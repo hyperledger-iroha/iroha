@@ -1262,115 +1262,127 @@ mod tests {
     }
     #[test]
     fn native_json_state_conversion_is_bounded_and_stack_safe_at_256_schema_nodes() {
-        std::thread::Builder::new()
-            .name("json-state-small-stack".to_owned())
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut vm = IVM::new(u64::MAX);
-                let (list_schema, list_handle) = nested_list_fixture(
-                    &mut vm,
-                    MAX_STATE_VALUE_NODES - 1,
-                    StateValueKindV1::Bool,
-                    1,
-                );
-                let mut stats = BuildStats::default();
-                let value = convert_state_schema(
-                    &vm,
-                    &list_schema,
-                    &[list_handle],
-                    CoreHost::resolve_code_tlv_addr,
-                    &mut stats,
-                )
-                .expect("convert 255 nested Lists");
-                let mut current = value.value();
-                for _ in 0..MAX_STATE_VALUE_NODES - 1 {
-                    let njson::Value::Array(items) = current else {
-                        panic!("each nested List must produce a JSON array");
-                    };
-                    assert_eq!(items.len(), 1);
-                    current = &items[0];
-                }
-                assert_eq!(current, &njson::Value::Bool(true));
-                assert_eq!(stats.collection_elements, MAX_STATE_VALUE_NODES - 1);
-                drop(value);
-                let option_schema =
-                    nested_option_schema(MAX_STATE_VALUE_NODES - 1, StateValueKindV1::Bool);
-                let option_handle = nested_some_options(&mut vm, MAX_STATE_VALUE_NODES - 1, 1);
-                let mut stats = BuildStats::default();
-                let option_value = convert_state_schema(
-                    &vm,
-                    &option_schema,
-                    &[option_handle],
-                    CoreHost::resolve_code_tlv_addr,
-                    &mut stats,
-                )
-                .expect("convert 255 nested Options");
-                let mut current = option_value.value();
-                for _ in 0..MAX_STATE_VALUE_NODES - 1 {
-                    let object = current.as_object().expect("each Option retains its tag");
-                    assert_eq!(object.len(), 1);
-                    current = object.get("some").expect("active Option tag");
-                }
-                assert_eq!(current, &njson::Value::Bool(true));
-                assert_eq!(stats.collection_elements, MAX_STATE_VALUE_NODES - 1);
-                drop(option_value);
-                let (too_deep, too_deep_handle) =
-                    nested_list_fixture(&mut vm, MAX_STATE_VALUE_NODES, StateValueKindV1::Bool, 1);
-                assert!(matches!(
-                    convert_state_schema(
+        // VM construction has its own large fixed frame; this worker bounds the
+        // JSON operations and their deep-value cleanup, not the fixture setup.
+        let mut vm = IVM::new(u64::MAX);
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .name("json-state-small-stack".to_owned())
+                .stack_size(128 * 1024)
+                .spawn_scoped(scope, || {
+                    let (list_schema, list_handle) = nested_list_fixture(
+                        &mut vm,
+                        MAX_STATE_VALUE_NODES - 1,
+                        StateValueKindV1::Bool,
+                        1,
+                    );
+                    let mut stats = BuildStats::default();
+                    let value = convert_state_schema(
                         &vm,
-                        &too_deep,
-                        &[too_deep_handle],
+                        &list_schema,
+                        &[list_handle],
                         CoreHost::resolve_code_tlv_addr,
-                        &mut BuildStats::default(),
-                    ),
-                    Err(VMError::DecodeError)
-                ));
-                let malformed_schema =
-                    nested_option_schema(MAX_STATE_VALUE_NODES - 1, StateValueKindV1::Bool);
-                let option_layout =
-                    crate::sum::SumLayoutV1::option(1).expect("unary Option layout");
-                let malformed_inner = crate::sum::allocate_words(&mut vm, option_layout, 0, &[])
-                    .expect("innermost Option::none");
-                vm.store_u64(malformed_inner + 8, 1)
-                    .expect("forge inactive Option payload");
-                let malformed_outer =
-                    nested_some_options(&mut vm, MAX_STATE_VALUE_NODES - 2, malformed_inner);
-                assert!(matches!(
-                    convert_state_schema(
+                        &mut stats,
+                    )
+                    .expect("convert 255 nested Lists");
+                    let mut current = value.value();
+                    for _ in 0..MAX_STATE_VALUE_NODES - 1 {
+                        let njson::Value::Array(items) = current else {
+                            panic!("each nested List must produce a JSON array");
+                        };
+                        assert_eq!(items.len(), 1);
+                        current = &items[0];
+                    }
+                    assert_eq!(current, &njson::Value::Bool(true));
+                    assert_eq!(stats.collection_elements, MAX_STATE_VALUE_NODES - 1);
+                    drop(value);
+                    let option_schema =
+                        nested_option_schema(MAX_STATE_VALUE_NODES - 1, StateValueKindV1::Bool);
+                    let option_handle = nested_some_options(&mut vm, MAX_STATE_VALUE_NODES - 1, 1);
+                    let mut stats = BuildStats::default();
+                    let option_value = convert_state_schema(
                         &vm,
-                        &malformed_schema,
-                        &[malformed_outer],
+                        &option_schema,
+                        &[option_handle],
                         CoreHost::resolve_code_tlv_addr,
-                        &mut BuildStats::default(),
-                    ),
-                    Err(VMError::DecodeError)
-                ));
-                let mut node_index = 0usize;
-                assert!(matches!(
-                    state_node_word_count(&option_schema.nodes, &mut node_index),
-                    Ok(1)
-                ));
-                assert_eq!(node_index, MAX_STATE_VALUE_NODES);
-                let too_many_options =
-                    nested_option_schema(MAX_STATE_VALUE_NODES, StateValueKindV1::Bool);
-                let mut too_many_index = 0usize;
-                assert!(matches!(
-                    state_node_word_count(&too_many_options.nodes, &mut too_many_index),
-                    Err(VMError::DecodeError)
-                ));
-            })
-            .expect("spawn small-stack JSON state test")
-            .join()
-            .expect("small-stack JSON state test");
+                        &mut stats,
+                    )
+                    .expect("convert 255 nested Options");
+                    let mut current = option_value.value();
+                    for _ in 0..MAX_STATE_VALUE_NODES - 1 {
+                        let object = current.as_object().expect("each Option retains its tag");
+                        assert_eq!(object.len(), 1);
+                        current = object.get("some").expect("active Option tag");
+                    }
+                    assert_eq!(current, &njson::Value::Bool(true));
+                    assert_eq!(stats.collection_elements, MAX_STATE_VALUE_NODES - 1);
+                    drop(option_value);
+                    let (too_deep, too_deep_handle) = nested_list_fixture(
+                        &mut vm,
+                        MAX_STATE_VALUE_NODES,
+                        StateValueKindV1::Bool,
+                        1,
+                    );
+                    assert!(matches!(
+                        convert_state_schema(
+                            &vm,
+                            &too_deep,
+                            &[too_deep_handle],
+                            CoreHost::resolve_code_tlv_addr,
+                            &mut BuildStats::default(),
+                        ),
+                        Err(VMError::DecodeError)
+                    ));
+                    let malformed_schema =
+                        nested_option_schema(MAX_STATE_VALUE_NODES - 1, StateValueKindV1::Bool);
+                    let option_layout =
+                        crate::sum::SumLayoutV1::option(1).expect("unary Option layout");
+                    let malformed_inner =
+                        crate::sum::allocate_words(&mut vm, option_layout, 0, &[])
+                            .expect("innermost Option::none");
+                    vm.store_u64(malformed_inner + 8, 1)
+                        .expect("forge inactive Option payload");
+                    let malformed_outer =
+                        nested_some_options(&mut vm, MAX_STATE_VALUE_NODES - 2, malformed_inner);
+                    assert!(matches!(
+                        convert_state_schema(
+                            &vm,
+                            &malformed_schema,
+                            &[malformed_outer],
+                            CoreHost::resolve_code_tlv_addr,
+                            &mut BuildStats::default(),
+                        ),
+                        Err(VMError::DecodeError)
+                    ));
+                    let mut node_index = 0usize;
+                    assert!(matches!(
+                        state_node_word_count(&option_schema.nodes, &mut node_index),
+                        Ok(1)
+                    ));
+                    assert_eq!(node_index, MAX_STATE_VALUE_NODES);
+                    let too_many_options =
+                        nested_option_schema(MAX_STATE_VALUE_NODES, StateValueKindV1::Bool);
+                    let mut too_many_index = 0usize;
+                    assert!(matches!(
+                        state_node_word_count(&too_many_options.nodes, &mut too_many_index),
+                        Err(VMError::DecodeError)
+                    ));
+                })
+                .expect("spawn small-stack JSON state test")
+                .join()
+                .expect("small-stack JSON state test");
+        });
     }
     #[test]
     fn build_json_deep_success_and_later_invalid_sibling_cleanup_are_stack_safe() {
-        std::thread::Builder::new()
+        // VM construction has its own large fixed frame; this worker bounds the
+        // JSON operations and their deep-value cleanup, not the fixture setup.
+        let mut vm = IVM::new(u64::MAX);
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
             .name("json-build-small-stack".to_owned())
             .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut vm = IVM::new(u64::MAX);
+            .spawn_scoped(scope, || {
                 let nesting = njson::MAX_JSON_VALUE_NESTING_DEPTH - 1;
                 let expected = Json::from_raw_json(format!(
                     "{}true{}",
@@ -1477,6 +1489,7 @@ mod tests {
             .expect("spawn small-stack JSON build test")
             .join()
             .expect("small-stack JSON build test");
+        });
     }
     #[test]
     fn build_json_emits_canonical_payload_accepted_by_getter_under_alternate_flags() {

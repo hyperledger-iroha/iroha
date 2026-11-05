@@ -238,7 +238,11 @@ fn transactional_device_wait_failure_preserves_inputs() {
 #[test]
 #[ignore = "required actual Metal native19 transactional parity; run alone in release"]
 fn required_metal_native19_transactional_inverse_matches_original_cpu_outputs() {
-    assert!(!cfg!(debug_assertions), "use optimized build");
+    // Preserve the optimized-only runtime refusal in ordinary debug test harnesses.
+    assert!(
+        !std::hint::black_box(cfg!(debug_assertions)),
+        "use optimized build"
+    );
     select_metal_device().expect("actual Metal required");
     for width in [1, 4, 8] {
         check_device_case(19, width, Direction::Inverse);

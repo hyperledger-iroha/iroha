@@ -49,6 +49,12 @@ fn client_sends_transaction_with_invalid_instruction_should_not_see_any_changes(
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .expect_err("invalid second instruction must reject the transaction");
+    assert!(
+        error
+            .downcast_ref::<iroha_data_model::transaction::error::TransactionRejectionReason>()
+            .is_some(),
+        "rollback requires an authenticated rejection: {error:?}"
+    );
     // The second instruction must fail after the valid registration is attempted.
     assert!(
         error

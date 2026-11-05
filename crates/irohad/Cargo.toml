@@ -196,7 +196,7 @@ time = { workspace = true }
 ivm = { workspace = true, features = ["cuda"] }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1.4", features = ["event", "fs", "net", "pipe", "process"] }
+rustix = { version = "1.1.4", features = ["event", "fs", "net", "pipe", "process", "stdio"] }
 
 [package.metadata.cargo-all-features]
 denylist = [

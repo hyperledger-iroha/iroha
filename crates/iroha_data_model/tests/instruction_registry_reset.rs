@@ -2,7 +2,10 @@
 //! been initialized lazily.
 use iroha_data_model::{
     instruction_registry_with_ids,
-    isi::{framed_instruction_payload, set_instruction_registry, wire_id_of},
+    isi::{
+        decode_instruction_from_pair, framed_instruction_payload, set_instruction_registry,
+        wire_id_of,
+    },
     prelude::*,
 };
 
@@ -49,9 +52,20 @@ fn set_instruction_registry_overrides_existing() {
     let bytes = norito::to_bytes(&boxed).expect("serialize");
     let decoded: InstructionBox = norito::decode_from_bytes(&bytes).expect("deserialize");
     assert_eq!(decoded.as_any().downcast_ref::<Log>(), Some(&log));
+    assert_eq!(
+        decode_instruction_from_pair(wire_id, &frame)
+            .expect("registered typed decoder")
+            .as_any()
+            .downcast_ref::<Log>(),
+        Some(&log),
+    );
 
     set_instruction_registry(instruction_registry_with_ids![SetParameter]);
     assert!(wire_id_of::<Log>().is_none());
+    assert!(
+        decode_instruction_from_pair(wire_id, &frame).is_err(),
+        "the replaced registry must refuse the removed typed instruction",
+    );
     assert!(wire_id_of::<SetParameter>().is_some());
     let decoded: InstructionBox = norito::decode_from_bytes(&bytes).expect("opaque envelope");
     let opaque = decoded.as_opaque().expect("Log left the registry");
@@ -59,4 +73,7 @@ fn set_instruction_registry_overrides_existing() {
     assert_eq!(opaque.frame(), frame);
     assert_eq!(norito::to_bytes(&decoded).expect("re-encode"), bytes);
     set_instruction_registry(iroha_data_model::instruction_registry::default());
+    let restored: InstructionBox = norito::decode_from_bytes(&bytes).expect("restored typed Log");
+    assert_eq!(restored.id(), log.id());
+    assert!(restored.as_opaque().is_none());
 }

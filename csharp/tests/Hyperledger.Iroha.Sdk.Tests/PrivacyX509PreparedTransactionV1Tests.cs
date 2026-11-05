@@ -90,12 +90,34 @@ public sealed class PrivacyX509PreparedTransactionV1Tests
     [Fact]
     public async Task DisposeCannotCloseAResourceDuringAnAcceptedManagedCall()
     {
-        var driver = new Driver { Block = true }; var owner = new PrivacyX509NativeOwner(driver, 7);
-        var signing = Task.Run(() => owner.Sign(new byte[32], new byte[] { 1 }), TestContext.Current.CancellationToken);
-        Assert.True(driver.Started.Wait(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
-        var closing = Task.Run(owner.Dispose, TestContext.Current.CancellationToken);
-        Assert.Equal(0, driver.Closes);
-        driver.Release.Set(); await signing; await closing;
+        var driver = new Driver { Block = true };
+        using var owner = new PrivacyX509NativeOwner(driver, 7);
+        // Both calls deliberately block. Dedicated workers keep their scheduling
+        // independent of the parallel test runner's ThreadPool workers.
+        var signing = Task.Factory.StartNew(
+            () => owner.Sign(new byte[32], new byte[] { 1 }),
+            TestContext.Current.CancellationToken,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+        using var closingStarted = new ManualResetEventSlim();
+        Task? closing = null;
+        try
+        {
+            Assert.True(driver.Started.Wait(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+            closing = Task.Factory.StartNew(
+                () => { closingStarted.Set(); owner.Dispose(); },
+                TestContext.Current.CancellationToken,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default);
+            Assert.True(closingStarted.Wait(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+            Assert.False(closing.IsCompleted);
+            Assert.Equal(0, driver.Closes);
+        }
+        finally
+        {
+            driver.Release.Set();
+            await Task.WhenAll(signing, closing ?? Task.CompletedTask);
+        }
         Assert.Equal(1, driver.Closes); Assert.False(driver.ClosedDuringSign);
     }
     [Fact]

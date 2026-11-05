@@ -10,16 +10,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  IROHA_CLI_DIR: "/__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}/test"
-  TEST_NETWORK_TMP_DIR: /tmp
+  IROHA_CLI_DIR: "${{ github.workspace }}/test"
   NEXTEST_PROFILE: ci
 
 jobs:
-  ci_image:
-    uses: ./.github/workflows/ci_image_preflight.yml
-    permissions:
-      contents: read
-
   ivm_only:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -57,13 +51,22 @@ jobs:
 
   pre_build:
     if: needs.rust_changes.outputs.has_binaries == 'true'
-    needs: [rust_changes, ci_image]
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
-    timeout-minutes: 30
+    needs: [rust_changes]
+    runs-on: ubuntu-24.04
+    # Selected daemon and SoraFS CLI feature graphs build separately.
+    timeout-minutes: 240
+    env:
+      VERGEN_GIT_SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Verify compiled source identity matches checkout
+        run: |
+          set -eu
+          test "$(git rev-parse --verify HEAD)" = "${VERGEN_GIT_SHA:?}" || {
+            echo "compiled source identity must equal the checked-out commit" >&2
+            exit 1
+          }
+      - uses: ./.github/actions/setup-native-ci
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
@@ -71,31 +74,29 @@ jobs:
         with:
           cache: "false"
           toolchain: 1.99.1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
-        with:
-          python-version: "3.11"
+      - name: Provision bounded hosted build swap
+        run: python3 -I -S ci/provision_hosted_build_swap.py
       - name: Build selected release binaries
         env:
           REQUIRED_BINARIES: ${{ needs.rust_changes.outputs.binaries }}
         run: |
-          python3 scripts/rust_ci.py build-binaries \
+          python3 -I -S ci/observe_build_capacity.py -- python3 scripts/rust_ci.py build-binaries \
             --binaries "$REQUIRED_BINARIES" \
-            --output-dir target/release/pre_build
+            --output-dir "${RUNNER_TEMP:?}/iroha-prebuilt-binaries"
       - name: Upload binaries
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: bins
-          path: target/release/pre_build
+          path: ${{ runner.temp }}/iroha-prebuilt-binaries
           retention-days: 1
 
   consistency:
     if: needs.rust_changes.outputs.run_consistency == 'true'
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
-    needs: [rust_changes, pre_build, ci_image]
+    runs-on: ubuntu-24.04
+    needs: [rust_changes, pre_build]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ./.github/actions/setup-native-ci
       - name: Download binaries
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
@@ -111,16 +112,12 @@ jobs:
 
   kotodama_docs:
     if: needs.rust_changes.outputs.run_kotodama_docs == 'true'
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
-    needs: [rust_changes, pre_build, ci_image]
+    runs-on: ubuntu-24.04
+    needs: [rust_changes, pre_build]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
-        with:
-          python-version: "3.11"
+      - uses: ./.github/actions/setup-native-ci
       - name: Download canonical koto driver
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
@@ -154,14 +151,15 @@ jobs:
         run: cargo fmt --all -- --check
 
   sumeragi:
-    needs: ci_image
     name: Sumeragi core, simulator and node lanes
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
+    env:
+      # Match the existing nightly Core mutation build policy on finite hosted memory.
+      CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ./.github/actions/setup-native-ci
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
@@ -169,35 +167,85 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
+      - name: Provision bounded hosted build swap
+        run: python3 -I -S ci/provision_hosted_build_swap.py
+      - name: Record hosted build capacity before testing
+        run: &linux_build_capacity |
+          set -euo pipefail
+          nproc
+          free -b
+          df -B1 -- "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
+          /usr/bin/time --version
+          python3 -I -S - <<'PY'
+          from pathlib import Path
+
+          root = Path("/sys/fs/cgroup")
+          membership = Path("/proc/self/cgroup")
+          scopes = [root]
+          try:
+              with membership.open("rb") as stream:
+                  groups = stream.read(4096).decode("utf-8", errors="replace")
+              print(f"cgroup membership: {groups}")
+              for line in groups.splitlines():
+                  parts = line.split(":", 2)
+                  if len(parts) == 3 and parts[:2] == ["0", ""]:
+                      relative = Path(parts[2])
+                      if relative.is_absolute() and ".." not in relative.parts:
+                          scopes.append(root.joinpath(*relative.parts[1:]))
+          except OSError as error:
+              print(f"cgroup membership unavailable: {type(error).__name__}")
+          for scope in dict.fromkeys(scopes):
+              for name in ("memory.max", "memory.current", "memory.peak", "memory.events",
+                           "memory.swap.max", "memory.swap.current"):
+                  path = scope / name
+                  try:
+                      with path.open("rb") as stream:
+                          value = stream.read(1025)
+                      text = value[:1024].decode("utf-8", errors="replace")
+                      print(f"{path}: {text}" + (" [truncated]" if len(value) > 1024 else ""))
+                  except OSError as error:
+                      print(f"{path}: unavailable ({type(error).__name__})")
+          PY
       - name: Core, simulator, specification traceability and quorums (default seeds)
-        run: env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS cargo test --locked -p iroha_sumeragi --features sim
+        run: env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS /usr/bin/time -v cargo test --locked -p iroha_sumeragi --features sim
       - name: Node driver, lanes and four-validator node tests
-        run: env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS cargo test --locked -p iroha_core --lib -- sumeragi::lanes sumeragi::node sumeragi::driver sumeragi::executor
+        run: env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS python3 -I -S ci/observe_build_capacity.py -- /usr/bin/time -v cargo test --locked -p iroha_core --lib -- sumeragi::lanes sumeragi::node sumeragi::driver sumeragi::executor
+      - name: Record hosted build capacity after testing
+        if: always()
+        run: *linux_build_capacity
 
   # The Rust lanes test default features only; this target needs the opt-in
   # `fastpq-replay-measurement` feature. `iroha_measurement` itself is tested by
   # the foundation lane (`ci/rust_lanes.toml`).
   zk_phase_tree_measurement:
-    needs: ci_image
     name: ZK phase-tree measurement on a FASTPQ workload
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
+    env:
+      # Bound concurrent compiler processes without changing test features or coverage.
+      CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ./.github/actions/setup-native-ci
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
+      - name: Provision bounded hosted build swap
+        run: python3 -I -S ci/provision_hosted_build_swap.py
+      - name: Record hosted build capacity before testing
+        run: *linux_build_capacity
       - name: FASTPQ prove and verify under the shared phase and resource recorder
-        run: cargo test --locked -p iroha_core_privacy --features fastpq-replay-measurement --test fastpq_phase_tree_measurement
+        run: /usr/bin/time -v cargo test --locked -p iroha_core_privacy --features fastpq-replay-measurement --test fastpq_phase_tree_measurement
       # The State commitment candidates of task G.2 are development-only: their
       # conformance adapters and their measurement target compile only under
       # opt-in features that no default lane sets.
       - name: State commitment candidates satisfy the keyed State contract
-        run: cargo test --locked -p iroha_core --lib --features state-commitment-prototypes -- keyed_commitment::candidates_tests
+        run: python3 -I -S ci/observe_build_capacity.py -- /usr/bin/time -v cargo test --locked -p iroha_core --lib --features state-commitment-prototypes -- keyed_commitment::candidates_tests
       - name: State commitment candidate measurement target (smoke run)
-        run: cargo test --locked -p iroha_core_privacy --features fastpq-replay-measurement --test state_commitment_candidates_measurement
+        run: /usr/bin/time -v cargo test --locked -p iroha_core_privacy --features fastpq-replay-measurement --test state_commitment_candidates_measurement
+      - name: Record hosted build capacity after testing
+        if: always()
+        run: *linux_build_capacity
 
   # The Rust lanes test default features only. The maximum-proof transport matrix of task
   # X.2 (twelve Exact12 envelopes at the 9,437,184-byte proof ceiling, every supported
@@ -206,14 +254,12 @@ jobs:
   # coherence, maximum gossip and Sumeragi frames, admission and proposer bounds, and the
   # genesis and daemon startup frame checks) are default tests; the steps below name them.
   x2_maximum_proof_transport:
-    needs: ci_image
     name: Maximum-proof transport bounds (X.2)
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ./.github/actions/setup-native-ci
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
@@ -221,6 +267,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
+      - name: Provision bounded hosted build swap
+        run: python3 -I -S ci/provision_hosted_build_swap.py
       - name: Complete canonical envelopes and exact/one-over contract bounds
         run: cargo test --locked -p iroha_data_model --features privacy-exact12-conformance --test resource_contract_v1
       - name: Committed policy coherence, chain frame and sync bounds, complete maximum frames
@@ -233,7 +281,7 @@ jobs:
         run: cargo test --locked -p irohad_lib --lib -- block_sync_topic_must_carry_the_local_sync_budget control_topic_must_carry_the_largest_control_frame check_config_and_runtime_enforce_frame_cap_boundary
       - name: Node admission, gossip, proposer, restore and serving bounds
         run: |
-          cargo test --locked -p iroha_core --lib -- \
+          python3 -I -S ci/observe_build_capacity.py -- cargo test --locked -p iroha_core --lib -- \
             resource_coherence:: \
             state::deserialize::state_snapshot_decode_error_tests::resource_restore_ \
             gossiper::tests::shipped_gossip_frames_carry_the_maximum_admitted_signed_transaction \
@@ -248,12 +296,10 @@ jobs:
             privacy::tests::privacy_block_counts_and_actual_aggregate_bytes_are_independent
 
   norito_rpc_verify:
-    needs: ci_image
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ./.github/actions/setup-native-ci
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
@@ -291,6 +337,9 @@ jobs:
           cargo run --locked -p ivm --example entrypoint_argument_record_v1_fixture -- --check fixtures/kotodama/entrypoint_argument_record_v1.json
           cargo test --locked -p ivm --test ivm_group_05 kotodama_argument_record::
           cargo test --locked -p iroha_primitives randomized_decimal_arithmetic_matches_independent_rational_reference
+      - name: Verify the Windows suspend-inclusive native clock
+        if: runner.os == 'Windows'
+        run: cargo test --locked -p iroha_primitives --lib 'time::continuous::tests::'
 
   android_fixture_compat:
     runs-on: ubuntu-latest
@@ -345,7 +394,84 @@ jobs:
         run: |
           python3 -I -S scripts/check_build_efficiency_provenance.py
           python3 scripts/rust_ci.py validate
-          python3 -m pytest -q pytests/scripts/rust_ci_test.py
+          python3 -m pytest -q pytests/scripts/rust_ci_test.py pytests/scripts/rust_test_shards_test.py scripts/tests/hosted_build_swap_test.py pytests/scripts/ci_private_fixture_root_test.py
+      - name: Classify the PR reverse-dependency closure
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          FULL_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, 'ci/full') }}
+        run: |
+          mkdir -p target/ci
+          scope_args=(--base "$BASE_SHA")
+          if test "$FULL_REQUESTED" = true; then
+            scope_args=(--all)
+          fi
+          python3 scripts/rust_ci.py classify \
+            "${scope_args[@]}" \
+            --json-out target/ci/rust-classification.json \
+            --github-output "$GITHUB_OUTPUT" \
+            > target/ci/rust-classification.log
+      - name: Upload Rust classification evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: rust-classification
+          path: |
+            target/ci/rust-classification.json
+            target/ci/rust-classification.log
+          if-no-files-found: error
+
+  rust_source_guards:
+    name: Validate repository source guards
+    runs-on: ubuntu-24.04
+    # The full guard suite exceeded 100 minutes locally; it runs alongside compilation.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
+        with:
+          cache: "false"
+          toolchain: 1.99.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.11"
+      - name: Install pinned router-test dependency
+        run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
+      - name: Provision the normal Linux observer prerequisites
+        run: |
+          set -euo pipefail
+          # The observer opens per-process userspace events; it does not need
+          # system-wide or kernel profiling. Executable-memfd policy is unchanged.
+          sudo sysctl -w kernel.perf_event_paranoid=2
+          test "$(sysctl -n kernel.perf_event_paranoid)" = 2
+          cargo_bin="$(rustup which cargo)"
+          rustc_bin="$(rustup which rustc)"
+          native_target="$("$rustc_bin" -vV | sed -n 's/^host: //p')"
+          RUSTC="$rustc_bin" "$cargo_bin" fetch --locked --target "$native_target"
+      - name: Run the complete harness through the normal native publisher
+        run: |
+          set -euo pipefail
+          # Both the CI invoker and public loader retain the complete source census.
+          ulimit -n 65536
+          python3 -I -S -B ci/run_linux_resource_harness.py \
+            --source-root "$(pwd -P)" \
+            --source-commit "$GITHUB_SHA" \
+            --cargo-bin "$(rustup which cargo)" \
+            --rustc-bin "$(rustup which rustc)" \
+            --cargo-home "$(cd "$HOME/.cargo" && pwd -P)" \
+            --run-root "$RUNNER_TEMP/iroha-linux-resource-harness"
+      - name: Retain Linux harness publication evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: linux-resource-harness-publication
+          path: ${{ runner.temp }}/iroha-linux-resource-harness/evidence
+          if-no-files-found: error
+      - name: Verify repository source contracts and inventories
+        run: |
           python3 -m pytest -q \
             pytests/scripts/check_cargo_feature_hygiene_test.py \
             scripts/tests/panic_recovery_boundaries_test.py \
@@ -378,13 +504,14 @@ jobs:
             scripts/tests/check_zk_resource_contract_test.py \
             scripts/tests/check_zk_runtime_validity_test.py \
             scripts/tests/check_zk_feature_parity_test.py \
+            scripts/tests/native_dif_workflow_test.py \
             scripts/tests/check_zk_operation_inventory_test.py \
             scripts/tests/check_durable_workflow_contract_test.py \
             scripts/tests/check_operation_contract_test.py \
             scripts/tests/check_zk_economic_invariants_test.py \
             scripts/tests/check_zk_primitive_workloads_test.py \
             scripts/tests/check_state_commitment_candidates_test.py \
-            scripts/tests/zk_resource_harness_test.py \
+            scripts/tests/linux_resource_harness_ci_test.py \
             pytests/scripts/iso_xsd_fixture_verify_test.py \
             pytests/scripts/iso_xsd_profile_catalog_include_test.py
           python3 scripts/check_cargo_feature_hygiene.py
@@ -429,39 +556,12 @@ jobs:
           python3 -I -S scripts/check_fhe_ownership_map.py
           python3 -I -S scripts/fhe_bgv_cost_model.py
           python3 -I -S crates/iroha_fhe/tests/vectors/bgv_reference.py --check
-      - name: Classify the PR reverse-dependency closure
-        id: classify
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          FULL_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, 'ci/full') }}
-        run: |
-          mkdir -p target/ci
-          scope_args=(--base "$BASE_SHA")
-          if test "$FULL_REQUESTED" = true; then
-            scope_args=(--all)
-          fi
-          python3 scripts/rust_ci.py classify \
-            "${scope_args[@]}" \
-            --json-out target/ci/rust-classification.json \
-            --github-output "$GITHUB_OUTPUT" \
-            > target/ci/rust-classification.log
-      - name: Upload Rust classification evidence
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: rust-classification
-          path: |
-            target/ci/rust-classification.json
-            target/ci/rust-classification.log
-          if-no-files-found: error
 
   rust_affected:
     name: Rust ${{ matrix.lane }} (${{ matrix.package_count }} packages)
     if: needs.rust_changes.outputs.has_binary_free_rust == 'true'
-    needs: [rust_changes, ci_image]
-    runs-on: [self-hosted, Linux, iroha2]
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
+    needs: [rust_changes]
+    runs-on: ubuntu-24.04
     timeout-minutes: 240
     strategy:
       fail-fast: false
@@ -470,6 +570,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/setup-native-ci
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
@@ -478,8 +579,11 @@ jobs:
         with:
           cache-on-failure: "true"
           shared-key: rust-lane-1.99.1-${{ matrix.lane }}
+      - name: Provision bounded hosted build swap for Core and execution checks
+        if: contains(',execution,execution-model,execution-vm,execution-kagemusha,', format(',{0},', matrix.lane)) || contains(format(',{0},', matrix.packages), ',iroha_core,') || contains(format(',{0},', matrix.packages), ',iroha_core_privacy,')
+        run: python3 -I -S ci/provision_hosted_build_swap.py
       - name: Enforce data-model compile-unit budget
-        if: matrix.lane == 'execution'
+        if: contains(format(',{0},', matrix.packages), ',iroha_data_model,')
         run: >-
           python3 scripts/check_compile_unit_budget.py
           --locked
@@ -492,7 +596,7 @@ jobs:
           --budget-min-growth 3
           --json-out target/ci/iroha-data-model-compile-units.json
       - name: Upload data-model compile-unit evidence
-        if: always() && matrix.lane == 'execution'
+        if: always() && contains(format(',{0},', matrix.packages), ',iroha_data_model,')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: compile-units-${{ matrix.lane }}
@@ -500,35 +604,52 @@ jobs:
           if-no-files-found: error
       - name: Run locked affected checks
         run: >
-          python3 scripts/rust_ci.py run
+          python3 -I -S ci/observe_build_capacity.py -- python3 scripts/rust_ci.py run
           --packages "${{ matrix.packages }}"
-          --checks clippy,build,test,doc
+          --checks "${{ matrix.checks || 'clippy,build,test,doc' }}"
+          --native-shard "${{ matrix.native_shard }}"
+      - name: Retain native test shard receipt
+        if: always() && matrix.native_shard
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: rust-native-${{ matrix.lane }}
+          path: ${{ runner.temp }}/iroha-native-test-receipts/*.json
+          if-no-files-found: error
 
   rust_network:
     name: Rust network ${{ matrix.lane }} (${{ matrix.package_count }} packages)
     if: needs.rust_changes.outputs.has_binary_rust == 'true'
-    needs: [rust_changes, pre_build, ci_image]
-    runs-on: [self-hosted, Linux, iroha2]
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
+    needs: [rust_changes, pre_build]
+    runs-on: ubuntu-24.04
     timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.rust_changes.outputs.binary_matrix) }}
     env:
       IROHA_TEST_REQUIRE_NETWORK: "1"
-      TEST_NETWORK_BIN_IROHAD: bins/iroha3d
-      TEST_NETWORK_BIN_IROHA: bins/iroha
-      TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES: bins/iroha3d_private_settlement_routes
+      IROHA_TEST_NETWORK_KEEP_DIRS: "1"
+      VERGEN_GIT_SHA: ${{ github.sha }}
+      TEST_NETWORK_BIN_IROHAD: ${{ github.workspace }}/bins/iroha3d
+      TEST_NETWORK_BIN_IROHA: ${{ github.workspace }}/bins/iroha
+      TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES: ${{ github.workspace }}/bins/iroha3d_private_settlement_routes
+      TEST_NETWORK_BIN_IROHAD_TAIRA: ${{ github.workspace }}/bins/iroha3d_taira
+      TEST_NETWORK_BIN_IROHAD_DISPOSABLE_BROKER: ${{ github.workspace }}/bins/iroha_test_runtime_provider_broker
       KAGAMI_BIN: ${{ github.workspace }}/bins/kagami
       TEST_NETWORK_BIN_SORAFS_CLI: ${{ github.workspace }}/bins/sorafs_cli
-      # These packages own real networks; parallel harness tests exhaust the
-      # bounded network-permit queue before queued scenarios can start.
+      # Real network harnesses retain their serial execution policy.
       RUST_TEST_THREADS: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Verify compiled source identity matches checkout
+        run: |
+          set -eu
+          test "$(git rev-parse --verify HEAD)" = "${VERGEN_GIT_SHA:?}" || {
+            echo "compiled source identity must equal the checked-out commit" >&2
+            exit 1
+          }
+      - uses: ./.github/actions/setup-native-ci
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
@@ -545,28 +666,66 @@ jobs:
       - name: Make test-network binaries executable
         run: chmod +x -R bins
       - name: Run locked affected checks
+        # Leave time for failure artifacts before the enclosing four-hour job expires.
+        timeout-minutes: 220
         run: >
           python3 scripts/rust_ci.py run
           --packages "${{ matrix.packages }}"
-          --checks clippy,build,test,doc
+          --checks "${{ matrix.checks || 'clippy,build,test,doc' }}"
+          --test-target "${{ matrix.test_target }}"
+          --native-shard "${{ matrix.native_shard }}"
+      - name: Retain native test shard receipt
+        if: always() && matrix.native_shard
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: rust-native-${{ matrix.lane }}
+          path: ${{ runner.temp }}/iroha-native-test-receipts/*.json
+          if-no-files-found: error
+      - name: Stage failed test-network process logs
+        if: failure()
+        run: >-
+          python3 scripts/collect_test_network_logs.py
+          --source "$TEST_NETWORK_TMP_DIR"
+          --destination target/test-network-logs
       - name: Upload failed test-network artifacts
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: test-network-${{ matrix.lane }}
-          path: ${{ env.TEST_NETWORK_TMP_DIR }}/irohad_test_network_*
+          path: |
+            target/test-network-logs/
+            target/sccp-continuation/
           if-no-files-found: ignore
           retention-days: 3
 
   rust_required:
     name: Required affected Rust validation
     if: always()
-    needs: [rust_changes, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests, sora_parliament_lifecycle]
+    needs: [rust_changes, rust_source_guards, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests, sora_parliament_lifecycle]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Download native test shard receipts
+        if: contains(needs.rust_changes.outputs.binary_free_matrix, 'native_shard') || contains(needs.rust_changes.outputs.binary_matrix, 'native_shard')
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: rust-native-*
+          path: native-test-receipts
+      - name: Verify complete native test coverage
+        if: needs.rust_changes.result == 'success'
+        env:
+          BINARY_FREE_MATRIX: ${{ needs.rust_changes.outputs.binary_free_matrix }}
+          BINARY_MATRIX: ${{ needs.rust_changes.outputs.binary_matrix }}
+        run: >-
+          python3 scripts/rust_ci.py verify-native-shards
+          --matrix "$BINARY_FREE_MATRIX" --matrix "$BINARY_MATRIX"
+          --receipts native-test-receipts
       - name: Aggregate dynamic Rust lane results
         env:
           CLASSIFIER_RESULT: ${{ needs.rust_changes.result }}
+          SOURCE_GUARDS_RESULT: ${{ needs.rust_source_guards.result }}
           BINARY_FREE_RESULT: ${{ needs.rust_affected.result }}
           BINARY_FREE_SELECTED: ${{ needs.rust_changes.outputs.has_binary_free_rust }}
           NETWORK_RESULT: ${{ needs.rust_network.result }}
@@ -584,6 +743,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$CLASSIFIER_RESULT" = success
+          test "$SOURCE_GUARDS_RESULT" = success
           check_result() {
             case "$1:$2" in
               true:success|false:skipped) return 0 ;;
@@ -601,7 +761,7 @@ jobs:
   pytests:
     if: needs.rust_changes.outputs.run_pytests == 'true'
     needs: [rust_changes, pre_build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       IROHA_CONTAINER: "defaults-irohad0-1"
       BIN_IROHAD: bins/iroha3d
@@ -646,9 +806,12 @@ jobs:
           command: |
             cd pytests/iroha_cli_tests
             poetry run pytest
-          on_retry_command: |
+          new_command_on_retry: |
+            set -e
             ./scripts/test_env.py cleanup
             ./scripts/test_env.py setup
+            (cd pytests/iroha_torii_tests && poetry run pytest)
+            (cd pytests/iroha_cli_tests && poetry run pytest)
       - name: Terminate test network
         run: ./scripts/test_env.py cleanup
 
@@ -979,17 +1142,18 @@ jobs:
 
   sora_parliament_lifecycle:
     if: needs.rust_changes.outputs.run_sora_parliament_lifecycle == 'true'
-    needs: [rust_changes, ci_image]
-    runs-on: [self-hosted, Linux, iroha2]
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
+    needs: [rust_changes]
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
       CARGO_TARGET_DIR: target/sora-parliament-lifecycle
+      IROHA_TEST_NETWORK_KEEP_DIRS: "1"
       SORA_PARLIAMENT_ALERT_EVIDENCE_DIR: target/sora-parliament-alert-evidence
-      SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR: target/sora-parliament-crypto-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+      # Cargo runs benchmarks from the package directory; all producers share this absolute root.
+      SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR: ${{ github.workspace }}/target/sora-parliament-crypto-evidence-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ./.github/actions/setup-native-ci
       - name: Install pinned Parliament benchmark checker dependency
         run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
       - name: Create fresh private Parliament crypto evidence layout
@@ -1265,5 +1429,17 @@ jobs:
           exit "$failure"
       - name: Verify isolated Parliament corridor source contract
         run: python3 -I -S scripts/tests/sora_parliament_lifecycle_corridor_source_test.py
+      - name: Provision bounded hosted build swap for Parliament Core tests
+        run: python3 -I -S ci/provision_hosted_build_swap.py
       - name: Run exact four-validator Parliament lifecycle corridor
-        run: bash ci/check_sora_parliament_lifecycle.sh
+        run: python3 -I -S ci/observe_build_capacity.py -- bash ci/check_sora_parliament_lifecycle.sh
+      - name: Retain failed Parliament node diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: sora-parliament-node-logs
+          path: |
+            ${{ env.TEST_NETWORK_TMP_DIR }}/irohad_test_network_*/**/run-*-stdout.log
+            ${{ env.TEST_NETWORK_TMP_DIR }}/irohad_test_network_*/**/run-*-stderr.log
+          if-no-files-found: ignore
+          retention-days: 3

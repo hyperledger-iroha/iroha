@@ -239,6 +239,7 @@ fn original_unit_read_and_each_staged_debit_reject_all_single_field_mutations() 
 fn complete_native_return_uses_bounded_stack() {
     let (native, budget) = native();
     std::thread::Builder::new()
+        .name(stringify!(complete_native_return_uses_bounded_stack).to_owned())
         .stack_size(256 * 1024)
         .spawn(move || {
             let returning = Returning::new(&native, &plan(&native), &budget).unwrap();
@@ -433,6 +434,10 @@ fn complete_authentic_bool_return_uses_the_original_bounded_stack() {
     for word in [0, 1] {
         let (native, budget) = native_bool(word);
         std::thread::Builder::new()
+            .name(
+                stringify!(complete_authentic_bool_return_uses_the_original_bounded_stack)
+                    .to_owned(),
+            )
             .stack_size(256 * 1024)
             .spawn(move || {
                 let returning = Returning::new(&native, &plan(&native), &budget).unwrap();

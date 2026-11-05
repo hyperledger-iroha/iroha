@@ -586,7 +586,8 @@ fn observer_node_catches_up() -> Result<()> {
             let client = peer.client();
             let alice = client
                 .client()
-                .query_single(FindAccountById::new(ALICE_ID.clone()))?;
+                .query_single(FindAccountById::new(ALICE_ID.clone()))
+                .wrap_err("Alice account must exist on each synchronized peer")?;
             assert_eq!(alice.id(), &*ALICE_ID);
             if let Some(note) = alice.metadata().get(&note_key) {
                 last_note = Some(note.as_ref().to_string());

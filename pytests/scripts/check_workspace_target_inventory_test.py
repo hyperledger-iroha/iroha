@@ -28,11 +28,37 @@ def test_repository_target_inventory() -> None:
     assert TARGET_INVENTORY.check_metadata(metadata) == []
 
 
+@pytest.mark.parametrize("package_name, directory", (
+    ("iroha_release_bundle", "crates"),
+    ("iroha_native_source_delivery", "tools"),
+))
+def test_native_release_helpers_require_explicit_development_selection(
+    package_name: str, directory: str,
+) -> None:
+    """Release validation helpers retain tests without joining shipping builds."""
+    metadata = TARGET_INVENTORY.load_metadata(ROOT)
+    owner = (package_name, package_name)
+    package = next(row for row in metadata["packages"] if row["name"] == package_name)
+    target = next(row for row in package["targets"] if row["name"] == package_name and "bin" in row["kind"])
+    manifest = tomllib.loads((ROOT / directory / package_name / "Cargo.toml").read_text())
+    declared = next(row for row in manifest["bin"] if row["name"] == package_name)
+    assert declared["required-features"] == target["required-features"] == ["dev-tools"]
+    assert manifest["features"]["dev-tools"] == []
+    assert "dev-tools" not in manifest["features"]["default"]
+    assert target["test"] is True
+    assert owner in TARGET_INVENTORY.all_workspace_bins(metadata)
+    assert owner not in TARGET_INVENTORY.resolved_default_bins(metadata)
+    assert len(TARGET_INVENTORY.resolved_default_bins(metadata)) == 24
+    target["required-features"] = []
+    assert any("non-shipping binaries enabled by default" in error and repr(owner) in error
+               for error in TARGET_INVENTORY.check_metadata(metadata))
+
+
 def test_musubi_fixture_owner_is_declared_but_never_default() -> None:
     metadata = TARGET_INVENTORY.load_metadata(ROOT)
     target = ("iroha_data_model", "musubi_fixtures")
 
-    assert TARGET_INVENTORY.EXPECTED_DECLARED_BIN_COUNT == 102
+    assert TARGET_INVENTORY.EXPECTED_DECLARED_BIN_COUNT == 104
     assert target in TARGET_INVENTORY.all_workspace_bins(metadata)
     assert target not in TARGET_INVENTORY.resolved_default_bins(metadata)
 
@@ -90,9 +116,9 @@ def test_disposable_beacon_conductor_cannot_escape_its_development_inventory(
             TARGET_INVENTORY.resolved_default_bins(metadata)
         )
         if mutation == "missing":
-            assert any("declared binary count 101 differs from the expected 102" in e for e in errors)
+            assert any("declared binary count 103 differs from the expected 104" in e for e in errors)
         else:
-            assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 102
+            assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 104
             assert any("unreviewed binary owners are declared" in e for e in errors)
             assert not any("declared binary count" in e for e in errors)
     else:
@@ -236,7 +262,7 @@ def test_reviewed_inventory_preserves_the_existing_default_ceiling() -> None:
     assert TARGET_INVENTORY.BASELINE_DECLARED_BIN_COUNT == 116
     assert TARGET_INVENTORY.MAX_DEFAULT_BIN_COUNT == 24
     assert len(TARGET_INVENTORY.EXPECTED_DEFAULT_BINS) == 24
-    assert len(TARGET_INVENTORY.EXPECTED_DECLARED_BINS) == 102
+    assert len(TARGET_INVENTORY.EXPECTED_DECLARED_BINS) == 104
     assert TARGET_INVENTORY.EXPECTED_DEFAULT_BINS <= TARGET_INVENTORY.EXPECTED_DECLARED_BINS
 
 
@@ -269,7 +295,7 @@ def test_rejects_developer_owner_replacement_at_unchanged_count() -> None:
     package = next(row for row in modified["packages"] if row["name"] == "ivm")
     target = next(row for row in package["targets"] if row["name"] == "ivm_fixture_export")
     target["name"] = "unreviewed_fixture_export"
-    assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 102
+    assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 104
     assert TARGET_INVENTORY.resolved_default_bins(modified) == (
         TARGET_INVENTORY.resolved_default_bins(metadata)
     )
@@ -380,15 +406,15 @@ def test_unreviewed_owner_is_refused_behind_dev_tools() -> None:
     unknown = (package["name"], "unreviewed_model_tool")
     package["targets"].append({"kind": ["bin"], "name": unknown[1], "required-features": ["dev-tools"]})
     assert TARGET_INVENTORY.resolved_default_bins(modified) == TARGET_INVENTORY.resolved_default_bins(metadata)
-    assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 103
+    assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 105
     errors = TARGET_INVENTORY.check_metadata(modified)
     assert any("unreviewed binary owners are declared" in e and repr(unknown) in e for e in errors)
-    assert any("declared binary count 103 differs from the expected 102" in e for e in errors)
+    assert any("declared binary count 105 differs from the expected 104" in e for e in errors)
     assert not any("non-shipping binaries enabled by default" in e for e in errors)
 
 
 def test_declared_count_is_derived_from_the_complete_closed_owner_set() -> None:
-    assert TARGET_INVENTORY.EXPECTED_DECLARED_BIN_COUNT == len(TARGET_INVENTORY.EXPECTED_DECLARED_BINS) == 102
+    assert TARGET_INVENTORY.EXPECTED_DECLARED_BIN_COUNT == len(TARGET_INVENTORY.EXPECTED_DECLARED_BINS) == 104
     assert TARGET_INVENTORY.MAX_DEFAULT_BIN_COUNT == 24
     assert len(TARGET_INVENTORY.EXPECTED_DEFAULT_BINS) == 24
 
@@ -414,7 +440,7 @@ def test_fee_rewards_evidence_verifier_requires_explicit_dev_tools_opt_in() -> N
     assert owner not in TARGET_INVENTORY.EXPECTED_DEFAULT_BINS
     assert owner in TARGET_INVENTORY.all_workspace_bins(metadata)
     assert owner not in TARGET_INVENTORY.resolved_default_bins(metadata)
-    assert len(TARGET_INVENTORY.all_workspace_bins(metadata)) == 102
+    assert len(TARGET_INVENTORY.all_workspace_bins(metadata)) == 104
     assert len(TARGET_INVENTORY.resolved_default_bins(metadata)) == 24
     assert TARGET_INVENTORY.MAX_DEFAULT_BIN_COUNT == 24
     assert TARGET_INVENTORY.check_metadata(metadata) == []
@@ -461,10 +487,10 @@ def test_fee_rewards_evidence_verifier_cannot_escape_development_inventory(
             for error in errors
         )
         if mutation == "missing":
-            assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 101
-            assert any("declared binary count 101 differs from the expected 102" in e for e in errors)
+            assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 103
+            assert any("declared binary count 103 differs from the expected 104" in e for e in errors)
         else:
-            assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 102
+            assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 104
             assert any("unreviewed binary owners are declared" in e and repr(replacement) in e for e in errors)
             assert not any("declared binary count" in e for e in errors)
     else:
@@ -473,7 +499,11 @@ def test_fee_rewards_evidence_verifier_cannot_escape_development_inventory(
         )
         enabled = {owner}
         if mutation == "default-feature":
-            enabled.add(("iroha_core", "fastpq_fixture_capture"))
+            enabled.update({
+                ("iroha_core", "fastpq_fixture_capture"),
+                ("iroha_core", "ironwood_activation_preflight"),
+                ("iroha_core", "trigger_lifecycle_preflight"),
+            })
         assert TARGET_INVENTORY.resolved_default_bins(modified) == (
             TARGET_INVENTORY.resolved_default_bins(metadata) | enabled
         )
@@ -511,7 +541,7 @@ def test_artifact_admission_tool_requires_explicit_dev_tools_opt_in() -> None:
     assert owner not in TARGET_INVENTORY.EXPECTED_DEFAULT_BINS
     assert owner in TARGET_INVENTORY.all_workspace_bins(metadata)
     assert owner not in TARGET_INVENTORY.resolved_default_bins(metadata)
-    assert len(TARGET_INVENTORY.all_workspace_bins(metadata)) == 102
+    assert len(TARGET_INVENTORY.all_workspace_bins(metadata)) == 104
     assert len(TARGET_INVENTORY.resolved_default_bins(metadata)) == 24
     assert TARGET_INVENTORY.check_metadata(metadata) == []
     # The release gate and the fixture regeneration guide build the tool explicitly.
@@ -554,10 +584,10 @@ def test_artifact_admission_tool_cannot_escape_development_inventory(mutation: s
             for error in errors
         )
         if mutation == "missing":
-            assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 101
-            assert any("declared binary count 101 differs from the expected 102" in e for e in errors)
+            assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 103
+            assert any("declared binary count 103 differs from the expected 104" in e for e in errors)
         else:
-            assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 102
+            assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 104
             assert any("unreviewed binary owners are declared" in e and repr(replacement) in e for e in errors)
             assert not any("declared binary count" in e for e in errors)
     else:
@@ -704,10 +734,10 @@ def test_enrollment_journal_provisioner_cannot_disappear_or_change_owner(mutatio
     else:
         assert any("reviewed binary owners are no longer declared" in e and repr(owner) in e for e in errors)
         if mutation == "missing":
-            assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 101
-            assert any("declared binary count 101 differs from the expected 102" in e for e in errors)
+            assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 103
+            assert any("declared binary count 103 differs from the expected 104" in e for e in errors)
         else:
-            assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 102
+            assert len(TARGET_INVENTORY.all_workspace_bins(modified)) == 104
             assert any("unreviewed binary owners are declared" in e for e in errors)
             assert any("non-shipping binaries enabled by default" in e for e in errors)
             assert len(TARGET_INVENTORY.resolved_default_bins(modified)) == 24
@@ -748,8 +778,44 @@ def test_oss_scanner_feature_owner_cannot_escape_inventory(mutation: str) -> Non
               else "non-shipping binaries enabled by default")
     assert any(marker in error and repr(owner) in error for error in errors)
     if mutation == "missing":
-        assert any("declared binary count 101 differs from the expected 102" in error for error in errors)
+        assert any("declared binary count 103 differs from the expected 104" in error for error in errors)
     elif mutation == "replaced":
         assert any("unreviewed binary owners are declared" in error for error in errors)
     else:
         assert any("default binary count 25 exceeds 24" in error for error in errors)
+
+
+@pytest.mark.parametrize("name, feature", (
+    ("ironwood_activation_preflight", "node"),
+    ("trigger_lifecycle_preflight", "json"),
+))
+def test_runtime_preflight_tools_require_explicit_development_selection(name: str, feature: str) -> None:
+    """Offline diagnostics retain their native feature and tests without shipping by default."""
+    metadata = TARGET_INVENTORY.load_metadata(ROOT)
+    owner = ("iroha_core", name)
+    package = next(row for row in metadata["packages"] if row["name"] == owner[0])
+    target = next(row for row in package["targets"] if row["name"] == name)
+    manifest = tomllib.loads((ROOT / "crates/iroha_core/Cargo.toml").read_text())
+    declared = next(row for row in manifest["bin"] if row["name"] == name)
+    assert declared["required-features"] == target["required-features"] == ["dev-tools", feature]
+    assert target["test"] is True
+    assert owner in TARGET_INVENTORY.all_workspace_bins(metadata)
+    assert owner not in TARGET_INVENTORY.resolved_default_bins(metadata)
+    assert TARGET_INVENTORY.check_metadata(metadata) == []
+    for mutation in ("missing", "replaced", "ungated", "default-feature"):
+        modified = copy.deepcopy(metadata)
+        package = next(row for row in modified["packages"] if row["name"] == owner[0])
+        target = next(row for row in package["targets"] if row["name"] == name)
+        if mutation == "missing":
+            package["targets"].remove(target)
+        elif mutation == "replaced":
+            target["name"] = "unreviewed_preflight"
+        elif mutation == "ungated":
+            target["required-features"] = [feature]
+        else:
+            node = next(row for row in modified["resolve"]["nodes"] if row["id"] == package["id"])
+            node["features"].append("dev-tools")
+        errors = TARGET_INVENTORY.check_metadata(modified)
+        marker = ("reviewed binary owners are no longer declared" if mutation in ("missing", "replaced")
+                  else "non-shipping binaries enabled by default")
+        assert any(marker in error and repr(owner) in error for error in errors), (mutation, errors)

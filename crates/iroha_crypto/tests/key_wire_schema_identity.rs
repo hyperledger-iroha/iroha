@@ -1,7 +1,8 @@
 //! Immutable pre-declaration key, algorithm and signature wire identities.
 
 use iroha_crypto::{
-    Algorithm, ExposedPrivateKey, HashOf, KeyPair, PublicKeyCompact, Signature, SignatureOf,
+    Algorithm, ExposedPrivateKey, HashOf, KeyPair, PrivateKey, PublicKeyCompact, Signature,
+    SignatureOf,
 };
 use norito::schema::identity::frame_hash;
 use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, codec::Encode, json};
@@ -67,9 +68,30 @@ fn current_frames() -> Vec<json::Value> {
         }
     }
     for algorithm in [Algorithm::Ed25519, Algorithm::Secp256k1] {
-        let keys =
+        let keys = if algorithm == Algorithm::Secp256k1 {
+            // Public test-only material captured before the schema declarations.
+            // Freeze the original scalar and point: provider RNG sampling changed
+            // with elliptic-curve 0.14, but this test owns wire identity, not key
+            // derivation. Production seed derivation and the goldens stay intact.
+            let keys = KeyPair::from(
+                PrivateKey::from_hex(
+                    algorithm,
+                    "9c7125052b3bdb29a0e9164b01dad280d0a02dcdcda0300580cd7fd1e4c5a9d1",
+                )
+                .unwrap(),
+            );
+            let captured_public =
+                hex::decode("0326d306415612ce73aae0466bd5f278185fce954cd138a9f95a5a266dbc7656e0")
+                    .unwrap();
+            assert_eq!(
+                keys.public_key().to_bytes(),
+                (algorithm, captured_public.as_slice())
+            );
+            keys
+        } else {
             KeyPair::try_from_seed(b"Iroha crypto key frame fixtures only".to_vec(), algorithm)
-                .unwrap();
+                .unwrap()
+        };
         let compact: PublicKeyCompact =
             norito::codec::decode_adaptive(&keys.public_key().encode()).unwrap();
         let signature = Signature::try_new(keys.private_key(), b"wire identity fixture").unwrap();

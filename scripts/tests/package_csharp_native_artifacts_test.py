@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -240,6 +242,42 @@ class CSharpNativePackageTests(unittest.TestCase):
                     root,
                     source_state=clean_source_state,
                 )
+
+    def test_native_smokes_require_pack_success_without_optional_retry_success(self) -> None:
+        """Evaluate the smoke condition after optional retry ancestors are skipped."""
+
+        workflow = (REPO_ROOT / ".github/workflows/pr_csharp.yml").read_text()
+        smoke = workflow.split("  native-package-smoke:\n", 1)[1]
+        header = smoke.split("    strategy:\n", 1)[0]
+        self.assertIn("    needs: build-test-pack\n", header)
+        match = re.search(r"(?m)^    if: \$\{\{ (.+) \}\}$", header)
+        self.assertIsNotNone(match, "optional ancestor skips must not suppress native smokes")
+        for cancelled, packed, retry, retry_2 in itertools.product(
+            (False, True), ("success", "failure", "skipped", "cancelled", ""),
+            ("success", "skipped", "failure"), ("success", "skipped", "failure"),
+        ):
+            with self.subTest(cancelled=cancelled, packed=packed, retry=retry, retry_2=retry_2):
+                prior_success = not cancelled and all(
+                    outcome == "success" for outcome in (packed, retry, retry_2)
+                )
+                expression = match[1].replace("needs.build-test-pack.result", repr(packed))
+                functions = {"cancelled()": cancelled, "success()": prior_success,
+                             "failure()": "failure" in (packed, retry, retry_2), "always()": True}
+                has_status_function = any(name in expression for name in functions)
+                for name, value in functions.items():
+                    expression = expression.replace(name, repr(value))
+                expression = re.sub(r"!(?!=)", "not ", expression).replace("&&", "and").replace("||", "or")
+                selected = eval(expression, {"__builtins__": {}}, {})
+                if not has_status_function:
+                    selected = selected and prior_success
+                self.assertEqual(selected, not cancelled and packed == "success")
+        self.assertNotIn("continue-on-error:", smoke)
+        self.assertIn("      fail-fast: false\n", smoke)
+        self.assertEqual(smoke.count("          - os:"), 5)
+        self.assertIn("          name: csharp-sdk-native-package-${{ github.sha }}\n", smoke)
+        self.assertIn("          path: ${{ runner.temp }}/csharp-sdk-package\n", smoke)
+        self.assertIn("          CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER: ${{ matrix.rid }}\n", smoke)
+        self.assertIn("        run: ci/check_csharp_sdk_package_consumer.sh\n", smoke)
 
     def test_repository_pack_and_workflow_contract(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/pr_csharp.yml").read_text(

@@ -7,6 +7,10 @@ import { PRIVACY_PROTOCOL_IDS_V1 as SOURCE_IDS } from "../src/privacyCapabilitie
 import { PRIVACY_PROTOCOL_IDS_V1 as DIST_IDS } from "../dist/privacyCapabilities.js";
 
 const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+const EXACT12_ROWS = readFileSync(`${REPO_ROOT}/fixtures/privacy/exact12_v1.tsv`, "utf8")
+  .split("\n")
+  .map((line) => line.split("\t"))
+  .filter(([kind]) => kind === "protocol");
 const EXPECTED_IDS = [
   "zk-ace-pq-authorization-v1",
   "anonymous-pgc-k-out-of-n-v1",
@@ -26,15 +30,42 @@ function source(path) {
   return readFileSync(`${REPO_ROOT}/${path}`, "utf8");
 }
 
+// This is a source-contract check. Native catalog construction and archive
+// validation remain exercised by their Rust and SDK runtime suites.
+function assertNativeExact12Roster(rust) {
+  const declaration = /impl PrivacyRuntimeProtocolIdV1\s*\{[\s\S]*?pub const ALL: \[Self; Self::COUNT\] = \[([\s\S]*?)\];/u.exec(rust);
+  assert.ok(declaration, "native V1 catalog declares its complete canonical roster");
+  const variants = declaration[1].split(",").map((entry) => entry.trim()).filter(Boolean);
+  assert.deepEqual(variants, EXACT12_ROWS.map((row) => `Self::${row[3]}`));
+}
+
 test("JavaScript, Python, and the Rust data model pin one canonical protocol order", () => {
+  assert.equal(EXACT12_ROWS.length, 12);
+  assert.deepEqual(EXACT12_ROWS.map((row) => row[1]), EXPECTED_IDS.map((_, index) => String(index)));
+  assert.deepEqual(EXACT12_ROWS.map((row) => row[2]), EXPECTED_IDS);
   assert.deepEqual(SOURCE_IDS, EXPECTED_IDS);
   assert.deepEqual(DIST_IDS, EXPECTED_IDS);
 
   const python = source("python/iroha_python/src/iroha_python/privacy_catalog.py");
   const rust = source("crates/iroha_data_model/src/privacy.rs");
+  assertNativeExact12Roster(rust);
   for (const id of EXPECTED_IDS) {
     assert.match(python, new RegExp(`"${id}"`));
     assert.match(rust, new RegExp(`"${id}"`));
+  }
+});
+
+test("native V1 catalog parity rejects missing, reordered, and extension rows", () => {
+  const rust = source("crates/iroha_data_model/src/privacy.rs");
+  const first = "Self::ZkAcePqAuthorizationV1,";
+  const last = "Self::PqMaspStarkV1,";
+  for (const changed of [
+    rust.replace(first, ""),
+    rust.replace(/Self::(?:ZkAcePqAuthorizationV1|PqMaspStarkV1),/gu, (entry) => entry === first ? last : first),
+    rust.replace(last, `${last} Self::IronwoodHalo2ActionsV1,`),
+  ]) {
+    assert.notEqual(changed, rust, "negative control changes the native roster");
+    assert.throws(() => assertNativeExact12Roster(changed), assert.AssertionError);
   }
 });
 
@@ -47,7 +78,7 @@ test("native SDK archives expose local compiled profiles without synthesizing re
     const rust = source(path);
     const productionRust = rust.split(/\n#\[cfg\(test\)\]\nmod tests\s*\{/u, 1)[0];
     assert.match(rust, /PrivacyCompiledProfileCatalogV1/);
-    assert.match(rust, /PrivacyProtocolIdV1::ALL/);
+    assert.match(rust, /PrivacyRuntimeProtocolIdV1::ALL/);
     assert.match(rust, /compiled_privacy_profile_catalog_v1/);
     assert.match(
       rust,

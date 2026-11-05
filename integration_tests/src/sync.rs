@@ -10,11 +10,115 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::runtime::Runtime;
+/// Run a bounded synchronous test operation outside every Tokio runtime context.
+///
+/// Tokio's blocking pool still enters its runtime handle, which the blocking SDK
+/// intentionally refuses. This helper owns a native thread instead; awaiting or
+/// dropping its future joins that exact thread. Callers must supply operations
+/// with their existing transport or test deadlines.
+///
+/// # Errors
+/// Returns thread creation failures, a panic diagnostic, or loss of the result.
+pub fn spawn_blocking<F, T>(operation: F) -> impl std::future::Future<Output = std::io::Result<T>>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let thread = std::thread::Builder::new()
+        .name("iroha-integration-blocking".into())
+        .spawn(move || {
+            let value = operation();
+            let _ = sender.send(value);
+        })
+        .map(|thread| NativeBlockingThread(Some(thread)));
+    async move {
+        let mut thread = thread?;
+        let value = receiver.await;
+        thread.join()?;
+        value.map_err(|_| std::io::Error::other("native blocking task lost its result"))
+    }
+}
+
+struct NativeBlockingThread(Option<std::thread::JoinHandle<()>>);
+
+impl NativeBlockingThread {
+    fn join(&mut self) -> std::io::Result<()> {
+        let Some(thread) = self.0.take() else {
+            return Ok(());
+        };
+        thread.join().map_err(|payload| {
+            let message = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("non-string panic payload");
+            std::io::Error::other(format!("native blocking task panicked: {message}"))
+        })
+    }
+}
+
+impl Drop for NativeBlockingThread {
+    fn drop(&mut self) {
+        // A timeout may stop polling the future, but it does not abandon its
+        // already-started native operation or allow its client to outlive the test.
+        let _ = self.join();
+    }
+}
+
 // Integration submissions occasionally need more time to commit under DA-enabled consensus;
 // give the network a bounded window before failing. Keep bounded to avoid long hangs when
 // Torii is unreachable, but allow env overrides for slower hosts.
 const STATUS_RETRY_DELAY: Duration = Duration::from_millis(100);
 const STATUS_RETRY_DEFAULT: Duration = Duration::from_secs(120);
+
+/// Read complete authoritative status within one original observation deadline.
+/// Only the SDK's typed busy/deadline responses may be retried. Authentication,
+/// malformed data, transport failures and other service errors remain terminal.
+///
+/// # Errors
+/// Returns the original terminal response or expiration of the caller's deadline.
+pub async fn status_until(client: &iroha::client::Client, deadline: Instant) -> Result<Status> {
+    tokio::time::timeout_at(deadline.into(), async {
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            eyre::ensure!(!remaining.is_zero(), "status observation deadline elapsed");
+            let mut builder = client.with_request_deadline(deadline).to_builder();
+            builder.torii_request_timeout = builder.torii_request_timeout.min(remaining);
+            match builder.build()?.status().get().await {
+                Ok(status) => {
+                    eyre::ensure!(
+                        Instant::now() < deadline,
+                        "status observation deadline elapsed"
+                    );
+                    return Ok(status);
+                }
+                Err(error) => {
+                    let iroha::Error::StatusUnavailable {
+                        reason:
+                            Some(
+                                iroha::StatusFailureReason::DeadlineElapsed
+                                | iroha::StatusFailureReason::StateBusy,
+                            ),
+                        retry_after,
+                    } = &error
+                    else {
+                        return Err(error.into());
+                    };
+                    let delay = retry_after
+                        .unwrap_or(Duration::from_millis(150))
+                        .max(Duration::from_millis(150));
+                    if delay >= deadline.saturating_duration_since(Instant::now()) {
+                        return Err(error.into());
+                    }
+                    tokio::time::sleep(delay).await;
+                }
+            }
+        }
+    })
+    .await
+    .wrap_err("status observation exceeded its original deadline")?
+}
 
 /// Run a synchronous fixture operation without inheriting a Tokio runtime.
 ///
@@ -776,5 +880,48 @@ mod tests {
             msg.contains("status retry failed"),
             "expected status retry failure, got: {msg}"
         );
+    }
+}
+
+#[cfg(test)]
+mod native_blocking_tests {
+    use super::spawn_blocking;
+
+    async fn checks_runtime_context() {
+        assert!(
+            tokio::task::spawn_blocking(|| tokio::runtime::Handle::try_current().is_ok())
+                .await
+                .unwrap()
+        );
+        assert!(
+            spawn_blocking(|| tokio::runtime::Handle::try_current().is_err())
+                .await
+                .unwrap()
+        );
+        let error = spawn_blocking::<_, ()>(|| panic!("native fixture panic"))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("native fixture panic"));
+    }
+
+    #[tokio::test]
+    async fn native_blocking_calls_leave_current_thread_runtime() {
+        checks_runtime_context().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn native_blocking_calls_leave_multi_thread_runtime() {
+        checks_runtime_context().await;
+    }
+
+    #[test]
+    fn dropping_native_blocking_future_joins_its_operation() {
+        let completed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = std::sync::Arc::clone(&completed);
+        let task = spawn_blocking(move || {
+            observed.store(true, std::sync::atomic::Ordering::Release);
+        });
+        drop(task);
+        assert!(completed.load(std::sync::atomic::Ordering::Acquire));
     }
 }

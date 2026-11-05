@@ -1,5 +1,5 @@
 //! Deadline-bound status observations for the real committee-transition fixture.
-use eyre::{Result, WrapErr as _, ensure};
+use eyre::{Result, ensure};
 use std::time::{Duration, Instant};
 
 const RETRY_DELAY: Duration = Duration::from_millis(150);
@@ -170,33 +170,9 @@ pub async fn quote_fees_until(
 
 /// Read an authoritative applied height without extending the caller's deadline.
 pub async fn height_until(client: &iroha::client::Client, deadline: Instant) -> Result<u64> {
-    tokio::time::timeout_at(deadline.into(), async {
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            ensure!(!remaining.is_zero(), "committee status deadline elapsed");
-            let mut builder = client.to_builder();
-            builder.torii_request_timeout = builder.torii_request_timeout.min(remaining);
-            match builder.build()?.status().get().await {
-                Ok(status) => {
-                    ensure!(
-                        Instant::now() < deadline,
-                        "committee status deadline elapsed"
-                    );
-                    return Ok(status.blocks);
-                }
-                Err(error) => {
-                    let Some(delay) =
-                        retry_delay(&error, deadline.saturating_duration_since(Instant::now()))
-                    else {
-                        return Err(error.into());
-                    };
-                    tokio::time::sleep(delay).await;
-                }
-            }
-        }
-    })
-    .await
-    .wrap_err("committee status exceeded its original deadline")?
+    Ok(integration_tests::sync::status_until(client, deadline)
+        .await?
+        .blocks)
 }
 
 /// Observe every voter concurrently within the same original phase deadline.

@@ -218,7 +218,7 @@ def test_js_instruction_type_map_rejects_hardcoded_hashes(
         MODULE._extract_js_instruction_type_map(source)  # type: ignore[attr-defined]
 
 
-def _run_isolated_replay(root: Path) -> tuple[int, dict, Path, Path]:
+def _run_isolated_replay(root: Path, *, current_js: bool = False) -> tuple[int, dict, Path, Path]:
     codegen_root = root / "stage" / "codegen"
     codegen_root.mkdir(parents=True)
     manifest = _write_manifest(
@@ -247,8 +247,11 @@ def _run_isolated_replay(root: Path) -> tuple[int, dict, Path, Path]:
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     source_root = root / "source"
     js_source = source_root / "javascript/iroha_js/src/norito.js"
-    js_source.parent.mkdir(parents=True)
-    _write_js_type_map(js_source)
+    if current_js:
+        assert _copy_current_js_inventory(source_root) == js_source
+    else:
+        js_source.parent.mkdir(parents=True)
+        _write_js_type_map(js_source)
     summary_path = root / "stage" / "summary.json"
     args = [
         "--manifest", str(manifest),
@@ -265,9 +268,10 @@ def _run_isolated_replay(root: Path) -> tuple[int, dict, Path, Path]:
     return exit_code, summary, manifest, metadata_path
 
 
-def test_isolated_replays_have_identical_logical_summaries(tmp_path: Path) -> None:
-    first = _run_isolated_replay(tmp_path / "first")
-    second = _run_isolated_replay(tmp_path / "second")
+@pytest.mark.parametrize("current_js", [False, True])
+def test_isolated_replays_have_identical_logical_summaries(tmp_path: Path, current_js: bool) -> None:
+    first = _run_isolated_replay(tmp_path / "first", current_js=current_js)
+    second = _run_isolated_replay(tmp_path / "second", current_js=current_js)
 
     assert first[0] == second[0] == 0
     assert first[1] == second[1]
@@ -335,12 +339,84 @@ def _copy_current_js_inventory(tmp_path: Path) -> Path:
     target_dir.mkdir(parents=True)
     for filename in (
         "norito.js",
+        "noritoValueCodecs.js",
         "noritoNftMarketCodecs.js",
         "noritoGameRegistry.js",
-        "noritoValueCodecs.js",
     ):
         (target_dir / filename).write_bytes((source_dir / filename).read_bytes())
     return target_dir / "norito.js"
+
+
+def test_current_js_imported_prefix_matches_inline_owner_across_independent_roots(
+    tmp_path: Path,
+) -> None:
+    first = _copy_current_js_inventory(tmp_path / "first")
+    second = _copy_current_js_inventory(tmp_path / "second")
+    inline = _copy_current_js_inventory(tmp_path / "inline")
+    source = inline.read_text(encoding="utf-8")
+    assert source.count("  TEXT_IROHA_DATA_MODEL,\n") == 1
+    source = source.replace("  TEXT_IROHA_DATA_MODEL,\n", "", 1)
+    inline.write_text(
+        'const TEXT_IROHA_DATA_MODEL = "iroha_data_model::";\n' + source,
+        encoding="utf-8",
+    )
+    maps = [MODULE._extract_js_instruction_type_map(path) for path in (first, second, inline)]
+    assert maps[0] == maps[1] == maps[2]
+    assert len(maps[0]) >= 70
+    assert MODULE._canonical_sha256(maps[0]) == MODULE._canonical_sha256(maps[1])
+
+
+@pytest.mark.parametrize(
+    ("filename", "old", "new", "error"),
+    [
+        ("norito.js", './noritoValueCodecs.js', './foreign.js', "unsupported JS instruction constant import"),
+        ("norito.js", './noritoValueCodecs.js', '../noritoValueCodecs.js', "unsupported JS instruction constant import"),
+        ("norito.js", '  TEXT_IROHA_DATA_MODEL,', '  OTHER_PREFIX as TEXT_IROHA_DATA_MODEL,', "unsupported JS instruction constant import"),
+        ("norito.js", '  TEXT_IROHA_DATA_MODEL,', '  TEXT_IROHA_DATA_MODEL, TEXT_IROHA_DATA_MODEL,', "unsupported JS instruction constant import"),
+        ("norito.js", '  TEXT_IROHA_DATA_MODEL,', '  TEXT_IROHA_DATA_MODEL,,', "unsupported JS instruction constant import"),
+        ("norito.js", 'const TEXT_IROHA_DATA_MODEL_ISI', 'import { TEXT_IROHA_DATA_MODEL } from "./noritoValueCodecs.js";\nconst TEXT_IROHA_DATA_MODEL_ISI', "repeated JS instruction constant import"),
+        ("norito.js", 'const TEXT_IROHA_DATA_MODEL_ISI', 'const TEXT_IROHA_DATA_MODEL = "iroha_data_model::";\nconst TEXT_IROHA_DATA_MODEL_ISI', "missing or repeated JS instruction constant"),
+        ("noritoValueCodecs.js", '  TEXT_IROHA_DATA_MODEL,', '', "missing or repeated JS instruction constant export"),
+        ("noritoValueCodecs.js", '  TEXT_IROHA_DATA_MODEL,', '  TEXT_IROHA_DATA_MODEL, TEXT_IROHA_DATA_MODEL,', "missing or repeated JS instruction constant export"),
+        ("noritoValueCodecs.js", '  TEXT_IROHA_DATA_MODEL,', '  TEXT_IROHA_DATA_MODEL as OTHER_PREFIX,', "missing or repeated JS instruction constant export"),
+        ("noritoValueCodecs.js", 'const TEXT_IROHA_DATA_MODEL = "iroha_data_model::";', 'const TEXT_IROHA_DATA_MODEL = "iroha_data_model::";\nconst TEXT_IROHA_DATA_MODEL = "iroha_data_model::";', "missing or repeated JS instruction constant"),
+        ("noritoValueCodecs.js", 'const TEXT_IROHA_DATA_MODEL = "iroha_data_model::";', 'const TEXT_IROHA_DATA_MODEL = TEXT_IROHA_DATA_MODEL;', "cyclic JavaScript instruction binding constant"),
+        ("noritoValueCodecs.js", 'const TEXT_IROHA_DATA_MODEL = "iroha_data_model::";', 'const TEXT_IROHA_DATA_MODEL = getPrefix();', "unsupported JS instruction binding expression"),
+        ("noritoValueCodecs.js", '"iroha_data_model::"', '"foreign_model::"', "noncanonical JS instruction binding"),
+    ],
+)
+def test_current_js_imported_prefix_rejects_owner_and_expression_drift(
+    tmp_path: Path, filename: str, old: str, new: str, error: str,
+) -> None:
+    js_source = _copy_current_js_inventory(tmp_path)
+    owner = js_source.with_name(filename)
+    original = owner.read_text(encoding="utf-8")
+    assert old in original
+    owner.write_text(original.replace(old, new, 1), encoding="utf-8")
+    with pytest.raises(ValueError, match=error):
+        MODULE._extract_js_instruction_type_map(js_source)
+
+
+def test_current_js_imported_prefix_requires_readable_owner(tmp_path: Path) -> None:
+    js_source = _copy_current_js_inventory(tmp_path)
+    js_source.with_name("noritoValueCodecs.js").unlink()
+    with pytest.raises(ValueError, match="cannot read JS instruction constant owner"):
+        MODULE._extract_js_instruction_type_map(js_source)
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [('(PREFIX + "isi::")', "iroha_data_model::isi::"), ('(PREFIX) + ("isi::")', "iroha_data_model::isi::")],
+)
+def test_js_string_expression_preserves_parenthesized_concatenation(
+    expression: str, expected: str,
+) -> None:
+    assert MODULE._js_string_expression(Path(__file__), 'const PREFIX = "iroha_data_model::";', expression) == expected
+
+
+def test_js_parentheses_preserve_missing_constant_diagnostic() -> None:
+    with pytest.raises(ValueError, match="missing or repeated JS instruction constant MISSING"):
+        MODULE._js_string_expression(Path(__file__), '', '(MISSING + "isi::")')
 
 
 def test_current_js_computed_wire_id_and_imported_bindings_match_manifest(

@@ -47,6 +47,23 @@ const DOMAIN_REGISTRATION_RECOVERY_POLL: Duration = Duration::from_millis(250);
 const ACCOUNT_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(30);
 const ACCOUNT_VISIBILITY_POLL: Duration = Duration::from_millis(100);
 const CANONICAL_EXECUTOR: &[u8] = include_bytes!("../../defaults/executor.to");
+fn fund_multisig_fixture_authority(
+    network: &Network,
+    client: &Client,
+    account: &AccountId,
+) -> Result<()> {
+    let fee_asset =
+        iroha_genesis::signed_genesis_root_fee_policy(&network.genesis().0)?.fee_asset_id;
+    client.submit(
+        Transfer::asset_quantity(
+            AssetId::new(fee_asset, client.client().account().clone()),
+            10_000_u32,
+            account.clone(),
+        ),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    Ok(())
+}
 fn proposal_nonce(seed: u8) -> MultisigProposalNonce {
     MultisigProposalNonce::new([seed; 32]).expect("nonzero fixture nonce")
 }
@@ -701,9 +718,10 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
         .expect("network should expose at least one peer")
         .torii_url()
         .clone();
+    let cancel_client = alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client);
     let propose_cancel = post_torii_app_json(
         &rt,
-        &alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client),
+        &cancel_client,
         &BOB_KEYPAIR,
         &format!("{torii_base}/v1/multisig/cancel"),
         &MultisigCancelRequestDto {
@@ -897,7 +915,7 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
             }),
         "proposer should receive a hashed MULTISIG_SIGNATORY role for the long multisig account"
     );
-    fund_runtime_signers(&test_client, [proposer.0.clone()])?;
+    fund_multisig_fixture_authority(&network, &test_client, &proposer.0)?;
     let proposer_client = alt_client(proposer.clone(), &test_client);
     let mut expected_proposal_ids = Vec::new();
     for suffix in ["a", "b", "c"] {
@@ -1135,7 +1153,7 @@ fn multisig_materialized_signatory_can_propose_and_approve() -> Result<()> {
             (missing_signer.0.clone(), 1),
         ]),
         NonZeroU16::new(2).unwrap(),
-        NonZeroU64::MAX,
+        NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).expect("finite default proposal TTL"),
     );
     let seed_account = AccountId::new(KeyPair::random().public_key().clone());
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
@@ -1263,6 +1281,18 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account() -
         register_accounts,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
+    let fee_asset_definition = iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+        .parse::<AssetDefinitionId>()?;
+    test_client
+        .submit(
+            Transfer::asset_quantity(
+                AssetId::new(fee_asset_definition, ALICE_ID.clone()),
+                100u32,
+                non_signatory.0.clone(),
+            ),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .wrap_err("fund the existing non-signatory authority for multisig registration fees")?;
     let missing_signer = gen_account_in(domain.name());
     let spec = MultisigSpec::new(
         BTreeMap::from([
@@ -1369,6 +1399,18 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account_aft
         register_accounts,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
+    let fee_asset_definition = iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+        .parse::<AssetDefinitionId>()?;
+    test_client
+        .submit(
+            Transfer::asset_quantity(
+                AssetId::new(fee_asset_definition, ALICE_ID.clone()),
+                100u32,
+                non_signatory.0.clone(),
+            ),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .wrap_err("fund the existing non-signatory authority for multisig registration fees")?;
     let missing_signer = gen_account_in(domain.name());
     let spec = MultisigSpec::new(
         BTreeMap::from([
@@ -1418,7 +1460,7 @@ fn multisig_add_signatory_materializes_missing_account() -> Result<()> {
     let spec = MultisigSpec::new(
         BTreeMap::from([(existing_signer.0.clone(), 1)]),
         NonZeroU16::new(1).unwrap(),
-        NonZeroU64::MAX,
+        NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).expect("finite default proposal TTL"),
     );
     let seed_account = AccountId::new(KeyPair::random().public_key().clone());
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client).submit::<InstructionBox>(
@@ -1431,9 +1473,9 @@ fn multisig_add_signatory_materializes_missing_account() -> Result<()> {
         find_account(&test_client, &missing_signer.0)?.is_none(),
         "precondition: missing signatory must not exist"
     );
-    // Domain ownership does not authorize controller mutation. The existing
-    // one-of-one member proposes and approves the exact AddSignatory instruction.
-    fund_runtime_signers(&test_client, [existing_signer.0.clone()])?;
+    // Domain ownership does not authorize another account's controller mutation.
+    // The existing single-member quorum executes the change as the multisig account.
+    fund_multisig_fixture_authority(&network, &test_client, &existing_signer.0)?;
     let signer_client = alt_client(existing_signer, &test_client);
     let instructions = vec![
         AddSignatory::new(
@@ -1455,6 +1497,10 @@ fn multisig_add_signatory_materializes_missing_account() -> Result<()> {
         .into(),
         FeePaymentIntent::authority(Vec::new(), None),
     )?;
+    assert!(
+        find_account(&test_client, &missing_signer.0)?.is_none(),
+        "proposal alone must not execute even when the proposer is the entire quorum"
+    );
     signer_client.submit::<InstructionBox>(
         MultisigApprove::new(multisig_account_id, proposal_id, instructions_hash).into(),
         FeePaymentIntent::authority(Vec::new(), None),

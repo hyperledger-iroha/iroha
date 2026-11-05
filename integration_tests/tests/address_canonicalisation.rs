@@ -3,6 +3,7 @@ use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox::{
     self, start_network_async_or_skip as sandbox_start_network_async_or_skip,
 };
+use integration_tests::sync::spawn_blocking;
 use iroha::data_model::{
     isi::{
         SetKeyValue,
@@ -19,22 +20,26 @@ use iroha::data_model::{
 };
 use iroha_data_model::account::address::AccountAddress;
 use iroha_data_model::alias_setup::{
-    AccountAliasRoleV1, AccountProvisionV1, ResolvedAccountAliasV1,
+    AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, ResolvedAccountAliasV1,
 };
 use iroha_data_model::prelude::RepoInstructionBox;
 use iroha_executor_data_model::permission::account::{
-    AccountAliasPermissionScope, CanManageAccountAlias,
+    AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
 };
+use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_model_base::topology::DataSpaceId;
 use iroha_test_network::{
-    NetworkBuilder, account_alias_setup_instruction, init_instruction_registry,
+    NetworkBuilder, account_alias_setup_instruction, account_alias_setup_instruction_in_dataspace,
+    domain_setup_instruction_in_dataspace, init_instruction_registry,
 };
 use iroha_test_samples::{
     ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR,
     SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
 };
+use iroha_torii::filter::{FilterExpr, ListQuery};
 use reqwest::Client;
 use std::{
     env,
@@ -87,6 +92,39 @@ fn http_client() -> Client {
         .connect_timeout(Duration::from_secs(5))
         .build()
         .expect("http client should build")
+}
+fn collection_equality_url(
+    mut url: reqwest::Url,
+    field: &str,
+    literal: &str,
+    limit: u32,
+) -> Result<reqwest::Url> {
+    let query = ListQuery::new()
+        .filter(FilterExpr::Eq(field.into(), literal.into()))
+        .limit(limit);
+    url.query_pairs_mut().extend_pairs(query.to_query_pairs()?);
+    Ok(url)
+}
+#[test]
+fn collection_equality_urls_use_the_current_get_filter_language() -> Result<()> {
+    for field in ["id", "authority"] {
+        for literal in [i105_alice_literal(), dotted_i105_alice_literal()] {
+            let url = collection_equality_url(
+                "http://127.0.0.1:8080/v1/accounts".parse()?,
+                field,
+                &literal,
+                8,
+            )?;
+            let parsed = ListQuery::from_query_pairs(url.query_pairs())?;
+            assert_eq!(
+                parsed,
+                ListQuery::new()
+                    .filter(FilterExpr::Eq(field.into(), literal.into()))
+                    .limit(8),
+            );
+        }
+    }
+    Ok(())
 }
 fn kaigi_operator_http_client() -> Client {
     Client::builder()
@@ -206,10 +244,7 @@ fn extract_holder_account_ids(value: &norito::json::Value) -> Vec<String> {
         })
         .unwrap_or_default()
 }
-async fn find_asset_definition_with_holders(
-    http: &Client,
-    base: &reqwest::Url,
-) -> Result<Option<String>> {
+async fn find_asset_definition_with_holders(http: &Client, base: &reqwest::Url) -> Result<String> {
     let definitions_url = base
         .join("/v1/assets/definitions?limit=64")
         .expect("join asset definitions url");
@@ -242,7 +277,6 @@ async fn find_asset_definition_with_holders(
                 .collect()
         })
         .unwrap_or_default();
-    let mut first_successful_definition: Option<String> = None;
     for definition_id in definition_ids {
         let mut holders_url = base.clone();
         {
@@ -250,7 +284,7 @@ async fn find_asset_definition_with_holders(
                 .path_segments_mut()
                 .expect("torii_url must allow path segments");
             path.clear();
-            path.push("v2");
+            path.push("v1");
             path.push("assets");
             path.push(definition_id.as_str());
             path.push("holders");
@@ -261,26 +295,21 @@ async fn find_asset_definition_with_holders(
             .header("Accept", "application/json")
             .send()
             .await?;
-        if holders_resp.status() == reqwest::StatusCode::NOT_FOUND {
-            continue;
-        }
-        if !holders_resp.status().is_success() {
-            continue;
-        }
-        if first_successful_definition.is_none() {
-            first_successful_definition = Some(definition_id.clone());
-        }
+        let status = holders_resp.status();
         let holders_body = holders_resp.text().await?;
+        eyre::ensure!(
+            status.is_success(),
+            "failed to list holders for {definition_id}: {status} body={holders_body}"
+        );
         let holders_json: norito::json::Value = norito::json::from_str(&holders_body)?;
         let holder_ids = extract_holder_account_ids(&holders_json);
         if !holder_ids.is_empty() {
-            return Ok(Some(definition_id));
+            return Ok(definition_id);
         }
     }
-    if let Some(definition_id) = first_successful_definition {
-        return Ok(Some(definition_id));
-    }
-    Ok(None)
+    Err(eyre!(
+        "test genesis must expose an asset definition with holders"
+    ))
 }
 fn extract_explorer_authorities(value: &norito::json::Value) -> Vec<String> {
     value
@@ -530,19 +559,14 @@ async fn accounts_listing_filter_rejects_dotted_i105_literals() -> Result<()> {
         .code_str()
         .to_string();
     // GET filters use the textual grammar; JSON filter trees belong to POST queries.
-    let filter = format!(r#"id == "{literal}""#);
     let http = http_client();
-    let mut url = network
+    let url = network
         .client()
         .client()
         .endpoint()
         .join("/v1/accounts")
         .expect("join accounts url");
-    {
-        let mut pairs = url.query_pairs_mut();
-        pairs.append_pair("filter", &filter);
-        pairs.append_pair("limit", "8");
-    }
+    let url = collection_equality_url(url, "id", &literal, 8)?;
     let resp = http
         .get(url)
         .header("Accept", "application/json")
@@ -852,19 +876,15 @@ async fn asset_holders_get_supports_i105_response() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
     let http = http_client();
-    let Some(definition_literal) =
-        find_asset_definition_with_holders(&http, network.client().client().endpoint()).await?
-    else {
-        eprintln!("Skipping asset holder GET I105 coverage: holders endpoint unavailable.");
-        return Ok(());
-    };
+    let definition_literal =
+        find_asset_definition_with_holders(&http, network.client().client().endpoint()).await?;
     let mut url = network.client().client().endpoint().clone();
     {
         let mut path = url
             .path_segments_mut()
             .expect("torii_url must allow path segments");
         path.clear();
-        path.push("v2");
+        path.push("v1");
         path.push("assets");
         path.push(definition_literal.as_str());
         path.push("holders");
@@ -911,19 +931,15 @@ async fn asset_holders_query_rejects_dotted_i105_filter_literals() -> Result<()>
         .to_string();
     let body = format!(r#"{{"filter":{{"op":"eq","args":["account_id","{literal}"]}},"limit":4}}"#);
     let http = http_client();
-    let Some(definition_literal) =
-        find_asset_definition_with_holders(&http, network.client().client().endpoint()).await?
-    else {
-        eprintln!("Skipping asset holder query I105 coverage: holders endpoint unavailable.");
-        return Ok(());
-    };
+    let definition_literal =
+        find_asset_definition_with_holders(&http, network.client().client().endpoint()).await?;
     let mut url = network.client().client().endpoint().clone();
     {
         let mut path = url
             .path_segments_mut()
             .expect("torii_url must allow path segments");
         path.clear();
-        path.push("v2");
+        path.push("v1");
         path.push("assets");
         path.push(definition_literal.as_str());
         path.push("holders");
@@ -1219,15 +1235,7 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
         .endpoint()
         .join("/v1/explorer/transactions")
         .expect("join explorer transactions url");
-    let default_url = {
-        let mut url = base.clone();
-        {
-            let mut qp = url.query_pairs_mut();
-            qp.append_pair("filter", &format!(r#"authority == "{account_literal}""#));
-            qp.append_pair("limit", "8");
-        }
-        url
-    };
+    let default_url = collection_equality_url(base.clone(), "authority", &account_literal, 8)?;
     let resp = http
         .get(default_url)
         .header("Accept", "application/json")
@@ -1251,15 +1259,7 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
             .all(|literal| literal == &account_literal),
         "explorer transactions should default to I105 literals; got {authorities:?}"
     );
-    let i105_url = {
-        let mut url = base.clone();
-        {
-            let mut qp = url.query_pairs_mut();
-            qp.append_pair("filter", &format!(r#"authority == "{account_literal}""#));
-            qp.append_pair("limit", "8");
-        }
-        url
-    };
+    let i105_url = collection_equality_url(base.clone(), "authority", &account_literal, 8)?;
     let resp = http
         .get(i105_url)
         .header("Accept", "application/json")
@@ -1282,15 +1282,8 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
         "explorer transactions should honour canonical I105; got {authorities:?}"
     );
     let dotted_i105_filter = dotted_i105_literal(&i105_literal);
-    let dotted_i105_filter_url = {
-        let mut url = base;
-        {
-            let mut qp = url.query_pairs_mut();
-            qp.append_pair("filter", &format!(r#"authority == "{dotted_i105_filter}""#));
-            qp.append_pair("limit", "8");
-        }
-        url
-    };
+    let dotted_i105_filter_url =
+        collection_equality_url(base, "authority", &dotted_i105_filter, 8)?;
     let dotted_i105_reason = AccountId::parse_encoded(&dotted_i105_filter)
         .expect_err("dotted I105 authority filter must fail strict parsing")
         .code_str()
@@ -1356,15 +1349,7 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
         .endpoint()
         .join("/v1/explorer/instructions")
         .expect("join explorer instructions url");
-    let default_url = {
-        let mut url = base.clone();
-        {
-            let mut qp = url.query_pairs_mut();
-            qp.append_pair("filter", &format!(r#"authority == "{account_literal}""#));
-            qp.append_pair("limit", "8");
-        }
-        url
-    };
+    let default_url = collection_equality_url(base.clone(), "authority", &account_literal, 8)?;
     let resp = http
         .get(default_url)
         .header("Accept", "application/json")
@@ -1388,15 +1373,7 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
             .all(|literal| literal == &account_literal),
         "explorer instructions should default to I105 literals; got {authorities:?}"
     );
-    let i105_url = {
-        let mut url = base.clone();
-        {
-            let mut qp = url.query_pairs_mut();
-            qp.append_pair("filter", &format!(r#"authority == "{account_literal}""#));
-            qp.append_pair("limit", "8");
-        }
-        url
-    };
+    let i105_url = collection_equality_url(base.clone(), "authority", &account_literal, 8)?;
     let resp = http
         .get(i105_url)
         .header("Accept", "application/json")
@@ -1419,15 +1396,8 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
         "explorer instructions should honour canonical I105; got {authorities:?}"
     );
     let dotted_i105_filter = dotted_i105_literal(&i105_literal);
-    let dotted_i105_filter_url = {
-        let mut url = base;
-        {
-            let mut qp = url.query_pairs_mut();
-            qp.append_pair("filter", &format!(r#"authority == "{dotted_i105_filter}""#));
-            qp.append_pair("limit", "8");
-        }
-        url
-    };
+    let dotted_i105_filter_url =
+        collection_equality_url(base, "authority", &dotted_i105_filter, 8)?;
     let dotted_i105_reason = AccountId::parse_encoded(&dotted_i105_filter)
         .expect_err("dotted I105 authority filter must fail strict parsing")
         .code_str()
@@ -1641,33 +1611,43 @@ async fn accounts_query_rejects_public_key_filter_literals() -> Result<()> {
     Ok(())
 }
 #[tokio::test]
-async fn accounts_query_requires_canonical_ids_for_aliased_accounts() -> Result<()> {
-    let domain_id: DomainId = DomainId::try_new("aliases", "universal")?;
+#[allow(clippy::too_many_lines)]
+async fn accounts_query_requires_canonical_ids_after_alias_resolution() -> Result<()> {
+    let domain_id = DomainId::try_new("aliases", "universal")?;
     let alias_literal = format!("primary@{domain_id}");
-    let alias = ResolvedAccountAliasV1::new(
-        alias_literal.parse()?,
-        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-    );
+    let alias: AccountAliasName = alias_literal.parse()?;
     let account_id = checked_random_account_id();
+    let domain_scope = AccountAliasPermissionScope::Domain(domain_id.clone());
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
-        .with_genesis_instruction(Register::domain(Domain::new(domain_id.clone())))
         .with_genesis_instruction(Register::account(Account::new(account_id.clone())))
+        .with_genesis_instruction(Register::domain(Domain::new(domain_id.clone())))
+        .with_genesis_instruction(Transfer::domain(
+            SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+            domain_id.clone(),
+            ALICE_ID.clone(),
+        ))
         .with_genesis_instruction(Grant::account_permission(
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Alias(alias),
+                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
             }),
-            SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+            ALICE_ID.clone(),
         ))
-        .with_genesis_instruction(account_alias_setup_instruction(
-            &alias_literal,
-            &account_id,
-            AccountProvisionV1::Existing,
-            AccountAliasRoleV1::Primary,
-        )?);
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanManageAccountAlias {
+                scope: domain_scope.clone(),
+            }),
+            ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanResolveAccountAlias {
+                scope: domain_scope,
+            }),
+            ALICE_ID.clone(),
+        ));
     let Some(network) = Box::pin(start_network_async_or_skip(
         builder,
-        stringify!(accounts_query_requires_canonical_ids_for_aliased_accounts),
+        stringify!(accounts_query_requires_canonical_ids_after_alias_resolution),
     ))
     .await?
     else {
@@ -1675,83 +1655,95 @@ async fn accounts_query_requires_canonical_ids_for_aliased_accounts() -> Result<
     };
     network.ensure_blocks(1).await?;
     let client = network.client();
-    let url = client
-        .client()
-        .endpoint()
-        .join("/v1/accounts/query")
-        .expect("join accounts query url");
-    let expected = account_id.to_string();
+    let setup = [
+        domain_setup_instruction_in_dataspace(&domain_id, DataSpaceId::UNIVERSAL, &ALICE_ID)?,
+        account_alias_setup_instruction_in_dataspace(
+            &alias_literal,
+            DataSpaceId::UNIVERSAL,
+            &account_id,
+            AccountProvisionV1::Existing,
+            AccountAliasRoleV1::Primary,
+        )?,
+    ];
+    let resolved = spawn_blocking({
+        let client = client.clone();
+        let alias = alias.clone();
+        move || -> Result<_> {
+            client.submit_all(
+                setup,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )?;
+            let resolved = client
+                .client()
+                .resolve_account_alias_authenticated(&alias)?;
+            let absent: AccountAliasName = "missing@aliases.universal".parse()?;
+            assert!(
+                client
+                    .client()
+                    .resolve_account_alias_authenticated(&absent)?
+                    .is_none()
+            );
+            Ok(resolved)
+        }
+    })
+    .await??
+    .expect("the separately leased alias must resolve");
+    assert_eq!(resolved.alias(), &alias);
+    assert_eq!(resolved.account_id(), &account_id);
+
+    let url = client.client().endpoint().join("/v1/accounts/query")?;
+    let expected = resolved.account_id().to_string();
     let http = http_client();
     wait_for_account_in_query(&http, url.clone(), &expected).await?;
-    let i105_literal = dotted_i105_literal(&account_id.to_string());
-    // Generic account filters require canonical IDs. Resolving an alias is a
-    // separate caller-aware operation with its own resolution permission.
-    let alias_body =
-        format!(r#"{{"filter":{{"op":"eq","args":["id","{alias_literal}"]}},"limit":4}}"#);
-    let alias_resp = http
-        .post(url.clone())
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .body(alias_body)
-        .send()
-        .await?;
-    let alias_status = alias_resp.status();
-    let alias_body = alias_resp.text().await?;
-    assert_eq!(
-        alias_status,
-        reqwest::StatusCode::BAD_REQUEST,
-        "generic filters must reject even a bound alias, got {alias_status} body={alias_body}"
-    );
-    let alias_doc: norito::json::Value = norito::json::from_str(&alias_body)?;
-    assert_eq!(
-        alias_doc.get("code").and_then(norito::json::Value::as_str),
-        Some("invalid_filter"),
-        "alias rejection must identify the invalid filter: {alias_doc:?}"
-    );
-    assert!(
-        alias_body.contains("account filter requires a canonical I105 literal"),
-        "alias rejection must explain the canonical-ID requirement: {alias_body}"
-    );
-    let canonical_body =
-        format!(r#"{{"filter":{{"op":"eq","args":["id","{expected}"]}},"limit":4}}"#);
-    let canonical_resp = http
+    let canonical_body = norito::json::to_vec(&norito::json!({
+        "filter": {"op": "eq", "args": ["id", expected]}, "limit": 4
+    }))?;
+    let canonical_response = http
         .post(url.clone())
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
         .body(canonical_body)
         .send()
         .await?;
-    assert_eq!(canonical_resp.status(), reqwest::StatusCode::OK);
-    let canonical_doc = norito::json::from_str(&canonical_resp.text().await?)?;
-    let canonical_ids = extract_account_ids(&canonical_doc);
+    let canonical_status = canonical_response.status();
+    let canonical_body = canonical_response.text().await?;
     assert_eq!(
-        canonical_ids,
-        vec![expected],
-        "canonical filter must return exactly the bound account as a canonical ID"
+        canonical_status,
+        reqwest::StatusCode::OK,
+        "{canonical_body}"
     );
-    let body = format!(r#"{{"filter":{{"op":"eq","args":["id","{i105_literal}"]}},"limit":4}}"#);
-    let resp = http
-        .post(url.clone())
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .body(body)
-        .send()
-        .await?;
-    let status = resp.status();
-    let body = resp.text().await?;
-    let reason = AccountId::parse_encoded(&i105_literal)
-        .expect_err("dotted I105 literal must fail strict parsing")
-        .code_str()
-        .to_string();
-    assert_eq!(
-        status,
-        reqwest::StatusCode::BAD_REQUEST,
-        "dotted I105 literal should be rejected, got {status} body={body}"
-    );
-    assert!(
-        body.contains(&reason),
-        "response body should mention {reason}, got {body}"
-    );
+    let canonical_doc: norito::json::Value = norito::json::from_str(&canonical_body)?;
+    assert_eq!(extract_account_ids(&canonical_doc), vec![expected.clone()]);
+
+    // Alias resolution is a distinct caller-aware read. Even an active alias
+    // must never be accepted as an account identity in the generic collection filter.
+    for rejected in [alias_literal, dotted_i105_literal(&expected)] {
+        let reason = AccountId::parse_encoded(&rejected)
+            .expect_err("only canonical I105 literals are account identities")
+            .code_str()
+            .to_string();
+        let body = norito::json::to_vec(&norito::json!({
+            "filter": {"op": "eq", "args": ["id", rejected]}, "limit": 4
+        }))?;
+        let response = http
+            .post(url.clone())
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .body(body)
+            .send()
+            .await?;
+        let status = response.status();
+        let body = response.text().await?;
+        assert_eq!(
+            status,
+            reqwest::StatusCode::BAD_REQUEST,
+            "noncanonical account filter {rejected} should fail: {body}"
+        );
+        assert!(
+            body.contains(&reason),
+            "response should mention {reason}, got {body}"
+        );
+    }
     Ok(())
 }
 #[tokio::test]
@@ -1816,32 +1808,42 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-    // Issue the repo agreement after genesis to avoid initial-executor restrictions. Some
-    // environments may not ship repo instructions; skip gracefully if the binary rejects them.
+    // Consent binds both legs to this exact settlement and each intended movement.
+    let cash_consent = Permission::from(CanExecuteSettlement {
+        debited_asset: AssetId::new(cash_def_id, BOB_ID.clone()),
+        settlement_id: repo_instruction.settlement_id(),
+        intent_hash: repo_instruction.initiation_intent_hash(),
+    });
+    let collateral_consent = Permission::from(CanExecuteSettlement {
+        debited_asset: AssetId::new(collateral_def_id, BOB_ID.clone()),
+        settlement_id: repo_instruction.settlement_id(),
+        intent_hash: repo_instruction.maturity_intent_hash(),
+    });
     let repo_instruction_box: InstructionBox = RepoInstructionBox::from(repo_instruction).into();
     let client = network.client();
-    let account = client.account_client();
-    let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
-        [repo_instruction_box],
-        iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        Metadata::default(),
-    ))?;
-    let quote = account
-        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
-        .await?;
-    assert!(
-        payload
-            .fee_payment
-            .has_same_payer_and_gas_bound(&quote.intent),
-        "repo fee quote must preserve the selected payer and gas bound"
-    );
-    payload.fee_payment = quote.intent;
-    let transaction = account.sign_transaction(payload)?;
-    if let Err(err) = account.submit_transaction_and_wait(&transaction).await {
-        eprintln!("Skipping repo i105 literal coverage: {err}");
-        return Ok(());
-    }
-    network.ensure_blocks(2).await?;
+    spawn_blocking({
+        let client = client.clone();
+        move || -> Result<()> {
+            let bob_client = integration_tests::sync::rebind_blocking_client(&client, |config| {
+                config.account = BOB_ID.clone();
+                config.key_pair = BOB_KEYPAIR.clone();
+            });
+            bob_client.submit_all(
+                [
+                    Grant::account_permission(cash_consent, ALICE_ID.clone()),
+                    Grant::account_permission(collateral_consent, ALICE_ID.clone()),
+                ],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )?;
+            client.submit(
+                repo_instruction_box,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )?;
+            Ok(())
+        }
+    })
+    .await??;
+    network.ensure_blocks(3).await?;
     let http = http_client();
     let base = client.client().endpoint().clone();
     let i105_alice = ALICE_ID.to_string();
@@ -1865,14 +1867,8 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let entry = if let Some(entry) = find_repo_entry(&parsed, agreement_literal.as_str()) {
-        entry
-    } else {
-        eprintln!(
-            "Skipping repo i105 literal coverage: repo agreement not observed after submission."
-        );
-        return Ok(());
-    };
+    let entry = find_repo_entry(&parsed, agreement_literal.as_str())
+        .expect("repo listing must include the applied fixture agreement");
     let initiator = entry
         .get("initiator")
         .and_then(norito::json::Value::as_str)
@@ -1926,8 +1922,36 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
     let query_url = base.join("/v1/repo/agreements/query")?;
     let query_body =
         format!(r#"{{"filter":{{"op":"eq","args":["id","{agreement_literal}"]}},"limit":4}}"#);
+    let unsigned = http
+        .post(query_url.clone())
+        .header("Content-Type", "application/json")
+        .body(query_body.clone())
+        .send()
+        .await?;
+    assert_eq!(unsigned.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let timestamp_ms = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
+    let nonce = "address-canonicalisation-repo-query";
+    let message = iroha_torii::canonical_network_request_signature_message(
+        client.client().network_id(),
+        &iroha_torii::Method::POST,
+        &query_url.path().parse()?,
+        query_body.as_bytes(),
+        timestamp_ms,
+        nonce,
+    )?;
+    let signature = Signature::try_new(client.client().key_pair().private_key(), &message)?;
     let resp = http
         .post(query_url)
+        .header(
+            iroha_torii::HEADER_ACCOUNT,
+            client.client().account().to_canonical_hex()?,
+        )
+        .header(
+            iroha_torii::HEADER_SIGNATURE,
+            iroha_torii::signature_header_value(&signature)?,
+        )
+        .header(iroha_torii::HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
+        .header(iroha_torii::HEADER_NONCE, nonce)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
         .body(query_body)

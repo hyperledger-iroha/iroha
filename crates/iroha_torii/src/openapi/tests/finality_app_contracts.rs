@@ -13,7 +13,7 @@ fn assert_array_bounds(schema: &Map, minimum: u64, maximum: u64, unique: Option<
 fn assert_item_ref(schema: &Map, expected: &str) {
     scalar_contracts! { schema.get("items").and_then(Value::as_object).and_then(|items| items.get("$ref")) => Text(expected); }
 }
-fn object_field_set(object: &Map) -> BTreeSet<&str> {
+pub(super) fn object_field_set(object: &Map) -> BTreeSet<&str> {
     object.keys().map(String::as_str).collect()
 }
 fn schema_string_field_set<'a>(schema: &'a Map, key: &str, context: &str) -> BTreeSet<&'a str> {
@@ -497,6 +497,8 @@ fn generated_spec_documents_collection_pages_and_queries() {
         &response_rows! {
         "/v1/accounts", "get", "200", "#/components/schemas/AccountPage";
         "/v1/accounts/query", "post", "200", "#/components/schemas/AccountPage";
+        "/v1/roles/query", "post", "200", "#/components/schemas/RolePage";
+        "/v1/accounts/{account_id}/roles/query", "post", "200", "#/components/schemas/AccountRolePage";
         "/v1/domains", "get", "200", "#/components/schemas/DomainPage";
         "/v1/domains/query", "post", "200", "#/components/schemas/DomainPage";
         "/v1/accounts/{account_id}/assets", "get", "200", "#/components/schemas/AccountAssetPage";
@@ -523,14 +525,14 @@ fn generated_spec_documents_collection_pages_and_queries() {
     },
     );
     let schemas = component_schemas(&document);
-    for page in contract_words("AccountPage AccountAssetPage AssetDefinitionPage AssetHolderPage DomainPage NftPage RepoAgreementPage RwaPage TransactionPage AccountHistoryPage ContractActivityPage ContractEventPage") {
+    for page in contract_words("AccountPage AccountAssetPage AssetDefinitionPage AssetHolderPage DomainPage NftPage RepoAgreementPage RwaPage TransactionPage AccountHistoryPage ContractActivityPage ContractEventPage RolePage AccountRolePage") {
         let schema = contract_schema(schemas, page);
         let required = schema_fields(schema, "required", page);
         string_members! { required; Present => &["items", "next_cursor"]; };
         let properties = contract_object(schema.get("properties"), page);
         member_contracts! { properties; Absent => &["has_more", "count_mode", "offset"]; }
     }
-    for path in contract_words("/v1/accounts/query /v1/domains/query /v1/repo/agreements/query") {
+    for path in contract_words("/v1/accounts/query /v1/domains/query /v1/repo/agreements/query /v1/roles/query /v1/accounts/{account_id}/roles/query") {
         text_contracts! { operation_request_schema_ref(openapi_operation(&document, path, "post"), path) => "#/components/schemas/CollectionQuery"; }
     }
     text_contracts! { operation_request_schema_ref(openapi_operation(&document, "/v1/transactions/query", "post"), "/v1/transactions/query") => "#/components/schemas/HistoryQuery"; }
@@ -710,4 +712,72 @@ fn scoped_artifact_openapi_binds_network_full_dataspace_and_content() {
     ] {
         assert!(document.get("paths").unwrap().get(retired).is_none());
     }
+}
+
+#[test]
+fn generated_spec_role_reads_require_canonical_authorized_callers() {
+    let document = generate_spec();
+    for (path, method, account_scoped) in [
+        ("/v1/roles", "get", false),
+        ("/v1/roles/query", "post", false),
+        ("/v1/accounts/{account_id}/roles", "get", true),
+        ("/v1/accounts/{account_id}/roles/query", "post", true),
+    ] {
+        let operation = openapi_operation(&document, path, method);
+        let security = operation.get("security").and_then(Value::as_array).unwrap();
+        assert!(!security.is_empty());
+        assert!(
+            security
+                .iter()
+                .all(|entry| !entry.as_object().unwrap().is_empty())
+        );
+        assert!(
+            operation
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap()
+                .contains("CanReadAllLedgerData")
+        );
+        let description = operation.get("description").and_then(Value::as_str).unwrap();
+        if account_scoped {
+            assert!(description.contains("CanReadAccountData"));
+            assert!(description.contains("target account"));
+        }
+        let responses = operation.get("responses").unwrap();
+        assert!(responses.get("401").is_some());
+        assert!(responses.get("403").is_some());
+        let expected_page = if account_scoped {
+            "#/components/schemas/AccountRolePage"
+        } else {
+            "#/components/schemas/RolePage"
+        };
+        assert_eq!(operation_response_schema_ref(operation, "200", path), expected_page);
+        if method == "post" {
+            assert_eq!(
+                operation_request_schema_ref(operation, path),
+                "#/components/schemas/CollectionQuery"
+            );
+        } else {
+            for name in ["filter", "sort", "select", "limit", "cursor", "include_total"] {
+                assert!(operation_parameters(operation).iter().any(|parameter| {
+                    parameter.get("name").and_then(Value::as_str) == Some(name)
+                }), "{path} is missing {name}");
+            }
+        }
+    }
+    let schemas = component_schemas(&document);
+    assert_eq!(
+        compact_finality_app_contracts::object_field_set(contract_object(
+            contract_schema(schemas, "RoleRow").get("properties"),
+            "role fields"
+        )),
+        contract_word_set("id permissions")
+    );
+    assert_eq!(
+        compact_finality_app_contracts::object_field_set(contract_object(
+            contract_schema(schemas, "AccountRoleRow").get("properties"),
+            "assignment fields"
+        )),
+        contract_word_set("id")
+    );
 }

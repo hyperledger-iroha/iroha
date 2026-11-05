@@ -19,7 +19,9 @@ fn statement() -> IrohaZkX509StarkP256StatementV1 {
         .find(|row| row.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1)
         .expect("X509 row");
     let PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement) =
-        norito::decode_canonical(&row.statement_norito).expect("statement")
+        norito::decode_canonical::<PrivacyStatementV1>(&row.statement_norito)
+            .expect("canonical wire statement")
+            .into()
     else {
         panic!("X509 fixture")
     };
@@ -166,7 +168,15 @@ fn canonical_input_admission_and_failure_outputs_are_bounded() {
     let bundle = privacy_exact12_fixture_bundle_v1().unwrap();
     for row in bundle.rows {
         if row.protocol_id != PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 {
-            through_c(&row.statement_norito, WRONG_PROTOCOL);
+            let statement: PrivacyRuntimeStatementV1 =
+                norito::decode_canonical::<PrivacyStatementV1>(&row.statement_norito)
+                    .expect("canonical wire statement")
+                    .into();
+            through_c(
+                &norito::encode_canonical(&statement).unwrap(),
+                WRONG_PROTOCOL,
+            );
+            through_c(&row.statement_norito, NON_CANONICAL);
         }
     }
     // A correctly encoded different root schema cannot enter the statement path.

@@ -1,10 +1,11 @@
 # GPU Zstd backend ownership
 
-The CUDA and Metal plugins each retain the `gpu_zstd_compress` and
-`gpu_zstd_decompress` C exports in their separate shared libraries. Both use
-`gpuzstd_codec` for portable frame coding and the sequence layout. Neither
-backend depends on the other's device implementation or C exports. Metal's
-existing Rust codec modules and sequence type remain available as re-exports.
+The CUDA plugin exports `gpuzstd_cuda_compress` and `gpuzstd_cuda_decompress`;
+the Metal plugin exports `gpu_zstd_compress` and `gpu_zstd_decompress`. Norito
+selects the exact exports of its configured backend. Both use `gpuzstd_codec`
+for portable frame coding and the sequence layout. Neither backend depends on
+the other's device implementation or C exports. Metal's existing Rust codec
+modules and sequence type remain available as re-exports.
 
 Build both packages in one Cargo invocation to exercise workspace feature
 unification. Do not test this by disabling Metal's default `c-abi` feature:
@@ -21,8 +22,8 @@ plugins' exports and raw-frame decoding, and rejects Metal symbols or framework
 imports in the CUDA artifact. Its archive check catches the original dependency
 edge even when the linker discards a duplicate definition. Symbol inspection
 currently supports macOS and Linux and requires their native `nm` (plus `otool`
-on macOS). The plugins intentionally share C symbol names for separate loading;
-linking both C-exporting Rust libraries into one executable is not supported.
+on macOS). The plugins use distinct C symbol names so co-built libraries retain
+an unambiguous backend identity, including when both Rust libraries are linked.
 
 Existing portable codec tests now run under `gpuzstd_codec`. Metal's hardware
 parity tests consume that crate's `test-support` CPU references. Real-device

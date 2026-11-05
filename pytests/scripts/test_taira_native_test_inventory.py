@@ -1,5 +1,6 @@
 """Exact native source ownership rejects stale declarations and wrong module edges."""
 import importlib.util
+import re
 from pathlib import Path
 import shutil
 import tempfile
@@ -29,6 +30,29 @@ class NativeInventoryTests(unittest.TestCase):
 
     def validate(self):
         return inventory.validate_native_source_inventory(self.root, owners=self.owners)
+
+    def test_conditional_controls_keep_exact_child_module_gates_and_names(self):
+        cases = (
+            ("sumeragi/epoch_beacon/producer/tests.rs", "parliament_fixture_tests",
+             'feature = "test-network-parliament-signers"',
+             "parliament_fixture_owners_drive_real_threshold_shares_and_refuse_invalid_provider_output"),
+            ("query/native_context_archive/read/tests.rs", "windows_custody_tests", "windows",
+             "completed_native_read_rechecks_original_private_custody_at_receiver_finish"),
+        )
+        shipping = {leaf for _, _, _, _, _, names in inventory.NATIVE_CORE_TEST_OWNERS for leaf in names}
+        for parent, module, gate, name in cases:
+            with self.subTest(control=name):
+                path = ROOT / "crates/iroha_core/src" / parent
+                source = path.read_text()
+                registration = f'#[cfg({gate})]\n#[path = "{module}.rs"]\nmod {module};'
+                self.assertEqual(source.count(registration), 1)
+                self.assertNotIn(f"fn {name}(", source)
+                child = path.with_name(module + ".rs").read_text()
+                self.assertEqual(child.count(f"#[test]\nfn {name}("), 1)
+                self.assertIn("use super::*;", child)
+                self.assertNotIn(name, shipping)
+        selector = "sumeragi::epoch_beacon::producer::tests::parliament_fixture_tests::" + cases[0][3]
+        self.assertEqual((ROOT / "ci/check_sora_parliament_lifecycle.sh").read_text().count(selector), 1)
 
     def test_exact_owner_and_registered_source(self):
         self.assertEqual(self.validate(), {"owner::tests::exact_case"})
@@ -84,18 +108,20 @@ class NativeInventoryTests(unittest.TestCase):
             inventory.validate_native_source_inventory(
                 self.root, owners=self.owners, windows_only=(("tests.rs", "exact_case"),))
 
-    def test_reviewed_windows_only_declarations_are_gated_and_unselected(self):
-        owners = {row[2]: row for row in inventory.NATIVE_CORE_TEST_OWNERS}
+    def test_relocated_windows_control_is_exactly_gated_and_unselected(self):
+        parent = ROOT / "crates/iroha_core/src/query/native_context_archive/read/tests.rs"
+        leaf = "completed_native_read_rechecks_original_private_custody_at_receiver_finish"
+        module = "windows_custody_tests"
+        self.assertEqual(inventory.NATIVE_WINDOWS_ONLY_TESTS, ())
+        self.assertEqual(parent.read_text().count(
+            '#[cfg(windows)]\n#[path = "windows_custody_tests.rs"]\nmod windows_custody_tests;'), 1)
+        mask = inventory.rust_source_masker(ROOT)
+        declarations = re.findall(r"#\[test\]\s*fn\s+(\w+)\s*\(",
+                                  mask(parent.with_name(module + ".rs").read_text()))
+        self.assertEqual(declarations, [leaf])
+        self.assertNotIn("fn " + leaf + "(", mask(parent.read_text()))
         selectors = {name for _, names in inventory.native_owner_stages() for name in names}
-        self.assertTrue(inventory.NATIVE_WINDOWS_ONLY_TESTS)
-        for source, leaf in inventory.NATIVE_WINDOWS_ONLY_TESTS:
-            with self.subTest(source=source, leaf=leaf):
-                owner = owners[source]
-                self.assertNotIn(leaf, owner[-1])
-                self.assertNotIn(owner[4] + "::" + leaf, selectors)
-                with self.assertRaisesRegex(ValueError, "Windows-only census differs") as refusal:
-                    inventory.validate_native_source_inventory(ROOT, owners=(owner,), windows_only=())
-                self.assertIn(leaf, str(refusal.exception))
+        self.assertFalse(any(name.rsplit("::", 1)[-1] == leaf for name in selectors))
 
     def test_merged_original_custody_and_sccp_schedule_controls_require_exact_owners(self):
         """Merged controls remain mandatory and reject equal-count substitutions."""
@@ -169,7 +195,7 @@ class NativeInventoryTests(unittest.TestCase):
     def test_real_checkout_matches_every_reviewed_owner(self):
         names = inventory.validate_native_source_inventory(ROOT)
         self.assertEqual(len(names), sum(len(row[-1]) for row in inventory.NATIVE_CORE_TEST_OWNERS))
-        self.assertEqual(len(names), 636)
+        self.assertEqual(len(names), 637)
 
     def test_authenticated_epoch_schedule_stays_in_exact_boundary_census(self):
         owner, = (row for row in inventory.NATIVE_CORE_TEST_OWNERS

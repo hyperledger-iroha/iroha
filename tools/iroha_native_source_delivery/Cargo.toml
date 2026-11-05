@@ -13,6 +13,7 @@ publish = false
 workspace = true
 
 [features]
+default = []
 # The internal delivery executable is an explicit release/CI tool, never a default
 # workspace binary (scripts/check_workspace_target_inventory.py).
 dev-tools = []

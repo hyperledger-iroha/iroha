@@ -117,6 +117,10 @@ ceiling. Source and page storage fit the combined fresh and retained admission
 leases; neither a live-State replay nor a generic producer fallback is used.
 Peers support the bounded ephemeral adapter, and `FindTriggers` and
 `FindActiveTriggerIds` follow the same unfiltered, unsorted, zero-offset shape.
+Complete trigger rows include executable, authority, selector and metadata
+ownership under their source-specific bounded profile. Source scans, decoding,
+page overlap and cursor retention remain charged to the configured working-set
+and work budgets.
 Iterable producers without a source-specific bounded adapter, and shapes with
 predicates, offsets or sorting not admitted by their adapter, are refused before
 execution with the stable reason

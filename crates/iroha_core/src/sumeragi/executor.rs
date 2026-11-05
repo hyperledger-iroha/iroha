@@ -1744,17 +1744,22 @@ impl<'s> Worker<'s> {
                 "the original prepared publication is still retained".into(),
             ));
         }
-        if self
-            .finishing
-            .as_ref()
-            .is_none_or(|original| original.block_hash != block_hash)
-        {
-            self.retire_superseded_execution(block_hash);
-        }
         let pool = self.state.ivm_execution_budget();
+        // Superseded jobs are external owners of this job's pool. Return their
+        // bytes before opening the replacement's rollback-credit scope.
+        #[cfg(all(test, sumeragi_core_mutation = "HC984"))]
+        let replacement_credits = pool
+            .with_attempt_credits(None, || self.retire_superseded_execution(block_hash))
+            .1;
+        #[cfg(not(all(test, sumeragi_core_mutation = "HC984")))]
+        self.retire_superseded_execution(block_hash);
         let retained = self
             .job_decode(block_hash)
             .and_then(|attempt| attempt.rollback_credits.take());
+        // SPEC: §13.4 HC984 captures the superseded owner's retirement credits
+        // in the replacement job, so the original release observation never wakes.
+        #[cfg(all(test, sumeragi_core_mutation = "HC984"))]
+        let retained = retained.or(replacement_credits);
         let (outcome, credits) = pool.with_attempt_credits(retained, || {
             self.run_attempt_with_finisher(block, block_hash, certified, finish)
         });
@@ -1773,10 +1778,17 @@ impl<'s> Worker<'s> {
         outcome
     }
 
-    /// Retire the previous execution and any other candidate's original owners before
-    /// `block_hash` executes. This runs outside the attempt's credit scope, so their
-    /// credits return to the pool and wake its waiters.
+    /// Retire only superseded execution owners before a new job can capture refunds.
     fn retire_superseded_execution(&mut self, block_hash: Hash32) {
+        // An exact finishing retry must first revalidate its original source in
+        // run_attempt_with_finisher; no private owner can retire on that path.
+        if self
+            .finishing
+            .as_ref()
+            .is_some_and(|original| original.block_hash == block_hash)
+        {
+            return;
+        }
         // An explicitly superseded candidate releases its original private execution.
         self.finishing = None;
         // The state admits one overlay: drop the previous one first.

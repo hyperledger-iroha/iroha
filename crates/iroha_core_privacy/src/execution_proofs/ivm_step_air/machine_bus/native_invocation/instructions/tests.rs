@@ -258,11 +258,71 @@ fn exact_workspace_refusal_preserves_original_native_owner_and_final_refund() {
 }
 
 #[test]
+fn placed_rows_keep_backing_and_clear_failed_or_unwinding_initialization() {
+    let bytes = 2 * core::mem::size_of::<Witness>();
+    let budget = AllocationBudget::new(bytes);
+    let mut rows = ChargedBuffer::<Witness>::new(2, &budget).unwrap();
+    let backing = rows.spare_capacity_mut().as_ptr().cast::<Witness>();
+    Witness::push_with(&mut rows, |row| {
+        assert!(row.iter().all(|value| *value == F::ZERO));
+        row.fill(F::ONE);
+        Ok::<_, ()>(())
+    })
+    .unwrap();
+    assert_eq!(rows.as_slice().as_ptr(), backing);
+    assert_eq!(budget.reserved_bytes(), bytes);
+
+    let assert_cleared = |rows: &mut ChargedBuffer<Witness>| {
+        assert_eq!(rows.as_slice().len(), 1);
+        assert_eq!(rows.as_slice().as_ptr(), backing);
+        assert!(rows.as_slice()[0].0.iter().all(|value| *value == F::ONE));
+        // SAFETY: placement fully initialized the second row, and its destructor
+        // only overwrote its Copy fields with valid zeros. Truncation retained
+        // this allocation; inspection neither moves nor drops the row again.
+        #[allow(unsafe_code)]
+        let cleared = unsafe { rows.spare_capacity_mut()[0].assume_init_ref() };
+        assert!(cleared.0.iter().all(|value| *value == F::ZERO));
+        assert_eq!(budget.reserved_bytes(), bytes);
+    };
+    let failed = Witness::push_with(&mut rows, |row| {
+        assert!(row.iter().all(|value| *value == F::ZERO));
+        row.fill(F::ONE);
+        Err("witness refusal")
+    });
+    assert_eq!(failed, Err("witness refusal"));
+    assert_cleared(&mut rows);
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Witness::push_with(&mut rows, |row| -> Result<(), ()> {
+            assert!(row.iter().all(|value| *value == F::ZERO));
+            row.fill(F::ONE);
+            panic!("witness unwind");
+        })
+    }));
+    assert!(unwound.is_err());
+    assert_cleared(&mut rows);
+
+    Witness::push_with(&mut rows, |row| {
+        assert!(row.iter().all(|value| *value == F::ZERO));
+        Ok::<_, ()>(())
+    })
+    .unwrap();
+    assert_eq!(rows.as_slice().len(), 2);
+    assert_eq!(rows.as_slice().as_ptr(), backing);
+    assert_eq!(budget.reserved_bytes(), bytes);
+    drop(rows);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+
+#[test]
 fn maximum_native_step_profile_builds_and_evaluates_with_bounded_stack() {
     let body = [enc::encode_ri(wide::arithmetic::ADDI, 4, 4, 1); 60];
     let (native, budget) = native(artifact(&body, 0, false));
     assert_eq!(native.instructions(), ivm::execution_packets::MAX_STEPS);
     std::thread::Builder::new()
+        .name(
+            stringify!(maximum_native_step_profile_builds_and_evaluates_with_bounded_stack)
+                .to_owned(),
+        )
         .stack_size(256 * 1024)
         .spawn(move || {
             let before = budget.reserved_bytes();

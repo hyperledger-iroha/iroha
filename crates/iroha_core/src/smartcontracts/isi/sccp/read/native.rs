@@ -116,6 +116,9 @@ pub enum SccpNativeReadError {
     /// The original compact reader's typed storage, framing or admission error.
     #[error(transparent)]
     Source(#[from] NativeCommitCertificateReadErrorV1),
+    /// Exact original windowed-history refusal, retaining local decoder/allocation custody.
+    #[error(transparent)]
+    History(#[from] crate::state::CommittedOutcomeReadError),
     /// The original caller's allocation pool refused this demand.
     #[error(transparent)]
     Allocation(#[from] AllocationRefusal),

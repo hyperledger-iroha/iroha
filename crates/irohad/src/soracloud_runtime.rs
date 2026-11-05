@@ -13547,8 +13547,7 @@ fn admit_inrou_root_custodied_executable_entry_with(
         }
         let component = current.join(part);
         let entry = metadata(&component)?;
-        let mut target = None;
-        if entry.mode & 0o170000 == 0o120000 {
+        let target = if entry.mode & 0o170000 == 0o120000 {
             links = links.checked_add(1)?;
             if links > 40 || entry.uid != 0 || entry.gid != 0 || entry.links != 1 {
                 return None;
@@ -13566,13 +13565,14 @@ fn admit_inrou_root_custodied_executable_entry_with(
             for part in parts.split('/').rev() {
                 pending.push_front(part.to_owned());
             }
-            target = Some(link);
+            Some(link)
         } else {
             if !pending.is_empty() && !trusted_directory(entry) {
                 return None;
             }
-            current = component.clone();
-        }
+            current.clone_from(&component);
+            None
+        };
         observed.push((component, entry, target));
     }
     let resolved = metadata(&current)?;

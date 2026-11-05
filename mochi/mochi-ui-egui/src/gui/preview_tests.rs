@@ -107,7 +107,7 @@ impl Renderer {
                 (primitive.clip_rect.max.to_vec2() * output.pixels_per_point).to_pos2(),
             );
             let texture = self.textures.get(&mesh.texture_id);
-            for triangle in mesh.indices.chunks_exact(3) {
+            for triangle in mesh.indices.as_chunks::<3>().0 {
                 let vertices = [
                     &mesh.vertices[triangle[0] as usize],
                     &mesh.vertices[triangle[1] as usize],

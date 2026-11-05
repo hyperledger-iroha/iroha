@@ -1238,6 +1238,28 @@ class BeaconGateTests(unittest.TestCase):
             self.assertEqual(selected["network"], gate.NETWORK_OBSERVATION_STAGES + gate.BEACON_NETWORK_STAGES)
             self.assertEqual([name for _, names in selected["daemon"] for name in names].count(seam), 1)
 
+    def test_descriptor_relay_outer_controls_are_required_once_in_every_scope(self):
+        source = (SCRIPT.resolve().parents[1] / "crates/irohad/src/beacon_bootstrap/descriptor_relay_tests.rs").read_text()
+        controls = (
+            "beacon_bootstrap::descriptor_relay::tests::dense_parent_descriptors_preserve_all_native_handoffs",
+            "beacon_bootstrap::descriptor_relay::tests::typed_dispatch_restores_logs_and_rejects_missing_evidence_before_private_consumption",
+            "beacon_bootstrap::descriptor_relay::tests::surviving_unrelated_slot_is_refused_without_changing_it",
+            "beacon_bootstrap::descriptor_relay::tests::private_logs_refuse_preexisting_names_and_nonprivate_root",
+        )
+        for control in controls:
+            self.assertEqual(len(re.findall(r"#\[test\]\s*fn\s+" + control.rsplit("::", 1)[1] + r"\s*\(", source)), 1)
+        for scope in gate.QUALIFICATION_SCOPES:
+            selected = gate.qualification_stages(scope)
+            daemon = [name for _, names in selected["daemon"] for name in names]
+            for control in controls:
+                self.assertEqual(daemon.count(control), 1)
+                focus = gate.focused_regression_stages(scope, ("daemon=" + control,))
+                self.assertEqual([name for _, names in focus["daemon"] for name in names], [control])
+                listing = "\n".join(name + ": test" for name in daemon if name != control)
+                with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                    gate.require_tests(listing, selected["daemon"])
+            self.assertFalse(any(name.endswith(("::dense_parent", "::relay_child")) for name in daemon))
+
     def test_beacon_setup_and_custody_run_once_in_startup_for_every_scope(self):
         broker_controls = (
             'taira_runtime_signer::tests::disposable_broker_composes_exact_soracloud_and_threshold_catalogs',

@@ -16,7 +16,7 @@ pub const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1: usize = 512;
 /// bounded text: non-empty, unpadded, and free of control characters.
 ///
 /// # Errors
-/// Returns [`crate::error::ParseError`] when a provided reason is not canonical.
+/// Returns [`iroha_model_base::error::ParseError`] when a provided reason is not canonical.
 pub fn validate_asset_transfer_availability_reason(
     reason: Option<&str>,
 ) -> Result<(), iroha_model_base::error::ParseError> {
@@ -275,7 +275,7 @@ impl AssetTransferControlRecord {
     /// Validate the canonical persisted representation of this record.
     ///
     /// # Errors
-    /// Returns [`crate::error::ParseError`] when the record contains an empty
+    /// Returns [`iroha_model_base::error::ParseError`] when the record contains an empty
     /// policy, a non-canonical reason, duplicate or unordered windows, a
     /// cleared limit, or usage for a window without an active limit.
     pub fn validate_canonical(&self) -> Result<(), iroha_model_base::error::ParseError> {
@@ -399,7 +399,7 @@ impl AssetTransferControlStoreV1 {
     /// or ambiguous legacy state must be rejected rather than normalized.
     ///
     /// # Errors
-    /// Returns [`crate::error::ParseError`] when records are duplicated,
+    /// Returns [`iroha_model_base::error::ParseError`] when records are duplicated,
     /// unordered, empty, or individually non-canonical.
     pub fn validate_canonical(&self) -> Result<(), iroha_model_base::error::ParseError> {
         if self.controls.is_empty() {

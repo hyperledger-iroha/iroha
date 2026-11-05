@@ -68,6 +68,24 @@ def test_checked_in_inventory_seals_current_consumers() -> None:
     assert stats.tests == 703
 
 
+@pytest.mark.parametrize("mutation", ["missing", "renamed-test"])
+def test_x509_pending_action_module_remains_sealed(tmp_path: Path, mutation: str) -> None:
+    copied_manifest = _copy_fixture_tree(tmp_path)
+    source = tmp_path / "crates/kotodama_lang/src/compiler/x509_pending_action_tests.rs"
+    if mutation == "missing":
+        source.unlink()
+        with pytest.raises(FileNotFoundError) as error:
+            checker.validate_manifest(tmp_path, copied_manifest)
+        assert error.value.filename == str(source)
+    else:
+        text = source.read_text(encoding="utf-8")
+        original = "fn pending_action_cannot_be_forged_observed_encoded_or_persisted()"
+        assert text.count(original) == 1
+        source.write_text(text.replace(original, "fn unreviewed_pending_action_test()"), encoding="utf-8")
+        with pytest.raises(checker.ValidationError, match="test name/order inventory changed"):
+            checker.validate_manifest(tmp_path, copied_manifest)
+
+
 def test_corrupt_fixture_inventory_digest_fails_closed(tmp_path: Path) -> None:
     copied_manifest = _copy_fixture_tree(tmp_path)
     payload = json.loads(copied_manifest.read_text(encoding="utf-8"))

@@ -1,8 +1,8 @@
 //! Soracloud manifest schema for deterministic service hosting on Sora3.
 //!
-//! The initial Soracloud release uses canonical Norito payloads: [`SoraContainerManifestV1`],
-//! [`SoraServiceManifestV1`], [`SoraStateBindingV1`], [`AgentApartmentManifestV1`],
-//! [`FheParamSetV1`], and [`FheExecutionPolicyV1`]. Together they describe executable bundles,
+//! The initial Soracloud release uses canonical Norito payloads: [`crate::soracloud::SoraContainerManifestV1`],
+//! [`crate::soracloud::SoraServiceManifestV1`], [`crate::soracloud::SoraStateBindingV1`], [`crate::soracloud::AgentApartmentManifestV1`],
+//! [`crate::soracloud::FheParamSetV1`], and [`crate::soracloud::FheExecutionPolicyV1`]. Together they describe executable bundles,
 //! deployment/routing policy, state mutation limits, agent-policy envelopes, and deterministic
 //! policy metadata and audit trails. FHE remains unavailable for production: the exact
 //! BFV profile is insecure and no replacement encryption profile is qualified.

@@ -143,9 +143,18 @@ fn configuration_readback_and_node_local_restart() -> eyre::Result<()> {
             restarted_peer.start_checked(layers.iter(), None),
         )
         .await
-        .wrap_err("handshake-compatible validator restart exceeded its startup deadline")??;
+        .wrap_err("compatible-work validator restart exceeded its startup deadline")??;
         Ok::<_, eyre::Report>(())
     })?;
+    let compatible = operators[0].configuration().get()?;
+    assert_shared_settings(&compatible);
+    assert_pow(&compatible, (6, 720, 180, 360, 8192, 1, 1));
+    assert_eq!(compatible.logger.level, Level::DEBUG);
+    assert_eq!(compatible.logger.filter.as_deref(), Some("iroha_p2p=trace"));
+    assert_eq!(
+        handshake_identity(&compatible.network.soranet_handshake),
+        handshake_identity(&baseline[0].network.soranet_handshake),
+    );
 
     let height = network.peers()[1].client().status().get()?.blocks;
     network.peers()[1].client().submit(
@@ -199,6 +208,55 @@ fn handshake_identity(value: &SoranetHandshakeSummary) -> (&str, &str, &str, u8,
         value.sig_id,
         value.resume_hash_hex.as_deref(),
     )
+}
+
+#[test]
+fn restart_readback_policy_requires_compatible_handshake_work() {
+    use iroha_crypto::soranet::{pow, puzzle};
+    use std::num::NonZeroU32;
+    use std::time::UNIX_EPOCH;
+
+    let policy = |memory, time, lanes, difficulty, skew, minimum| {
+        puzzle::Parameters::try_new(
+            NonZeroU32::new(memory).unwrap(),
+            NonZeroU32::new(time).unwrap(),
+            NonZeroU32::new(lanes).unwrap(),
+            difficulty,
+            Duration::from_secs(skew),
+            Duration::from_secs(minimum),
+        )
+        .unwrap()
+    };
+    let baseline = policy(8192, 1, 1, 6, 900, 120);
+    let higher_work = policy(12288, 3, 3, 7, 720, 180);
+    let compatible = policy(8192, 1, 1, 6, 720, 180);
+    let binding = puzzle::ChallengeBinding::new(&[0x31; 32], &[0x42; 32], &[0x53; 32]);
+    // A fixed public ticket keeps verification independent of wall-clock time and search cost.
+    let ticket = pow::Ticket {
+        version: pow::Ticket::VERSION,
+        difficulty: 6,
+        expires_at: 1_793_798_821,
+        client_nonce: [
+            138, 54, 128, 39, 175, 88, 190, 69, 234, 40, 12, 96, 126, 7, 85, 57, 223, 84, 88, 221,
+            115, 204, 76, 11, 161, 182, 241, 7, 156, 237, 123, 240,
+        ],
+        solution: [
+            218, 6, 165, 2, 77, 228, 142, 120, 147, 61, 34, 137, 135, 155, 136, 167, 20, 113, 255,
+            62, 174, 56, 111, 149, 140, 104, 196, 14, 9, 9, 95, 112,
+        ],
+    };
+    for ttl in [240, 360] {
+        let now = UNIX_EPOCH + Duration::from_secs(ticket.expires_at - ttl);
+        assert!(puzzle::verify_at(&ticket, &binding, &baseline, now).is_ok());
+        assert!(puzzle::verify_at(&ticket, &binding, &compatible, now).is_ok());
+        assert!(matches!(
+            puzzle::verify_at(&ticket, &binding, &higher_work, now),
+            Err(puzzle::Error::DifficultyMismatch {
+                ticket: 6,
+                required: 7
+            })
+        ));
+    }
 }
 
 fn assert_startup_configuration(config: &Configuration) {

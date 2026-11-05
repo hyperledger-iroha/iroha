@@ -3,8 +3,9 @@
 //! Version 1 stores equally sized chunks in write-once slots in an unlinked Unix temporary file.
 //! Every slot is independently protected with XChaCha20-Poly1305. The file is never reopenable
 //! through this API: the live file descriptor, zeroizing key, immutable layout, context, and arena
-//! nonce prefix move together from [`ConfidentialSpoolWriterV1`] to
-//! [`ConfidentialSpoolSnapshotV1`].
+//! nonce prefix move together from
+//! [`ConfidentialSpoolWriterV1`](crate::confidential_spool::ConfidentialSpoolWriterV1) to
+//! [`ConfidentialSpoolSnapshotV1`](crate::confidential_spool::ConfidentialSpoolSnapshotV1).
 //!
 //! This module deliberately makes narrower claims than encrypted storage. It does not claim secure
 //! deletion, swap exclusion, core-dump exclusion, page-cache erasure, or an RSS bound. The snapshot

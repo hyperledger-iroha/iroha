@@ -56,11 +56,13 @@ impl ManagedStreamTokenCustody {
         } else {
             let terms = Terms::new(deadline_unix_ms, options)?;
             let (policy, _) = self.retained_configuration(options.deadline)?;
-            let (verifier, current) = self.observe(&policy.binding, options.deadline)?;
+            let (verifier, current, source) =
+                self.observe_with_source(&policy.binding, options.deadline)?;
             let unsigned = self.select_renewal_unsigned(
                 sequence,
                 &policy,
                 &current,
+                source,
                 &verifier,
                 &terms,
                 options.deadline,
@@ -165,6 +167,7 @@ impl ManagedStreamTokenCustody {
         sequence: u64,
         policy: &SignerCustodyPolicyV1,
         current: &VerifiedStreamTokenCustodyStateV1,
+        source: Vec<u8>,
         verifier: &FinalityVerifier,
         terms: &Terms,
         deadline: Instant,
@@ -191,7 +194,8 @@ impl ManagedStreamTokenCustody {
             now,
             terms.requested_deadline_unix_ms,
         )?;
-        let unsigned = self.unsigned_enrollment(policy, current, verifier, interval, now)?;
+        let unsigned =
+            self.unsigned_enrollment(policy, current, source, verifier, interval, now)?;
         unsigned.validate_with_checkpoint(
             self,
             CustodyPurpose::Renewal(sequence),

@@ -62,7 +62,7 @@ def inspect_symbols(artifacts: dict[str, dict[str, Path]]) -> None:
         arguments = ("-gU",) if sys.platform == "darwin" else ("-D", "--defined-only")
         symbols = output("nm", *arguments, plugin)
         exported = [line.split()[-1].removeprefix("_") for line in symbols.splitlines() if line.split()]
-        for symbol in ("gpu_zstd_compress", "gpu_zstd_decompress"):
+        for symbol in c_abi_symbols(name):
             if exported.count(symbol) != 1:
                 raise AssertionError(f"{name} must export exactly one {symbol}")
     cuda = artifacts["gpuzstd_cuda"]
@@ -77,15 +77,25 @@ def inspect_symbols(artifacts: dict[str, dict[str, Path]]) -> None:
             raise AssertionError("CUDA plugin imports the Metal framework")
 
 
-def verify_c_abi(plugin: Path, require_cuda_unavailable: bool) -> None:
+def c_abi_symbols(backend: str) -> tuple[str, str]:
+    """Select the exact current exports owned by one known backend."""
+    if backend == "gpuzstd_cuda":
+        return "gpuzstd_cuda_compress", "gpuzstd_cuda_decompress"
+    if backend == "gpuzstd_metal":
+        return "gpu_zstd_compress", "gpu_zstd_decompress"
+    raise ValueError(f"unknown GPU Zstd backend: {backend}")
+
+
+def verify_c_abi(backend: str, plugin: Path, require_cuda_unavailable: bool) -> None:
     """Exercise actual exported functions without requiring an accelerator."""
     library = ctypes.CDLL(str(plugin), mode=ctypes.RTLD_LOCAL)
     pointer = ctypes.c_void_p
     size_pointer = ctypes.POINTER(ctypes.c_size_t)
-    compress = library.gpu_zstd_compress
+    compress_symbol, decompress_symbol = c_abi_symbols(backend)
+    compress = getattr(library, compress_symbol)
     compress.argtypes = [pointer, ctypes.c_size_t, ctypes.c_int, pointer, size_pointer]
     compress.restype = ctypes.c_int
-    decompress = library.gpu_zstd_decompress
+    decompress = getattr(library, decompress_symbol)
     decompress.argtypes = [pointer, ctypes.c_size_t, pointer, size_pointer]
     decompress.restype = ctypes.c_int
 
@@ -120,7 +130,7 @@ def main() -> None:
     artifacts = artifact_paths(args.cargo_messages)
     inspect_symbols(artifacts)
     for name, paths in artifacts.items():
-        verify_c_abi(paths["plugin"], args.cuda_unavailable and name == "gpuzstd_cuda")
+        verify_c_abi(name, paths["plugin"], args.cuda_unavailable and name == "gpuzstd_cuda")
     print("Both plugin C ABIs passed; CUDA artifacts contain no Metal implementation.")
 
 

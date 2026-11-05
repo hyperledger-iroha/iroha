@@ -86,7 +86,7 @@ fn required_avx2_dif_owner_matches_scalar_dense_and_refusal_boundaries() {
         pool.install(|| {
             for common in 2..=10 {
                 let rows = 1usize << common;
-                for length in [
+                for length in std::collections::BTreeSet::from([
                     1,
                     2,
                     3,
@@ -95,10 +95,7 @@ fn required_avx2_dif_owner_matches_scalar_dense_and_refusal_boundaries() {
                     rows / 2 + 1,
                     rows - 1,
                     rows,
-                ]
-                .into_iter()
-                .collect::<std::collections::BTreeSet<_>>()
-                {
+                ]) {
                     if length == 0 || length > rows {
                         continue;
                     }

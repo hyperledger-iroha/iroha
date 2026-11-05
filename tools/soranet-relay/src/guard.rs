@@ -584,6 +584,8 @@ mod tests {
         at_unix: i64,
         valid_until_unix: i64,
         _temp: NamedTempFile,
+        // Drop the file before removing its protected parent directory.
+        _directory: tempfile::TempDir,
     }
     #[test]
     fn load_guard_entry_validates_snapshot() {
@@ -640,7 +642,10 @@ mod tests {
             fixture.at_unix,
         )
         .expect_err("mismatched descriptor commit should fail validation");
-        matches!(err, GuardDirectoryError::DescriptorCommitMismatch { .. });
+        assert!(matches!(
+            err,
+            GuardDirectoryError::DescriptorCommitMismatch { .. }
+        ));
     }
     #[test]
     fn load_guard_entry_rejects_invalid_expected_digest_without_panic() {
@@ -1053,7 +1058,14 @@ mod tests {
         let bytes = snapshot
             .to_bytes()
             .expect("guard directory snapshot encodes");
-        let mut temp = NamedTempFile::new().expect("temp file");
+        let directory = tempfile::tempdir().expect("snapshot fixture directory");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+                .expect("protect snapshot fixture directory");
+        }
+        let mut temp = NamedTempFile::new_in(directory.path()).expect("snapshot file");
         temp.write_all(&bytes).expect("write snapshot");
         let config = GuardDirectoryConfig {
             snapshot_path: temp.path().to_path_buf(),
@@ -1067,6 +1079,7 @@ mod tests {
             at_unix: snapshot.valid_after_unix,
             valid_until_unix: snapshot.valid_until_unix,
             _temp: temp,
+            _directory: directory,
         }
     }
     #[allow(clippy::too_many_arguments)]

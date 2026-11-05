@@ -430,13 +430,22 @@ pub(super) fn matched_benchmark_builder(
             processes.extend(committee.iter().map(|entry| entry.peer.clone()));
             let mut transactions = genesis_post_topology(shape, &processes, &committee);
             transactions.extend(post.clone());
-            unexecuted_genesis_factory_with_post_topology(
+            let genesis = unexecuted_genesis_factory_with_post_topology(
                 Vec::new(),
                 transactions,
                 topology,
                 entries,
                 genesis_staking_policy(),
-            )
+            );
+            assert_eq!(
+                iroha_genesis::signed_genesis_consensus_metadata(&genesis.0)
+                    .expect("matched workload has signed consensus metadata")
+                    .sumeragi_context
+                    .root_scope,
+                iroha::data_model::block::consensus::SumeragiRootScope::Global,
+                "matched balance observations require one global World checkpoint"
+            );
+            genesis
         })
         .with_genesis_instruction(npos_override_instruction(VALIDATORS_PER_LANE))
         .with_private_settlement_route_control())
@@ -552,18 +561,99 @@ pub(super) fn coherent_control_balances(
     client: &Client,
     ids: &[AssetId],
 ) -> Result<Vec<TransparentControlBalanceExpectation>> {
-    let assets = client.client().query(FindAssets::new()).execute_all()?;
+    let request_timeout = client.client().torii_request_timeout();
+    ensure!(
+        !request_timeout.is_zero(),
+        "coherent balance observation requires a bounded client"
+    );
+    // Retain this exact peer, network, authority and runtime owner. Every page
+    // and both checkpoint reads share the original request budget.
+    let deadline = Instant::now() + request_timeout;
+    let client = client.with_request_deadline(deadline)?;
+    let mut visibility_checked = false;
+    let balances = collect_coherent_control_balances(
+        ids,
+        *client.client().network_id(),
+        || {
+            // This authenticated manifest is projected from StateView.height()
+            // and its World, unlike the consensus owner's possibly ahead tip.
+            let manifest = client.client().get_privacy_capabilities()?;
+            Ok((manifest.network_id, manifest.committed_height))
+        },
+        |definition| {
+            if !visibility_checked {
+                ensure!(
+                    integration_tests::collections::permissions(
+                        &client,
+                        client.client().account(),
+                    )?
+                    .contains(&Permission::from(CanReadAllLedgerData)),
+                    "coherent balance observation requires complete ledger visibility"
+                );
+                visibility_checked = true;
+            }
+            Ok(client
+                .list(
+                    iroha::collections::Collection::AssetHolders(definition.clone()),
+                    iroha::collections::ListQuery::new(),
+                )
+                .collect::<iroha::Result<Vec<_>>>()?)
+        },
+    )?;
+    ensure!(
+        Instant::now() <= deadline,
+        "coherent balance observation exceeded its original request deadline"
+    );
+    Ok(balances)
+}
+
+fn collect_coherent_control_balances(
+    ids: &[AssetId],
+    network_id: iroha::data_model::NetworkId,
+    mut checkpoint: impl FnMut() -> Result<(iroha::data_model::NetworkId, u64)>,
+    mut holders: impl FnMut(&AssetDefinitionId) -> Result<Vec<HarnessJsonValue>>,
+) -> Result<Vec<TransparentControlBalanceExpectation>> {
+    ensure!(!ids.is_empty(), "coherent balance inventory is empty");
+    let before = checkpoint()?;
+    ensure!(
+        before.0 == network_id && before.1 > 0,
+        "coherent balance checkpoint differs from the original network or omits genesis"
+    );
     let mut values = BTreeMap::new();
-    for asset in assets {
-        ensure!(
-            values
-                .insert(asset.id.clone(), asset.value().clone())
-                .is_none(),
-            "duplicate coherent asset row"
-        );
+    for definition in BTreeSet::from_iter(ids.iter().map(AssetId::definition)) {
+        for row in holders(definition)? {
+            let id: AssetId = integration_tests::collections::field(&row, "id")?;
+            let asset: AssetDefinitionId = integration_tests::collections::field(&row, "asset")?;
+            let account: AccountId = integration_tests::collections::field(&row, "account_id")?;
+            let scope: String = integration_tests::collections::field(&row, "scope")?;
+            let quantity: Quantity = integration_tests::collections::field(&row, "quantity")?;
+            let expected_scope = match id.scope() {
+                AssetBalanceScope::Global => "global".to_owned(),
+                AssetBalanceScope::Dataspace(dataspace) => {
+                    format!("dataspace:{}", dataspace.as_u64())
+                }
+            };
+            ensure!(
+                id.definition() == definition
+                    && &asset == definition
+                    && id.account() == &account
+                    && scope == expected_scope,
+                "coherent holder row substituted its definition, account or balance scope"
+            );
+            ensure!(
+                values.insert(id, quantity).is_none(),
+                "duplicate coherent asset row"
+            );
+        }
     }
-    // FindAssets is a complete coherent WSV snapshot. Absent exact buckets have
-    // zero quantity; we do not interpret a failed point query as a zero balance.
+    ensure!(
+        checkpoint()? == before,
+        "global applied checkpoint changed during the complete balance observation"
+    );
+    // The fixture asserts a global signed-genesis root: every scoped partition
+    // belongs to the same monotonically published World. Complete holder pages
+    // bracketed by its unchanged applied checkpoint are one coherent snapshot.
+    // Only complete absence is zero; a failed page or moved checkpoint is an error.
     Ok(ids
         .iter()
         .map(|id| TransparentControlBalanceExpectation {
@@ -709,6 +799,7 @@ pub(super) fn validate_matched_replay_details(
 
 pub(super) fn wait_for_matched_replay_rejection(
     network: &Network,
+    runtime: &tokio::runtime::Runtime,
     replay: &SignedTransaction,
     settlement: &SettleAtomic,
 ) -> Result<()> {
@@ -733,7 +824,7 @@ pub(super) fn wait_for_matched_replay_rejection(
                 }
             };
             validate_matched_replay_details(&details, replay, settlement)?;
-            let blocks = client.client().query(FindBlocks::new()).execute_all()?;
+            let blocks = runtime.block_on(integration_tests::blocks::canonical_history(&client))?;
             let matching = blocks
                 .iter()
                 .filter(|block| &block.hash() == details.transaction.block_hash())
@@ -776,6 +867,163 @@ mod tests {
         iroha::data_model::NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(hash(0xE1)),
         )
+    }
+
+    fn holder_row(id: &AssetId, quantity: &str) -> HarnessJsonValue {
+        let definition = id.definition();
+        let account = id.account();
+        let scope = match id.scope() {
+            AssetBalanceScope::Global => "global".to_owned(),
+            AssetBalanceScope::Dataspace(dataspace) => format!("dataspace:{}", dataspace.as_u64()),
+        };
+        norito::json!({
+            "id": id,
+            "asset": definition,
+            "account_id": account,
+            "scope": scope,
+            "quantity": quantity,
+        })
+    }
+
+    #[test]
+    fn coherent_holder_snapshot_preserves_partitions_quantities_and_complete_absence() -> Result<()>
+    {
+        let workload = MatchedBenchmarkWorkloadV1::new(2, 8, 9, false)?;
+        let source = workload.payments[0].source.clone();
+        let absent = AssetId::with_scope(
+            source.definition().clone(),
+            workload.payments[0].recipient.clone(),
+            *source.scope(),
+        );
+        let other = workload.payments[1].source.clone();
+        let global = AssetId::of(source.definition().clone(), source.account().clone());
+        let ids = [source.clone(), absent, other.clone(), global.clone()];
+        let mut checked = BTreeSet::new();
+        let mut checkpoints = 0;
+        let rows = collect_coherent_control_balances(
+            &ids,
+            network_id(),
+            || {
+                checkpoints += 1;
+                Ok((network_id(), 42))
+            },
+            |definition| {
+                assert!(checked.insert(definition.clone()));
+                Ok(if definition == source.definition() {
+                    vec![holder_row(&source, "13"), holder_row(&global, "19")]
+                } else {
+                    vec![holder_row(&other, "17")]
+                })
+            },
+        )?;
+        assert_eq!(checkpoints, 2);
+        assert_eq!(checked.len(), 2);
+        assert_eq!(
+            rows.iter().map(|row| &row.asset_id).collect::<Vec<_>>(),
+            ids.iter().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.amount.clone())
+                .collect::<Vec<_>>(),
+            [13_u32, 0, 17, 19].map(Quantity::from)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn coherent_holder_snapshot_refuses_changed_missing_or_foreign_checkpoints() -> Result<()> {
+        let workload = MatchedBenchmarkWorkloadV1::new(2, 8, 9, false)?;
+        let ids = [workload.payments[0].source.clone()];
+        let foreign = iroha::data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(hash(0xE2)),
+        );
+        for cuts in [
+            [(network_id(), 42), (network_id(), 43)],
+            [(network_id(), 42), (network_id(), 41)],
+            [(network_id(), 42), (foreign, 42)],
+            [(foreign, 42), (foreign, 42)],
+            [(network_id(), 0), (network_id(), 0)],
+        ] {
+            let mut cuts = cuts.into_iter();
+            assert!(
+                collect_coherent_control_balances(
+                    &ids,
+                    network_id(),
+                    || Ok(cuts.next().unwrap()),
+                    |_| Ok(Vec::new()),
+                )
+                .is_err()
+            );
+        }
+        let mut reads = 0;
+        assert!(
+            collect_coherent_control_balances(
+                &ids,
+                network_id(),
+                || {
+                    reads += 1;
+                    ensure!(reads == 1, "checkpoint read failed");
+                    Ok((network_id(), 42))
+                },
+                |_| Ok(Vec::new()),
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn coherent_holder_snapshot_refuses_partial_reads_duplicates_and_substituted_rows() -> Result<()>
+    {
+        let workload = MatchedBenchmarkWorkloadV1::new(2, 8, 9, false)?;
+        let source = workload.payments[0].source.clone();
+        let ids = [source.clone(), workload.payments[1].source.clone()];
+        let mut definitions = 0;
+        assert!(
+            collect_coherent_control_balances(
+                &ids,
+                network_id(),
+                || Ok((network_id(), 42)),
+                |_| {
+                    definitions += 1;
+                    ensure!(definitions == 1, "later holder page failed");
+                    Ok(Vec::new())
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(definitions, 2);
+        let good = holder_row(&source, "13");
+        let mut malformed = vec![vec![good.clone(), good.clone()]];
+        for (field, value) in [
+            ("asset", ids[1].definition().to_string()),
+            ("account_id", workload.payments[0].recipient.to_string()),
+            ("scope", "global".to_owned()),
+            ("quantity", "invalid".to_owned()),
+            ("id", ids[1].canonical_literal()),
+        ] {
+            let mut row = good.clone();
+            row.as_object_mut()
+                .unwrap()
+                .insert(field.to_owned(), value.into());
+            malformed.push(vec![row]);
+        }
+        let mut missing = good;
+        missing.as_object_mut().unwrap().remove("id");
+        malformed.push(vec![missing]);
+        for rows in malformed {
+            assert!(
+                collect_coherent_control_balances(
+                    std::slice::from_ref(&source),
+                    network_id(),
+                    || Ok((network_id(), 42)),
+                    |_| Ok(rows.clone()),
+                )
+                .is_err()
+            );
+        }
+        Ok(())
     }
 
     fn prestate(

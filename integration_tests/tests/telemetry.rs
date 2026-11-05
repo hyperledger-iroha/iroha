@@ -1,9 +1,14 @@
 //! Telemetry and metrics surface integration tests.
 use eyre::ensure;
-use iroha_data_model::{Level, isi::Log};
+use iroha_data_model::{
+    Identifiable as _, Level,
+    isi::{BurnBox, InstructionBox, Log, MintBox, RegisterBox, TransferBox},
+    transaction::Executable,
+};
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::peer::Peer;
 use iroha_test_network::NetworkBuilder;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use tokio::runtime::Runtime;
 const TELEMETRY_REQUIRED_KEYS: &[&str] = &[
     "accounts{domain=\"garden_of_live_flowers\"}",
@@ -11,12 +16,22 @@ const TELEMETRY_REQUIRED_KEYS: &[&str] = &[
     "accounts{domain=\"wonderland\"}",
     "block_height",
     "block_height_non_empty",
-    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"+Inf\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"10\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"25\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"50\"}",
     "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"100\"}",
-    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"1500\"}",
-    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"30000\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"250\"}",
     "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"500\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"750\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"1000\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"1500\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"2000\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"3000\"}",
     "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"5000\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"10000\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"30000\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"60000\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"+Inf\"}",
     "sumeragi_commit_latency_ms_count{lane=\"global\"}",
     "sumeragi_commit_latency_ms_sum{lane=\"global\"}",
     "sumeragi_commits_total{lane=\"global\"}",
@@ -49,6 +64,60 @@ const TELEMETRY_REQUIRED_KEYS: &[&str] = &[
     "uptime_since_genesis_ms",
     "view_changes",
 ];
+fn expected_genesis_metrics<'a>(
+    instructions: impl IntoIterator<Item = &'a InstructionBox>,
+) -> (Vec<f64>, BTreeSet<DomainId>) {
+    // Native genesis initializes its authority domain before running the signed instructions.
+    let mut domains = BTreeSet::from([iroha_genesis::GENESIS_DOMAIN_ID.clone()]);
+    let mut amounts = Vec::new();
+    for instruction in instructions {
+        if let Some(RegisterBox::Domain(register)) =
+            instruction.as_any().downcast_ref::<RegisterBox>()
+        {
+            domains.insert(register.object().id().clone());
+        }
+        let quantity = if let Some(MintBox::Asset(mint)) =
+            instruction.as_any().downcast_ref::<MintBox>()
+        {
+            Some(mint.object())
+        } else if let Some(BurnBox::Asset(burn)) = instruction.as_any().downcast_ref::<BurnBox>() {
+            Some(burn.object())
+        } else if let Some(TransferBox::Asset(transfer)) =
+            instruction.as_any().downcast_ref::<TransferBox>()
+        {
+            Some(transfer.object())
+        } else {
+            None
+        };
+        if let Some(quantity) = quantity {
+            amounts.push(quantity.as_numeric().clone().to_f64_lossy());
+        }
+    }
+    (amounts, domains)
+}
+
+#[test]
+#[allow(clippy::float_cmp)]
+fn genesis_metric_expectations_include_registered_domains_and_numeric_movements() {
+    use iroha_data_model::prelude::*;
+    let domain = DomainId::try_new("telemetry", "universal").unwrap();
+    let definition =
+        AssetDefinitionId::derive_from_components(domain.clone(), "coin".parse().unwrap());
+    let asset = AssetId::new(definition, iroha_test_samples::ALICE_ID.clone());
+    let instructions: Vec<InstructionBox> = vec![
+        Register::domain(Domain::new(domain.clone())).into(),
+        Mint::asset_quantity(13u32, asset.clone()).into(),
+        Burn::asset_quantity(2u32, asset.clone()).into(),
+        Transfer::asset_quantity(asset, 4u32, iroha_test_samples::BOB_ID.clone()).into(),
+    ];
+    let (amounts, domains) = expected_genesis_metrics(&instructions);
+    assert_eq!(amounts, vec![13.0, 2.0, 4.0]);
+    assert_eq!(
+        domains,
+        BTreeSet::from([iroha_genesis::GENESIS_DOMAIN_ID.clone(), domain])
+    );
+}
+
 fn builder_with_full_telemetry() -> NetworkBuilder {
     NetworkBuilder::new().with_config_layer(|layer| {
         layer.write("telemetry_profile", "full");
@@ -94,6 +163,7 @@ fn start_network(
 async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
     let builder = builder_with_full_telemetry()
         .with_peers(4)
+        .with_permissioned_consensus()
         .with_block_cadence(std::time::Duration::from_secs(2));
     let Some(network) =
         sandbox::start_network_async_or_skip(builder, stringify!(telemetry_permissioned_smoke))
@@ -125,19 +195,41 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
             "missing metric key {key}; available keys: {keys:?}"
         );
     }
-    // The current signed bootstrap includes all four validators' funded stakes
-    // and the reserved system domains, in addition to the sample account assets.
-    assert_eq!(metrics.get("tx_amount_sum"), 15_000_057.0);
-    assert_eq!(metrics.get("tx_amount_count"), 24.0);
-    assert_eq!(metrics.get("tx_amount_bucket{le=\"0\"}"), 0.0);
-    assert_eq!(metrics.get("tx_amount_bucket{le=\"1000\"}"), 2.0);
-    assert_eq!(metrics.get("domains"), 8.0);
-    assert_eq!(metrics.get("accounts{domain=\"genesis\"}"), 0.0);
-    assert_eq!(metrics.get("accounts{domain=\"wonderland\"}"), 0.0);
+    let genesis = network.genesis();
+    let (amounts, domains) =
+        expected_genesis_metrics(genesis.0.external_transactions().flat_map(|transaction| {
+            let Executable::Instructions(instructions) = transaction.instructions() else {
+                panic!("the telemetry genesis fixture must contain native instructions");
+            };
+            instructions.iter()
+        }));
+    assert_eq!(metrics.get("tx_amount_sum"), amounts.iter().sum::<f64>());
     assert_eq!(
-        metrics.get("accounts{domain=\"garden_of_live_flowers\"}"),
-        0.0
+        metrics.get("tx_amount_count"),
+        f64::from(u32::try_from(amounts.len())?)
     );
+    for upper_bound in [0.0, 1_000.0] {
+        assert_eq!(
+            metrics.get(format!("tx_amount_bucket{{le=\"{upper_bound:.0}\"}}")),
+            f64::from(u32::try_from(
+                amounts
+                    .iter()
+                    .filter(|amount| **amount <= upper_bound)
+                    .count()
+            )?),
+        );
+    }
+    assert_eq!(
+        metrics.get("domains"),
+        f64::from(u32::try_from(domains.len())?)
+    );
+    for domain in domains {
+        assert_eq!(
+            metrics.get(format!("accounts{{domain=\"{}\"}}", domain.name())),
+            0.0
+        );
+    }
+    // fetch_online_peers
     // Genesis readiness does not imply that every P2P handshake has completed.
     // Share the existing network sync budget across all four signed observations.
     let peer_deadline = tokio::time::Instant::now() + network.sync_timeout();
@@ -226,6 +318,10 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
             .text()
             .await?;
         let snapshot = MetricsReader::new(&snapshot);
+        assert!(
+            snapshot.get("sumeragi_commit_latency_ms_count{lane=\"global\"}") >= 1.0,
+            "each validator must record the real post-genesis commit"
+        );
         assert!(snapshot.get("sumeragi_commits_total{lane=\"global\"}") >= 1.0);
         assert!(snapshot.get("sumeragi_committed_height{lane=\"global\"}") >= 2.0);
         assert!(snapshot.get("sumeragi_applied_height{lane=\"global\"}") >= 2.0);

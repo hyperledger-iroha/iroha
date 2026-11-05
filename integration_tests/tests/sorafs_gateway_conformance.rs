@@ -239,6 +239,10 @@ fn sorafs_gateway_refusal_scenarios_match_expectations() {
             "scenario {id} should be marked as passed after refusal validation"
         );
     }
+    assert!(
+        report.scenario("C7").is_none(),
+        "the retired proof-sample protocol is not a current capability refusal"
+    );
 }
 #[test]
 fn sorafs_gateway_capability_refusals_align_with_fixtures() {

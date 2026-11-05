@@ -11,6 +11,7 @@ import ast
 import base64
 from dataclasses import FrozenInstanceError
 import hashlib
+import importlib.machinery
 import io
 import json
 import os
@@ -44,6 +45,35 @@ def extract_original_harness(source: bytes) -> str:
     return body + "\n"
 
 
+def test_native_fixture_names_keep_current_shadow_and_foreign_suffixes_distinct() -> None:
+    """Exercise the actual pure selector for Unix and Windows interpreter inventories."""
+    import pytest
+
+    body = extract_original_harness(SHELL_HARNESS.read_bytes())
+    definitions = [node for node in ast.parse(body).body
+                   if isinstance(node, ast.FunctionDef) and node.name == "fixture_native_names"]
+    assert len(definitions) == 1
+    namespace = {}
+    exec(compile(ast.Module(body=definitions, type_ignores=[]),
+                 str(SHELL_HARNESS) + ":fixture-native-names", "exec"), namespace)
+    choose = namespace["fixture_native_names"]
+    for suffixes, expected in (
+        ((".cpython-312-x86_64-linux-gnu.so", ".abi3.so", ".so"), ".abi3.so"),
+        ((".cpython-312-darwin.so", ".abi3.so", ".so"), ".abi3.so"),
+        ((".cp312-win_amd64.pyd", ".pyd"), ".pyd"),
+    ):
+        selected = choose(suffixes)
+        assert selected["suffix"] == expected
+        assert selected["filename"] == "_crypto" + expected
+        assert selected["member"] == "iroha_native/" + selected["filename"]
+        assert selected["shadow_filename"] == "_crypto" + suffixes[0]
+        assert selected["shadow_filename"] != selected["filename"]
+        assert selected["foreign_suffix"] not in suffixes
+    for suffixes in ((), (".dylib",), (".pyd",), (".abi3.so",), (".pyd", ".abi3.so")):
+        with pytest.raises(AssertionError, match="current native and distinct shadow"):
+            choose(suffixes)
+
+
 def run_byte_controls(original: dict) -> int:
     """Reuse the original fixture owners, including their real ZIP/RECORD builders."""
     verifier = original["verifier"]
@@ -60,9 +90,10 @@ def run_byte_controls(original: dict) -> int:
     record_hash = original["record_hash"]
     member = original["member"]
     sdk_dist = original["sdk_dist"]
+    native_names = original["native_names"]
     byte_path_parity_checks = 0
 
-    def assert_byte_path_parity(path, *, owner=None, suffixes=(".abi3.so",)):
+    def assert_byte_path_parity(path, *, owner=None, suffixes=(native_names["suffix"],)):
         """Exercise the same original fixture through both canonical entries."""
         nonlocal byte_path_parity_checks
         owner = verifier.NATIVE_OWNER if owner is None else owner
@@ -115,7 +146,7 @@ def run_byte_controls(original: dict) -> int:
     assert_byte_path_parity(byte_fixture)
     assert_byte_path_parity(byte_sdk_fixture, owner=verifier.SDK_OWNER)
     assert_byte_path_parity(streamed_wheel_path)
-    content = verifier.parse_wheel_bytes(byte_raw, extension_suffixes=(".abi3.so",))
+    content = verifier.parse_wheel_bytes(byte_raw, extension_suffixes=(native_names["suffix"],))
     try:
         content.metadata_version = "substituted"
     except FrozenInstanceError:
@@ -137,7 +168,7 @@ def run_byte_controls(original: dict) -> int:
         verifier.importlib.util.module_from_spec = forbidden_byte_parser_io
         Path.open = forbidden_byte_parser_io
         os.open = forbidden_byte_parser_io
-        if verifier.parse_wheel_bytes(byte_raw, extension_suffixes=(".abi3.so",)) != content:
+        if verifier.parse_wheel_bytes(byte_raw, extension_suffixes=(native_names["suffix"],)) != content:
             raise AssertionError("immutable captured content changed")
     finally:
         verifier._read_stable_regular_file = original_file_reader
@@ -159,7 +190,7 @@ def run_byte_controls(original: dict) -> int:
         return original_parser(payload, **kwargs)
     try:
         verifier.parse_wheel_bytes = observed_parser
-        verifier.preflight_wheel(byte_fixture, seal(byte_fixture), extension_suffixes=(".abi3.so",))
+        verifier.preflight_wheel(byte_fixture, seal(byte_fixture), extension_suffixes=(native_names["suffix"],))
         if parser_calls != [byte_raw]:
             raise AssertionError("file entry must delegate once with the actual captured bytes")
         parser_calls.clear()
@@ -204,12 +235,12 @@ def run_byte_controls(original: dict) -> int:
     expect_failure("fixed native or SDK", lambda: assert_byte_path_parity(byte_fixture, owner=foreign_owner))
     for suffixes in ((), ("",), (".dylib",), ("../evil.so",), ("\\evil.pyd",)):
         expect_failure("invalid extension suffixes", lambda: assert_byte_path_parity(byte_fixture, suffixes=suffixes))
-    expect_failure("current-platform native module", lambda: assert_byte_path_parity(byte_fixture, suffixes=(".pyd",)))
+    expect_failure("current-platform native module", lambda: assert_byte_path_parity(byte_fixture, suffixes=(native_names["foreign_suffix"],)))
 
     for name, fragment in (
-        ("iroha_native/_crypto.pyd", "non-current native module"),
+        ("iroha_native/_crypto" + native_names["foreign_suffix"], "non-current native module"),
         ("iroha_native/_crypto.py", "reserved native Python source path"),
-        ("iroha_native/nested/_crypto.abi3.so", "non-current native module"),
+        ("iroha_native/nested/" + native_names["filename"], "non-current native module"),
         ("iroha_native/duplicated.PYD", "non-current native module"),
     ):
         candidate = write_wheel(fixture_root / "byte-foreign-extension.whl", with_record(valid_entries()[:-1] + [member(name)]))
@@ -226,7 +257,7 @@ def run_byte_controls(original: dict) -> int:
         entries = [(info, payload.replace(original, changed)) for info, payload in sdk_entries if not info.filename.endswith("/RECORD")]
         candidate = write_wheel(fixture_root / "byte-sdk-owner.whl", with_record(entries, f"{sdk_dist}/RECORD"))
         expect_failure(fragment, lambda: assert_byte_path_parity(candidate, owner=verifier.SDK_OWNER))
-    candidate = write_wheel(fixture_root / "byte-sdk-native.whl", with_record([entry for entry in sdk_entries if not entry[0].filename.endswith("/RECORD")] + [member("iroha_python/_crypto.abi3.so")], f"{sdk_dist}/RECORD"))
+    candidate = write_wheel(fixture_root / "byte-sdk-native.whl", with_record([entry for entry in sdk_entries if not entry[0].filename.endswith("/RECORD")] + [member("iroha_python/" + native_names["filename"])], f"{sdk_dist}/RECORD"))
     expect_failure("must not contain a native module", lambda: assert_byte_path_parity(candidate, owner=verifier.SDK_OWNER))
 
     # Explicit package-root directories have only one PurePosixPath component.
@@ -300,7 +331,7 @@ def load_pure_harness_builders(fixture_root: Path) -> dict:
             or report["verifier"] != verifier_before
             or SHELL_HARNESS.read_bytes() != source or _identity(VERIFIER) != verifier_before):
         raise AssertionError("original fixture source or interpreter owner changed")
-    names = {"member", "write_wheel", "record_hash", "with_record", "valid_entries"}
+    names = {"member", "write_wheel", "record_hash", "with_record", "valid_entries", "fixture_native_names"}
     definitions = [node for node in ast.parse(body).body
                    if isinstance(node, ast.FunctionDef) and node.name in names]
     if len(definitions) != len(names) or {node.name for node in definitions} != names:
@@ -313,6 +344,7 @@ def load_pure_harness_builders(fixture_root: Path) -> dict:
     # loading statements, in the normally collected parent process.
     exec(compile(ast.Module(body=definitions, type_ignores=[]),
                  str(SHELL_HARNESS) + ":pure-fixture-builders", "exec"), namespace)
+    namespace["native_names"] = namespace["fixture_native_names"](importlib.machinery.EXTENSION_SUFFIXES)
     with zipfile.ZipFile(fixture_root / "sdk.whl") as sdk:
         namespace["sdk_entries"] = [(info, sdk.read(info)) for info in sdk.infolist()]
     return namespace
@@ -389,6 +421,52 @@ def test_harness_extraction_requires_its_exact_unique_source_owner() -> None:
             pass
         else:
             raise AssertionError("invalid original harness owner was accepted")
+
+
+def test_malformed_archive_names_survive_both_zipfile_separator_policies(tmp_path: Path) -> None:
+    """Run the real harness/parser with Unix and Windows ZIP name normalization."""
+    probe = r'''
+import io
+import json
+import os
+from pathlib import Path
+import runpy
+import sys
+import types
+import zipfile
+
+controls, root, separator = sys.argv[1:]
+# Change only zipfile's platform view, leaving filesystem and verifier owners
+# untouched. This exercises the stdlib's real ZipInfo constructor and reader.
+zipfile.os = types.SimpleNamespace(**{
+    **vars(os), "sep": separator, "altsep": "/" if separator == "\\" else None,
+})
+unsafe_name = r"iroha_native\escape.py"
+assert zipfile.ZipInfo(unsafe_name).filename == (
+    unsafe_name.replace("\\", "/") if separator == "\\" else unsafe_name
+)
+namespace = runpy.run_path(controls)
+report = namespace["run_isolated"](Path(root))
+raw = (Path(root) / "backslash.whl").read_bytes()
+# Both local and central headers must contain the adversarial spelling. A
+# different, valid member with a missing RECORD row is not this path control.
+assert raw.count(unsafe_name.encode("ascii")) == 2
+with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+    assert archive.infolist()[-1].orig_filename == unsafe_name
+print("ZIP_SEPARATOR_CONTROL=" + json.dumps({
+    "separator": separator, "byte_path_pairs": report["byte_path_pairs"],
+}))
+'''
+    for label, separator in (("unix", "/"), ("windows", "\\")):
+        result = subprocess.run(
+            [sys.executable, "-I", "-S", "-B", "-", str(Path(__file__).resolve()),
+             str(tmp_path / label), separator],
+            input=probe, capture_output=True, text=True, timeout=120, check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        rows = [json.loads(line.removeprefix("ZIP_SEPARATOR_CONTROL="))
+                for line in result.stdout.splitlines() if line.startswith("ZIP_SEPARATOR_CONTROL=")]
+        assert rows == [{"separator": separator, "byte_path_pairs": 80}]
 
 
 def test_shell_owned_inert_child_excludes_installed_distributions(tmp_path: Path) -> None:
@@ -469,7 +547,7 @@ def test_pure_builders_preserve_parent_cached_owners_and_distribution(tmp_path, 
     destination = helpers["write_wheel"](tmp_path / "pure-builder.whl", entries)
     with zipfile.ZipFile(destination) as archive:
         assert archive.read("iroha_native/__init__.py") == helpers["package_bytes"]
-        assert archive.read("iroha_native/_crypto.abi3.so") == helpers["native_bytes"]
+        assert archive.read(helpers["native_names"]["member"]) == helpers["native_bytes"]
     assert {entry.filename for entry, _raw in helpers["sdk_entries"]} >= {
         "iroha_python/__init__.py", "iroha_python-0.0.0.dist-info/RECORD"}
 

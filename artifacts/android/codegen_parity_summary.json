@@ -1,0 +1,25 @@
+{
+  "status": "ok",
+  "instruction_manifest": {
+    "path": "target-codex/android_codegen/instruction_manifest.json",
+    "sha256": "731a6dea8e1cfe03d382e138e7181f28dee25d4a74dab27e83d99f36df4e363b",
+    "entry_count": 79,
+    "expected_sha256": "731a6dea8e1cfe03d382e138e7181f28dee25d4a74dab27e83d99f36df4e363b",
+    "expected_entry_count": 79
+  },
+  "builder_index": {
+    "path": "target-codex/android_codegen/builder_index.json",
+    "sha256": "bbdefc841cf2fc651ba2a05f2de4cc1456bd25e43aae7899ffa58a9b93a85ce7",
+    "entry_count": 79,
+    "expected_sha256": "bbdefc841cf2fc651ba2a05f2de4cc1456bd25e43aae7899ffa58a9b93a85ce7",
+    "expected_entry_count": 79
+  },
+  "errors": [],
+  "javascript_instruction_schema_map": {
+    "source_path": "javascript/iroha_js/src/norito.js",
+    "entry_count": 72,
+    "manifest_matched_entry_count": 43,
+    "wire_binding_sha256": "9e920871650b8022b78f466feabe80b12002e5afb37df6ee05bd3332f81460fc",
+    "derived_from_type_names": true
+  }
+}

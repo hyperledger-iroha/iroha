@@ -170,7 +170,8 @@ async fn assert_soracloud_hf_lease_asset_ready(
         .await?;
     if asset_definition.id != asset_definition_id {
         return Err(eyre::eyre!(
-            "soracloud HF lease asset definition `{asset_definition_id}` is missing from test-network genesis"
+            "soracloud HF lease asset definition query returned `{}` instead of `{asset_definition_id}`",
+            asset_definition.id,
         ));
     }
     for account_id in accounts {
@@ -370,6 +371,33 @@ fn local_program_config_uses_checked_key_generation() {
     );
     assert_eq!(config.status_timeout, DEFAULT_TRANSACTION_STATUS_TIMEOUT);
     assert_eq!(config.ttl, DEFAULT_TRANSACTION_TIME_TO_LIVE);
+    let from_table = iroha_config_base::read::ConfigReader::new()
+        .with_toml_source(iroha_config_base::toml::TomlSource::inline(config.toml()))
+        .read_and_complete::<iroha::config::UserConfig>()
+        .expect("canonical CLI TOML")
+        .parse()
+        .expect("complete CLI identity and signer");
+    let from_env = iroha_config_base::read::ConfigReader::new()
+        .with_env(iroha_config_base::env::MockEnv::from(config.envs()))
+        .read_and_complete::<iroha::config::UserConfig>()
+        .expect("canonical CLI environment")
+        .parse()
+        .expect("complete CLI environment identity and signer");
+    for parsed in [from_table, from_env] {
+        assert_eq!(parsed.network_id, config.network_id);
+        assert_eq!(
+            parsed.account_chain_discriminant,
+            config.account_chain_discriminant
+        );
+        assert_eq!(
+            parsed.account,
+            AccountId::new(config.key.public_key().clone())
+        );
+        assert_eq!(parsed.key_pair, config.key);
+        assert_eq!(parsed.torii_api_url, config.torii_url);
+        assert_eq!(parsed.transaction_status_timeout, config.status_timeout);
+        assert_eq!(parsed.transaction_ttl, config.ttl);
+    }
 }
 fn program_config_for_account(client: &Client, key: &KeyPair) -> ProgramConfig {
     let ttl = client
@@ -3165,7 +3193,7 @@ async fn soracloud_agent_autonomy_controls_use_live_torii_control_plane() -> eyr
         SoracloudSuccessCase::new("agent deploy");
         "agent", "deploy",
         "--manifest", manifest_path.to_string_lossy().into_owned(),
-        "--lease-blocks", "30",
+        "--lease-ticks", "30",
         "--autonomy-budget-units", "500",
         "--torii-url", network.client().client().endpoint().to_string(),
     );
@@ -3308,7 +3336,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         SoracloudSuccessCase::new("sender deploy");
         "agent", "deploy",
         "--manifest", sender_manifest_path.to_string_lossy().into_owned(),
-        "--lease-blocks", "1",
+        "--lease-ticks", "1",
         "--torii-url", network.client().client().endpoint().to_string(),
     );
     let _recipient_deploy = run_bounded_soracloud_success!(
@@ -3316,7 +3344,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         SoracloudSuccessCase::new("recipient deploy");
         "agent", "deploy",
         "--manifest", recipient_manifest_path.to_string_lossy().into_owned(),
-        "--lease-blocks", "30",
+        "--lease-ticks", "30",
         "--torii-url", network.client().client().endpoint().to_string(),
     );
     let expired_wallet = run_bounded_soracloud_command!(
@@ -3344,7 +3372,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         SoracloudSuccessCase::new("lease renew");
         "agent", "lease-renew",
         "--apartment-name", "ops_agent",
-        "--lease-blocks", "20",
+        "--lease-ticks", "20",
         "--torii-url", network.client().client().endpoint().to_string(),
     );
     let restart = run_bounded_soracloud_success!(
@@ -3583,7 +3611,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         SoracloudSuccessCase::new("sender deploy");
         "agent", "deploy",
         "--manifest", sender_manifest_path.to_string_lossy().into_owned(),
-        "--lease-blocks", "80",
+        "--lease-ticks", "80",
         "--autonomy-budget-units", "500",
         "--torii-url", &restart_torii_url,
     );
@@ -3592,7 +3620,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         SoracloudSuccessCase::new("recipient deploy");
         "agent", "deploy",
         "--manifest", recipient_manifest_path.to_string_lossy().into_owned(),
-        "--lease-blocks", "80",
+        "--lease-ticks", "80",
         "--autonomy-budget-units", "250",
         "--torii-url", &restart_torii_url,
     );
@@ -4106,7 +4134,7 @@ async fn soracloud_agent_lease_commands_require_torii_url() -> eyre::Result<()> 
             "agent-deploy",
             "--manifest",
             &manifest_path.to_string_lossy(),
-            "--lease-blocks",
+            "--lease-ticks",
             "1",
         ],
     )
@@ -4119,7 +4147,7 @@ async fn soracloud_agent_lease_commands_require_torii_url() -> eyre::Result<()> 
             "agent-lease-renew",
             "--apartment-name",
             "ops_agent",
-            "--lease-blocks",
+            "--lease-ticks",
             "20",
         ],
     )

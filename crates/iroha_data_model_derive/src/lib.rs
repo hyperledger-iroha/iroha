@@ -23,30 +23,34 @@ pub fn enum_ref(input: TokenStream) -> Result<TokenStream> {
     enum_ref::impl_enum_ref(&input)
 }
 #[doc = include_str!("lib_docs/model.md")]
-#[manyhow]
 #[proc_macro_attribute]
-pub fn model(attr: TokenStream, input: TokenStream) -> TokenStream {
+pub fn model(
+    attr: proc_macro::TokenStream,
+    input: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    let attr: TokenStream = attr.into();
     let mut emitter = Emitter::new();
     if !attr.is_empty() {
         emit!(emitter, attr, "This attribute does not take any arguments");
     }
-    let Some(input) = emitter.handle(syn::parse2(input)) else {
-        return emitter.finish_token_stream();
+    let Some(input) = emitter.handle(syn::parse2(input.into())) else {
+        return emitter.finish_token_stream().into();
     };
     let result = model::impl_model(&mut emitter, &input);
-    emitter.finish_token_stream_with(result)
+    emitter.finish_token_stream_with(result).into()
 }
 /// Same as [`model()`] macro, but only processes a single item.
 ///
 /// You should prefer using [`model()`] macro over this one.
-#[manyhow]
 #[proc_macro]
-pub fn model_single(input: TokenStream) -> TokenStream {
+pub fn model_single(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let mut emitter = Emitter::new();
-    let Some(input) = emitter.handle(syn::parse2(input)) else {
-        return emitter.finish_token_stream();
+    let Some(input) = emitter.handle(syn::parse2(input.into())) else {
+        return emitter.finish_token_stream().into();
     };
-    emitter.finish_token_stream_with(model::process_item(input))
+    emitter
+        .finish_token_stream_with(model::process_item(input))
+        .into()
 }
 #[doc = include_str!("lib_docs/instruction.md")]
 #[manyhow]
@@ -76,37 +80,34 @@ pub fn instruction(attr: TokenStream, input: TokenStream) -> Result<TokenStream>
     Ok(expanded)
 }
 #[doc = include_str!("lib_docs/id_eq_ord_hash.md")]
-#[manyhow]
 #[proc_macro_derive(IdEqOrdHash, attributes(id, opaque))]
-pub fn id_eq_ord_hash(input: TokenStream) -> TokenStream {
+pub fn id_eq_ord_hash(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let mut emitter = Emitter::new();
-    let Some(input) = emitter.handle(syn::parse2(input)) else {
-        return emitter.finish_token_stream();
+    let Some(input) = emitter.handle(syn::parse2(input.into())) else {
+        return emitter.finish_token_stream().into();
     };
     let result = id::impl_id_eq_ord_hash(&mut emitter, &input);
-    emitter.finish_token_stream_with(result)
+    emitter.finish_token_stream_with(result).into()
 }
 #[doc = include_str!("lib_docs/has_origin.md")]
-#[manyhow]
 #[proc_macro_derive(HasOrigin, attributes(has_origin))]
-pub fn has_origin_derive(input: TokenStream) -> TokenStream {
+pub fn has_origin_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let mut emitter = Emitter::new();
-    let Some(input) = emitter.handle(syn::parse2(input)) else {
-        return emitter.finish_token_stream();
+    let Some(input) = emitter.handle(syn::parse2(input.into())) else {
+        return emitter.finish_token_stream().into();
     };
     let result = has_origin::impl_has_origin(&mut emitter, &input);
-    emitter.finish_token_stream_with(result)
+    emitter.finish_token_stream_with(result).into()
 }
 #[doc = include_str!("lib_docs/event_set.md")]
-#[manyhow]
 #[proc_macro_derive(EventSet, attributes(event_set))]
-pub fn event_set_derive(input: TokenStream) -> TokenStream {
+pub fn event_set_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let mut emitter = Emitter::new();
-    let Some(input) = emitter.handle(syn::parse2(input)) else {
-        return emitter.finish_token_stream();
+    let Some(input) = emitter.handle(syn::parse2(input.into())) else {
+        return emitter.finish_token_stream().into();
     };
     let result = event_set::impl_event_set_derive(&mut emitter, &input);
-    emitter.finish_token_stream_with(result)
+    emitter.finish_token_stream_with(result).into()
 }
 /// Derive macro generating registration builders for data model structs.
 ///

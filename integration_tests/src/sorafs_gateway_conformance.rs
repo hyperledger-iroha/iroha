@@ -2376,6 +2376,22 @@ fn car_writer_structural_failures_map_to_range_payload_mismatch() {
         ));
     }
 }
+#[test]
+fn canonical_car_verification_refuses_payload_tampering() {
+    let bundle = canonical_fixture_bundle();
+    CarVerifier::verify_full_car(&bundle.manifest, &bundle.car_bytes)
+        .expect("the original canonical CAR verifies");
+    let mut corrupted = bundle.car_bytes.clone();
+    *corrupted.last_mut().expect("canonical CAR has a payload") ^= 1;
+    assert_eq!(corrupted.len(), bundle.car_bytes.len());
+    assert!(
+        CarVerifier::verify_full_car(&bundle.manifest, &corrupted).is_err(),
+        "one changed payload byte must fail against the original manifest"
+    );
+    let result = run_replay_scenario("B4", &PinPolicyConstraints::default());
+    assert_eq!(result.status, 422);
+    assert_eq!(result.outcome, ScenarioOutcome::Refusal);
+}
 fn run_replay_scenario(id: &str, policy: &PinPolicyConstraints) -> GatewayResult {
     let outcome = match id {
         "A1" => verify_full_replay(&SuccessGatewayClient::new(), policy),

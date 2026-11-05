@@ -1716,7 +1716,7 @@ async fn trigger_burn_repetitions() -> Result<()> {
 async fn unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss()
 -> Result<()> {
     let Some(network) =
-        start_network(stringify!(unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss))
+        sandbox::start_network_async_or_skip(mint_rose_fixture_builder("shared_mint_rose"), stringify!(unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss))
             .await?
     else {
         return Ok(());
@@ -1726,20 +1726,24 @@ async fn unregistering_one_of_two_triggers_with_identical_contract_should_not_ca
         stringify!(unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss),
         || async {
             let account_id = ALICE_ID.clone();
+            let artifact = load_sample_ivm("mint_rose_trigger");
+            let alias = ContractAlias::from_components("shared_mint_rose", None, "universal")?;
+            let metadata = mint_rose_trigger_metadata(&artifact, &alias)?;
+            deploy_mint_rose_callback(&test_client, artifact.clone(), alias).await?;
             let first_trigger_id = "mint_rose_1".parse::<TriggerId>()?;
             let second_trigger_id = "mint_rose_2".parse::<TriggerId>()?;
             let build_trigger = |trigger_id: TriggerId| {
                 Trigger::new(
                     trigger_id.clone(),
                     Action::new(
-                        load_sample_ivm("mint_rose_trigger"),
+                        artifact.clone(),
                         Repeats::Indefinitely,
                         account_id.clone(),
                         ExecuteTriggerEventFilter::new()
                             .for_trigger(trigger_id)
                             .under_authority(account_id.clone()),
                     ).expect("trigger action fixture satisfies validation invariants")
-                    .with_metadata(contract_entrypoint_metadata("run")),
+                    .with_metadata(metadata.clone()),
                 )
             };
             let first_trigger = build_trigger(first_trigger_id.clone());

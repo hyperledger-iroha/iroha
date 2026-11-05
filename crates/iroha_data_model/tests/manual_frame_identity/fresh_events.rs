@@ -649,7 +649,7 @@ fn capture_values() -> Vec<Value> {
 fn current_identity_capture() -> Value {
     norito::json!({
         "format_version": 1,
-        "purpose": "public event owners before identity declaration",
+        "purpose": "public event owners with current canonical variants",
         "default_encode_flags": (ncore::default_encode_flags()),
         "rows": (capture_values()),
     })
@@ -660,7 +660,7 @@ fn public_fresh_event_frames_match_capture() {
     let evidence = current_identity_capture();
     let captured: Value =
         norito::json::from_json(include_str!("../fixtures/fresh_event_identity_frames.json"))
-            .expect("decode immutable actual pre-declaration capture");
+            .expect("decode current canonical event frames");
     assert_eq!(evidence, captured);
 }
 

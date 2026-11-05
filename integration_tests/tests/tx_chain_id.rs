@@ -39,6 +39,14 @@ fn send_tx_with_same_chain_name_but_different_genesis_network() {
         10_u32,
         AssetId::new(asset_definition_id.clone(), sender_id.clone()),
     );
+    let fee_asset_definition = iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+        .parse::<AssetDefinitionId>()
+        .unwrap();
+    let fund_sender = Transfer::asset_quantity(
+        AssetId::new(fee_asset_definition, ALICE_ID.clone()),
+        100u32,
+        sender_id.clone(),
+    );
     test_client
         .submit_all::<InstructionBox>(
             [
@@ -46,6 +54,7 @@ fn send_tx_with_same_chain_name_but_different_genesis_network() {
                 create_receiver_account.into(),
                 register_asset_definition.into(),
                 register_asset.into(),
+                fund_sender.into(),
             ],
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

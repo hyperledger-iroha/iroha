@@ -25,12 +25,14 @@ impl ManagedStreamTokenCustody {
         );
         assert!(Fees::from_options(options).unwrap() == *authorization.fees());
         let verifier = native.observe(&self.authority);
-        let current = native.bootstrap_custody(&self.authority, policy, &verifier);
+        let (current, source) =
+            native.bootstrap_custody_with_source(&self.authority, policy, &verifier);
         assert!(current.current().is_none());
         let original = Original {
             selection: self.selection(&policy.binding, &current).unwrap(),
             action: Action::Configure(policy.clone()),
             checkpoint: checkpoint_bytes(&verifier).unwrap(),
+            source,
         };
         self.validate_original(&original, CustodyPurpose::Configure)
             .unwrap();

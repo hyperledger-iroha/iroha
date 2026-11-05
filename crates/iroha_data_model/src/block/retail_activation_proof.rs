@@ -1,7 +1,7 @@
 //! Finalized first-release retail activation evidence.
 //!
 //! This authenticates an executed activation transaction at its block height. Finality comes
-//! only from a [`VerifiedSumeragiBlock`]: the portable `SumeragiFinalityVerifier` constructs it
+//! only from a [`crate::sumeragi_finality::VerifiedSumeragiBlock`]: the portable `SumeragiFinalityVerifier` constructs it
 //! from the contiguous `SumeragiFinalityProof` prefix of Kura-certified frames (the block with
 //! its exact-quorum `CommitQC` over the core header and certified result `R`,
 //! `specs/sumeragi.md` §12.7), rooted in an independently selected signed genesis or checkpoint.

@@ -1447,7 +1447,7 @@ fn set_release_no_follow(options: &mut OpenOptions) {
 }
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn release_no_follow_flag() -> i32 {
-    rustix::fs::OFlags::NOFOLLOW.bits() as i32
+    rustix::fs::OFlags::NOFOLLOW.bits().cast_signed()
 }
 #[cfg(all(
     unix,

@@ -73,6 +73,7 @@ FINALITY_TESTS = (
     "protected_contract_identity_openapi_is_signed_and_exact",
     "multisig_read_auth_contract_is_path_specific",
     "scoped_artifact_openapi_binds_network_full_dataspace_and_content",
+    "generated_spec_role_reads_require_canonical_authorized_callers",
 )
 SORAFS_TESTS = (
     "evidence_audit_openapi_requires_and_returns_exact_cursors",

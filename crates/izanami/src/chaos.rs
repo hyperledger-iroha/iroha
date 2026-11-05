@@ -2325,17 +2325,10 @@ fn make_network_builder_with_sorafs(
         let gas_account = instructions::nexus_gas_account_id()?;
         let mut root_fees = profile.root_fees.clone();
         root_fees.fee_sink_account_id = gas_account.clone();
-        root_fees.sponsor_vault_custody_account_id = gas_account.clone();
+        root_fees.sponsor_vault_custody_account_id = gas_account;
         builder = builder.with_genesis_instruction(SetParameter::new(Parameter::Custom(
             root_fees.into_custom_parameter()?,
         )));
-        let gas_account_id = gas_account.to_string();
-        builder = builder.with_config_layer(move |layer| {
-            layer.write(
-                ["pipeline", "gas", "tech_account_id"],
-                gas_account_id.clone(),
-            );
-        });
     }
     if let Some(profile) = config.nexus.as_ref() {
         builder = builder.without_npos_genesis_bootstrap();
@@ -10821,14 +10814,29 @@ mod tests {
             return Ok(());
         };
         let mut params = Parameters::default();
-        for tx in network.genesis_isi() {
-            for isi in tx {
+        let mut staking_assignments = 0;
+        let genesis = network.genesis();
+        for tx in genesis.0.external_transactions() {
+            let Executable::Instructions(instructions) = tx.instructions() else {
+                continue;
+            };
+            for isi in instructions {
                 let Some(set_param) = isi.as_any().downcast_ref::<SetParameter>() else {
                     continue;
                 };
+                if let Parameter::Custom(custom) = set_param.inner()
+                    && custom.id()
+                        == &iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id()
+                {
+                    staking_assignments += 1;
+                }
                 params.set_parameter(set_param.inner().clone());
             }
         }
+        assert_eq!(
+            staking_assignments, 1,
+            "the final signed genesis contains one authored staking policy"
+        );
         assert_eq!(
             network.block_cadence(),
             default_nexus_pipeline_time(),
@@ -10846,17 +10854,6 @@ mod tests {
             u32::try_from(config.peer_count).unwrap_or(u32::MAX),
             "izanami should cap NPoS election set to active peer count in soak runs"
         );
-        let read_str = |layer: &Table, path: &[&str]| -> Option<String> {
-            let mut current = layer;
-            for (idx, key) in path.iter().enumerate() {
-                let value = current.get(*key)?;
-                if idx + 1 == path.len() {
-                    return value.as_str().map(ToString::to_string);
-                }
-                current = value.as_table()?;
-            }
-            None
-        };
         let layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
         let fees = iroha_data_model::block::consensus::RootFeePolicy::from_parameters(&params)?
             .expect("original signed fee policy");
@@ -10867,7 +10864,6 @@ mod tests {
             fees.fee_asset_id,
             config.nexus.as_ref().unwrap().fee_asset_id
         );
-        let expected_gas_account = expected_gas.to_string();
         let staking =
             iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_parameters(&params)?;
         assert_eq!(
@@ -10876,12 +10872,12 @@ mod tests {
         );
         assert_eq!(staking.stake_escrow_account_id, expected_gas);
         assert_eq!(staking.slash_sink_account_id, expected_gas);
-        let path = &["pipeline", "gas", "tech_account_id"][..];
-        let actual = layers.iter().rev().find_map(|layer| read_str(layer, path));
-        assert_eq!(
-            actual.as_deref(),
-            Some(expected_gas_account.as_str()),
-            "config override for {path:?} should use deterministic Izanami gas account"
+        assert!(
+            layers.iter().all(|layer| layer
+                .get("pipeline")
+                .and_then(TomlValue::as_table)
+                .is_none_or(|pipeline| !pipeline.contains_key("gas"))),
+            "fee custody belongs to signed genesis policy, never a node-local gas override"
         );
         Ok(())
     }

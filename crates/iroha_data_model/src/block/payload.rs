@@ -107,6 +107,13 @@ mod model {
         /// Original local allocation custody; never encoded or part of identity.
         #[norito(skip)]
         #[codec(skip)]
+        #[cfg_attr(
+            not(any(test, feature = "transparent_api")),
+            expect(
+                dead_code,
+                reason = "Retains allocation custody through output destruction; only transparent producers attach it."
+            )
+        )]
         pub(crate) lifecycle_custody: super::super::LifecycleOutputCustody,
     }
 }

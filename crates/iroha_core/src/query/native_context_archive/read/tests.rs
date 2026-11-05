@@ -286,29 +286,8 @@ fn returning_archive_cancels_pending_bytes_but_preserves_completed_byte_owner() 
 }
 
 #[cfg(windows)]
-#[test]
-fn completed_native_read_rechecks_original_private_custody_at_receiver_finish() {
-    let original = vec![0x42; 5000];
-    let budget = AllocationBudget::new(original.len());
-    let (directory, mut read) = fixture(&original, budget.clone());
-    let bytes = complete(&mut read);
-    let pointer = bytes.as_slice().as_ptr();
-    read.recheck_namespace().unwrap();
-    assert!(
-        std::process::Command::new("icacls.exe")
-            .arg(canonical_path(directory.path()))
-            .args(["/grant", "*S-1-1-0:R"])
-            .status()
-            .unwrap()
-            .success()
-    );
-    assert!(read.recheck_namespace().is_err());
-    assert_eq!(bytes.as_slice(), original);
-    assert_eq!(bytes.as_slice().as_ptr(), pointer);
-    assert_eq!(budget.reserved_bytes(), original.len());
-    drop(bytes);
-    assert_eq!(budget.reserved_bytes(), 0);
-}
+#[path = "windows_custody_tests.rs"]
+mod windows_custody_tests;
 
 #[test]
 fn original_intent_read_shares_exact_descriptor_capacity_and_prefix_custody() {

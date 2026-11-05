@@ -1,6 +1,6 @@
 //! Integration tests ensuring executor-enforced permission policies.
 use eyre::Result;
-use integration_tests::{sandbox, sync::sync_after_submission};
+use integration_tests::{collections, sandbox, sync::sync_after_submission};
 use iroha::{
     blocking::Client,
     collections::{Collection, ListQuery, Page, field},
@@ -274,15 +274,20 @@ async fn genesis_transactions_are_validated_by_executor() -> Result<()> {
     )
     .await
 }
-fn get_assets(iroha: &Client, id: &AccountId) -> Vec<Asset> {
-    iroha
-        .client()
-        .query(FindAssets::new())
-        .execute_all()
-        .expect("Failed to execute request.")
-        .into_iter()
-        .filter(|asset| asset.id().account() == id)
-        .collect()
+
+fn get_assets(client: &Client, id: &AccountId) -> Vec<norito::json::Value> {
+    let rows = client
+        .list(
+            iroha::collections::Collection::AccountAssets(id.clone()),
+            iroha::collections::ListQuery::new(),
+        )
+        .collect::<iroha::Result<Vec<_>>>()
+        .expect("Failed to execute asset collection request");
+    assert!(
+        rows.iter()
+            .all(|row| collections::field::<AccountId>(row, "account_id").unwrap() == *id)
+    );
+    rows
 }
 #[test]
 fn permissions_disallow_asset_transfer() {
@@ -404,7 +409,7 @@ fn account_permission_revoke_then_grant_last_wins_canonical_output() -> Result<(
     )?;
     last_non_empty_height = status.blocks_non_empty;
     let perm: Permission = CanModifyAccountMetadata {
-        account: mouse_id.clone(),
+        account: ALICE_ID.clone(),
     }
     .into();
     let mouse_client =
@@ -953,4 +958,45 @@ fn associated_permissions_removed_from_role_on_unregister() {
         false,
         "domain unregister",
     );
+}
+
+#[tokio::test]
+async fn genesis_preparation_rejects_duplicate_domain_before_startup() {
+    // Preparation now executes genesis before any peer can start. Inspect the
+    // native typed refusal at that owner, then prepare the one-registration control.
+    let kingdom_id = DomainId::try_new("kingdom", "universal").expect("fixture domain");
+    let builder = NetworkBuilder::new().with_peers(4).with_genesis_block(
+        move |topology, topology_entries| {
+            let register = InstructionBox::from(Register::domain(Domain::new(kingdom_id.clone())));
+            let error = try_genesis_factory(
+                vec![vec![register.clone(), register.clone()]],
+                topology.clone(),
+                topology_entries.clone(),
+            )
+            .expect_err("the native executor must reject duplicate domain registration");
+            let rejection = error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<iroha_core::block::GenesisOutputRejection>())
+                .unwrap_or_else(|| panic!("expected a native genesis output rejection: {error:?}"));
+            let expected =
+                TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+                    iroha_data_model::isi::error::InstructionExecutionError::Repetition(
+                        iroha_data_model::isi::error::RepetitionError {
+                            instruction: iroha_data_model::isi::InstructionType::Register,
+                            id: kingdom_id.clone().into(),
+                        },
+                    ),
+                ));
+            assert_eq!(rejection.reason.as_ref(), &expected);
+            try_genesis_factory(vec![vec![register]], topology, topology_entries)
+                .expect("one registration must prepare through the same native validator")
+        },
+    );
+    let Some(network) = sandbox::build_network_or_skip(
+        builder,
+        stringify!(genesis_preparation_rejects_duplicate_domain_before_startup),
+    ) else {
+        return;
+    };
+    assert!(network.genesis().0.has_results());
 }

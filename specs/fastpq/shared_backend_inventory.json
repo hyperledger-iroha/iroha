@@ -302,6 +302,10 @@
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_transform.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_value_fixed_tests.rs"
           ]
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_avx2_test_kernel.rs",
+          "role": "source"
         }
       ]
     },
@@ -954,6 +958,14 @@
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/registration_phase_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/support_and_io_tests.rs"
           ]
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash_avx2_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash_persistent_avx2_tests.rs",
+          "role": "test"
         }
       ]
     },
@@ -1134,6 +1146,14 @@
         },
         {
           "path": "crates/iroha_js_host/src/privacy_x509_transaction/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash_avx2_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash_persistent_avx2_tests.rs",
           "role": "test"
         }
       ]
@@ -3227,6 +3247,10 @@
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_trace_replay_inverse_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_transform.rs"
           ]
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_avx2_test_kernel.rs",
+          "role": "source"
         }
       ]
     },
@@ -3620,6 +3644,10 @@
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_transform.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_value_fixed_tests.rs"
           ]
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_avx2_test_kernel.rs",
+          "role": "source"
         }
       ]
     },

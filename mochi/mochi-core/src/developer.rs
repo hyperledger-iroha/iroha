@@ -1027,6 +1027,104 @@ impl SubmissionOutcome {
 mod tests {
     use super::*;
 
+    fn install_listener_handoff_fixture(bin: &Path, expected_config: &Path) -> PathBuf {
+        let harness = std::env::current_exe().unwrap();
+        std::fs::copy(
+            &harness,
+            bin.join(format!("kagami{}", std::env::consts::EXE_SUFFIX)),
+        )
+        .unwrap();
+        let source = bin.join("config_check_daemon.rs");
+        std::fs::write(
+            &source,
+            include_str!("../tests/fixtures/config_check_daemon.rs"),
+        )
+        .unwrap();
+        let receipt = bin.join("config-preflight.receipt");
+        let output =
+            std::process::Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
+                .args(["--edition=2024", "-C", "debuginfo=0"])
+                .arg(&source)
+                .arg("-o")
+                .arg(bin.join(format!("iroha3d{}", std::env::consts::EXE_SUFFIX)))
+                .env("MOCHI_TEST_PREFLIGHT_CONFIG", expected_config)
+                .env("MOCHI_TEST_PREFLIGHT_RECEIPT", &receipt)
+                .env("MOCHI_TEST_PREFLIGHT_HARNESS", harness)
+                .output()
+                .unwrap();
+        assert!(
+            output.status.success(),
+            "native preflight fixture failed to compile: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        receipt
+    }
+
+    #[test]
+    fn native_preflight_fixture_requires_the_exact_peer_and_preserves_worker_refusal() {
+        let temporary = tempfile::tempdir().unwrap();
+        let bin = temporary.path().join("bin");
+        let generation = temporary.path().join("generation");
+        std::fs::create_dir(&bin).unwrap();
+        std::fs::create_dir(&generation).unwrap();
+        let generation = generation.canonicalize().unwrap();
+        let config = generation.join("peer0.toml");
+        std::fs::write(&config, "fixture = true\n").unwrap();
+        let other = generation.join("peer1.toml");
+        std::fs::write(&other, "fixture = true\n").unwrap();
+        let receipt = install_listener_handoff_fixture(&bin, &config);
+        InstalledRuntime::from_directory(&bin).unwrap();
+        let daemon = bin.join(format!("iroha3d{}", std::env::consts::EXE_SUFFIX));
+        for arguments in [
+            vec![
+                "--config".as_ref(),
+                other.as_os_str(),
+                "--check-config".as_ref(),
+                "--json".as_ref(),
+            ],
+            vec![
+                "--config".as_ref(),
+                config.as_os_str(),
+                "--check-config".as_ref(),
+            ],
+            vec![
+                "--config".as_ref(),
+                config.as_os_str(),
+                "--json".as_ref(),
+                "--check-config".as_ref(),
+            ],
+        ] {
+            let output = std::process::Command::new(&daemon)
+                .args(arguments)
+                .current_dir(&generation)
+                .output()
+                .unwrap();
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+            assert!(!receipt.exists());
+        }
+        let worker = std::process::Command::new(&daemon)
+            .arg("--mochi-fixture-not-a-runtime")
+            .output()
+            .unwrap();
+        assert!(!worker.status.success());
+        assert!(String::from_utf8_lossy(&worker.stderr).contains("Unrecognized option"));
+        assert!(!receipt.exists());
+        let output = std::process::Command::new(&daemon)
+            .arg("--config")
+            .arg(&config)
+            .args(["--check-config", "--json"])
+            .current_dir(&generation)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"{\"status\":\"ready\"}\n");
+        assert_eq!(
+            std::fs::read(&receipt).unwrap(),
+            config.to_str().unwrap().as_bytes()
+        );
+    }
+
     #[test]
     fn submissions_settle_as_applied_rejected_or_expired_and_stay_errors_only_when_uncertain() {
         let hash = "ab".repeat(32);
@@ -1348,17 +1446,18 @@ mod tests {
         let bin = temporary.path().join("bin");
         std::fs::create_dir(&project).unwrap();
         std::fs::create_dir(&bin).unwrap();
-        // The native harness does not implement Kagami's worker entry point. Canonical
-        // preparation is real; listener handoff detects its exit before adoption.
-        for program in ["kagami", "iroha3d"] {
-            std::fs::copy(
-                std::env::current_exe().unwrap(),
-                bin.join(format!("{program}{}", std::env::consts::EXE_SUFFIX)),
-            )
-            .unwrap();
-        }
+        // Canonical generation is real. The native daemon double acknowledges only its
+        // exact preflight; the unchanged libtest worker exits before listener adoption.
+        let state = temporary.path().canonicalize().unwrap().join("state");
+        let expected_config = workspace_state_root(&state, &project)
+            .unwrap()
+            .join("networks")
+            .join("fixture")
+            .join("generation")
+            .join("peer0.toml");
+        let preflight_receipt = install_listener_handoff_fixture(&bin, &expected_config);
         let desktop = DeveloperWorkspace::with_runtime(
-            &temporary.path().join("state"),
+            &state,
             &project,
             InstalledRuntime::from_directory(&bin).unwrap(),
         )
@@ -1374,6 +1473,10 @@ mod tests {
                 Some(iroha_deploy::managed::Error::Invalid(message)) if message == &expected
             ),
             "genuine generation must retain the owned worker's listener handoff failure: {failure}"
+        );
+        assert_eq!(
+            std::fs::read(&preflight_receipt).unwrap(),
+            expected_config.to_str().unwrap().as_bytes()
         );
         let context = desktop.select("fixture").unwrap();
         assert_create_refuses_retained_context(&desktop, "fixture");

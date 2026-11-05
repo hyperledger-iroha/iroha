@@ -6,6 +6,7 @@ import os
 import subprocess
 import tempfile
 import textwrap
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -28,11 +29,24 @@ class FuzzSmokeTests(unittest.TestCase):
         self.bin = self.directory / "bin"
         self.bin.mkdir()
         self.log = self.directory / "cargo.log"
+        self.fixture_root = self.directory / "repository"
+        (self.fixture_root / "scripts").mkdir(parents=True)
+        self.script = self.fixture_root / "scripts" / SCRIPT.name
+        self.script.write_bytes(SCRIPT.read_bytes())
+        self.fuzz = self.fixture_root / "crates" / "ivm" / "fuzz"
+        self.fuzz.mkdir(parents=True)
+        (self.fuzz / "Cargo.lock").write_text("version = 4\n", encoding="utf-8")
         self.write_executable(
             "cargo",
             """
             #!/usr/bin/env bash
             printf '%s\n' "$*" >> "$FUZZ_TEST_LOG"
+            if [[ "${2:-}" == metadata ]]; then
+              exit "${FAKE_METADATA_EXIT:-0}"
+            fi
+            if [[ "${FAKE_LOCK_DRIFT:-0}" == 1 ]]; then
+              printf 'changed\n' >> Cargo.lock
+            fi
             exit "${FAKE_CARGO_EXIT:-0}"
             """,
         )
@@ -99,8 +113,8 @@ class FuzzSmokeTests(unittest.TestCase):
         if extra_environment is not None:
             environment.update(extra_environment)
         return subprocess.run(
-            ["/bin/bash", str(SCRIPT), *arguments],
-            cwd=ROOT,
+            ["/bin/bash", str(self.script), *arguments],
+            cwd=self.fixture_root,
             env=environment,
             text=True,
             capture_output=True,
@@ -150,8 +164,9 @@ class FuzzSmokeTests(unittest.TestCase):
         self.assertNotIn("Norito targets", result.stdout)
 
         invocations = self.log.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(len(invocations), 1)
-        invocation = invocations[0]
+        self.assertEqual(len(invocations), 2)
+        self.assertIn(f"+{PINNED_NIGHTLY} metadata --locked --format-version 1", invocations[0])
+        invocation = invocations[1]
         self.assertIn(f"+{PINNED_NIGHTLY} fuzz run", invocation)
         self.assertIn("--codegen-units 16", invocation)
         self.assertIn("crates/ivm/fuzz numeric_v1", invocation)
@@ -160,6 +175,65 @@ class FuzzSmokeTests(unittest.TestCase):
         self.assertIn("-max_total_time=2", invocation)
         self.assertNotIn("tlv_validate", invocation)
         self.assertNotIn("kotodama_lower", invocation)
+
+    def test_strict_numeric_mode_requires_an_unchanged_locked_graph(self) -> None:
+        """Missing locks, resolver changes and build-time lock drift cannot pass."""
+
+        self.install_cargo_fuzz()
+        self.install_rustup(PINNED_NIGHTLY)
+        lock = self.fuzz / "Cargo.lock"
+        lock.unlink()
+        missing = self.run_script("--strict", "--numeric-v1-only")
+        self.assertEqual(missing.returncode, 1)
+        self.assertIn("committed regular Cargo.lock", missing.stderr)
+        self.assertFalse(self.log.exists())
+        lock.write_text("version = 4\n", encoding="utf-8")
+        unresolved = self.run_script(
+            "--strict", "--numeric-v1-only",
+            extra_environment={"FAKE_METADATA_EXIT": "101"},
+        )
+        self.assertEqual(unresolved.returncode, 101)
+        self.assertNotIn(" fuzz run ", self.log.read_text(encoding="utf-8"))
+        drift = self.run_script(
+            "--strict", "--numeric-v1-only",
+            extra_environment={"FAKE_LOCK_DRIFT": "1"},
+        )
+        self.assertEqual(drift.returncode, 1)
+        self.assertIn("Cargo.lock changed during numeric_v1", drift.stderr)
+
+    def test_ivm_fuzz_lock_preserves_canonical_dependency_versions_and_patches(self) -> None:
+        """The isolated graph adds only its fuzz harness to the shipping selection."""
+
+        def packages(path: Path) -> set[tuple]:
+            return {
+                (item["name"], item["version"], item.get("source"), item.get("checksum"))
+                for item in tomllib.loads(path.read_text(encoding="utf-8"))["package"]
+            }
+
+        canonical = packages(ROOT / "Cargo.lock")
+        isolated = packages(ROOT / "crates/ivm/fuzz/Cargo.lock")
+        added_packages = isolated - canonical
+        self.assertEqual(len(added_packages), 4)
+        additions = {name: version for name, version, _source, _checksum in added_packages}
+        self.assertEqual(additions, {
+            "ivm-fuzz": "2.0.0-rc.2.0", "libfuzzer-sys": "0.4.13",
+            "arbitrary": "1.5.0", "derive_arbitrary": "1.5.0",
+        })
+        for name in ("w3f-bls", "ark-serialize", "ark-ff", "ark-bls12-381"):
+            self.assertEqual(
+                {item for item in isolated if item[0] == name},
+                {item for item in canonical if item[0] == name},
+            )
+        root_patches = tomllib.loads((ROOT / "Cargo.toml").read_text())["patch"]["crates-io"]
+        manifest = ROOT / "crates/ivm/fuzz/Cargo.toml"
+        fuzz_patches = tomllib.loads(manifest.read_text())["patch"]["crates-io"]
+        reachable = {name for name, _version, _source, _checksum in isolated}
+        self.assertEqual(set(fuzz_patches), set(root_patches) & reachable)
+        for name, patch in fuzz_patches.items():
+            self.assertEqual(
+                (manifest.parent / patch["path"]).resolve(),
+                (ROOT / root_patches[name]["path"]).resolve(),
+            )
 
     def test_strict_mode_propagates_target_failure(self) -> None:
         """A libFuzzer crash or nonzero exit makes the strict smoke fail."""
@@ -203,6 +277,47 @@ class FuzzSmokeTests(unittest.TestCase):
         self.assertIn('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"', workflow)
         self.assertIn("group: numeric-v1-fuzz-${{ github.sha }}", workflow)
         self.assertIn("cancel-in-progress: false", workflow)
+
+    def test_pull_requests_provision_hosted_tools_without_changing_release_policy(self) -> None:
+        """PRs cannot queue on absent hosts; non-PR routing and fuzz limits stay fixed."""
+
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn(
+            "runs-on: ${{ fromJSON(github.event_name == 'pull_request' && "
+            "'[\"ubuntu-24.04\"]' || '[\"self-hosted\",\"Linux\",\"iroha2\"]') }}",
+            workflow,
+        )
+        provision = workflow.split(
+            "      - name: Provision hosted PR fuzz tools\n", 1
+        )[1].split("\n      - ", 1)[0]
+        self.assertIn("if: github.event_name == 'pull_request'", provision)
+        self.assertIn("uses: ./.github/actions/setup-native-ci", provision)
+        self.assertIn(f"toolchain: {PINNED_NIGHTLY}", provision)
+        release = workflow.split(
+            "      - uses: actions-rust-lang/setup-rust-toolchain@", 1
+        )[1].split("\n      - ", 1)[0]
+        self.assertIn("if: github.event_name != 'pull_request'", release)
+        self.assertIn(f"toolchain: {PINNED_NIGHTLY}", release)
+        for setting in ('RUNS: "10000"', 'FUZZ_MAX_TOTAL_TIME: "60"',
+                        'FUZZ_RSS_LIMIT_MB: "3072"', 'FUZZ_CODEGEN_UNITS: "16"',
+                        'timeout-minutes: 120', 'workspaces: "crates/ivm/fuzz -> target"'):
+            self.assertIn(setting, workflow)
+        self.assertNotIn("CARGO_TARGET_DIR", workflow)
+        self.assertNotIn("continue-on-error", workflow)
+        self.assertIn('".github/actions/setup-native-ci/**"', workflow)
+        pull_request = workflow.split("  pull_request:\n", 1)[1].split(
+            "  push:", 1
+        )[0]
+        for source in (
+            "scripts/ci_private_fixture_root.py",
+            "pytests/scripts/ci_private_fixture_root_test.py",
+        ):
+            self.assertIn(f'      - "{source}"\n', pull_request)
+        check = workflow.split(
+            "      - name: Exercise strict fuzz prerequisite and routing regressions\n", 1
+        )[1].split("\n      - ", 1)[0]
+        self.assertIn("if: github.event_name == 'pull_request'", check)
+        self.assertIn("run: python3 pytests/scripts/fuzz_smoke_test.py", check)
 
     def test_dedicated_workflow_covers_every_numeric_semantics_input(self) -> None:
         """Compiler, ABI, fixture, syscall-test, and spec edits all trigger fuzzing."""

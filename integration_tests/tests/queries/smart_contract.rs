@@ -1,10 +1,10 @@
 //! Smart contract query behaviour checks.
-#[path = "../support/contract_deployment.rs"]
-mod contract_deployment;
+use crate::contract_fixture;
 use eyre::{Result, WrapErr};
 use integration_tests::sandbox;
 use iroha::{client::QueryError, data_model::prelude::*};
 use iroha_core::smartcontracts::ivm::gas_limit_for_meta;
+use iroha_data_model::smart_contract::ContractAlias;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_test_network::*;
@@ -20,66 +20,50 @@ fn fee_payment_with_gas_limit(bytecode: &IvmBytecode) -> Result<FeePaymentIntent
         NonZeroU64::new(gas_limit),
     ))
 }
-/// Deploy the exact sample and delegate only its declared invocation and metadata effect.
-fn sample_contract_metadata(
-    client: &iroha::blocking::Client,
-    bytecode: &IvmBytecode,
-    alias: &str,
-) -> Result<Metadata> {
-    use iroha_executor_data_model::permission::{
-        account::CanModifyAccountMetadata, smart_contract::CanUseContractPermission,
-    };
-    let alias =
-        iroha_data_model::smart_contract::ContractAlias::from_components(alias, None, "universal")?;
-    let (address, code_hash, _, _) =
-        contract_deployment::deploy_contract_locally_signed(client, bytecode.as_ref(), alias)?;
-    client.submit_all(
-        [
-            Grant::account_permission(
-                CanUseContractPermission {
-                    contract: address.clone(),
-                    permission: "Admin".parse()?,
-                },
-                client.client().account().clone(),
-            ),
-            Grant::account_permission(
-                CanModifyAccountMetadata {
-                    account: client.client().account().clone(),
-                },
-                address.subject_id(),
-            ),
-        ],
-        FeePaymentIntent::authority(Vec::new(), None),
-    )?;
-    let mut metadata = Metadata::default();
-    for (key, value) in [
-        ("contract_address", address.to_string()),
-        ("contract_code_hash", code_hash),
-        ("contract_entrypoint", "run".to_owned()),
-    ] {
-        metadata.insert(
-            key.parse::<Name>()?,
-            iroha_primitives::json::Json::new(value),
-        );
-    }
-    Ok(metadata)
+
+fn query_contract_metadata(alias: &ContractAlias) -> Metadata {
+    contract_fixture::call_metadata(alias)
 }
 
 #[test]
+fn query_contract_samples_select_their_declared_entrypoint() -> Result<()> {
+    let alias = ContractAlias::from_components("query_fixture", None, "universal")?;
+    let metadata = query_contract_metadata(&alias);
+    let name: String = metadata
+        .get(&"contract_entrypoint".parse::<Name>()?)
+        .expect("explicit entrypoint")
+        .try_into_any()?;
+    for sample in [
+        "query_assets_and_save_cursor",
+        "smart_contract_can_filter_queries",
+    ] {
+        let bytecode = load_sample_ivm(sample);
+        let artifact = ivm::verify_contract_artifact(bytecode.as_ref())
+            .map_err(|error| eyre::eyre!("verify {sample}: {error}"))?;
+        let entrypoint = artifact
+            .contract_interface
+            .entrypoints
+            .iter()
+            .find(|entrypoint| entrypoint.name == name)
+            .expect("the signed metadata selects the sample's declared entrypoint");
+        assert!(entrypoint.params.is_empty());
+        assert!(entrypoint.argument_schema.is_none());
+    }
+    Ok(())
+}
+#[test]
 fn smart_contract_query_scenarios() -> Result<()> {
-    let mut builder = NetworkBuilder::new()
-        .with_genesis_instruction(Grant::account_permission(
-            iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode,
-            iroha_test_samples::ALICE_ID.clone(),
-        ))
-        .with_config_layer(|layer| {
-            layer.write(["pipeline", "query_default_cursor_mode"], "stored");
-        });
-    for alias in ["query_assets_cursor", "query_filter_sample"] {
-        builder = builder.with_genesis_instruction(Grant::account_permission(
-            contract_deployment::contract_alias_management_permission(alias),
-            iroha_test_samples::ALICE_ID.clone(),
-        ));
+    let aliases = ["query_cursor_fixture", "query_filter_fixture"]
+        .map(|name| ContractAlias::from_components(name, None, "universal"))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut builder = NetworkBuilder::new().with_config_layer(|layer| {
+        layer.write(["pipeline", "query_default_cursor_mode"], "stored");
+    });
+    for permission in
+        contract_fixture::deployment_permissions(&iroha_test_samples::ALICE_ID, &aliases)
+    {
+        builder = builder.with_genesis_instruction(permission);
     }
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
         builder,
@@ -89,28 +73,45 @@ fn smart_contract_query_scenarios() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
+    let effect_permissions = [
+        iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
+            account: client.client().account().clone(),
+        }
+        .into(),
+    ];
     let torii = client.client().endpoint().clone();
     let env_dir = network.env_dir().to_path_buf();
     // The contract writes a synthetic cursor that has no server-owned stored query.
     // Continuing it must fail before executor validation or cursor advancement.
     {
         let bytecode = load_sample_ivm("query_assets_and_save_cursor");
-        let metadata = sample_contract_metadata(&client, &bytecode, "query_assets_cursor")?;
-        let fee_payment = fee_payment_with_gas_limit(&bytecode)?;
-        let account = client.account_client();
-        let mut payload = account.prepare_transaction(
-            iroha::client::AccountTransactionDraft::new(bytecode, fee_payment, metadata),
+        contract_fixture::deploy(
+            &client,
+            bytecode.as_ref(),
+            aliases[0].clone(),
+            &effect_permissions,
         )?;
-        let quote = client
-            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })?;
-        eyre::ensure!(
-            payload
-                .fee_payment
-                .has_same_payer_and_gas_bound(&quote.intent),
-            "contract query fixture quote changed payer or gas bound"
-        );
-        payload.fee_payment = quote.intent;
-        let transaction = account.sign_transaction(payload)?;
+        let fee_payment = fee_payment_with_gas_limit(&bytecode)?;
+        let transaction = {
+            let account = client.account_client();
+            let mut payload =
+                account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    bytecode,
+                    fee_payment,
+                    query_contract_metadata(&aliases[0]),
+                ))?;
+            let quote = client.quote_fees(iroha::client::FeeQuoteRequest::AccountSignature {
+                payload: &payload,
+            })?;
+            assert!(
+                payload
+                    .fee_payment
+                    .has_same_payer_and_gas_bound(&quote.intent)
+            );
+            payload.fee_payment = quote.intent;
+            account.sign_transaction(payload)
+        }
+        .expect("build integration-test transaction");
         client.submit_transaction_and_wait(&transaction)?;
         let cursor_key: Name = "cursor".parse().unwrap();
         let asset_cursor = client
@@ -139,22 +140,33 @@ fn smart_contract_query_scenarios() -> Result<()> {
     // smart_contract_can_filter_queries
     {
         let bytecode = load_sample_ivm("smart_contract_can_filter_queries");
-        let metadata = sample_contract_metadata(&client, &bytecode, "query_filter_sample")?;
-        let fee_payment = fee_payment_with_gas_limit(&bytecode)?;
-        let account = client.account_client();
-        let mut payload = account.prepare_transaction(
-            iroha::client::AccountTransactionDraft::new(bytecode, fee_payment, metadata),
+        contract_fixture::deploy(
+            &client,
+            bytecode.as_ref(),
+            aliases[1].clone(),
+            &effect_permissions,
         )?;
-        let quote = client
-            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })?;
-        eyre::ensure!(
-            payload
-                .fee_payment
-                .has_same_payer_and_gas_bound(&quote.intent),
-            "contract query fixture quote changed payer or gas bound"
-        );
-        payload.fee_payment = quote.intent;
-        let transaction = account.sign_transaction(payload)?;
+        let fee_payment = fee_payment_with_gas_limit(&bytecode)?;
+        let transaction = {
+            let account = client.account_client();
+            let mut payload =
+                account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    bytecode,
+                    fee_payment,
+                    query_contract_metadata(&aliases[1]),
+                ))?;
+            let quote = client.quote_fees(iroha::client::FeeQuoteRequest::AccountSignature {
+                payload: &payload,
+            })?;
+            assert!(
+                payload
+                    .fee_payment
+                    .has_same_payer_and_gas_bound(&quote.intent)
+            );
+            payload.fee_payment = quote.intent;
+            account.sign_transaction(payload)
+        }
+        .expect("build integration-test transaction");
         client
             .submit_transaction_and_wait(&transaction)
             .wrap_err_with(|| {

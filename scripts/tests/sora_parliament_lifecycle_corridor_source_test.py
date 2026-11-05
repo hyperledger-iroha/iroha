@@ -3,7 +3,13 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import shlex
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -17,6 +23,7 @@ NO_RESULT_PATHS = ROOT / "integration_tests/tests/sora_parliament_no_result_path
 FAILURE_PATHS = ROOT / "integration_tests/tests/sora_parliament_failure_paths.rs"
 ENACTMENT = ROOT / "integration_tests/tests/sora_parliament_enactment.rs"
 SUPPORT = ROOT / "integration_tests/tests/sora_parliament_lifecycle_support.rs"
+SUBMISSION = ROOT / "integration_tests/tests/support/parliament_submission.rs"
 NATIVE_FINALITY = ROOT / "integration_tests/tests/sora_parliament_finality.rs"
 USER_CONFIG = ROOT / "crates/iroha_config/src/parameters/user.rs"
 ACTUAL_CONFIG = ROOT / "crates/iroha_config/src/parameters/actual.rs"
@@ -28,6 +35,21 @@ BEACON_TEST_SIGNER = (
 )
 BEACON_LIFECYCLE = ROOT / "crates/iroha_core/src/sumeragi/epoch_beacon/producer.rs"
 BEACON_PRODUCER_TESTS = ROOT / "crates/iroha_core/src/sumeragi/epoch_beacon/producer/tests.rs"
+CORE_OWNER_TESTS = (
+    "beacon::parliament_test_network_signer::tests::authenticated_fixture_requires_exact_keys_and_every_signed_private_edge",
+    "beacon::parliament_test_network_signer::tests::exact_seat_signer_matches_the_public_fixture_and_rejects_foreign_roster",
+    "beacon::parliament_test_network_signer::tests::exact_seat_signer_supports_one_domain_separated_successor_session",
+    "beacon::parliament_test_network_signer::tests::custody_retains_only_exact_initial_and_successor_owners_without_replacement",
+    "beacon::parliament_test_network_signer::tests::poisoned_fixture_custody_refuses_capability_and_signing",
+    "beacon::parliament_test_network_signer::tests::invalid_provider_mode_preserves_owned_capability_but_returns_a_malformed_share",
+    "sumeragi::epoch_beacon::producer::tests::parliament_fixture_tests::parliament_fixture_owners_drive_real_threshold_shares_and_refuse_invalid_provider_output",
+    "sumeragi::epoch_beacon::producer::tests::native_invalid_local_share_is_never_retained_or_counted",
+    "sumeragi::epoch_beacon::producer::tests::wrong_source_sender_and_proof_never_change_the_owned_round",
+)
+CORE_OWNER_COMMAND = (
+    "test", "--locked", "--profile", "test", "-p", "iroha_core", "--lib",
+    "--features", "mutation-testing,iroha-core-tests,test-network-parliament-signers",
+)
 MANDATORY_NPOS_TEST_NAME = (
     "four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_gate"
 )
@@ -53,6 +75,25 @@ NO_RESULT_RESTART_CONTRACT_ABSENCE = '''assert_governed_contract_absent(
         "public-finding restart effect isolation",
     )
     .await?;'''
+NO_RESULT_PUBLICATION_MARKERS = (
+    'observe_exact_height(client, request_height, "public-finding sortition registration",).await?;',
+    "assert_eq!(current_height(client).await?, request_height);",
+    'observe_exact_height(client, roster_seal_height, "public-finding roster sealing").await?;',
+    "assert_eq!(current_height(client).await?, roster_seal_height);",
+    'observe_exact_height(client, retry_request_height, "deadline retry sortition registration",).await?;',
+    "assert_eq!(current_height(client).await?, retry_request_height);",
+    'observe_exact_height(client, retry_roster_seal_height, "deadline retry roster sealing",).await?;',
+    "assert_eq!(current_height(client).await?, retry_roster_seal_height);",
+    "network.ensure_blocks(second_retry_height).await?;",
+    'observe_exact_height(client, second_retry_height, "second public-finding retry").await?;',
+    "let second_retry_state = read_attempt(client, second_retry_id).await?;",
+    "let peer_client = peer.client();",
+    'observe_exact_height(&peer_client, second_retry_height, "public-finding peer publication",).await?;',
+    "let peer_rejected = read_on_dedicated_thread({",
+    "restart_peer.once_block(second_retry_height)",
+    'observe_exact_height(&restart_peer.client(), second_retry_height, "public-finding restored publication",).await?;',
+    "let restored_rejected = read_on_dedicated_thread({",
+)
 EXACT_INACTIVE_CONTRACT_PROJECTION = '''if object.len() != 3
         || object.get("found").and_then(norito::json::Value::as_bool) != Some(false)
         || object
@@ -102,8 +143,9 @@ EXACT_ABSENCE_CLASSIFICATION_MARKERS = (
     "finality proof returned height",
     "if block.header() != proof.block_header",
     "finality proof header differs from its finalized block",
-    "let block = exact_block(client, height, network)",
-    "if block.global_beacon_pulse().is_some() {",
+    "let (_, authenticated) = finality::certified_block(network, client, height)",
+    '.wrap_err_with(|| format!("{label}: exact certified block is unavailable"))?;',
+    "if authenticated.commitment().beacon.is_some() {",
     EXACT_NON_BOUNDARY_PULSE_ABSENCE,
 )
 CAPACITY_DOMAIN_REGISTRATION = (
@@ -156,6 +198,7 @@ def read_corridor_source() -> str:
             FAILURE_PATHS.read_text(encoding="utf-8"),
             ENACTMENT.read_text(encoding="utf-8"),
             SUPPORT.read_text(encoding="utf-8"),
+            SUBMISSION.read_text(encoding="utf-8"),
             NATIVE_FINALITY.read_text(encoding="utf-8"),
         )
     )
@@ -204,6 +247,46 @@ NO_RESULT_TEST = re.compile(
 # A sortition slot is the first consensus-native pulse height at or after the frozen delay
 # and above every earlier generation slot. The wait for it is governance-local.
 SORTITION_SLOT_HELPER_MARKERS = {
+    "submit_parliament_instructions": (
+        "let transaction = prepare_parliament_transaction(client, instructions).await?;",
+        "let deadline = Instant::now() + OPERATION_TIMEOUT;",
+        "submit_prepared_parliament_transaction_until(client, &transaction, deadline).await",
+    ),
+    "submit_prepared_parliament_transaction_until": (
+        "let signed_hash = transaction.hash();",
+        "let bounded = client.with_request_deadline(deadline)?;",
+        "tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {",
+        "let applied_hash = bounded.account_client().submit_transaction_and_wait(transaction).await?;",
+        "if applied_hash != signed_hash {",
+        '"Parliament Applied response substituted the signed transaction hash"',
+        "let local = bounded.client().wait_until_transaction_applied_local(signed_hash, TransactionWaitOptions { timeout: deadline.saturating_duration_since(Instant::now()), ..TransactionWaitOptions::default() },).await?;",
+        "let applied_height = local.block_height.ok_or_else(|| {",
+        'observe_exact_height(&bounded, applied_height, "Parliament local Applied publication",).await?;',
+        "if Instant::now() >= deadline {",
+        '.wrap_err_with(|| format!("Parliament Applied publication unresolved for {signed_hash}"))',
+    ),
+    "install_threshold_sessions": (
+        "submit_parliament_instructions(",
+        'observe_exact_height(client, install_height, "failure-corridor threshold-key installation",).await?;',
+        'admit_parliament_height_carrier(&client, [Log::new(Level::INFO, "carry Parliament failure-corridor threshold-key activation".to_owned(),)],).await?;',
+        "network.ensure_blocks(activation_height).await?;",
+        'observe_exact_height(client, activation_height, "failure-corridor threshold-key activation",).await?;',
+    ),
+    "admit_parliament_height_carrier": (
+        "submission::prepare_parliament_transaction(client, instructions).await?;",
+        "let admitted_hash = tokio::time::timeout(OPERATION_TIMEOUT, client.account_client().submit_transaction(&transaction),)",
+        "if admitted_hash != transaction.hash() {",
+        '"Parliament carrier admission substituted the signed hash"',
+    ),
+    "advance_to_height_with_carriers": (
+        "let height = current_height(client).await?;",
+        "if height == target_height { return Ok(()); }",
+        "if height > target_height {",
+        "let carrier_height = height .checked_add(1)",
+        'admit_parliament_height_carrier(client, [Log::new(Level::INFO, format!("{label} admission carrier {carrier_height}"),)],).await?;',
+        "network.ensure_blocks(carrier_height).await?;",
+        "observe_exact_height(client, carrier_height, label).await?;",
+    ),
     "with_signed_npos_epoch": (
         "epoch_length_blocks: NonZeroU64::new(epoch_length_blocks)",
         "evidence_horizon_blocks: epoch_length_blocks * 2,",
@@ -239,7 +322,7 @@ SORTITION_SLOT_HELPER_MARKERS = {
         "aligned_native_pulse_height(earliest, epoch_length_blocks)?;",
     ),
     "await_native_sortition_pulse": (
-        "advance_to_autonomous_predecessor(network, client, slot, label).await?;",
+        "advance_to_height_with_carriers(network, client, slot, label).await?;",
         "network.ensure_blocks(slot).await?;",
         "observe_exact_height(client, slot, label).await?;",
         "pulses.push(pulse_at(&peer.client(), slot, network).await?);",
@@ -249,6 +332,7 @@ SORTITION_SLOT_HELPER_MARKERS = {
     "cross_native_boundary_after_pulse": (
         "if boundary_height % epoch_length_blocks != 0 {",
         "network.ensure_blocks(boundary_height).await?;",
+        'admit_parliament_height_carrier(client, [Log::new(Level::INFO, format!("{label} successor carrier {successor_height}"),)],).await?;',
         "network.ensure_blocks(successor_height).await?;",
         "observe_exact_height(client, successor_height, label).await?;",
         "context.authorization.epoch != successor_epoch",
@@ -257,6 +341,7 @@ SORTITION_SLOT_HELPER_MARKERS = {
     ),
 }
 RETIRED_SORTITION_SLOT_RULES = (
+    "advance_to_autonomous_predecessor",
     "request_height + 4",
     ".checked_add(CAPACITY_SORTITION_DELAY_BLOCKS)",
     "the demanded sortition threshold-beacon effect",
@@ -306,16 +391,46 @@ GOVERNANCE_ISOLATION_CONSTANTS = (
     "const ISOLATION_CARRIERS_AFTER_RESTART: u64 = 3;",
     "pub const CORRIDOR_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 128;",
 )
-AUTONOMOUS_PULSE_PROGRESSION = '''network.ensure_blocks(pulse_height).await?;
+NATIVE_PULSE_PROGRESSION = '''network.ensure_blocks(pulse_height).await?;
+    observe_exact_height(
+        &client,
+        pulse_height,
+        "initial mandatory pre-boundary pulse",
+    )
+    .await?;
     assert_eq!(
         current_height(&client).await?,
         pulse_height,
-        "the mandatory threshold-beacon effect must autonomously finalize its exact pre-boundary height",
+        "the mandatory threshold beacon must finalize the carrier at its exact pre-boundary height",
     );'''
 BOUNDARY_PROGRESSION = '''network.ensure_blocks(boundary_height).await?;
+    observe_exact_height(&client, boundary_height, "first native boundary").await?;
     assert_eq!(current_height(&client).await?, boundary_height);'''
 SUCCESSOR_PROGRESSION = '''network.ensure_blocks(boundary_height + 1).await?;
+    observe_exact_height(&client, boundary_height + 1, "first native successor").await?;
     assert_eq!(current_height(&client).await?, boundary_height + 1);'''
+MANDATORY_NATIVE_WORK = (
+    'advance_to_height_with_carriers(&network, &client, pulse_height - 1, "initial mandatory pre-boundary pulse",).await?;',
+    'admit_parliament_height_carrier(&client, [Log::new(Level::INFO, "carry the initial mandatory pre-boundary pulse".to_owned(),)],).await?;',
+    "network.ensure_blocks(pulse_height).await?;",
+    'admit_parliament_height_carrier(&client, [Log::new(Level::INFO, "carry retained-authority successor progression".to_owned(),)],).await?;',
+    "network.ensure_blocks(boundary_height).await?;",
+    'admit_parliament_height_carrier(&client, [Log::new(Level::INFO, "carry the first native successor epoch".to_owned(),)],).await?;',
+    "network.ensure_blocks(boundary_height + 1).await?;",
+    'advance_to_height_with_carriers(&network, &client, successor_pulse_height, "retained-session mandatory pre-boundary pulse",).await?;',
+    "network.ensure_blocks(successor_pulse_height).await?;",
+    'admit_parliament_height_carrier(&client, [Log::new(Level::INFO, "carry the retained-session NPoS boundary".to_owned(),)],).await?;',
+    "network.ensure_blocks(second_boundary_height).await?;",
+    'admit_parliament_height_carrier(&client, [Log::new(Level::INFO, "carry the second native successor epoch".to_owned(),)],).await?;',
+    "network.ensure_blocks(second_boundary_height + 1).await?;",
+)
+FAIL_CLOSED_NATIVE_WORK = (
+    'advance_to_height_with_carriers(&network, &client, predecessor_height, "fail-closed mandatory pulse predecessor",).await?;',
+    "network.ensure_blocks(predecessor_height).await?;",
+    "assert_eq!(current_height(&client).await?, predecessor_height);",
+    'admit_parliament_height_carrier(&client, [Log::new(Level::INFO, "pending work for the below-threshold mandatory pulse".to_owned(),)],).await?;',
+    "let pulse_status_is_active = |status: &SumeragiStatus| -> bool {",
+)
 SUCCESSOR_SEED_EQUALITY = (
     "assert_eq!(context.leader_seed, successor_seed);"
 )
@@ -395,7 +510,8 @@ SORANET_POW_REQUIRED_OVERRIDE = (
     '["network","soranet_handshake","pow","required"]'
 )
 PARLIAMENT_CRYPTO_WORKFLOW_MARKERS = (
-    "SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR: target/sora-parliament-crypto-evidence-",
+    "SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR: ${{ github.workspace }}/"
+    "target/sora-parliament-crypto-evidence-${{ github.run_id }}-${{ github.run_attempt }}",
     "pytest==9.0.3",
     "scripts/tests/check_sora_parliament_crypto_bench_test.py",
     "IROHA_PARLIAMENT_CRYPTO_ALLOCATION_EVIDENCE_V1",
@@ -424,6 +540,8 @@ def require(condition: bool, message: str) -> None:
 def validate_runner(source: str) -> None:
     """Validate the exact debug prebuild and no-skip execution corridor."""
 
+    source = "\n".join(line for line in source.splitlines()
+                       if not line.lstrip().startswith("#"))
     required = (
         "cargo build --locked",
         "--features test-network-parliament-signers",
@@ -431,6 +549,7 @@ def validate_runner(source: str) -> None:
         "IROHA_TEST_SKIP_BUILD=1",
         "IROHA_TEST_REQUIRE_NETWORK=1",
         "IROHA_FAIL_ON_SANDBOX_SKIP=1",
+        "IROHA_TEST_NETWORK_START_ATTEMPTS=1",
         "cargo test --locked",
         "--features parliament-test-signers",
         "--test sora_parliament_lifecycle_smoke",
@@ -439,18 +558,34 @@ def validate_runner(source: str) -> None:
     for marker in required:
         require(marker in source, f"Parliament runner lost `{marker}`")
     require("--release" not in source, "test signer runner must remain debug-only")
+    require("CARGO_BUILD_JOBS" not in source, "runner must preserve the native Cargo jobserver")
     require(source.count("cargo build ") == 1, "runner needs one exact daemon prebuild")
-    require(source.count("cargo test ") == 1, "runner needs one exact test invocation")
+    require(source.count("cargo test ") == 2, "runner needs exact Core and network test commands")
+    selected = re.findall(r"readonly -a CORE_TESTS=\(\n(.*?)\n\)", source, re.DOTALL)
+    command = re.findall(r"readonly -a CORE_CARGO=\(\n(.*?)\n\)", source, re.DOTALL)
+    require(len(selected) == 1 and tuple(shlex.split(selected[0])) == CORE_OWNER_TESTS,
+            "runner must select every exact Core ownership control once")
+    require(len(command) == 1 and shlex.split(command[0]) == ["cargo", *CORE_OWNER_COMMAND],
+            "runner must preserve the validated debug Core command")
+    listing = 'CORE_TEST_LIST="$("${CORE_CARGO[@]}" -- "${CORE_TESTS[@]}" --exact --include-ignored --list)"'
+    execution = '"${CORE_CARGO[@]}" -- "${CORE_TESTS[@]}" --exact --include-ignored --nocapture --test-threads=1'
+    for marker in (listing, execution,
+                   'grep -Fxc -- "${core_test}: test" <<<"$CORE_TEST_LIST" || true',
+                   "grep -Ec ': (test|benchmark)$'",
+                   '!= "${#CORE_TESTS[@]}"',
+                   'for core_test in "${CORE_TESTS[@]}"; do'):
+        require(source.count(marker) == 1, f"runner lost exact nonempty Core selection `{marker}`")
     require(
         source.index("cargo build ")
         < source.index("TEST_NETWORK_BIN_IROHAD_PARLIAMENT_SIGNERS")
-        < source.index("cargo test "),
-        "runner must prebuild, pin the exact daemon, then run the test",
+        < source.index(listing) < source.index(execution)
+        < source.index("cargo test --locked \\\n  -p integration_tests"),
+        "runner must prebuild, pin the daemon, list and run Core controls, then run the network",
     )
 
 
 def validate_workflow(source: str) -> None:
-    """Validate that PR CI schedules the isolated runner on four-peer capacity."""
+    """Validate the isolated corridor's exact hosted runner and native setup."""
 
     job = re.search(
         r"(?ms)^  sora_parliament_lifecycle:\n(?P<body>.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
@@ -458,14 +593,44 @@ def validate_workflow(source: str) -> None:
     )
     require(job is not None, "PR workflow does not schedule the Parliament corridor")
     body = job.group("body")
+    require(
+        re.findall(r"(?m)^    runs-on: (.+)$", body) == ["ubuntu-24.04"],
+        "Parliament PR job must use the exact ubuntu-24.04 runner",
+    )
+    setup = "uses: ./.github/actions/setup-native-ci"
+    setup_steps = [
+        step for step in re.split(r"(?m)^      - ", body)[1:]
+        if step.partition("\n")[0] == setup
+    ]
+    require(
+        len(setup_steps) == 1
+        and [line.strip() for line in setup_steps[0].splitlines()
+             if line.strip() and not line.lstrip().startswith("#")] == [setup],
+        "Parliament PR job needs one exact unconditional native setup step",
+    )
     for marker in (
-        "runs-on: [self-hosted, Linux, iroha2]",
         "CARGO_TARGET_DIR: target/sora-parliament-lifecycle",
         "python3 -I -S scripts/tests/sora_parliament_lifecycle_corridor_source_test.py",
-        "bash ci/check_sora_parliament_lifecycle.sh",
+        "python3 -I -S ci/observe_build_capacity.py -- bash ci/check_sora_parliament_lifecycle.sh",
         *PARLIAMENT_CRYPTO_WORKFLOW_MARKERS,
     ):
         require(marker in body, f"Parliament PR job lost `{marker}`")
+    swap_step = (
+        "      - name: Provision bounded hosted build swap for Parliament Core tests\n"
+        "        run: python3 -I -S ci/provision_hosted_build_swap.py\n"
+    )
+    require(body.count(swap_step) == 1,
+            "Parliament Core tests require one unconditional bounded swap step")
+    require(body.index("Verify isolated Parliament corridor source contract")
+            < body.index(swap_step)
+            < body.index("Run exact four-validator Parliament lifecycle corridor"),
+            "Parliament swap must follow crypto/source checks and precede Core compilation")
+    require("timeout-minutes: 120" in body and "CARGO_BUILD_JOBS" not in body,
+            "Parliament must retain its timeout and native Cargo jobserver")
+    require(
+        body.index(setup) < body.index("cargo bench --locked -p iroha_crypto"),
+        "Parliament native setup must precede compilation",
+    )
     require(
         body.count("cargo bench --locked -p iroha_crypto --bench parliament_crypto") == 2,
         "Parliament crypto evidence needs one allocation and one Criterion invocation",
@@ -519,6 +684,14 @@ def validate_native_sortition_helpers(source: str) -> None:
                 compact(marker) in helper,
                 f"native sortition helper `{name}` lost `{marker}`",
             )
+    for name in (
+        "submit_parliament_instructions", "submit_prepared_parliament_transaction_until",
+        "install_threshold_sessions", "admit_parliament_height_carrier", "advance_to_height_with_carriers",
+        "await_native_sortition_pulse", "cross_native_boundary_after_pulse",
+    ):
+        require_exact_ordered_markers(
+            corridor_helper(source, name), SORTITION_SLOT_HELPER_MARKERS[name], name,
+        )
     for retired in RETIRED_SORTITION_SLOT_RULES:
         require(
             retired not in source,
@@ -528,6 +701,17 @@ def validate_native_sortition_helpers(source: str) -> None:
         'tick(&client, "finalize the demanded sortition pulse")' not in source,
         "demanded Parliament pulse regained a racing tick",
     )
+
+
+def require_exact_ordered_markers(source: str, markers: tuple[str, ...], owner: str) -> None:
+    """Bind real carrier admission before its exact observation, once per step."""
+    body = compact(re.sub(r"/\*.*?\*/|//[^\n]*", "", source, flags=re.S))
+    positions = []
+    for marker in markers:
+        expected = compact(marker)
+        require(body.count(expected) == 1, f"{owner} lost unique native work `{marker}`")
+        positions.append(body.index(expected))
+    require(positions == sorted(positions), f"{owner} observes native work before admission")
 
 
 def governance_isolation_test(source: str) -> tuple[re.Match[str], str]:
@@ -640,6 +824,9 @@ def validate_public_finding_no_result_retries_and_restore(source: str) -> None:
     )
     require(helper is not None, "public-finding closure helper is absent")
     helper_source = helper.group(0)
+    require_exact_ordered_markers(
+        helper_source, NO_RESULT_PUBLICATION_MARKERS, "public-finding State observations",
+    )
     for marker in (
         "expected_sortition_slot(network, client, attempt_id, request_height, None).await?;",
         "expected_sortition_slot(network, client, retry_id, retry_request_height, None).await?;",
@@ -722,6 +909,16 @@ def validate_exact_absence_classification(source: str) -> None:
         "NonZeroU64::new(height)" in exact.group(0),
         "the exact finalized-block helper must reject a zero requested height",
     )
+    absence = compact(corridor_helper(source, "assert_no_global_beacon_pulse_at"))
+    for marker in (
+        "let (_, authenticated) = finality::certified_block(network, client, height)",
+        '.await.wrap_err_with(|| format!("{label}: exact certified block is unavailable"))?;',
+        "if authenticated.commitment().beacon.is_some() {",
+    ):
+        require(
+            absence.count(compact(marker)) == 1,
+            "beacon absence must inspect the exact independently certified execution commitment",
+        )
 
     broad_absence_patterns = {
         "governed-contract lookup": (
@@ -981,6 +1178,7 @@ def validate_mandatory_npos_boundary(source: str) -> None:
     """Require genuine pulses and genesis-bound authority across retained epochs."""
 
     _, test = mandatory_npos_test(source)
+    require_exact_ordered_markers(test, MANDATORY_NATIVE_WORK, "mandatory NPoS corridor")
     require(
         source.count("const MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 8;") == 1,
         "mandatory NPoS epoch length is not one exact eight-block constant",
@@ -999,7 +1197,7 @@ def validate_mandatory_npos_boundary(source: str) -> None:
         "assert_eq!(beacon_record.session.threshold, 2);",
         "let boundary_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS;",
         "pulse_height = boundary_height - 1",
-        AUTONOMOUS_PULSE_PROGRESSION,
+        NATIVE_PULSE_PROGRESSION,
         "verify_finalized_global_threshold_beacon_pulse_v1(",
         "let successor_epoch = 1;",
         "global_threshold_beacon_npos_successor_seed_v1(",
@@ -1067,17 +1265,67 @@ def validate_beacon_rotation_fixture(source: str) -> None:
     )
     for marker in (
         "deterministic_parliament_beacon_successor_key_record_v1",
-        "deterministic_fixture_v1(network_id, ordered_roster, true, budget)",
-        "let initial_fixture =",
-        "deterministic_fixture_v1(self.network_id, &self.ordered_roster, false, &self.budget)",
-        "let successor_fixture =",
-        "deterministic_fixture_v1(self.network_id, &self.ordered_roster, true, &self.budget)",
-        "if successor_fixture.session.record() != session.record()",
+        "deterministic_fixture_v1(network_id, ordered_roster, signing_keys, true, budget)",
+        "signing_keys.len() != roster.len()",
+        "key.public_key() != peer.public_key()",
+        "sign_global_threshold_beacon_dkg_recipient_key_v1(",
+        "sign_global_threshold_beacon_dkg_dealer_commitment_v1(",
+        "seal_global_threshold_beacon_dkg_private_edge_v1(",
+        "accept_global_threshold_beacon_dkg_private_edge_v1(",
+        "deterministic_session_v1(self.network_id, &self.ordered_roster, false)",
+        "deterministic_session_v1(self.network_id, &self.ordered_roster, true)",
+        "if session.adaptive_dkg.session == initial",
+        "else if session.adaptive_dkg.session == successor",
+        "if fixture.session.record() != session.record()",
+        "if record.adaptive_dkg.session != dkg_session",
+        "actual.coefficient_commitments != expected.coefficient_commitments",
+        "actual.constant_term_proof != expected.constant_term_proof",
+        "for key in &record.adaptive_dkg.recipient_keys",
+        "for commitment in &record.adaptive_dkg.dealer_commitments",
+        "for edge in &record.adaptive_dkg.encrypted_shares",
+        "for acceptance in &record.adaptive_dkg.share_acceptances",
+        "if state.finalize(dkg_session.acceptances_end_height, &crypto)? != record",
         "exact_seat_signer_supports_one_domain_separated_successor_session",
         "assert_ne!(initial.session.session_id, successor.session.session_id);",
         "verify_partial_signature(payload, &partial)",
+        "authenticated_fixture_requires_exact_keys_and_every_signed_private_edge",
+        "assert_eq!(dkg.encrypted_shares.len(), 16);",
+        "assert_eq!(dkg.share_acceptances.len(), 16);",
     ):
-        require(marker in source, f"rotatable beacon test fixture lost `{marker}`")
+        require(compact(marker) in compact(source), f"rotatable beacon test fixture lost `{marker}`")
+    validate_fixture_owned_custody(source)
+
+
+FIXTURE_CUSTODY_MARKERS = (
+    "owners: Mutex<[Option<InMemoryGlobalThresholdBeaconPartialSignerV1>; 2]>",
+    "owners: Mutex::new([None, None])",
+    "let mut owners = self.owners.lock().map_err(|_| Unavailable)?;",
+    "let slot = &mut owners[usize::from(use_successor)];",
+    "if slot.is_none() { *slot = Some(self.import_owned_signer(session, use_successor)?); }",
+    "if owner.session.record() != session.record() { return Err(NotOwned); }",
+    "AdaptiveThresholdBlsSecretShare::from_dealer_shares(fixture.session.transcript(), &private_contributions,)",
+    "Ok(InMemoryGlobalThresholdBeaconPartialSignerV1 { session: fixture.session, share, })",
+    "if expected_signer_index != self.local_signer_index { return Err(super::GlobalThresholdBeaconCapabilityErrorV1::NotOwned); }",
+    "self.with_retained_signer(session, |owner| { owner.attest_partial_signing_capability(session, expected_signer_index) })?",
+    ".with_retained_signer(session, |owner| owner.sign_partial(session, payload))",
+    "if self.emit_invalid_share { partial.signature_share[0] ^= 1; }",
+)
+
+
+def validate_fixture_owned_custody(source: str) -> None:
+    """The disposable provider must own verified private shares before non-signing lookup."""
+    source = re.sub(r"/\*.*?\*/|//[^\n]*", "", source, flags=re.S)
+    implementation = source.split("#[cfg(test)]", 1)[0]
+    for marker in FIXTURE_CUSTODY_MARKERS:
+        require(compact(marker) in compact(implementation), f"fixture custody lost `{marker}`")
+    provisioning = implementation.split("fn with_retained_signer", 1)[1].split(
+        "impl GlobalThresholdBeaconPartialSignerV1", 1
+    )[0]
+    attestation = implementation.split("fn attest_partial_signing_capability", 1)[1].split(
+        "fn sign_partial", 1
+    )[0]
+    for forbidden in ("sign_partial(", "sign_payload(", "from_validated_share(", "for_validated_session("):
+        require(forbidden not in provisioning + attestation, "fixture capability lookup must not sign or invent public-only custody")
 
 
 def validate_beacon_mode_profiles(source: str) -> None:
@@ -1105,6 +1353,7 @@ def validate_fail_closed_npos_boundary(source: str) -> None:
     """Require four live validators to stall exactly below a mandatory pulse."""
 
     _, test = fail_closed_npos_test(source)
+    require_exact_ordered_markers(test, FAIL_CLOSED_NATIVE_WORK, "below-threshold NPoS corridor")
     required = (
         "SumeragiNposParameters::default()",
         ".with_peers(VALIDATOR_COUNT)",
@@ -1252,7 +1501,7 @@ def validate_native_beacon_admission_and_fixture_isolation(
         'long = "test-network-parliament-beacon-signer-mode"',
         "hide = true",
         "TestNetworkParliamentBeaconSignerMode::Absent => None",
-        "with_deliberately_invalid_outbound()",
+        "with_deliberately_invalid_share()",
     ):
         require(marker in daemon, f"feature-only daemon signer wiring lost `{marker}`")
     require(
@@ -1282,6 +1531,10 @@ def validate_native_beacon_admission_and_fixture_isolation(
         and "signature_share[0] ^= 1" not in lifecycle,
         "protocol code must not inject test faults",
     )
+    require(
+        "test_network_emit_invalid_outbound_partial_v1" not in beacon,
+        "the retired outbound-fault trait hook must not return",
+    )
     for marker in (
         "fn wrong_source_sender_and_proof_never_change_the_owned_round()",
         "fn native_invalid_local_share_is_never_retained_or_counted()",
@@ -1289,6 +1542,118 @@ def validate_native_beacon_admission_and_fixture_isolation(
         ".accept(&source, applied, &fixture.keys[1], &bad)",
     ):
         require(marker in producer_tests, f"native invalid-share unit coverage lost `{marker}`")
+
+
+class SoraParliamentLifecycleRunnerTests(unittest.TestCase):
+    """Execute the real shell route with only external Cargo replaced."""
+
+    def run_runner(self, *, phase: str = "", listing: str = "", wrapped: bool = False):
+        with tempfile.TemporaryDirectory(prefix="parliament runner ") as directory:
+            root = Path(directory).resolve()
+            (root / "ci").mkdir()
+            (root / "bin").mkdir()
+            (root / "ci/check_sora_parliament_lifecycle.sh").write_bytes(RUNNER.read_bytes())
+            (root / "ci/observe_build_capacity.py").write_bytes(
+                (ROOT / "ci/observe_build_capacity.py").read_bytes()
+            )
+            cargo = root / "bin/cargo"
+            cargo.write_text(
+                f"#!{sys.executable}\n" + '''import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+phase = ("build" if args[0] == "build" else
+         "list" if "--list" in args else
+         "core" if "iroha_core" in args else "integration")
+with Path(os.environ["CALLS"]).open("a") as stream:
+    stream.write(json.dumps({"phase": phase, "args": args, "cwd": os.getcwd(),
+        "target": os.environ.get("CARGO_TARGET_DIR"),
+        "jobs": os.environ.get("CARGO_BUILD_JOBS"),
+        "flags": {key: os.environ.get(key) for key in (
+            "TEST_NETWORK_BIN_IROHAD_PARLIAMENT_SIGNERS", "IROHA_TEST_SKIP_BUILD",
+            "IROHA_TEST_REQUIRE_NETWORK", "IROHA_FAIL_ON_SANDBOX_SKIP",
+            "IROHA_TEST_NETWORK_START_ATTEMPTS", "NORITO_SKIP_BINDINGS_SYNC")}}) + "\\n")
+print(phase + " stderr", file=sys.stderr)
+if phase == os.environ.get("FAIL_PHASE"):
+    sys.exit({"build": 21, "list": 22, "core": 23, "integration": 24}[phase])
+if phase == "build":
+    daemon = Path(os.environ["CARGO_TARGET_DIR"]) / "debug/iroha3d"
+    daemon.parent.mkdir(parents=True)
+    daemon.write_text("#!/bin/sh\\nexit 0\\n")
+    daemon.chmod(0o700)
+elif phase == "list":
+    names = [item for item in args[args.index("--") + 1:] if not item.startswith("--")]
+    mode = os.environ.get("LISTING_MODE")
+    if mode == "empty": names = []
+    elif mode == "missing": names = names[:-1]
+    elif mode == "duplicate": names.append(names[0])
+    elif mode == "extra": names.append("unexpected::test")
+    for name in names: print(name + ": test")
+    print(f"\\n{len(names)} tests, 0 benchmarks")
+else:
+    print(phase + " stdout")
+''', encoding="utf-8")
+            cargo.chmod(0o700)
+            target = root / "warm target"
+            calls = root / "calls.jsonl"
+            env = dict(os.environ)
+            env.pop("CARGO_BUILD_JOBS", None)
+            env.update(PATH=str(root / "bin") + os.pathsep + env["PATH"],
+                       CARGO_TARGET_DIR=str(target), CALLS=str(calls),
+                       FAIL_PHASE=phase, LISTING_MODE=listing)
+            command = "bash ci/check_sora_parliament_lifecycle.sh"
+            if wrapped:
+                match = re.search(
+                    r"Run exact four-validator Parliament lifecycle corridor\n        run: ([^\n]+)",
+                    WORKFLOW.read_text(),
+                )
+                self.assertIsNotNone(match)
+                command = match.group(1)
+                self.assertEqual(command, "python3 -I -S ci/observe_build_capacity.py -- "
+                                 "bash ci/check_sora_parliament_lifecycle.sh")
+            result = subprocess.run(["bash", "-c", command], cwd=root, env=env,
+                                    text=True, capture_output=True, timeout=20)
+            rows = [json.loads(line) for line in calls.read_text().splitlines()]
+            return result, rows, str(root), str(target)
+
+    def test_actual_runner_selects_every_exact_owner_and_preserves_network_route(self):
+        result, rows, root, target = self.run_runner()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([row["phase"] for row in rows], ["build", "list", "core", "integration"])
+        selected = [*CORE_OWNER_COMMAND, "--", *CORE_OWNER_TESTS,
+                    "--exact", "--include-ignored"]
+        self.assertEqual(rows[1]["args"], [*selected, "--list"])
+        self.assertEqual(rows[2]["args"], [*selected, "--nocapture", "--test-threads=1"])
+        self.assertEqual(rows[0]["args"], ["build", "--locked", "-p", "irohad", "--bin",
+                                           "iroha3d", "--features", "test-network-parliament-signers"])
+        self.assertEqual(rows[3]["args"], ["test", "--locked", "-p", "integration_tests",
+            "--features", "parliament-test-signers", "--test", "sora_parliament_lifecycle_smoke",
+            "--", "--nocapture", "--test-threads=1"])
+        for row in rows:
+            self.assertEqual((row["cwd"], row["target"], row["jobs"]), (root, target, None))
+        self.assertEqual(rows[-1]["flags"], {
+            "TEST_NETWORK_BIN_IROHAD_PARLIAMENT_SIGNERS": target + "/debug/iroha3d",
+            "IROHA_TEST_SKIP_BUILD": "1", "IROHA_TEST_REQUIRE_NETWORK": "1",
+            "IROHA_FAIL_ON_SANDBOX_SKIP": "1", "IROHA_TEST_NETWORK_START_ATTEMPTS": "1",
+            "NORITO_SKIP_BINDINGS_SYNC": "1"})
+        self.assertIn("core stdout", result.stdout)
+        self.assertIn("integration stdout", result.stdout)
+
+    def test_actual_runner_rejects_empty_missing_duplicate_or_extra_selection(self):
+        for mode in ("empty", "missing", "duplicate", "extra"):
+            with self.subTest(mode=mode):
+                result, rows, _, _ = self.run_runner(listing=mode)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual([row["phase"] for row in rows], ["build", "list"])
+
+    def test_actual_workflow_observer_preserves_success_and_every_child_failure(self):
+        phases = ["build", "list", "core", "integration"]
+        for failed, code in (("", 0), *zip(phases, (21, 22, 23, 24))):
+            with self.subTest(failed=failed):
+                result, rows, _, _ = self.run_runner(phase=failed, wrapped=True)
+                self.assertEqual(result.returncode, code, result.stderr)
+                self.assertEqual([row["phase"] for row in rows],
+                                 phases[:phases.index(failed) + 1] if failed else phases)
+                self.assertIn((failed or "integration") + " stderr", result.stderr)
 
 
 class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
@@ -1341,6 +1706,35 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
         validate_runner(RUNNER.read_text(encoding="utf-8"))
         validate_workflow(WORKFLOW.read_text(encoding="utf-8"))
 
+    def test_workflow_rejects_hosted_runner_setup_and_evidence_drift(self) -> None:
+        source = WORKFLOW.read_text(encoding="utf-8")
+        validate_workflow(source)
+        prefix, body = source.split("  sora_parliament_lifecycle:\n", 1)
+        runner = "    runs-on: ubuntu-24.04\n"
+        setup = "      - uses: ./.github/actions/setup-native-ci\n"
+        evidence = PARLIAMENT_CRYPTO_WORKFLOW_MARKERS[0]
+        for old, new, message in (
+            (runner, "", "exact ubuntu-24.04 runner"),
+            (runner, "    runs-on: ubuntu-latest\n", "exact ubuntu-24.04 runner"),
+            (runner, "    runs-on: ubuntu-24.04-arm\n", "exact ubuntu-24.04 runner"),
+            (runner, "    runs-on: [self-hosted, Linux, iroha2]\n", "exact ubuntu-24.04 runner"),
+            (runner, runner + runner, "exact ubuntu-24.04 runner"),
+            (setup, "", "unconditional native setup"),
+            (setup, setup + setup, "unconditional native setup"),
+            (setup, setup + "        if: false\n", "unconditional native setup"),
+            (setup, setup + "        with:\n          working-directory: other\n", "unconditional native setup"),
+            (evidence, evidence.replace("${{ github.workspace }}/", ""), "SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR"),
+            (evidence, evidence.replace("${{ github.run_id }}", "fixed"), "SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR"),
+            (evidence, evidence.replace("${{ github.run_attempt }}", "fixed"), "SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR"),
+        ):
+            with self.subTest(new=new), self.assertRaisesRegex(ContractError, message):
+                validate_workflow(
+                    prefix + "  sora_parliament_lifecycle:\n" + body.replace(old, new, 1)
+                )
+        without_setup = body.replace(setup, "", 1)
+        with self.assertRaisesRegex(ContractError, "setup must precede compilation"):
+            validate_workflow(prefix + "  sora_parliament_lifecycle:\n" + without_setup + setup)
+
     def test_runner_contract_rejects_each_removed_security_marker(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
         for marker in (
@@ -1357,6 +1751,42 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
         ):
             with self.subTest(marker=marker), self.assertRaises(ContractError):
                 validate_runner(source.replace(marker, "", 1))
+
+    def test_core_selection_rejects_removed_duplicated_or_weakened_controls(self) -> None:
+        source = RUNNER.read_text(encoding="utf-8")
+        for name in CORE_OWNER_TESTS:
+            for replacement in ("", name + "\n  " + name, "# " + name):
+                with self.subTest(name=name, replacement=replacement), self.assertRaises(ContractError):
+                    validate_runner(source.replace(name, replacement, 1))
+        for old, new in (
+            ("--exact --include-ignored --list", "--list"),
+            ("--exact --include-ignored --nocapture", "--nocapture"),
+            ('grep -Fxc -- "${core_test}: test"', 'grep -Fc -- "${core_test}"'),
+            ("grep -Ec ': (test|benchmark)$'", "grep -c test"),
+            ("--profile test -p iroha_core --lib", "--profile release -p iroha_core --lib"),
+            ("mutation-testing,iroha-core-tests,test-network-parliament-signers", "iroha-core-tests"),
+        ):
+            with self.subTest(old=old), self.assertRaises(ContractError):
+                validate_runner(source.replace(old, new, 1))
+
+    def test_parliament_capacity_step_cannot_skip_or_precede_crypto_and_source_checks(self) -> None:
+        source = WORKFLOW.read_text(encoding="utf-8")
+        prefix, body = source.split("  sora_parliament_lifecycle:\n", 1)
+        step = (
+            "      - name: Provision bounded hosted build swap for Parliament Core tests\n"
+            "        run: python3 -I -S ci/provision_hosted_build_swap.py\n"
+        )
+        for modified in (
+            body.replace(step, "", 1),
+            body.replace(step, step + step, 1),
+            body.replace(step, step.replace("        run:", "        if: false\n        run:"), 1),
+            body.replace(step, "", 1).replace("      - name: Verify isolated Parliament", step + "      - name: Verify isolated Parliament", 1),
+            body.replace("python3 -I -S ci/observe_build_capacity.py -- bash ci/check_sora_parliament_lifecycle.sh",
+                         "bash ci/check_sora_parliament_lifecycle.sh", 1),
+            body.replace("timeout-minutes: 120", "timeout-minutes: 240", 1),
+        ):
+            with self.subTest(modified=modified[-300:]), self.assertRaises(ContractError):
+                validate_workflow(prefix + "  sora_parliament_lifecycle:\n" + modified)
 
     def test_workflow_contract_rejects_each_removed_crypto_evidence_marker(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")
@@ -1476,8 +1906,8 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             "sortition pulse transaction race": corridor
             + '\n    tick(&client, "finalize the demanded sortition pulse")?;\n',
             "restored Parliament-demanded pulse wait": corridor.replace(
-                "advance_to_autonomous_predecessor(network, client, slot, label).await?;",
-                "advance_to_autonomous_predecessor(network, client, slot, label).await?;\n"
+                "advance_to_height_with_carriers(network, client, slot, label).await?;",
+                "advance_to_height_with_carriers(network, client, slot, label).await?;\n"
                 "    network.ensure_blocks(sortition_pulse_height).await?;",
                 1,
             ),
@@ -1539,7 +1969,10 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
         validate_sortition_corridors_execute(corridor)
         runner = RUNNER.read_text(encoding="utf-8")
         self.assertNotIn("--ignored", runner)
-        self.assertNotIn("--include-ignored", runner)
+        # Only the nine exact Core controls force execution of ignored tests;
+        # the complete network suite retains its ordinary never-ignored route.
+        network_runner = runner[runner.index("cargo test --locked \\\n  -p integration_tests"):]
+        self.assertNotIn("--include-ignored", network_runner)
         mutations = {}
         for name in SORTITION_ONLY_CORRIDOR_TEST_NAMES:
             mutations[f"{name} bare ignore"] = corridor.replace(
@@ -1592,6 +2025,9 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
                 owner = {
                     "match read_on_dedicated_thread({": "assert_asset_not_found",
                     "NonZeroU64::new(height)": "exact_block",
+                    "let (_, authenticated) = finality::certified_block(network, client, height)": "assert_no_global_beacon_pulse_at",
+                    '.wrap_err_with(|| format!("{label}: exact certified block is unavailable"))?;': "assert_no_global_beacon_pulse_at",
+                    "if authenticated.commitment().beacon.is_some() {": "assert_no_global_beacon_pulse_at",
                 }.get(marker)
                 validate_exact_absence_classification(
                     mutate_marker(corridor, marker, owner=owner)
@@ -1714,12 +2150,29 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
         source = BEACON_TEST_SIGNER.read_text(encoding="utf-8")
         for marker in (
             "TEST_SUCCESSOR_SESSION_ID_DOMAIN_V1",
-            "deterministic_fixture_v1(network_id, ordered_roster, true, budget)",
-            "deterministic_fixture_v1(self.network_id, &self.ordered_roster, true, &self.budget)",
+            "signing_keys.len() != roster.len()",
+            "actual.coefficient_commitments != expected.coefficient_commitments",
+            "actual.constant_term_proof != expected.constant_term_proof",
+            "for key in &record.adaptive_dkg.recipient_keys",
+            "for commitment in &record.adaptive_dkg.dealer_commitments",
+            "for edge in &record.adaptive_dkg.encrypted_shares",
+            "for acceptance in &record.adaptive_dkg.share_acceptances",
+            "if state.finalize(dkg_session.acceptances_end_height, &crypto)? != record",
             "exact_seat_signer_supports_one_domain_separated_successor_session",
         ):
             with self.subTest(marker=marker), self.assertRaises(ContractError):
                 validate_beacon_rotation_fixture(source.replace(marker, "", 1))
+
+    def test_fixture_custody_cannot_be_public_only_unbounded_or_sign_during_lookup(self) -> None:
+        source = BEACON_TEST_SIGNER.read_text(encoding="utf-8")
+        validate_fixture_owned_custody(source)
+        for marker in FIXTURE_CUSTODY_MARKERS:
+            with self.subTest(marker=marker), self.assertRaises(ContractError):
+                validate_fixture_owned_custody(mutate_marker(source, marker))
+        for forbidden in ("sign_partial(", "sign_payload(", "from_validated_share(", "for_validated_session("):
+            changed = source.replace("let mut owners =", f"{forbidden}session); let mut owners =", 1)
+            with self.subTest(forbidden=forbidden), self.assertRaises(ContractError):
+                validate_fixture_owned_custody(changed)
 
     def test_mandatory_npos_boundary_rejects_adversarial_mutations(self) -> None:
         corridor = read_corridor_source()
@@ -1746,13 +2199,13 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             "missing epoch constant": corridor.replace(
                 "const MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 8;", "", 1
             ),
-            "non-autonomous pulse": mutate_mandatory_npos_test(
+            "missing native pulse observation": mutate_mandatory_npos_test(
                 corridor,
                 "network.ensure_blocks(pulse_height).await?;",
                 'tick(&client, "commit mandatory pre-boundary pulse")?;',
             ),
-            "missing autonomous-height equality": mutate_mandatory_npos_test(
-                corridor, AUTONOMOUS_PULSE_PROGRESSION
+            "missing exact pulse-height equality": mutate_mandatory_npos_test(
+                corridor, NATIVE_PULSE_PROGRESSION
             ),
             "missing boundary progression": mutate_mandatory_npos_test(
                 corridor, BOUNDARY_PROGRESSION
@@ -1809,6 +2262,89 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
                 validate_mandatory_npos_boundary(
                     mutate_mandatory_npos_test(corridor, marker)
                 )
+
+    def test_native_pulse_cases_require_ordered_real_work_before_observation(self) -> None:
+        """Idle silence cannot prove a valid pulse or a below-threshold refusal."""
+        corridor = read_corridor_source()
+        for name, markers, validate in (
+            (MANDATORY_NPOS_TEST_NAME, MANDATORY_NATIVE_WORK, validate_mandatory_npos_boundary),
+            (FAIL_CLOSED_NPOS_TEST_NAME, FAIL_CLOSED_NATIVE_WORK, validate_fail_closed_npos_boundary),
+        ):
+            owner = name + "_impl"
+            validate(corridor)
+            for marker in markers:
+                for replacement in ("", f"/* {marker} */", marker + "\n" + marker):
+                    with self.subTest(owner=owner, marker=marker, replacement=replacement):
+                        changed = mutate_marker(corridor, marker, replacement, owner=owner)
+                        with self.assertRaises(ContractError):
+                            validate(changed)
+            # Retaining every call is insufficient if admission happens after its wait.
+            changed = mutate_marker(corridor, markers[0], "", owner=owner)
+            changed = mutate_marker(
+                changed, markers[-1], markers[-1] + "\n" + markers[0], owner=owner,
+            )
+            with self.subTest(owner=owner, mutation="late admission"), self.assertRaises(ContractError):
+                validate(changed)
+        pending = FAIL_CLOSED_NATIVE_WORK[3]
+        with self.subTest(mutation="waiting for the refused transaction to apply"), self.assertRaises(ContractError):
+            validate_fail_closed_npos_boundary(mutate_marker(
+                corridor, pending,
+                pending.replace("admit_parliament_height_carrier", "submit_parliament_instructions"),
+                owner=FAIL_CLOSED_NPOS_TEST_NAME + "_impl",
+            ))
+
+    def test_threshold_installation_observes_exact_publication_in_order(self) -> None:
+        """Durable storage cannot substitute for the client's installed State projection."""
+        corridor = read_corridor_source()
+        owner = "install_threshold_sessions"
+        markers = SORTITION_SLOT_HELPER_MARKERS[owner]
+        validate_native_sortition_helpers(corridor)
+        for marker in (markers[1], markers[4]):
+            for replacement in (
+                marker.replace("observe_exact_height", "assert_current_height"),
+                marker.replace("client, install_height,", "client, install_height + 1,")
+                .replace("client, activation_height,", "client, activation_height + 1,"),
+                f"/* {marker} */",
+                marker + "\n" + marker,
+            ):
+                with self.subTest(marker=marker, replacement=replacement), self.assertRaises(ContractError):
+                    validate_native_sortition_helpers(mutate_marker(
+                        corridor, marker, replacement, owner=owner,
+                    ))
+        # A retained activation observer before the durable-block barrier is still wrong.
+        changed = mutate_marker(corridor, markers[4], "", owner=owner)
+        changed = mutate_marker(changed, markers[3], markers[4] + markers[3], owner=owner)
+        with self.subTest(mutation="publication observation before storage barrier"), self.assertRaises(ContractError):
+            validate_native_sortition_helpers(changed)
+
+    def test_public_finding_observes_the_exact_peer_before_state_assertions(self) -> None:
+        """Global Applied and durable blocks do not fence another peer's State projection."""
+        corridor = read_corridor_source()
+        owner = "exercise_public_finding_no_result_retries_and_restore"
+        validate_public_finding_no_result_retries_and_restore(corridor)
+        for marker in NO_RESULT_PUBLICATION_MARKERS:
+            with self.subTest(marker=marker), self.assertRaises(ContractError):
+                validate_public_finding_no_result_retries_and_restore(
+                    mutate_marker(corridor, marker, "", owner=owner)
+                )
+            if not marker.startswith("observe_exact_height"):
+                continue
+            for replacement in (f"/* {marker} */", marker + marker):
+                with self.subTest(marker=marker, replacement=replacement), self.assertRaises(ContractError):
+                    validate_public_finding_no_result_retries_and_restore(
+                        mutate_marker(corridor, marker, replacement, owner=owner)
+                    )
+        for marker in (NO_RESULT_PUBLICATION_MARKERS[12], NO_RESULT_PUBLICATION_MARKERS[15]):
+            replacement = marker.replace("&peer_client", "client").replace("&restart_peer.client()", "client")
+            with self.subTest(marker=marker, mutation="wrong peer"), self.assertRaises(ContractError):
+                validate_public_finding_no_result_retries_and_restore(
+                    mutate_marker(corridor, marker, replacement, owner=owner)
+                )
+        observer, query = NO_RESULT_PUBLICATION_MARKERS[12:14]
+        changed = mutate_marker(corridor, observer, "", owner=owner)
+        changed = mutate_marker(changed, query, query + observer, owner=owner)
+        with self.subTest(mutation="observation after query"), self.assertRaises(ContractError):
+            validate_public_finding_no_result_retries_and_restore(changed)
 
     def test_native_finality_rejects_missing_or_disconnected_authentication(self) -> None:
         """Genesis, source, committee, votes and deadline checks must precede the callback."""

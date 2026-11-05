@@ -2,11 +2,20 @@
 """Enforce the Kotodama V1 Criterion regression budget.
 
 The gate compares every current compiler/runtime workload against Criterion's
-runner-local ``base`` samples captured from the clean reset anchor. Missing or
+runner-local ``base`` samples captured from the clean reset anchor. Typed queries
+use separately attested drivers with identical untimed reader permission grants;
+all other original setup bytes, assertions and timed bodies remain bound to each
+clean revision. Missing or
 malformed samples fail closed. A workload fails when its median is more than
 five percent slower, and List sugar has an independent zero-slowdown check
 against its manual-loop counterpart. Candidate samples can never be captured
-as a portable or self baseline.
+as a portable or self baseline. Qualification also requires the conservative
+ratio of the candidate upper median confidence bound to the baseline lower
+bound to fit the five-percent budget. Inconclusive/noisy paired runs fail
+without a qualification receipt. List sugar retains its zero-slowdown median
+policy; its intervals and any overlap are recorded without requiring it to be
+statistically faster than the manual loop. This is component evidence on one VM,
+not a hardware-tier calibration or a joint statistical confidence claim.
 """
 
 from __future__ import annotations
@@ -17,6 +26,7 @@ import hashlib
 import json
 import math
 import re
+import runpy
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -26,14 +36,14 @@ from typing import Mapping, Sequence
 
 MAX_REGRESSION = 0.05
 LIST_SUGAR_MAX_SLOWDOWN = 0.0
-# The user-selected reset anchor is the untouched comparison baseline. It
+# The user-approved optimizations performance baseline remains untouched. It
 # contains the complete current benchmark inventory and its original lockfile.
-BASELINE_SHA = "fc09b635df385d0488067f09baaa92a8d16fa124"
+BASELINE_SHA = "06912ee4f8f9423b458d72039dbd0a1c8fde7b43"
 BASELINE_CARGO_LOCK_SHA256 = (
-    "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
+    "1ce796ba4fe8769f4d298a0ce9fe52acff39a012f5ce6cf4323fbd50c2028b55"
 )
 CANDIDATE_CARGO_LOCK_SHA256 = (
-    "d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f"
+    "89e4ede120c543e04aec6c9f560996d60c52a441bf3c028d313d03bc85dd1dc5"
 )
 EVIDENCE_SCHEMA = "iroha.kotodama.performance.v1"
 LIST_SUGAR_BENCHMARK = "kotodama_list_comprehension_runtime_64"
@@ -479,6 +489,8 @@ def write_evidence_report(
     threshold: float,
     candidate_revision: str,
     candidate_lock_sha256: str,
+    confidence_bounds: Mapping[str, object],
+    query_drivers: Mapping[str, object],
 ) -> None:
     """Create one source- and sample-bound machine-readable gate receipt."""
 
@@ -490,6 +502,8 @@ def write_evidence_report(
     report = {
         "schema": EVIDENCE_SCHEMA,
         "threshold": threshold,
+        "confidence_bounds": confidence_bounds,
+        "derived_query_drivers": query_drivers,
         "benchmark_count": len(comparisons),
         "criterion_estimates_sha256": criterion_estimates_sha256(criterion_dir),
         "baseline": {
@@ -1102,8 +1116,18 @@ def _positive_finite(value: object, context: str) -> float:
     return number
 
 
-def read_criterion_median(path: Path) -> float:
-    """Read ``median.point_estimate`` from one Criterion estimates file."""
+@dataclass(frozen=True)
+class MedianEstimate:
+    """A Criterion median and its reported confidence interval."""
+
+    point: float
+    lower: float
+    upper: float
+    confidence_level: float
+
+
+def read_criterion_estimate(path: Path) -> MedianEstimate:
+    """Require a finite median enclosed by a reported >=95% interval."""
 
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -1117,7 +1141,31 @@ def read_criterion_median(path: Path) -> float:
         raise GateError(
             f"Criterion sample {path} is missing median.point_estimate"
         ) from error
-    return _positive_finite(value, f"Criterion median in {path}")
+    point = _positive_finite(value, f"Criterion median in {path}")
+    try:
+        interval = payload["median"]["confidence_interval"]
+        lower = _positive_finite(interval["lower_bound"], f"lower bound in {path}")
+        upper = _positive_finite(interval["upper_bound"], f"upper bound in {path}")
+        level = _positive_finite(
+            interval["confidence_level"], f"confidence level in {path}"
+        )
+    except (KeyError, TypeError) as error:
+        raise GateError(
+            f"Criterion sample {path} is missing median confidence bounds"
+        ) from error
+    if not 0.95 <= level < 1.0:
+        raise GateError(f"Criterion confidence level in {path} must be >=0.95 and <1")
+    if not lower <= point <= upper:
+        raise GateError(
+            f"Criterion confidence interval in {path} must enclose its median"
+        )
+    return MedianEstimate(point, lower, upper, level)
+
+
+def read_criterion_median(path: Path) -> float:
+    """Read the median only after validating its confidence interval."""
+
+    return read_criterion_estimate(path).point
 
 
 def read_current_samples(
@@ -1210,6 +1258,76 @@ def enforce_list_sugar(samples: Mapping[str, float]) -> None:
         )
 
 
+def enforce_confidence_bounds(
+    criterion_dir: Path, threshold: float
+) -> dict[str, object]:
+    """Require the paired regression budget; report List uncertainty separately.
+
+    This deliberately conservative admission rule uses Criterion's individual
+    median intervals; it does not assert a joint confidence level for the ratio.
+    """
+
+    current = {
+        name: read_criterion_estimate(criterion_dir / name / "new" / "estimates.json")
+        for name in REPRESENTATIVE_BENCHMARKS
+    }
+    baseline = {
+        name: read_criterion_estimate(criterion_dir / name / "base" / "estimates.json")
+        for name in REGRESSION_BENCHMARKS
+    }
+    rows = compare_samples(
+        {name: estimate.lower for name, estimate in baseline.items()},
+        {name: current[name].upper for name in REGRESSION_BENCHMARKS},
+    )
+    sugar = Comparison(
+        LIST_SUGAR_BENCHMARK,
+        current[LIST_MANUAL_BENCHMARK].lower,
+        current[LIST_SUGAR_BENCHMARK].upper,
+    )
+    try:
+        enforce(rows, threshold)
+    except GateError as error:
+        raise GateError(
+            "inconclusive confidence bounds: no performance qualification; " + str(error)
+        ) from error
+    sugar_estimate = current[LIST_SUGAR_BENCHMARK]
+    manual_estimate = current[LIST_MANUAL_BENCHMARK]
+    if sugar_estimate.upper < manual_estimate.lower:
+        relation = "sugar_interval_below_manual"
+    elif sugar_estimate.lower > manual_estimate.upper:
+        relation = "sugar_interval_above_manual"
+    else:
+        relation = "overlapping_or_touching_intervals"
+    return {
+        "rule": "candidate-upper / baseline-lower - 1 <= threshold",
+        "minimum_individual_confidence_level": 0.95,
+        "comparisons": [
+            {
+                "name": row.name,
+                "baseline_lower_ns": row.baseline_ns,
+                "candidate_upper_ns": row.measured_ns,
+                "maximum_change": row.change,
+                "baseline_confidence_level": baseline[row.name].confidence_level,
+                "candidate_confidence_level": current[row.name].confidence_level,
+            }
+            for row in rows
+        ],
+        "list_sugar": {
+            "decision_basis": "point_median_zero_slowdown",
+            "interval_relation": relation,
+            "manual_median_ns": manual_estimate.point,
+            "sugar_median_ns": sugar_estimate.point,
+            "manual_upper_ns": manual_estimate.upper,
+            "sugar_lower_ns": sugar_estimate.lower,
+            "manual_lower_ns": sugar.baseline_ns,
+            "sugar_upper_ns": sugar.measured_ns,
+            "maximum_change": sugar.change,
+            "manual_confidence_level": current[LIST_MANUAL_BENCHMARK].confidence_level,
+            "sugar_confidence_level": current[LIST_SUGAR_BENCHMARK].confidence_level,
+        },
+    }
+
+
 def render(comparisons: Sequence[Comparison]) -> str:
     """Render a compact, deterministic comparison table."""
 
@@ -1238,6 +1356,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--threshold", type=float, default=MAX_REGRESSION)
+    parser.add_argument("--query-driver-root", type=Path,
+                        help="paired derived driver evidence; defaults beside Criterion output")
     parser.add_argument(
         "--candidate-root",
         type=Path,
@@ -1264,6 +1384,17 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def validate_query_drivers(
+    output: Path, baseline: Path, candidate: Path, expected_candidate: str
+) -> dict[str, object]:
+    """Require both fresh, exactly derived driver receipts before qualification."""
+    driver = runpy.run_path(str(Path(__file__).with_name("kotodama_query_driver.py")))
+    try:
+        return driver["validate_pair"](output, baseline, candidate, expected_candidate)
+    except (ValueError, OSError, KeyError, RuntimeError) as error:
+        raise GateError(f"derived query driver evidence is invalid: {error}") from error
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
@@ -1281,6 +1412,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         validate_benchmark_policy()
         validate_baseline_provenance(args.baseline_root)
+        candidate_root = args.candidate_root or Path(__file__).resolve().parents[1]
+        query_drivers = validate_query_drivers(
+            args.query_driver_root or args.criterion_dir.parent / "kotodama-query-drivers",
+            args.baseline_root, candidate_root,
+            args.expected_candidate_commit or _git_head(candidate_root),
+        )
         current = read_current_samples(
             args.criterion_dir, REPRESENTATIVE_BENCHMARKS
         )
@@ -1292,6 +1429,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(render(comparisons))
         enforce(comparisons, args.threshold)
+        confidence_bounds = enforce_confidence_bounds(
+            args.criterion_dir, args.threshold
+        )
         if args.json_output is not None:
             candidate_revision, candidate_lock_sha256 = (
                 validate_candidate_provenance(
@@ -1305,6 +1445,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 threshold=args.threshold,
                 candidate_revision=candidate_revision,
                 candidate_lock_sha256=candidate_lock_sha256,
+                confidence_bounds=confidence_bounds,
+                query_drivers=query_drivers,
             )
     except GateError as error:
         print(f"error: {error}", file=sys.stderr)
@@ -1312,7 +1454,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(
         "All comparable Kotodama medians are within the 5% V1 budget, every "
         "required workload is present, and List sugar is no slower than its "
-        "manual-loop baseline."
+        "manual-loop baseline by median. Paired revision confidence bounds also "
+        "fit the 5% budget; List interval overlap is reported separately."
     )
     return 0
 

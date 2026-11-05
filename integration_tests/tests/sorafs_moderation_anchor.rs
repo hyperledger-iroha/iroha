@@ -2,10 +2,11 @@
 
 use super::sorafs_network::{prepare_transaction, submit_transaction};
 use eyre::{Result, WrapErr as _, ensure, eyre};
-use futures_util::TryStreamExt as _;
+use futures_util::StreamExt as _;
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
+    collections::{Collection, ListQuery, field},
     crypto::{HashOf, KeyPair, Signature},
     data_model::{
         events::data::sorafs::SorafsModerationLedgerEventKind,
@@ -21,8 +22,7 @@ use iroha::{
         },
         prelude::*,
         query::{
-            asset::prelude::{FindAssetById, FindAssetDefinitionById},
-            error::{FindError, QueryExecutionFail},
+            asset::prelude::FindAssetDefinitionById,
             sorafs::prelude::{
                 FindSorafsModerationAppeal, FindSorafsModerationCase,
                 FindSorafsModerationChallenge, FindSorafsModerationSnapshot,
@@ -49,7 +49,6 @@ use iroha::{
         },
         transaction::error::TransactionRejectionReason,
     },
-    query::QueryError,
 };
 use iroha_executor_data_model::permission::{
     query::CanReadAllLedgerData,
@@ -80,7 +79,7 @@ use sorafs_manifest::pop_credentials::{
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::{
     task::JoinSet,
-    time::{Instant, sleep, timeout, timeout_at},
+    time::{Instant, sleep, timeout_at},
 };
 
 const CASE_ID: &str = "four-peer-anchor";
@@ -419,6 +418,27 @@ fn pop_policy(issuer: &KeyPair) -> PopIssuerPolicyV1 {
     }
 }
 
+fn pop_batch(issuer: &KeyPair, published_at_epoch: u64) -> PopCredentialCommitmentBatchV1 {
+    // Use the same signed credential and canonical Merkle witness as the proof
+    // fixture; arbitrary 32-byte hashes are not canonical field commitments.
+    valid_pop_batch(issuer, &pop_material(issuer, published_at_epoch))
+}
+
+#[test]
+fn moderation_pop_batch_uses_a_canonical_signed_membership_root() {
+    let epoch = 1_700_000_000;
+    let material = pop_material(&BOB_KEYPAIR, epoch);
+    let expected = valid_pop_batch(&BOB_KEYPAIR, &material);
+    let batch = pop_batch(&BOB_KEYPAIR, epoch);
+    assert_eq!(batch, expected);
+    verify_pop_commitment_root_signature_v1(&material.root)
+        .expect("the batch root retains its canonical scalar and publisher signature");
+    assert_eq!(
+        batch.commitments[0].commitment_root,
+        material.root.root_digest
+    );
+}
+
 fn valid_pop_batch(issuer: &KeyPair, material: &PopMaterial) -> PopCredentialCommitmentBatchV1 {
     let canonical_credential =
         norito::encode_canonical(&material.credential).expect("encode canonical PoP credential");
@@ -671,18 +691,67 @@ fn voting_asset_balance(
     voting_asset_id: &AssetDefinitionId,
     account: &AccountId,
 ) -> Result<Quantity> {
-    let asset_id = AssetId::new(voting_asset_id.clone(), account.clone());
-    match client
-        .client()
-        .query_single(FindAssetById::new(asset_id.clone()))
-    {
-        Ok(asset) if asset.id() == &asset_id => Ok(asset.value().clone()),
-        Ok(_) => Err(eyre!("exact voting asset query returned a different asset")),
-        Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
-            FindError::Asset(missing),
-        )))) if missing.as_ref() == &asset_id => Ok(Quantity::zero()),
-        Err(error) => Err(eyre!(error)),
-    }
+    let rows = client
+        .list(
+            Collection::AccountAssets(account.clone()),
+            ListQuery::new().filter(
+                field("asset").eq(voting_asset_id.to_string()) & field("scope").eq("global"),
+            ),
+        )
+        .collect::<iroha::Result<Vec<_>>>()?;
+    voting_balance_from_rows(&rows, voting_asset_id, account)
+}
+
+fn voting_balance_from_rows(
+    rows: &[norito::json::Value],
+    voting_asset_id: &AssetDefinitionId,
+    account: &AccountId,
+) -> Result<Quantity> {
+    ensure!(
+        rows.len() <= 1,
+        "voting asset collection repeated its partition"
+    );
+    let Some(row) = rows.first() else {
+        return Ok(Quantity::zero());
+    };
+    let definition: AssetDefinitionId = integration_tests::collections::field(row, "asset")?;
+    let owner: AccountId = integration_tests::collections::field(row, "account_id")?;
+    let scope: String = integration_tests::collections::field(row, "scope")?;
+    ensure!(
+        &definition == voting_asset_id && &owner == account && scope == "global",
+        "voting asset collection returned a different partition"
+    );
+    integration_tests::collections::field(row, "quantity")
+}
+
+#[test]
+fn voting_rows_require_the_exact_partition_and_preserve_absence_and_quantity() -> Result<()> {
+    let definition = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("wonderland", "universal")?,
+        "vote".parse()?,
+    );
+    let row = |account: &AccountId, scope: &str| norito::json!({"asset": definition, "account_id": account, "scope": scope, "quantity": "13"});
+    assert_eq!(
+        voting_balance_from_rows(&[], &definition, &BOB_ID)?,
+        Quantity::zero()
+    );
+    assert_eq!(
+        voting_balance_from_rows(&[row(&BOB_ID, "global")], &definition, &BOB_ID)?,
+        Quantity::from(13_u32)
+    );
+    assert!(voting_balance_from_rows(&[row(&ALICE_ID, "global")], &definition, &BOB_ID).is_err());
+    assert!(
+        voting_balance_from_rows(&[row(&BOB_ID, "dataspace:1")], &definition, &BOB_ID).is_err()
+    );
+    assert!(
+        voting_balance_from_rows(
+            &[row(&BOB_ID, "global"), row(&BOB_ID, "global")],
+            &definition,
+            &BOB_ID,
+        )
+        .is_err()
+    );
+    Ok(())
 }
 
 fn settlement_observation(
@@ -819,21 +888,30 @@ async fn wait_for_settlement_convergence(
 }
 
 async fn exact_block(client: &Client, height: u64) -> Result<SignedBlock> {
-    let nonzero_height = std::num::NonZeroU64::new(height)
+    let requested = std::num::NonZeroU64::new(height)
         .ok_or_else(|| eyre!("exact finalized block height must be nonzero"))?;
-    let block = timeout(client.client().torii_request_timeout(), async {
+    let request_timeout = client.client().torii_request_timeout();
+    ensure!(
+        !request_timeout.is_zero(),
+        "exact block fixture requires its bounded client"
+    );
+    // Keep one existing request budget around authentication, the exact canonical block,
+    // and connection closure. The returned full header still owns hash/time comparisons.
+    let block = tokio::time::timeout(request_timeout, async {
         let mut blocks = client
             .account_client()
             .blocks()
-            .subscribe(nonzero_height)
+            .subscribe(requested)
             .await?;
-        blocks
-            .try_next()
-            .await?
-            .ok_or_else(|| eyre!("canonical replay ended before finalized block {height}"))
+        let block = blocks
+            .next()
+            .await
+            .ok_or_else(|| eyre!("block stream ended before finalized block {height}"))??;
+        blocks.close().await?;
+        Ok::<_, eyre::Report>(block)
     })
     .await
-    .wrap_err_with(|| format!("query exact finalized block {height} deadline elapsed"))??;
+    .wrap_err_with(|| format!("timed out reading exact finalized block {height}"))??;
     ensure!(
         block.header().height().get() == height,
         "exact finalized-block query returned height {} for requested height {height}",

@@ -44,9 +44,71 @@ def assert_fails(contract: dict, fragment: str, tasks: dict | None = None) -> No
     assert any(fragment in problem for problem in found), found
 
 
+def anonymous_ballot_execution_is_unavailable(transactions: str, qualification: str) -> bool:
+    """Registration preparation does not open the actual ballot execution boundary."""
+    return all((
+        re.search(
+            r"fn anonymous_ballot_unavailable\(\) -> ExecutionDeferred \{\s*"
+            r"ivm::error::ExecutionDeferral::VerifierInitializationUnavailable\.into\(\)\s*}",
+            transactions,
+        ),
+        re.search(
+            r"TransactionEntrypoint::AnonymousBallot\(_\) => \{\s*"
+            r"return Err\(AcceptTransactionFail::AnonymousBallotUnavailable\);\s*}",
+            transactions,
+        ),
+        re.search(
+            r"pub const PARLIAMENT_BALLOT_QUALIFICATION_V1: Option<Digest512> = None;",
+            qualification,
+        ),
+    ))
+
+
+def test_ballot_unavailability_checks_reject_opened_admission_or_qualification() -> None:
+    transactions = (ROOT / "crates/iroha_core/src/tx.rs").read_text(encoding="utf-8")
+    qualification = (ROOT / "crates/iroha_data_model/src/governance/anonymous_ballot/qualification.rs").read_text(encoding="utf-8")
+    assert anonymous_ballot_execution_is_unavailable(transactions, qualification)
+    for changed_transactions, changed_qualification in (
+        (transactions.replace("VerifierInitializationUnavailable", "ActiveMemoryCapacity"), qualification),
+        (transactions.replace("return Err(AcceptTransactionFail::AnonymousBallotUnavailable);", "return Ok(());"), qualification),
+        (transactions, qualification.replace("Option<Digest512> = None;", "Option<Digest512> = Some(APPROVED);")),
+    ):
+        assert not anonymous_ballot_execution_is_unavailable(changed_transactions, changed_qualification)
+
+
 def test_tracked_contract_matches_the_source() -> None:
     assert problems(CONTRACT) == []
     assert CHECKER["main"]([]) == 0
+
+
+def test_helper_owned_name_source_charge_remains_pinned(tmp_path: Path) -> None:
+    path = "crates/iroha_core/src/smartcontracts/isi/query/ordinary_memory.rs"
+    scope = next(scope for scope in CONTRACT["completeness"]["scopes"] if scope.get("path") == path)
+    files = [
+        file
+        for group in CONTRACT["completeness"]["excluded"]
+        for file in group.get("files", [group])
+        if file.get("path") == path
+    ]
+    contract = {
+        "bounds": [],
+        "completeness": {
+            "scopes": [scope],
+            "excluded": [{"reason": "Preserve the existing ordinary-query source charges.", "files": files}],
+        },
+    }
+    source = (ROOT / path).read_text(encoding="utf-8")
+    destination = tmp_path / path
+    destination.parent.mkdir(parents=True)
+    destination.write_text(source, encoding="utf-8")
+    found: list[str] = []
+    CHECKER["check_completeness"](tmp_path, contract, found)
+    assert found == []
+    before = "pub const ORDINARY_NAME_ID_SOURCE_BYTES: u64 = 1_024;"
+    assert source.count(before) == 1
+    destination.write_text(source.replace(before, before.replace("1_024", "1_025")), encoding="utf-8")
+    CHECKER["check_completeness"](tmp_path, contract, found)
+    assert any("ORDINARY_NAME_ID_SOURCE_BYTES" in error and "is now `1_025`" in error for error in found)
 
 
 def test_contract_covers_every_group_stage_and_class() -> None:
@@ -559,14 +621,11 @@ def test_declared_items_are_not_yet_implemented_and_state_their_requirements() -
     entrypoints = (ROOT / "crates/iroha_data_model/src/transaction/signed.rs").read_text(encoding="utf-8")
     entrypoint_variants = entrypoints.split("pub enum TransactionEntrypoint {", 1)[1].split("\n    }", 1)[0]
     assert "AnonymousBallot(CanonicalAnonymousBallotEnvelopeV1)" in entrypoint_variants
-    core_manifest = (ROOT / "crates/iroha_core/Cargo.toml").read_text(encoding="utf-8")
-    assert "iroha_parliament_ballot" not in core_manifest
+    registration = (ROOT / "crates/iroha_core/src/state/parliament_registration.rs").read_text(encoding="utf-8")
+    assert "use iroha_parliament_ballot::registration::{RegistrationErrorV1, verify_registration_v1};" in registration
     core_transactions = (ROOT / "crates/iroha_core/src/tx.rs").read_text(encoding="utf-8")
-    assert re.search(
-        r"fn anonymous_ballot_unavailable\(\) -> ExecutionDeferred \{\s*"
-        r"ivm::error::ExecutionDeferral::VerifierInitializationUnavailable\.into\(\)\s*}",
-        core_transactions,
-    )
+    qualification = (ROOT / "crates/iroha_data_model/src/governance/anonymous_ballot/qualification.rs").read_text(encoding="utf-8")
+    assert anonymous_ballot_execution_is_unavailable(core_transactions, qualification)
     relation_ids = {item["id"] for item in CONTRACT["relations"]}
     for item in CONTRACT["declared"]:
         assert item["status"] == "not_implemented"

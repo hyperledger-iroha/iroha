@@ -9,14 +9,11 @@
 //! written by earlier releases stay readable, and publication accepts either form when a record
 //! already exists.
 
-use super::{RecordName, open_named_record, verify_bytes};
+use super::{ArchiveDirectory, ArchiveFile, RecordName, open_named_record, verify_bytes};
 use crate::query::native_context_archive::NativeContextArchiveError;
 use iroha_allocation::ChargedBuffer;
 use iroha_crypto::Hash;
-use std::{
-    fs::File,
-    io::{self, Read, Seek, Write},
-};
+use std::io::{self, Read, Seek, Write};
 
 /// Leading bytes of a packed record; canonical Norito records start with `NRT0` instead.
 pub(super) const MAGIC: [u8; 4] = *b"NCP1";
@@ -275,29 +272,42 @@ impl<'a> Stored<'a> {
 
 /// Bytes a record file holds, written and compared without assembling a copy.
 pub(super) trait StoredContent {
+    /// Exact byte count used to reserve a private publication file.
+    fn stored_len(&self) -> usize;
     /// Write the complete stored bytes to a freshly truncated file.
-    fn write_to(&self, file: &mut File) -> io::Result<()>;
+    fn write_to(&self, file: &mut impl Write) -> io::Result<()>;
     /// Fail unless `file`, positioned at its start, holds exactly these stored bytes.
-    fn verify(&self, file: File) -> io::Result<()>;
+    fn verify(&self, mut file: ArchiveFile) -> io::Result<()> {
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || metadata.len() != self.stored_len() as u64 {
+            return Err(differs());
+        }
+        self.verify_stream(&mut file)
+    }
+    /// Compare a retained publication handle without reopening or duplicating it.
+    fn verify_stream(&self, file: &mut impl Read) -> io::Result<()>;
 }
 
 impl StoredContent for [u8] {
-    fn write_to(&self, file: &mut File) -> io::Result<()> {
+    fn stored_len(&self) -> usize {
+        self.len()
+    }
+    fn write_to(&self, file: &mut impl Write) -> io::Result<()> {
         file.write_all(self)
     }
-    fn verify(&self, file: File) -> io::Result<()> {
-        verify_bytes(file, self)
+    fn verify_stream(&self, file: &mut impl Read) -> io::Result<()> {
+        super::verify_stream(file, self)
     }
 }
 
 impl StoredContent for Stored<'_> {
-    fn write_to(&self, file: &mut File) -> io::Result<()> {
+    fn stored_len(&self) -> usize {
+        self.len()
+    }
+    fn write_to(&self, file: &mut impl Write) -> io::Result<()> {
         self.chunks(|bytes| file.write_all(bytes))
     }
-    fn verify(&self, mut file: File) -> io::Result<()> {
-        if !file.metadata()?.is_file() {
-            return Err(differs());
-        }
+    fn verify_stream(&self, file: &mut impl Read) -> io::Result<()> {
         let mut scratch = [0; STEP];
         self.chunks(|mut expected| {
             while !expected.is_empty() {
@@ -325,11 +335,12 @@ fn differs() -> io::Error {
 /// Fail unless `file` holds `original` itself or, for a context record, a packed record that
 /// rebuilds it exactly. Either form may already exist after an upgrade or an interrupted write.
 pub(super) fn verify_original(
-    directory: &File,
-    mut file: File,
+    directory: &ArchiveDirectory,
+    file: &mut ArchiveFile,
     original: &[u8],
     context: bool,
 ) -> io::Result<()> {
+    file.rewind()?;
     let mut magic = [0; 4];
     let packed = context
         && file.metadata()?.len() >= HEADER_LEN as u64
@@ -340,7 +351,7 @@ pub(super) fn verify_original(
         return verify_bytes(file, original);
     }
     let stored = file.metadata()?.len();
-    let header = read_header(&mut file).map_err(|_| differs())?;
+    let header = read_header(file).map_err(|_| differs())?;
     if header.length != original.len() || header.hash != <[u8; 32]>::from(Hash::new(original)) {
         return Err(differs());
     }
@@ -348,19 +359,21 @@ pub(super) fn verify_original(
     let mut position = 0;
     let mut scratch = [0; STEP];
     for _ in 0..header.pieces {
-        let (piece, used) = read_piece(&mut file, offset, stored).map_err(|_| differs())?;
+        let (piece, used) = read_piece(file, offset, stored).map_err(|_| differs())?;
         offset = piece.end(offset + used);
         let end = position + piece.length;
         let expected = original.get(position..end).ok_or_else(differs)?;
-        let mut source = piece.open(directory, &file)?;
-        for expected in expected.chunks(STEP) {
-            source
-                .read_exact(&mut scratch[..expected.len()])
-                .map_err(|_| differs())?;
-            if scratch[..expected.len()] != *expected {
-                return Err(differs());
+        piece.with_source(directory, file, |source| {
+            for expected in expected.chunks(STEP) {
+                source
+                    .read_exact(&mut scratch[..expected.len()])
+                    .map_err(|_| differs())?;
+                if scratch[..expected.len()] != *expected {
+                    return Err(differs());
+                }
             }
-        }
+            Ok(())
+        })?;
         position = end;
     }
     if position != original.len() || offset != stored {
@@ -370,7 +383,10 @@ pub(super) fn verify_original(
 }
 
 /// Rebuild a packed record's canonical bytes for an offline rewrite, checked against its hash.
-pub(super) fn rebuild(directory: &File, record: &mut File) -> io::Result<Vec<u8>> {
+pub(super) fn rebuild(
+    directory: &ArchiveDirectory,
+    record: &mut ArchiveFile,
+) -> io::Result<Vec<u8>> {
     let stored = record.metadata()?.len();
     let header = read_header(record)?;
     // Grow only by pieces whose stored length was checked; the header's length is unverified.
@@ -383,9 +399,10 @@ pub(super) fn rebuild(directory: &File, record: &mut File) -> io::Result<Vec<u8>
         if start + piece.length > header.length {
             return Err(differs());
         }
-        let mut source = piece.open(directory, record)?;
-        out.resize(start + piece.length, 0);
-        source.read_exact(&mut out[start..])?;
+        piece.with_source(directory, record, |source| {
+            out.resize(start + piece.length, 0);
+            source.read_exact(&mut out[start..])
+        })?;
     }
     if offset != stored
         || out.len() != header.length
@@ -402,7 +419,7 @@ struct Header {
     pieces: u32,
 }
 
-fn read_header(file: &mut File) -> io::Result<Header> {
+fn read_header(file: &mut ArchiveFile) -> io::Result<Header> {
     let mut header = [0; HEADER_LEN];
     file.seek(io::SeekFrom::Start(0))?;
     file.read_exact(&mut header)?;
@@ -433,24 +450,28 @@ impl PieceHeader {
             .map_or(after_header, |start| start + self.length as u64)
     }
 
-    /// Open the piece's bytes for one blocking pass: the record descriptor at its inline run,
-    /// or the shared piece once its length matches.
-    fn open(&self, directory: &File, record: &File) -> io::Result<File> {
+    /// Read through the original record handle or a retained shared-piece handle.
+    /// Borrowing the inline reader preserves Windows metadata and ancestry custody.
+    fn with_source<T>(
+        &self,
+        directory: &ArchiveDirectory,
+        record: &mut ArchiveFile,
+        read: impl FnOnce(&mut dyn Read) -> io::Result<T>,
+    ) -> io::Result<T> {
         if let Some(start) = self.inline {
-            let mut source = record.try_clone()?;
-            source.seek(io::SeekFrom::Start(start))?;
-            return Ok(source);
+            record.seek(io::SeekFrom::Start(start))?;
+            return read(record);
         }
-        let shared = open_named_record(directory, &RecordName::shared(&self.hash, false))?;
+        let mut shared = open_named_record(directory, &RecordName::shared(&self.hash, false))?;
         if shared.metadata()?.len() != self.length as u64 {
             return Err(differs());
         }
-        Ok(shared)
+        read(&mut shared)
     }
 }
 
 /// Read the piece header at `offset`; returns the header and its stored length.
-fn read_piece(file: &mut File, offset: u64, stored: u64) -> io::Result<(PieceHeader, u64)> {
+fn read_piece(file: &mut ArchiveFile, offset: u64, stored: u64) -> io::Result<(PieceHeader, u64)> {
     let mut prefix = [0; SHARED_HEADER_LEN];
     file.seek(io::SeekFrom::Start(offset))?;
     file.read_exact(&mut prefix[..INLINE_HEADER_LEN])?;
@@ -497,13 +518,13 @@ struct PieceRead {
     header: PieceHeader,
     copied: usize,
     /// The shared piece descriptor, pinned once opened.
-    file: Option<File>,
+    file: Option<ArchiveFile>,
 }
 
 impl Expansion {
     /// Inspect a selected record. `None` means it is stored in canonical form.
     pub(super) fn start(
-        record: &mut File,
+        record: &mut ArchiveFile,
         stored: usize,
         maximum: usize,
     ) -> Result<Option<Self>, NativeContextArchiveError> {
@@ -541,8 +562,8 @@ impl Expansion {
     /// and matches its original length and hash.
     pub(super) fn step(
         &mut self,
-        directory: &File,
-        record: &mut File,
+        directory: &ArchiveDirectory,
+        record: &mut ArchiveFile,
         stored: u64,
         out: &mut ChargedBuffer<u8>,
     ) -> Result<bool, NativeContextArchiveError> {

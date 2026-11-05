@@ -185,6 +185,20 @@ impl ProviderFundingBootstrap {
         )?)
     }
 
+    /// Retain existing custody or create it after live permission, in one parent bracket.
+    pub(super) fn open_for_bootstrap(
+        parent: &ServiceAuthority,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+        authorize_creation: &dyn Fn() -> Result<bool>,
+    ) -> Result<Option<Self>> {
+        Self::from_existing_authority(ServiceAuthority::open_provider_for_bootstrap(
+            parent,
+            provider,
+            ProviderPurpose::ProviderFundingBootstrap,
+            authorize_creation,
+        )?)
+    }
+
     fn from_existing_authority(authority: Option<ServiceAuthority>) -> Result<Option<Self>> {
         let Some(authority) = authority else {
             return Ok(None);

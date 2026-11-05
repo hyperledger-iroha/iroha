@@ -693,20 +693,26 @@
       {
         "frame": "4e52543000001d0fd8e511e4f68f4474990c9eb9ae6900050000000000000014de71ac2a2a6734020401000000",
         "json": [
-          "Proposed"
+          "Scheduled"
         ],
         "option_frame": "4e525430000000da31a18c84382bac00fcf3c7d90d56000700000000000000cd9fc98f6dde86490201050401000000",
         "vector_frame": "4e5254300000c48e5b30529f4c7dcb06a49ae4892fa5000e00000000000000aa5949ec172696d2020100000000000000050401000000"
       },
       {
-        "frame": "4e52543000001d0fd8e511e4f68f4474990c9eb9ae69000500000000000000dc1a9a60ee170078020407000000",
+        "frame": "4e52543000001d0fd8e511e4f68f4474990c9eb9ae690005000000000000000e56f5713298de080204ff010000",
         "json": [
-          "Proposed",
+          "Scheduled",
+          "Attested",
           "Activated",
-          "Canceled"
+          "Lapsed",
+          "Canceled",
+          "Contained",
+          "ContainmentExpired",
+          "ContainmentReviewed",
+          "ContainmentResolved"
         ],
-        "option_frame": "4e525430000000da31a18c84382bac00fcf3c7d90d56000700000000000000055b2243a9e3e1050201050407000000",
-        "vector_frame": "4e5254300000c48e5b30529f4c7dcb06a49ae4892fa5000e00000000000000629da220d31bf19e020100000000000000050407000000"
+        "option_frame": "4e525430000000da31a18c84382bac00fcf3c7d90d56000700000000000000d7174d52756c3f7502010504ff010000",
+        "vector_frame": "4e5254300000c48e5b30529f4c7dcb06a49ae4892fa5000e00000000000000b0d1cd310f942fee0201000000000000000504ff010000"
       }
     ],
     "deserialize_hash": "1d0fd8e511e4f68f4474990c9eb9ae69",

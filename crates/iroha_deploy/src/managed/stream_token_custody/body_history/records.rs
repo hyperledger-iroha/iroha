@@ -139,6 +139,7 @@ pub(in crate::managed::stream_token_custody) struct UnsignedEnrollment {
     pub statement: SignerCustodyStatementV1,
     pub selected_at_unix_ms: u64,
     pub checkpoint: Vec<u8>,
+    pub source: Vec<u8>,
 }
 impl UnsignedEnrollment {
     pub(in crate::managed::stream_token_custody) fn validate_with_imports<
@@ -210,6 +211,7 @@ impl UnsignedEnrollment {
         }
         let verifier = checkpoint()?;
         Self::validate_checkpoint_scope(owner, verifier.borrow())?;
+        owner.verify_retained_source(&self.selection, &self.source, verifier.borrow())?;
         self.validate_selection_against_checkpoint(owner, purpose, provider_plan, verifier.borrow())
     }
 
@@ -328,6 +330,7 @@ impl UnsignedEnrollment {
         let record = enrollment::decode_enrollment(enrollment)?;
         if encode(&original.selection, 64 * 1024)? != encode(&self.selection, 64 * 1024)?
             || original.checkpoint != self.checkpoint
+            || original.source != self.source
             || record.statement != self.statement
             || *anchor != self.statement.anchor
             || *selected_at_unix_ms != self.selected_at_unix_ms

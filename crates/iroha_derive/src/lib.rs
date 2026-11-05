@@ -119,14 +119,15 @@ pub fn from_variant_derive(input: TokenStream) -> Result<TokenStream> {
 ///
 /// The expansion delegates to `iroha_futures`, whose `telemetry` feature decides
 /// whether the body is instrumented.
-#[manyhow]
 #[proc_macro_attribute]
-pub fn telemetry_future(args: TokenStream, input: TokenStream) -> TokenStream {
-    futures::telemetry_future_impl(&args, input)
+pub fn telemetry_future(
+    args: proc_macro::TokenStream,
+    input: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    futures::telemetry_future_impl(&args.into(), input.into()).into()
 }
 /// Derive `iroha_config_base::read::ReadConfig` trait.
-#[manyhow]
 #[proc_macro_derive(ReadConfig, attributes(config))]
-pub fn derive_read_config(input: TokenStream) -> TokenStream {
-    config_base::derive_read_config_impl(input)
+pub fn derive_read_config(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    config_base::derive_read_config_impl(input.into()).into()
 }

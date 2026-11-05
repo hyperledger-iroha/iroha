@@ -43,6 +43,7 @@ netflix/*
 target_migrate/*
 !artifacts/android/
 artifacts/android/*
+!artifacts/android/codegen_parity_summary.json
 !artifacts/android/attestation/
 !artifacts/android/attestation/**
 !artifacts/android/fixture_runs/
@@ -372,8 +373,10 @@ integration_tests/fixtures/sumeragi_da*
 
 # Keep transient nested lockfiles ignored. The root workspace lock is an
 # authenticated release input and must be committed with the source tree.
+# The isolated IVM fuzz gate also commits its canonical dependency selection.
 **/Cargo.lock
 !/Cargo.lock
+!/crates/ivm/fuzz/Cargo.lock
 # Ignore local JSON corpora and generated tapes used in tests
 crates/norito/tests/corpora/*.json
 crates/norito/tests/corpora/*.tape

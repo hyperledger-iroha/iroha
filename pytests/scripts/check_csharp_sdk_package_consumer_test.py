@@ -5,7 +5,9 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
+from xml.etree import ElementTree
 
 import pytest
 
@@ -121,7 +123,8 @@ def test_csharp_sdk_package_consumer_script_pins_real_package_consumption() -> N
         'run_dotnet "${app_dir}" build "${project_file}"',
         'run_dotnet "${app_dir}" run --project "${project_file}"',
         "NUGET_PACKAGES=\"${NUGET_PACKAGES:-${WORK_DIR}/nuget-packages}\"",
-        "<add key=\"iroha-local\" value=\"${package_dir}\" />",
+        'write_consumer_nuget_config "${app_dir}/NuGet.Config" "${package_dir}" || return 1',
+        '<add key="iroha-local" value={quoteattr(sys.argv[2])} />',
         "<add key=\"nuget.org\" value=\"https://api.nuget.org/v3/index.json\" />",
         "dotnet-add-package.log",
         "package_install_log_matches_local_source()",
@@ -334,6 +337,114 @@ esac
     assert "dotnet version: 10.0.402" in completed.stdout
     assert "fake dotnet info from pinned directory" in completed.stdout
     assert (app_dir / "global.json").read_bytes() == pinned_global_json.read_bytes()
+
+
+@pytest.mark.parametrize(
+    ("windows_paths", "conversion_status", "failed_phase"),
+    [(False, 0, ""), (True, 0, ""), (True, 37, ""),
+     (True, 0, "build"), (True, 0, "run")],
+)
+def test_consumer_uses_native_xml_source_and_keeps_failure_boundaries(
+    tmp_path: Path, windows_paths: bool, conversion_status: int, failed_phase: str,
+) -> None:
+    """Run the actual shell route; replace only native tools with transcript controls."""
+    packages = tmp_path / "packages & 'quoted'"
+    packages.mkdir()
+    for suffix in ("nupkg", "symbols.nupkg"):
+        (packages / f"Hyperledger.Iroha.Sdk.1.2.3.{suffix}").write_bytes(b"inert package")
+    pin = tmp_path / "global.json"
+    pin.write_bytes((ROOT / "csharp/global.json").read_bytes())
+    source = 'D:/a/_temp/packages & <quoted> "double" \'single\'' if windows_paths else str(packages)
+    env = dict(os.environ, PYTHON_BIN=sys.executable, EXPECTED_SOURCE=source,
+               TRACE=str(tmp_path / "calls"), WORK_PARENT=str(tmp_path),
+               DOTNET_GLOBAL_JSON=str(pin), PACKAGE_VERSION="1.2.3",
+               RUNTIME_IDENTIFIER="win-x64" if windows_paths else "osx-arm64",
+               CONVERSION_STATUS=str(conversion_status), FAILED_PHASE=failed_phase)
+    functions = ("require_local_package", "require_runtime_identifier",
+                 "stage_pinned_dotnet_global_json", "write_consumer_nuget_config",
+                 "package_install_log_matches_local_source", "validate_consumer_project",
+                 "run_consumer_smoke")
+    program = "set -euo pipefail\n" + "\n".join(_bash_function_source(name) for name in functions)
+    script = SCRIPT.read_text(encoding="utf-8")
+    program += script[script.index("write_consumer_program() {\n"):
+                      script.index("validate_consumer_project() {\n")]
+    if windows_paths:
+        program += r'''
+cygpath() {
+  [[ "$1" == "-m" || "$1" == "-w" ]]
+  [[ "$2" == "${ADMITTED_SOURCE}" ]]
+  [[ "${CONVERSION_STATUS}" == 0 ]] || return "${CONVERSION_STATUS}"
+  printf '%s\n' "${EXPECTED_SOURCE}"
+}
+'''
+    else:
+        # Windows CI has cygpath installed; this control must still exercise
+        # the unmodified Unix-path branch without changing the host filesystem.
+        program += r'''
+command() {
+  if [[ "$#" == 2 && "$1" == "-v" && "$2" == "cygpath" ]]; then return 1; fi
+  builtin command "$@"
+}
+'''
+    program += r'''
+verify_native_package() { printf 'verify-native\n' >> "${TRACE}"; }
+require_dotnet() { printf 'sdk\n' >> "${TRACE}"; }
+run_dotnet() {
+  local app_dir="$1"
+  shift
+  printf '%s\n' "$1" >> "${TRACE}"
+  case "$1" in
+    new) printf '<Project></Project>\n' > "${app_dir}/consumer.csproj" ;;
+    add)
+      "${PYTHON_BIN}" -I - "${app_dir}/NuGet.Config" <<'PY' || return 1
+import os
+import sys
+from xml.etree import ElementTree
+root = ElementTree.parse(sys.argv[1]).getroot()
+assert root.find('./packageSources/add[@key="iroha-local"]').attrib['value'] == os.environ['EXPECTED_SOURCE']
+PY
+      printf '<Project><PackageReference Include="Hyperledger.Iroha.Sdk" Version="%s" /></Project>\n' \
+        "${PACKAGE_VERSION}" > "${app_dir}/consumer.csproj"
+      printf 'Installed Hyperledger.Iroha.Sdk %s from %s\n' "${PACKAGE_VERSION}" "${EXPECTED_SOURCE}"
+      ;;
+    build|run) [[ "$1" != "${FAILED_PHASE}" ]] || return 53 ;;
+    *) return 64 ;;
+  esac
+}
+ADMITTED_SOURCE="$(cd "$1" && pwd)"
+printf '%s' "${ADMITTED_SOURCE}" > "${TRACE}.source"
+'''
+    if not windows_paths:
+        program += 'EXPECTED_SOURCE="${ADMITTED_SOURCE}"\n'
+    program += r'''
+run_consumer_smoke "$1" "a=hello+world&z=last" 0
+'''
+    result = subprocess.run(["bash", "-c", program, "bash", str(packages)],
+                            env=env, text=True, capture_output=True, timeout=30)
+    expected_calls = ["verify-native", "sdk", "new"]
+    if not conversion_status:
+        expected_calls += ["add", "build"]
+        if failed_phase != "build":
+            expected_calls += ["run"]
+    assert (tmp_path / "calls").read_text().splitlines() == expected_calls
+    assert result.returncode == (1 if conversion_status or failed_phase else 0), result.stderr
+    app_dirs = list(tmp_path.glob("iroha-csharp-sdk-package-consumer.*/consumer"))
+    assert len(app_dirs) == 1
+    assert (app_dirs[0] / "global.json").read_bytes() == pin.read_bytes()
+    config = app_dirs[0] / "NuGet.Config"
+    if conversion_status:
+        assert not config.exists()
+    else:
+        if not windows_paths:
+            source = (tmp_path / "calls.source").read_text()
+        sources = list(ElementTree.parse(config).getroot().find("packageSources"))
+        assert [(entry.tag, entry.attrib) for entry in sources] == [
+            ("clear", {}),
+            ("add", {"key": "iroha-local", "value": source}),
+            ("add", {"key": "nuget.org", "value": "https://api.nuget.org/v3/index.json"}),
+        ]
+        assert (app_dirs[0] / "Program.cs").is_file()
+    assert ("C# SDK package consumer package:" in result.stdout) == (not conversion_status and not failed_phase)
 
 
 def test_pr_csharp_workflow_runs_package_consumer_guard() -> None:

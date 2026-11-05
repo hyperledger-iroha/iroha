@@ -1,10 +1,10 @@
 //! Lanes of the global chain (`specs/sumeragi_lanes.md`).
 //!
 //! A lane incarnation is a Sumeragi instance with a committee and chain parameters pinned at
-//! creation ([`SumeragiLaneRecord`]). Its blocks are admission-checked transaction batches; the
-//! global chain merges certified lane blocks by reference ([`SumeragiLaneMerge`]) and is the only
-//! place world state changes. The lane set, its autoscale history ([`SumeragiLaneState`]) and the
-//! governed policy ([`SumeragiLanePolicy`]) are committed global-chain state.
+//! creation ([`crate::sumeragi_lanes::SumeragiLaneRecord`]). Its blocks are admission-checked transaction batches; the
+//! global chain merges certified lane blocks by reference ([`crate::sumeragi_lanes::SumeragiLaneMerge`]) and is the only
+//! place world state changes. The lane set, its autoscale history ([`crate::sumeragi_lanes::SumeragiLaneState`]) and the
+//! governed policy ([`crate::sumeragi_lanes::SumeragiLanePolicy`]) are committed global-chain state.
 
 mod custody;
 mod samples;

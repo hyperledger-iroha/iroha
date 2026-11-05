@@ -121,15 +121,56 @@ pub async fn fund_citizen_fees(
         parameters.xor_asset_definition_id,
         client.client().account().clone(),
     );
-    submit_parliament_instructions(
-        client,
-        citizens.iter().map(|citizen| {
-            iroha_data_model::isi::Transfer::asset_quantity(
-                source.clone(),
-                10_000_u32,
-                citizen.clone(),
+    // One ordinary transfer per signed entry leaves room for its fee fragments
+    // under the committed intrinsic FASTPQ ceiling. A single 24-transfer entry
+    // cannot fit the bootstrap limit of 16, even before fee fragments.
+    for instructions in citizen_fee_entries(&source, citizens) {
+        submit_parliament_instructions(client, instructions).await?;
+    }
+    Ok(())
+}
+
+fn citizen_fee_entries<'a>(
+    source: &'a AssetId,
+    citizens: &'a [AccountId],
+) -> impl Iterator<Item = [InstructionBox; 1]> + 'a {
+    citizens.iter().map(|citizen| {
+        [iroha_data_model::isi::Transfer::asset_quantity(
+            source.clone(),
+            10_000_u32,
+            citizen.clone(),
+        )
+        .into()]
+    })
+}
+
+#[test]
+fn citizen_fee_entries_preserve_every_recipient_amount_and_source_in_bounded_entries() {
+    use iroha::data_model::prelude::{Quantity, TransferBox};
+    let citizens = citizen_accounts(&citizen_keys());
+    let source = AssetId::of(
+        SumeragiNposParameters::default().xor_asset_definition_id,
+        citizens[0].clone(),
+    );
+    let entries = citizen_fee_entries(&source, &citizens).collect::<Vec<_>>();
+    assert_eq!(entries.len(), CITIZEN_COUNT);
+    assert!(
+        CITIZEN_COUNT
+            > usize::try_from(
+                iroha_data_model::parameter::FastpqSourcePolicyV1::bootstrap()
+                    .intrinsic
+                    .max_transcripts,
             )
-        }),
-    )
-    .await
+            .unwrap()
+    );
+    for (entry, citizen) in entries.iter().zip(&citizens) {
+        let Some(TransferBox::Asset(transfer)) = entry[0].as_any().downcast_ref::<TransferBox>()
+        else {
+            panic!("one ordinary signed funding transfer per entry");
+        };
+        assert_eq!(&transfer.source, &source);
+        assert_eq!(&transfer.destination, citizen);
+        assert_eq!(transfer.object, Quantity::from(10_000_u32));
+    }
+    assert_eq!(citizen_fee_entries(&source, &[]).count(), 0);
 }

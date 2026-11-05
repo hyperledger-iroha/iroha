@@ -3349,12 +3349,15 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
             .ok_or_else(|| eyre!("network must have at least one peer"))?;
         let client = submit_peer.client();
         for idx in 0..target_blocks {
-            client
-                .submit::<InstructionBox>(
+            let client = client.clone();
+            integration_tests::sync::spawn_blocking(move || {
+                client.submit::<InstructionBox>(
                     Log::new(Level::INFO, format!("localnet soak {idx}")).into(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
-                .wrap_err_with(|| format!("failed to submit log instruction {idx}"))?;
+            })
+            .await?
+            .wrap_err_with(|| format!("failed to submit log instruction {idx}"))?;
             if (idx + 1) % submit_batch == 0 {
                 wait_for_queue_depth(&network, queue_soft_limit, SOAK_STATUS_POLL_TIMEOUT).await?;
             }

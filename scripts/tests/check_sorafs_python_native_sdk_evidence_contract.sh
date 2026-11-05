@@ -45,6 +45,8 @@ if runner.count("--evidence-dir") != 1:
     raise SystemExit("Python native evidence output must have one opt-in binding")
 helper_build = runner.index("cargo build --locked -p iroha_native_source_delivery")
 helper_check = runner.index("assert_build_source_unchanged", helper_build)
+if "--features dev-tools --bin iroha_native_source_delivery" not in runner[helper_build:helper_check]:
+    raise SystemExit("Native helper must explicitly select its development binary")
 helper_use = runner.index('IROHA_NATIVE_SOURCE_DELIVERY_TEST_HELPER="${NATIVE_HELPER}"')
 if not runner.index("SOURCE_BEFORE_PIN=") < helper_build < helper_check < helper_use:
     raise SystemExit("Native helper must be built inside the original authenticated source pin")

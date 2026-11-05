@@ -1385,7 +1385,8 @@ fn synthesize_manifest_from_payload(
                 chunk.length,
                 ChunkDigest::new(chunk.blake3),
                 ChunkRole::Data,
-                0,
+                // The synthetic profile has one data shard in each stripe.
+                idx,
             ))
         })
         .collect::<Result<Vec<_>, Box<dyn Error>>>()?;
@@ -1594,7 +1595,7 @@ mod tests {
         CommitmentArtifact, ManifestAudit, ManifestAuditStatus, PolicySnapshot, ProofBenchOptions,
         ReceiptArtifact, ReplicationOrderSnapshot, blob_class_label, build_remediation_plan,
         diff_receipt_and_commitment, reconcile_receipts_and_commitments, run_proof_bench,
-        storage_class_label,
+        storage_class_label, synthesize_manifest_from_payload,
     };
     use crate::JsonTarget;
     use iroha_crypto::{Hash as CryptoHash, Signature};
@@ -1822,6 +1823,53 @@ mod tests {
         );
         assert!(entry.notes.iter().any(|note| note.contains("retention")));
     }
+    #[test]
+    fn synthetic_proof_manifest_uses_canonical_single_shard_stripes() {
+        use sorafs_car::{PlanFromManifestError, build_plan_from_da_manifest};
+
+        let chunk_size = 65_536u32;
+        for payload_size in [1, 65_535, 65_536, 65_537, 262_144, 262_145] {
+            let payload = vec![0x5a; payload_size];
+            let mut manifest = synthesize_manifest_from_payload(&payload, chunk_size).unwrap();
+            let plan = build_plan_from_da_manifest(&manifest)
+                .expect("the benchmark producer must emit canonical manifest geometry");
+            let chunk_count = payload_size.div_ceil(usize::try_from(chunk_size).unwrap());
+            assert_eq!(manifest.erasure_profile.data_shards, 1);
+            assert_eq!(manifest.erasure_profile.parity_shards, 0);
+            assert_eq!(manifest.erasure_profile.row_parity_stripes, 0);
+            assert_eq!(manifest.total_stripes, u32::try_from(chunk_count).unwrap());
+            assert_eq!(manifest.shards_per_stripe, 1);
+            assert_eq!(plan.chunks.len(), chunk_count);
+            assert_eq!(plan.content_length, u64::try_from(payload_size).unwrap());
+            for (index, (committed, planned)) in
+                manifest.chunks.iter().zip(&plan.chunks).enumerate()
+            {
+                let offset = index * usize::try_from(chunk_size).unwrap();
+                let length = (payload_size - offset).min(usize::try_from(chunk_size).unwrap());
+                assert_eq!(committed.index, u32::try_from(index).unwrap());
+                assert_eq!(committed.group_id, u32::try_from(index).unwrap());
+                assert_eq!(committed.offset, u64::try_from(offset).unwrap());
+                assert_eq!(committed.length, u32::try_from(length).unwrap());
+                assert_eq!(planned.offset, committed.offset);
+                assert_eq!(planned.length, committed.length);
+                assert_eq!(
+                    planned.digest,
+                    *blake3::hash(&payload[offset..offset + length]).as_bytes()
+                );
+            }
+            if chunk_count > 1 {
+                manifest.chunks[1].group_id = 0;
+                assert!(matches!(
+                    build_plan_from_da_manifest(&manifest),
+                    Err(PlanFromManifestError::NonCanonicalChunk {
+                        chunk_index: 1,
+                        field: "group_id",
+                    })
+                ));
+            }
+        }
+    }
+
     #[test]
     fn proof_bench_runner_accepts_fixture() {
         let root = crate::workspace_root();

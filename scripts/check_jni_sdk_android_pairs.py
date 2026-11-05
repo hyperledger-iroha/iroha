@@ -14,6 +14,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 JNI_SOURCE = REPO_ROOT / "crates/connect_norito_bridge/src/platform_jni/part_3.rs"
 SDK_PREFIX = "Java_org_hyperledger_iroha_sdk_"
 ANDROID_PREFIX = "Java_org_hyperledger_iroha_android_"
+# The current wrappers pass the already-borrowed Env directly through
+# with_java_env; redundant reborrows/closures were removed in f5ba1f76b8.
+# All 44 exported signatures, argument order and attributes remain unchanged.
 EXPECTED_ABI_DIGEST = "b45689c20107a43798f45f6716b210265734eaf7369a3a3308ac9d4e57655342"
 EXPECTED_ATTRIBUTE_DIGEST = "3cf8bad3c1c97d0af5bd2b783f77bf8ee7e5b6c0f249555c4b8f10bfbedb2817"
 

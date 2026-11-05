@@ -3886,7 +3886,7 @@ pub enum PrivacyCompiledProfileCatalogArchiveValidationStatusV1 {
     /// The archive exceeds the fixed byte ceiling.
     ArchiveTooLarge = 3,
     /// Norito rejected an enclosing allowance or a field, allocation, or nesting budget.
-    /// Exceeding the fixed twelve-row catalog is instead [`Self::InvalidManifest`].
+    /// Exceeding the fixed twelve-row catalog is instead [`Self::InvalidCatalog`].
     DecodeResourceLimit = 4,
     /// The archive schema is not exactly [`PrivacyCompiledProfileCatalogV1`].
     SchemaMismatch = 5,

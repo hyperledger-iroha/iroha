@@ -7,9 +7,11 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -53,7 +55,9 @@ EXPECTED_SOURCE_BOUND_BENCHMARKS = (
 def write_estimate(path: Path, median: float) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps({"median": {"point_estimate": median}}), encoding="utf-8"
+        json.dumps({"median": {"point_estimate": median, "confidence_interval": {
+            "confidence_level": 0.95, "lower_bound": median, "upper_bound": median,
+        }}}), encoding="utf-8"
     )
 
 
@@ -80,7 +84,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         baseline = self.root / "baseline"
         with mock.patch.object(
             PERF, "validate_baseline_provenance"
-        ) as validate:
+        ) as validate, mock.patch.object(PERF, "validate_query_drivers", return_value={"base": {}, "candidate": {}}):
             result = PERF.main(
                 [
                     "--criterion-dir",
@@ -115,6 +119,89 @@ class KotodamaPerfGateTests(unittest.TestCase):
         write_estimate(missing, float("nan"))
         self.assertEqual(self.run_gate(), 1)
 
+    def test_criterion_confidence_intervals_are_mandatory_and_validated(self) -> None:
+        path = self.root / "estimates.json"
+        valid = {"confidence_level": 0.95, "lower_bound": 95.0, "upper_bound": 105.0}
+        for field, value in (
+            ("confidence_level", 0.9), ("confidence_level", 1.0),
+            ("confidence_level", True), ("lower_bound", 0),
+            ("lower_bound", float("nan")), ("lower_bound", 101.0),
+            ("upper_bound", 99.0), ("upper_bound", float("inf")),
+            ("upper_bound", "105"),
+        ):
+            with self.subTest(field=field, value=value):
+                path.write_text(json.dumps({"median": {"point_estimate": 100.0,
+                    "confidence_interval": {**valid, field: value}}}))
+                with self.assertRaises(PERF.GateError):
+                    PERF.read_criterion_estimate(path)
+        path.write_text(json.dumps({"median": {"point_estimate": 100.0}}))
+        with self.assertRaisesRegex(PERF.GateError, "missing median confidence"):
+            PERF.read_criterion_median(path)
+        path.write_text(json.dumps({"median": {"point_estimate": 100.0,
+            "confidence_interval": valid}}))
+        self.assertEqual(PERF.read_criterion_estimate(path),
+                         PERF.MedianEstimate(100.0, 95.0, 105.0, 0.95))
+
+    def test_uncertain_regression_cannot_qualify_or_write_a_receipt(self) -> None:
+        populate(self.root, "base")
+        populate(self.root, "new")
+        name = PERF.REGRESSION_BENCHMARKS[0]
+        path = self.root / name / "base" / "estimates.json"
+        payload = json.loads(path.read_text())
+        payload["median"]["confidence_interval"]["lower_bound"] *= 0.9
+        path.write_text(json.dumps(payload))
+        report = self.root / "report.json"
+        with (
+            mock.patch.object(PERF, "validate_baseline_provenance"),
+            mock.patch.object(PERF, "validate_query_drivers", return_value={"base": {}, "candidate": {}}),
+            mock.patch.object(PERF, "validate_candidate_provenance") as candidate,
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()) as stderr,
+        ):
+            result = PERF.main([
+                "--criterion-dir", str(self.root), "--baseline-root", "baseline",
+                "--candidate-root", "candidate", "--expected-candidate-commit", "c" * 40,
+                "--json-output", str(report),
+            ])
+        self.assertEqual(result, 1)
+        self.assertIn("inconclusive confidence bounds: no performance qualification", stderr.getvalue())
+        candidate.assert_not_called()
+        self.assertFalse(report.exists())
+
+    def test_confidence_extremes_keep_exact_five_percent_boundary(self) -> None:
+        populate(self.root, "base")
+        populate(self.root, "new")
+        path = self.root / PERF.REGRESSION_BENCHMARKS[0] / "new" / "estimates.json"
+        payload = json.loads(path.read_text())
+        point = payload["median"]["point_estimate"]
+        payload["median"]["confidence_interval"]["upper_bound"] = point * 1.05
+        path.write_text(json.dumps(payload))
+        PERF.enforce_confidence_bounds(self.root, 0.05)
+        payload["median"]["confidence_interval"]["upper_bound"] = point * 1.051
+        path.write_text(json.dumps(payload))
+        with self.assertRaisesRegex(PERF.GateError, "inconclusive"):
+            PERF.enforce_confidence_bounds(self.root, 0.05)
+
+    def test_list_sugar_keeps_median_equality_with_reported_interval_overlap(self) -> None:
+        populate(self.root, "base")
+        populate(self.root, "new")
+        for name in (PERF.LIST_SUGAR_BENCHMARK, PERF.LIST_MANUAL_BENCHMARK):
+            for sample in ("base", "new"):
+                write_estimate(self.root / name / sample / "estimates.json", 100.0)
+        PERF.enforce_confidence_bounds(self.root, 0.05)
+        path = self.root / PERF.LIST_SUGAR_BENCHMARK / "new" / "estimates.json"
+        payload = json.loads(path.read_text())
+        payload["median"]["confidence_interval"]["upper_bound"] = 100.001
+        path.write_text(json.dumps(payload))
+        report = PERF.enforce_confidence_bounds(self.root, 0.05)["list_sugar"]
+        self.assertEqual(report["decision_basis"], "point_median_zero_slowdown")
+        self.assertEqual(report["interval_relation"], "overlapping_or_touching_intervals")
+        self.assertGreater(report["maximum_change"], 0.0)
+        self.assertEqual(self.run_gate(), 0)
+        payload["median"]["point_estimate"] = 100.001
+        path.write_text(json.dumps(payload))
+        self.assertEqual(self.run_gate(), 1)
+
     def test_portable_and_self_baseline_cli_paths_are_rejected(self) -> None:
         common = ["--baseline-root", str(self.root / "baseline")]
         for option in ("--baseline", "--write-baseline"):
@@ -138,7 +225,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         stdout = io.StringIO()
         stderr = io.StringIO()
         self.assertEqual(
-            "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222",
+            "1ce796ba4fe8769f4d298a0ce9fe52acff39a012f5ce6cf4323fbd50c2028b55",
             PERF.BASELINE_CARGO_LOCK_SHA256,
         )
         with (
@@ -321,7 +408,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
             set(PERF.BASELINE_TIMED_BODY_SHA256),
         )
         self.assertEqual(
-            "fc09b635df385d0488067f09baaa92a8d16fa124",
+            "06912ee4f8f9423b458d72039dbd0a1c8fde7b43",
             PERF.BASELINE_SHA,
         )
 
@@ -787,6 +874,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
 
         with (
             mock.patch.object(PERF, "validate_baseline_provenance"),
+            mock.patch.object(PERF, "validate_query_drivers", return_value={"base": {}, "candidate": {}}),
             mock.patch.object(
                 PERF,
                 "validate_candidate_provenance",
@@ -813,6 +901,12 @@ class KotodamaPerfGateTests(unittest.TestCase):
         report = json.loads(report_path.read_text(encoding="utf-8"))
         self.assertEqual(report["schema"], PERF.EVIDENCE_SCHEMA)
         self.assertEqual(report["threshold"], PERF.MAX_REGRESSION)
+        bounds = report["confidence_bounds"]
+        self.assertEqual(bounds["minimum_individual_confidence_level"], 0.95)
+        self.assertEqual(len(bounds["comparisons"]), len(PERF.REGRESSION_BENCHMARKS))
+        self.assertTrue(all(row["maximum_change"] <= 0.05 for row in bounds["comparisons"]))
+        self.assertEqual(bounds["list_sugar"]["decision_basis"], "point_median_zero_slowdown")
+        self.assertEqual(bounds["list_sugar"]["interval_relation"], "sugar_interval_below_manual")
         self.assertEqual(
             report["benchmark_count"], len(PERF.REGRESSION_BENCHMARKS)
         )
@@ -825,6 +919,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
             report["baseline"]["cargo_lock_sha256"],
             PERF.BASELINE_CARGO_LOCK_SHA256,
         )
+        self.assertEqual(report["derived_query_drivers"], {"base": {}, "candidate": {}})
         self.assertEqual(report["candidate"]["revision"], candidate_revision)
         self.assertEqual(
             report["candidate"]["cargo_lock_sha256"], candidate_lock
@@ -837,6 +932,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         original = report_path.read_bytes()
         with (
             mock.patch.object(PERF, "validate_baseline_provenance"),
+            mock.patch.object(PERF, "validate_query_drivers", return_value={"base": {}, "candidate": {}}),
             mock.patch.object(
                 PERF,
                 "validate_candidate_provenance",
@@ -864,11 +960,33 @@ class KotodamaPerfGateTests(unittest.TestCase):
             )
         self.assertEqual(report_path.read_bytes(), original)
 
+    def test_missing_derived_driver_never_compares_or_qualifies_samples(self) -> None:
+        populate(self.root, "base")
+        populate(self.root, "new")
+        report = self.root / "report.json"
+        with (
+            mock.patch.object(PERF, "validate_baseline_provenance"),
+            mock.patch.object(PERF, "read_current_samples") as samples,
+            contextlib.redirect_stdout(io.StringIO()) as stdout,
+            contextlib.redirect_stderr(io.StringIO()) as stderr,
+        ):
+            result = PERF.main([
+                "--criterion-dir", str(self.root), "--baseline-root", str(self.root / "absent-base"),
+                "--candidate-root", str(ROOT), "--expected-candidate-commit", "c" * 40,
+                "--json-output", str(report),
+            ])
+        self.assertEqual(result, 1)
+        self.assertIn("derived query driver evidence is invalid", stderr.getvalue())
+        self.assertNotIn("benchmark | baseline ns", stdout.getvalue())
+        samples.assert_not_called()
+        self.assertFalse(report.exists())
+
     def test_evidence_arguments_are_all_or_nothing(self) -> None:
         populate(self.root, "base")
         populate(self.root, "new")
         with (
             mock.patch.object(PERF, "validate_baseline_provenance"),
+            mock.patch.object(PERF, "validate_query_drivers", return_value={"base": {}, "candidate": {}}),
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(io.StringIO()) as stderr,
         ):
@@ -893,6 +1011,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         report = evidence / "report.json"
         with (
             mock.patch.object(PERF, "validate_baseline_provenance"),
+            mock.patch.object(PERF, "validate_query_drivers", return_value={"base": {}, "candidate": {}}),
             mock.patch.object(
                 PERF, "validate_candidate_provenance"
             ) as validate_candidate,
@@ -931,6 +1050,14 @@ class KotodamaPerfGateTests(unittest.TestCase):
             PERF.GateError, "parent must be a regular, non-symlink directory"
         ):
             PERF.criterion_estimates_sha256(self.root)
+
+    def test_candidate_lock_policy_matches_the_current_source_lock(self) -> None:
+        """Catch a stale candidate pin before CI starts benchmark preparation."""
+
+        self.assertEqual(
+            PERF.CANDIDATE_CARGO_LOCK_SHA256,
+            hashlib.sha256((ROOT / "Cargo.lock").read_bytes()).hexdigest(),
+        )
 
     def test_candidate_provenance_requires_exact_clean_revision(self) -> None:
         candidate = self.root / "candidate"
@@ -983,13 +1110,114 @@ class KotodamaPerfGateTests(unittest.TestCase):
         ):
             PERF.validate_candidate_provenance(candidate, revision)
 
+    def test_measurement_shell_preserves_original_warning_policy_and_commands(self) -> None:
+        """Execute both actual steps, preserving diagnostics and every failure status."""
+        workflow = (ROOT / ".github/workflows/kotodama_perf.yml").read_text()
+        for revision in ("base", "candidate"):
+            marker = f"      - name: Measure {revision} revision\n"
+            step = workflow.split(marker, 1)[1].split("\n      - name:", 1)[0]
+            command = textwrap.dedent(step.split("        run: |\n", 1)[1]).replace("${{ github.sha }}", "c" * 40)
+            expected = [[
+                "candidate/scripts/kotodama_perf_bundle.py", "measure",
+                "--revision-root", "baseline" if revision == "base" else "candidate",
+                "--candidate-root", "candidate", "--expected-candidate-commit", "c" * 40,
+                "--label", revision, "--output", str(self.root / "target/kotodama-prepared" / revision),
+            ]]
+            for failure_at in (0, 1):
+                with self.subTest(revision=revision, failure_at=failure_at):
+                    root = self.root / f"{revision}-{failure_at}"
+                    root.mkdir()
+                    bin_dir = root / "bin"
+                    bin_dir.mkdir()
+                    receipt = root / "calls.jsonl"
+                    cargo = bin_dir / "cargo"
+                    cargo.write_text(
+                        f"#!{sys.executable}\n"
+                        "import json, os, pathlib, sys\n"
+                        "receipt = pathlib.Path(os.environ['TEST_CARGO_RECEIPT'])\n"
+                        "count = len(receipt.read_text().splitlines()) if receipt.exists() else 0\n"
+                        "keys = ('CARGO_BUILD_WARNINGS', 'RUSTUP_TOOLCHAIN', 'CARGO_BUILD_JOBS', "
+                        "'CARGO_INCREMENTAL', 'CARGO_TARGET_DIR', 'RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS')\n"
+                        "with receipt.open('a') as out:\n"
+                        "    out.write(json.dumps({'argv': sys.argv[1:], 'cwd': os.getcwd(), "
+                        "'environment': {key: os.environ[key] for key in keys if key in os.environ}}) + '\\n')\n"
+                        "print('cargo output')\n"
+                        "print('warning: retained compiler diagnostic', file=sys.stderr)\n"
+                        "raise SystemExit(23 if count + 1 == int(os.environ['TEST_FAIL_AT']) else 0)\n"
+                    )
+                    cargo.chmod(0o700)
+                    # The derived driver itself has executable/compiler controls
+                    # in kotodama_query_driver_test.py; here its shell invocation
+                    # must retain argv, environment and failure propagation.
+                    driver_python = bin_dir / "python3"
+                    driver_python.write_bytes(cargo.read_bytes())
+                    driver_python.chmod(0o700)
+                    retained = {
+                        "RUSTUP_TOOLCHAIN": "1.99.1", "CARGO_BUILD_JOBS": "1",
+                        "CARGO_INCREMENTAL": "0", "CARGO_TARGET_DIR": str(self.root / "target"),
+                        "RUSTFLAGS": "--cfg retained_warning_policy",
+                        "CARGO_ENCODED_RUSTFLAGS": "-C\x1fdebuginfo=1",
+                    }
+                    environment = {
+                        **os.environ, **retained, "CARGO_BUILD_WARNINGS": "deny",
+                        "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
+                        "TEST_CARGO_RECEIPT": str(receipt), "TEST_FAIL_AT": str(failure_at),
+                    }
+                    result = subprocess.run(["bash", "-e", "-c", command], cwd=root,
+                                            env=environment, text=True, capture_output=True)
+                    calls = [json.loads(line) for line in receipt.read_text().splitlines()]
+                    count = failure_at or 1
+                    self.assertEqual(result.returncode, 23 if failure_at else 0)
+                    self.assertEqual([call["argv"] for call in calls], expected[:count])
+                    self.assertEqual(result.stdout, "cargo output\n" * count)
+                    self.assertEqual(result.stderr, "warning: retained compiler diagnostic\n" * count)
+                    for call in calls:
+                        self.assertEqual(call["cwd"], str(root.resolve()))
+                        self.assertNotIn("CARGO_BUILD_WARNINGS", call["environment"])
+                        for name, value in retained.items():
+                            self.assertEqual(call["environment"][name], value)
+
+    def test_hosted_budget_and_partial_diagnostics_preserve_qualification(self) -> None:
+        """Cold builds may finish or fail without reusing or qualifying cached samples."""
+        workflow = (ROOT / ".github/workflows/kotodama_perf.yml").read_text()
+        job = workflow.split("  representative-regression:\n", 1)[1].split("\n  kotodama-artifact-gate:", 1)[0]
+        self.assertIn("    timeout-minutes: 360\n", job)
+        self.assertIn('      CARGO_BUILD_JOBS: "1"\n', job)
+        self.assertNotIn("Restore Rust build cache", job)
+        self.assertIn("needs: [prepare-baseline, prepare-candidate, kotodama-artifact-gate]", job)
+        for name, root in (("prepare-baseline", "baseline"), ("prepare-candidate", "candidate")):
+            preparation = workflow.split(f"  {name}:\n", 1)[1].split("\n  representative-regression:", 1)[0]
+            cache = preparation.split("      - name: Restore Rust build cache\n", 1)[1].split("\n      - name:", 1)[0]
+            self.assertIn('          cache-on-failure: "true"\n', cache)
+            self.assertIn('          cache-workspace-crates: "true"\n', cache)
+            self.assertIn(f"{root} -> ../target-kotodama-perf", cache)
+        self.assertLess(job.index("Clear cached benchmark evidence"), job.index("Measure base revision"))
+        self.assertIn('run: rm -rf "$CARGO_TARGET_DIR/criterion"', job)
+        self.assertLess(job.index("Clear base current samples"), job.index("Measure candidate revision"))
+
+        for name in ("Seal complete performance evidence", "Upload complete performance evidence"):
+            complete = job.split(f"      - name: {name}\n", 1)[1].split("\n      - name:", 1)[0]
+            self.assertNotIn("        if:", complete, "qualified evidence requires prior success")
+            self.assertNotIn("continue-on-error:", complete)
+        diagnostic = job.split("      - name: Upload nonqualifying performance diagnostics\n", 1)[1]
+        self.assertIn("        if: ${{ !success() }}\n", diagnostic)
+        self.assertIn("        timeout-minutes: 5\n", diagnostic)
+        self.assertIn("uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9", diagnostic)
+        self.assertIn("name: kotodama-performance-nonqualifying-diagnostics-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}", diagnostic)
+        self.assertIn("            target-kotodama-perf/criterion\n", diagnostic)
+        self.assertIn("            target-kotodama-perf/kotodama-perf-evidence\n", diagnostic)
+        self.assertIn("          if-no-files-found: warn\n", diagnostic)
+        self.assertIn("          retention-days: 14\n", diagnostic)
+        self.assertNotIn("run:", diagnostic)
+        self.assertNotIn("continue-on-error:", job)
+
     def test_release_workflow_runs_the_complete_artifact_gate(self) -> None:
         workflow = (
             ROOT / ".github" / "workflows" / "kotodama_perf.yml"
         ).read_text(encoding="utf-8")
         representative_job = workflow.split(
             "  representative-regression:\n", 1
-        )[1]
+        )[1].split("\n  kotodama-artifact-gate:", 1)[0]
         self.assertIn('      CARGO_BUILD_JOBS: "1"', representative_job)
         self.assertIn('      RUSTUP_TOOLCHAIN: "1.99.1"', representative_job)
 
@@ -1026,29 +1254,30 @@ class KotodamaPerfGateTests(unittest.TestCase):
             r"(?m)^\s*(?:cargo|cp|curl|install|ln|mv|python|rsync|touch|wget)\b",
         )
 
-        python_marker = "      - name: Install Python 3.12\n"
-        self.assertEqual(representative_job.count(python_marker), 1)
-        python_step = representative_job.split(python_marker, 1)[1].split(
+        setup_marker = "      - name: Install native benchmark prerequisites\n"
+        self.assertEqual(representative_job.count(setup_marker), 1)
+        setup_step = representative_job.split(setup_marker, 1)[1].split(
             "\n      - name:", 1
         )[0]
-        self.assertIn(
-            "uses: actions/setup-python@"
-            "6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
-            python_step,
-        )
-        self.assertIn('          python-version: "3.12"', python_step)
-        regression_test_marker = "      - name: Test regression checker\n"
+        self.assertIn("uses: ./candidate/.github/actions/setup-native-ci", setup_step)
+        self.assertIn("working-directory: candidate", setup_step)
+        self.assertIn("toolchain: 1.99.1", setup_step)
+        self.assertIn("runs-on: ubuntu-24.04", representative_job)
+        self.assertNotIn("self-hosted", representative_job)
+        self.assertIn('".github/actions/setup-native-ci/**"', workflow)
+        pull_request = workflow.split("  pull_request:\n", 1)[1].split(
+            "  workflow_dispatch:", 1
+        )[0]
+        for source in (
+            "scripts/ci_private_fixture_root.py",
+            "pytests/scripts/ci_private_fixture_root_test.py",
+        ):
+            self.assertIn(f'      - "{source}"\n', pull_request)
         self.assertLess(
-            representative_job.index(python_marker),
-            representative_job.index(regression_test_marker),
+            representative_job.index(setup_marker),
+            representative_job.index("      - name: Test regression checker\n"),
         )
 
-        toolchain_marker = "      - name: Install Rust toolchain\n"
-        self.assertEqual(representative_job.count(toolchain_marker), 1)
-        toolchain_step = representative_job.split(toolchain_marker, 1)[1].split(
-            "\n      - name:", 1
-        )[0]
-        self.assertIn("          toolchain: 1.99.1", toolchain_step)
         self.assertNotIn("Install the candidate benchmark harness", workflow)
         self.assertNotIn(
             "cp candidate/crates/ivm/benches/bench_kotodama.rs", workflow
@@ -1092,22 +1321,10 @@ class KotodamaPerfGateTests(unittest.TestCase):
         base_step = workflow.split(base_marker, 1)[1].split(
             "\n      - name:", 1
         )[0]
-        self.assertIn(
-            "cargo bench --locked --jobs 1 -p ivm --bench bench_kotodama",
-            base_step,
-        )
-        self.assertTrue(
-            all(
-                line.strip().startswith("cargo bench --locked --jobs 1 ")
-                for line in base_step.splitlines()
-                if line.strip().startswith("cargo bench ")
-            )
-        )
-        self.assertIn("--bench queries -- typed_core_query_", base_step)
-        self.assertIn(
-            "-p iroha_core --features bench,iroha-core-tests --bench queries",
-            base_step,
-        )
+        self.assertIn("python3 candidate/scripts/kotodama_perf_bundle.py measure", base_step)
+        self.assertIn("--label base", base_step)
+        self.assertIn("--revision-root baseline --candidate-root candidate", base_step)
+        self.assertNotIn("cargo bench", base_step)
 
         candidate_marker = "      - name: Measure candidate revision\n"
         self.assertEqual(workflow.count(candidate_marker), 1)
@@ -1117,18 +1334,10 @@ class KotodamaPerfGateTests(unittest.TestCase):
         candidate_step = workflow.split(candidate_marker, 1)[1].split(
             "\n      - name:", 1
         )[0]
-        self.assertTrue(
-            all(
-                line.strip().startswith("cargo bench --locked --jobs 1 ")
-                for line in candidate_step.splitlines()
-                if line.strip().startswith("cargo bench ")
-            )
-        )
-        self.assertIn("--bench queries -- typed_core_query_", candidate_step)
-        self.assertIn(
-            "-p iroha_core --features bench,iroha-core-tests --bench queries",
-            candidate_step,
-        )
+        self.assertIn("python3 candidate/scripts/kotodama_perf_bundle.py measure", candidate_step)
+        self.assertIn("--label candidate", candidate_step)
+        self.assertIn("--revision-root candidate --candidate-root candidate", candidate_step)
+        self.assertNotIn("cargo bench", candidate_step)
         self.assertNotIn("KOTODAMA_BASE_FILTER", workflow)
 
         enforcement_marker = "      - name: Enforce five-percent ceiling\n"
@@ -1196,25 +1405,37 @@ class KotodamaPerfGateTests(unittest.TestCase):
         self.assertIn("scripts/regenerate_kotodama_goldens.py", release_gate)
         self.assertIn("--check", release_gate)
         self.assertIn(
-            "--koto ../target-kotodama-perf/debug/koto", release_gate
+            '--koto "$RUNNER_TEMP/kotodama-artifact-tools/koto"', release_gate
         )
         self.assertIn(
-            "--admission-tool ../target-kotodama-perf/debug/ivm_artifact_admit", release_gate
+            '--admission-tool "$RUNNER_TEMP/kotodama-artifact-tools/ivm_artifact_admit"',
+            release_gate,
         )
         self.assertNotIn("--skip-runtime-manifest-check", release_gate)
         self.assertNotIn("--skip-contract-tests", release_gate)
 
         build_marker = "      - name: Build canonical Kotodama release tools\n"
         self.assertEqual(workflow.count(build_marker), 1)
+        stage_marker = "      - name: Stage private single-link Kotodama tools\n"
+        self.assertEqual(workflow.count(stage_marker), 1)
+        stage_step = workflow.split(stage_marker, 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn("scripts/stage_kotodama_artifact_tools.py", stage_step)
+        self.assertIn('--build-directory "$CARGO_TARGET_DIR/debug"', stage_step)
+        self.assertIn('--output "$RUNNER_TEMP/kotodama-artifact-tools"', stage_step)
+        self.assertLess(workflow.index(build_marker), workflow.index(stage_marker))
+        self.assertLess(workflow.index(stage_marker), workflow.index(marker))
         self.assertLess(
             workflow.index(enforcement_marker), workflow.index(seal_marker)
         )
         self.assertLess(
             workflow.index(seal_marker), workflow.index(upload_marker)
         )
-        self.assertLess(
-            workflow.index(upload_marker), workflow.index(build_marker)
-        )
+        self.assertIn("needs: [prepare-baseline, prepare-candidate, kotodama-artifact-gate]", representative_job)
+        artifact_job = workflow.split("  kotodama-artifact-gate:\n", 1)[1]
+        self.assertIn(build_marker, artifact_job)
+        self.assertIn(marker, artifact_job)
         build_step = workflow.split(build_marker, 1)[1].split(marker, 1)[0]
         self.assertIn(
             "cargo build --locked -p kotodama_toolchain --bin koto -p ivm_artifact_admission "
@@ -1223,7 +1444,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         )
         self.assertIn("python3 scripts/check_kotodama_docs.py", build_step)
         self.assertIn(
-            "--koto ../target-kotodama-perf/debug/koto", build_step
+            '--koto "$RUNNER_TEMP/kotodama-artifact-tools/koto"', build_step
         )
         self.assertIn("bash scripts/check_no_legacy_codec.sh", workflow)
         self.assertIn("npm test --prefix javascript/iroha_js", workflow)

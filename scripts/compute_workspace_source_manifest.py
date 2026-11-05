@@ -915,6 +915,10 @@ def _validate_symlink_graph(symlinks: Mapping[bytes, bytes]) -> None:
 
 
 def _open_root_directory(path: Path, label: str) -> tuple[int, os.stat_result]:
+    # Source seals require descriptor-relative POSIX custody. Windows artifact
+    # evidence has its separate clean-index owner; it cannot replace this walk.
+    if os.name != "posix":
+        raise SourceSealError("source seals require the POSIX descriptor-relative walk")
     before = path.lstat()
     if not stat.S_ISDIR(before.st_mode) or stat.S_ISLNK(before.st_mode):
         raise SourceSealError(f"{label} must be a real directory")

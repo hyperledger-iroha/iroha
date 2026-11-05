@@ -333,11 +333,29 @@ fn parent_namespace_replacement_and_restored_mutation_remain_rejected() {
     let owner = OwnerDirectory::open_or_create(temporary.path().join("owner")).unwrap();
     let batch = pending(&owner, "batch").seal().unwrap();
     let path = batch.path().to_owned();
+    // Darwin can require owner write access to rename the directory itself.
+    // The adversary restores the sealed mode before every custody assertion.
+    #[cfg(target_vendor = "apple")]
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
     std::fs::rename(&path, owner.path().join("moved")).unwrap();
+    #[cfg(target_vendor = "apple")]
+    std::fs::set_permissions(
+        owner.path().join("moved"),
+        std::fs::Permissions::from_mode(0o500),
+    )
+    .unwrap();
     std::fs::create_dir(&path).unwrap();
     assert!(batch.revalidate().is_err());
     std::fs::remove_dir(&path).unwrap();
+    #[cfg(target_vendor = "apple")]
+    std::fs::set_permissions(
+        owner.path().join("moved"),
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
     std::fs::rename(owner.path().join("moved"), &path).unwrap();
+    #[cfg(target_vendor = "apple")]
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o500)).unwrap();
     assert!(batch.revalidate().is_err());
     let fresh = ReaderDirectory::open(owner.path())
         .unwrap()

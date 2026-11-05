@@ -211,7 +211,7 @@ unsafe fn write_len(out: *mut c_uint, value: usize) -> Result<(), c_int> {
 /// Every output pointer that would be written on success must be aligned and
 /// valid for one `c_uint`. Pointer ranges must be representable without
 /// wrapping the address space. Overlapping outputs are permitted as input to
-/// the preflight and return [`ERR_BUFFER_OVERLAP`] before any write occurs.
+/// the preflight and return `ERR_BUFFER_OVERLAP` before any write occurs.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn soranet_mlkem_parameters(
     suite_id: c_uint,
@@ -254,7 +254,7 @@ pub unsafe extern "C" fn soranet_mlkem_parameters(
 /// # Safety
 /// Each buffer must be valid for its declared length and occupy a non-wrapping
 /// address range. Overlapping buffers are permitted as input to the preflight
-/// and return [`ERR_BUFFER_OVERLAP`] before Rust references are formed;
+/// and return `ERR_BUFFER_OVERLAP` before Rust references are formed;
 /// disjointness is required only for a successful operation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn soranet_mlkem_generate_keypair(
@@ -315,7 +315,7 @@ pub unsafe extern "C" fn soranet_mlkem_generate_keypair(
 /// # Safety
 /// Each buffer must be valid for its declared length and occupy a non-wrapping
 /// address range. Overlapping ranges are permitted as input to the preflight
-/// and return [`ERR_BUFFER_OVERLAP`] before Rust references are formed;
+/// and return `ERR_BUFFER_OVERLAP` before Rust references are formed;
 /// disjointness is required only for a successful operation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn soranet_mlkem_encapsulate(
@@ -398,7 +398,7 @@ pub unsafe extern "C" fn soranet_mlkem_encapsulate(
 /// Input pointers must reference valid encodings and output buffers must match
 /// the suite's lengths. Every range must be non-wrapping. An output that
 /// overlaps either input is permitted as input to the preflight and returns
-/// [`ERR_BUFFER_OVERLAP`] before Rust references are formed. The two read-only
+/// `ERR_BUFFER_OVERLAP` before Rust references are formed. The two read-only
 /// inputs may overlap each other.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn soranet_mlkem_decapsulate(
@@ -476,7 +476,7 @@ pub unsafe extern "C" fn soranet_mlkem_decapsulate(
 /// Every output pointer that would be written on success must be aligned and
 /// valid for one `c_uint`. Pointer ranges must be representable without
 /// wrapping the address space. Overlapping outputs are permitted as input to
-/// the preflight and return [`ERR_BUFFER_OVERLAP`] before any write occurs.
+/// the preflight and return `ERR_BUFFER_OVERLAP` before any write occurs.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn soranet_mldsa_parameters(
     suite_id: c_uint,
@@ -515,7 +515,7 @@ pub unsafe extern "C" fn soranet_mldsa_parameters(
 /// # Safety
 /// Each buffer must be valid for its declared length and occupy a non-wrapping
 /// address range. Overlapping buffers are permitted as input to the preflight
-/// and return [`ERR_BUFFER_OVERLAP`] before Rust references are formed;
+/// and return `ERR_BUFFER_OVERLAP` before Rust references are formed;
 /// disjointness is required only for a successful operation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn soranet_mldsa_generate_keypair(
@@ -576,7 +576,7 @@ pub unsafe extern "C" fn soranet_mldsa_generate_keypair(
 /// Input pointers must reference valid buffers and the signature buffer must
 /// match the suite length. Every range must be non-wrapping. A signature output
 /// that overlaps either input is permitted as input to the preflight and
-/// returns [`ERR_BUFFER_OVERLAP`] before Rust references are formed. The two
+/// returns `ERR_BUFFER_OVERLAP` before Rust references are formed. The two
 /// read-only inputs may overlap each other; a null message pointer is permitted
 /// only for length zero.
 #[unsafe(no_mangle)]

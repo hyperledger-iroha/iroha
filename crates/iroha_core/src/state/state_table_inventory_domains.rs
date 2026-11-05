@@ -217,6 +217,11 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Name,
+        reason: "Exact reserved credential-registration input wire name, carried by an opaque envelope and not registered as an executable instruction. It identifies one candidate input layout; it computes no State digest, creates no authoritative ballot State and grants no ballot qualification or execution authority",
+        literals: &[r"iroha.governance.parliament.credential.register.v1"],
+    },
+    OtherDomains {
+        usage: Use::Name,
         reason: "JSON schema names emitted by the test-only SCCP forgery-evidence, governance and liability reference generators. These label fixture records rather than hashing their bytes; retaining exact classification does not exempt fixture sources from scanning",
         literals: &[
             r"iroha.sccp.forgery_evidence.v1",
@@ -1471,8 +1476,8 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha.parameters.v1",
             r"iroha.runtime.endorsed_change_set_proposal.v1",
             r"iroha.world.lthash16.v1",
-            r"iroha:runtime:addition:v1\0",
             r"iroha:ironwood:qualification-evidence:v1\0",
+            r"iroha:runtime:addition:v1\0",
             r"iroha:runtime:baseline:v1\0",
             r"iroha:runtime:definition:v1\0",
             r"iroha:runtime:ironwood:v1\0",
@@ -1481,8 +1486,9 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Record,
-        reason: "Identities and signature domains of live-upgrade lifecycle records (specs/live_runtime_upgrades.md §6, §7, §13): change sets and the release signers' provenance endorsements of them, validator support attestations with the release digests and committees they bind, adoption trust anchors, and emergency containment with its panel endorsements. Each hashes or signs one canonical record or a release's build status and implemented definitions; none commits to State content",
+        reason: "Identities and signature domains of live-upgrade lifecycle records (specs/live_runtime_upgrades.md §6, §7, §13): change sets and the release signers' provenance endorsements of them, validator support attestations with the release digests and committees they bind, adoption trust anchors, and emergency containment with its panel endorsements. Each hashes or signs one canonical record or a release's build status and implemented definitions; none commits to State content. The adoption-attestation domain signs the exact record ID and validator; signature coverage alone authenticates neither the supplied committee nor governance, State import or startup authority",
         literals: &[
+            r"iroha:runtime:adoption-attestation:v1\0",
             r"iroha:runtime:adoption:v1\0",
             r"iroha:runtime:change-set-endorsement:v1\0",
             r"iroha:runtime:change-set:v1\0",

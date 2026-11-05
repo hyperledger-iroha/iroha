@@ -9982,7 +9982,35 @@ fn anonymous_ballot_tags_hash_records_without_an_authoritative_state_owner() {
             .iter()
             .map(|(path, text)| (path.as_str(), text.as_str())),
     );
-    assert!(scan.unlisted_domains.is_empty());
+    assert!(
+        scan.unlisted_domains.is_empty(),
+        "{:?}",
+        scan.unlisted_domains
+    );
+    let registration_path = format!("{MODULE}/registration_input.rs");
+    let registration_wire =
+        iroha_data_model::governance::anonymous_ballot::RegisterParliamentCredentialV1::WIRE_ID;
+    assert_eq!(
+        domain_owners().get(registration_wire),
+        Some(&DomainOwner::Other(Use::Name)),
+        "the opaque candidate input names a layout, not authoritative ballot State"
+    );
+    assert_eq!(
+        scan.literal_uses.get(registration_wire),
+        Some(&BTreeMap::from([(registration_path.clone(), 1)])),
+        "the reserved wire name retains its exact defining source and occurrence"
+    );
+    let registration_source = source(&registration_path);
+    let shadow_wire = "iroha.governance.parliament.credential.register.shadow.v1";
+    let changed = format!("{registration_source}\nconst SHADOW: &str = \"{shadow_wire}\";\n");
+    assert_eq!(
+        scan_sources([(registration_path.as_str(), changed.as_str())])
+            .unlisted_domains
+            .into_iter()
+            .collect::<Vec<_>>(),
+        [format!("{shadow_wire} in {registration_path}")],
+        "classifying one opaque wire name cannot exempt another under its prefix"
+    );
     for (tag, _) in &tags {
         assert!(
             scan.literal_uses.contains_key(tag),
@@ -10037,9 +10065,53 @@ fn anonymous_ballot_tags_hash_records_without_an_authoritative_state_owner() {
             );
         }
     }
+    // The linked registration verifier prepares candidate-only borrowed values.
+    // It does not open ballot execution or create an authoritative ballot State owner.
     assert!(
-        !source("crates/iroha_core/Cargo.toml").contains("iroha_parliament_ballot"),
-        "the node depends on a ballot crate: review the anonymous-ballot tag classification"
+        !iroha_data_model::governance::anonymous_ballot::parliament_ballot_qualified_v1(),
+        "binding ballots remain unqualified"
+    );
+    assert_eq!(
+        crate::tx::anonymous_ballot_unavailable().reason(),
+        ivm::error::ExecutionDeferral::VerifierInitializationUnavailable,
+        "candidate registration preparation must not supply a ballot verifier"
+    );
+}
+
+/// Adoption attestations sign supplied records without authenticating State or startup.
+#[test]
+fn adoption_attestation_domain_keeps_its_exact_record_owner() {
+    let path = "crates/iroha_data_model/src/runtime/adoption.rs";
+    let text = source(path);
+    let scan = scan_sources([(path, text.as_str())]);
+    assert!(
+        scan.unlisted_domains.is_empty(),
+        "{:?}",
+        scan.unlisted_domains
+    );
+    let literal = r"iroha:runtime:adoption-attestation:v1\0";
+    assert_eq!(
+        iroha_data_model::runtime::adoption::ADOPTION_ATTESTATION_DOMAIN,
+        b"iroha:runtime:adoption-attestation:v1\0"
+    );
+    assert_eq!(
+        domain_owners().get(literal),
+        Some(&DomainOwner::Other(Use::Record))
+    );
+    assert_eq!(
+        scan.literal_uses.get(literal),
+        Some(&BTreeMap::from([(path.to_owned(), 1)])),
+        "the original signing domain retains its exact defining source and occurrence"
+    );
+    let shadow = r"iroha:runtime:adoption-attestation:shadow:v1\0";
+    let changed = format!("{text}\nconst SHADOW: &str = r\"{shadow}\";\n");
+    assert_eq!(
+        scan_sources([(path, changed.as_str())])
+            .unlisted_domains
+            .into_iter()
+            .collect::<Vec<_>>(),
+        [format!("{shadow} in {path}")],
+        "classifying one attestation record must not exempt another domain under its prefix"
     );
 }
 

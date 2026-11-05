@@ -20,7 +20,7 @@ fn block_header_golden_bytes() {
     // The default policy is pinned against Core's compiled ZK/SCCP inputs.
     // The current layout includes the execution-context and beacon commitment slots.
     let expected: &[u8] = &hex!(
-        "0801000000000000000100010001000100010001000839300000000000000800000000000000005201500100010001000601040100000042014001640105015001fb01590127011d011001c001b2018d0191011d014a013101660192018801ce013f01eb01a7015601370179011a012e01de011d0129011f010601000100"
+        "08010000000000000001000100010001000100010008393000000000000008000000000000000052015001000100010006010401000000420140019101d301b101b10108016301400151019001a401ab012d0178013801bc01a2012b01d90184010801a0013f01e001f801de01ff01dc013501c2014d01df017a01000100"
     );
     assert_eq!(bytes.as_slice(), expected);
     let mut cursor = expected;
@@ -33,4 +33,45 @@ fn block_header_golden_bytes() {
         BlockHeader::decode_all(&mut without_beacon).is_err(),
         "a header without the required beacon commitment slot must be rejected",
     );
+}
+
+#[test]
+fn endorsed_runtime_upgrade_frame_identity() {
+    use iroha_data_model::{
+        isi::governance::ProposeEndorsedRuntimeUpgradeProposal,
+        runtime::lifecycle::{ChangeSetId, RuntimeUpgradeActionV1},
+    };
+    let ins = ProposeEndorsedRuntimeUpgradeProposal {
+        action: RuntimeUpgradeActionV1::Cancel(ChangeSetId([0x19; 32])),
+        provenance: Vec::new(),
+    };
+    // This declaration was added after the original frame-owner capture.
+    // Pin its own current identity without inventing historical observations.
+    assert_eq!(
+        <ProposeEndorsedRuntimeUpgradeProposal as norito::NoritoSchema>::nominal_name(),
+        "iroha_data_model::isi::governance::ProposeEndorsedRuntimeUpgradeProposal"
+    );
+    let identity = [
+        0x8b, 0x05, 0x06, 0x9e, 0xaf, 0xde, 0x39, 0x32, 0x4c, 0xef, 0x2f, 0x79, 0x25, 0x6a, 0xbd,
+        0xc1,
+    ];
+    assert_eq!(
+        norito::schema::identity::frame_hash::<ProposeEndorsedRuntimeUpgradeProposal>(),
+        identity
+    );
+    let frame = norito::encode_canonical(&ins).expect("encode endorsed proposal frame");
+    assert_eq!(
+        norito::core::Header::read(frame.as_slice()).unwrap().schema,
+        identity
+    );
+    let decoded: ProposeEndorsedRuntimeUpgradeProposal =
+        norito::decode_canonical(&frame).expect("decode endorsed proposal frame");
+    assert_eq!(decoded, ins);
+    assert_eq!(norito::encode_canonical(&decoded).unwrap(), frame);
+    let mut wrong_schema = frame;
+    wrong_schema[6] ^= 1;
+    assert!(matches!(
+        norito::decode_canonical::<ProposeEndorsedRuntimeUpgradeProposal>(&wrong_schema),
+        Err(norito::Error::SchemaMismatch)
+    ));
 }

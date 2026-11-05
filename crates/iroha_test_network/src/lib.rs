@@ -180,6 +180,17 @@ fn random_soranet_transport_key_pair_distinct_from(streaming: &KeyPair) -> KeyPa
 }
 pub use crate::config::genesis as genesis_factory;
 
+/// Prepare the default signed genesis and return native validation failures as typed errors.
+///
+/// Uses the same preparation path as [`genesis_factory`] and [`NetworkBuilder`].
+/// Negative genesis fixtures can inspect the original rejection before any peer starts;
+/// this does not bypass preparation or establish node or network qualification.
+///
+/// # Errors
+/// Returns the original native validation error when an authored genesis instruction,
+/// policy, or execution result is invalid.
+pub use crate::config::try_genesis as try_genesis_factory;
+
 /// Build a signed custom genesis with post-topology instructions and defer
 /// transaction execution to [`NetworkBuilder`].
 ///
@@ -1065,7 +1076,7 @@ pub enum ParliamentBeaconSignerMode {
     Valid,
     /// Do not install a global-beacon partial signer for this validator.
     Absent,
-    /// Broadcast a deliberately proof-invalid share without admitting it locally.
+    /// Return a proof-invalid provider share that native own-share admission must reject.
     Invalid,
 }
 
@@ -3509,6 +3520,37 @@ impl Network {
             .first()
             .expect("there is at least one peer")
             .client()
+    }
+    /// Bind a newly created peer to this network's exact genesis and client policy.
+    ///
+    /// This prepares clients for an explicitly joining peer without adding its vote
+    /// to the committee or changing the network's signed genesis.
+    ///
+    /// # Errors
+    /// Rejects a foreign environment, a previously started or attached peer, or
+    /// a source identity that no longer matches the network's signed genesis.
+    pub fn attach_peer(&self, peer: &NetworkPeer) -> Result<()> {
+        if peer.dir.parent() != Some(self.env.dir.as_path()) {
+            return Err(eyre!(
+                "joining peer belongs to a different test environment"
+            ));
+        }
+        if peer.runs_count.load(Ordering::Acquire) != 0 || peer.retained_client.get().is_some() {
+            return Err(eyre!("joining peer must be attached before its first use"));
+        }
+        let source = self
+            .peers
+            .first()
+            .and_then(|source| source.client_config.get())
+            .ok_or_else(|| eyre!("test network has no bound client identity"))?;
+        if source.chain != self.chain_id() || source.network_id != self.network_id() {
+            return Err(eyre!(
+                "test network client identity differs from its signed genesis"
+            ));
+        }
+        peer.client_config
+            .set(source.clone())
+            .map_err(|_| eyre!("joining peer already has an immutable client identity"))
     }
     /// Chain ID of the network
     pub fn chain_id(&self) -> ChainId {
@@ -11715,6 +11757,49 @@ mod tests {
     }
 
     #[test]
+    fn joining_peer_retains_exact_network_identity_and_refuses_rebinding() -> Result<()> {
+        let mut network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
+        let peer = NetworkPeer::builder().build(network.env());
+        assert!(peer.client_config.get().is_none());
+        network.attach_peer(&peer)?;
+        let selected = peer.client_config.get().unwrap();
+        let source = network.peers()[0].client_config.get().unwrap();
+        assert_eq!(selected.chain, network.chain_id());
+        assert_eq!(selected.network_id, network.network_id());
+        assert_eq!(selected.chain_discriminant, source.chain_discriminant);
+        assert_eq!(selected.policy.status_timeout, source.policy.status_timeout);
+        assert_eq!(
+            selected.policy.request_timeout,
+            source.policy.request_timeout
+        );
+        assert_eq!(selected.policy.ttl, source.policy.ttl);
+        assert_eq!(*peer.client().client().network_id(), network.network_id());
+        assert!(network.attach_peer(&peer).is_err());
+
+        let foreign_root = tempdir()?;
+        let foreign = NetworkPeer::builder().build(&Environment {
+            dir: foreign_root.path().to_path_buf(),
+        });
+        assert!(network.attach_peer(&foreign).is_err());
+        assert!(foreign.client_config.get().is_none());
+
+        let started = NetworkPeer::builder().build(network.env());
+        started.runs_count.store(1, Ordering::Release);
+        assert!(network.attach_peer(&started).is_err());
+        assert!(started.client_config.get().is_none());
+
+        let unbound = NetworkPeer::builder().build(network.env());
+        network.consensus_profile.chain_id = ChainId::from("changed-joining-source");
+        assert!(network.attach_peer(&unbound).is_err());
+        assert!(unbound.client_config.get().is_none());
+        assert_eq!(
+            peer.client_config.get().unwrap().network_id,
+            selected.network_id
+        );
+        Ok(())
+    }
+
+    #[test]
     fn generated_peer_base_config_parses_without_retired_load_publisher() -> Result<()> {
         let dir = tempdir()?;
         let environment = Environment {
@@ -16739,7 +16824,9 @@ mod tests {
         assert_eq!(peer.restart_genesis_file(false), Some(later_genesis_path));
         Ok(())
     }
-    fn parse_peer_run_config(path: &Path) -> Result<iroha_config::parameters::actual::Root> {
+    fn parse_peer_run_genesis_hash(
+        path: &Path,
+    ) -> Result<HashOf<iroha_data_model::block::BlockHeader>> {
         let reader = ConfigReader::new()
             .with_env(MockEnv::default())
             .read_toml_with_extends(path)
@@ -16747,7 +16834,10 @@ mod tests {
         let user = reader
             .read_and_complete::<iroha_config::parameters::user::Root>()
             .map_err(|error| eyre!("complete peer run config {}: {error:?}", path.display()))?;
+        // Validate the complete configuration here, but keep its large value out of
+        // the async caller's frame while that caller also builds native genesis.
         user.parse()
+            .map(|config| config.genesis.expected_hash)
             .map_err(|error| eyre!("parse peer run config {}: {error:?}", path.display()))
     }
     #[tokio::test(flavor = "current_thread")]
@@ -16845,9 +16935,7 @@ mod tests {
             .write_run_config(layers.iter().map(Cow::Borrowed), None, None, 0)
             .await?;
         assert_eq!(
-            parse_peer_run_config(&no_local_genesis_config)?
-                .genesis
-                .expected_hash,
+            parse_peer_run_genesis_hash(&no_local_genesis_config)?,
             expected_hash,
             "a first start without a local artifact must still receive the operator anchor"
         );
@@ -16861,9 +16949,7 @@ mod tests {
             )
             .await?;
         assert_eq!(
-            parse_peer_run_config(&bootstrap_config)?
-                .genesis
-                .expected_hash,
+            parse_peer_run_genesis_hash(&bootstrap_config)?,
             expected_hash
         );
         let genesis_path = peer
@@ -16881,9 +16967,7 @@ mod tests {
             )
             .await?;
         assert_eq!(
-            parse_peer_run_config(&restart_config)?
-                .genesis
-                .expected_hash,
+            parse_peer_run_genesis_hash(&restart_config)?,
             expected_hash,
             "restart must reuse the independently provisioned anchor"
         );

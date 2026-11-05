@@ -66,18 +66,14 @@ async fn taikai_video_segments_require_resolution_metadata() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-    crate::da::admission::install(&network, 7).await?;
+    integration_tests::da::admission::install_producer_policy(&network, LaneId::SINGLE, 7).await?;
     let mut metadata = base_taikai_metadata();
     metadata.retain(|entry| entry.key != META_TRACK_RESOLUTION);
     let request = build_taikai_request(&network, metadata);
     let response = post_ingest(&network, &request).await?;
     let status = response.status();
     let body = response.text().await?;
-    assert_eq!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "unexpected DA response: {body}"
-    );
+    assert_eq!(status, StatusCode::BAD_REQUEST, "DA refusal body: {body}");
     assert!(
         body.contains(META_TRACK_RESOLUTION),
         "expected missing-resolution error, got body: {body}"
@@ -100,17 +96,13 @@ async fn taikai_segments_require_signing_manifest_metadata() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-    crate::da::admission::install(&network, 7).await?;
+    integration_tests::da::admission::install_producer_policy(&network, LaneId::SINGLE, 7).await?;
     let metadata = base_taikai_metadata();
     let request = build_taikai_request(&network, metadata);
     let response = post_ingest(&network, &request).await?;
     let status = response.status();
     let body = response.text().await?;
-    assert_eq!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "unexpected DA response: {body}"
-    );
+    assert_eq!(status, StatusCode::BAD_REQUEST, "DA refusal body: {body}");
     assert!(
         body.contains(META_SSM),
         "expected missing-SSM error, got body: {body}"
@@ -134,7 +126,7 @@ async fn taikai_audio_segments_require_audio_layout_metadata() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-    crate::da::admission::install(&network, 7).await?;
+    integration_tests::da::admission::install_producer_policy(&network, LaneId::SINGLE, 7).await?;
     let mut metadata = base_audio_metadata();
     metadata.retain(|entry| entry.key != META_TRACK_AUDIO_LAYOUT);
     metadata.retain(|entry| entry.key != META_TRACK_RESOLUTION);
@@ -142,11 +134,7 @@ async fn taikai_audio_segments_require_audio_layout_metadata() -> Result<()> {
     let response = post_ingest(&network, &request).await?;
     let status = response.status();
     let body = response.text().await?;
-    assert_eq!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "unexpected DA response: {body}"
-    );
+    assert_eq!(status, StatusCode::BAD_REQUEST, "DA refusal body: {body}");
     assert!(
         body.contains(META_TRACK_AUDIO_LAYOUT),
         "expected missing-audio-layout error, got body: {body}"
@@ -170,18 +158,14 @@ async fn taikai_ingest_latency_metadata_requires_integer() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-    crate::da::admission::install(&network, 7).await?;
+    integration_tests::da::admission::install_producer_policy(&network, LaneId::SINGLE, 7).await?;
     let mut metadata = base_taikai_metadata();
     metadata.push(metadata_utf8(META_TAIKAI_INGEST_LATENCY_MS, "not-a-number"));
     let request = build_taikai_request(&network, metadata);
     let response = post_ingest(&network, &request).await?;
     let status = response.status();
     let body = response.text().await?;
-    assert_eq!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "unexpected DA response: {body}"
-    );
+    assert_eq!(status, StatusCode::BAD_REQUEST, "DA refusal body: {body}");
     assert!(
         body.contains(META_TAIKAI_INGEST_LATENCY_MS),
         "expected ingest-latency parse error, got body: {body}"
@@ -204,18 +188,14 @@ async fn taikai_live_edge_drift_metadata_requires_integer() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-    crate::da::admission::install(&network, 7).await?;
+    integration_tests::da::admission::install_producer_policy(&network, LaneId::SINGLE, 7).await?;
     let mut metadata = base_taikai_metadata();
     metadata.push(metadata_utf8(META_TAIKAI_LIVE_EDGE_DRIFT_MS, "invalid"));
     let request = build_taikai_request(&network, metadata);
     let response = post_ingest(&network, &request).await?;
     let status = response.status();
     let body = response.text().await?;
-    assert_eq!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "unexpected DA response: {body}"
-    );
+    assert_eq!(status, StatusCode::BAD_REQUEST, "DA refusal body: {body}");
     assert!(
         body.contains(META_TAIKAI_LIVE_EDGE_DRIFT_MS),
         "expected live-edge drift parse error, got body: {body}"
@@ -239,18 +219,14 @@ async fn taikai_ingest_node_id_metadata_requires_utf8() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-    crate::da::admission::install(&network, 7).await?;
+    integration_tests::da::admission::install_producer_policy(&network, LaneId::SINGLE, 7).await?;
     let mut metadata = base_taikai_metadata();
     metadata.push(metadata_bytes(META_TAIKAI_INGEST_NODE_ID, vec![0xFF]));
     let request = build_taikai_request(&network, metadata);
     let response = post_ingest(&network, &request).await?;
     let status = response.status();
     let body = response.text().await?;
-    assert_eq!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "unexpected DA response: {body}"
-    );
+    assert_eq!(status, StatusCode::BAD_REQUEST, "DA refusal body: {body}");
     assert!(
         body.contains(META_TAIKAI_INGEST_NODE_ID),
         "expected ingest-node-id UTF-8 error, got body: {body}"
@@ -273,18 +249,14 @@ async fn taikai_ssm_payload_requires_caller_manifest() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-    crate::da::admission::install(&network, 7).await?;
+    integration_tests::da::admission::install_producer_policy(&network, LaneId::SINGLE, 7).await?;
     let mut metadata = base_taikai_metadata();
     metadata.push(metadata_bytes(META_SSM, vec![0xDE, 0xAD, 0xBE, 0xEF]));
     let request = build_taikai_request(&network, metadata);
     let response = post_ingest(&network, &request).await?;
     let status = response.status();
     let body = response.text().await?;
-    assert_eq!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "unexpected DA response: {body}"
-    );
+    assert_eq!(status, StatusCode::BAD_REQUEST, "DA refusal body: {body}");
     assert!(
         body.contains("norito_manifest"),
         "expected caller-manifest requirement, got body: {body}"

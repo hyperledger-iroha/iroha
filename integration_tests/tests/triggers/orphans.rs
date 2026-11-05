@@ -123,11 +123,24 @@ async fn set_up_trigger(
         )
         .expect("trigger action fixture satisfies validation invariants"),
     ));
+    let native_fee_asset =
+        iroha_genesis::signed_genesis_root_fee_policy(&network.genesis().0)?.fee_asset_id;
+    let fund_authority = Transfer::asset_quantity(
+        AssetId::new(native_fee_asset, iroha.client().account().clone()),
+        10_000_u32,
+        the_one_who_fails.clone(),
+    );
     let grant_register_trigger_permission = Grant::account_permission(
         CanRegisterTrigger {
             authority: the_one_who_fails.clone(),
         },
         the_one_who_fails.clone(),
+    );
+    let grant_account_removal = Grant::account_permission(
+        CanUnregisterAccount {
+            account: the_one_who_fails.clone(),
+        },
+        iroha.client().account().clone(),
     );
     let authority_client = network
         .peers()
@@ -137,23 +150,10 @@ async fn set_up_trigger(
     run_on_dedicated_thread({
         let client = iroha.clone();
         let create_the_one_who_fails: InstructionBox = create_the_one_who_fails.into();
-        let the_one_who_fails = the_one_who_fails.clone();
+        let fund_authority: InstructionBox = fund_authority.into();
         move || {
             client.submit_all::<InstructionBox>(
-                [
-                    create_failand,
-                    create_the_one_who_fails,
-                    Transfer::asset_quantity(
-                        AssetId::of(
-                            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
-                                .parse()?,
-                            client.client().account().clone(),
-                        ),
-                        100u32,
-                        the_one_who_fails.clone(),
-                    )
-                    .into(),
-                ],
+                [create_failand, create_the_one_who_fails, fund_authority],
                 iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )?;
             eyre::Result::<()>::Ok(())
@@ -166,13 +166,7 @@ async fn set_up_trigger(
             client.submit_all::<InstructionBox>(
                 [
                     grant_register_trigger_permission.into(),
-                    Grant::account_permission(
-                        CanUnregisterAccount {
-                            account: client.client().account().clone(),
-                        },
-                        iroha_test_samples::ALICE_ID.clone(),
-                    )
-                    .into(),
+                    grant_account_removal.into(),
                 ],
                 iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )?;

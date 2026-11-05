@@ -1,7 +1,8 @@
 //! CUDA GPU-assisted zstd helper for Norito.
 //!
-//! This crate exports the same C ABI as `gpuzstd_metal`, but under the `gpuzstd_cuda` artifact name
-//! so Unix/Windows Norito builds can load an in-tree CUDA helper directly. The CUDA path performs
+//! This crate exports the owner-qualified `gpuzstd_cuda_compress` and
+//! `gpuzstd_cuda_decompress` C ABI so Unix/Windows Norito builds can load the CUDA
+//! helper without colliding with the shared Metal dependency's C exports. The CUDA path performs
 //! deterministic match-finding and sequence generation on the GPU, then uses the shared zstd frame
 //! encoder for host-side frame assembly. Decode uses the shared frame decoder and falls back to the
 //! CPU zstd decoder for frames the in-crate decoder does not yet support.
@@ -200,7 +201,7 @@ unsafe fn decompress_ffi(src: *const u8, src_len: usize, dst: *mut u8, dst_len: 
 /// `src` must point to `src_len` readable bytes. `dst` must point to a writable buffer whose
 /// capacity is provided via `*dst_len`. `dst_len` must be non-null and writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn gpu_zstd_compress(
+pub unsafe extern "C" fn gpuzstd_cuda_compress(
     src: *const u8,
     src_len: usize,
     level: i32,
@@ -215,7 +216,7 @@ pub unsafe extern "C" fn gpu_zstd_compress(
 /// `src` must point to `src_len` readable bytes. `dst` must point to a writable buffer whose
 /// capacity is provided via `*dst_len`. `dst_len` must be non-null and writable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn gpu_zstd_decompress(
+pub unsafe extern "C" fn gpuzstd_cuda_decompress(
     src: *const u8,
     src_len: usize,
     dst: *mut u8,
@@ -242,7 +243,7 @@ mod tests {
         let mut out = vec![0u8; payload.len().saturating_mul(4).saturating_add(512)];
         let mut out_len = out.len();
         let rc = unsafe {
-            gpu_zstd_compress(
+            gpuzstd_cuda_compress(
                 payload.as_ptr(),
                 payload.len(),
                 level,
@@ -260,7 +261,7 @@ mod tests {
         let mut out = vec![0u8; expected_len.saturating_mul(2).saturating_add(256)];
         let mut out_len = out.len();
         let rc = unsafe {
-            gpu_zstd_decompress(
+            gpuzstd_cuda_decompress(
                 payload.as_ptr(),
                 payload.len(),
                 out.as_mut_ptr(),
@@ -306,7 +307,7 @@ mod tests {
         let mut out = [0u8; 64];
         let mut out_len = out.len();
         let rc = unsafe {
-            gpu_zstd_compress(
+            gpuzstd_cuda_compress(
                 std::ptr::null(),
                 payload.len(),
                 1,
@@ -316,7 +317,7 @@ mod tests {
         };
         assert_eq!(rc, RC_INVALID);
         let rc = unsafe {
-            gpu_zstd_compress(
+            gpuzstd_cuda_compress(
                 payload.as_ptr(),
                 payload.len(),
                 1,
@@ -326,7 +327,7 @@ mod tests {
         };
         assert_eq!(rc, RC_INVALID);
         let rc = unsafe {
-            gpu_zstd_decompress(
+            gpuzstd_cuda_decompress(
                 payload.as_ptr(),
                 payload.len(),
                 out.as_mut_ptr(),
@@ -339,11 +340,12 @@ mod tests {
     fn ffi_rejects_null_pointers_even_for_zero_length_buffers() {
         let mut out = [0u8; 8];
         let mut out_len = out.len();
-        let rc =
-            unsafe { gpu_zstd_compress(std::ptr::null(), 0, 1, out.as_mut_ptr(), &mut out_len) };
+        let rc = unsafe {
+            gpuzstd_cuda_compress(std::ptr::null(), 0, 1, out.as_mut_ptr(), &mut out_len)
+        };
         assert_eq!(rc, RC_INVALID);
         let rc =
-            unsafe { gpu_zstd_decompress(std::ptr::null(), 0, out.as_mut_ptr(), &mut out_len) };
+            unsafe { gpuzstd_cuda_decompress(std::ptr::null(), 0, out.as_mut_ptr(), &mut out_len) };
         assert_eq!(rc, RC_INVALID);
     }
     #[cfg(not(gpuzstd_cuda_available))]
@@ -356,7 +358,7 @@ mod tests {
         let mut out = [0xA5; 128];
         let mut out_len = out.len();
         let rc = unsafe {
-            gpu_zstd_compress(
+            gpuzstd_cuda_compress(
                 payload.as_ptr(),
                 payload.len(),
                 1,
@@ -374,7 +376,7 @@ mod tests {
         let mut out = [0u8; 1];
         let mut out_len = 0usize;
         let rc = unsafe {
-            gpu_zstd_compress(
+            gpuzstd_cuda_compress(
                 payload.as_ptr(),
                 payload.len(),
                 1,
@@ -385,7 +387,7 @@ mod tests {
         assert_eq!(rc, RC_NO_SPACE);
         let encoded = zstd::encode_all(Cursor::new(payload), 1).expect("cpu encode");
         let rc = unsafe {
-            gpu_zstd_decompress(
+            gpuzstd_cuda_decompress(
                 encoded.as_ptr(),
                 encoded.len(),
                 out.as_mut_ptr(),
@@ -401,7 +403,7 @@ mod tests {
         let mut out = [0xA5u8; 4];
         let mut out_len = out.len();
         let rc = unsafe {
-            gpu_zstd_decompress(
+            gpuzstd_cuda_decompress(
                 encoded.as_ptr(),
                 encoded.len(),
                 out.as_mut_ptr(),
@@ -414,7 +416,7 @@ mod tests {
         let invalid = [0u8, 1, 2, 3, 4, 5];
         let mut out_len = out.len();
         let rc = unsafe {
-            gpu_zstd_decompress(
+            gpuzstd_cuda_decompress(
                 invalid.as_ptr(),
                 invalid.len(),
                 out.as_mut_ptr(),
@@ -432,7 +434,7 @@ mod tests {
         let mut out = vec![0u8; payload.len()];
         let mut out_len = out.len();
         let rc = unsafe {
-            gpu_zstd_decompress(
+            gpuzstd_cuda_decompress(
                 encoded.as_ptr(),
                 encoded.len(),
                 out.as_mut_ptr(),
@@ -449,7 +451,7 @@ mod tests {
         let mut out = [0u8; 4];
         let mut out_len = out.len();
         let rc = unsafe {
-            gpu_zstd_compress(
+            gpuzstd_cuda_compress(
                 payload.as_ptr(),
                 payload.len(),
                 1,
@@ -468,7 +470,7 @@ mod tests {
         let mut encoded = vec![0u8; 64];
         let mut encoded_len = encoded.len();
         let rc = unsafe {
-            gpu_zstd_compress(
+            gpuzstd_cuda_compress(
                 payload.as_ptr(),
                 payload.len(),
                 1,
@@ -489,7 +491,7 @@ mod tests {
         let mut decoded = [0u8; 1];
         let mut decoded_len = decoded.len();
         let rc = unsafe {
-            gpu_zstd_decompress(
+            gpuzstd_cuda_decompress(
                 encoded.as_ptr(),
                 encoded.len(),
                 decoded.as_mut_ptr(),
@@ -514,7 +516,7 @@ mod tests {
         let mut exact = vec![0u8; encoded.len()];
         let mut exact_len = exact.len();
         let rc = unsafe {
-            gpu_zstd_compress(
+            gpuzstd_cuda_compress(
                 payload.as_ptr(),
                 payload.len(),
                 1,
@@ -532,7 +534,7 @@ mod tests {
         let mut out = [0u8; 8];
         let mut out_len = out.len();
         let rc = unsafe {
-            gpu_zstd_decompress(input.as_ptr(), input.len(), out.as_mut_ptr(), &mut out_len)
+            gpuzstd_cuda_decompress(input.as_ptr(), input.len(), out.as_mut_ptr(), &mut out_len)
         };
         assert_eq!(rc, RC_ZSTD);
     }
@@ -566,7 +568,7 @@ mod tests {
         let mut out = [0u8; 64];
         let mut out_len = out.len();
         let rc = unsafe {
-            gpu_zstd_decompress(
+            gpuzstd_cuda_decompress(
                 invalid.as_ptr(),
                 invalid.len(),
                 out.as_mut_ptr(),
@@ -584,7 +586,7 @@ mod tests {
             let mut out = [0x5Au8; 64];
             let mut out_len = out.len();
             let rc = unsafe {
-                gpu_zstd_decompress(
+                gpuzstd_cuda_decompress(
                     truncated.as_ptr(),
                     truncated.len(),
                     out.as_mut_ptr(),
@@ -603,7 +605,7 @@ mod tests {
         let mut out = [0u8; 4];
         let mut out_len = out.len();
         let rc = unsafe {
-            gpu_zstd_decompress(
+            gpuzstd_cuda_decompress(
                 encoded.as_ptr(),
                 encoded.len(),
                 out.as_mut_ptr(),
@@ -702,5 +704,68 @@ mod tests {
             .expect("GPUZSTD_CUDA_REQUIRE requires CUDA compression to succeed");
         let decoded = zstd::decode_all(Cursor::new(&compressed)).expect("cpu decode");
         assert_eq!(decoded, payload);
+    }
+}
+
+#[cfg(test)]
+mod c_abi_exports {
+    //! Verify the CUDA helper's exact C exports independently of Rust name mangling.
+
+    use std::{io::Cursor, ptr};
+
+    type CompressFn = unsafe extern "C" fn(*const u8, usize, i32, *mut u8, *mut usize) -> i32;
+    type DecompressFn = unsafe extern "C" fn(*const u8, usize, *mut u8, *mut usize) -> i32;
+
+    unsafe extern "C" {
+        #[link_name = "gpuzstd_cuda_compress"]
+        fn exported_compress(
+            src: *const u8,
+            src_len: usize,
+            level: i32,
+            dst: *mut u8,
+            dst_len: *mut usize,
+        ) -> i32;
+        #[link_name = "gpuzstd_cuda_decompress"]
+        fn exported_decompress(
+            src: *const u8,
+            src_len: usize,
+            dst: *mut u8,
+            dst_len: *mut usize,
+        ) -> i32;
+    }
+
+    #[test]
+    fn owner_qualified_exports_bind_cuda_and_preserve_cpu_decode() {
+        assert!(ptr::fn_addr_eq(
+            exported_compress as CompressFn,
+            crate::gpuzstd_cuda_compress as CompressFn
+        ));
+        assert!(ptr::fn_addr_eq(
+            exported_decompress as DecompressFn,
+            crate::gpuzstd_cuda_decompress as DecompressFn
+        ));
+        let payload = b"CUDA ABI owner remains distinct from the shared Metal codec";
+        let encoded = zstd::encode_all(Cursor::new(payload), 1).expect("CPU zstd encode");
+        let mut output = vec![0u8; payload.len()];
+        let mut output_len = output.len();
+        assert_eq!(
+            unsafe {
+                exported_decompress(
+                    encoded.as_ptr(),
+                    encoded.len(),
+                    output.as_mut_ptr(),
+                    &mut output_len,
+                )
+            },
+            0
+        );
+        assert_eq!(output_len, payload.len());
+        assert_eq!(output, payload);
+        assert_eq!(
+            unsafe { exported_compress(ptr::null(), 0, 1, output.as_mut_ptr(), &mut output_len) },
+            1
+        );
+        assert_eq!(output_len, payload.len());
+        assert_eq!(output, payload);
     }
 }

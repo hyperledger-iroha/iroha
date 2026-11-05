@@ -132,6 +132,21 @@
       "kind": "source-digests"
     },
     {
+      "path": "docs/validation/parliament_ballot_current_candidate_20261104/campaign/report.json",
+      "sha256": "ea32672b012c52e7da53273221dc45564100d3def969ee12b8da8a4d4d4d7a67",
+      "kind": "source-digests"
+    },
+    {
+      "path": "docs/validation/parliament_ballot_current_candidate_20261104/fatal-output/report.json",
+      "sha256": "71c68c85583a3a9715fea3425344a90115284664eaf22be7a078d59bd7c329c7",
+      "kind": "source-digests"
+    },
+    {
+      "path": "docs/validation/parliament_ballot_current_candidate_20261104/stack-v2/receipt.json",
+      "sha256": "07b863553d8df8f2ad3277b58fdbea6291017918f57f322b9780dce55ee3f29c",
+      "kind": "source-digests"
+    },
+    {
       "path": "docs/validation/parliament_ballot_current_correspondence/analysis/report.json",
       "sha256": "0e2d94bf99deb3314a1a0d3dee37070180b9ff1277b6aeb40cbfcd4814cb2207",
       "kind": "source-digests"
@@ -279,6 +294,16 @@
     {
       "path": "docs/validation/parliament_ballot_profile_bound/analysis/report.json",
       "sha256": "5f686d26ff0fa65cbf7bad03f46633377f91df442a716253bbb44b721e5d1e8b",
+      "kind": "source-digests"
+    },
+    {
+      "path": "docs/validation/parliament_ballot_resource_accounting_20261104/producer-metadata.json",
+      "sha256": "a3c393547e2db8ba59bf9ddd0355c75ffa69c61c9fcdad025dfd4e9eb6cd08cd",
+      "kind": "cargo-metadata"
+    },
+    {
+      "path": "docs/validation/parliament_ballot_resource_accounting_20261104/producer-receipt.json",
+      "sha256": "b89c01685238a5c617913c0efb55aaf618d7cfe1802ad8cd0c7cd7b37b6a5680",
       "kind": "source-digests"
     },
     {

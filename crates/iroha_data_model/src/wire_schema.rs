@@ -5,7 +5,7 @@
 //! descriptors, and the IVM ABI hash. Equality identifies these covered layouts
 //! and ABI; it makes no claim about undescribed opaque byte domains or semantic
 //! validation rules. This module renders and hashes the roots and supplies the
-//! block wire root ([`covered_wire_schema`], rooted at [`SignedBlock`]);
+//! block wire root ([`crate::wire_schema::covered_wire_schema`], rooted at [`SignedBlock`]);
 //! `iroha_core::release_identity::wire_schema_hash` adds the consensus wire root
 //! (`iroha_sumeragi::message::WireMessage` and native `Evidence` frames), then the
 //! canonical `ExecutionResultCommitment` payload root and the codec-owned

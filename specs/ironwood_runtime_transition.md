@@ -104,7 +104,7 @@ Read-only preflight: export the operator-selected network's `/v1/runtime/upgrade
 response to a local file, then run (from this clone, with its selected toolchain):
 
 ```sh
-CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$PWD/target" cargo run --offline --jobs 6 -p iroha_core --features node \
+CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$PWD/target" cargo run --offline --jobs 6 -p iroha_core --features node,dev-tools \
   --bin ironwood_activation_preflight -- runtime-upgrades.json H
 ```
 

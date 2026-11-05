@@ -244,7 +244,7 @@ impl<const INDEX: usize, T> norito::core::DecodeField<INDEX, T> for LocateHeader
 }
 
 #[test]
-fn original_header_alignment_refusal_and_inline_nonzero_invalidity_keep_their_actual_causes_and_original_counter()
+fn original_header_unaligned_field_refusal_and_inline_nonzero_invalidity_keep_their_actual_causes_and_original_counter()
  {
     use norito::core::DecodeRecordFields;
     let flags = header_flags::COMPACT_LEN;
@@ -287,6 +287,25 @@ fn original_header_alignment_refusal_and_inline_nonzero_invalidity_keep_their_ac
                 .sum::<usize>()
     );
     let zero = DecodeLimits::new(0, wire.len(), 0, 0, 64);
+    pool.set_limit_bytes(0);
+    let reserved = pool.reserved_bytes();
+    let (owning_valid, allocations) = measured(|| {
+        caller.with_limits(zero, zero, || {
+            decoder
+                .with_limits(zero, zero, || {
+                    norito::core::decode_field_canonical::<BlockHeader>(
+                        span.get(input.as_slice()).unwrap(),
+                    )
+                })
+                .unwrap()
+        })
+    });
+    assert_eq!(
+        allocations, 0,
+        "unaligned owning decode borrows its original payload"
+    );
+    assert_eq!(owning_valid.unwrap().unwrap(), (original, wire.len()));
+    assert_eq!(pool.reserved_bytes(), reserved);
     assert_eq!(
         decoder
             .with_limits(zero, zero, || BlockHeader::decode_inline_payload(
@@ -301,11 +320,11 @@ fn original_header_alignment_refusal_and_inline_nonzero_invalidity_keep_their_ac
     let pointer = input.as_slice().as_ptr();
     let hash = Hash::new(input.as_slice());
     let bytes = span.get(input.as_slice()).unwrap();
-    let copied_bytes = bytes.len();
-    let protocol = norito::canonical_decode_limits(copied_bytes);
-    pool.set_limit_bytes(0);
+    let payload_bytes = bytes.len();
+    let protocol = norito::canonical_decode_limits(payload_bytes);
+    let enclosing = DecodeLimits::new(0, payload_bytes - 1, 0, 0, 64);
     let (owning, allocations) = measured(|| {
-        caller.with_limits(zero, zero, || {
+        caller.with_limits(enclosing, enclosing, || {
             classify_decode_attempt(|| {
                 decoder
                     .with_limits(protocol, protocol, || {
@@ -317,7 +336,7 @@ fn original_header_alignment_refusal_and_inline_nonzero_invalidity_keep_their_ac
     });
     assert_eq!(
         allocations, 0,
-        "logical copy refusal must precede the actual heap allocation"
+        "the enclosing field ceiling must reject before malformed leaf decoding"
     );
     let owning = owning.unwrap().unwrap_err();
     assert_eq!(owning.kind(), DecodeAttemptErrorKind::EnclosingLimit);
@@ -327,11 +346,29 @@ fn original_header_alignment_refusal_and_inline_nonzero_invalidity_keep_their_ac
             .downcast_ref::<norito::Error>()
             .unwrap()
             .decode_resource_error(),
-        Some(DecodeResourceError::TotalAllocationExceeded {
-            attempted: copied_bytes as u64,
-            limit: 0
+        Some(DecodeResourceError::FieldLengthExceeded {
+            length: payload_bytes as u64,
+            limit: (payload_bytes - 1) as u64
         })
     );
+    let (owning_invalid, allocations) = measured(|| {
+        caller.with_limits(zero, zero, || {
+            classify_decode_attempt(|| {
+                decoder
+                    .with_limits(zero, zero, || {
+                        norito::core::decode_field_canonical::<BlockHeader>(bytes)
+                    })
+                    .unwrap()
+            })
+        })
+    });
+    assert_eq!(allocations, 0);
+    let owning_invalid = owning_invalid.unwrap().unwrap_err();
+    assert_eq!(owning_invalid.kind(), DecodeAttemptErrorKind::Invalid);
+    assert!(matches!(
+        owning_invalid.into_error(),
+        norito::Error::InvalidNonZero
+    ));
     let (inline, allocations) = measured(|| {
         classify_decode_attempt(|| {
             decoder
@@ -354,9 +391,9 @@ fn original_header_alignment_refusal_and_inline_nonzero_invalidity_keep_their_ac
     );
     assert_eq!(
         owning.into_error().decode_resource_error(),
-        Some(DecodeResourceError::TotalAllocationExceeded {
-            attempted: copied_bytes as u64,
-            limit: 0
+        Some(DecodeResourceError::FieldLengthExceeded {
+            length: payload_bytes as u64,
+            limit: (payload_bytes - 1) as u64
         })
     );
     assert_eq!(pool.reserved_bytes(), floor);

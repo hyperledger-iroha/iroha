@@ -239,6 +239,52 @@ def _js_string_expression(
     raise ValueError(f"unsupported JS instruction binding expression for {name}: {expression}")
 
 
+def _js_instruction_constant_imports(path: Path, source: str) -> Dict[str, str]:
+    """Resolve the one shared binding prefix from its explicit local JS owner.
+
+    This is declarative source inspection, never JavaScript execution or general
+    module loading. Other imported expressions remain unsupported.
+    """
+
+    symbol = "TEXT_IROHA_DATA_MODEL"
+    imports = [
+        (names, module)
+        for names, _, module in re.findall(
+            r"(?m)^import\s*\{([^{}]*)\}\s*from\s*([\"'])([^\"'\n]+)\2\s*;",
+            source,
+        )
+        if re.search(rf"\b{symbol}\b", names)
+    ]
+    if not imports:
+        return {}
+    if len(imports) != 1:
+        raise ValueError(f"repeated JS instruction constant import {symbol}")
+    names, module = imports[0]
+    entries = [entry.strip() for entry in names.split(",")]
+    if entries[-1] == "":
+        entries.pop()
+    if (
+        module != "./noritoValueCodecs.js"
+        or entries.count(symbol) != 1
+        or any(re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", entry) is None for entry in entries)
+    ):
+        raise ValueError(f"unsupported JS instruction constant import {symbol}: malformed or renames imported JS instruction constant {symbol}")
+    owner = path.with_name("noritoValueCodecs.js")
+    try:
+        owner_source = owner.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"cannot read JS instruction constant owner {owner}; {path} imports {symbol} from missing module {owner.name}") from exc
+    exports = [
+        entry.strip()
+        for names in re.findall(r"(?m)^export\s*\{([^{}]*)\}\s*;", owner_source)
+        for entry in names.split(",")
+        if re.search(rf"\b{symbol}\b", entry)
+    ]
+    if exports != [symbol]:
+        raise ValueError(f"missing or repeated JS instruction constant export {symbol}; {owner} must declare and export {symbol} exactly once")
+    return {symbol: _js_string_expression(owner, owner_source, symbol)}
+
+
 def _instruction_names_from_module(path: Path, family: str, namespace: str) -> List[str]:
     """Read the two imported declarative instruction-name inventories."""
 
@@ -271,6 +317,7 @@ def _extract_js_instruction_type_map(path: Path) -> Dict[str, str]:
     """Resolve every declared JS outer wire ID to its exact Rust inner type."""
 
     source = path.read_text(encoding="utf-8")
+    _js_instruction_constant_imports(path, source)
     if re.search(r"\bconst INNER_SCHEMA_HASH_BY_WIRE_ID\b", source):
         raise ValueError(f"{path} retains a separate instruction schema-hash map")
     marker = "const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({"

@@ -19,10 +19,11 @@
 //! endorsements and absences) with their generated client configurations; this module never
 //! signs for a citizen.
 
+#[cfg(unix)]
+use std::io::Write as _;
 use std::{
     collections::BTreeSet,
     fs,
-    io::Write as _,
     path::{Path, PathBuf},
 };
 

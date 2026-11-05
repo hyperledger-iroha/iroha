@@ -119,6 +119,16 @@ impl KagamiLocalnet {
         let mut children = Vec::with_capacity(peers as usize);
         for idx in 0..peers {
             let config_path = out_dir.join(format!("peer{idx}.toml"));
+            let snapshot_dir = out_dir
+                .join("storage")
+                .join(format!("peer{idx}"))
+                .join("snapshot");
+            // Kura authenticates its empty root before the daemon creates snapshot storage.
+            // Precreating this child would make a fresh generated ledger non-pristine.
+            assert!(
+                !snapshot_dir.exists(),
+                "fresh localnet has no snapshot storage"
+            );
             let log_path = out_dir.join(format!("peer{idx}.log"));
             let log_file = fs::File::create(&log_path)
                 .wrap_err_with(|| format!("create log file {}", log_path.display()))?;

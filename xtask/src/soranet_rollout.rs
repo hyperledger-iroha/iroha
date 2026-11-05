@@ -444,7 +444,7 @@ fn sanitize_label(input: &str) -> String {
 }
 fn compact_timestamp_format() -> &'static [FormatItem<'static>] {
     static FORMAT: std::sync::LazyLock<Vec<FormatItem<'static>>> = std::sync::LazyLock::new(|| {
-        time::format_description::parse("[year][month][day]T[hour][minute][second]Z")
+        time::format_description::parse_borrowed::<1>("[year][month][day]T[hour][minute][second]Z")
             .expect("valid timestamp format")
     });
     &FORMAT
@@ -473,6 +473,14 @@ mod tests {
     use super::*;
     use iroha_crypto::{PublicKey, Signature};
     use tempfile::tempdir;
+    #[test]
+    fn compact_timestamp_format_preserves_utc_capture_directory_names() {
+        let timestamp = time::macros::datetime!(2026-11-03 00:01:02 UTC);
+        assert_eq!(
+            timestamp.format(compact_timestamp_format()).unwrap(),
+            "20261103T000102Z"
+        );
+    }
     #[test]
     fn capture_rollout_writes_checked_signature_metadata() {
         let temp = tempdir().expect("tempdir");

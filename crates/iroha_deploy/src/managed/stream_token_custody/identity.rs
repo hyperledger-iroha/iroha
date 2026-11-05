@@ -98,6 +98,7 @@ impl ManagedStreamTokenCustody {
         if original.selection.provider_id != self.authority.provider_id()? {
             return Err(invalid("original custody provider differs"));
         }
+        self.verify_retained_source(&original.selection, &original.source, &verifier)?;
         self.validate_original_action(original, purpose, &verifier, plan)
     }
     // Action-owned decodes run only after the original checkpoint and Global root checks.

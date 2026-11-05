@@ -713,7 +713,7 @@ fn the_packing_rule_and_large_input_digests_reproduce_the_g1_vectors() {
     let fixture = wallet_vectors();
     let poseidon = at(&fixture, &["poseidon"]);
     let kats = at(poseidon, &["kats"]).as_array().expect("kats");
-    assert_eq!(kats.len(), 59);
+    assert_eq!(kats.len(), 58);
     let one_two_three = [1_u64, 2, 3].map(Fp::from).to_vec();
     for kat in kats {
         let label = at(kat, &["domain"]).as_str().expect("domain");

@@ -88,11 +88,12 @@ mod tests {
                     Some(norito::encode_canonical(&typed).unwrap())
                 );
                 assert!(project_instruction(&input).is_none());
-                let envelope = norito::decode_canonical(&row.envelope_norito).unwrap();
-                let retired = norito::encode_canonical(&SubmitPrivacyProofV1::new(
-                    (envelope).try_into().expect("frozen Exact12 test input"),
-                ))
-                .unwrap();
+                let envelope = norito::decode_canonical::<
+                    iroha_data_model::privacy::PrivacyProofEnvelopeV1,
+                >(&row.envelope_norito)
+                .expect("canonical wire envelope");
+                let retired =
+                    norito::encode_canonical(&SubmitPrivacyProofV1::new(envelope)).unwrap();
                 assert!(project_instruction(&retired).is_none());
             } else {
                 let typed = norito::decode_canonical::<SubmitPrivacyProofV1>(&input)
@@ -135,7 +136,7 @@ mod tests {
             .iter()
             .find(|row| row.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1)
             .unwrap();
-        let x509: iroha_data_model::privacy::PrivacyRuntimeProofEnvelopeV1 =
+        let x509: iroha_data_model::privacy::PrivacyProofEnvelopeV1 =
             norito::decode_canonical(&x509.envelope_norito).unwrap();
         let generic: SubmitPrivacyProofV1 =
             norito::decode_canonical(&fixtures.rows[0].submit_proof_instruction_norito).unwrap();

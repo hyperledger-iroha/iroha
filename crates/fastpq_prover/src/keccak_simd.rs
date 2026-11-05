@@ -229,7 +229,7 @@ unsafe fn vector_permute(state: &mut [[u64; 2]; 25]) {
                 _mm_srl_epi64(a, _mm_cvtsi64_si128(64 - i64::from(n))),
             )
         };
-        let duplicate = |v: u64| -> V { _mm_set1_epi64x(v as i64) };
+        let duplicate = |v: u64| -> V { _mm_set1_epi64x(v.cast_signed()) };
         let mut c = Clearing::new([[0u64; 2]; 5]);
         let mut d = Clearing::new([[0u64; 2]; 5]);
         let mut b = Clearing::new([[0u64; 2]; 25]);

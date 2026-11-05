@@ -4,7 +4,7 @@ use super::*;
 use iroha_fs::{
     FileMetadata, FileSnapshot, OwnerDirectory, PrivateDirectory, ReaderDirectory, RetainedFile,
 };
-use std::io::{Seek as _, SeekFrom};
+use std::io::SeekFrom;
 
 /// A captured source keeps its original and complete native snapshot through streaming.
 #[derive(Debug)]

@@ -388,9 +388,9 @@ macro_rules! define_release_audit_projection_v1 {
         }
     ) => {
         #[doc = concat!(
-            "Return a canonical BFV full-bootstrap release-audit projection from [`",
+            "Return a canonical BFV full-bootstrap release-audit projection from `",
             stringify!($source),
-            "`].\n\n# Errors\nReturns [`BfvError`] when canonical release-audit admission or digesting fails."
+            "`.\n\n# Errors\nReturns [`BfvError`] when canonical release-audit admission or digesting fails."
         )]
         $(#[$meta])*
         pub fn $name($($arg: $arg_ty),*) -> Result<$output, BfvError> {

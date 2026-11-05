@@ -136,7 +136,7 @@ impl PublicInput {
 }
 
 #[cfg(windows)]
-pub(crate) struct PublicInput {
+pub struct PublicInput {
     file: iroha_fs::RetainedFile,
     snapshot: iroha_fs::FileSnapshot,
     pub(crate) bytes: Vec<u8>,
@@ -458,7 +458,7 @@ mod windows_tests {
     #[test]
     fn native_public_input_pins_original_and_rejects_links_and_excessive_length() {
         let (_temporary, args, _trust) = fixture();
-        let input = PublicInput::read(&args.peers).unwrap();
+        let input: super::super::PublicInput = PublicInput::read(&args.peers).unwrap();
         let original = input.bytes.clone();
         assert!(fs::write(&args.peers, b"[]").is_err());
         assert!(fs::rename(&args.peers, args.peers.with_extension("displaced")).is_err());

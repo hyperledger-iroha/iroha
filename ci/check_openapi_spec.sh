@@ -588,6 +588,9 @@ build_unsigned_replay_bundle() {
     --verify --root "${source_root}" --no-writable-paths
   verify_replay_source_identity "${source_root}"
   cp -R "${REPLAY_BASELINE}/." "${output_dir}/"
+  # cp inherits the sealed baseline's read-only modes. Only this fresh,
+  # independent output copy is mutable while assembling generated aliases.
+  chmod -R u+w "${output_dir}"
   cp "${generated_dir}/torii.json" "${output_dir}/torii.json"
   cp "${generated_dir}/manifest.json" "${output_dir}/manifest.json"
   sync_unsigned_replay_bundle \

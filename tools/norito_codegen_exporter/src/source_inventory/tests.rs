@@ -98,17 +98,24 @@ fn function_local_items_and_nested_generic_slots_are_preserved() {
 #[test]
 fn direct_and_generic_manual_impls_retain_exact_self_and_trait_spans() {
     let report = inspect(
-        "use norito::NoritoSerialize as Serialize;\nimpl<T> Serialize for Wrapper<T> {}\nimpl Wrapper<u8> {}\n",
+        "use norito::NoritoSerialize as Serialize;\nimpl<T> Serialize for Wrapper<T> {}\nimpl Wrapper<u8> {}\n#[cfg(feature = \"thread\")] impl !core::marker::Send for Wrapper<u16> {}\n",
     );
-    assert_eq!(report.implementations.len(), 2);
+    assert_eq!(report.implementations.len(), 3);
     let item = &report.implementations[0];
     assert_eq!(item.self_type.source, "Wrapper<T>");
+    assert_eq!(item.trait_site.as_ref().unwrap().span.source, "Serialize");
     assert_eq!(
         item.trait_site.as_ref().unwrap().candidate_families,
         ["serialize"]
     );
     assert_eq!(item.generics[0].identifier, "T");
     assert!(report.implementations[1].trait_site.is_none());
+    let negative = &report.implementations[2];
+    assert_eq!(negative.self_type.source, "Wrapper<u16>");
+    let site = negative.trait_site.as_ref().unwrap();
+    assert_eq!(site.span.source, "core::marker::Send");
+    assert_eq!(site.conditions, ["#[cfg(feature = \"thread\")]"]);
+    assert!(negative.span.source.contains("impl !core::marker::Send"));
 }
 
 #[test]

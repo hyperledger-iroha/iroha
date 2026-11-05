@@ -438,18 +438,18 @@ struct CodegenField {
 ///
 /// - If found invalid `transparent` attribute
 /// - If it's impossible to infer the type for transparent attribute
-#[manyhow]
 #[proc_macro_derive(IntoSchema, attributes(schema, codec, norito))]
-pub fn schema_derive(input: TokenStream) -> TokenStream {
+pub fn schema_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input: TokenStream = input.into();
     let original_input = input.clone();
     let mut emitter = Emitter::new();
     let Some(input) = emitter.handle(syn::parse2::<syn::DeriveInput>(input)) else {
-        return emitter.finish_token_stream();
+        return emitter.finish_token_stream().into();
     };
     let Some(mut input) =
         emitter.handle(darling_result(IntoSchemaInput::from_derive_input(&input)))
     else {
-        return emitter.finish_token_stream();
+        return emitter.finish_token_stream().into();
     };
     // first of all, `IntoSchema` impls are required for all generic type parameters to be able to call `type_name` on them
     add_bounds_to_all_generic_parameters(
@@ -483,10 +483,12 @@ pub fn schema_derive(input: TokenStream) -> TokenStream {
             )
         }
     };
-    emitter.finish_token_stream_with(quote! {
-        #impl_type_id
-        #impl_schema
-    })
+    emitter
+        .finish_token_stream_with(quote! {
+            #impl_type_id
+            #impl_schema
+        })
+        .into()
 }
 fn impl_transparent_into_schema(
     emitter: &mut Emitter,

@@ -2345,7 +2345,15 @@ impl LinuxTunDevice {
             return Err(error);
         }
         let file = unsafe { fs::File::from_raw_fd(fd) };
-        let file = AsyncFd::new(file)?;
+        Self::from_owned_file(file, name).map_err(BackendError::Io)
+    }
+    #[cfg(any(target_os = "linux", test))]
+    fn from_owned_file(file: fs::File, name: String) -> io::Result<Self> {
+        // SAFETY: `File` owns a valid, stable descriptor. This private device
+        // retains that owner in `AsyncFd` until deregistration/drop, and its I/O
+        // methods only borrow the file; none replaces or closes the descriptor.
+        // On registration failure, conversion drops the retained file owner.
+        let file = unsafe { AsyncFd::register(file) }.map_err(io::Error::from)?;
         Ok(Self { file, name })
     }
     #[cfg(not(target_os = "linux"))]
@@ -3402,6 +3410,55 @@ mod tests {
         assert_ne!(flags & LINUX_IFF_TUN_EXCL, 0);
         verify_requested_tun_name("svpn0", "svpn0").expect("exact kernel name");
         assert!(verify_requested_tun_name("svpn0", "svpn1").is_err());
+    }
+    #[tokio::test]
+    async fn tun_file_registration_retains_io_and_closes_on_drop() {
+        let (socket, mut peer) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+        socket.set_nonblocking(true).expect("nonblocking device");
+        peer.set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("bounded peer read");
+        let file = fs::File::from(std::os::fd::OwnedFd::from(socket));
+        let descriptor = file.as_raw_fd();
+        let device = LinuxTunDevice::from_owned_file(file, "fixture".to_owned())
+            .expect("register owned descriptor");
+        assert_eq!(device.name(), "fixture");
+        for payload in [b"first", b"again"] {
+            peer.write_all(payload).expect("write inbound bytes");
+            let mut received = [0; 5];
+            let mut count = 0;
+            while count < received.len() {
+                let read = timeout(Duration::from_secs(5), device.recv(&mut received[count..]))
+                    .await
+                    .expect("bounded device read")
+                    .expect("read inbound bytes");
+                assert_ne!(read, 0);
+                count += read;
+            }
+            assert_eq!(&received, payload);
+            assert_eq!(device.file.get_ref().as_raw_fd(), descriptor);
+        }
+        let mut count = 0;
+        while count < b"reply".len() {
+            let written = timeout(Duration::from_secs(5), device.send(&b"reply"[count..]))
+                .await
+                .expect("bounded device write")
+                .expect("write outbound bytes");
+            assert_ne!(written, 0);
+            count += written;
+        }
+        let mut received = [0; 5];
+        peer.read_exact(&mut received).expect("read outbound bytes");
+        assert_eq!(&received, b"reply");
+        drop(device);
+        assert_eq!(peer.read(&mut received).expect("peer observes close"), 0);
+    }
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn tun_file_registration_preserves_poll_registration_error() {
+        let file = fs::File::open("/dev/null").expect("non-pollable file");
+        let error = LinuxTunDevice::from_owned_file(file, "fixture".to_owned())
+            .expect_err("epoll must reject a non-pollable file");
+        assert_eq!(error.raw_os_error(), Some(nix::libc::EPERM));
     }
     #[test]
     fn route_and_address_commands_fail_on_preexisting_host_state() {

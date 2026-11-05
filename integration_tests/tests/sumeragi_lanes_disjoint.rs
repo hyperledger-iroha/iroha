@@ -155,6 +155,25 @@ fn disjoint_genesis(
     )
 }
 
+#[test]
+fn disjoint_built_network_preserves_its_authored_paid_fee_policy() -> Result<()> {
+    let _guard = sandbox::serial_guard();
+    init_instruction_registry();
+    let network = disjoint_builder()?.build();
+    let fees = iroha_genesis::signed_genesis_root_fee_policy(&network.genesis().0)?;
+    assert_eq!(
+        fees,
+        iroha_config::parameters::defaults::nexus::fees::genesis_policy()
+    );
+    assert!(fees.base_fee.is_zero());
+    assert!(fees.per_byte_fee.is_zero());
+    assert!(!fees.per_instruction_fee.is_zero());
+    assert!(!fees.per_gas_unit_fee.is_zero());
+    assert_eq!(network.validators().len(), MEMBERS);
+    assert_eq!(network.committee_validators().len(), LANES.len() * MEMBERS);
+    Ok(())
+}
+
 /// Check signer ownership on the original observed processes, including global lane observers.
 fn ready_frontiers(network: &Network, peers: &[&NetworkPeer]) -> Result<[u64; 2]> {
     ensure!(!peers.is_empty(), "no peers selected for lane progress");

@@ -48,7 +48,7 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    // Submit two transactions so the first fetch-size=1 page has a real
+    // Submit two transactions so the first one-row page has a real
     // continuation even if genesis is not included in the block-header query.
     for name in ["blkcheck_a", "blkcheck_b"] {
         client.submit(
@@ -108,7 +108,7 @@ fn transactions_iterable_non_empty() -> Result<()> {
     };
     let client = network.client();
     // At minimum, genesis should exist. Poll briefly to allow any background commits
-    // to surface before asserting on the iterable query results.
+    // to surface before asserting on the transaction collection results.
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let snapshot = client
@@ -217,7 +217,7 @@ fn find_triggers_includes_registered() -> Result<()> {
         trig_id.clone(),
         Action::new(
             vec![InstructionBox::from(instr)],
-            Repeats::Exactly(1),
+            Repeats::Indefinitely,
             ALICE_ID.clone(),
             TimeEventFilter::new(ExecutionTime::PreCommit),
         )
@@ -457,9 +457,9 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
     assert!(
         err.chain().any(|cause| matches!(
             cause.downcast_ref::<iroha::data_model::ValidationFail>(),
-            Some(iroha::data_model::ValidationFail::NotPermitted(message)) if message == &expected
+            Some(iroha::data_model::ValidationFail::NotPermitted(reason)) if reason == &expected
         )),
-        "Unexpected error: {err:?}"
+        "unexpected rejection for the depleted trigger: {err:?}"
     );
     // And confirm it's not among active IDs
     let snapshot = client

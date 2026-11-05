@@ -986,6 +986,7 @@ fn admit_native_platform(admitted: &HostAdmission) -> Result<()> {
     Ok(())
 }
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 /// Native captures use the same retained interpreter and four-source capsule as effects.
 pub(in crate::taira_public_reset) fn inspect_native_owner_inputs(
     host: &host_pair::ResetHostV1,

@@ -237,10 +237,10 @@ async fn assert_no_global_beacon_pulse_at(
     label: &str,
     network: &iroha_test_network::Network,
 ) -> Result<()> {
-    let block = exact_block(client, height, network)
+    let (_, authenticated) = finality::certified_block(network, client, height)
         .await
-        .wrap_err_with(|| format!("{label}: exact finalized block is unavailable"))?;
-    if block.global_beacon_pulse().is_some() {
+        .wrap_err_with(|| format!("{label}: exact certified block is unavailable"))?;
+    if authenticated.commitment().beacon.is_some() {
         return Err(eyre!(
             "{label}: finalized block {height} unexpectedly carries a global beacon pulse"
         ));
@@ -340,6 +340,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     let beacon_record = deterministic_parliament_beacon_key_record_v1(
         network.network_id(),
         &ordered_roster,
+        &ordered_validator_signers(&network, &ordered_roster)?,
         &beacon_budget,
     )
     .wrap_err("derive mandatory NPoS beacon fixture")?;
@@ -386,14 +387,15 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     )
     .await?;
     network.ensure_blocks(activation_height).await?;
+    observe_exact_height(&client, activation_height, "threshold-key activation").await?;
     assert_eq!(current_height(&client).await?, activation_height);
 
     let boundary_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS;
     let pulse_height = boundary_height - 1;
-    advance_to_autonomous_predecessor(
+    advance_to_height_with_carriers(
         &network,
         &client,
-        pulse_height,
+        pulse_height - 1,
         "initial mandatory pre-boundary pulse",
     )
     .await?;
@@ -404,11 +406,25 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         &network,
     )
     .await?;
+    admit_parliament_height_carrier(
+        &client,
+        [Log::new(
+            Level::INFO,
+            "carry the initial mandatory pre-boundary pulse".to_owned(),
+        )],
+    )
+    .await?;
     network.ensure_blocks(pulse_height).await?;
+    observe_exact_height(
+        &client,
+        pulse_height,
+        "initial mandatory pre-boundary pulse",
+    )
+    .await?;
     assert_eq!(
         current_height(&client).await?,
         pulse_height,
-        "the mandatory threshold-beacon effect must autonomously finalize its exact pre-boundary height",
+        "the mandatory threshold beacon must finalize the carrier at its exact pre-boundary height",
     );
 
     let mut pulses = Vec::with_capacity(network.peers().len());
@@ -452,8 +468,18 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     )
     .await?;
     network.ensure_blocks(boundary_height).await?;
+    observe_exact_height(&client, boundary_height, "first native boundary").await?;
     assert_eq!(current_height(&client).await?, boundary_height);
+    admit_parliament_height_carrier(
+        &client,
+        [Log::new(
+            Level::INFO,
+            "carry the first native successor epoch".to_owned(),
+        )],
+    )
+    .await?;
     network.ensure_blocks(boundary_height + 1).await?;
+    observe_exact_height(&client, boundary_height + 1, "first native successor").await?;
     assert_eq!(current_height(&client).await?, boundary_height + 1);
     for peer in network.peers() {
         let status = read_on_dedicated_thread({
@@ -489,7 +515,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         .checked_add(MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS)
         .and_then(|height| height.checked_sub(1))
         .ok_or_else(|| eyre!("successor mandatory pulse height overflow"))?;
-    advance_to_autonomous_predecessor(
+    advance_to_height_with_carriers(
         &network,
         &client,
         successor_pulse_height,
@@ -547,7 +573,21 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     )
     .await?;
     network.ensure_blocks(second_boundary_height).await?;
+    admit_parliament_height_carrier(
+        &client,
+        [Log::new(
+            Level::INFO,
+            "carry the second native successor epoch".to_owned(),
+        )],
+    )
+    .await?;
     network.ensure_blocks(second_boundary_height + 1).await?;
+    observe_exact_height(
+        &client,
+        second_boundary_height + 1,
+        "second native successor",
+    )
+    .await?;
     for peer in network.peers() {
         let status = read_on_dedicated_thread({
             let client = peer.client().client().clone();
@@ -771,6 +811,7 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
     let beacon_record = deterministic_parliament_beacon_key_record_v1(
         network.network_id(),
         &ordered_roster,
+        &ordered_validator_signers(&network, &ordered_roster)?,
         &beacon_budget,
     )
     .wrap_err("derive fail-closed NPoS beacon fixture")?;
@@ -805,6 +846,7 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
     )
     .await?;
     network.ensure_blocks(activation_height).await?;
+    observe_exact_height(&client, activation_height, "threshold-key activation").await?;
     assert_eq!(current_height(&client).await?, activation_height);
 
     let pulse_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS - 1;
@@ -814,8 +856,25 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
         Some(predecessor_height),
         "the retained deterministic fixture must expose one committed predecessor after activation",
     );
+    advance_to_height_with_carriers(
+        &network,
+        &client,
+        predecessor_height,
+        "fail-closed mandatory pulse predecessor",
+    )
+    .await?;
     network.ensure_blocks(predecessor_height).await?;
     assert_eq!(current_height(&client).await?, predecessor_height);
+    // Admission returns before application: this real work must remain pending
+    // when the exact native pulse has fewer than its required valid shares.
+    admit_parliament_height_carrier(
+        &client,
+        [Log::new(
+            Level::INFO,
+            "pending work for the below-threshold mandatory pulse".to_owned(),
+        )],
+    )
+    .await?;
     let pulse_status_is_active = |status: &SumeragiStatus| -> bool {
         assert!(
             !status.is_halted(),
@@ -1113,10 +1172,8 @@ async fn four_validator_pending_parliament_request_never_blocks_unrelated_work_o
     // No beacon key session is installed, and the signer profile stays below the exact
     // threshold of two for any session: no validator set can produce a threshold pulse
     // at any height of this corridor.
-    // TODO: also run this corridor with an installed, below-threshold key session (as the
-    // fail-closed corridor installs it) once the test-network beacon fixture
-    // `deterministic_parliament_beacon_key_record_v1` is rebuilt on the all-edge DKG; it is
-    // currently rejected with "test Parliament beacon cryptographic fixture is invalid".
+    // The separate fail-closed corridor installs an authenticated key with fewer
+    // than two valid signers; this corridor covers the distinct absent-key case.
     for peer in network.peers() {
         let (_, horizon) = require_beacon_horizon(
             &peer.client(),
@@ -1506,6 +1563,7 @@ fn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface() {
         concat!(".", "submit("),
         concat!(".", "submit_all("),
         concat!("client.", "status()"),
+        concat!("global_beacon_", "pulse()"),
         concat!("tokio::task::", "block_in_place"),
         concat!("tokio::task::", "spawn_blocking"),
         concat!("Cast", "PlainBallot"),

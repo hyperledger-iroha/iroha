@@ -19,7 +19,7 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
     let client = network.client();
     let alice_id_str = format!("{}", *iroha_test_samples::ALICE_ID);
     // Submit a tx (registering a dummy asset def) to ensure at least one Alice-authored tx exists
-    iroha_test_network::read_on_dedicated_thread({
+    integration_tests::sync::spawn_blocking({
         let client = client.clone();
         move || {
             client.submit(
@@ -39,7 +39,7 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
             )
         }
     })
-    .await?;
+    .await??;
     network.ensure_blocks(2).await?;
     // Build filter: authority == ALICE_ID (canonical encoded literal) AND timestamp_ms >= 0
     let eq_filter = norito::json::object([

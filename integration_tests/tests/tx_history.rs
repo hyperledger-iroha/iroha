@@ -18,7 +18,6 @@ use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
-use iroha_primitives::nonzero;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use iroha_torii::{
@@ -26,10 +25,47 @@ use iroha_torii::{
     canonical_network_request_signature_message, signature_header_value,
 };
 use std::{
+    num::NonZeroU64,
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::time::{Instant, sleep};
+
+const SEALED_REVEAL_CADENCE_MS: u64 = 10_000;
+
+fn sealed_reveal_payload_retry_parameter() -> Parameter {
+    Parameter::Sumeragi(SumeragiParameter::PayloadRetryIntervalMs(
+        NonZeroU64::new(SEALED_REVEAL_CADENCE_MS).unwrap(),
+    ))
+}
+
+#[test]
+fn sealed_reveal_cadence_preserves_the_signed_payload_retry_bound() {
+    let parameter = sealed_reveal_payload_retry_parameter();
+    let encoded = norito::to_bytes(&parameter).expect("encode signed retry parameter");
+    let decoded: Parameter = norito::decode_from_bytes(&encoded).expect("decode retry parameter");
+    assert_eq!(parameter, decoded);
+    let Parameter::Sumeragi(SumeragiParameter::PayloadRetryIntervalMs(retry)) = decoded else {
+        panic!("the sealed reveal fixture must author its signed payload retry interval");
+    };
+    let chain = iroha_sumeragi::types::ChainParams {
+        block_time: SEALED_REVEAL_CADENCE_MS,
+        payload_retry_interval: retry.get(),
+        ..Default::default()
+    };
+    let transport = iroha_sumeragi::pacemaker::minimum_transport_frame_bytes(chain.max_block_bytes);
+    iroha_sumeragi::pacemaker::validate_chain(&chain, transport)
+        .expect("ten-second reveal cadence must retain a valid signed retry bound");
+    let old = iroha_sumeragi::types::ChainParams {
+        payload_retry_interval: iroha_sumeragi::types::ChainParams::default()
+            .payload_retry_interval,
+        ..chain
+    };
+    assert_eq!(
+        iroha_sumeragi::pacemaker::validate_chain(&old, transport),
+        Err(iroha_sumeragi::api::ConfigError::BlockTimeAbovePayloadRetry)
+    );
+}
 #[test]
 fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()> {
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
@@ -94,6 +130,7 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
             result?;
         } else {
             let error = result.expect_err("mint into the missing definition must reject");
+            ensure!(error.downcast_ref::<iroha_data_model::transaction::error::TransactionRejectionReason>().is_some(), "history requires authenticated rejection: {error:?}");
             ensure!(
                 error
                     .chain()
@@ -503,16 +540,17 @@ async fn wait_for_all_peers_to_observe_reveals(
     loop {
         let mut all_observed = true;
         for (index, client) in clients.iter().enumerate() {
+            let bounded = client.with_request_deadline(deadline.into_std())?;
             let peer_result = async {
                 for marker in marker_keys {
                     ensure!(
-                        account_has_metadata(client, marker).await?,
+                        account_has_metadata(&bounded, marker).await?,
                         "metadata marker {marker} is missing"
                     );
                 }
-                let amount = numeric_asset_value(client, asset_id).await?;
+                let amount = numeric_asset_value(&bounded, asset_id).await?;
                 ensure!(
-                    amount == *expected_amount,
+                    &amount == expected_amount,
                     "asset amount is {amount}, expected {expected_amount}"
                 );
                 Ok::<(), eyre::Report>(())
@@ -646,10 +684,8 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new()
             .with_min_peers(4)
-            .with_block_cadence(Duration::from_secs(10))
-            .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-                SumeragiParameter::PayloadRetryIntervalMs(nonzero!(10_000_u64)),
-            )))
+            .with_block_cadence(Duration::from_millis(SEALED_REVEAL_CADENCE_MS))
+            .with_genesis_instruction(SetParameter::new(sealed_reveal_payload_retry_parameter()))
             .with_sync_timeout(Duration::from_secs(480)),
         stringify!(sealed_reveal_adversarial_cases_hold_on_multi_peer_network),
     )

@@ -7,12 +7,7 @@ use iroha_config_base::toml::WriteExt;
 use iroha_core::sumeragi::network_topology::Topology;
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::*;
-use iroha_data_model::{
-    Level,
-    asset::AssetDefinition,
-    isi::Register,
-    parameter::{BlockParameter, SumeragiParameter},
-};
+use iroha_data_model::{Level, asset::AssetDefinition, isi::Register, parameter::BlockParameter};
 use iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition;
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
@@ -936,11 +931,8 @@ async fn block_after_genesis_is_synced() -> Result<()> {
             let network = NetworkBuilder::new()
                 .with_base_seed(SEED)
                 .with_peers(7)
-                // Align test timing with the new consensus pipeline (3s block, 6s commit).
-                .with_block_cadence(Duration::from_secs(9))
-                .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-                    SumeragiParameter::PayloadRetryIntervalMs(nonzero!(9_000_u64)),
-                )))
+                // Keep the signed cadence inside the default five-second payload retry window.
+                .with_block_cadence(Duration::from_secs(3))
                 .build();
             let network = sandbox::SerializedNetwork::new(network, guard);
             let relay = P2pRelay::for_network(&network);
@@ -1045,7 +1037,8 @@ impl UnstableNetwork {
             ));
         }
         let account_id = ALICE_ID.clone();
-        let asset_owning_domain = DomainId::try_new("wonderland", "universal").expect("Valid");
+        let asset_owning_domain =
+            DomainId::try_new("unstable_network", "universal").expect("Valid");
         let asset_definition_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             asset_owning_domain.clone(),
             "unstable".parse().expect("Valid"),
@@ -1053,7 +1046,7 @@ impl UnstableNetwork {
         let Some((network, mut relay)) =
             run_or_skip_on_sandbox_panic("unstable_network::run", || {
                 let guard = sandbox::serial_guard();
-                let network = self.build_network(&asset_definition_id);
+                let network = self.build_network(&asset_definition_id, &asset_owning_domain);
                 let network = sandbox::SerializedNetwork::new(network, guard);
                 let relay = P2pRelay::for_network(&network);
                 (network, relay)
@@ -1180,7 +1173,11 @@ impl UnstableNetwork {
         );
         selected
     }
-    fn build_network(&self, asset_definition_id: &AssetDefinitionId) -> Network {
+    fn build_network(
+        &self,
+        asset_definition_id: &AssetDefinitionId,
+        asset_owning_domain: &DomainId,
+    ) -> Network {
         let builder = NetworkBuilder::new()
             .with_auto_populated_trusted_peers()
             .with_peers(self.peers)
@@ -1213,11 +1210,12 @@ impl UnstableNetwork {
             .with_genesis_instruction(SetParameter::new(Parameter::Block(
                 BlockParameter::MaxTransactions(nonzero!(1u64)),
             )))
+            .with_genesis_instruction(Register::domain(Domain::new(asset_owning_domain.clone())))
             .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
                 asset_definition_id.clone(),
                 "unstable".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(asset_owning_domain.clone()),
             )))
             .with_genesis_instruction(Grant::account_permission(
                 CanMintAssetWithDefinition {

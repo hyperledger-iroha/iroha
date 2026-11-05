@@ -265,18 +265,26 @@ pub fn anchor_witness(
     } else {
         Some(
             forgery::keeper::anchor_witness(view, height.get(), budget, control).map_err(
-                |error| match error {
-                    forgery::ForgeryVerificationError::EvidenceExpired => {
-                        SccpNativeReadError::Pruned("completed anchor root")
+                |error| {
+                    use forgery::keeper::AnchorWitnessReadError::{Source, Verification};
+                    match error {
+                        Source(original) => SccpNativeReadError::History(original),
+                        Verification(forgery::ForgeryVerificationError::EvidenceExpired) => {
+                            SccpNativeReadError::Pruned("completed anchor root")
+                        }
+                        Verification(forgery::ForgeryVerificationError::Cancelled) => {
+                            SccpNativeReadError::Cancelled
+                        }
+                        Verification(forgery::ForgeryVerificationError::Deadline) => {
+                            SccpNativeReadError::Deadline
+                        }
+                        Verification(forgery::ForgeryVerificationError::Allocation(error)) => {
+                            SccpNativeReadError::Allocation(error)
+                        }
+                        Verification(_) => SccpNativeReadError::Unavailable(
+                            "original completed anchor witness unavailable",
+                        ),
                     }
-                    forgery::ForgeryVerificationError::Cancelled => SccpNativeReadError::Cancelled,
-                    forgery::ForgeryVerificationError::Deadline => SccpNativeReadError::Deadline,
-                    forgery::ForgeryVerificationError::Allocation(error) => {
-                        SccpNativeReadError::Allocation(error)
-                    }
-                    _ => SccpNativeReadError::Unavailable(
-                        "original completed anchor witness unavailable",
-                    ),
                 },
             )?,
         )

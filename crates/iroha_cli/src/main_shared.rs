@@ -10734,7 +10734,7 @@ mod cli_integration_harness {
     fn harness_singular_executor_and_parameters() {
         use iroha::data_model::{
             executor::ExecutorDataModel,
-            parameter::Parameters,
+            parameter::{CustomParameters, Parameters},
             query::{
                 executor::prelude::{FindExecutorDataModel, FindParameters},
                 runtime::{AbiVersion, prelude::FindAbiVersion},
@@ -10743,7 +10743,7 @@ mod cli_integration_harness {
         use std::collections::BTreeSet;
         let mut server = MockQueryServer::default();
         let executor_model = ExecutorDataModel {
-            parameters: BTreeMap::default(),
+            parameters: CustomParameters::default(),
             instructions: BTreeSet::new(),
             permissions: BTreeSet::new(),
             schema: Json::from(norito::json!({ "kind": "demo" })),

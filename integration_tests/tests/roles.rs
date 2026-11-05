@@ -19,6 +19,129 @@ use tokio::runtime::Runtime;
 fn start_network(context: &'static str) -> Option<(sandbox::SerializedNetwork, Runtime)> {
     sandbox::start_network_blocking_or_skip(NetworkBuilder::new(), context).unwrap()
 }
+fn funded_role_authority_client(
+    network: &Network,
+    account: &AccountId,
+    key: &iroha::crypto::KeyPair,
+) -> Result<Client> {
+    let funder = network.client();
+    let fee_asset =
+        iroha_genesis::signed_genesis_root_fee_policy(&network.genesis().0)?.fee_asset_id;
+    funder.submit(
+        Transfer::asset_quantity(
+            AssetId::new(fee_asset, funder.client().account().clone()),
+            10_000_u32,
+            account.clone(),
+        ),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    Ok(network.peers()[0].client_for(account, key.private_key().clone()))
+}
+
+#[test]
+fn metadata_role_authority_requires_explicit_role_management() -> Result<()> {
+    use iroha_core::{
+        executor::Executor,
+        state::World,
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+
+    let mouse = AccountId::new(
+        iroha::crypto::KeyPair::try_from_seed(vec![81; 32], iroha::crypto::Algorithm::Ed25519)?
+            .public_key()
+            .clone(),
+    );
+    for granted in [false, true] {
+        let world = World::with(
+            [],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(mouse.clone()).build(&ALICE_ID),
+            ],
+            [],
+        );
+        let mut config = TestChainConfig::new(world, 0);
+        config
+            .genesis_instructions
+            .push(Grant::account_permission(CanManageRoles, ALICE_ID.clone()).into());
+        if granted {
+            config
+                .genesis_instructions
+                .push(Grant::account_permission(CanManageRoles, mouse.clone()).into());
+        }
+        let chain =
+            CertifiedTestChain::start(config).expect("apply the genuine signed fixture genesis");
+        let state = chain.state();
+        let mut block = state.block(BlockHeader::new(
+            2_u64.try_into()?,
+            Some(
+                state
+                    .view()
+                    .latest_block_hash()
+                    .expect("signed genesis parent"),
+            ),
+            None,
+            1_000,
+            0,
+        ));
+        let mut transaction = block.transaction();
+        let register: InstructionBox = Register::role(
+            Role::new("METADATA_ROLE_CONTROL".parse()?, mouse.clone()).add_permission(
+                CanModifyAccountMetadata {
+                    account: mouse.clone(),
+                },
+            ),
+        )
+        .into();
+        let registration =
+            Executor::Initial.execute_instruction(&mut transaction, &mouse, &register);
+        if granted {
+            registration?;
+        } else {
+            assert_eq!(
+                registration.expect_err("metadata authority alone cannot register a role"),
+                ValidationFail::NotPermitted("Can't register role".to_owned()),
+            );
+        }
+        assert_eq!(
+            Executor::Initial
+                .execute_instruction(
+                    &mut transaction,
+                    &ALICE_ID,
+                    &Grant::account_permission(CanManageRoles, mouse.clone()).into(),
+                )
+                .expect_err("role management is an explicitly genesis-only capability"),
+            ValidationFail::NotPermitted(
+                "authority cannot grant or revoke permission `CanManageRoles`".to_owned()
+            ),
+        );
+        assert_eq!(
+            Executor::Initial
+                .execute_instruction(
+                    &mut transaction,
+                    &ALICE_ID,
+                    &SetKeyValue::account(mouse.clone(), "key".parse()?, Json::from("value"))
+                        .into(),
+                )
+                .expect_err("role management must not give Alice Mouse's metadata permission"),
+            ValidationFail::NotPermitted("authority cannot modify this metadata".to_owned()),
+        );
+        if granted {
+            Executor::Initial.execute_instruction(
+                &mut transaction,
+                &mouse,
+                &Grant::account_role("METADATA_ROLE_CONTROL".parse()?, ALICE_ID.clone()).into(),
+            )?;
+            Executor::Initial.execute_instruction(
+                &mut transaction,
+                &ALICE_ID,
+                &SetKeyValue::account(mouse.clone(), "key".parse()?, Json::from("value")).into(),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn err_chain_contains(err: &eyre::Report, needle: &str) -> bool {
     err.chain().any(|cause| cause.to_string().contains(needle))
 }
@@ -84,20 +207,7 @@ fn register_and_grant_role_for_metadata_access() -> Result<()> {
     };
     let test_client = network.client();
     let alice_id = ALICE_ID.clone();
-    let fund_mouse = Transfer::asset_quantity(
-        AssetId::new(
-            iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?,
-            alice_id.clone(),
-        ),
-        100_u32,
-        mouse_id.clone(),
-    );
-    test_client.submit(
-        fund_mouse,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )?;
-    let mouse_client =
-        network.peers()[0].client_for(&mouse_id, mouse_keypair.private_key().clone());
+    let mouse_client = funded_role_authority_client(&network, &mouse_id, &mouse_keypair)?;
     // Registering role
     let role_id = "ACCESS_TO_MOUSE_METADATA".parse::<RoleId>()?;
     let role =
@@ -303,8 +413,7 @@ fn grant_revoke_role_permissions() -> Result<()> {
         [register_mouse.into(), fund_mouse.into()],
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    let mouse_client =
-        network.peers()[0].client_for(&mouse_id, mouse_keypair.private_key().clone());
+    let mouse_client = funded_role_authority_client(&network, &mouse_id, &mouse_keypair)?;
     // Registering role
     let role_id = "ACCESS_TO_MOUSE_METADATA".parse::<RoleId>()?;
     let role = Role::new(role_id.clone(), mouse_id.clone());
@@ -384,13 +493,7 @@ fn grant_revoke_role_permissions() -> Result<()> {
 fn role_permission_revoke_then_grant_last_wins_canonical_output() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
-        .with_default_block_cadence()
-        .with_config_layer(|layer| {
-            layer
-                .write(["pipeline", "parallel_overlay"], true)
-                .write(["pipeline", "parallel_apply"], true)
-                .write("telemetry_profile", "full");
-        });
+        .with_default_block_cadence();
     let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
         builder,
         stringify!(role_permission_revoke_then_grant_last_wins_canonical_output),
@@ -595,4 +698,54 @@ fn bounded_role_collections_preserve_assignments_and_authorization() -> Result<(
     assert_eq!(denied.http_status(), Some(403));
     assert_eq!(denied.code(), Some("role_read_denied"));
     Ok(())
+}
+
+#[tokio::test]
+async fn unknown_role_genesis_preparation_preserves_typed_rejection() {
+    // Preparation owns native genesis execution before peer startup. The exact
+    // unknown-role rejection must survive as a typed source through that path.
+    let builder =
+        NetworkBuilder::new()
+            .with_peers(4)
+            .with_genesis_block(|topology, topology_entries| {
+                let role_id = "UNEXISTING".parse::<RoleId>().unwrap();
+                let grant = Grant::account_role(role_id.clone(), ALICE_ID.clone());
+                let error = try_genesis_factory(
+                    vec![vec![grant.clone().into()]],
+                    topology.clone(),
+                    topology_entries.clone(),
+                )
+                .expect_err("delegating an unknown role must fail native genesis preparation");
+                let rejection = error
+                    .chain()
+                    .find_map(|cause| {
+                        cause.downcast_ref::<iroha_core::block::GenesisOutputRejection>()
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected a native genesis output rejection: {error:?}")
+                    });
+                assert_eq!(
+                    rejection.reason.as_ref(),
+                    &TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                        "cannot delegate an unknown role".to_owned(),
+                    )),
+                );
+                let register =
+                    Register::role(Role::new(role_id, iroha_test_samples::BOB_ID.clone()));
+                try_genesis_factory(
+                    vec![vec![register.into(), grant.into()]],
+                    topology,
+                    topology_entries,
+                )
+                .expect(
+                    "registering the role before delegation must pass the same native validator",
+                )
+            });
+    let Some(network) = sandbox::build_network_or_skip(
+        builder,
+        stringify!(unknown_role_genesis_preparation_preserves_typed_rejection),
+    ) else {
+        return;
+    };
+    assert!(network.genesis().0.has_results());
 }

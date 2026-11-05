@@ -20,7 +20,8 @@
 //! `blst_fp12` representation.  Its result is deterministic across hardware.
 //! Runtime protocol validation does not depend on a mutable audit flag.  The
 //! separate official binary-publication corridor must call
-//! [`validate_timed_ovn_official_release_audit_manifest_bytes_v1`] and supply
+//! [`validate_timed_ovn_official_release_audit_manifest_bytes_v1`](crate::timed_ovn::validate_timed_ovn_official_release_audit_manifest_bytes_v1)
+//! and supply
 //! the exact independently reviewed source archive, release-artifact manifest,
 //! target inventory, report, and evidence archive.  No such external audit
 //! artifact is asserted or embedded by this module.
@@ -1282,7 +1283,6 @@ impl<Provenance> TimedOvnRosterV1<Provenance> {
             return Err(TimedOvnError::InvalidRosterSize);
         }
         let mut previous_participant: Option<[u8; 32]> = None;
-        let mut participants = HashSet::with_capacity(registrations.len());
         let mut public_keys =
             HashSet::with_capacity(registrations.len() * TIMED_OVN_CHOICE_COUNT_V1);
         for registration in &registrations {
@@ -1290,6 +1290,8 @@ impl<Provenance> TimedOvnRosterV1<Provenance> {
             if verify_proofs {
                 registration.verify(session)?;
             }
+            // Strict canonical order already proves participant uniqueness. A
+            // nonadjacent repeat is rejected as noncanonical at this same point.
             if let Some(previous) = previous_participant {
                 if registration.participant_hash == previous {
                     return Err(TimedOvnError::DuplicateParticipant);
@@ -1297,9 +1299,6 @@ impl<Provenance> TimedOvnRosterV1<Provenance> {
                 if registration.participant_hash < previous {
                     return Err(TimedOvnError::NonCanonicalRoster);
                 }
-            }
-            if !participants.insert(registration.participant_hash) {
-                return Err(TimedOvnError::DuplicateParticipant);
             }
             for public_key in registration.public_keys {
                 if !public_keys.insert(public_key) {
@@ -1804,13 +1803,13 @@ impl TimedOvnMaskedBallotV1 {
         let participant_hash = take::<32>(bytes, &mut cursor)?;
         let index = u16::from_be_bytes(take::<2>(bytes, &mut cursor)?);
         let mut u = [[0_u8; TIMED_OVN_G2_BYTES_V1]; TIMED_OVN_CHOICE_COUNT_V1];
-        let mut unique_u = HashSet::with_capacity(TIMED_OVN_CHOICE_COUNT_V1);
-        for ephemeral in &mut u {
-            *ephemeral = take::<TIMED_OVN_G2_BYTES_V1>(bytes, &mut cursor)?;
-            decode_nonidentity_g2(ephemeral)?;
-            if !unique_u.insert(*ephemeral) {
+        for option in 0..TIMED_OVN_CHOICE_COUNT_V1 {
+            let ephemeral = take::<TIMED_OVN_G2_BYTES_V1>(bytes, &mut cursor)?;
+            decode_nonidentity_g2(&ephemeral)?;
+            if u[..option].contains(&ephemeral) {
                 return Err(TimedOvnError::DuplicateEphemeral);
             }
+            u[option] = ephemeral;
         }
         let mut c = [[0_u8; TIMED_OVN_GT_BYTES_V1]; TIMED_OVN_CHOICE_COUNT_V1];
         for commitment in &mut c {
@@ -1945,9 +1944,8 @@ impl TimedOvnMaskedBallotV1 {
         let ballot_points = decode_gt_array(&self.c, false)?;
         let ephemerals = decode_g2_array(&self.u)?;
         let release_term = GtElement::from_bytes(&context.common.release_term, false)?;
-        let mut unique_u = HashSet::with_capacity(TIMED_OVN_CHOICE_COUNT_V1);
-        for ephemeral in self.u {
-            if !unique_u.insert(ephemeral) {
+        for (option, ephemeral) in self.u.iter().enumerate() {
+            if self.u[..option].contains(ephemeral) {
                 return Err(TimedOvnError::DuplicateEphemeral);
             }
         }
@@ -2041,14 +2039,13 @@ impl TimedOvnRegistrationSecretV1 {
         let mut r_scalars = [Scalar::from(0_u64); TIMED_OVN_CHOICE_COUNT_V1];
         let mut u = [[0_u8; TIMED_OVN_G2_BYTES_V1]; TIMED_OVN_CHOICE_COUNT_V1];
         let mut c = [[0_u8; TIMED_OVN_GT_BYTES_V1]; TIMED_OVN_CHOICE_COUNT_V1];
-        let mut unique_u = HashSet::with_capacity(TIMED_OVN_CHOICE_COUNT_V1);
         for option in 0..TIMED_OVN_CHOICE_COUNT_V1 {
             r_bytes[option] = random_nonzero_scalar_bytes(rng)?;
             r_scalars[option] = decode_scalar(&r_bytes[option])?;
             let ephemeral = (G2Projective::generator() * r_scalars[option])
                 .to_affine()
                 .to_compressed();
-            if !unique_u.insert(ephemeral) {
+            if u[..option].contains(&ephemeral) {
                 return Err(TimedOvnError::DuplicateEphemeral);
             }
             let vote = if option == choice.index() {
@@ -3333,6 +3330,149 @@ mod tests {
                 abstain: 0,
             })
         );
+    }
+
+    #[test]
+    fn ballot_duplicate_checks_preserve_point_and_scalar_error_order() {
+        let fixture = fixture(15);
+        let ballot = cast_fixture_ballots(&fixture, 16).remove(0);
+        for (first, repeated) in [(0, 1), (0, 2), (1, 2)] {
+            let mut duplicate = ballot.clone();
+            duplicate.u[repeated] = duplicate.u[first];
+            assert_eq!(
+                duplicate.verify(&fixture.survivors),
+                Err(TimedOvnError::DuplicateEphemeral)
+            );
+            assert_eq!(
+                TimedOvnMaskedBallotV1::from_bytes(&fixture.survivors, &duplicate.to_bytes()),
+                Err(TimedOvnError::DuplicateEphemeral)
+            );
+            duplicate.proof.challenges[0] = [0xff; TIMED_OVN_SCALAR_BYTES_V1];
+            assert_eq!(
+                duplicate.verify(&fixture.survivors),
+                Err(TimedOvnError::DuplicateEphemeral)
+            );
+            assert_eq!(
+                TimedOvnMaskedBallotV1::parse_bytes(&duplicate.to_bytes()),
+                Err(TimedOvnError::DuplicateEphemeral)
+            );
+        }
+
+        let mut duplicate = ballot;
+        duplicate.u[1] = duplicate.u[0];
+        duplicate.u[2] = G2Affine::identity().to_compressed();
+        // Wire parsing checks each point and its uniqueness before reading the next;
+        // verification decodes all points before checking their uniqueness.
+        assert_eq!(
+            TimedOvnMaskedBallotV1::parse_bytes(&duplicate.to_bytes()),
+            Err(TimedOvnError::DuplicateEphemeral)
+        );
+        assert_eq!(
+            duplicate.verify(&fixture.survivors),
+            Err(TimedOvnError::IdentityElement)
+        );
+        duplicate.u[0] = G2Affine::identity().to_compressed();
+        duplicate.u[1] = duplicate.u[0];
+        assert_eq!(
+            TimedOvnMaskedBallotV1::parse_bytes(&duplicate.to_bytes()),
+            Err(TimedOvnError::IdentityElement)
+        );
+    }
+
+    #[test]
+    fn repeated_ballot_randomness_rejects_the_second_ephemeral() {
+        struct RepeatingRng {
+            fills: usize,
+        }
+        impl rand::TryRng for RepeatingRng {
+            type Error = core::convert::Infallible;
+
+            fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+                panic!("ballot scalar generation requests bytes")
+            }
+
+            fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+                panic!("ballot scalar generation requests bytes")
+            }
+
+            fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
+                self.fills += 1;
+                destination.fill(1);
+                Ok(())
+            }
+        }
+        impl rand::TryCryptoRng for RepeatingRng {}
+
+        let fixture = fixture(19);
+        let mut rng = RepeatingRng { fills: 0 };
+        assert_eq!(
+            fixture.secrets[0].cast_ballot_with_rng(
+                &fixture.survivors,
+                TimedOvnChoiceV1::Aye,
+                &mut rng,
+            ),
+            Err(TimedOvnError::DuplicateEphemeral)
+        );
+        assert_eq!(rng.fills, 2);
+    }
+
+    #[test]
+    fn roster_duplicates_preserve_canonical_and_proof_error_order() {
+        let fixture = fixture(19);
+        let session = fixture.roster.session();
+        let registrations = fixture.roster.registrations();
+        for (indices, expected) in [
+            (vec![0, 0], TimedOvnError::DuplicateParticipant),
+            (vec![0, 1, 0], TimedOvnError::NonCanonicalRoster),
+            (vec![1, 0], TimedOvnError::NonCanonicalRoster),
+        ] {
+            let records: Vec<_> = indices
+                .iter()
+                .map(|&index| registrations[index].clone())
+                .collect();
+            let cached = records
+                .iter()
+                .map(|registration| {
+                    TimedOvnCommittedRegistrationCacheV1::from_committed_record(
+                        session,
+                        &registration.to_bytes(),
+                    )
+                    .expect("canonical cached registration")
+                })
+                .collect();
+            assert_eq!(TimedOvnRosterV1::new(session, records), Err(expected));
+            assert_eq!(
+                TimedOvnCommittedRosterCacheV1::from_committed_records(session, cached),
+                Err(expected)
+            );
+        }
+
+        let mut invalid_duplicate = registrations[0].clone();
+        invalid_duplicate.proofs[0].response = Scalar::from(0_u64).to_bytes_be();
+        assert_eq!(
+            TimedOvnRosterV1::new(session, vec![registrations[0].clone(), invalid_duplicate],),
+            Err(TimedOvnError::InvalidProofOfPossession)
+        );
+
+        // The remaining public-key set must reject repeats both within and across seats.
+        for source in [0, 1] {
+            let mut records = registrations.to_vec();
+            records[1].public_keys[1] = records[source].public_keys[0];
+            let cached = records
+                .iter()
+                .map(|registration| {
+                    TimedOvnCommittedRegistrationCacheV1::from_committed_record(
+                        session,
+                        &registration.to_bytes(),
+                    )
+                    .expect("canonical cached registration")
+                })
+                .collect();
+            assert_eq!(
+                TimedOvnCommittedRosterCacheV1::from_committed_records(session, cached),
+                Err(TimedOvnError::DuplicateRegistrationKey)
+            );
+        }
     }
 
     #[test]

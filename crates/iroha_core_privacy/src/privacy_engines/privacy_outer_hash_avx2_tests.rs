@@ -185,7 +185,7 @@ unsafe fn permute_lanes(lanes: &mut [[u64; 4]; 25], temporary: &mut [[u64; 4]; 5
                 store(&mut lanes[y * 5 + x], value);
             }
         }
-        let value = _mm256_xor_si256(load(&lanes[0]), _mm256_set1_epi64x(constant as i64));
+        let value = _mm256_xor_si256(load(&lanes[0]), _mm256_set1_epi64x(constant.cast_signed()));
         store(&mut lanes[0], value);
     }
 }
@@ -379,7 +379,7 @@ fn required_avx2_all_rate_positions_updates_and_scalar_tails_match_actual_owner(
         + core::mem::size_of::<SerializedState<Sha3_384>>()
         + 4 * MAX_UPDATE;
     assert!(named <= NAMED_WORKER_SCRATCH_LIMIT);
-    assert!(16 * NAMED_WORKER_SCRATCH_LIMIT <= 1 << 30);
+    const { assert!(16 * NAMED_WORKER_SCRATCH_LIMIT <= 1 << 30) };
     let mut permutations = 0;
     for cursor in 0..RATE {
         for length in 0..=MAX_UPDATE {
@@ -530,7 +530,7 @@ fn row_context() -> TransparentStarkDigestContextV1 {
 }
 
 fn row_streams(rows: usize, width: usize, leaf: &[u8]) -> Vec<PrivacyOuterLastFieldStreamV1> {
-    assert!(rows > 0 && rows <= 1 << 22 && width > 0 && width <= usize::from(u16::MAX));
+    assert!(rows > 0 && rows <= 1 << 22 && width > 0 && u16::try_from(width).is_ok());
     let catalog = TransparentStarkDigestContextV1::catalog_v1();
     let domain = row_context()
         .domain_v1(&catalog, leaf, b"vector-row-leaf", 0, 0, 0)
@@ -752,7 +752,11 @@ fn avx2_exact_width_rows_report_paired_owner_cost() {
     // Input generation and column clearing are outside the measured interval.
     use std::time::Instant;
     assert!(std::is_x86_feature_detected!("avx2"));
-    assert!(!cfg!(debug_assertions), "optimized diagnostic required");
+    // Keep this runtime refusal compilable in ordinary debug test harnesses.
+    assert!(
+        !std::hint::black_box(cfg!(debug_assertions)),
+        "optimized diagnostic required"
+    );
     let (groups, full_rows, stream_limit, replay_limit, runtime_limit) =
         crate::privacy_engines::zk_x509::stark::ZkX509MainRegistrationShapeV1::row_hash_diagnostic_geometry_v1().unwrap();
     let shapes = [

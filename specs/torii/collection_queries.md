@@ -54,6 +54,10 @@ Design rules:
 are [history collections](#history-collections) with a few
 restrictions.
 
+Role collections read the contacted root's authoritative World without
+aggregating independent roots. Stored-role and exact-account authorization,
+ordered source reads and cursor limits are specified with their columns below.
+
 Collection planning, source scans, filtering, projection and final JSON encoding
 run on a blocking worker under the request's original query-memory owner.
 Cancelling the HTTP task does not release that owner while the worker or its

@@ -266,6 +266,34 @@ pub fn genesis(
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
     )
 }
+
+/// Prepare the default signed genesis through native validation, preserving its typed error.
+///
+/// # Errors
+/// Returns the original native rejection of an invalid genesis instruction or policy.
+pub fn try_genesis(
+    extra_transactions: Vec<Vec<InstructionBox>>,
+    topology: UniqueVec<PeerId>,
+    topology_entries: Vec<GenesisTopologyEntry>,
+) -> Result<GenesisBlock, Report> {
+    init_instruction_registry();
+    try_build_minimal_genesis_with_post_topology_and_staged_hash(
+        extra_transactions,
+        Vec::new(),
+        topology,
+        topology_entries,
+        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+        chain_id(),
+        GenesisPolicyConfig {
+            genesis_crypto: test_network_crypto_admission_policy(),
+            confidential_policy_hash: Some(
+                iroha_core::state::default_genesis_confidential_policy_hash(),
+            ),
+            ..Default::default()
+        },
+    )
+    .map(|(block, _, _)| block)
+}
 /// Build the default genesis using a custom signing key pair.
 pub fn genesis_with_keypair(
     extra_transactions: Vec<Vec<InstructionBox>>,
@@ -564,6 +592,31 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
     chain_id: ChainId,
+    policy: GenesisPolicyConfig,
+) -> (
+    GenesisBlock,
+    StagedGenesisPolicyHashes,
+    RawGenesisTransaction,
+) {
+    try_build_minimal_genesis_with_post_topology_and_staged_hash(
+        extra_transactions,
+        post_topology_transactions,
+        topology,
+        topology_entries,
+        genesis_key_pair,
+        chain_id,
+        policy,
+    )
+    .expect("minimal genesis must pre-execute without synthetic results")
+}
+
+fn try_build_minimal_genesis_with_post_topology_and_staged_hash(
+    extra_transactions: Vec<Vec<InstructionBox>>,
+    post_topology_transactions: Vec<Vec<InstructionBox>>,
+    topology: UniqueVec<PeerId>,
+    topology_entries: Vec<GenesisTopologyEntry>,
+    genesis_key_pair: KeyPair,
+    chain_id: ChainId,
     crate::config::GenesisPolicyConfig {
         genesis_crypto,
         staking_policy,
@@ -577,11 +630,14 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
         confidential_policy_hash,
         preview_cadence_ms,
     }: crate::config::GenesisPolicyConfig,
-) -> (
-    GenesisBlock,
-    StagedGenesisPolicyHashes,
-    RawGenesisTransaction,
-) {
+) -> Result<
+    (
+        GenesisBlock,
+        StagedGenesisPolicyHashes,
+        RawGenesisTransaction,
+    ),
+    Report,
+> {
     // Permission JSON is materialized here, before native pre-execution begins.
     // A supplied runtime configuration owns its address profile on every calling thread.
     let _profile = runtime_config.as_ref().map(|config| {
@@ -641,7 +697,6 @@ fn build_minimal_genesis_with_post_topology_and_staged_hash(
             Ok((resign_genesis(&validated, &genesis_key_pair), hashes))
         },
     )
-    .expect("minimal genesis must pre-execute without synthetic results")
 }
 #[cfg(test)]
 fn build_minimal_genesis_unexecuted(

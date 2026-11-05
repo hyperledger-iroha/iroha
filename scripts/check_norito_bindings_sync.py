@@ -263,6 +263,12 @@ def run_python_parity_checks() -> None:
     """Execute Norito Python binding parity checks."""
 
     print("[norito] Running Python binding parity checks...", file=sys.stderr)
+    # Reference regressions (including standard compressed frames) are part of
+    # the strict binding gate, alongside the shared fixture projections below.
+    run_command(
+        [sys.executable, "-m", "pytest", "-q", REPO_ROOT / "python/norito_py/tests"],
+        cwd=REPO_ROOT,
+    )
     sys.path.insert(0, str(REPO_ROOT / "python" / "norito_py" / "src"))
     try:
         import norito  # type: ignore[import-not-found]
@@ -553,7 +559,7 @@ def main() -> int:
         if "python" in message_lower:
             print(
                 "Python Norito parity checks failed. Run "
-                "'python3 -m unittest discover -s python/norito_py/tests' to investigate.",
+                "'python3 -m pytest -q python/norito_py/tests' to investigate.",
                 file=sys.stderr,
             )
         else:
@@ -575,7 +581,7 @@ def main() -> int:
         else:
             print(
                 "Python Norito parity checks failed. Run "
-                "'python3 -m unittest discover -s python/norito_py/tests' to investigate.",
+                "'python3 -m pytest -q python/norito_py/tests' to investigate.",
                 file=sys.stderr,
             )
         return 1

@@ -1,6 +1,12 @@
 # CI image contract
 
-All managed Rust CI containers receive `IROHA_CI_IMAGE` through the hosted
+PR validation runs directly on GitHub-hosted Ubuntu runners. The shared
+`setup-native-ci` action installs native build dependencies and the declared Rust
+toolchain; Python static analysis installs its pinned Poetry version and uses
+the committed lockfiles. These development checks require no private runner or
+container registry configuration.
+
+Release, publishing and scheduled container jobs receive `IROHA_CI_IMAGE` through the hosted
 `ci_image_preflight.yml` job. The variable must contain an immutable
 `repository@sha256:<64 lowercase hex digits>` reference. Missing or mutable
 references fail before the dependent container starts. There is no tag fallback.

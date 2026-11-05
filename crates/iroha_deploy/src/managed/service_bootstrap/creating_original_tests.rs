@@ -64,6 +64,7 @@ impl Fixture {
         deadline: Instant,
     ) -> Run<'a> {
         Run {
+            diagnostics: None,
             authority: &self.authority,
             original: &self.original,
             deadline,

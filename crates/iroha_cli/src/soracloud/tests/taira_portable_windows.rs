@@ -118,6 +118,7 @@ fn native_taira_copy_keeps_captured_original_and_never_replaces_output() {
     );
     let destination = temporary.path().join("copied");
     let expected = fs::read(&sources[0]).unwrap();
+    assert_eq!(captured.len(), u64::try_from(expected.len()).unwrap());
     assert_eq!(
         copy_taira_stage_source_file(&sources[0], &destination, &captured).unwrap(),
         u64::try_from(expected.len()).unwrap()

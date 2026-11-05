@@ -8493,7 +8493,7 @@ fn run_main_with_config_guard(
                     TestNetworkParliamentBeaconSignerMode::Valid => Some(Arc::new(beacon_signer)),
                     TestNetworkParliamentBeaconSignerMode::Absent => None,
                     TestNetworkParliamentBeaconSignerMode::Invalid => {
-                        Some(Arc::new(beacon_signer.with_deliberately_invalid_outbound()))
+                        Some(Arc::new(beacon_signer.with_deliberately_invalid_share()))
                     }
                 };
                 if let Some(beacon_signer) = beacon_signer {

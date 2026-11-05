@@ -88,13 +88,30 @@ pub fn dispatch_if_requested() -> bool {
     if args.next().as_deref() != Some(OsStr::new("beacon-prepare-custody")) {
         return false;
     }
+    dispatch_arguments(args, false);
+    true
+}
+
+pub(crate) fn dispatch_arguments(args: impl Iterator<Item = OsString>, relayed: bool) {
     let args =
-        Args::parse_from(std::iter::once(OsString::from("beacon-prepare-custody")).chain(args));
+        Args::try_parse_from(std::iter::once(OsString::from("beacon-prepare-custody")).chain(args));
+    let args = match args {
+        Ok(args) => args,
+        Err(error) if !relayed => error.exit(),
+        Err(_) => std::process::exit(2),
+    };
+    if relayed
+        && crate::beacon_bootstrap::descriptor_relay::prepare_pending(
+            args.current_catalog.is_some(),
+        )
+        .is_err()
+    {
+        std::process::exit(2);
+    }
     if let Err(error) = run(args) {
         eprintln!("beacon custody preparation failed: {error}");
         std::process::exit(1);
     }
-    true
 }
 
 /// Preserve local admission failures until the terminal command diagnostic.

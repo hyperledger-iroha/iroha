@@ -199,6 +199,31 @@ impl Client {
     ) -> Result<
         iroha_data_model::sorafs::stream_token_custody::proof::VerifiedStreamTokenCustodyStateV1,
     > {
+        self.get_stream_token_custody_state_with_source(
+            provider, expected_owner, expected_binding, native_schema, block,
+        )
+        .map(|(_, verified)| verified)
+    }
+
+    /// Read custody state and retain its native source for this independently selected cut.
+    ///
+    /// The returned proof is untrusted source material when persisted. A later reader must
+    /// authenticate it again against the original certified block and independent owner,
+    /// binding and schema. It never substitutes for a fresh current-state observation.
+    /// # Errors
+    /// The same scope, transport, codec, proof and deadline refusals as
+    /// [`Self::get_stream_token_custody_state`].
+    pub fn get_stream_token_custody_state_with_source(
+        &self,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+        expected_owner: &iroha_data_model::account::AccountId,
+        expected_binding: &sorafs_manifest::signer::custody::SignerCustodyBindingV1,
+        native_schema: impl iroha_data_model::sumeragi_finality::WorldStateSchemaPolicyV1,
+        block: &iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
+    ) -> Result<(
+        iroha_data_model::sorafs::stream_token_custody::proof::StreamTokenCustodyProofV1,
+        iroha_data_model::sorafs::stream_token_custody::proof::VerifiedStreamTokenCustodyStateV1,
+    )> {
         use iroha_data_model::sorafs::stream_token_custody::proof::{
             MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1, StreamTokenCustodyProofV1,
         };
@@ -247,7 +272,7 @@ impl Client {
             block,
         )?;
         self.ensure_activation_evidence_deadline()?;
-        Ok(verified)
+        Ok((proof, verified))
     }
 
     fn read_provider_discovery_frame(

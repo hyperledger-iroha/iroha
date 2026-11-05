@@ -1,0 +1,12 @@
+# Pure-Python drivers for native filesystem/source-delivery component controls.
+# These tests use the explicit compiled native helpers, not the installed SDK.
+# Full SDK/privacy gates retain python/iroha_python/requirements-ci.lock.
+# Regenerate with Python 3.12 and pip-tools 7.6.2:
+#   pip-compile --generate-hashes --resolver=backtracking --strip-extras \
+#     --output-file ci/requirements-native-components.lock \
+#     ci/requirements-native-components.in
+# Include pytest's pure-Python Windows console dependency on every host so the
+# same resolved lock is complete on Linux, macOS, and Windows.
+colorama==0.4.6
+packaging==26.3
+pytest==9.2.0

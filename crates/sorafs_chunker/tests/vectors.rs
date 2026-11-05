@@ -1,3 +1,5 @@
+//! Canonical chunk-plan vectors and their cross-language authenticated fixtures.
+
 use iroha_crypto::{Algorithm, PublicKey, Signature};
 use norito::json::Value;
 use sorafs_chunker::{chunk_bytes, fixtures::FixtureProfile};
@@ -116,7 +118,7 @@ fn generated_vectors_match_expected_constants() {
     );
     assert_eq!(
         vectors.sha3_digest_hex(),
-        "13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482"
+        "d7e0445a621df04e14a1bdd90d9247ab1416c453e4c95a57bdd3bb208bdb47f7"
     );
     let digest_hexes = vectors.blake3_digest_hexes();
     assert_eq!(

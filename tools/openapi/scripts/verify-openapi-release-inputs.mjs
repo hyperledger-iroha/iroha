@@ -48,6 +48,7 @@ export const OPENAPI_TRACKED_GENERATOR_INPUT_MAX_BYTES =
   16 * 1024 * 1024;
 export const OPENAPI_GENERATOR_INPUT_PATHS = Object.freeze([
   '.cargo/config.toml',
+  '.github/actions',
   '.github/workflows/openapi.yml',
   OPENAPI_TRACKED_GENERATOR_INPUT_PATH,
   'Cargo.toml',

@@ -3,7 +3,10 @@
 from pathlib import Path
 import os
 import re
+import shlex
+import stat
 import subprocess
+import textwrap
 import tomllib
 
 import pytest
@@ -15,13 +18,19 @@ IMAGE = "image: ${{ needs.ci_image.outputs.image }}"
 COUNTS = {
     "nightly_sumeragi.yml": 10,
     "nightly_sumeragi_soak.yml": 2,
-    "openapi.yml": 1,
-    "pr.yml": 10,
-    "pr_python_static.yml": 1,
     "publish.yml": 1,
     "publish_custom.yml": 1,
     "publish_dev.yml": 1,
     "workspace_release.yml": 6,
+}
+HOSTED_NATIVE_JOBS = {
+    "pr.yml": (
+        "pre_build", "consistency", "kotodama_docs", "sumeragi",
+        "zk_phase_tree_measurement", "x2_maximum_proof_transport",
+        "norito_rpc_verify", "rust_affected", "rust_network",
+        "sora_parliament_lifecycle",
+    ),
+    "openapi.yml": ("canonical-spec",),
 }
 
 
@@ -60,6 +69,189 @@ def test_all_ci_consumers_are_gated(name: str, count: int) -> None:
         if IMAGE in block:
             changed = re.sub(r"^    needs: .+\n", "", block, flags=re.M)
             assert f"{job} is not gated by preflight" in violations(source.replace(block, changed))
+
+
+def hosted_violations(source: str, names: tuple[str, ...]) -> list[str]:
+    """Development validation must provision every formerly image-owned job."""
+    errors = []
+    blocks = jobs(source)
+    if "ci_image" in blocks:
+        errors.append("development checks still require a configured image")
+    for name in names:
+        block = blocks.get(name, "")
+        if "runs-on: ubuntu-24.04" not in block:
+            errors.append(f"{name} has no hosted Linux runner")
+        if "container:" in block or "self-hosted" in block:
+            errors.append(f"{name} retains external infrastructure")
+        if "uses: ./.github/actions/setup-native-ci" not in block:
+            errors.append(f"{name} has no native tool provisioning")
+        elif "actions/setup-python@" in block.split("uses: ./.github/actions/setup-native-ci", 1)[1]:
+            errors.append(f"{name} replaces the provisioned Python environment")
+    return errors
+
+
+@pytest.mark.parametrize("name,names", HOSTED_NATIVE_JOBS.items())
+def test_development_jobs_run_without_image_or_private_runner_configuration(
+    name: str, names: tuple[str, ...],
+) -> None:
+    source = (WORKFLOWS / name).read_text()
+    assert hosted_violations(source, names) == []
+    assert "needs.ci_image" not in source
+    assert "vars.IROHA_CI_IMAGE" not in source
+    for job, block in jobs(source).items():
+        if job in names:
+            changed = block.replace("      - uses: ./.github/actions/setup-native-ci\n", "")
+            assert f"{job} has no native tool provisioning" in hosted_violations(
+                source.replace(block, changed), names,
+            )
+
+
+@pytest.mark.parametrize("name,names", HOSTED_NATIVE_JOBS.items())
+def test_native_jobs_retain_the_python_environment_with_script_requirements(
+    name: str, names: tuple[str, ...],
+) -> None:
+    source = (WORKFLOWS / name).read_text()
+    for job, block in jobs(source).items():
+        if job in names:
+            changed = block.replace(
+                "      - uses: ./.github/actions/setup-native-ci\n",
+                "      - uses: ./.github/actions/setup-native-ci\n"
+                "      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0\n"
+                "        with:\n          python-version: \"3.11\"\n",
+            )
+            assert f"{job} replaces the provisioned Python environment" in hosted_violations(
+                source.replace(block, changed), names,
+            )
+
+
+def test_openapi_validation_tracks_both_branches_and_native_setup_changes() -> None:
+    source = (WORKFLOWS / "openapi.yml").read_text()
+    triggers = source.split("\non:\n", 1)[1].split("\npermissions:\n", 1)[0]
+    for event in ("pull_request", "push"):
+        block = re.search(rf"^  {event}:\n.*?(?=^  \w+:\n|\Z)", triggers, re.M | re.S)
+        assert block is not None
+        assert "branches: [main, optimizations]" in block.group()
+        assert '      - ".github/actions/**"' in block.group()
+        assert '      - ".github/workflows/openapi.yml"' in block.group()
+
+
+def test_python_static_analysis_uses_committed_locks_on_a_hosted_runner() -> None:
+    source = (WORKFLOWS / "pr_python_static.yml").read_text()
+    block = jobs(source)["check"]
+    assert "runs-on: ubuntu-24.04" in block
+    assert "ci_image" not in source
+    assert "container:" not in block
+    assert "actions/setup-python@" in block
+    assert 'poetry-version: "2.5.1"' in block
+    assert "poetry check --lock" in block
+    assert "poetry install --no-root" in block
+    assert "poetry lock\n" not in block
+    for command in ("poetry run black --check", "poetry run mypy", "poetry run flake8"):
+        assert command in block
+
+
+def test_native_provisioning_uses_pinned_actions_and_declared_rust_toolchain() -> None:
+    source = (ROOT / ".github/actions/setup-native-ci/action.yml").read_text()
+    assert "sudo apt-get install" in source
+    for package in ("clang", "cmake", "libssl-dev", "pkg-config", "protobuf-compiler", "mold"):
+        assert package in source
+    assert "toolchain: ${{ inputs.toolchain }}" in source
+    assert 'default: ""' in source
+    assert "clippy,rustfmt,llvm-tools-preview" in source
+    for action in re.findall(r"uses: ([^\s]+)", source):
+        assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", action), action
+
+
+def test_native_provisioning_installs_fontconfig_development_metadata(tmp_path: Path) -> None:
+    """Execute the apt step without privilege and retain the GUI pkg-config prerequisite."""
+    source = (ROOT / ".github/actions/setup-native-ci/action.yml").read_text()
+    step = source.split("    - name: Install native build prerequisites\n", 1)[1].split("    - uses:", 1)[0]
+    command = textwrap.dedent(step.split("      run: |\n", 1)[1])
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    sudo = binaries / "sudo"
+    sudo.write_text('#!/bin/bash\nset -eu\nprintf "%s\\n" "$*" >> "$PROVISION_LOG"\n')
+    sudo.chmod(0o700)
+    log = tmp_path / "provision.log"
+    result = subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", command],
+        env={**os.environ, "PATH": f"{binaries}{os.pathsep}{os.environ['PATH']}", "PROVISION_LOG": str(log)},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    calls = [shlex.split(line) for line in log.read_text().splitlines()]
+    assert len(calls) == 2 and calls[0] == ["apt-get", "update"]
+    assert calls[1][:4] == ["apt-get", "install", "--no-install-recommends", "-y"]
+    assert calls[1].count("libfontconfig-dev") == 1
+    assert calls[1].count("pkg-config") == 1
+
+
+def test_native_setup_installs_helpers_from_the_selected_checkout() -> None:
+    source = (ROOT / ".github/actions/setup-native-ci/action.yml").read_text()
+    inputs = source.split("inputs:\n", 1)[1].split("runs:\n", 1)[0]
+    assert '  working-directory:\n' in inputs
+    assert '    default: "."' in inputs
+    step = source.split("    - name: Install repository Python build helpers\n", 1)[1].split("    - uses:", 1)[0]
+    assert '      working-directory: ${{ inputs.working-directory }}' in step
+    assert '      run: python -m pip install -r scripts/requirements.txt' in step
+    assert '${{ inputs.working-directory }}' not in step.split('      run:', 1)[1]
+
+
+@pytest.mark.parametrize("existing", ["absent", "private-file", "private-link", "tmp-file", "tmp-link"])
+def test_native_setup_provisions_real_private_replay_roots(tmp_path: Path, existing: str) -> None:
+    source = (ROOT / ".github/actions/setup-native-ci/action.yml").read_text()
+    setup = source.split("    - name: Prepare sealed replay temporary root\n", 1)[1].split("    - name:", 1)[0]
+    assert "      shell: bash\n" in setup
+    command = textwrap.dedent(setup.split("      run: |\n", 1)[1])
+    assert "sudo install -d -o root -g root -m 0755 /private\n" in command
+    assert "sudo install -d -o root -g root -m 1777 /private/tmp\n" in command
+    private = tmp_path / "private"
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o700)
+    if existing.startswith("tmp-"):
+        private.mkdir(mode=0o755)
+    selected = private / "tmp" if existing.startswith("tmp-") else private
+    if existing.endswith("file"):
+        selected.write_text("keep")
+    elif existing.endswith("link"):
+        selected.symlink_to(outside, target_is_directory=True)
+
+    # Exercise the actual shell body without host privilege or changing /private.
+    # The fake sudo verifies root ownership is requested; install still creates
+    # real directories with the production modes under the test's private root.
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    sudo = binaries / "sudo"
+    sudo.write_text(
+        '#!/bin/bash\nset -eu\n'
+        '[[ "$*" == "install -d -o root -g root -m "* ]]\n'
+        'printf "%s\\n" "$*" >> "$PROVISION_LOG"\n'
+        'exec install -d -m "$8" "$9"\n'
+    )
+    sudo.chmod(0o700)
+    log = tmp_path / "provision.log"
+    result = subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", command.replace("/private", shlex.quote(str(private)))],
+        env={**os.environ, "PATH": f"{binaries}{os.pathsep}{os.environ['PATH']}", "PROVISION_LOG": str(log)},
+        capture_output=True, text=True, check=False,
+    )
+    if existing != "absent":
+        assert result.returncode != 0
+        assert "not a real directory" in result.stderr
+        assert not log.exists()
+        assert stat.S_IMODE(outside.stat().st_mode) == 0o700
+        if existing.endswith("file"):
+            assert selected.read_text() == "keep"
+        return
+
+    assert result.returncode == 0, result.stderr
+    assert stat.S_IMODE(private.stat().st_mode) == 0o755
+    assert stat.S_IMODE((private / "tmp").stat().st_mode) == 0o1777
+    run = subprocess.run(
+        ["mktemp", "-d", str(private / "tmp" / "replay.XXXXXX")],
+        capture_output=True, text=True, check=True,
+    )
+    assert stat.S_IMODE(Path(run.stdout.strip()).stat().st_mode) == 0o700
 
 
 def test_no_workflow_starts_from_an_unchecked_ci_variable_or_old_tag() -> None:

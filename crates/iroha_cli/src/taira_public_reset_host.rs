@@ -10,6 +10,7 @@ pub(super) mod dispatcher_transition;
 mod first_boot;
 #[path = "taira_public_reset_native_edge.rs"]
 mod native_edge;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(super) use native_edge::inspect_native_owner_inputs;
 pub(super) use native_edge::{
     AdoptNativeEdgeOwner, AuthorizeNativeEdgeOwner, CaptureNativePython,

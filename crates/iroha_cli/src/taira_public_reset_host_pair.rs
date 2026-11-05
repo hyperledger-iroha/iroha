@@ -669,6 +669,7 @@ pub(super) struct SignedNativeEdgeCaptureV1 {
 }
 
 impl SignedNativeEdgeCaptureV1 {
+    #[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
     pub(super) fn sign(claims: NativeEdgeCaptureClaimsV1, native_key: &KeyPair) -> Result<Self> {
         if native_key.public_key().try_algorithm()? != Algorithm::Ed25519 {
             return Err(eyre!(
@@ -903,6 +904,7 @@ pub(super) struct SignedNativeEdgeCandidateV1 {
 }
 
 impl SignedNativeEdgeCandidateV1 {
+    #[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
     pub(super) fn sign(claims: NativeEdgeCandidateClaimsV1, owner: &KeyPair) -> Result<Self> {
         if owner.public_key().try_algorithm()? != Algorithm::Ed25519 {
             return Err(eyre!(

@@ -121,7 +121,11 @@ fn apple_kernel_search_ancestor_replacement_and_alias_are_rejected() {
     let directory = Directory::open_exact(&fixture.leaf).unwrap();
     let retired = fixture.root.join("retired");
     fixture.restore.0.push(retired.clone());
+    // Some Darwin filesystems require owner write access to rename a directory.
+    // Restore search-only access before checking the retained original's identity.
+    fs::set_permissions(&fixture.search, fs::Permissions::from_mode(0o300)).unwrap();
     fs::rename(&fixture.search, &retired).unwrap();
+    fs::set_permissions(&retired, fs::Permissions::from_mode(0o100)).unwrap();
     fs::create_dir(&fixture.search).unwrap();
     fs::create_dir(&fixture.leaf).unwrap();
     fs::set_permissions(&fixture.leaf, fs::Permissions::from_mode(0o700)).unwrap();

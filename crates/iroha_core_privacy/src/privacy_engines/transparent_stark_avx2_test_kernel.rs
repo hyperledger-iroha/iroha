@@ -21,10 +21,10 @@ unsafe fn window(
     while offset + 4 <= left.len() {
         let index = (first + offset) * stride;
         let twiddle = _mm256_set_epi64x(
-            powers[index + 3 * stride].0 as i64,
-            powers[index + 2 * stride].0 as i64,
-            powers[index + stride].0 as i64,
-            powers[index].0 as i64,
+            powers[index + 3 * stride].0.cast_signed(),
+            powers[index + 2 * stride].0.cast_signed(),
+            powers[index + stride].0.cast_signed(),
+            powers[index].0.cast_signed(),
         );
         // SAFETY: each checked group contains four repr(transparent) u64 fields;
         // mutable halves are disjoint and loadu/storeu impose no SIMD alignment.
@@ -141,7 +141,9 @@ fn avx2_butterfly_edges_and_tails_match_independent_modular_arithmetic() {
         (1 << 32) - 1,
         1 << 32,
         (1 << 32) + 1,
+        (1 << 63) - 1,
         1 << 63,
+        (1 << 63) + 1,
         GOLDILOCKS_MODULUS_V1 - 2,
         GOLDILOCKS_MODULUS_V1 - 1,
     ];

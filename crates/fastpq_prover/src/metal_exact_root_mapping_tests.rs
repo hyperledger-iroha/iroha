@@ -346,7 +346,11 @@ fn required_metal_common22_mapping_reuse_preserves_complete_public_outputs() {
     const ROWS: usize = 1 << LOG;
     const WIDTH: usize = 4;
     const ROUNDS: usize = 12;
-    assert!(!cfg!(debug_assertions), "run optimized diagnostic");
+    // Preserve the optimized-only runtime refusal in ordinary debug test harnesses.
+    assert!(
+        !std::hint::black_box(cfg!(debug_assertions)),
+        "run optimized diagnostic"
+    );
     assert_eq!(rayon::current_num_threads(), 20, "use RAYON_NUM_THREADS=20");
     assert!(rayon::current_thread_index().is_none());
     let resident_gib: usize = std::env::var("X509_MAPPING_RESIDENT_GIB").map_or(0, |value| {

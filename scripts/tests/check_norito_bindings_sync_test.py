@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -134,6 +135,41 @@ def test_jvm_lane_runs_java_consumers_and_kotlin_fixtures(monkeypatch: pytest.Mo
     assert "org.hyperledger.iroha.sdk.tx.norito.TransactionFixtureParityTest" in args
 
 
+def test_python_lane_runs_reference_regressions_and_propagates_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+    monkeypatch.setattr(MODULE, "run_command", lambda args, **kwargs: calls.append((args, kwargs)))
+    MODULE.run_python_parity_checks()
+    assert calls == [(
+        [sys.executable, "-m", "pytest", "-q", MODULE.REPO_ROOT / "python/norito_py/tests"],
+        {"cwd": MODULE.REPO_ROOT},
+    )]
+
+    def failed_suite(*_args, **_kwargs):
+        raise MODULE.CheckError("reference regression failed")
+
+    monkeypatch.setattr(MODULE, "run_command", failed_suite)
+    with pytest.raises(MODULE.CheckError, match="reference regression failed"):
+        MODULE.run_python_parity_checks()
+
+
+def test_python_failure_reports_the_complete_reference_test_command(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("NORITO_BINDINGS_CHECK_ALL", "1")
+    monkeypatch.setattr(MODULE, "determine_base_ref", lambda: "origin/optimizations")
+    monkeypatch.setattr(MODULE, "compute_merge_base", lambda _: "base")
+    monkeypatch.setattr(MODULE, "gather_flags", lambda _: MODULE.PathFlags())
+
+    def failed_suite():
+        raise MODULE.CheckError("Python reference regression failed")
+
+    monkeypatch.setattr(MODULE, "run_python_parity_checks", failed_suite)
+    assert MODULE.main() == 1
+    assert "python3 -m pytest -q python/norito_py/tests" in capsys.readouterr().err
+
+
 def test_java_source_changes_select_canonical_jvm_lane(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     flags = MODULE.PathFlags()
@@ -158,3 +194,33 @@ def test_rust_changes_require_only_canonical_binding_updates(monkeypatch: pytest
     monkeypatch.setattr(MODULE, "run_jvm_parity_checks", lambda: calls.append("jvm"))
     assert MODULE.main() == 0
     assert calls == ["python", "jvm"]
+
+
+def test_ci_binding_gate_builds_same_source_jni_before_strict_parity() -> None:
+    workflow = (MODULE.REPO_ROOT / ".github/workflows/openapi.yml").read_text()
+    block = workflow.split("  binding-parity:\n", 1)[1].split("  metadata:\n", 1)[0]
+    assert "runs-on: ubuntu-24.04" in block
+    assert "fetch-depth: 0" in block
+    assert "uses: ./.github/actions/setup-native-ci" in block
+    assert "IROHA_NATIVE_LIBRARY_PATH: ${{ github.workspace }}/target/debug" in block
+    build = "cargo build --locked -p connect_norito_bridge --lib"
+    validate = 'test -s "$IROHA_NATIVE_LIBRARY_PATH/libconnect_norito_bridge.so"'
+    parity = "bash ci/check_norito_bindings_sync.sh"
+    assert block.index(build) < block.index(validate) < block.index(parity)
+    steps = re.split(r"(?=^      - )", block, flags=re.M)
+    bootstrap = [step for step in steps if "NORITO_SKIP_BINDINGS_SYNC" in step]
+    assert len(bootstrap) == 1
+    assert build in bootstrap[0]
+    assert parity not in bootstrap[0]
+    assert "NORITO_JVM_SKIP_TESTS" not in block
+    assert "continue-on-error" not in block
+
+
+def test_ci_binding_gate_provisions_compressed_python_reference_tests() -> None:
+    root = MODULE.REPO_ROOT
+    requirements = (root / "scripts/requirements.txt").read_text().splitlines()
+    setup = (root / ".github/actions/setup-native-ci/action.yml").read_text()
+    workflow = (root / ".github/workflows/openapi.yml").read_text()
+    assert "zstandard==0.25.0" in requirements
+    assert "python -m pip install -r scripts/requirements.txt" in setup
+    assert workflow.count('      - "python/norito_py/**"') == 2

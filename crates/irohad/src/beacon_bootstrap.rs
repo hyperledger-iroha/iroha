@@ -33,7 +33,22 @@ use iroha_core::validator_committee_evidence::{
     VerifiedValidatorCommitteeSelectionV1, verify_validator_committee_selection_evidence_v1,
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PublicKey, Signature};
-use iroha_data_model::{NetworkId, consensus::{GlobalThresholdBeaconDkgSessionV1, GlobalThresholdBeaconKeySessionV1}, isi::{InstructionBox, consensus_keys::{ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1, ThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleSignatureV1}}, nexus::ValidatorCommitteePreparationV1, sumeragi::finality::{NATIVE_FINALITY_MAX_BLOCK_BYTES, NATIVE_FINALITY_MAX_BLOCK_COUNT, NATIVE_FINALITY_MAX_JOURNAL_BYTES, NativeFinalityJournal, NativeFinalityLimits}};
+use iroha_data_model::{
+    NetworkId,
+    consensus::{GlobalThresholdBeaconDkgSessionV1, GlobalThresholdBeaconKeySessionV1},
+    isi::{
+        InstructionBox,
+        consensus_keys::{
+            ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
+            ThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleSignatureV1,
+        },
+    },
+    nexus::ValidatorCommitteePreparationV1,
+    sumeragi::finality::{
+        NATIVE_FINALITY_MAX_BLOCK_BYTES, NATIVE_FINALITY_MAX_BLOCK_COUNT,
+        NATIVE_FINALITY_MAX_JOURNAL_BYTES, NativeFinalityJournal, NativeFinalityLimits,
+    },
+};
 use iroha_model_base::topology::is_valid_committee_size;
 use iroha_model_base::{chain::ChainId, peer::PeerId};
 use norito::derive::{JsonDeserialize, JsonSerialize};
@@ -48,6 +63,7 @@ use std::{
 };
 use zeroize::{Zeroize as _, Zeroizing};
 
+pub(crate) mod descriptor_relay;
 mod genesis_seat;
 mod rotation_seat;
 mod seat_attempt;
@@ -470,10 +486,26 @@ pub(crate) fn dispatch_if_requested() -> bool {
     if args.next().as_deref() != Some(std::ffi::OsStr::new("beacon-bootstrap")) {
         return false;
     }
+    dispatch_arguments(args, false);
+    true
+}
+
+/// Run the same typed command after ordinary launch or the early descriptor handoff.
+pub(crate) fn dispatch_arguments(args: impl Iterator<Item = OsString>, relayed: bool) {
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
         crate::taira_runtime_signer::TAIRA_CHAIN_DISCRIMINANT_V1,
     );
-    let parsed = Args::parse_from(std::iter::once(OsString::from("beacon-bootstrap")).chain(args));
+    let parsed =
+        Args::try_parse_from(std::iter::once(OsString::from("beacon-bootstrap")).chain(args));
+    let parsed = match parsed {
+        Ok(parsed) => parsed,
+        Err(error) if !relayed => error.exit(),
+        // Before handoff stderr can be an input FIFO. Never print into it.
+        Err(_) => std::process::exit(2),
+    };
+    if relayed && prepare_relay(&parsed.command).is_err() {
+        std::process::exit(2);
+    }
     let credential_budget =
         iroha_allocation::AllocationBudget::new(parsed.credential_max_memory_bytes.get());
     let budget = &credential_budget;
@@ -635,7 +667,41 @@ pub(crate) fn dispatch_if_requested() -> bool {
         eprintln!("{error}");
         std::process::exit(error.public_command_exit_code());
     }
-    true
+}
+
+fn prepare_relay(command: &Command) -> Result<()> {
+    match command {
+        Command::ProvisionGenesisSeat {
+            key_fd,
+            config_fd,
+            public_fd,
+            finality_fd,
+            attempt_root,
+            ..
+        }
+        | Command::ProvisionRotationSeat {
+            key_fd,
+            config_fd,
+            public_fd,
+            finality_fd,
+            attempt_root,
+            ..
+        } if matches!((key_fd, config_fd), (Some(198), None) | (None, Some(198)))
+            && *public_fd == 201
+            && *finality_fd == 202 =>
+        {
+            descriptor_relay::prepare_seat(attempt_root)
+        }
+        Command::SignGenesisInstall {
+            key_fd, config_fd, ..
+        }
+        | Command::SignRotation {
+            key_fd, config_fd, ..
+        } if matches!((key_fd, config_fd), (Some(198), None) | (None, Some(198))) => {
+            descriptor_relay::prepare_key().map_err(|_| Error::Io)
+        }
+        _ => Err(Error::InvalidInput),
+    }
 }
 
 fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {

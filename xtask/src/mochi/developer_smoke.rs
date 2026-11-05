@@ -123,8 +123,17 @@ impl Harness {
             Duration::from_nanos(observation.elapsed_ns).as_secs_f64()
         );
         observation.value.ok_or_else(|| {
+            let startup = if args.starts_with(&["localnet", "up"]) {
+                let summary = startup_failure_summary(
+                    &self.root.path().join(format!("{}.stdout", self.sequence)),
+                )
+                .unwrap_or_else(|_| "unavailable".to_owned());
+                format!("; startup_status={summary}")
+            } else {
+                String::new()
+            };
             format!(
-                "installed CLI command did not complete: {}",
+                "installed CLI command did not complete: {}{startup}",
                 observation.outcome.as_str()
             )
             .into()
@@ -452,6 +461,38 @@ fn parse_command_output(bytes: &[u8]) -> Result<Value, super::latency::Outcome> 
     json::from_slice(bytes).map_err(|_| super::latency::Outcome::OutputRejected)
 }
 
+// Only the canonical CLI's public status is eligible for CI diagnostics. Retained stderr,
+// recovery commands, context paths, generated configuration and keys stay private.
+fn startup_failure_summary(path: &Path) -> Result<String, super::latency::Outcome> {
+    use super::latency::Outcome;
+
+    let mut bytes = Vec::new();
+    File::open(path)
+        .map_err(|_| Outcome::ControllerIo)?
+        .take(MAX_OUTPUT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| Outcome::ControllerIo)?;
+    let document = parse_command_output(&bytes)?;
+    let status: iroha_deploy::managed::ManagedStatus = json::from_value(
+        document
+            .get("status")
+            .cloned()
+            .ok_or(Outcome::OutputRejected)?,
+    )
+    .map_err(|_| Outcome::OutputRejected)?;
+    let summary = json::to_string(&norito::json!({
+        "phase": (status.phase),
+        "running_peers": (status.running_peers),
+        "failure": (status.failure),
+        "validators": (status.validators),
+    }))
+    .map_err(|_| Outcome::OutputRejected)?;
+    if summary.len() > 4096 {
+        return Err(Outcome::OutputRejected);
+    }
+    Ok(summary)
+}
+
 fn receipt_artifact(
     deployment: &Value,
     network: &str,
@@ -601,6 +642,96 @@ fn require_same_deployment(before: &Value, after: &Value) -> Result<(), Box<dyn 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn startup_diagnostic_document() -> Value {
+        norito::json!({
+            "status": {
+                "context": {
+                    "name": "local", "chain_id": "fixture", "network_id": "fixture",
+                    "account_id": "fixture", "dataspace_id": 0, "dataspace_alias": "fixture",
+                    "torii_url": "http://127.0.0.1:8080/", "client_config": "/private/SECRET.toml",
+                },
+                "phase": "failed", "running_peers": 0,
+                "failure": "startup deadline expired while authenticating current native provider and signer discovery",
+                "validators": [{"index": 2, "state": {"kind": "exited", "value": {"code": 9, "signal": null}}}],
+            },
+            "recovery": [{"argv": ["SECRET recovery path"]}],
+            "unrelated": "SECRET upstream output",
+        })
+    }
+
+    #[test]
+    fn startup_diagnostic_keeps_only_bounded_public_status() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("1.stdout");
+        let document = startup_diagnostic_document();
+        fs::write(&path, json::to_vec(&document).unwrap()).unwrap();
+        let summary = startup_failure_summary(&path).unwrap();
+        let projected: Value = json::from_str(&summary).unwrap();
+        assert_eq!(projected.as_object().unwrap().len(), 4);
+        for field in ["phase", "running_peers", "failure", "validators"] {
+            assert_eq!(
+                projected.get(field),
+                document.get("status").unwrap().get(field)
+            );
+        }
+        assert!(!summary.contains("SECRET"));
+        assert!(!summary.contains("context"));
+        assert!(!summary.contains("recovery"));
+        for bytes in [
+            b"{".to_vec(),
+            b"{\"status\":null}".to_vec(),
+            b"{} {}".to_vec(),
+            vec![b' '; usize::try_from(MAX_OUTPUT + 1).unwrap()],
+        ] {
+            fs::write(&path, bytes).unwrap();
+            assert!(startup_failure_summary(&path).is_err());
+        }
+        let mut oversized = document;
+        *oversized
+            .get_mut("status")
+            .unwrap()
+            .get_mut("failure")
+            .unwrap() = Value::String("x".repeat(4097));
+        fs::write(&path, json::to_vec(&oversized).unwrap()).unwrap();
+        assert!(startup_failure_summary(&path).is_err());
+        assert!(startup_failure_summary(&root.path().join("missing")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_startup_keeps_failure_status_and_closed_latency_outcome() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let kagami = root.path().join("kagami");
+        let document = json::to_string(&startup_diagnostic_document()).unwrap();
+        fs::write(
+            &kagami,
+            format!("#!/bin/sh\nprintf '%s\\n' '{document}'\nprintf '%s\\n' 'SECRET stderr' >&2\nexit 9\n"),
+        )
+        .unwrap();
+        fs::set_permissions(&kagami, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut harness = Harness::new(&kagami).unwrap();
+        let error = harness
+            .command(&["localnet", "up", "local", "--with-storage"])
+            .expect_err("diagnostics must never admit a failed installed command")
+            .to_string();
+        assert!(error.contains("command_failed; startup_status="));
+        assert!(error.contains("startup deadline expired while authenticating"));
+        assert!(error.contains("\"code\":9"));
+        assert!(!error.contains("SECRET"));
+        let observation = harness.observe_command(&["localnet", "up", "local", "--with-storage"]);
+        assert_eq!(
+            observation.outcome,
+            super::super::latency::Outcome::CommandFailed
+        );
+        assert!(observation.value.is_none());
+        assert_eq!(
+            fs::read_to_string(harness.root.path().join("1.stderr")).unwrap(),
+            "SECRET stderr\n"
+        );
+    }
 
     #[test]
     fn network_listing_uses_bounded_child_without_managed_state_or_path_lookup() {

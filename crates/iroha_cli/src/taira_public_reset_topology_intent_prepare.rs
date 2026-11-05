@@ -557,8 +557,11 @@ impl PrepareTopologyIntent {
             )?;
             let mut intent = old.topology_intent(&plan.hosts)?;
             intent.hosts = plan.hosts.clone();
-            intent.hosts.validator_guest.dispatcher_sha256 =
-                plan.candidate.executable.sha256.clone();
+            intent
+                .hosts
+                .validator_guest
+                .dispatcher_sha256
+                .clone_from(&plan.candidate.executable.sha256);
             intent.hosts.validator_guest.guard_sha256 = sha256_hex(&guards[0]);
             intent.deployment_id = format!("taira-public-{}-", &revision.commit[..8]);
             let mut nonce = [0_u8; 16];
@@ -569,9 +572,17 @@ impl PrepareTopologyIntent {
             intent
                 .deployment_id
                 .push_str(&intent.authorization_nonce[..8]);
-            intent.previous_genesis_hash = old.next_genesis_hash.clone();
-            intent.revision.source_root = revision.source_root.clone();
-            intent.revision.source_manifest_path = revision.source_manifest_path.clone();
+            intent
+                .previous_genesis_hash
+                .clone_from(&old.next_genesis_hash);
+            intent
+                .revision
+                .source_root
+                .clone_from(&revision.source_root);
+            intent
+                .revision
+                .source_manifest_path
+                .clone_from(&revision.source_manifest_path);
             intent.canary_onboarding_request = public.canary_onboarding_request.clone();
             intent.fee_intent = FeeIntentV1 {
                 payer: "authority".into(),
@@ -711,6 +722,10 @@ impl PrepareTopologyIntent {
             observed.pin(&self.edge_config, Some(0o640), MAX_PROOF)?;
             let native_cli = observed.pin(&self.native_edge_cli, Some(0o755), MAX_BINARY)?;
             let signed_cli = &plan.candidate.native_edge_candidate.claims.iroha_cli;
+            #[expect(
+                clippy::suspicious_operation_groupings,
+                reason = "The observed controller path must match the signed local copy, not the remote deployment path."
+            )]
             need(
                 native_cli.path == signed_cli.local_path
                     && native_cli.sha256 == signed_cli.sha256
@@ -723,14 +738,19 @@ impl PrepareTopologyIntent {
                 intent.hosts.native_edge.owner_home, revision.commit,
             );
             intent.edge.platform = intent.hosts.native_edge.platform.clone();
-            intent.edge.endpoint.remote_cli = signed_cli.remote_path.clone();
-            intent.edge.endpoint.upload_guard_sha256 = plan
-                .candidate
-                .native_edge_candidate
-                .claims
-                .native_guard
-                .sha256
-                .clone();
+            intent
+                .edge
+                .endpoint
+                .remote_cli
+                .clone_from(&signed_cli.remote_path);
+            intent.edge.endpoint.upload_guard_sha256.clone_from(
+                &plan
+                    .candidate
+                    .native_edge_candidate
+                    .claims
+                    .native_guard
+                    .sha256,
+            );
             intent.edge.initial_state =
                 EdgeInitialStateV1::AdmittedRelease(runtime.native_edge.claims.release.clone());
             intent.edge.artifacts = vec![

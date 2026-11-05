@@ -75,7 +75,8 @@ fn first_configure_proof_is_consumed_before_changed_native_preparation_refusal()
             let cut = native.observe(&owner.authority);
             let proof = native.bootstrap_custody(&owner.authority, &policy, &cut);
             assert!(proof.current().is_none());
-            Ok((cut, proof))
+            let source = native.bootstrap_custody_source(&owner.authority, &policy, &cut);
+            Ok((cut, proof, source))
         })
         .unwrap();
     assert!(admission.is_some());

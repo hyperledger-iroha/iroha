@@ -1568,6 +1568,10 @@ CORE_BEACON_STAGES = (('height-bound beacon readiness and actual custody', (
     'beacon::tests::runtime_beacon_capability_requires_exact_live_session_and_seat_without_signing',
 )), )
 DAEMON_BEACON_STAGES = (('native beacon bootstrap, broker and consumed credential custody', (
+    'beacon_bootstrap::descriptor_relay::tests::dense_parent_descriptors_preserve_all_native_handoffs',
+    'beacon_bootstrap::descriptor_relay::tests::typed_dispatch_restores_logs_and_rejects_missing_evidence_before_private_consumption',
+    'beacon_bootstrap::descriptor_relay::tests::surviving_unrelated_slot_is_refused_without_changing_it',
+    'beacon_bootstrap::descriptor_relay::tests::private_logs_refuse_preexisting_names_and_nonprivate_root',
     'taira_runtime_signer::tests::disposable_broker_composes_exact_soracloud_and_threshold_catalogs',
     'taira_runtime_signer::tests::disposable_broker_rejects_catalog_and_credential_substitution',
     'taira_runtime_signer::tests::disposable_broker_rejects_unsupported_slots_before_reading_credentials',

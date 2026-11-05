@@ -347,11 +347,30 @@ class Status(Base):
         self.assert_fails(errors, "operations[kaigi::JoinKaigi]: test_evidence is `none`")
         self.assert_fails(errors, "operations[kaigi::JoinKaigi]: test_evidence `none` needs test_note")
 
+        ignored_sources: dict[str, str] = {}
+
         def only_ignored(inventory: dict) -> None:
             item = operation(inventory, "game::VerifyExecutionProofV1")
-            self.assertEqual(item["test_evidence"], "not_default")
-            item["test_evidence"] = "default"
-        self.assert_fails(run("check_registry", edited(only_ignored)),
+            self.assertEqual(item["test_evidence"], "default")
+            # The actual verifier now has default coverage. Make that cited
+            # test ignored in both the source and its inventory, while leaving
+            # the claimed default evidence unchanged.
+            for test in item["tests"]:
+                if test.get("covers"):
+                    continue
+                path = test["path"]
+                text = ignored_sources.get(path, source(path))
+                pattern = rf"(?m)^([ \t]*)fn {re.escape(test['test'])}\("
+                changed, count = re.subn(
+                    pattern,
+                    lambda match: match[1] + '#[ignore = "negative inventory control"]\n' + match[0],
+                    text,
+                )
+                self.assertEqual(count, 1)
+                ignored_sources[path] = changed
+                test["ignored"] = True
+            self.assertTrue(ignored_sources)
+        self.assert_fails(run("check_registry", edited(only_ignored), ignored_sources),
                           "operations[game::VerifyExecutionProofV1]: test_evidence is `not_default`")
 
         def only_feature_gated(inventory: dict) -> None:

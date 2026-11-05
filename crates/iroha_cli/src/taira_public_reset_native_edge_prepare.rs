@@ -5,16 +5,25 @@
 //! records with inherited keys, and publishes all outputs as one fresh directory.
 
 use super::*;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+use host_pair::NativeOwnedPublicationV1;
+#[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
 use host_pair::{
     NativeEdgeCandidateClaimsV1, NativeEdgeCaptureClaimsV1, NativeEdgeCompletionProvenanceV1,
-    NativeFileIdentityV1, NativeObservedFileV1, NativeOwnedPublicationV1, NativePublicFileV1,
-    ResetHostPairV1, SignedNativeEdgeCandidateV1, SignedNativeEdgeCaptureV1,
+    NativePublicFileV1, ResetHostPairV1, SignedNativeEdgeCandidateV1, SignedNativeEdgeCaptureV1,
 };
+#[cfg(any(all(test, unix), all(target_os = "macos", target_arch = "aarch64")))]
+use host_pair::{NativeFileIdentityV1, NativeObservedFileV1};
+#[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
 use iroha_crypto::KeyPair;
+#[cfg(any(all(test, unix), all(target_os = "macos", target_arch = "aarch64")))]
 use iroha_fs::OwnerDirectory;
 
+#[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
 const REQUEST_SCHEMA: &str = "iroha.taira.public-reset.native-edge-prepare-request.v1";
+#[cfg(any(all(test, unix), all(target_os = "macos", target_arch = "aarch64")))]
 const MAX_REQUEST: u64 = 128 * 1024;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const MAX_PUBLIC_PLAN: u64 = 1024 * 1024;
 
 /// Prepare public native records without changing nginx, validators or ledger state.
@@ -37,6 +46,7 @@ pub(super) struct PrepareNativeEdge {
     output: PathBuf,
 }
 
+#[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct TerminalAuthorityV1 {
@@ -44,6 +54,7 @@ struct TerminalAuthorityV1 {
     authorization: NativePublicFileV1,
 }
 
+#[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct PrepareRequestV1 {
@@ -70,25 +81,23 @@ struct PrepareRequestV1 {
     terminal_authority: Option<TerminalAuthorityV1>,
 }
 
+#[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
 /// Sole maintained owner output; private-main content has no representation here.
 type OwnerObservationV1 = native_edge_protocol::NativeOwnerObservationV1;
 
+#[cfg(any(all(test, unix), all(target_os = "macos", target_arch = "aarch64")))]
 struct RetainedInput {
     parent: OwnerDirectory,
     pin: PinnedInput,
     identity: NativeFileIdentityV1,
 }
 
-#[cfg(unix)]
+#[cfg(any(all(test, unix), all(target_os = "macos", target_arch = "aarch64")))]
 fn native_identity(metadata: &fs::Metadata) -> Result<NativeFileIdentityV1> {
     native_edge_protocol::native_file_identity(metadata)
 }
 
-#[cfg(not(unix))]
-fn native_identity(_: &fs::Metadata) -> Result<NativeFileIdentityV1> {
-    Err(eyre!("native edge input custody requires Unix"))
-}
-
+#[cfg(any(all(test, unix), all(target_os = "macos", target_arch = "aarch64")))]
 impl RetainedInput {
     /// Metadata-only acquisition also retains every native ancestor; no body is read.
     fn metadata(expected: &NativeObservedFileV1, owner: u32) -> Result<Self> {
@@ -159,6 +168,7 @@ impl RetainedInput {
     }
 }
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn retain_public(
     refs: &mut Vec<RetainedInput>,
     reference: &NativePublicFileV1,
@@ -171,6 +181,7 @@ fn retain_public(
     Ok(bytes)
 }
 
+#[cfg(any(all(test, unix), all(target_os = "macos", target_arch = "aarch64")))]
 fn read_request(args: &PrepareNativeEdge) -> Result<(PrepareRequestV1, PinnedInput)> {
     validate_lower_hex("native request pin", &args.expected_request_sha256, 64)?;
     let pin = pin_owner_private_file(&args.request, "native prepare request")?;
@@ -189,6 +200,7 @@ fn read_request(args: &PrepareNativeEdge) -> Result<(PrepareRequestV1, PinnedInp
     Ok((request, pin))
 }
 
+#[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
 fn validate_selected_refs(request: &PrepareRequestV1) -> Result<()> {
     request.hosts.validate()?;
     let host = &request.hosts.native_edge;
@@ -225,6 +237,7 @@ fn validate_selected_refs(request: &PrepareRequestV1) -> Result<()> {
     Ok(())
 }
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn run_owner(
     host: &host_pair::ResetHostV1,
     action: &str,
@@ -239,6 +252,7 @@ fn run_owner(
     host::inspect_native_owner_inputs(host, action, request, scratch.path())
 }
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn inspect_owner(
     host: &host_pair::ResetHostV1,
     request: &[u8],
@@ -256,6 +270,7 @@ fn inspect_owner(
     Ok(observed)
 }
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn validate_new_plan(
     host: &host_pair::ResetHostV1,
     current: &[u8],
@@ -300,6 +315,7 @@ fn validate_new_plan(
     Ok(())
 }
 
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn derive_revision(request: &PrepareRequestV1, bytes: &[u8]) -> Result<RevisionV1> {
     let manifest: SourceManifestV1 = json::from_slice(bytes)?;
     let revision = RevisionV1 {
@@ -320,6 +336,7 @@ fn derive_revision(request: &PrepareRequestV1, bytes: &[u8]) -> Result<RevisionV
     Ok(revision)
 }
 
+#[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
 fn validate_darwin_header(bytes: &[u8]) -> Result<()> {
     if bytes.len() < 32
         || bytes[..4] != [0xcf, 0xfa, 0xed, 0xfe]
@@ -333,6 +350,7 @@ fn validate_darwin_header(bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
 #[derive(Clone, Copy)]
 struct NativeEdgeSigningKeys<'a> {
     trusted: &'a TrustedKeyV1,
@@ -340,6 +358,7 @@ struct NativeEdgeSigningKeys<'a> {
     owner_key: &'a KeyPair,
 }
 
+#[cfg(any(test, all(target_os = "macos", target_arch = "aarch64")))]
 fn sign_records(
     request: &PrepareRequestV1,
     revision: &RevisionV1,
@@ -1163,6 +1182,25 @@ mod tests {
             missing.drain(at..at + 2);
             assert!(Cli::try_parse_from(missing).is_err(), "{name}");
         }
+    }
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[test]
+    fn native_edge_prepare_refuses_unsupported_hosts_before_input_admission() {
+        let args = PrepareNativeEdge {
+            request: PathBuf::from("relative-unadmitted-request"),
+            expected_request_sha256: "not-an-admitted-digest".into(),
+            native_signing_key_fd: 65534,
+            owner_signing_key_fd: 65535,
+            output: PathBuf::from("relative-unadmitted-output"),
+        };
+        let mut output = Vec::new();
+        let error = prepare(&args, &mut output).expect_err("unsupported native owner");
+        assert_eq!(
+            error.to_string(),
+            "native edge preparation requires its admitted Darwin AArch64 host"
+        );
+        assert!(output.is_empty());
     }
 
     #[test]

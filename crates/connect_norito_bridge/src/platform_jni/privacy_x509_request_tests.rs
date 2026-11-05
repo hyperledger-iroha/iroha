@@ -23,10 +23,14 @@ fn fixture() -> (
         .expect("canonical proof-free request");
     let builder = TransactionBuilder::decode_payload(&row.unsigned_transaction_payload_norito)
         .expect("original fixture payload");
+    let statement: PrivacyRuntimeStatementV1 =
+        norito::decode_canonical::<PrivacyStatementV1>(&row.statement_norito)
+            .expect("canonical wire statement")
+            .into();
     (
         request,
         builder.payload().clone(),
-        row.statement_norito,
+        norito::encode_canonical(&statement).expect("canonical runtime statement"),
         row.transaction_intent_projection_norito,
     )
 }
@@ -154,6 +158,11 @@ fn request_boundary_rejects_materialized_inline_wrong_type_and_malformed_frames(
         if row.protocol_id != PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 {
             assert!(inspect_request(&row.submit_proof_instruction_norito).is_none());
             assert!(create_request(&row.statement_norito, 0).is_none());
+            let statement: PrivacyRuntimeStatementV1 =
+                norito::decode_canonical::<PrivacyStatementV1>(&row.statement_norito)
+                    .expect("canonical wire statement")
+                    .into();
+            assert!(create_request(&norito::encode_canonical(&statement).unwrap(), 0).is_none());
         }
     }
 }

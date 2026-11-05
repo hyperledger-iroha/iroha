@@ -42,6 +42,7 @@ test("release test profiles separate provisioned lanes and reject skipped result
     '"sorafsOrderbookSubmission.test.js"',
     '"sorafsOrchestrator.parity.test.js"',
     '"sorafsPdpValidation.test.js"',
+    'process.platform === "darwin" ? ["nativeBuildProfile.test.js"] : []',
     'testArguments.push("--test-concurrency=1")',
     '/# (?:SKIP|TODO)(?:\\s|$)/u',
   ]) {
@@ -63,6 +64,7 @@ test("release-scoped JavaScript tests contain no capability skip declarations", 
 
     "javascript/iroha_js/test/integrationTorii.test.js",
     "javascript/iroha_js/test/nativeBuildProvenance.test.js",
+    "javascript/iroha_js/test/nativeBuildProfile.test.js",
     "javascript/iroha_js/test/retailDailyLimitInstructions.test.js",
     "javascript/iroha_js/test/sorafsChunker.oneGib.test.js",
   ]) {

@@ -1,7 +1,7 @@
 //! Torii collection reads: one query language and one page envelope for every collection.
 //!
 //! Domains, accounts, asset definitions, NFTs, RWA lots, account assets, asset
-//! holders, permissions, transactions, subscription plans, subscriptions, UAID
+//! holders, permissions, roles, role assignments, transactions, subscription plans, subscriptions, UAID
 //! manifests and repo agreements are all read
 //! with a [`ListQuery`] and return a [`Page`] of JSON rows. The wire contract is
 //! `specs/torii/collection_queries.md`; the query language itself is the shared
@@ -13,6 +13,8 @@
 //! `Accept: application/json`. [`Client`] reads are public and unsigned;
 //! [`AccountClient`] reads carry the account's canonical request signature when
 //! it can sign directly, which only widens visibility into restricted dataspaces.
+//! Role collections require a signed account with `CanReadAllLedgerData` and
+//! return the roles of the contacted root's authoritative World.
 //!
 //! ```no_run
 //! use iroha::collections::{Collection, ListQuery, SortKey, TryStreamExt as _, field};
@@ -176,9 +178,9 @@ impl Collection {
             Self::Nfts => "nfts",
             Self::Rwas => "rwas",
             Self::AccountAssets(_) => "account_assets",
+            Self::AccountPermissions(_) => "account_permissions",
             Self::Roles => "roles",
             Self::AccountRoles(_) => "account_roles",
-            Self::AccountPermissions(_) => "account_permissions",
             Self::AssetHolders(_) => "asset_holders",
             Self::Transactions => "transactions",
             Self::AccountTransactions(_) => "account_transactions",
@@ -205,8 +207,8 @@ impl Collection {
 
     /// Route template, for example `/v1/accounts/{account_id}/assets`.
     ///
-    /// Queries go to `<route>/query`. Every route except `/v1/transactions`
-    /// also serves `GET` list requests.
+    /// Queries go to `<route>/query`. Transactions and role collections are
+    /// query-only; the other routes also serve `GET` list requests.
     pub const fn route(&self) -> &'static str {
         match self {
             Self::Domains => "/v1/domains",
@@ -215,9 +217,9 @@ impl Collection {
             Self::Nfts => "/v1/nfts",
             Self::Rwas => "/v1/rwas",
             Self::AccountAssets(_) => "/v1/accounts/{account_id}/assets",
+            Self::AccountPermissions(_) => "/v1/accounts/{account_id}/permissions",
             Self::Roles => "/v1/roles",
             Self::AccountRoles(_) => "/v1/accounts/{account_id}/roles",
-            Self::AccountPermissions(_) => "/v1/accounts/{account_id}/permissions",
             Self::AssetHolders(_) => "/v1/assets/{definition_id}/holders",
             Self::Transactions => "/v1/transactions",
             Self::AccountTransactions(_) => "/v1/accounts/{account_id}/transactions",
@@ -346,9 +348,9 @@ impl Collection {
             Self::Nfts => "collections.nfts",
             Self::Rwas => "collections.rwas",
             Self::AccountAssets(_) => "collections.account_assets",
+            Self::AccountPermissions(_) => "collections.account_permissions",
             Self::Roles => "collections.roles",
             Self::AccountRoles(_) => "collections.account_roles",
-            Self::AccountPermissions(_) => "collections.account_permissions",
             Self::AssetHolders(_) => "collections.asset_holders",
             Self::Transactions => "collections.transactions",
             Self::AccountTransactions(_) => "collections.account_transactions",
@@ -705,6 +707,18 @@ mod tests {
         let discriminant = iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT;
         let literal = i105(&account, discriminant);
         for (collection, name, route, path) in [
+            (
+                Collection::Roles,
+                "roles",
+                "/v1/roles",
+                "/v1/roles".to_owned(),
+            ),
+            (
+                Collection::AccountRoles(account.clone()),
+                "account_roles",
+                "/v1/accounts/{account_id}/roles",
+                format!("/v1/accounts/{literal}/roles"),
+            ),
             (
                 Collection::Domains,
                 "domains",

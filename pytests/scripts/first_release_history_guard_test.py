@@ -539,6 +539,28 @@ def test_current_tree_matches_its_inventory() -> None:
     assert GUARD.check(ROOT) == ()
 
 
+def test_version_error_fixture_exception_is_scoped_to_its_exact_path_and_type() -> None:
+    data, errors = GUARD.load_inventory(ROOT)
+    assert errors == []
+    path = "crates/iroha_version/src/error_tests.rs"
+    key = (path, "Payload")
+    test_only = {(entry["path"], entry["type"]) for entry in data["test_only_version_impls"]}
+    assert key in test_only
+    source = (ROOT / path).read_text(encoding="utf-8")
+    parent = (ROOT / "crates/iroha_version/src/lib.rs").read_text(encoding="utf-8")
+    assert "#[cfg(test)]\nmod error_tests;" in parent
+    assert GUARD.version_impl_errors(path, source, {}, test_only, set()) == []
+
+    for relative, text, exceptions, type_name in (
+        (path, source, test_only - {key}, "Payload"),
+        ("crates/iroha_version/src/production.rs", source, test_only, "Payload"),
+        (path, source.replace("Payload", "OtherPayload"), test_only, "OtherPayload"),
+    ):
+        violations = GUARD.version_impl_errors(relative, text, {}, exceptions, set())
+        assert len(violations) == 1
+        assert f"{type_name} is not listed" in violations[0]
+
+
 def test_current_inventory_lists_the_history_types_and_the_new_replay_tests() -> None:
     data, errors = GUARD.load_inventory(ROOT)
     assert errors == []

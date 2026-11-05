@@ -13,14 +13,14 @@ pub enum BitstreamError {
     UnexpectedEof,
 }
 const MAX_BITS: u32 = 56;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "fixtures"))]
 pub(crate) struct BitWriter {
     buffer: u64,
     bit_count: u32,
     out: Vec<u8>,
     max_bytes: usize,
 }
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "fixtures"))]
 impl BitWriter {
     pub(crate) fn with_capacity(max_bytes: usize) -> Self {
         Self {

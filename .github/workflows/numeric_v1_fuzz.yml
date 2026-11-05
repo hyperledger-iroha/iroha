@@ -3,7 +3,13 @@ name: Numeric V1 strict fuzz smoke
 on:
   pull_request:
     paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/numeric_v1_fuzz.yml"
+      - ".github/actions/setup-native-ci/**"
+      - "scripts/ci_private_fixture_root.py"
+      - "pytests/scripts/ci_private_fixture_root_test.py"
+      - "scripts/requirements.txt"
       - "crates/iroha_primitives/src/bigint.rs"
       - "crates/iroha_primitives/src/numeric.rs"
       - "crates/iroha_primitives/src/numeric/**"
@@ -44,9 +50,9 @@ concurrency:
 jobs:
   numeric_v1_fuzz:
     name: Numeric V1 libFuzzer gate
-    # Sanitizing the complete IVM dependency graph is memory intensive; use
-    # the same managed Linux pool as the repository's full workspace gates.
-    runs-on: [self-hosted, Linux, iroha2]
+    # PR validation provisions its own hosted native tools. Release and manual
+    # callers retain their existing managed runner selection and fuzz policy.
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-24.04"]' || '["self-hosted","Linux","iroha2"]') }}
     # A clean sanitizer build of the IVM graph can exceed 45 minutes even
     # though the libFuzzer execution itself is capped at 60 seconds.
     timeout-minutes: 120
@@ -64,7 +70,18 @@ jobs:
       - name: Verify exact source commit
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
+      - name: Provision hosted PR fuzz tools
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/setup-native-ci
+        with:
+          toolchain: nightly-2026-10-23
+
+      - name: Exercise strict fuzz prerequisite and routing regressions
+        if: github.event_name == 'pull_request'
+        run: python3 pytests/scripts/fuzz_smoke_test.py
+
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
+        if: github.event_name != 'pull_request'
         with:
           toolchain: nightly-2026-10-23
 

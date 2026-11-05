@@ -139,6 +139,44 @@ fn fallback_raw_genesis_from_json() -> RawGenesisTransaction {
         .build_raw()
         .expect("build complete lightweight integration-test genesis fixture")
 }
+
+fn rebind_genesis_topology(
+    raw: RawGenesisTransaction,
+    topology: Vec<GenesisTopologyEntry>,
+) -> Result<RawGenesisTransaction> {
+    // set_topology replaces only the current transaction's roster. Remove the
+    // original fixture roster before adding the exact four live validators.
+    complete_test_genesis_builder_for_topology(
+        raw.clear_topology().into_builder().next_transaction(),
+        topology,
+    )
+    .build_raw()
+}
+
+#[test]
+fn rebinding_genesis_topology_replaces_the_fixture_roster() -> Result<()> {
+    init_instruction_registry();
+    let raw = fallback_raw_genesis_from_json();
+    let topology: Vec<_> = deterministic_test_genesis_topology()
+        .into_iter()
+        .rev()
+        .collect();
+    let rebound = rebind_genesis_topology(raw, topology.clone())?;
+    let actual: Vec<_> = rebound
+        .transactions()
+        .iter()
+        .flat_map(|transaction| transaction.topology().iter().cloned())
+        .collect();
+    assert_eq!(actual, topology);
+    assert_eq!(
+        actual.len(),
+        4,
+        "the original roster must not remain in an earlier transaction"
+    );
+    rebound.validate_genesis_topology()?;
+    Ok(())
+}
+
 #[test]
 fn genesis_asset_minted_across_peers() -> Result<()> {
     init_instruction_registry();
@@ -198,6 +236,22 @@ fn genesis_asset_minted_across_peers() -> Result<()> {
             return Ok(());
         }
         return Err(err);
+    }
+    // Synchronous SDK reads run after leaving the network's Tokio context.
+    let asset_id = AssetId::new(
+        AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal")?,
+            "rose".parse()?,
+        ),
+        ALICE_ID.clone(),
+    );
+    for peer in network.peers() {
+        let asset = peer
+            .client()
+            .client()
+            .query_single(FindAssetById::new(asset_id.clone()))?;
+        assert_eq!(asset.id(), &asset_id);
+        assert_eq!(asset.value(), &Quantity::from(13_u32));
     }
     Ok(())
 }

@@ -225,7 +225,9 @@ fn four_validators_publish_native_sccp_finality_and_refuse_unqualified_launch() 
                     .forgery_hold(iroha_sccp::api::SccpForgeryHoldQuery::default())
             })?;
             ensure!(holds.revisions.is_empty() && holds.next.is_none());
-            let pause = client.sccp().fast_pause()?;
+            let pause = native_read::read(&client, "sccp.fast_pause", |bounded| {
+                bounded.sccp().fast_pause()
+            })?;
             ensure!(pause.panel.is_none() && pause.seats.is_none() && !pause.eligibility_available);
             ensure!(
                 pause.rounds.is_empty() && pause.active.is_empty() && pause.suspended.is_empty()

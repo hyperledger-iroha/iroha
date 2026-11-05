@@ -61,14 +61,11 @@ fn data_events_follow_instruction_order_in_tx() {
     let committed = chain.committed(chain.height());
     assert!(committed.block().output_error(0).is_none());
     let events = chain.take_events().expect("native publication events");
-    // Extract Data events in emission order
-    let data_events: Vec<_> = events
+    // Count the emitted data events.
+    let data_event_count = events
         .into_iter()
-        .filter_map(|ev| match ev {
-            iroha_data_model::events::EventBox::Data(d) => Some(d),
-            _ => None,
-        })
-        .collect();
+        .filter(|ev| matches!(ev, iroha_data_model::events::EventBox::Data(_)))
+        .count();
     // Expect at least three data events; basic sanity on count
-    assert!(data_events.len() >= 3, "expected multiple data events");
+    assert!(data_event_count >= 3, "expected multiple data events");
 }

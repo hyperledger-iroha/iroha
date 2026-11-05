@@ -43,8 +43,34 @@ assert _DOCS_SPEC is not None and _DOCS_SPEC.loader is not None
 KOTODAMA_DOCS = importlib.util.module_from_spec(_DOCS_SPEC)
 sys.modules[_DOCS_SPEC.name] = KOTODAMA_DOCS
 _DOCS_SPEC.loader.exec_module(KOTODAMA_DOCS)
+_SHARDS_SPEC = importlib.util.spec_from_file_location(
+    "rust_ci_native_shards", ROOT / "scripts" / "rust_test_shards.py"
+)
+assert _SHARDS_SPEC is not None and _SHARDS_SPEC.loader is not None
+NATIVE_SHARDS = importlib.util.module_from_spec(_SHARDS_SPEC)
+sys.modules[_SHARDS_SPEC.name] = NATIVE_SHARDS
+_SHARDS_SPEC.loader.exec_module(NATIVE_SHARDS)
 DEFAULT_MANIFEST = ROOT / "ci" / "rust_lanes.toml"
-CHECK_NAMES = ("clippy", "build", "test", "doc")
+CHECK_NAMES = ("clippy", "build", "test", "doctest", "doc")
+# Native harnesses are partitioned from their actual compiled inventories. The
+# owner row retains every other check, including Cargo-owned documentation tests.
+NATIVE_TEST_SHARDS = {"iroha_core": ("node-core", 4), "iroha_core_privacy": ("execution-privacy", 8)}
+NATIVE_TEST_SHARDS["integration_tests:sumeragi_npos_committee_transition"] = (
+    "integration-sumeragi_npos_committee_transition", 8,
+)
+# Preserve logical ownership while bounding independent hosted execution jobs.
+# The combined lane exceeded four hours before its proof tests had finished.
+EXECUTION_JOB_PACKAGES = {
+    "execution-model": frozenset({
+        "iroha_data_model", "iroha_data_model_derive",
+        "iroha_executor_data_model", "iroha_executor_data_model_derive",
+    }),
+    "execution-vm": frozenset({
+        "ivm", "ivm_abi", "ivm_artifact_admission", "kotodama_lang",
+        "kotodama_surface", "kotodama_toolchain",
+    }),
+    "execution-kagemusha": frozenset({"iroha_kagemusha_proof"}),
+}
 
 
 @dataclass(frozen=True)
@@ -59,11 +85,17 @@ class BinaryArtifact:
 
 BINARY_ARTIFACTS = {
     "iroha3d": BinaryArtifact("irohad", "iroha3d"),
+    "iroha3d_taira": BinaryArtifact("irohad", "iroha3d_taira"),
     "iroha": BinaryArtifact("iroha_cli", "iroha"),
     "kagami": BinaryArtifact("iroha_kagami", "kagami"),
     "koto": BinaryArtifact("kotodama_toolchain", "koto"),
     "sorafs_cli": BinaryArtifact(
-        "sorafs_orchestrator", "sorafs_cli", ("cli-orchestrator", "moderation-grpc")
+        "sorafs_orchestrator", "sorafs_cli",
+        ("cli-orchestrator", "moderation-grpc"), "sorafs-cli"
+    ),
+    "iroha_test_runtime_provider_broker": BinaryArtifact(
+        "irohad", "iroha_test_runtime_provider_broker",
+        ("test-network-disposable-broker",), "disposable-broker"
     ),
     "iroha3d_private_settlement_routes": BinaryArtifact(
         "irohad", "iroha3d", ("test-network-private-settlement-route-control",), "private-settlement-route-control"
@@ -163,12 +195,59 @@ class Classification:
                     package for package in packages
                     if bool(self.package_binaries.get(package)) == requires_binaries
                 )
+                for package in selected:
+                    if package in NATIVE_TEST_SHARDS:
+                        job, count = NATIVE_TEST_SHARDS[package]
+                        matrices[kind].append({
+                            "lane": job, "packages": package, "package_count": 1,
+                            "checks": "clippy,build,doctest,doc",
+                        })
+                        matrices[kind].extend({
+                            "lane": f"{job}-tests-{index}", "packages": package,
+                            "package_count": 1, "checks": "test", "native_shard": index,
+                        } for index in range(1, count + 1))
+                selected = tuple(package for package in selected if package not in NATIVE_TEST_SHARDS)
                 if selected:
-                    matrices[kind].append({
+                    row = {
                         "lane": lane,
                         "packages": ",".join(selected),
                         "package_count": len(selected),
-                    })
+                    }
+                    if lane == "execution":
+                        groups: dict[str, list[str]] = {}
+                        for package in selected:
+                            job = next((
+                                name for name, members in EXECUTION_JOB_PACKAGES.items()
+                                if package in members
+                            ), lane)
+                            groups.setdefault(job, []).append(package)
+                        matrices[kind].extend({
+                            "lane": job, "packages": ",".join(members),
+                            "package_count": len(members),
+                        } for job, members in groups.items())
+                    elif kind == "binary" and "integration_tests" in selected:
+                        others = tuple(package for package in selected if package != "integration_tests")
+                        if others:
+                            matrices[kind].append({**row, "packages": ",".join(others), "package_count": len(others)})
+                        matrices[kind].append({
+                            "lane": lane + "-library", "packages": "integration_tests",
+                            "package_count": 1, "test_target": "library",
+                        })
+                        for target in integration_test_targets():
+                            target_row = {
+                                "lane": lane + "-" + target, "packages": "integration_tests",
+                                "package_count": 1, "test_target": target, "checks": "test",
+                            }
+                            sharding = NATIVE_TEST_SHARDS.get("integration_tests:" + target)
+                            if sharding:
+                                job, count = sharding
+                                matrices[kind].extend({
+                                    **target_row, "lane": f"{job}-{index}", "native_shard": index,
+                                } for index in range(1, count + 1))
+                            else:
+                                matrices[kind].append(target_row)
+                    else:
+                        matrices[kind].append(row)
         return {
             "version": 2,
             "has_rust": self.has_rust,
@@ -908,23 +987,68 @@ def _supported_feature_args(
     return ["--features", ",".join(features)] if features else []
 
 
-# Per-package features that complete `cargo test` coverage of the package's own targets.
-TEST_FEATURES = (
-    ("iroha_torii", "iroha_torii/test-fixtures"),
-    ("iroha_release_bundle", "iroha_release_bundle/dev-tools"),
-    ("iroha_native_source_delivery", "iroha_native_source_delivery/dev-tools"),
-)
+def integration_test_targets(root: Path = ROOT) -> tuple[str, ...]:
+    """Enumerate every explicit integration harness selected by Cargo's default features."""
+
+    manifest = tomllib.loads((root / "integration_tests" / "Cargo.toml").read_text())
+    package = manifest["package"]
+    if package.get("autotests", True) or package.get("autobins", True):
+        raise ClassificationError("integration sharding requires explicit test and binary targets")
+    features = manifest.get("features", {})
+    enabled = {"default"}
+    while True:
+        discovered = {
+            item for name in enabled for item in features.get(name, ()) if item in features
+        }
+        if discovered <= enabled:
+            break
+        enabled.update(discovered)
+    # Fail closed if Cargo gains another default target that these scoped test
+    # commands would omit. Clippy still checks all declared targets separately.
+    directory = root / "integration_tests"
+    if (manifest.get("example") or manifest.get("bench")
+            or (directory / "examples").is_dir() or (directory / "benches").is_dir()):
+        raise ClassificationError("integration sharding requires explicit coverage for examples and benches")
+    for target in manifest.get("bin", ()):
+        required = target.get("required-features", ())
+        if not all(isinstance(feature, str) and feature in features for feature in required):
+            raise ClassificationError("unknown integration binary feature")
+        if set(required) <= enabled:
+            raise ClassificationError("integration sharding requires explicit coverage for enabled binaries")
+    names = []
+    declared = set()
+    for target in manifest.get("test", ()):
+        name = target.get("name", "")
+        if not name or not set(name) <= PACKAGE_NAME_CHARACTERS or name == "library":
+            raise ClassificationError("invalid explicit integration test target")
+        if name in declared:
+            raise ClassificationError("integration targets must be unique")
+        declared.add(name)
+        required = target.get("required-features", ())
+        if not all(isinstance(feature, str) and feature in features for feature in required):
+            raise ClassificationError(f"unknown integration target feature: {name}")
+        if set(required) <= enabled:
+            names.append(name)
+    if not names or len(names) != len(set(names)):
+        raise ClassificationError("integration targets must be nonempty and unique")
+    return tuple(sorted(names))
 
 
 def commands_for_checks(
     packages: Sequence[str], checks: Sequence[str],
     *, features_by_package: Mapping[str, Sequence[str]] | None = None,
     workspace: bool = False,
+    test_target: str | None = None,
 ) -> list[list[str]]:
     """Build locked, package-scoped Cargo validation commands."""
 
     if not packages:
         return []
+    if test_target and (
+        workspace or tuple(packages) != ("integration_tests",)
+        or test_target not in ("library", *integration_test_targets())
+    ):
+        raise ClassificationError("a scoped integration check requires one declared integration target")
     invalid_packages = [
         package
         for package in packages
@@ -939,6 +1063,23 @@ def commands_for_checks(
     if any(check in ("clippy", "doc") for check in checks):
         inventory = workspace_check_features() if features_by_package is None else features_by_package
         feature_args = _supported_feature_args(packages, inventory)
+    # Preserve the original grouped node test graph when Core runs alone:
+    # Torii/daemon dev-dependencies supplied these two non-default features.
+    # Explicit developer binaries retain their unit tests in this test-only graph.
+    # The same graph owns doctests; shipping builds remain unchanged.
+    selected_features = [
+        feature for package, feature in (
+            ("iroha_core", "iroha_core/iroha-core-tests"),
+            ("iroha_core", "iroha_core/expensive-telemetry"),
+            ("iroha_core", "iroha_core/dev-tools"),
+            ("iroha_torii", "iroha_torii/test-fixtures"),
+            ("iroha_release_bundle", "iroha_release_bundle/dev-tools"),
+            ("iroha_native_source_delivery", "iroha_native_source_delivery/dev-tools"),
+            ("xtask", "xtask/dev-tools"),
+        ) if package in packages
+    ]
+    test_features = (["--features", ",".join(selected_features)]
+                     if selected_features else [])
     commands: list[list[str]] = []
     for check in checks:
         if check == "clippy":
@@ -958,18 +1099,18 @@ def commands_for_checks(
         elif check == "build":
             commands.append(["cargo", "build", "--locked", *package_args])
         elif check == "test":
-            # Test routes opt into the features their own targets need: Torii integration
-            # targets use fixture entry points, and the release publisher and Python
-            # delivery helper keep their unit tests in `dev-tools` executables. A self
-            # dev-dependency would also compile its owning mutation feature as a library.
-            selected_test_features = [
-                feature for package, feature in TEST_FEATURES if package in packages
-            ]
-            test_features = (["--features", ",".join(selected_test_features)]
-                             if selected_test_features else [])
-            commands.append(
-                ["cargo", "test", "--locked", "--no-fail-fast", *test_features, *package_args]
-            )
+            # Select package-owned executable tests explicitly while preserving
+            # the ordinary build's shipping-only binary inventory.
+            test = ["cargo", "test", "--locked", "--no-fail-fast", *test_features, *package_args]
+            if test_target == "library":
+                commands.extend([
+                    [*test, "--lib", "--", "--test-threads=1"],
+                    [*test, "--doc", "--", "--test-threads=1"],
+                ])
+            elif test_target:
+                commands.append([*test, "--test", test_target, "--", "--test-threads=1"])
+            else:
+                commands.append(test)
         elif check == "doc":
             commands.append(
                 [
@@ -981,6 +1122,8 @@ def commands_for_checks(
                     *package_args,
                 ]
             )
+        elif check == "doctest":
+            commands.append(["cargo", "test", "--locked", "--no-fail-fast", *test_features, "--doc", *package_args])
         else:
             raise ClassificationError(
                 f"unknown check {check!r}; choose from {', '.join(CHECK_NAMES)}"
@@ -996,14 +1139,26 @@ def run_checks(
     dry_run: bool = False,
     workspace: bool = False,
     local: bool = False,
+    test_target: str | None = None,
+    native_shard: int | None = None,
 ) -> None:
     """Execute locked checks, optionally reusing the local incremental build lane."""
 
+    if native_shard is not None:
+        selection = packages[0] + (":" + test_target if test_target else "") if len(packages) == 1 else ""
+        if (workspace or local or tuple(checks) != ("test",)
+                or selection not in NATIVE_TEST_SHARDS):
+            raise ClassificationError("native sharding requires one declared package and only its native tests")
+        command, = commands_for_checks(packages, ("test",))
+        NATIVE_SHARDS.run_shard(root, packages[0], native_shard, NATIVE_TEST_SHARDS[selection][1],
+                               test_target=test_target, cargo_test_command=command, dry_run=dry_run)
+        return
     inventory = workspace_check_features(root)
     if workspace:
         packages = tuple(sorted(inventory))
     commands = commands_for_checks(
-        packages, checks, features_by_package=inventory, workspace=workspace
+        packages, checks, features_by_package=inventory, workspace=workspace,
+        test_target=test_target,
     )
     if not commands:
         print("No affected Rust packages; Cargo validation is not required.")
@@ -1214,6 +1369,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--local", action="store_true",
         help="use cargo_fast with stable development metadata and incremental reuse",
     )
+    run.add_argument(
+        "--test-target", default="",
+        help="one declared integration harness, or library for unit tests and doctests",
+    )
+    run.add_argument("--native-shard", default="", help="one-based native test shard for a declared package")
+    verify = subparsers.add_parser("verify-native-shards", help="require complete disjoint native test receipts")
+    verify.add_argument("--matrix", action="append", required=True, help="classifier matrix JSON")
+    verify.add_argument("--receipts", type=Path, required=True)
     binaries = subparsers.add_parser(
         "build-binaries", help="build selected binaries with their declared feature isolation"
     )
@@ -1257,12 +1420,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dry_run=args.dry_run,
                 workspace=args.workspace,
                 local=args.local,
+                **({"test_target": args.test_target} if args.test_target else {}),
+                **({"native_shard": int(args.native_shard)} if args.native_shard else {}),
             )
+        elif args.command == "verify-native-shards":
+            NATIVE_SHARDS.verify_receipts(ROOT, args.receipts, [json.loads(value) for value in args.matrix], NATIVE_TEST_SHARDS)
         elif args.command == "build-binaries":
             build_binaries(_parse_packages(args.binaries), args.output_dir)
         else:
             raise ClassificationError(f"unsupported command: {args.command}")
-    except (ClassificationError, OSError) as error:
+    except (ClassificationError, OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
     return 0

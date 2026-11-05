@@ -8539,7 +8539,7 @@ pub fn stage_taira_inrou_canary_deployment(
         }
         #[cfg(windows)]
         let source_metadata = &source_guards;
-        let source_sizes = source_metadata.iter().map(std::fs::Metadata::len);
+        let source_sizes = source_metadata.iter().map(|metadata| metadata.len());
         taira_stage_guest_total_bytes(source_sizes.clone())?;
         let rootfs_source_bytes = logical_member_paths
             .iter()
@@ -9121,8 +9121,11 @@ fn require_taira_validator_config_directory_identity(
 #[cfg(unix)]
 #[expect(
     clippy::useless_conversion,
-    clippy::unnecessary_fallible_conversions,
     reason = "Unix stat integer widths and signedness differ across the supported platforms."
+)]
+#[allow(
+    clippy::unnecessary_fallible_conversions,
+    reason = "Unix stat widening conversions occur on some supported platforms but not Linux x86_64; keep checked conversions on every platform."
 )]
 fn taira_file_identity_from_stat(stat: &rustix::fs::Stat) -> Result<TairaFileIdentity> {
     Ok(TairaFileIdentity {
@@ -14196,12 +14199,14 @@ impl SoracloudTempDir {
                 eyre!("Soracloud temporary directory suffix OS RNG failed: {error}")
             })?;
             let path = std::env::temp_dir().join(format!("{prefix}-{}", hex::encode(suffix)));
-            let mut builder = fs::DirBuilder::new();
+            let builder = fs::DirBuilder::new();
             #[cfg(unix)]
-            {
+            let builder = {
                 use std::os::unix::fs::DirBuilderExt as _;
+                let mut builder = builder;
                 builder.mode(0o700);
-            }
+                builder
+            };
             match builder.create(&path) {
                 Ok(()) => return Ok(Self { path }),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -16155,17 +16160,22 @@ fn write_inrou_preseed_qualification_file(
         )
     })?;
     #[cfg(not(unix))]
-    return Err(eyre!("Inrou qualification installation requires Unix"));
-    fs::File::open(parent)
-        .and_then(|directory| directory.sync_all())
-        .wrap_err("synchronize Inrou qualification output directory")?;
-    let installed = read_inrou_preseed_qualification_file(destination)?;
-    if installed != bytes {
-        return Err(eyre!(
-            "installed Inrou preseed qualification differs from its canonical bytes"
-        ));
+    {
+        Err(eyre!("Inrou qualification installation requires Unix"))
     }
-    Ok((destination.to_path_buf(), bytes))
+    #[cfg(unix)]
+    {
+        fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .wrap_err("synchronize Inrou qualification output directory")?;
+        let installed = read_inrou_preseed_qualification_file(destination)?;
+        if installed != bytes {
+            return Err(eyre!(
+                "installed Inrou preseed qualification differs from its canonical bytes"
+            ));
+        }
+        Ok((destination.to_path_buf(), bytes))
+    }
 }
 
 #[cfg(unix)]
@@ -23155,6 +23165,8 @@ fn normalize_template_shell_vars(body: &str) -> String {
     body.replace("${{BASH_SOURCE[0]}}", "${BASH_SOURCE[0]}")
 }
 fn mark_template_file_executable(path: &Path) -> Result<()> {
+    #[cfg(not(unix))]
+    let _ = path;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;

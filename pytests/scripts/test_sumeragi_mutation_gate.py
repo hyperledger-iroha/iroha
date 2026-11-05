@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -1006,6 +1007,42 @@ def test_native_execution_rollback_credit_mutation_requires_worker_owned_repeat_
     assert "publication worker fixture" in (ROOT / join_source).read_text()
     assert gate.has_switch("HC983", core=True)
     assert not gate.has_switch("HC983")
+
+
+def test_native_execution_replacement_credit_mutation_preserves_owner_and_guard_order():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC984"]
+    name = ("sumeragi::executor::parent_service_custody_tests::"
+            "parent_service_worker_replacement_retires_only_the_superseded_original_attempt")
+    cause = "explicit replacement retires the superseded receipt owner"
+    source = "crates/iroha_core/src/sumeragi/executor_parent_service_custody_tests.rs"
+    join_source = "crates/iroha_core/src/sumeragi/executor_publication_tests.rs"
+    assert rule.tests == (name,)
+    assert rule.causes == (gate.ExpectedFailure(
+        cause, source, worker_thread="sumeragi-publication-test",
+        join_source=join_source, join_message="publication worker fixture: Any { .. }"),)
+    body = named_rust_function((ROOT / source).read_text(), name.rsplit("::", 1)[-1])
+    assert f'"{cause}"' in body
+    assert "new candidate keeps its own receipt graph" in body
+    executor = (ROOT / "crates/iroha_core/src/sumeragi/executor.rs").read_text()
+    entry = named_rust_function(executor, "run_execution_with_finisher")
+    assert entry.index("self.retire_completed_payload(") < entry.index("self.publication_pending()")
+    assert entry.index("self.publication_pending()") < entry.index("self.retire_superseded_execution(")
+    assert entry.index("self.retire_superseded_execution(") < entry.index("pool.with_attempt_credits(retained,")
+    assert 'cfg(not(all(test, sumeragi_core_mutation = "HC984")))' in entry
+    assert 'cfg(all(test, sumeragi_core_mutation = "HC984"))' in entry
+    assert "let retained = retained.or(replacement_credits);" in entry
+    retirement = named_rust_function(executor, "retire_superseded_execution")
+    operations = ["original.block_hash == block_hash", "return;", "self.finishing = None",
+                  "self.live.take()", "self.results.remove(", "attempt.block_hash != block_hash",
+                  "self.signature_decode = None", "self.cancel_incoming_lane_reads()"]
+    positions = [retirement.index(operation) for operation in operations]
+    assert positions == sorted(positions)
+    attempt = named_rust_function(executor, "run_attempt_with_finisher")
+    assert "original.header != *block.header()" in attempt
+    assert "original.availability != *block.availability()" in attempt
+    assert "original.source != *block.source()" in attempt
+    assert gate.has_switch("HC984", core=True)
+    assert not gate.has_switch("HC984")
 
 
 def test_core_decode_refusal_classifier_gate_retains_global_and_inner_format_rejections():
@@ -2824,6 +2861,23 @@ def test_ci_sumeragi_sweeps_execute_with_their_declared_seed_environment(
     command = run.group(1)
     if command.startswith('"'):
         command = json.loads(command)
+    command = command.replace(
+        "python3 -I -S ci/observe_build_capacity.py -- ",
+        shlex.quote(sys.executable) + " -I -S "
+        + shlex.quote(str(ROOT / "ci/observe_build_capacity.py")) + " -- ",
+    )
+    if "/usr/bin/time -v " in command:
+        # GNU time is a hosted diagnostic, while this shell/seed control also
+        # runs on Darwin. Forward the exact child through a fixture timer.
+        timer = tmp_path / "gnu-time"
+        timer.write_text(
+            "#!" + sys.executable + "\n"
+            "import os, sys\n"
+            "assert sys.argv[1] == '-v'\n"
+            "os.execvp(sys.argv[2], sys.argv[2:])\n"
+        )
+        timer.chmod(0o700)
+        command = command.replace("/usr/bin/time -v ", shlex.quote(str(timer)) + " -v ")
     declared = re.search(r'(?m)^          SUMERAGI_SIM_SEEDS: "([0-9]+)"$', step.group(1))
     assert (declared.group(1) if declared else None) == explicit_count
     recorder = tmp_path / "cargo"
@@ -4063,6 +4117,10 @@ def test_retained_predecessor_mutations_bind_original_descriptor_kernel_and_exac
         cause = "HC175 later work refusal must retain completed predecessor descriptors"
         assert rule.causes == (gate.ExpectedFailure(cause, "crates/iroha_core/src/state/publication/retained_rows/predecessor_tests.rs"),)
         assert cause in named_rust_function(controls, name)
+        assert implementation.count("let result = admit(work, required, limit);") == 1
+        fault = implementation.split('sumeragi_core_mutation = "HC175"', 1)[1].split("result?;", 1)[0]
+        assert "if result.is_err()" in fault
+        assert "self.predecessor = PredecessorIndex::default();" in fault
     assert "fn " + name + "(" in controls
     assert '#[path = "predecessor_tests.rs"]' in implementation
     assert "allocations_during" in controls
@@ -4073,6 +4131,58 @@ def test_retained_predecessor_mutations_bind_original_descriptor_kernel_and_exac
     assert row is not None and name in row.group()
     assert "admit(work, required, limit)" in implementation
     assert "exact_resolve(amount, head.resolve)" in implementation
+
+
+@pytest.mark.parametrize("mid,owner,field,retained_type", [
+    ("HC175", "state/publication/retained_rows/predecessor.rs", "predecessor", "PredecessorIndex"),
+    ("HC232", "sumeragi/certified_chain/terminal_selection.rs", "frame", "AdmittedFrameRead"),
+])
+@pytest.mark.parametrize("configuration", ["production", "baseline", "mutant"])
+def test_retained_refusal_hooks_compile_cleanly_and_preserve_error_propagation(
+    tmp_path, mid, owner, field, retained_type, configuration,
+):
+    """Compile the actual fault/propagation block; this is not native custody qualification."""
+    source = (ROOT / "crates/iroha_core/src" / owner).read_text()
+    start = source.index("// SPEC: §13.4 " + mid)
+    end = source.index("result?;", start) + len("result?;")
+    actual_block = source[start:end]
+    active = configuration == "mutant"
+    fixture = tmp_path / "propagation.rs"
+    fixture.write_text(
+        "//! Exact production/test-cfg propagation fragment with accounting-only owners.\n"
+        "#[derive(Clone, Copy, Debug, PartialEq, Eq)]\n"
+        "pub enum ExecutionAttemptError { Deferred(u64), Rejected(u64) }\n"
+        "#[derive(Default)]\n"
+        f"pub struct {retained_type} {{ pub retained: usize }}\n"
+        f"pub struct Owner {{ pub {field}: {retained_type} }}\n"
+        "impl Owner {\n"
+        "pub fn propagate(&mut self, result: Result<(), ExecutionAttemptError>) "
+        "-> Result<(), ExecutionAttemptError> {\n"
+        + actual_block + "\nOk(())\n}\n}\n"
+        "fn main() {\n"
+        "for result in [Ok(()), Err(ExecutionAttemptError::Deferred(27)), "
+        "Err(ExecutionAttemptError::Rejected(39))] {\n"
+        f"let mut owner = Owner {{ {field}: {retained_type} {{ retained: 7 }} }};\n"
+        "assert_eq!(owner.propagate(result), result, \"return the original outcome\");\n"
+        f"let active = {str(active).lower()};\n"
+        + ("let fault = active && result.is_err();\n" if mid == "HC175" else
+           "let fault = active && matches!(result, Err(ExecutionAttemptError::Deferred(_)));\n")
+        + f"assert_eq!(owner.{field}.retained, if fault {{ 0 }} else {{ 7 }});\n"
+        "}\n}\n"
+    )
+    executable = tmp_path / ("propagation.exe" if os.name == "nt" else "propagation")
+    command = ["clippy-driver", "--edition=2024", "--crate-name", "propagation",
+               "--check-cfg", "cfg(test)", "--check-cfg",
+               'cfg(sumeragi_core_mutation, values("HC175", "HC232"))',
+               "-D", "warnings", str(fixture), "-o", str(executable)]
+    if configuration != "production":
+        command.extend(["--cfg", "test"])
+    if active:
+        command.extend(["--cfg", f'sumeragi_core_mutation="{mid}"'])
+    compiled = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert compiled.returncode == 0, compiled.stderr
+    ran = subprocess.run([str(executable)], capture_output=True, text=True, check=False)
+    assert ran.returncode == 0, ran.stderr
 
 
 def test_retained_predecessor_closed_keys_and_actual_group_consumer_keep_fallible_work():
@@ -6793,8 +6903,10 @@ def test_terminal_verification_slot_mutation_has_exact_owner_and_both_native_con
     assert "frame: AdmittedFrameRead" in source
     assert "self.frame.initialize(" in source
     assert "self.frame.take_committed()" in source
-    mutation = source.split(needle, 1)[1].split("return Err(cause)", 1)[0]
-    assert "ExecutionAttemptError::Deferred(_)" in mutation
+    decode = named_rust_function(source, "decode")
+    assert decode.count("let result = self.frame.initialize(") == 1
+    mutation = decode.split(needle, 1)[1].split("result?;", 1)[0]
+    assert "matches!(&result, Err(ExecutionAttemptError::Deferred(_)))" in mutation
     assert "self.frame = AdmittedFrameRead::default();" in mutation
     assert "AllocationBudget::new" not in source
     tests = (core / "sumeragi/certified_chain/terminal_selection/tests.rs").read_text()
@@ -11408,6 +11520,7 @@ def execution_attempt() -> str:
     executor = (ROOT / "crates/iroha_core/src/sumeragi/executor.rs").read_text()
     wrapper = named_rust_function(executor, "run_execution_with_finisher")
     assert wrapper.count("self.run_attempt_with_finisher(") == 1
+    assert "self.run_attempt_with_finisher(block,block_hash,certified,finish)" in re.sub(r"\s+", "", wrapper)
     return named_rust_function(executor, "run_attempt_with_finisher")
 
 

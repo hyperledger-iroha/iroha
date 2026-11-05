@@ -684,6 +684,10 @@ impl CoreWriteTransport for NativeStageTransport {
         {
             return Err(eyre!("read-only or expired stage cannot prepare/submit"));
         }
+        #[expect(
+            clippy::useless_let_if_seq,
+            reason = "Validate existing custody before preparation and retain its owner until the replacement read completes."
+        )]
         let mut retained = read_stage_prepared(&self.journal, &self.identity, kind)?;
         if operation == "prepare" {
             let bytes = candidate.ok_or_else(|| eyre!("stage prepare omits its envelope"))?;

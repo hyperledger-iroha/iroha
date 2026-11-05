@@ -800,7 +800,7 @@ impl KaigiRecord {
 ///
 /// # Errors
 ///
-/// Returns [`ParseError`](crate::error::ParseError) if the composed key violates
+/// Returns [`iroha_model_base::error::ParseError`] if the composed key violates
 /// the [`Name`] invariants enforced by the parser.
 pub fn kaigi_metadata_key(call_name: &Name) -> Result<Name, iroha_model_base::error::ParseError> {
     let composite = format!("kaigi__{}", call_name.as_ref());
@@ -817,7 +817,7 @@ fn relay_account_key_fragment(relay_id: &AccountId) -> String {
 ///
 /// # Errors
 ///
-/// Returns [`ParseError`](crate::error::ParseError) if the composed key violates [`Name`] rules.
+/// Returns [`iroha_model_base::error::ParseError`] if the composed key violates [`Name`] rules.
 pub fn kaigi_relay_metadata_key(
     relay_id: &AccountId,
 ) -> Result<Name, iroha_model_base::error::ParseError> {
@@ -831,7 +831,7 @@ pub fn kaigi_relay_metadata_key(
 ///
 /// # Errors
 ///
-/// Returns [`ParseError`](crate::error::ParseError) if the composed key violates [`Name`] rules.
+/// Returns [`iroha_model_base::error::ParseError`] if the composed key violates [`Name`] rules.
 pub fn kaigi_relay_feedback_key(
     relay_id: &AccountId,
 ) -> Result<Name, iroha_model_base::error::ParseError> {
@@ -845,7 +845,7 @@ pub fn kaigi_relay_feedback_key(
 ///
 /// # Errors
 ///
-/// Returns [`ParseError`](crate::error::ParseError) if the key violates [`Name`] rules.
+/// Returns [`iroha_model_base::error::ParseError`] if the key violates [`Name`] rules.
 pub fn kaigi_relay_allowlist_key() -> Result<Name, iroha_model_base::error::ParseError> {
     Name::from_str("kaigi_relay_allowlist")
 }

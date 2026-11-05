@@ -151,6 +151,16 @@ impl ManagedInitialGatewaySetup {
         Setup::open_provider_existing_from_original(parent, provider, Kind::Gateway, scope)
             .map(|inner| inner.map(|inner| Self { inner }))
     }
+
+    /// Retain existing custody or create it after live permission, in one parent bracket.
+    pub(super) fn open_for_bootstrap(
+        parent: &ServiceAuthority,
+        provider: ProviderId,
+        authorize_creation: &dyn Fn() -> Result<bool>,
+    ) -> Result<Option<Self>> {
+        Setup::open_provider_for_bootstrap(parent, provider, Kind::Gateway, authorize_creation)
+            .map(|inner| inner.map(|inner| Self { inner }))
+    }
 }
 
 /// Initial sole native recorder Set for the exact generated recorder and all three selected gateways.
@@ -349,6 +359,21 @@ impl ManagedInitialProviderIngestAuthority {
         Setup::open_provider_existing_from_original(parent, provider, Kind::ProviderIngest, scope)
             .map(|inner| inner.map(|inner| Self { inner }))
     }
+
+    /// Retain existing custody or create it after live permission, in one parent bracket.
+    pub(super) fn open_for_bootstrap(
+        parent: &ServiceAuthority,
+        provider: ProviderId,
+        authorize_creation: &dyn Fn() -> Result<bool>,
+    ) -> Result<Option<Self>> {
+        Setup::open_provider_for_bootstrap(
+            parent,
+            provider,
+            Kind::ProviderIngest,
+            authorize_creation,
+        )
+        .map(|inner| inner.map(|inner| Self { inner }))
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -450,6 +475,16 @@ impl Setup {
     ) -> Result<Option<Self>> {
         let purpose = Self::provider_purpose(kind)?;
         ServiceAuthority::open_provider_existing_from_original(parent, provider, purpose, scope)
+            .map(|authority| authority.map(|authority| Self { authority, kind }))
+    }
+    fn open_provider_for_bootstrap(
+        parent: &ServiceAuthority,
+        provider: ProviderId,
+        kind: Kind,
+        authorize_creation: &dyn Fn() -> Result<bool>,
+    ) -> Result<Option<Self>> {
+        let purpose = Self::provider_purpose(kind)?;
+        ServiceAuthority::open_provider_for_bootstrap(parent, provider, purpose, authorize_creation)
             .map(|authority| authority.map(|authority| Self { authority, kind }))
     }
     fn provider_purpose(kind: Kind) -> Result<ProviderPurpose> {

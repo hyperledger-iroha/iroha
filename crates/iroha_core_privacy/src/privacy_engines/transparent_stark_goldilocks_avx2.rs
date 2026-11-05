@@ -65,15 +65,15 @@ fn less(left: __m256i, right: __m256i) -> __m256i {
 #[target_feature(enable = "avx2")]
 #[inline]
 fn canonical(value: __m256i) -> __m256i {
-    let modulus = _mm256_set1_epi64x(GOLDILOCKS_MODULUS_V1 as i64);
-    let maximum = _mm256_set1_epi64x((GOLDILOCKS_MODULUS_V1 - 1) as i64);
+    let modulus = _mm256_set1_epi64x(GOLDILOCKS_MODULUS_V1.cast_signed());
+    let maximum = _mm256_set1_epi64x((GOLDILOCKS_MODULUS_V1 - 1).cast_signed());
     _mm256_sub_epi64(value, _mm256_and_si256(less(maximum, value), modulus))
 }
 
 #[target_feature(enable = "avx2")]
 #[inline]
 pub(super) fn multiply(left: __m256i, right: __m256i) -> __m256i {
-    let epsilon = _mm256_set1_epi64x(GOLDILOCKS_EPSILON_V1 as i64);
+    let epsilon = _mm256_set1_epi64x(GOLDILOCKS_EPSILON_V1.cast_signed());
     let left_high = _mm256_srli_epi64::<32>(left);
     let right_high = _mm256_srli_epi64::<32>(right);
     // Four exact 32x32 products reconstruct each independent 128-bit product.
@@ -121,7 +121,7 @@ pub(super) fn multiply(left: __m256i, right: __m256i) -> __m256i {
 #[inline]
 pub(super) fn add(left: __m256i, right: __m256i) -> __m256i {
     let sum = _mm256_add_epi64(left, right);
-    let epsilon = _mm256_set1_epi64x(GOLDILOCKS_EPSILON_V1 as i64);
+    let epsilon = _mm256_set1_epi64x(GOLDILOCKS_EPSILON_V1.cast_signed());
     canonical(_mm256_add_epi64(
         sum,
         _mm256_and_si256(less(sum, left), epsilon),
@@ -131,7 +131,7 @@ pub(super) fn add(left: __m256i, right: __m256i) -> __m256i {
 #[target_feature(enable = "avx2")]
 #[inline]
 pub(super) fn subtract(left: __m256i, right: __m256i) -> __m256i {
-    let epsilon = _mm256_set1_epi64x(GOLDILOCKS_EPSILON_V1 as i64);
+    let epsilon = _mm256_set1_epi64x(GOLDILOCKS_EPSILON_V1.cast_signed());
     _mm256_sub_epi64(
         _mm256_sub_epi64(left, right),
         _mm256_and_si256(less(left, right), epsilon),
@@ -151,12 +151,12 @@ unsafe fn window<O: DifOutputV1>(even: &mut [F], odd: &mut [F], root: F, first: 
         let t3 = t2.mul(root);
         let root2 = root.mul(root);
         let root4 = root2.mul(root2);
-        let step = _mm256_set1_epi64x(root4.0 as i64);
+        let step = _mm256_set1_epi64x(root4.0.cast_signed());
         let mut twiddles = _mm256_set_epi64x(
-            t3.0 as i64,
-            t2.0 as i64,
-            t1.0 as i64,
-            scalar_twiddle.0 as i64,
+            t3.0.cast_signed(),
+            t2.0.cast_signed(),
+            t1.0.cast_signed(),
+            scalar_twiddle.0.cast_signed(),
         );
         while offset + 4 <= even.len() {
             // SAFETY: F is repr(transparent) u64; complete unaligned groups are

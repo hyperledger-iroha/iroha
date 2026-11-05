@@ -22,7 +22,8 @@ use super::{
 };
 use iroha_allocation::AllocationBudget;
 use iroha_crypto::{
-    Hash,
+    Hash, KeyPair,
+    hybrid::HybridKeyPair,
     threshold_bls::{
         AdaptiveThresholdBlsParameters, AdaptiveThresholdBlsSecretShare, BeaconPurpose,
         DasRenDealerSecret, ValidatedDealerCommitment,
@@ -33,12 +34,17 @@ use iroha_data_model::{
     consensus::{
         GLOBAL_THRESHOLD_BEACON_VERSION_V1, GlobalThresholdBeaconDkgConstantProofV1,
         GlobalThresholdBeaconDkgDealerCommitmentV1, GlobalThresholdBeaconDkgSessionV1,
-        GlobalThresholdBeaconPartialSignatureV1,
+        GlobalThresholdBeaconKeySessionV1, GlobalThresholdBeaconPartialSignatureV1,
     },
 };
 use iroha_model_base::peer::PeerId;
 use rand::{SeedableRng as _, rngs::StdRng};
+use std::sync::Mutex;
 use thiserror::Error;
+
+#[path = "fixtures/private_exchange.rs"]
+mod private_exchange;
+use private_exchange::*;
 
 const EXACT_TEST_VALIDATORS_V1: usize = 4;
 const EXACT_TEST_THRESHOLD_V1: u16 = 2;
@@ -66,6 +72,10 @@ pub enum TestNetworkParliamentBeaconSignerErrorV1 {
 
 struct DeterministicFixtureV1 {
     session: ValidatedGlobalThresholdBeaconSessionV1,
+    dealers: DeterministicDealersV1,
+}
+
+struct DeterministicDealersV1 {
     parameters: AdaptiveThresholdBlsParameters<BeaconPurpose>,
     dealer_secrets: Vec<DasRenDealerSecret<BeaconPurpose>>,
     dealer_commitments: Vec<ValidatedDealerCommitment<BeaconPurpose>>,
@@ -134,17 +144,10 @@ fn dealer_commitment_dto_v1(
     }
 }
 
-fn deterministic_fixture_v1(
-    network_id: NetworkId,
-    roster: &[PeerId],
-    successor: bool,
-    budget: &AllocationBudget,
-) -> Result<DeterministicFixtureV1, TestNetworkParliamentBeaconSignerErrorV1> {
-    let dkg_session = deterministic_session_v1(network_id, roster, successor)?;
-    let parameters = adaptive_beacon_parameters(&dkg_session)
-        .map_err(|_| TestNetworkParliamentBeaconSignerErrorV1::InvalidCryptographicFixture)?;
-    let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
-    let mut state = GlobalThresholdBeaconDkgStateV1::new(dkg_session, &crypto, budget)
+fn deterministic_dealers_v1(
+    dkg_session: &GlobalThresholdBeaconDkgSessionV1,
+) -> Result<DeterministicDealersV1, TestNetworkParliamentBeaconSignerErrorV1> {
+    let parameters = adaptive_beacon_parameters(dkg_session)
         .map_err(|_| TestNetworkParliamentBeaconSignerErrorV1::InvalidCryptographicFixture)?;
     let dealer_seed: [u8; 32] = Hash::new_from_chunks(&[
         TEST_DEALER_SEED_DOMAIN_V1,
@@ -161,44 +164,205 @@ fn deterministic_fixture_v1(
             DasRenDealerSecret::generate_with_rng(&parameters, dealer_index, &mut rng).map_err(
                 |_| TestNetworkParliamentBeaconSignerErrorV1::InvalidCryptographicFixture,
             )?;
-        state
-            .record_dealer_commitment(1, &dealer_commitment_dto_v1(&commitment), &crypto)
-            .map_err(|_| TestNetworkParliamentBeaconSignerErrorV1::InvalidCryptographicFixture)?;
         dealer_secrets.push(secret);
         dealer_commitments.push(commitment);
     }
-    let record = state
-        .finalize(dkg_session.acceptances_end_height, &crypto)
-        .map_err(|_| TestNetworkParliamentBeaconSignerErrorV1::InvalidCryptographicFixture)?
-        .clone();
-    let binding = GlobalThresholdBeaconSessionBindingV1 {
-        network_id: record.network_id,
-        session_id: record.session_id,
-        roster_hash: record.roster_hash,
-        transcript_hash: record.transcript_hash,
-    };
-    let session = validate_global_threshold_beacon_session_v1(&record, &binding, budget)?;
-    Ok(DeterministicFixtureV1 {
-        session,
+    Ok(DeterministicDealersV1 {
         parameters,
         dealer_secrets,
         dealer_commitments,
     })
 }
 
+fn deterministic_fixture_v1(
+    network_id: NetworkId,
+    roster: &[PeerId],
+    signing_keys: &[&KeyPair],
+    successor: bool,
+    budget: &AllocationBudget,
+) -> Result<DeterministicFixtureV1, TestNetworkParliamentBeaconSignerErrorV1> {
+    let dkg_session = deterministic_session_v1(network_id, roster, successor)?;
+    if signing_keys.len() != roster.len()
+        || signing_keys
+            .iter()
+            .zip(roster)
+            .any(|(key, peer)| key.public_key() != peer.public_key())
+    {
+        return Err(TestNetworkParliamentBeaconSignerErrorV1::InvalidLocalSeat);
+    }
+    let dealers = deterministic_dealers_v1(&dkg_session)?;
+    let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
+    let mut state = GlobalThresholdBeaconDkgStateV1::new(dkg_session, &crypto, budget)?;
+    // Validator signing keys are borrowed only by this test authoring call. Use real
+    // fresh recipient encryption and authenticated private edges; no secret is exported.
+    let encryption_keys = (0..dkg_session.committee_size)
+        .map(|_| {
+            HybridKeyPair::try_generate(&mut rand::rngs::SysRng)
+                .map_err(|_| TestNetworkParliamentBeaconSignerErrorV1::InvalidCryptographicFixture)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let recipient_keys = signing_keys
+        .iter()
+        .zip(&encryption_keys)
+        .enumerate()
+        .map(|(offset, (signer, encryption))| {
+            sign_global_threshold_beacon_dkg_recipient_key_v1(
+                &dkg_session,
+                u16::try_from(offset + 1).expect("four fixture seats"),
+                signer,
+                encryption.public(),
+            )
+            .map_err(|_| TestNetworkParliamentBeaconSignerErrorV1::InvalidCryptographicFixture)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for key in &recipient_keys {
+        state.record_recipient_key(dkg_session.start_height, key)?;
+    }
+    let dealer_dtos = dealers
+        .dealer_commitments
+        .iter()
+        .enumerate()
+        .map(|(offset, commitment)| {
+            sign_global_threshold_beacon_dkg_dealer_commitment_v1(
+                &dkg_session,
+                &recipient_keys[offset],
+                signing_keys[offset],
+                dealer_commitment_dto_v1(commitment),
+            )
+            .map_err(|_| TestNetworkParliamentBeaconSignerErrorV1::InvalidCryptographicFixture)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for dto in &dealer_dtos {
+        state.record_dealer_commitment(dkg_session.start_height, dto, &crypto)?;
+    }
+    for (dealer_offset, (secret, commitment)) in dealers
+        .dealer_secrets
+        .iter()
+        .zip(&dealers.dealer_commitments)
+        .enumerate()
+    {
+        for (recipient_offset, recipient_key) in recipient_keys.iter().enumerate() {
+            let share = secret
+                .private_share(
+                    &dealers.parameters,
+                    commitment,
+                    u16::try_from(recipient_offset + 1).expect("four fixture seats"),
+                )
+                .map_err(|_| {
+                    TestNetworkParliamentBeaconSignerErrorV1::InvalidCryptographicFixture
+                })?;
+            let edge = seal_global_threshold_beacon_dkg_private_edge_v1(
+                &dkg_session,
+                &recipient_keys[dealer_offset],
+                signing_keys[dealer_offset],
+                &dealer_dtos[dealer_offset],
+                recipient_key,
+                &share,
+                dkg_session.commitments_end_height,
+            )
+            .map_err(|_| TestNetworkParliamentBeaconSignerErrorV1::InvalidCryptographicFixture)?;
+            state.record_encrypted_share(dkg_session.commitments_end_height, &edge)?;
+        }
+    }
+    let delivered = state.public_snapshot()?;
+    for edge in &delivered.encrypted_shares {
+        let dealer_offset = usize::from(edge.dealer_index - 1);
+        let recipient_offset = usize::from(edge.recipient_index - 1);
+        let (_, acceptance) = accept_global_threshold_beacon_dkg_private_edge_v1(
+            &dkg_session,
+            (
+                &recipient_keys[dealer_offset],
+                &recipient_keys[recipient_offset],
+            ),
+            signing_keys[recipient_offset],
+            encryption_keys[recipient_offset].secret(),
+            &dealer_dtos[dealer_offset],
+            edge,
+            dkg_session.deliveries_end_height,
+        )
+        .map_err(|_| TestNetworkParliamentBeaconSignerErrorV1::InvalidCryptographicFixture)?;
+        state.record_share_acceptance(dkg_session.deliveries_end_height, &acceptance)?;
+    }
+    drop(delivered);
+    let record = state
+        .finalize(dkg_session.acceptances_end_height, &crypto)?
+        .clone();
+    replay_deterministic_fixture_v1(network_id, roster, successor, &record, budget)
+}
+
+fn replay_deterministic_fixture_v1(
+    network_id: NetworkId,
+    roster: &[PeerId],
+    successor: bool,
+    record: &GlobalThresholdBeaconKeySessionV1,
+    budget: &AllocationBudget,
+) -> Result<DeterministicFixtureV1, TestNetworkParliamentBeaconSignerErrorV1> {
+    let dkg_session = deterministic_session_v1(network_id, roster, successor)?;
+    if record.adaptive_dkg.session != dkg_session {
+        return Err(TestNetworkParliamentBeaconSignerErrorV1::InvalidCryptographicFixture);
+    }
+    let dealers = deterministic_dealers_v1(&dkg_session)?;
+    if record.adaptive_dkg.dealer_commitments.len() != dealers.dealer_commitments.len()
+        || record
+            .adaptive_dkg
+            .dealer_commitments
+            .iter()
+            .zip(&dealers.dealer_commitments)
+            .any(|(actual, expected)| {
+                let expected = dealer_commitment_dto_v1(expected);
+                actual.dealer_index != expected.dealer_index
+                    || actual.coefficient_commitments != expected.coefficient_commitments
+                    || actual.constant_term_proof != expected.constant_term_proof
+            })
+    {
+        return Err(TestNetworkParliamentBeaconSignerErrorV1::InvalidCryptographicFixture);
+    }
+    // Replay the original signed public rows, including all encrypted edges and
+    // acknowledgements, through ordinary verification before exact-record dispatch.
+    let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
+    let mut state = GlobalThresholdBeaconDkgStateV1::new(dkg_session, &crypto, budget)?;
+    for key in &record.adaptive_dkg.recipient_keys {
+        state.record_recipient_key(dkg_session.start_height, key)?;
+    }
+    for commitment in &record.adaptive_dkg.dealer_commitments {
+        state.record_dealer_commitment(dkg_session.start_height, commitment, &crypto)?;
+    }
+    for edge in &record.adaptive_dkg.encrypted_shares {
+        state.record_encrypted_share(dkg_session.commitments_end_height, edge)?;
+    }
+    for acceptance in &record.adaptive_dkg.share_acceptances {
+        state.record_share_acceptance(dkg_session.deliveries_end_height, acceptance)?;
+    }
+    if state.finalize(dkg_session.acceptances_end_height, &crypto)? != record {
+        return Err(TestNetworkParliamentBeaconSignerErrorV1::InvalidCryptographicFixture);
+    }
+    let binding = GlobalThresholdBeaconSessionBindingV1 {
+        network_id: record.network_id,
+        session_id: record.session_id,
+        roster_hash: record.roster_hash,
+        transcript_hash: record.transcript_hash,
+    };
+    let session = validate_global_threshold_beacon_session_v1(record, &binding, budget)?;
+    Ok(DeterministicFixtureV1 { session, dealers })
+}
+
 /// Derive the exact unactivated public key record installed by the network test.
 ///
 /// This exports public transcript material only. No private share or dealer
-/// secret is returned, serialized, or logged.
+/// secret is returned, serialized, or logged. `signing_keys` must own the exact
+/// ordered validator roster. Polynomial keys are deterministic for the session;
+/// the authenticated encrypted delivery transcript uses fresh randomness.
 pub fn deterministic_parliament_beacon_key_record_v1(
     network_id: NetworkId,
     ordered_roster: &[PeerId],
+    signing_keys: &[&KeyPair],
     budget: &AllocationBudget,
 ) -> Result<
     FinalizedGlobalThresholdBeaconKeySessionRecordV1,
     TestNetworkParliamentBeaconSignerErrorV1,
 > {
-    let fixture = deterministic_fixture_v1(network_id, ordered_roster, false, budget)?;
+    let fixture =
+        deterministic_fixture_v1(network_id, ordered_roster, signing_keys, false, budget)?;
     FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(fixture.session.record().clone(), budget)
         .map_err(TestNetworkParliamentBeaconSignerErrorV1::Session)
 }
@@ -210,27 +374,29 @@ pub fn deterministic_parliament_beacon_key_record_v1(
 pub fn deterministic_parliament_beacon_successor_key_record_v1(
     network_id: NetworkId,
     ordered_roster: &[PeerId],
+    signing_keys: &[&KeyPair],
     budget: &AllocationBudget,
 ) -> Result<
     FinalizedGlobalThresholdBeaconKeySessionRecordV1,
     TestNetworkParliamentBeaconSignerErrorV1,
 > {
-    let fixture = deterministic_fixture_v1(network_id, ordered_roster, true, budget)?;
+    let fixture = deterministic_fixture_v1(network_id, ordered_roster, signing_keys, true, budget)?;
     FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(fixture.session.record().clone(), budget)
         .map_err(TestNetworkParliamentBeaconSignerErrorV1::Session)
 }
 
 /// Runtime-only signer bound to one exact peer seat in one exact ordered roster.
 ///
-/// The object stores no scalar share. It re-derives the feature-only deterministic
-/// fixture for the caller-supplied validated session, requires byte-for-byte
-/// public-record equality, produces one share, and immediately drops the
-/// zeroizing temporary secret material.
+/// The object retains at most the initial and successor session's zeroizing private
+/// share owners. Each owner is admitted by exact signed-record replay and private
+/// contribution verification before either capability lookup or signing can use it.
+/// This is disposable fixture custody, not deployment or release qualification.
 pub struct TestNetworkParliamentBeaconPartialSignerV1 {
     network_id: NetworkId,
     ordered_roster: Vec<PeerId>,
     local_signer_index: u16,
-    emit_invalid_outbound: bool,
+    emit_invalid_share: bool,
+    owners: Mutex<[Option<InMemoryGlobalThresholdBeaconPartialSignerV1>; 2]>,
     budget: AllocationBudget,
 }
 
@@ -258,35 +424,114 @@ impl TestNetworkParliamentBeaconPartialSignerV1 {
             network_id,
             ordered_roster,
             local_signer_index,
-            emit_invalid_outbound: false,
+            emit_invalid_share: false,
+            owners: Mutex::new([None, None]),
             budget: budget.clone(),
         })
     }
 
-    /// Mark this feature-only provider as an adversarial outbound signer.
+    /// Make this feature-only provider return a deliberately malformed share.
     ///
-    /// The provider still derives a proof-valid share. The Sumeragi test hook
-    /// corrupts that share only after signing, omits it from the local reducer,
-    /// and broadcasts it so every receiving validator must reject it through
-    /// the ordinary ingress verifier.
+    /// Corruption happens at this disposable provider boundary. The ordinary native
+    /// producer must reject it before retaining or broadcasting any own witness;
+    /// protocol code contains no fault-injection branch.
     #[must_use]
-    pub fn with_deliberately_invalid_outbound(mut self) -> Self {
-        self.emit_invalid_outbound = true;
+    pub fn with_deliberately_invalid_share(mut self) -> Self {
+        self.emit_invalid_share = true;
         self
+    }
+
+    fn with_retained_signer<T>(
+        &self,
+        session: &ValidatedGlobalThresholdBeaconSessionV1,
+        operation: impl FnOnce(&InMemoryGlobalThresholdBeaconPartialSignerV1) -> T,
+    ) -> Result<T, super::GlobalThresholdBeaconCapabilityErrorV1> {
+        use super::GlobalThresholdBeaconCapabilityErrorV1::{NotOwned, Unavailable};
+        let initial = deterministic_session_v1(self.network_id, &self.ordered_roster, false)
+            .map_err(|_| NotOwned)?;
+        let successor = deterministic_session_v1(self.network_id, &self.ordered_roster, true)
+            .map_err(|_| NotOwned)?;
+        let use_successor = if session.adaptive_dkg.session == initial {
+            false
+        } else if session.adaptive_dkg.session == successor {
+            true
+        } else {
+            return Err(NotOwned);
+        };
+        let mut owners = self.owners.lock().map_err(|_| Unavailable)?;
+        let slot = &mut owners[usize::from(use_successor)];
+        if slot.is_none() {
+            *slot = Some(self.import_owned_signer(session, use_successor)?);
+        }
+        let owner = slot.as_ref().ok_or(Unavailable)?;
+        // Never replace an existing owner with another record under the same session id.
+        if owner.session.record() != session.record() {
+            return Err(NotOwned);
+        }
+        Ok(operation(owner))
+    }
+
+    fn import_owned_signer(
+        &self,
+        session: &ValidatedGlobalThresholdBeaconSessionV1,
+        use_successor: bool,
+    ) -> Result<
+        InMemoryGlobalThresholdBeaconPartialSignerV1,
+        super::GlobalThresholdBeaconCapabilityErrorV1,
+    > {
+        use super::GlobalThresholdBeaconCapabilityErrorV1::NotOwned;
+        let fixture = replay_deterministic_fixture_v1(
+            self.network_id,
+            &self.ordered_roster,
+            use_successor,
+            session.record(),
+            &self.budget,
+        )
+        .map_err(|_| NotOwned)?;
+        if fixture.session.record() != session.record() {
+            return Err(NotOwned);
+        }
+        let private_contributions = fixture
+            .dealers
+            .dealer_secrets
+            .iter()
+            .zip(&fixture.dealers.dealer_commitments)
+            .map(|(secret, dealer)| {
+                secret.private_share(&fixture.dealers.parameters, dealer, self.local_signer_index)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| NotOwned)?;
+        let share = AdaptiveThresholdBlsSecretShare::from_dealer_shares(
+            fixture.session.transcript(),
+            &private_contributions,
+        )
+        .map_err(|_| NotOwned)?;
+        // This constructor verifies the complete qualified contribution set and the
+        // exact private commitment against this same transcript, without signing.
+        // Keep the verified share with its original session; do not invoke the generic
+        // import-challenge signer from a non-signing capability lookup.
+        Ok(InMemoryGlobalThresholdBeaconPartialSignerV1 {
+            session: fixture.session,
+            share,
+        })
     }
 }
 
 impl GlobalThresholdBeaconPartialSignerV1 for TestNetworkParliamentBeaconPartialSignerV1 {
     fn attest_partial_signing_capability(
         &self,
-        _session: &ValidatedGlobalThresholdBeaconSessionV1,
-        _expected_signer_index: u16,
+        session: &ValidatedGlobalThresholdBeaconSessionV1,
+        expected_signer_index: u16,
     ) -> Result<
         super::GlobalThresholdBeaconPartialSigningCapabilityV1,
         super::GlobalThresholdBeaconCapabilityErrorV1,
     > {
-        // Deterministic test-only keys cannot attest production readiness.
-        Err(super::GlobalThresholdBeaconCapabilityErrorV1::NotOwned)
+        if expected_signer_index != self.local_signer_index {
+            return Err(super::GlobalThresholdBeaconCapabilityErrorV1::NotOwned);
+        }
+        self.with_retained_signer(session, |owner| {
+            owner.attest_partial_signing_capability(session, expected_signer_index)
+        })?
     }
 
     fn sign_partial(
@@ -294,46 +539,13 @@ impl GlobalThresholdBeaconPartialSignerV1 for TestNetworkParliamentBeaconPartial
         session: &ValidatedGlobalThresholdBeaconSessionV1,
         payload: &[u8],
     ) -> Result<GlobalThresholdBeaconPartialSignatureV1, String> {
-        let initial_fixture =
-            deterministic_fixture_v1(self.network_id, &self.ordered_roster, false, &self.budget)
-                .map_err(|_| "test Parliament beacon fixture is unavailable".to_owned())?;
-        let fixture = if initial_fixture.session.record() == session.record() {
-            initial_fixture
-        } else {
-            let successor_fixture =
-                deterministic_fixture_v1(self.network_id, &self.ordered_roster, true, &self.budget)
-                    .map_err(|_| {
-                        "test Parliament successor beacon fixture is unavailable".to_owned()
-                    })?;
-            if successor_fixture.session.record() != session.record() {
-                return Err("test Parliament beacon session binding differs".to_owned());
-            }
-            successor_fixture
-        };
-        let private_contributions = fixture
-            .dealer_secrets
-            .iter()
-            .zip(&fixture.dealer_commitments)
-            .map(|(secret, dealer)| {
-                secret.private_share(&fixture.parameters, dealer, self.local_signer_index)
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| "test Parliament beacon share derivation failed".to_owned())?;
-        let share = AdaptiveThresholdBlsSecretShare::from_dealer_shares(
-            fixture.session.transcript(),
-            &private_contributions,
-        )
-        .map_err(|_| "test Parliament beacon share validation failed".to_owned())?;
-        let signer = InMemoryGlobalThresholdBeaconPartialSignerV1::from_validated_share(
-            fixture.session,
-            share,
-        )
-        .map_err(|_| "test Parliament beacon signer import failed".to_owned())?;
-        signer.sign_partial(session, payload)
-    }
-
-    fn test_network_emit_invalid_outbound_partial_v1(&self) -> bool {
-        self.emit_invalid_outbound
+        let mut partial = self
+            .with_retained_signer(session, |owner| owner.sign_partial(session, payload))
+            .map_err(|_| "test Parliament beacon share custody is unavailable".to_owned())??;
+        if self.emit_invalid_share {
+            partial.signature_share[0] ^= 1;
+        }
+        Ok(partial)
     }
 }
 
@@ -349,22 +561,92 @@ mod tests {
         ))
     }
 
-    fn roster() -> Vec<PeerId> {
+    fn signing_keys() -> Vec<KeyPair> {
         (1_u8..=4)
             .map(|tag| {
-                let key = KeyPair::try_from_seed(vec![tag; 32], Algorithm::BlsNormal)
-                    .expect("derive test BLS peer key");
-                PeerId::new(key.public_key().clone())
+                KeyPair::try_from_seed(vec![tag; 32], Algorithm::BlsNormal)
+                    .expect("derive test BLS peer key")
             })
             .collect()
     }
 
     #[test]
+    fn authenticated_fixture_requires_exact_keys_and_every_signed_private_edge() {
+        let keys = signing_keys();
+        let signers = keys.iter().collect::<Vec<_>>();
+        let roster = keys
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        let budget = crate::beacon::fixtures::fixture_budget();
+        let mut wrong = signers.clone();
+        wrong.swap(0, 1);
+        assert!(matches!(
+            deterministic_parliament_beacon_key_record_v1(network_id(), &roster, &wrong, &budget),
+            Err(TestNetworkParliamentBeaconSignerErrorV1::InvalidLocalSeat)
+        ));
+        assert_eq!(budget.reserved_bytes(), 0);
+        let record =
+            deterministic_parliament_beacon_key_record_v1(network_id(), &roster, &signers, &budget)
+                .expect("author complete authenticated fixture");
+        let dkg = &record.session.adaptive_dkg;
+        assert_eq!(dkg.recipient_keys.len(), 4);
+        assert_eq!(dkg.dealer_commitments.len(), 4);
+        assert_eq!(dkg.encrypted_shares.len(), 16);
+        assert_eq!(dkg.share_acceptances.len(), 16);
+        let replay =
+            replay_deterministic_fixture_v1(network_id(), &roster, false, &record.session, &budget)
+                .expect("ordinary reducer replays every authenticated fixture row");
+        assert_eq!(replay.session.record(), &record.session);
+        for fault in 0..5 {
+            let mut altered = record.session.clone();
+            match fault {
+                0 => {
+                    altered.adaptive_dkg.encrypted_shares.pop();
+                }
+                1 => {
+                    altered.adaptive_dkg.share_acceptances.pop();
+                }
+                2 => {
+                    altered.adaptive_dkg.recipient_keys[0].signature =
+                        iroha_crypto::Signature::from_bytes(&[]);
+                }
+                3 => {
+                    altered.adaptive_dkg.dealer_commitments[0].signature =
+                        iroha_crypto::Signature::from_bytes(&[]);
+                }
+                4 => {
+                    altered.adaptive_dkg.dealer_commitments[0]
+                        .constant_term_proof
+                        .response[0] ^= 1;
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                replay_deterministic_fixture_v1(network_id(), &roster, false, &altered, &budget,)
+                    .is_err(),
+                "fixture replay must reject incomplete or unauthenticated row {fault}"
+            );
+        }
+        assert!(
+            replay_deterministic_fixture_v1(network_id(), &roster, true, &record.session, &budget,)
+                .is_err(),
+            "initial transcript cannot be dispatched as its successor"
+        );
+    }
+
+    #[test]
     fn exact_seat_signer_matches_the_public_fixture_and_rejects_foreign_roster() {
-        let roster = roster();
+        let keys = signing_keys();
+        let signers = keys.iter().collect::<Vec<_>>();
+        let roster = keys
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
         let record = deterministic_parliament_beacon_key_record_v1(
             network_id(),
             &roster,
+            &signers,
             &crate::beacon::fixtures::fixture_budget(),
         )
         .expect("derive public fixture");
@@ -381,7 +663,7 @@ mod tests {
         )
         .expect("validate public fixture");
         let payload = b"exact feature-isolated test payload";
-        for peer in &roster {
+        for (index, peer) in roster.iter().enumerate() {
             let signer = TestNetworkParliamentBeaconPartialSignerV1::try_new(
                 network_id(),
                 roster.clone(),
@@ -389,6 +671,13 @@ mod tests {
                 &crate::beacon::fixtures::fixture_budget(),
             )
             .expect("bind exact test seat");
+            let index = u16::try_from(index + 1).unwrap();
+            assert!(
+                signer
+                    .attest_partial_signing_capability(&validated, index)
+                    .expect("the exact fixture owns its verified private share")
+                    .matches(&validated, index)
+            );
             let partial = signer
                 .sign_partial(&validated, payload)
                 .expect("produce proof-valid share");
@@ -409,6 +698,11 @@ mod tests {
         )
         .expect("bind seat in a different ordered roster");
         assert!(signer.sign_partial(&validated, payload).is_err());
+        assert!(
+            signer
+                .attest_partial_signing_capability(&validated, 2)
+                .is_err()
+        );
 
         let foreign_network = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x73; 32])),
@@ -421,20 +715,32 @@ mod tests {
         )
         .expect("bind exact seat to a different network");
         assert!(signer.sign_partial(&validated, payload).is_err());
+        assert!(
+            signer
+                .attest_partial_signing_capability(&validated, 1)
+                .is_err()
+        );
     }
 
     #[test]
     fn exact_seat_signer_supports_one_domain_separated_successor_session() {
-        let roster = roster();
+        let keys = signing_keys();
+        let signers = keys.iter().collect::<Vec<_>>();
+        let roster = keys
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
         let initial = deterministic_parliament_beacon_key_record_v1(
             network_id(),
             &roster,
+            &signers,
             &crate::beacon::fixtures::fixture_budget(),
         )
         .expect("derive initial public fixture");
         let successor = deterministic_parliament_beacon_successor_key_record_v1(
             network_id(),
             &roster,
+            &signers,
             &crate::beacon::fixtures::fixture_budget(),
         )
         .expect("derive successor public fixture");
@@ -477,11 +783,150 @@ mod tests {
     }
 
     #[test]
-    fn invalid_outbound_mode_preserves_valid_signing_and_sets_only_the_test_hook() {
-        let roster = roster();
+    fn custody_retains_only_exact_initial_and_successor_owners_without_replacement() {
+        use super::super::GlobalThresholdBeaconCapabilityErrorV1::NotOwned;
+
+        let keys = signing_keys();
+        let signers = keys.iter().collect::<Vec<_>>();
+        let roster = keys
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        let budget = crate::beacon::fixtures::fixture_budget();
+        let initial = deterministic_fixture_v1(network_id(), &roster, &signers, false, &budget)
+            .unwrap()
+            .session;
+        let replacement = deterministic_fixture_v1(network_id(), &roster, &signers, false, &budget)
+            .unwrap()
+            .session;
+        let successor = deterministic_fixture_v1(network_id(), &roster, &signers, true, &budget)
+            .unwrap()
+            .session;
+        assert_eq!(initial.record().session_id, replacement.record().session_id);
+        assert_ne!(initial.record(), replacement.record());
+        let signer = TestNetworkParliamentBeaconPartialSignerV1::try_new(
+            network_id(),
+            roster.clone(),
+            &roster[0],
+            &budget,
+        )
+        .unwrap();
+        assert!(signer.owners.lock().unwrap().iter().all(Option::is_none));
+        for wrong_seat in [0, 2, 5] {
+            assert_eq!(
+                signer.attest_partial_signing_capability(&initial, wrong_seat),
+                Err(NotOwned)
+            );
+        }
+        assert!(signer.owners.lock().unwrap().iter().all(Option::is_none));
+
+        let first = signer
+            .attest_partial_signing_capability(&initial, 1)
+            .unwrap();
+        assert!(first.matches(&initial, 1));
+        let owner_address = {
+            let owners = signer.owners.lock().unwrap();
+            assert!(owners[1].is_none());
+            std::ptr::from_ref(owners[0].as_ref().unwrap())
+        };
+        let payload = b"retained exact fixture owner";
+        for _ in 0..2 {
+            assert_eq!(
+                signer
+                    .attest_partial_signing_capability(&initial, 1)
+                    .unwrap(),
+                first
+            );
+            let partial = signer.sign_partial(&initial, payload).unwrap();
+            let decoded = super::super::adaptive_partial_signature_from_dto_v1(&partial).unwrap();
+            initial
+                .transcript()
+                .verify_partial_signature(payload, &decoded)
+                .unwrap();
+        }
+        assert_eq!(
+            signer.attest_partial_signing_capability(&replacement, 1),
+            Err(NotOwned)
+        );
+        assert!(signer.sign_partial(&replacement, payload).is_err());
+        assert!(
+            signer
+                .attest_partial_signing_capability(&successor, 1)
+                .unwrap()
+                .matches(&successor, 1)
+        );
+        let partial = signer.sign_partial(&successor, payload).unwrap();
+        let decoded = super::super::adaptive_partial_signature_from_dto_v1(&partial).unwrap();
+        successor
+            .transcript()
+            .verify_partial_signature(payload, &decoded)
+            .unwrap();
+        let owners = signer.owners.lock().unwrap();
+        assert_eq!(owners.len(), 2);
+        assert!(owners.iter().all(Option::is_some));
+        assert_eq!(
+            std::ptr::from_ref(owners[0].as_ref().unwrap()),
+            owner_address
+        );
+        assert_eq!(
+            owners[0].as_ref().unwrap().session.record(),
+            initial.record()
+        );
+        assert_eq!(
+            owners[1].as_ref().unwrap().session.record(),
+            successor.record()
+        );
+    }
+
+    #[test]
+    fn poisoned_fixture_custody_refuses_capability_and_signing() {
+        let keys = signing_keys();
+        let signers = keys.iter().collect::<Vec<_>>();
+        let roster = keys
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        let budget = crate::beacon::fixtures::fixture_budget();
+        let session = deterministic_fixture_v1(network_id(), &roster, &signers, false, &budget)
+            .unwrap()
+            .session;
+        let signer = TestNetworkParliamentBeaconPartialSignerV1::try_new(
+            network_id(),
+            roster.clone(),
+            &roster[0],
+            &budget,
+        )
+        .unwrap();
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _original = signer.owners.lock().unwrap();
+                panic!("poison only this disposable fixture owner");
+            }))
+            .is_err()
+        );
+        assert_eq!(
+            signer.attest_partial_signing_capability(&session, 1),
+            Err(super::super::GlobalThresholdBeaconCapabilityErrorV1::Unavailable)
+        );
+        assert!(
+            signer
+                .sign_partial(&session, b"unavailable fixture owner")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn invalid_provider_mode_preserves_owned_capability_but_returns_a_malformed_share() {
+        let keys = signing_keys();
+        let signers = keys.iter().collect::<Vec<_>>();
+        let roster = keys
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
         let record = deterministic_parliament_beacon_key_record_v1(
             network_id(),
             &roster,
+            &signers,
             &crate::beacon::fixtures::fixture_budget(),
         )
         .expect("derive public fixture");
@@ -504,17 +949,27 @@ mod tests {
             &crate::beacon::fixtures::fixture_budget(),
         )
         .expect("bind exact test seat")
-        .with_deliberately_invalid_outbound();
-        let payload = b"feature-isolated invalid-outbound fixture";
+        .with_deliberately_invalid_share();
+        assert!(
+            signer
+                .attest_partial_signing_capability(&validated, 1)
+                .expect("the adversarial fixture still owns its exact private share")
+                .matches(&validated, 1)
+        );
+        let payload = b"feature-isolated invalid-provider fixture";
         let partial = signer
             .sign_partial(&validated, payload)
-            .expect("the provider itself must still produce a valid share");
-        let decoded = super::super::adaptive_partial_signature_from_dto_v1(&partial)
-            .expect("decode proof-valid provider output");
-        validated
-            .transcript()
-            .verify_partial_signature(payload, &decoded)
-            .expect("the corruption belongs to the outbound lifecycle hook");
-        assert!(signer.test_network_emit_invalid_outbound_partial_v1());
+            .expect("the provider returns its deliberately malformed share");
+        let verified =
+            super::super::adaptive_partial_signature_from_dto_v1(&partial).and_then(|decoded| {
+                validated
+                    .transcript()
+                    .verify_partial_signature(payload, &decoded)
+                    .map_err(Into::into)
+            });
+        assert!(
+            verified.is_err(),
+            "ordinary proof verification must reject the provider output"
+        );
     }
 }

@@ -8,6 +8,7 @@ use iroha::query::QueryError;
 use iroha::{blocking::Client, crypto::KeyPair, data_model::prelude::*};
 use iroha_data_model::{
     ValidationFail,
+    parameter::{Parameter, SumeragiParameter},
     query::error::{FindError, QueryExecutionFail},
 };
 use iroha_executor_data_model::permission::asset::CanTransferAsset;
@@ -18,6 +19,7 @@ use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use iroha_torii_shared::status::Status;
 use std::{
+    num::NonZeroU64,
     sync::{
         OnceLock,
         atomic::{AtomicU64, Ordering},
@@ -30,8 +32,42 @@ static SERIAL_NETWORK_GUARD: OnceLock<sandbox::NetworkParallelismGuard> = OnceLo
 const QUERY_RETRIES: usize = 1_200;
 const QUERY_RETRY_DELAY: Duration = Duration::from_millis(100);
 const NON_EMPTY_BLOCK_TIMEOUT: Duration = Duration::from_secs(240);
-// Allow DA-enabled consensus time while remaining below the signed payload-retry interval.
-const FAST_PIPELINE_TIME: Duration = Duration::from_secs(4);
+// DA-enabled consensus needs a wider pipeline in local test runs to avoid view-change stalls.
+const FAST_PIPELINE_TIME: Duration = Duration::from_secs(6);
+
+fn asset_payload_retry_parameter() -> Parameter {
+    Parameter::Sumeragi(SumeragiParameter::PayloadRetryIntervalMs(
+        NonZeroU64::new(u64::try_from(FAST_PIPELINE_TIME.as_millis()).unwrap()).unwrap(),
+    ))
+}
+
+#[test]
+fn asset_cadence_preserves_the_signed_payload_retry_bound() {
+    let parameter = asset_payload_retry_parameter();
+    let encoded = norito::to_bytes(&parameter).expect("encode signed retry parameter");
+    let decoded: Parameter = norito::decode_from_bytes(&encoded).expect("decode retry parameter");
+    assert_eq!(parameter, decoded);
+    let Parameter::Sumeragi(SumeragiParameter::PayloadRetryIntervalMs(retry)) = decoded else {
+        panic!("the asset fixture must author its signed payload retry interval");
+    };
+    let chain = iroha_sumeragi::types::ChainParams {
+        block_time: u64::try_from(FAST_PIPELINE_TIME.as_millis()).unwrap(),
+        payload_retry_interval: retry.get(),
+        ..Default::default()
+    };
+    let transport = iroha_sumeragi::pacemaker::minimum_transport_frame_bytes(chain.max_block_bytes);
+    iroha_sumeragi::pacemaker::validate_chain(&chain, transport)
+        .expect("six-second asset cadence must retain a valid signed retry bound");
+    let old = iroha_sumeragi::types::ChainParams {
+        payload_retry_interval: iroha_sumeragi::types::ChainParams::default()
+            .payload_retry_interval,
+        ..chain
+    };
+    assert_eq!(
+        iroha_sumeragi::pacemaker::validate_chain(&old, transport),
+        Err(iroha_sumeragi::api::ConfigError::BlockTimeAbovePayloadRetry)
+    );
+}
 static ASSET_NAME_COUNTER: AtomicU64 = AtomicU64::new(0);
 struct ClientPool {
     clients: Vec<Client>,
@@ -270,6 +306,7 @@ fn quiet_network_builder_base() -> NetworkBuilder {
     NetworkBuilder::new()
         .with_peers(4)
         .with_block_cadence(FAST_PIPELINE_TIME)
+        .with_genesis_instruction(SetParameter::new(asset_payload_retry_parameter()))
         .with_ivm_fuel(IvmFuelConfig::Unset)
 }
 fn quiet_network_builder() -> NetworkBuilder {
@@ -318,15 +355,7 @@ fn submit_tx_or_skip(
         )
     }
 }
-fn submit_or_tolerate_timeout(
-    clients: &mut ClientPool,
-    instruction: impl Into<InstructionBox>,
-    context: &str,
-) -> Result<Option<()>> {
-    let tx = signed_transaction(clients.current(), [instruction.into()])?;
-    submit_tx_or_skip(clients, &tx, context)
-}
-fn signed_transaction(
+fn quoted_transaction(
     client: &Client,
     instructions: impl IntoIterator<Item = InstructionBox>,
 ) -> Result<SignedTransaction> {
@@ -342,11 +371,21 @@ fn signed_transaction(
         payload
             .fee_payment
             .has_same_payer_and_gas_bound(&quote.intent),
-        "fee quote changed the selected payer or gas bound"
+        "the quote must preserve the fixture's payer and gas bound"
     );
     payload.fee_payment = quote.intent;
-    account.sign_transaction(payload).map_err(Into::into)
+    Ok(account.sign_transaction(payload)?)
 }
+
+fn submit_or_tolerate_timeout(
+    clients: &mut ClientPool,
+    instruction: impl Into<InstructionBox>,
+    context: &str,
+) -> Result<Option<()>> {
+    let tx = quoted_transaction(clients.current(), [instruction.into()])?;
+    submit_tx_or_skip(clients, &tx, context)
+}
+
 fn is_tx_confirmation_timeout(err: &Report) -> bool {
     const NEEDLES: [&str; 4] = [
         "haven't got tx confirmation within",
@@ -601,8 +640,7 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             DomainId::try_new("exchange", "universal").expect("domain should be valid");
         let company_domain: DomainId =
             DomainId::try_new("company", "universal").expect("domain should be valid");
-        let crypto_domain =
-            DomainId::try_new("crypto", "universal").expect("domain should be valid");
+        let crypto_domain = DomainId::try_new("crypto", "universal")?;
         let (rate_def, rate_name) = unique_asset_definition_id("exchange.universal", "btceth");
         let (btc_def, btc_name) = unique_asset_definition_id("crypto.universal", "btc");
         let (eth_def, eth_name) = unique_asset_definition_id("crypto.universal", "eth");
@@ -681,12 +719,17 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
                 iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )?;
         }
-        let seed_instructions: [InstructionBox; 3] = [
+        let fee_definition = iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+            .parse::<AssetDefinitionId>()?;
+        let fee_source = AssetId::new(fee_definition, ALICE_ID.clone());
+        let seed_instructions: [InstructionBox; 5] = [
             Mint::asset_quantity(20_u32, rate.clone()).into(),
             Mint::asset_quantity(10_u32, seller_btc.clone()).into(),
             Mint::asset_quantity(200_u32, buyer_eth.clone()).into(),
+            Transfer::asset_quantity(fee_source.clone(), 100u32, seller_id.clone()).into(),
+            Transfer::asset_quantity(fee_source, 100u32, buyer_id.clone()).into(),
         ];
-        let seed_tx = signed_transaction(clients.current(), seed_instructions)?;
+        let seed_tx = quoted_transaction(clients.current(), seed_instructions)?;
         if submit_tx_or_skip(&mut clients, &seed_tx, "seed exchange balances")?.is_none() {
             return Ok(());
         }
@@ -732,7 +775,7 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
                     let instruction = Grant::account_permission(permission, alice_id.clone());
                     let owner_client = network.peers()[0]
                         .client_for(asset_id.account(), owner_key_pair.private_key().clone());
-                    let transaction = signed_transaction(&owner_client, [instruction.into()])?;
+                    let transaction = quoted_transaction(&owner_client, [instruction.into()])?;
                     if submit_tx_or_skip(&mut clients, &transaction, "grant transfer permission")?
                         .is_none()
                     {
@@ -765,7 +808,7 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             Transfer::asset_quantity(seller_btc.clone(), 10_u32, buyer_id.clone()).into(),
             Transfer::asset_quantity(buyer_eth.clone(), 10_u32 * rate, seller_id.clone()).into(),
         ];
-        let transfer_tx = signed_transaction(clients.current(), transfer_instructions)?;
+        let transfer_tx = quoted_transaction(clients.current(), transfer_instructions)?;
         if submit_tx_or_skip(&mut clients, &transfer_tx, "exchange transfers")?.is_none() {
             return Ok(());
         }
@@ -837,10 +880,7 @@ fn transfer_asset_definition() -> Result<()> {
             asset_definition_id.clone(),
             asset_definition_name,
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            Some(
-                DomainId::parse_fully_qualified("wonderland.universal")
-                    .expect("fixture owning domain"),
-            ),
+            Some(DomainId::try_new("wonderland", "universal")?),
         ))
         .into();
     clients.next().submit::<InstructionBox>(
@@ -1041,9 +1081,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         }
         Ok(())
     })();
-    if let Err(err) = result {
-        let _ = sandbox::handle_result::<()>(Err(err), stringify!(fail_if_dont_satisfy_spec))?;
-    }
+    let _ = sandbox::handle_result(result, stringify!(fail_if_dont_satisfy_spec))?;
     Ok(())
 }
 fn status_or_skip(res: Result<Status>, context: &str) -> Result<Option<Status>> {

@@ -3,21 +3,27 @@ use super::*;
 use crate::managed::native_operation::attempts::metadata;
 use crate::managed::native_operation::test_support::native_fixture::NativeFixture;
 
-/// Supplies an actual State proof at the exact retained native checkpoint.
+/// Reauthenticates the retained native source from this fixture's original network.
 pub(super) struct NativeEnrollmentReads<'a>(pub(super) &'a NativeFixture);
 impl body_history::EnrollmentReads for NativeEnrollmentReads<'_> {
     fn historical(
         &self,
         owner: &ManagedStreamTokenCustody,
         policy: &SignerCustodyPolicyV1,
+        unsigned: &body_history::UnsignedEnrollment,
         checkpoint: &FinalityVerifier,
         deadline: Instant,
     ) -> Result<VerifiedStreamTokenCustodyStateV1> {
         require_deadline(deadline)?;
-        assert_eq!(checkpoint.checkpoint().height(), self.0.chain.height());
-        Ok(self
-            .0
-            .bootstrap_custody(&owner.authority, policy, checkpoint))
+        assert_eq!(owner.authority.config.network_id, self.0.chain.network_id());
+        body_history::EnrollmentReads::historical(
+            &body_history::NativeEnrollmentReads,
+            owner,
+            policy,
+            unsigned,
+            checkpoint,
+            deadline,
+        )
     }
 }
 
@@ -34,7 +40,7 @@ impl ManagedStreamTokenCustody {
         let terms = Terms::new(utc, options).unwrap();
         let turn = SigningTurn::Explicit(&terms);
         // The public enroll/renew paths carry their selected authenticated current proof
-        // into finish_pending. The signing boundary still rereads its historical checkpoint.
+        // into finish_pending. The signing boundary reauthenticates its retained native source.
         let history = BodyHistory::initialize(
             self,
             purpose,
@@ -69,12 +75,14 @@ impl ManagedStreamTokenCustody {
         self.authority.validate_profile().unwrap();
         self.validate_policy(policy).unwrap();
         let verifier = native.observe(&self.authority);
-        let current = native.bootstrap_custody(&self.authority, policy, &verifier);
+        let (current, source) =
+            native.bootstrap_custody_with_source(&self.authority, policy, &verifier);
         assert!(current.current().is_none());
         let original = Original {
             selection: self.selection(&policy.binding, &current).unwrap(),
             action: Action::Configure(policy.clone()),
             checkpoint: checkpoint_bytes(&verifier).unwrap(),
+            source,
         };
         self.bootstrap_native_original(native, CustodyPurpose::Configure, &original, utc, options);
         self.recover_configure_selected_if_present(
@@ -119,7 +127,8 @@ impl ManagedStreamTokenCustody {
             .unwrap()
             .unwrap();
         let verifier = native.observe(&self.authority);
-        let current = native.bootstrap_custody(&self.authority, policy, &verifier);
+        let (current, source) =
+            native.bootstrap_custody_with_source(&self.authority, policy, &verifier);
         let state = current.current().unwrap();
         assert_eq!(state.control().policy, *policy);
         assert_eq!(state.record().execution_height, finalized.height);
@@ -131,7 +140,7 @@ impl ManagedStreamTokenCustody {
         let interval = select_interval(now);
         validate_interval(interval, now).unwrap();
         let unsigned = self
-            .unsigned_enrollment(policy, &current, &verifier, interval, now)
+            .unsigned_enrollment(policy, &current, source, &verifier, interval, now)
             .unwrap();
         let body = self.bootstrap_native_body(
             native,
@@ -188,7 +197,7 @@ impl ManagedStreamTokenCustody {
         self.bootstrap_native_selected(native, &original, &account, options);
     }
 
-    fn bootstrap_native_enrollment_original(
+    pub(super) fn bootstrap_native_enrollment_original(
         &self,
         native: &mut NativeFixture,
         purpose: CustodyPurpose,
@@ -263,13 +272,15 @@ impl ManagedStreamTokenCustody {
         options: &BoundedTransactionOptions,
     ) -> RetainedCustodyEnrollment {
         let verifier = native.observe(&self.authority);
-        let current = native.bootstrap_custody(&self.authority, policy, &verifier);
+        let (current, source) =
+            native.bootstrap_custody_with_source(&self.authority, policy, &verifier);
         let terms = Terms::new(utc, options).unwrap();
         let unsigned = self
             .select_renewal_unsigned(
                 sequence,
                 policy,
                 &current,
+                source,
                 &verifier,
                 &terms,
                 options.deadline,

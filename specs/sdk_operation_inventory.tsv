@@ -16,6 +16,8 @@ application.accounts_by_account_id_history_query_post	POST	/v1/accounts/{account
 application.accounts_by_account_id_identifiers_claim_receipt_post	POST	/v1/accounts/{account_id}/identifiers/claim-receipt	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	true	false	true
 application.accounts_by_account_id_permissions_get	GET	/v1/accounts/{account_id}/permissions	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
 application.accounts_by_account_id_permissions_query_post	POST	/v1/accounts/{account_id}/permissions/query	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
+application.accounts_by_account_id_roles_get	GET	/v1/accounts/{account_id}/roles	public	canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
+application.accounts_by_account_id_roles_query_post	POST	/v1/accounts/{account_id}/roles/query	public	canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
 application.accounts_by_account_id_transactions_get	GET	/v1/accounts/{account_id}/transactions	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
 application.accounts_by_account_id_transactions_query_post	POST	/v1/accounts/{account_id}/transactions/query	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
 application.accounts_by_uaid_portfolio_get	GET	/v1/accounts/{uaid}/portfolio	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
@@ -132,6 +134,8 @@ application.ram_lfe_programs_by_program_id_execute_post	POST	/v1/ram-lfe/program
 application.ram_lfe_receipts_verify_post	POST	/v1/ram-lfe/receipts/verify	public	canonical_account_signature	authenticated_account	compute	http	feature(app_api)	true	true	false	true
 application.repo_agreements_get	GET	/v1/repo/agreements	public	torii_default	public	read	http	feature(app_api)	true	true	false	false
 application.repo_agreements_query_post	POST	/v1/repo/agreements/query	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
+application.roles_get	GET	/v1/roles	public	canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
+application.roles_query_post	POST	/v1/roles/query	public	canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
 application.rwas_get	GET	/v1/rwas	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
 application.rwas_query_post	POST	/v1/rwas/query	public	optional_canonical_account_signature	dataspace_visible	read	http	feature(app_api)	true	true	false	true
 application.sns_names_by_namespace_by_literal_get	GET	/v1/sns/names/{namespace}/{literal}	public	torii_default	public	read	http	feature(app_api)	true	true	false	false

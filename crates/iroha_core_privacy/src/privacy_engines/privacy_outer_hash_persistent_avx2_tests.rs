@@ -937,7 +937,8 @@ fn required_avx2_persistent_roots_refusals_and_poisoned_cleanup() {
 fn persistent_rows_report_paired_owner_cost() {
     use std::time::Instant;
     assert!(std::is_x86_feature_detected!("avx2"));
-    assert!(!cfg!(debug_assertions));
+    // Keep this runtime refusal compilable in ordinary debug test harnesses.
+    assert!(!std::hint::black_box(cfg!(debug_assertions)));
     let (groups, full_rows, stream_limit, replay_limit, runtime_limit) =
         crate::privacy_engines::zk_x509::stark::ZkX509MainRegistrationShapeV1::row_hash_diagnostic_geometry_v1().unwrap();
     let shapes = [

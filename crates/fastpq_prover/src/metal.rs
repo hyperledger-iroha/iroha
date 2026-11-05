@@ -2570,7 +2570,7 @@ pub fn digest384_hash_frames_v1(
     let args = [
         u32::try_from(staged.frame_count)
             .map_err(|_| GpuError::InvalidInput("six-lane Metal frame count exceeds u32"))?,
-        u32::try_from(staged.words.len())
+        u32::try_from(staged._words.len())
             .map_err(|_| GpuError::InvalidInput("six-lane Metal word count exceeds u32"))?,
     ];
     let context = digest384_metal_context_v1()?;
@@ -2585,8 +2585,8 @@ pub fn digest384_hash_frames_v1(
         });
     }
     for len in [
-        staged.words.len(),
-        staged.descriptors.len(),
+        staged._words.len(),
+        staged._descriptors.len(),
         digest384_gpu_parameters_v1().len(),
         output.len(),
     ] {
@@ -2594,8 +2594,8 @@ pub fn digest384_hash_frames_v1(
     }
     let mut buffers = Vec::with_capacity(4);
     for mut pool in [
-        PooledBuffer::sensitive_from_slice(&staged.words)?,
-        PooledBuffer::sensitive_from_slice(&staged.descriptors)?,
+        PooledBuffer::sensitive_from_slice(&staged._words)?,
+        PooledBuffer::sensitive_from_slice(&staged._descriptors)?,
         PooledBuffer::from_slice(digest384_gpu_parameters_v1())?,
         PooledBuffer::sensitive_zeroed(output.len())?,
     ] {
@@ -2661,7 +2661,7 @@ pub fn digest384_indexed_coordinates_v1(
         });
     }
     for len in [
-        staged.words.len(),
+        staged._words.len(),
         digest384_gpu_parameters_v1().len(),
         output.len(),
     ] {
@@ -2669,7 +2669,7 @@ pub fn digest384_indexed_coordinates_v1(
     }
     let mut buffers = Vec::with_capacity(3);
     for mut pool in [
-        PooledBuffer::sensitive_from_slice(&staged.words)?,
+        PooledBuffer::sensitive_from_slice(&staged._words)?,
         PooledBuffer::from_slice(digest384_gpu_parameters_v1())?,
         PooledBuffer::sensitive_zeroed(output.len())?,
     ] {

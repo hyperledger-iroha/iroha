@@ -112,6 +112,34 @@ fn config() -> TestChainConfig {
     config
 }
 
+#[test]
+fn payment_fixture_authors_one_signed_root_fee_policy() {
+    use iroha_data_model::block::consensus::RootFeePolicy;
+
+    let config = config();
+    let policies: Vec<_> = config
+        .genesis_parameters
+        .iter()
+        .filter_map(|parameter| match parameter {
+            Parameter::Custom(custom) if custom.id() == &RootFeePolicy::parameter_id() => Some(
+                RootFeePolicy::from_custom_parameter(custom).expect("valid custom fee parameter"),
+            ),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(policies.len(), 1, "one signed genesis fee authority");
+    let fees = &policies[0];
+    assert_eq!(fees.fee_asset_id, fee_asset());
+    assert_eq!(
+        fees.fee_sink_account_id,
+        AccountId::new(config.genesis_key.public_key().clone())
+    );
+    assert_eq!(fees.base_fee, Quantity::one());
+    assert!(fees.per_byte_fee.is_zero());
+    assert!(fees.per_instruction_fee.is_zero());
+    assert!(fees.per_gas_unit_fee.is_zero());
+}
+
 fn intent(chain: &CertifiedTestChain) -> SettleAtomic {
     SettleAtomic::new(
         chain.network_id(),

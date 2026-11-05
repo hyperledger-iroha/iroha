@@ -60,8 +60,9 @@ async fn sns_registrar_round_trip() -> Result<()> {
     assert_eq!(policy.suffix_key(), "domain");
     Ok(())
 }
-/// Registration increments telemetry metrics and yields deterministic gateway bindings.
+/// Finalized domain registration updates the domain gauge and deterministic gateway bindings.
 #[tokio::test]
+#[allow(clippy::float_cmp)]
 async fn sns_registration_emits_metrics_and_gateway_bindings() -> Result<()> {
     let Some(network) = start_sns_network(stringify!(
         sns_registration_emits_metrics_and_gateway_bindings
@@ -74,11 +75,14 @@ async fn sns_registration_emits_metrics_and_gateway_bindings() -> Result<()> {
     let client = network.client();
     let metrics_endpoint = client.client().endpoint().join("metrics")?;
     let http = HttpClient::new();
-    // Domain registration executes the canonical EnsureAlias instruction.
-    // Its native instrumentation records successful execution in `isi`; the
-    // retired registrar HTTP operation does not own this transaction path.
-    let metric_labels = [("type", "ensure_alias"), ("success_status", "success")];
-    let baseline = read_metric_sample(&http, &metrics_endpoint, "isi", &metric_labels)
+    // EnsureAlias is a native ledger instruction, not an HTTP registrar mutation.
+    // Its finalized domain must appear in the same state-derived telemetry scrape.
+    let metric_labels = [];
+    let baseline = read_metric_sample(&http, &metrics_endpoint, "domains", &metric_labels)
+        .await?
+        .ok_or_else(|| eyre!("the domains gauge must be present before registration"))?;
+    let alias_labels = [("type", "ensure_alias"), ("success_status", "success")];
+    let alias_before = read_metric_sample(&http, &metrics_endpoint, "isi", &alias_labels)
         .await?
         .unwrap_or(0.0);
     let label = unique_label("telemetry");
@@ -86,17 +90,24 @@ async fn sns_registration_emits_metrics_and_gateway_bindings() -> Result<()> {
     setup_domain(&client, &label).await?;
     let mut observed_after = None;
     for _ in 0..METRIC_READY_RETRIES {
-        let current = read_metric_sample(&http, &metrics_endpoint, "isi", &metric_labels).await?;
-        if let Some(value) = current.filter(|value| *value >= baseline + 1.0) {
+        let current =
+            read_metric_sample(&http, &metrics_endpoint, "domains", &metric_labels).await?;
+        let alias_current = read_metric_sample(&http, &metrics_endpoint, "isi", &alias_labels)
+            .await?
+            .unwrap_or(0.0);
+        if let Some(value) =
+            current.filter(|value| *value == baseline + 1.0 && alias_current >= alias_before + 1.0)
+        {
             observed_after = Some(value);
             break;
         }
         sleep(Duration::from_millis(METRIC_RETRY_DELAY_MS)).await;
     }
     let observed_after = observed_after.unwrap_or(baseline);
-    assert!(
-        observed_after >= baseline + 1.0,
-        "successful ensure_alias counter did not advance (baseline {baseline}, observed {observed_after})"
+    assert_eq!(
+        observed_after,
+        baseline + 1.0,
+        "the finalized SNS registration must add exactly one domain"
     );
     let bindings = derive_gateway_hosts(&format!("{literal}.domain"))
         .map_err(|err| eyre!("gateway host derivation failed: {err}"))?;
@@ -138,6 +149,7 @@ async fn sns_renewal_uses_expiry_cas() -> Result<()> {
         .checked_add(ALIAS_LEASE_YEAR_MS)
         .ok_or_else(|| eyre!("test renewal expiry overflow"))?;
     let domain = DomainId::parse_fully_qualified(&literal)?;
+    let policy = get_sns_policy(&client, record.selector.suffix_id).await?;
     let renewal = RenewAliasLease::new(
         AliasTargetV1::Domain(ResolvedDomainV1::new(domain, DataSpaceId::UNIVERSAL)),
         original_expiry,

@@ -8865,6 +8865,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
     }
     #[test]
     fn canonical_kotodama_request_compiles_named_companion_inventory() {
+        // Source maps describe emitted code; a constant-return helper is folded away.
         let request = JsKotodamaCompileRequest {
             artifacts: Vec::new(),
             source: "seiyaku App { include \"parts/view.ko\"; import \"math.ko\" as arith; }"
@@ -8873,12 +8874,12 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             sources: Some(vec![
                 JsKotodamaSourceFile {
                     source_name: "parts/view.ko".into(),
-                    source: "view fn value() authorize(anyone) -> int { return arith::value(); }"
+                    source: "view fn value(int input) authorize(anyone) -> int { return arith::value(input: input); }"
                         .into(),
                 },
                 JsKotodamaSourceFile {
                     source_name: "math.ko".into(),
-                    source: "module Math { export fn value() -> int { return 7; } }".into(),
+                    source: "module Math { export fn value(int input) -> int { return input + 7; } }".into(),
                 },
             ]),
             imports: None,
@@ -8890,13 +8891,34 @@ seiyaku Privacy { permission CanCommitPrivateInput;
         let output = result.output.expect("compiled source set");
         assert!(output.source_map_json.contains("parts/view.ko"));
         assert!(output.source_map_json.contains("math.ko"));
+        let source_map = json::parse_value(&output.source_map_json).expect("source-map sidecar");
+        let entries = source_map["entries"]
+            .as_array()
+            .expect("source-map entries");
+        let helper = entries
+            .iter()
+            .find(|entry| {
+                entry["source_path"].as_str() == Some("math.ko")
+                    && entry["source_kind"].as_str() == Some("statement")
+            })
+            .expect("executed helper retains its original source");
+        assert!(helper["pc_start"].as_u64().unwrap() < helper["pc_end"].as_u64().unwrap());
+        let helper_source = &request.sources.as_ref().expect("sources")[1].source;
+        let start = usize::try_from(helper["byte_start"].as_u64().unwrap()).unwrap();
+        let end = usize::try_from(helper["byte_end"].as_u64().unwrap()).unwrap();
+        assert_eq!(&helper_source[start..end], "return input + 7;");
+        assert!(entries.iter().any(|entry| {
+            entry["source_path"].as_str() == Some("parts/view.ko")
+                && entry["source_id"] != helper["source_id"]
+        }));
     }
     #[test]
     fn canonical_kotodama_request_compiles_locked_package_companions() {
+        // Keep real helper work after optimization so its package source is symbolized.
         let mut request = JsKotodamaCompileRequest {
             artifacts: Vec::new(),
             source:
-                "seiyaku App { view fn value() authorize(anyone) -> int { return calc::value(); } }"
+                "seiyaku App { view fn value(int input) authorize(anyone) -> int { return calc::value(input: input); } }"
                     .into(),
             source_name: Some("app.ko".into()),
             sources: None,
@@ -8913,7 +8935,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
                 }],
                 sources: Some(vec![JsKotodamaSourceFile {
                     source_name: "src/body.ko".into(),
-                    source: "export fn value() -> int { return 7; }".into(),
+                    source: "export fn value(int input) -> int { return input + 7; }".into(),
                 }]),
                 exports: vec!["value".into()],
                 imports: None,
@@ -8925,11 +8947,35 @@ seiyaku Privacy { permission CanCommitPrivateInput;
         let output = result.output.expect("locked source bundle output");
         assert!(output.source_map_json.contains("src/body.ko"));
         assert!(output.source_map_json.contains("source_id"));
+        let source_map = json::parse_value(&output.source_map_json).expect("source-map sidecar");
+        let entries = source_map["entries"]
+            .as_array()
+            .expect("source-map entries");
+        let helper = entries
+            .iter()
+            .find(|entry| {
+                entry["source_path"].as_str() == Some("src/body.ko")
+                    && entry["source_kind"].as_str() == Some("statement")
+            })
+            .expect("executed helper retains its locked package source");
+        assert!(helper["pc_start"].as_u64().unwrap() < helper["pc_end"].as_u64().unwrap());
+        let helper_source = &request.packages.as_ref().expect("package")[0]
+            .sources
+            .as_ref()
+            .expect("companions")[0]
+            .source;
+        let start = usize::try_from(helper["byte_start"].as_u64().unwrap()).unwrap();
+        let end = usize::try_from(helper["byte_end"].as_u64().unwrap()).unwrap();
+        assert_eq!(&helper_source[start..end], "return input + 7;");
+        assert!(entries.iter().any(|entry| {
+            entry["source_path"].as_str() == Some("app.ko")
+                && entry["source_id"] != helper["source_id"]
+        }));
         request.packages.as_mut().expect("package")[0]
             .sources
             .as_mut()
             .expect("companions")[0]
-            .source = "export fn value() -> int { return missing; }".into();
+            .source = "export fn value(int input) -> int { return missing; }".into();
         let invalid = compile_kotodama_request(&request).expect("bounded invalid source");
         assert!(!invalid.ok);
         let diagnostics = invalid.diagnostics_json.expect("native package diagnostic");

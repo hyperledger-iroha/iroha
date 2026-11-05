@@ -180,12 +180,20 @@ packages = ["integration_tests"]
 # Cargo's CARGO_BIN_EXE_* paths and do not need downloaded release artifacts.
 # Private-settlement route-control tests run under Cargo and cannot build child
 # programs. Their explicit artifact is built separately with the test feature;
-# it never replaces the shipping daemon. The qualified corridor bundle below
+# it never replaces the shipping daemon. The disposable broker likewise has its
+# own feature-isolated build. Both suites invoke Kagami, while only test-network
+# fixtures use the Taira launcher. The qualified corridor bundle below
 # keeps its own build and provenance protocol.
 [package_binaries]
-iroha_test_network = ["iroha3d", "iroha", "iroha3d_private_settlement_routes"]
+iroha_test_network = [
+  "iroha3d", "iroha", "iroha3d_private_settlement_routes", "iroha3d_taira",
+  "iroha_test_runtime_provider_broker", "kagami",
+]
 izanami = ["iroha3d", "iroha"]
-integration_tests = ["iroha3d", "iroha", "iroha3d_private_settlement_routes", "kagami", "sorafs_cli"]
+integration_tests = [
+  "iroha3d", "iroha", "iroha3d_private_settlement_routes",
+  "iroha_test_runtime_provider_broker", "kagami", "sorafs_cli",
+]
 
 # Non-Cargo consumers participate in the same artifact-union calculation.
 # Package triggers use the expanded reverse-dependency closure. Unknown/shared
@@ -251,6 +259,7 @@ generated = [
 # deliberately fail closed to every Rust lane.
 all = [
   ".cargo/**",
+  ".github/actions/**",
   ".github/workflows/**",
   ".gitignore",
   "Cargo.lock",

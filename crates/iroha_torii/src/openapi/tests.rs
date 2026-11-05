@@ -490,6 +490,8 @@ fn expected_read_operation(method: &str, path: &str) -> bool {
                 path,
                 "/v1/amx/debit-approval/{height}"
                     | "/v1/accounts/query"
+                    | "/v1/roles/query"
+                    | "/v1/accounts/{account_id}/roles/query"
                     | "/v1/accounts/inspect"
                     | "/v1/accounts/{account_id}/assets/query"
                     | "/v1/assets/{definition_id}/holders/query"

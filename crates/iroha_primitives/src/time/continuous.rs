@@ -128,7 +128,8 @@ pub fn native_continuous_clock_nanos() -> io::Result<u128> {
 /// # Errors
 /// Refuses native-unit conversion overflow. Requires the native Windows 10+ API.
 pub fn native_continuous_clock_nanos() -> io::Result<u128> {
-    #[link(name = "kernel32")]
+    // The Windows SDK exports this API through the Mincore import library.
+    #[link(name = "mincore")]
     unsafe extern "system" {
         #[link_name = "QueryInterruptTimePrecise"]
         fn query_interrupt_time_precise(value: *mut u64);
@@ -160,6 +161,15 @@ pub fn native_continuous_clock_nanos() -> io::Result<u128> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_precise_interrupt_clock_advances_across_a_real_wait() {
+        let before = native_continuous_clock_nanos().unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+        let after = native_continuous_clock_nanos().unwrap();
+        assert!(after > before);
+    }
 
     #[cfg(any(
         target_vendor = "apple",

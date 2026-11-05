@@ -3,7 +3,12 @@
 import base64
 import copy
 import json
+import os
 import re
+import shlex
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -901,6 +906,106 @@ def test_release_gate_is_clean_pinned_and_replays_complete_bundles_independently
     assert "VERSION_VERIFY_POLICY_ARGS" not in gate
 
 
+def test_replay_bundle_copy_is_mutable_without_unsealing_inputs(tmp_path: Path) -> None:
+    """Exercise actual sealed file modes and assembly, without a Cargo build."""
+
+    source = tmp_path / "source"
+    (source / "scripts").mkdir(parents=True)
+    sealer = source / "scripts" / "seal_workspace_source.py"
+    sealer.write_bytes((REPO_ROOT / "scripts" / sealer.name).read_bytes())
+    authority = source / "artifacts" / "openapi"
+    originals = {
+        "torii.json": b'{"authority":"original"}\n',
+        "manifest.json": b'{"manifest":"original"}\n',
+        "versions/current/torii.json": b'{"authority":"original"}\n',
+        "versions/current/manifest.json": b'{"manifest":"original"}\n',
+        "versions.json": b'{"current":"original"}\n',
+        "versions/retained/torii.json": b'{"retained":"unchanged"}\n',
+        "allowed_signers.json": b"{}\n",
+    }
+    for name, payload in originals.items():
+        path = authority / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+    subprocess.run(
+        [
+            sys.executable, "-I", "-S", str(sealer), "--seal", "--root",
+            str(source), "--no-writable-paths",
+        ],
+        check=True,
+    )
+    baseline = tmp_path / "baseline"
+    baseline.mkdir(mode=0o700)
+    subprocess.run(["cp", "-R", str(authority) + "/.", str(baseline) + "/"], check=True)
+
+    def snapshots(root: Path) -> dict:
+        return {
+            path.relative_to(root).as_posix(): (
+                path.stat().st_mode,
+                path.stat().st_ino,
+                path.stat().st_nlink,
+                path.read_bytes() if path.is_file() else None,
+            )
+            for path in [root, *root.rglob("*")]
+        }
+
+    original_source = snapshots(source)
+    original_baseline = snapshots(baseline)
+    assert all(not (entry[0] & 0o222) for entry in original_source.values())
+    assert all(not ((baseline / name).stat().st_mode & 0o222) for name in originals)
+    gate = OPENAPI_GATE.read_text(encoding="utf-8")
+    function = "build_unsigned_replay_bundle() {" + gate.split(
+        "build_unsigned_replay_bundle() {", 1
+    )[1].split("\nREPLAY_SOURCE_FIRST=", 1)[0]
+    # Generation and Git provenance have their own gates; retain the real source
+    # seal verifier, baseline copy, generated-file checks and assembly commands.
+    harness = r'''
+set -euo pipefail
+umask 077
+resolve_allowed_signers_path() { printf '%s/artifacts/openapi/allowed_signers.json\n' "$1"; }
+verify_replay_source_identity() { :; }
+run_xtask_in_repo() {
+  [[ "$3" == openapi && "$4" == --output-root && "$6" == --unsigned-manifest ]]
+  printf '{"authority":"generated"}\n' > "$5/torii.json"
+  printf '{"manifest":"generated"}\n' > "$5/manifest.json"
+}
+sync_unsigned_replay_bundle() {
+  # The real sync rewrites these existing mutable aliases and version map.
+  cp "$2/torii.json" "$2/versions/current/torii.json"
+  cp "$2/manifest.json" "$2/versions/current/manifest.json"
+  printf '{"current":"generated"}\n' > "$2/versions.json"
+}
+'''
+    result = subprocess.run(
+        [
+            "bash", "-c",
+            harness + function + '\nbuild_unsigned_replay_bundle "$1" "$2" "$3" "$4"',
+            "replay-bundle-permissions", str(source), str(tmp_path / "target"),
+            str(tmp_path / "generated"), str(tmp_path / "output"),
+        ],
+        env={**os.environ, "REPLAY_BASELINE": str(baseline)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert snapshots(source) == original_source
+    assert snapshots(baseline) == original_baseline
+    output = tmp_path / "output"
+    for name in originals:
+        copied = output / name
+        assert copied.stat().st_ino != (baseline / name).stat().st_ino
+        assert copied.stat().st_nlink == 1
+        assert copied.stat().st_mode & 0o777 == 0o600
+    for directory in [output, output / "versions", output / "versions" / "current"]:
+        assert directory.stat().st_mode & 0o777 == 0o700
+    assert (output / "torii.json").read_bytes() == b'{"authority":"generated"}\n'
+    for name in ("torii.json", "manifest.json"):
+        assert (output / "versions/current" / name).read_bytes() == (output / name).read_bytes()
+    assert (output / "versions.json").read_bytes() == b'{"current":"generated"}\n'
+    for name in ("versions/retained/torii.json", "allowed_signers.json"):
+        assert (output / name).read_bytes() == originals[name]
+
+
 def test_openapi_cargo_and_owner_surfaces_obey_release_process_policy() -> None:
     gate = OPENAPI_GATE.read_text(encoding="utf-8")
     wrapper = OPENAPI_GENERATOR_WRAPPER.read_text(encoding="utf-8")
@@ -1083,6 +1188,182 @@ def test_openapi_cargo_and_owner_surfaces_obey_release_process_policy() -> None:
     assert "cargo run" not in readme
     assert "--lockfile-path" not in readme
     assert "unstable-options" not in readme
+
+
+def canonical_workflow_command(name: str) -> str:
+    """Extract the actual canonical job setup script for executable regressions."""
+
+    canonical = OPENAPI_WORKFLOW.read_text().split("  canonical-spec:\n", 1)[1]
+    step = canonical.split(f"      - name: {name}\n", 1)[1]
+    step = step.split("      - name:", 1)[0]
+    assert "        shell: bash\n" in step
+    return textwrap.dedent(step.split("        run: |\n", 1)[1])
+
+
+@pytest.mark.parametrize("exit_code", [0, 23])
+def test_canonical_workflow_runs_android_parser_and_replay_controls(
+    tmp_path: Path, exit_code: int,
+) -> None:
+    canonical = OPENAPI_WORKFLOW.read_text().split("  canonical-spec:\n", 1)[1]
+    name = "Exercise replay provisioning and failure contracts"
+    step = canonical.split(f"      - name: {name}\n", 1)[1].split("      - name:", 1)[0]
+    assert "if:" not in step
+    assert "continue-on-error:" not in step
+    command = " ".join(line.strip() for line in step.split("        run: >-\n", 1)[1].splitlines())
+    assert canonical.index(name) < canonical.index("bash ci/check_android_codegen.sh")
+    expected = [
+        "-m", "pytest", "-q",
+        "scripts/tests/check_openapi_fail_closed_test.py",
+        "scripts/tests/check_android_codegen_release_gate_test.py",
+        "scripts/tests/check_android_codegen_parity_test.py",
+        "scripts/tests/android_codegen_replay_sorafs_fixture_test.py",
+        "scripts/tests/ci_image_preflight_test.py",
+    ]
+    assert shlex.split(command) == ["python3", *expected]
+    executable = tmp_path / "python3"
+    executable.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE_ARGV"\nexit "$CAPTURE_EXIT"\n'
+    )
+    executable.chmod(0o700)
+    capture = tmp_path / "captured arguments"
+    result = subprocess.run(
+        ["bash", "-c", command],
+        env={**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+             "CAPTURE_ARGV": str(capture), "CAPTURE_EXIT": str(exit_code)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == exit_code
+    assert capture.read_text().splitlines() == expected
+
+
+@pytest.mark.parametrize("tool", ["cargo", "rustc"])
+@pytest.mark.parametrize(
+    "cargo_kind",
+    ["regular", "missing", "relative", "symlink", "directory", "nonexecutable", "unnormalized", "newline"],
+)
+def test_canonical_workflow_selects_only_real_installed_tools(
+    tmp_path: Path, tool: str, cargo_kind: str,
+) -> None:
+    """The rustup shim is never replay authority, and unsafe output is not exported."""
+
+    root = tmp_path.resolve()
+    binary_root = root / "bin"
+    binary_root.mkdir()
+    paths = {name: root / ("installed " + name) for name in ("cargo", "rustc")}
+    for path in paths.values():
+        path.write_text("#!/bin/sh\nexit 0\n")
+        path.chmod(0o700)
+    cargo = paths[tool]
+    selected = str(cargo)
+    if cargo_kind == "missing":
+        selected = str(root / "missing")
+    elif cargo_kind == "relative":
+        selected = cargo.name
+    elif cargo_kind == "symlink":
+        link = root / "cargo-link"
+        link.symlink_to(cargo)
+        selected = str(link)
+    elif cargo_kind == "directory":
+        selected = str(binary_root)
+    elif cargo_kind == "nonexecutable":
+        cargo.chmod(0o600)
+    elif cargo_kind == "unnormalized":
+        selected = str(root) + "/./" + cargo.name
+    elif cargo_kind == "newline":
+        injected = root / "cargo\nUNEXPECTED_ENV=value"
+        cargo.rename(injected)
+        selected = str(injected)
+    rustup = binary_root / "rustup"
+    rustup.write_text(
+        '#!/bin/sh\n[ "$#" = 2 ] && [ "$1" = which ] || exit 3\n'
+        'case "$2" in\n'
+        'cargo) printf "%s\\n" "$FIXTURE_CARGO" ;;\n'
+        'rustc) printf "%s\\n" "$FIXTURE_RUSTC" ;;\n'
+        '*) exit 3 ;;\nesac\n'
+    )
+    rustup.chmod(0o700)
+    environment_file = root / "github-env"
+    environment = {
+        **os.environ,
+        "PATH": str(binary_root) + os.pathsep + os.environ["PATH"],
+        "FIXTURE_CARGO": selected if tool == "cargo" else str(paths["cargo"]),
+        "FIXTURE_RUSTC": selected if tool == "rustc" else str(paths["rustc"]),
+        "GITHUB_ENV": str(environment_file),
+    }
+    result = subprocess.run(
+        ["bash", "-c", canonical_workflow_command(
+            "Select installed Cargo and Rustc executables for sealed replay",
+        )],
+        cwd=root, env=environment, text=True, capture_output=True, check=False,
+    )
+    if cargo_kind == "regular":
+        assert result.returncode == 0, result.stderr
+        assert environment_file.read_text() == (
+            f"IROHA_RELEASE_CARGO_BIN={paths['cargo']}\nRUSTC={paths['rustc']}\n"
+        )
+    else:
+        assert result.returncode != 0
+        assert not environment_file.exists()
+
+
+@pytest.mark.parametrize("native_host", ["x86_64-unknown-linux-gnu", ""])
+def test_canonical_workflow_prefetches_locked_native_inputs(
+    tmp_path: Path, native_host: str,
+) -> None:
+    """Both offline replays share a prepared registry, never a replay target/cache."""
+
+    root = tmp_path.resolve()
+    cargo = root / "installed cargo"
+    cargo.write_text(
+        f"#!{sys.executable}\nimport json, os, sys\n"
+        "with open(os.environ['FIXTURE_CALL'], 'w') as stream:\n"
+        "    json.dump(sys.argv[1:], stream)\n"
+    )
+    cargo.chmod(0o700)
+    rustc = root / "installed rustc"
+    rustc.write_text(
+        '#!/bin/sh\n[ "$#" = 1 ] && [ "$1" = -vV ] || exit 3\n'
+        "printf '%s\\n' " + shlex.quote("rustc 1.99.1\nhost: " + native_host) + "\n"
+    )
+    rustc.chmod(0o700)
+    shim = root / "rustc"
+    shim.write_text("#!/bin/sh\nexit 88\n")
+    shim.chmod(0o700)
+    call = root / "cargo-call.json"
+    result = subprocess.run(
+        ["bash", "-c", canonical_workflow_command(
+            "Prefetch committed native dependencies before offline replay",
+        )],
+        cwd=root,
+        env={
+            **os.environ,
+            "PATH": str(root) + os.pathsep + os.environ["PATH"],
+            "IROHA_RELEASE_CARGO_BIN": str(cargo),
+            "RUSTC": str(rustc),
+            "FIXTURE_CALL": str(call),
+        },
+        text=True, capture_output=True, check=False,
+    )
+    if native_host:
+        assert result.returncode == 0, result.stderr
+        assert json.loads(call.read_text()) == ["fetch", "--locked", "--target", native_host]
+    else:
+        assert result.returncode != 0
+        assert not call.exists()
+
+    canonical = OPENAPI_WORKFLOW.read_text().split("  canonical-spec:\n", 1)[1]
+    ordered = [
+        "provision-openapi-cargo-lock.mjs pin",
+        "Select installed Cargo and Rustc executables for sealed replay",
+        "Prefetch committed native dependencies before offline replay",
+        "git status --porcelain=v1 --untracked-files=all",
+        "bash ci/check_openapi_spec.sh",
+        "bash ci/check_android_codegen.sh",
+    ]
+    positions = [canonical.index(marker) for marker in ordered]
+    assert positions == sorted(positions)
 
 
 def test_sealed_openapi_builds_do_not_stage_integration_fixtures_into_source() -> None:

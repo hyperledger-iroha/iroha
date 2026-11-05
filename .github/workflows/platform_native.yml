@@ -16,6 +16,9 @@ on:
       - "crates/iroha_operation_journal/**"
       - "crates/iroha_fhe/**"
       - "crates/iroha_core_privacy/**"
+      - "crates/iroha_core/**"
+      - "crates/iroha_primitives/**"
+      - "crates/iroha_torii/**"
       - "crates/ivm/**"
       - "crates/iroha_measurement/**"
       - "crates/iroha_plonk/build.rs"
@@ -27,6 +30,7 @@ on:
       - "ci/verify_privacy_python_wheel.py"
       - "ci/privacy_sdk_cargo_lockfile_test.sh"
       - "ci/check_sorafs_python_native_sdk.sh"
+      - "ci/requirements-native-components.*"
       - "scripts/tests/python_native_source_delivery_test.py"
       - "scripts/tests/python_native_delivery_gate_contract_test.py"
       - "scripts/tests/python_wheel_byte_owner_test.py"
@@ -82,7 +86,8 @@ jobs:
   native:
     name: Native ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    # Intel's first cold build takes over an hour; retain both feature variants and all DIF controls.
+    timeout-minutes: ${{ matrix.target == 'x86_64-apple-darwin' && 240 || matrix.target == 'x86_64-pc-windows-msvc' && 120 || 60 }}
     strategy:
       fail-fast: false
       matrix:
@@ -142,6 +147,27 @@ jobs:
               assert (root / "file-link").is_symlink()
               assert (root / "directory-link").is_symlink()
           PY
+      - name: Prepare current-user known-folder ownership for native fixtures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # The hosted image can supply a system-owned LocalAppData directory.
+          # Positive OS-folder fixtures require its actual user to own the leaf;
+          # production lookup still refuses foreign ownership without repairing it.
+          $folder = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+          if ([string]::IsNullOrWhiteSpace($folder)) { throw 'Missing OS-selected local data directory' }
+          $item = Get-Item -LiteralPath $folder -Force
+          if (!$item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'OS-selected local data directory must be a real directory'
+          }
+          $user = [Security.Principal.WindowsIdentity]::GetCurrent().User
+          $acl = Get-Acl -LiteralPath $folder
+          if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $user.Value) {
+            $acl.SetOwner($user)
+            Set-Acl -LiteralPath $folder -AclObject $acl
+          }
+          $owner = (Get-Acl -LiteralPath $folder).GetOwner([Security.Principal.SecurityIdentifier])
+          if ($owner.Value -ne $user.Value) { throw 'Known-folder fixture ownership differs from the effective user' }
       - name: Exercise native filesystem custody and documentation contracts
         run: |
           set -euo pipefail
@@ -198,7 +224,8 @@ jobs:
           set -euo pipefail
           cargo test --locked --config profile.test.package.iroha_core_privacy.opt-level=3 -p iroha_core_privacy --lib required_avx2_dif -- --ignored --nocapture --test-threads=1 \
             2>&1 | tee target/platform-native/dif-default.log
-          cargo test --locked --config profile.test.package.iroha_core_privacy.opt-level=3 -p iroha_core_privacy --no-default-features --features zk-stark --lib full_native_ -- --nocapture --test-threads=1 \
+          # Select the receipt's exact owner; unrelated proof qualifications also use full_native_.
+          cargo test --locked --config profile.test.package.iroha_core_privacy.opt-level=3 -p iroha_core_privacy --no-default-features --features zk-stark --lib privacy_engines::zk_x509::stark::main_aggregate::main_transform::full_dispatch_tests::full_native_ -- --nocapture --test-threads=1 \
             2>&1 | tee target/platform-native/dif-feature-off.log
           set +e
           cargo test --locked --config profile.test.package.iroha_core_privacy.opt-level=3 -p iroha_core_privacy --no-default-features --features zk-stark --lib required_avx2_dif -- --ignored --nocapture --test-threads=1 \
@@ -273,13 +300,17 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --locked -p iroha_plonk --test source_identity 2>&1 | tee target/platform-native/source-identity.log
-      - name: Exercise retained Python source delivery
+      - name: Prepare retained Python source delivery fixtures
+        id: source_delivery_ready
         run: |
           set -euo pipefail
           cargo test --locked -p iroha_native_source_delivery --features dev-tools 2>&1 | tee target/platform-native/source-delivery-rust.log
           cargo clippy --locked -p iroha_native_source_delivery --features dev-tools --all-targets -- -D warnings 2>&1 | tee target/platform-native/source-delivery-clippy.log
           cargo build --locked -p iroha_native_source_delivery --features dev-tools
-          python -m pip install --require-hashes --only-binary=:all: -r python/iroha_python/requirements-ci.lock
+          python -m pip install --require-hashes --only-binary=:all: -r ci/requirements-native-components.lock
+      - name: Exercise retained Python source delivery
+        run: |
+          set -euo pipefail
           export IROHA_NATIVE_SOURCE_DELIVERY_TEST_HELPER="$(python -c 'import os; from pathlib import Path; print(Path("target/debug/iroha_native_source_delivery" + (".exe" if os.name == "nt" else "")).resolve(), end="")')"
           python -m pytest -q \
             scripts/tests/python_native_source_delivery_test.py \
@@ -291,12 +322,17 @@ jobs:
             pytests/scripts/workspace_source_keeper_test.py \
             2>&1 | tee target/platform-native/source-delivery-python.log
       - name: Exercise producer admission and synchronous original-session supervision
-        if: runner.os != 'macOS'
-        # The preceding Python delivery step installs the hashed pytest dependencies.
+        if: ${{ !cancelled() && runner.os != 'macOS' && steps.source_delivery_ready.outcome == 'success' }}
+        # Successful preparation requires every preceding setup/build gate. This
+        # independent suite still runs after delivery pytest fails; the job stays failed.
         run: |
           set -euo pipefail
           # Give fixture callers a valid explicit compiler environment; refusal tests inject overrides.
-          unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN
+          # setup-python supplies linker/pkg-config paths, while setup-rust supplies
+          # developer Cargo settings. These are not release fixture caller inputs.
+          unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN \
+            PKG_CONFIG_PATH LD_LIBRARY_PATH RUST_BACKTRACE CARGO_PROFILE_DEV_DEBUG \
+            CARGO_UNSTABLE_SPARSE_REGISTRY CARGO_REGISTRIES_CRATES_IO_PROTOCOL
           export IROHA_TEST_PROCESS_BRIDGE_LIBRARY="$(python -c 'import os; from pathlib import Path; print((Path("target/debug") / ("iroha_process_bridge.dll" if os.name == "nt" else "libiroha_process_bridge.so")).resolve(), end="")')"
           export IROHA_TEST_PROVENANCE_EMITTER="$(python -c 'import os; from pathlib import Path; print(Path("target/debug/examples/provenance_fixture" + (".exe" if os.name == "nt" else "")).resolve(), end="")')"
           python -m pytest -q --junitxml=target/platform-native/release-process-python.xml \

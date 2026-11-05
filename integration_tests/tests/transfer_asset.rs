@@ -9,6 +9,11 @@ use iroha::{
         isi::InstructionBox,
         prelude::*,
     },
+    query::QueryError,
+};
+use iroha_data_model::{
+    ValidationFail,
+    query::error::{FindError, QueryExecutionFail},
 };
 use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
@@ -59,11 +64,20 @@ fn wait_for_asset_value(
             .query_single(FindAssetById::new(asset_id.clone()))
         {
             Ok(asset) => {
-                assert_eq!(asset.id(), &asset_id);
+                assert_eq!(
+                    asset.id(),
+                    &asset_id,
+                    "exact global asset query returned another asset"
+                );
                 last_observed = format!("value={:?}", asset.value());
                 if asset.value() == expected_value {
                     return;
                 }
+            }
+            Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+                FindError::Asset(missing),
+            )))) if missing.as_ref() == &asset_id => {
+                "asset is not visible yet".clone_into(&mut last_observed);
             }
             Err(err) => {
                 last_observed = format!("query failed: {err}");

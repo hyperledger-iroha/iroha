@@ -1590,9 +1590,11 @@ fn require_inrou_cgroup_kill_control(path: &Path) -> eyre::Result<()> {
         );
     }
     let mut options = fs::OpenOptions::new();
-    options
-        .write(true)
-        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32);
+    options.write(true).custom_flags(
+        (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC)
+            .bits()
+            .cast_signed(),
+    );
     let opened = options.open(path).wrap_err_with(|| {
         format!(
             "open mandatory writable Inrou cgroup.kill {}",
@@ -1783,7 +1785,6 @@ fn write_control_and_require_exact(path: &Path, value: &str, label: &str) -> eyr
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
-    use std::io::{Read as _, Write as _};
     use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
 
     use super::*;
@@ -2015,8 +2016,9 @@ mod tests {
             assert!(parse_inrou_internal_launcher_v1(overlap).is_err());
 
             let mut override_uid = exact.clone();
+            let insertion = gid_index + 1;
             override_uid.splice(
-                gid_index + 1..gid_index + 1,
+                insertion..insertion,
                 [
                     OsString::from("--reuid"),
                     OsString::from((70_000 + other).to_string()),

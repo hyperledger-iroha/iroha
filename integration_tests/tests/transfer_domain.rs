@@ -1,5 +1,5 @@
 //! Integration tests for domain permissions and transfers.
-use eyre::{Result, eyre};
+use eyre::{Result, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::query::QueryError;
 use iroha::{blocking::Client, crypto::KeyPair, data_model::prelude::*};
@@ -17,7 +17,7 @@ use iroha_executor_data_model::permission::{
     asset_definition::{CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition},
     domain::CanUnregisterDomain,
     nft::{CanRegisterNft, CanUnregisterNft},
-    trigger::{CanModifyTrigger, CanUnregisterTrigger},
+    trigger::{CanExecuteTrigger, CanModifyTrigger, CanUnregisterTrigger},
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -34,6 +34,62 @@ fn start_network(
 ) -> Result<Option<(sandbox::SerializedNetwork, Runtime)>> {
     sandbox::start_network_blocking_or_skip(builder, context)
 }
+/// Fund the selected signer from the original signed fee asset and retain the same endpoint.
+fn funded_account_client(
+    network: &Network,
+    client: &Client,
+    account: &AccountId,
+    keypair: &KeyPair,
+) -> Result<Client> {
+    ensure!(
+        account == &AccountId::new(keypair.public_key().clone()),
+        "fixture account must match its signing key"
+    );
+    let mut builder = client.client().to_builder();
+    let asset = iroha_genesis::signed_genesis_root_fee_policy(&network.genesis().0)?.fee_asset_id;
+    client.submit(
+        Transfer::asset_quantity(
+            AssetId::new(asset, builder.account.clone()),
+            25_000_u32,
+            account.clone(),
+        ),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    builder.account = account.clone();
+    builder.key_pair = keypair.clone();
+    Client::from_client(builder.build()?)
+}
+
+/// Require the authenticated permission rejection, rather than an unrelated fee or transport error.
+fn assert_permission_denied(error: &eyre::Report, expected: &str) {
+    use iroha_data_model::transaction::error::TransactionRejectionReason;
+
+    assert!(
+        error.chain().any(|cause| matches!(
+            cause.downcast_ref::<TransactionRejectionReason>(),
+            Some(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message)))
+                if message.contains(expected)
+        )),
+        "expected permission rejection containing {expected:?}, got {error:?}"
+    );
+}
+
+#[test]
+fn permission_assertions_read_wrapped_authenticated_rejections() {
+    let reason = iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+        ValidationFail::NotPermitted("authority cannot modify this metadata".into()),
+    );
+    let error = eyre::Report::new(reason).wrap_err("transaction reached Rejected finality");
+    assert_permission_denied(&error, "authority cannot modify this metadata");
+}
+
+#[test]
+#[should_panic(expected = "expected permission rejection")]
+fn permission_assertions_refuse_unauthenticated_matching_text() {
+    let error = eyre!("authority cannot modify this metadata");
+    assert_permission_denied(&error, "authority cannot modify this metadata");
+}
+
 fn submit_as<I: Into<InstructionBox>>(
     client: &Client,
     authority: &AccountId,
@@ -85,9 +141,9 @@ fn wait_for_domain_owner(
             .query_single(FindDomainById::new(domain_id.clone()))
         {
             Ok(domain) => {
-                eyre::ensure!(
+                ensure!(
                     domain.id() == domain_id,
-                    "exact domain query returned a different domain"
+                    "exact domain query returned another domain"
                 );
                 if domain.owned_by() == expected_owner {
                     return Ok(domain);
@@ -183,83 +239,87 @@ fn domain_owner_account_permissions() -> Result<()> {
         return Ok(());
     };
     let test_client = network.client();
-    let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal")?;
+    let kingdom_id = DomainId::try_new("kingdom", "universal")?;
     let (mad_hatter_id, mad_hatter_keypair) = gen_account_in("kingdom");
-    // the canonical ALICE account is owner of "kingdom" domain
-    let kingdom = Domain::new(kingdom_id);
-    submit_ensure_domain_for_network(&network, &test_client, kingdom)?;
-    let mad_hatter = Account::new(mad_hatter_id.clone());
+    submit_ensure_domain_for_network(&network, &test_client, Domain::new(kingdom_id))?;
     test_client.submit(
-        Register::account(mad_hatter),
+        Register::account(Account::new(mad_hatter_id.clone())),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    // Domain ownership no longer grants direct account metadata mutation rights.
+    let owner = funded_account_client(&network, &test_client, &mad_hatter_id, &mad_hatter_keypair)?;
     let key: Name = "key".parse()?;
     let value = Json::new("value");
-    let err = test_client
+    // Domain ownership grants no authority over another canonical, domainless account.
+    let set = SetKeyValue::account(mad_hatter_id.clone(), key.clone(), value);
+    let error = test_client
         .submit(
-            SetKeyValue::account(mad_hatter_id.clone(), key.clone(), value),
+            set.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .expect_err("domain owner must not edit another account metadata");
-    assert!(err.chain().any(|cause| {
-        cause
-            .to_string()
-            .contains("authority cannot modify this metadata")
-    }));
-    let err = test_client
+        .expect_err("domain owner must not edit another account's metadata");
+    assert_permission_denied(&error, "authority cannot modify this metadata");
+    owner.submit(
+        set,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    let remove = RemoveKeyValue::account(mad_hatter_id.clone(), key);
+    let error = test_client
         .submit(
-            RemoveKeyValue::account(mad_hatter_id.clone(), key),
+            remove.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .expect_err("domain owner must not remove another account metadata");
-    assert!(err.chain().any(|cause| {
-        cause
-            .to_string()
-            .contains("authority cannot remove this metadata")
-    }));
-    // Account capabilities require an explicit grant from the universal account owner.
-    let bob_id = BOB_ID.clone();
+        .expect_err("domain owner must not remove another account's metadata");
+    assert_permission_denied(&error, "authority cannot remove this metadata");
+    owner.submit(
+        remove,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     let permission = CanUnregisterAccount {
         account: mad_hatter_id.clone(),
     };
-    let denied = test_client
+    let grant = Grant::account_permission(permission.clone(), BOB_ID.clone());
+    let error = test_client
         .submit(
-            Grant::account_permission(permission.clone(), bob_id.clone()),
-            FeePaymentIntent::authority(Vec::new(), None),
+            grant.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .expect_err("domain ownership must not delegate another account's removal");
-    assert!(
-        denied.chain().any(|cause| cause
-            .to_string()
-            .contains("authority cannot grant or revoke permission `CanUnregisterAccount`")),
-        "unexpected account delegation rejection: {denied:?}"
-    );
-    fund_signer(&test_client, mad_hatter_id.clone())?;
-    submit_as(
-        &test_client,
-        &mad_hatter_id,
-        &mad_hatter_keypair,
-        [Grant::account_permission(
-            permission.clone(),
-            ALICE_ID.clone(),
-        )],
+        .expect_err("domain owner must not grant another account's permissions");
+    assert_permission_denied(&error, "CanUnregisterAccount");
+    owner.submit(
+        grant,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    test_client.submit(
-        Grant::account_permission(permission.clone(), bob_id.clone()),
+    let revoke = Revoke::account_permission(permission.clone(), BOB_ID.clone());
+    let error = test_client
+        .submit(
+            revoke.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err("domain owner must not revoke another account's permissions");
+    assert_permission_denied(&error, "CanUnregisterAccount");
+    owner.submit(
+        revoke,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    let unregister = Unregister::account(mad_hatter_id);
+    let error = test_client
+        .submit(
+            unregister.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err("domain owner must not unregister another account without a grant");
+    assert_permission_denied(&error, "authority cannot remove this resource");
+    owner.submit(
+        Grant::account_permission(permission, ALICE_ID.clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     test_client.submit(
-        RevokeBox::from(Revoke::account_permission(permission, bob_id)),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )?;
-    // The explicit account capability authorizes removal after grant/revoke delegation.
-    test_client.submit(
-        Unregister::account(mad_hatter_id),
+        unregister,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     Ok(())
 }
+
 #[test]
 fn domain_owner_asset_definition_permissions() -> Result<()> {
     let builder = NetworkBuilder::new();
@@ -286,13 +346,14 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
         Register::account(bob),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    fund_signer(&test_client, bob_id.clone())?;
     let rabbit = Account::new(rabbit_id.clone());
     test_client.submit(
         Register::account(rabbit),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    // The domain owner registers the definition, then transfers issuer ownership to Bob.
+    let owner = funded_account_client(&network, &test_client, &bob_id, &bob_keypair)?;
+    // Alice registers in her domain, then transfers the definition to Bob so
+    // domain ownership and definition ownership remain separate for the assertions.
     let coin = AssetDefinition::numeric(
         coin_id.clone(),
         "coin".to_owned(),
@@ -304,12 +365,12 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
             Register::asset_definition(coin).into(),
             Transfer::asset_definition(ALICE_ID.clone(), coin_id.clone(), bob_id.clone()).into(),
         ],
-        FeePaymentIntent::authority(Vec::new(), None),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    let stored = test_client
+    let definition = test_client
         .client()
         .query_single(FindAssetDefinitionById::new(coin_id.clone()))?;
-    assert_eq!(stored.owned_by(), &bob_id);
+    assert_eq!(definition.owned_by(), &bob_id);
     // Asset definitions are issuer-owned in first-release semantics.
     let err = test_client
         .submit(
@@ -324,22 +385,67 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
     }));
     let key: Name = "key".parse()?;
     let value = Json::new("value");
-    let denied = test_client
+    let set = SetKeyValue::asset_definition(coin_id.clone(), key.clone(), value);
+    let error = test_client
         .submit(
-            SetKeyValue::asset_definition(coin_id.clone(), key.clone(), value.clone()),
-            FeePaymentIntent::authority(Vec::new(), None),
+            set.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .expect_err("domain owner must not edit another issuer's definition without a grant");
-    assert!(
-        denied.chain().any(|cause| cause
-            .to_string()
-            .contains("authority cannot modify this metadata")),
-        "unexpected definition metadata rejection: {denied:?}"
-    );
-    submit_as::<InstructionBox>(
-        &test_client,
-        &bob_id,
-        &bob_keypair,
+        .expect_err("domain owner must not modify another issuer's definition metadata");
+    assert_permission_denied(&error, "authority cannot modify this metadata");
+    owner.submit(
+        set,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    let remove = RemoveKeyValue::asset_definition(coin_id.clone(), key);
+    let error = test_client
+        .submit(
+            remove.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err("domain owner must not remove another issuer's definition metadata");
+    assert_permission_denied(&error, "authority cannot remove this metadata");
+    owner.submit(
+        remove,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    let permission = CanUnregisterAssetDefinition {
+        asset_definition: coin_id.clone(),
+    };
+    let grant = Grant::account_permission(permission.clone(), BOB_ID.clone());
+    let error = test_client
+        .submit(
+            grant.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err("domain owner must not grant another issuer's definition permissions");
+    assert_permission_denied(&error, "CanUnregisterAssetDefinition");
+    owner.submit(
+        grant,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    let revoke = Revoke::account_permission(permission, BOB_ID.clone());
+    let error = test_client
+        .submit(
+            revoke.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err("domain owner must not revoke another issuer's definition permissions");
+    assert_permission_denied(&error, "CanUnregisterAssetDefinition");
+    owner.submit(
+        revoke,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    let unregister = Unregister::asset_definition(coin_id.clone());
+    let error = test_client
+        .submit(
+            unregister.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err("domain owner must not unregister another issuer's definition");
+    assert_permission_denied(&error, "authority cannot remove this resource");
+    // Explicit issuer grants are tested only after every domain-only refusal above.
+    owner.submit_all::<InstructionBox>(
         [
             Grant::account_permission(
                 CanModifyAssetDefinitionMetadata {
@@ -356,29 +462,21 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
             )
             .into(),
         ],
+        FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    test_client.submit(
-        SetKeyValue::asset_definition(coin_id.clone(), key.clone(), value),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )?;
-    test_client.submit(
-        RemoveKeyValue::asset_definition(coin_id.clone(), key),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )?;
-    let permission = CanUnregisterAssetDefinition {
-        asset_definition: coin_id.clone(),
-    };
-    test_client.submit(
-        Grant::account_permission(permission.clone(), bob_id.clone()),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )?;
-    test_client.submit(
-        RevokeBox::from(Revoke::account_permission(permission, bob_id)),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )?;
-    test_client.submit(
-        Unregister::asset_definition(coin_id),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    let delegated_key: Name = "delegated_metadata".parse()?;
+    test_client.submit_all::<InstructionBox>(
+        [
+            SetKeyValue::asset_definition(
+                coin_id.clone(),
+                delegated_key.clone(),
+                Json::new("granted"),
+            )
+            .into(),
+            RemoveKeyValue::asset_definition(coin_id, delegated_key).into(),
+            unregister.into(),
+        ],
+        FeePaymentIntent::authority(Vec::new(), None),
     )?;
     Ok(())
 }
@@ -405,8 +503,9 @@ fn domain_owner_asset_permissions() -> Result<()> {
         Register::account(bob),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    fund_signer(&test_client, bob_id.clone())?;
-    // The domain owner registers the definition, then transfers issuer ownership to Bob.
+    let owner = funded_account_client(&network, &test_client, &bob_id, &bob_keypair)?;
+    // Alice registers in her domain, then transfers the definition to Bob so
+    // domain ownership and definition ownership remain separate for the assertions.
     let coin = AssetDefinition::numeric(
         coin_id.clone(),
         "coin".to_owned(),
@@ -495,45 +594,31 @@ fn domain_owner_asset_permissions() -> Result<()> {
     let exact_permission = CanTransferAsset {
         asset: bob_coin_id.clone(),
     };
-    submit_as(
-        &test_client,
-        &bob_id,
-        &bob_keypair,
-        [Grant::account_permission(
-            exact_permission.clone(),
-            alice_id.clone(),
-        )],
+    owner.submit(
+        Grant::account_permission(exact_permission.clone(), alice_id.clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     test_client.submit(
         Transfer::asset_quantity(bob_coin_id.clone(), 5u32, alice_id.clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    submit_as(
-        &test_client,
-        &bob_id,
-        &bob_keypair,
-        [Revoke::account_permission(
-            exact_permission,
-            alice_id.clone(),
-        )],
+    owner.submit(
+        Revoke::account_permission(exact_permission, alice_id.clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    let _ = test_client
+    let revoked = test_client
         .submit(
             Transfer::asset_quantity(bob_coin_id.clone(), 1u32, alice_id.clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .expect_err("revoking the asset-specific permission must immediately close access");
+    assert_permission_denied(&revoked, "source asset owner must sign the transaction");
     let definition_permission = CanTransferAssetWithDefinition {
         asset_definition: bob_coin_id.definition().clone(),
     };
-    submit_as(
-        &test_client,
-        &bob_id,
-        &bob_keypair,
-        [Grant::account_permission(
-            definition_permission,
-            alice_id.clone(),
-        )],
+    owner.submit(
+        Grant::account_permission(definition_permission, alice_id.clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     test_client.submit(
         Transfer::asset_quantity(bob_coin_id, 5u32, alice_id),
@@ -597,19 +682,24 @@ fn active_alias_domain_owner_cannot_transfer_the_aliased_accounts_assets() -> Re
         )?,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    submit_as(
+    let issuer = funded_account_client(
+        &network,
         &client,
         &definition_owner,
         &definition_owner_keypair,
+    )?;
+    issuer.submit_all::<InstructionBox>(
         [
-            InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
+            Register::asset_definition(AssetDefinition::numeric(
                 asset_definition,
                 "alias-safe coin".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                Some(asset_domain.clone()),
-            ))),
-            InstructionBox::from(Mint::asset_quantity(10_u32, source_asset.clone())),
+                Some(asset_domain),
+            ))
+            .into(),
+            Mint::asset_quantity(10_u32, source_asset.clone()).into(),
         ],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     let error = client
         .submit(
@@ -648,20 +738,18 @@ fn domain_owner_nft_permissions() -> Result<()> {
         Register::account(bob),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    fund_signer(&test_client, bob_id.clone())?;
-    // Grant permission to register NFT to "bob@kingdom"
+    // Grant the canonical Bob account permission to register NFTs in this domain.
     let permission = CanRegisterNft { domain: kingdom_id };
     test_client.submit(
         Grant::account_permission(permission, bob_id.clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    // register NFT by "bob@kingdom" so he is owner of it
+    // Bob signs the registration and becomes the NFT owner.
     let nft = Nft::new(nft_id.clone(), Metadata::default());
-    submit_as(
-        &test_client,
-        &bob_id,
-        &bob_keypair,
-        [Register::nft(nft.clone())],
+    let owner = funded_account_client(&network, &test_client, &bob_id, &bob_keypair)?;
+    owner.submit(
+        Register::nft(nft.clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     // check that the canonical ALICE account as owner of domain can edit metadata of NFT in her domain
     let key: Name = "key".parse()?;
@@ -713,7 +801,6 @@ fn domain_owner_trigger_permissions() -> Result<()> {
         Register::account(bob),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    fund_signer(&test_client, bob_id.clone())?;
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
         "rose".parse()?,
@@ -741,80 +828,87 @@ fn domain_owner_trigger_permissions() -> Result<()> {
         err.chain()
             .any(|cause| cause.to_string().contains("Missing CanRegisterTrigger"))
     );
-    submit_as(
-        &test_client,
-        &bob_id,
-        &bob_keypair,
-        [Grant::account_permission(
+    let owner = funded_account_client(&network, &test_client, &bob_id, &bob_keypair)?;
+    owner.submit(
+        Grant::account_permission(
             iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
                 authority: bob_id.clone(),
             },
             bob_id.clone(),
-        )],
+        ),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    submit_as(&test_client, &bob_id, &bob_keypair, [register_trigger])?;
-    let denied = test_client
+    owner.submit(
+        register_trigger,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    let mint = Mint::trigger_repetitions(1_u32, trigger_id.clone());
+    let error = test_client
         .submit(
-            Mint::trigger_repetitions(1u32, trigger_id.clone()),
-            FeePaymentIntent::authority(Vec::new(), None),
+            mint.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .expect_err("domain ownership must not modify another account's trigger");
-    assert!(
-        denied.chain().any(|cause| cause
-            .to_string()
-            .contains("authority cannot modify trigger repetitions")),
-        "unexpected trigger modification rejection: {denied:?}"
-    );
-    submit_as::<InstructionBox>(
-        &test_client,
-        &bob_id,
-        &bob_keypair,
-        [
-            Grant::account_permission(
-                CanModifyTrigger {
-                    trigger: trigger_id.clone(),
-                },
-                alice_id.clone(),
-            )
-            .into(),
-            Grant::account_permission(
-                CanUnregisterTrigger {
-                    trigger: trigger_id.clone(),
-                },
-                alice_id.clone(),
-            )
-            .into(),
-        ],
-    )?;
-    test_client.submit(
-        Mint::trigger_repetitions(1_u32, trigger_id.clone()),
+        .expect_err("domain owner must not modify another account's trigger repetitions");
+    assert_permission_denied(&error, "authority cannot modify trigger repetitions");
+    owner.submit(
+        mint,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    test_client.submit(
-        Burn::trigger_repetitions(1_u32, trigger_id.clone()),
+    let burn = Burn::trigger_repetitions(1_u32, trigger_id.clone());
+    let error = test_client
+        .submit(
+            burn.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err("domain owner must not burn another account's trigger repetitions");
+    assert_permission_denied(&error, "authority cannot burn this resource");
+    owner.submit(
+        burn,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    // Domain ownership must not authorize executing another account's trigger.
-    // Native admission rejects this before the trigger's filter is evaluated.
+    let execute_permission = CanExecuteTrigger {
+        trigger: trigger_id.clone(),
+    };
     let execute_trigger = ExecuteTrigger::new(trigger_id.clone());
     let err = test_client
         .submit(
             Instruction::into_instruction_box(Box::new(execute_trigger)),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .expect_err("domain ownership must not execute another account's trigger");
-    assert!(
-        err.chain().any(|cause| cause
-            .to_string()
-            .contains("authority cannot execute this trigger")),
-        "unexpected manual-trigger rejection: {err:?}"
-    );
-
+        .expect_err("domain owner must not execute another account's trigger without a grant");
+    assert_permission_denied(&err, "authority cannot execute this trigger");
+    owner.submit(
+        Grant::account_permission(execute_permission, alice_id.clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     let permission = CanUnregisterTrigger {
         trigger: trigger_id.clone(),
     };
-    test_client.submit(
-        Grant::account_permission(permission, bob_id),
+    let error = test_client
+        .submit(
+            Unregister::trigger(trigger_id.clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err("domain owner must not unregister another account's trigger without a grant");
+    assert_permission_denied(&error, "authority cannot remove this resource");
+    owner.submit(
+        Grant::account_permission(
+            CanModifyTrigger {
+                trigger: trigger_id.clone(),
+            },
+            alice_id.clone(),
+        ),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    test_client.submit_all::<InstructionBox>(
+        [
+            Mint::trigger_repetitions(1_u32, trigger_id.clone()).into(),
+            Burn::trigger_repetitions(1_u32, trigger_id.clone()).into(),
+        ],
+        FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    owner.submit(
+        Grant::account_permission(permission, alice_id),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     test_client.submit(
@@ -887,14 +981,12 @@ fn not_allowed_to_transfer_other_user_domain() -> Result<()> {
     let client = network.client();
     let domain = client
         .client()
-        .query_single(FindDomainById::new(foo_domain.clone()))
-        .expect("Failed to execute Iroha Query");
+        .query_single(FindDomainById::new(foo_domain.clone()))?;
     assert_eq!(domain.id(), &foo_domain);
     assert_eq!(domain.owned_by(), &user1);
     let users_domain_record = client
         .client()
-        .query_single(FindDomainById::new(users_domain.clone()))
-        .expect("Failed to execute Iroha Query");
+        .query_single(FindDomainById::new(users_domain.clone()))?;
     assert_eq!(users_domain_record.id(), &users_domain);
     assert_eq!(users_domain_record.owned_by(), &user1);
     // Client authority is "alice@wonderlang".

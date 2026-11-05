@@ -140,7 +140,7 @@ impl<T> WithOrigin<T> {
     pub fn origin(&self) -> &ParameterOrigin {
         &self.origin
     }
-    /// Construct [`ConfigValueAndOrigin`] attachment to use with [`error_stack::Report::attach_printable`].
+    /// Construct [`ConfigValueAndOrigin`] attachment to use with [`error_stack::Report::attach`].
     pub fn into_attachment(self) -> ConfigValueAndOrigin<T> {
         ConfigValueAndOrigin::new(self.value, self.origin)
     }

@@ -2603,14 +2603,108 @@ fn leakage_block_wire(block: &iroha::data_model::block::SignedBlock) -> Result<V
     Ok(output)
 }
 
+async fn read_canonical_full_block_prefix(
+    stream: &mut (
+             impl futures_util::Stream<Item = iroha::Result<iroha::data_model::block::SignedBlock>>
+             + Unpin
+         ),
+    tip: u64,
+) -> Result<Vec<iroha::data_model::block::SignedBlock>> {
+    ensure!(tip > 0, "canonical block replay omitted genesis");
+    let mut blocks = Vec::new();
+    for expected_height in 1..=tip {
+        let block = stream.next().await.ok_or_else(|| {
+            eyre!("canonical block replay ended before height {expected_height}")
+        })??;
+        ensure!(
+            block.header().height().get() == expected_height,
+            "canonical block replay substituted or skipped height {expected_height}"
+        );
+        blocks.push(block);
+    }
+    Ok(blocks)
+}
+
+#[tokio::test]
+async fn canonical_full_block_prefix_retains_wire_and_refuses_incomplete_or_reordered_history()
+-> Result<()> {
+    let key = KeyPair::try_from_seed(vec![0x46; 32], Algorithm::Ed25519)?;
+    let block = |height| {
+        iroha::data_model::block::builder::BlockBuilder::new(BlockHeader::new(
+            NonZeroU64::new(height).unwrap(),
+            None,
+            None,
+            height * 7,
+            0,
+        ))
+        .build_with_signature(0, key.private_key())
+    };
+    let expected = [block(1), block(2)];
+    let mut stream = futures_util::stream::iter(expected.iter().cloned().map(Ok));
+    let observed = read_canonical_full_block_prefix(&mut stream, 2).await?;
+    for (expected, observed) in expected.iter().zip(&observed) {
+        assert_eq!(observed.encode_wire()?, expected.encode_wire()?);
+    }
+    for heights in [vec![], vec![1], vec![2, 1], vec![1, 1], vec![1, 3]] {
+        let mut stream =
+            futures_util::stream::iter(heights.into_iter().map(|height| Ok(block(height))));
+        assert!(
+            read_canonical_full_block_prefix(&mut stream, 2)
+                .await
+                .is_err()
+        );
+    }
+    let mut stream = futures_util::stream::iter([Ok(block(1))]);
+    assert!(
+        read_canonical_full_block_prefix(&mut stream, 0)
+            .await
+            .is_err()
+    );
+    let mut stream = futures_util::stream::iter([Err(iroha::Error::Timeout {
+        operation: "stream.receive",
+    })]);
+    assert!(
+        read_canonical_full_block_prefix(&mut stream, 1)
+            .await
+            .is_err()
+    );
+    Ok(())
+}
+
+fn canonical_full_block_prefix(
+    runtime: &tokio::runtime::Runtime,
+    client: &Client,
+) -> Result<Vec<iroha::data_model::block::SignedBlock>> {
+    let request_timeout = client.client().torii_request_timeout();
+    ensure!(
+        !request_timeout.is_zero(),
+        "canonical block replay requires a bounded client"
+    );
+    runtime.block_on(async {
+        tokio::time::timeout(request_timeout, async {
+            // The status height bounds this read; carrier identity still comes
+            // from the complete canonical signed blocks below.
+            let tip = client.client().status().get().await?.blocks;
+            let mut stream = client
+                .account_client()
+                .blocks()
+                .subscribe(NonZeroU64::MIN)
+                .await?;
+            let blocks = read_canonical_full_block_prefix(&mut stream, tip).await?;
+            stream.close().await?;
+            Ok::<_, eyre::Report>(blocks)
+        })
+        .await
+        .wrap_err("timed out replaying the canonical block prefix")?
+    })
+}
+
 fn leakage_carrier_block(
+    runtime: &tokio::runtime::Runtime,
     client: &Client,
     entrypoint: HashOf<TransactionEntrypoint>,
 ) -> Result<iroha::data_model::block::SignedBlock> {
-    let mut matching = client
-        .client()
-        .query(FindBlocks)
-        .execute_all()?
+    let mut matching = canonical_full_block_prefix(runtime, client)?
         .into_iter()
         .filter(|block| block.network_input_hashes().any(|hash| hash == entrypoint))
         .collect::<Vec<_>>();
@@ -2641,7 +2735,7 @@ fn submit_leakage_carrier_with_event(
         .map_err(|_| eyre!("timed out opening leakage carrier event stream"))??;
         tokio::time::sleep(Duration::from_millis(100)).await;
         let submitter = client.clone();
-        let response = tokio::task::spawn_blocking(move || {
+        let response = integration_tests::sync::spawn_blocking(move || {
             submitter
                 .client()
                 .submit_private_settlement_bundle_v1(&submit)
@@ -8394,13 +8488,11 @@ fn wait_for_identical_settlement_finality(
 }
 
 fn canonical_carrier_header(
+    runtime: &tokio::runtime::Runtime,
     client: &Client,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Result<Option<BlockHeader>> {
-    let matching = client
-        .client()
-        .query(FindBlocks)
-        .execute_all()?
+    let matching = canonical_full_block_prefix(runtime, client)?
         .into_iter()
         .filter(|block| {
             block
@@ -8418,6 +8510,7 @@ fn canonical_carrier_header(
 
 fn wait_for_identical_canonical_carrier(
     network: &Network,
+    runtime: &tokio::runtime::Runtime,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Result<BlockHeader> {
     let started = Instant::now();
@@ -8427,7 +8520,7 @@ fn wait_for_identical_canonical_carrier(
         let mut headers = Vec::with_capacity(process_count);
         last_observed.clear();
         for (peer_index, peer) in network.all_peers().enumerate() {
-            match canonical_carrier_header(&peer.client(), entrypoint_hash) {
+            match canonical_carrier_header(runtime, &peer.client(), entrypoint_hash) {
                 Ok(Some(header)) => {
                     last_observed.push(format!(
                         "peer#{peer_index}:h{}:{}",
@@ -8550,11 +8643,8 @@ fn wait_for_transparent_control_consents(
         for peer in network.all_peers() {
             // Consents were granted TO the independent carrier sponsor. Query
             // that exact grantee on every validator, not each granting payer.
-            if let Ok(permissions) = peer
-                .client()
-                .client()
-                .query(FindPermissionsByAccountId::new(ALICE_ID.clone()))
-                .execute_all()
+            if let Ok(permissions) =
+                integration_tests::collections::permissions(&peer.client(), &ALICE_ID)
             {
                 if expected
                     .iter()
@@ -8747,7 +8837,7 @@ fn run_real_process_transparent_control_benchmark(
     let receipt = wait_for_identical_settlement_finality(&network, source_id)?;
     validate_transparent_native_receipt(&receipt, &transaction, request.participants)?;
     let carrier_started = Instant::now();
-    let carrier = wait_for_identical_canonical_carrier(&network, entrypoint_hash)?;
+    let carrier = wait_for_identical_canonical_carrier(&network, &owner.runtime, entrypoint_hash)?;
     let business_receipt =
         wait_for_matched_business_receipt(&network, &settlement, &carrier, carrier_started)?;
     ensure!(
@@ -8785,7 +8875,7 @@ fn run_real_process_transparent_control_benchmark(
     let _replay_error = authority
         .submit_transaction_and_wait(&replay)
         .expect_err("a fresh carrier reusing the committed settlement id was accepted");
-    wait_for_matched_replay_rejection(&network, &replay, &settlement)?;
+    wait_for_matched_replay_rejection(&network, &owner.runtime, &replay, &settlement)?;
     wait_for_transparent_control_balances(
         &network,
         shape,
@@ -8800,7 +8890,8 @@ fn run_real_process_transparent_control_benchmark(
     );
     ensure!(
         wait_for_identical_settlement_finality(&network, source_id)? == receipt
-            && wait_for_identical_canonical_carrier(&network, entrypoint_hash)? == carrier,
+            && wait_for_identical_canonical_carrier(&network, &owner.runtime, entrypoint_hash)?
+                == carrier,
         "replay changed the durable native settlement certificate or canonical carrier"
     );
     // Rejected results may be recorded in canonical history. Their exact
@@ -9293,7 +9384,7 @@ fn run_real_process_leakage_campaign(
         "signed RS16 leakage finality observations are incomplete"
     );
 
-    let carrier_block = leakage_carrier_block(&sponsor, entrypoint_hash)?;
+    let carrier_block = leakage_carrier_block(&runtime, &sponsor, entrypoint_hash)?;
     let block_wire = leakage_block_wire(&carrier_block)?;
     let (query_records, query_sources) =
         leakage_query_records(&network, final_manifest.bundle_id, &receipt)?;

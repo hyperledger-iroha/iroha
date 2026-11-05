@@ -85,8 +85,8 @@ export PATH="${VENV_SCRIPTS}:${PATH}"
 NATIVE_HELPER_TARGET="${SDK_SESSION}/native-helper-target"
 NATIVE_HELPER_HOST="$("${RUSTC:-rustc}" -vV | awk '/^host: / { print $2 }')"
 [[ -n "${NATIVE_HELPER_HOST}" ]] || { echo "error: native helper compiler has no host target" >&2; exit 1; }
-(cd "${ROOT_DIR}" && cargo build --locked -p iroha_native_source_delivery --features dev-tools \
-  --bin iroha_native_source_delivery --target "${NATIVE_HELPER_HOST}" \
+(cd "${ROOT_DIR}" && cargo build --locked -p iroha_native_source_delivery \
+  --features dev-tools --bin iroha_native_source_delivery --target "${NATIVE_HELPER_HOST}" \
   --target-dir "${NATIVE_HELPER_TARGET}")
 assert_build_source_unchanged
 NATIVE_HELPER="$(capture_python "${VENV_PYTHON}" -I -B -c \

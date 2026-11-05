@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import re
 import subprocess
 import sys
+import textwrap
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -20,6 +23,592 @@ assert SPEC is not None and SPEC.loader is not None
 rust_ci = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = rust_ci
 SPEC.loader.exec_module(rust_ci)
+
+CAPACITY_SCRIPT = ROOT / "ci" / "observe_build_capacity.py"
+CAPACITY_SPEC = importlib.util.spec_from_file_location("build_capacity", CAPACITY_SCRIPT)
+assert CAPACITY_SPEC is not None and CAPACITY_SPEC.loader is not None
+capacity = importlib.util.module_from_spec(CAPACITY_SPEC)
+CAPACITY_SPEC.loader.exec_module(capacity)
+
+
+def _workflow_job(name: str) -> str:
+    """Read one actual PR job without depending on YAML tag resolution."""
+
+    workflow = (ROOT / ".github/workflows/pr.yml").read_text()
+    body = workflow.split(f"  {name}:\n", 1)[1]
+    return re.split(r"^  [a-z_][a-z_0-9-]*:\n", body, maxsplit=1, flags=re.MULTILINE)[0]
+
+
+def test_source_guards_run_independently_and_remain_required() -> None:
+    """Compilation can start after routing, but cannot waive source validation."""
+
+    classifier = _workflow_job("rust_changes")
+    guards = _workflow_job("rust_source_guards")
+    required = _workflow_job("rust_required")
+    assert "python3 scripts/rust_ci.py validate" in classifier
+    assert "python3 scripts/rust_ci.py classify" in classifier
+    assert "scripts/tests/check_dependency_budget_test.py" not in classifier
+    assert "scripts/tests/check_dependency_budget_test.py" in guards
+    assert "python3 -I -S scripts/check_release_feature_graph.py" in guards
+    assert "python3 -I -S scripts/check_state_commitment_candidates.py" in guards
+    assert re.search(r"(?m)^    (?:needs|if):", guards) is None
+    assert "    if: always()" in required
+    assert "needs: [rust_changes, rust_source_guards," in required
+    assert "SOURCE_GUARDS_RESULT: ${{ needs.rust_source_guards.result }}" in required
+    for name in ("rust_affected", "rust_network", "pre_build"):
+        assert "rust_source_guards" not in _workflow_job(name)
+
+
+def test_python_network_consumers_share_the_binary_producer_host() -> None:
+    """Keep pinned Python available on the same Linux release as prebuilt binaries."""
+    producer = _workflow_job("pre_build")
+    consumer = _workflow_job("pytests")
+    assert "    runs-on: ubuntu-24.04\n" in producer
+    assert "    runs-on: ubuntu-24.04\n" in consumer
+    assert "          python-version: 3.11.12\n" in consumer
+    assert "needs: [rust_changes, pre_build]" in consumer
+    assert "run: ./scripts/test_env.py setup" in consumer
+    assert "working-directory: pytests/iroha_torii_tests" in consumer
+    assert "working-directory: pytests/iroha_cli_tests" in consumer
+
+
+@pytest.mark.parametrize("job_name", ("pre_build", "rust_network"))
+@pytest.mark.parametrize("identity", ("matching", "different", "missing", "missing-checkout"))
+def test_network_compiled_identity_requires_the_exact_checkout(
+    tmp_path: Path, job_name: str, identity: str,
+) -> None:
+    """Execute each real preflight against Git, including missing metadata and failed Git reads."""
+    job = _workflow_job(job_name)
+    assert "      VERGEN_GIT_SHA: ${{ github.sha }}\n" in job
+    step_name = "      - name: Verify compiled source identity matches checkout\n"
+    assert job.index(step_name) < job.index("uses: ./.github/actions/setup-native-ci")
+    body = job.split(step_name, 1)[1].split("        run: |\n", 1)[1]
+    command = textwrap.dedent(body.split("      - uses:", 1)[0])
+    actual = subprocess.check_output(
+        ["git", "rev-parse", "--verify", "HEAD"], cwd=ROOT, text=True,
+    ).strip()
+    environment = {key: value for key, value in os.environ.items() if key != "VERGEN_GIT_SHA"}
+    if identity != "missing":
+        environment["VERGEN_GIT_SHA"] = "0" * 40 if identity == "different" else actual
+    result = subprocess.run(
+        ["/bin/sh", "-c", command], cwd=tmp_path if identity == "missing-checkout" else ROOT,
+        env=environment, capture_output=True, text=True, check=False,
+    )
+    assert (result.returncode == 0) is (identity == "matching"), result.stderr
+
+
+def test_network_source_binding_cannot_change_benchmark_or_sealed_metadata() -> None:
+    """Only the ordinary binary producer and its Rust consumers bind the checkout SHA."""
+    workflow = (ROOT / ".github/workflows/pr.yml").read_text()
+    assert len(re.findall(r"^      VERGEN_GIT_SHA:", workflow, re.MULTILINE)) == 2
+    assert "VERGEN_GIT_SHA" not in workflow.split("jobs:", 1)[0]
+    assert "IROHA_GIT_COMMIT_HASH" not in workflow
+    assert "VERGEN_GIT_SHA" not in (ROOT / ".github/actions/setup-native-ci/action.yml").read_text()
+
+
+def test_network_artifact_overrides_are_absolute_and_complete() -> None:
+    """The executable owners receive canonical workspace paths, including strict fixture readers."""
+    job = _workflow_job("rust_network")
+    overrides = dict(re.findall(r"^      ((?:TEST_NETWORK_BIN_\w+)|KAGAMI_BIN): (.+)$", job, re.MULTILINE))
+    expected = {
+        "TEST_NETWORK_BIN_IROHAD": "iroha3d",
+        "TEST_NETWORK_BIN_IROHA": "iroha",
+        "TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES": "iroha3d_private_settlement_routes",
+        "TEST_NETWORK_BIN_IROHAD_TAIRA": "iroha3d_taira",
+        "TEST_NETWORK_BIN_IROHAD_DISPOSABLE_BROKER": "iroha_test_runtime_provider_broker",
+        "KAGAMI_BIN": "kagami",
+        "TEST_NETWORK_BIN_SORAFS_CLI": "sorafs_cli",
+    }
+    assert overrides == {key: "${{ github.workspace }}/bins/" + binary for key, binary in expected.items()}
+    manifest = rust_ci.load_lane_manifest()
+    assert set(expected.values()) == set().union(*map(set, manifest.package_binaries.values()))
+    assert "sorafs_cli" in manifest.package_binaries["integration_tests"]
+    assert "sorafs_cli" not in manifest.package_binaries["iroha_test_network"]
+    assert '      IROHA_TEST_REQUIRE_NETWORK: "1"' in job
+
+
+def test_core_host_capacity_policy_preserves_every_test_command() -> None:
+    """Only the two heavy Core jobs bound build concurrency; every suite stays selected."""
+    workflow = (ROOT / ".github/workflows/pr.yml").read_text()
+    assert workflow.count('CARGO_BUILD_JOBS: "2"') == 2
+    observer = "python3 -I -S ci/observe_build_capacity.py -- "
+    assert workflow.count(observer) == 6
+    seeds = "env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS "
+    expected = {
+        "sumeragi": [
+            seeds + "cargo test --locked -p iroha_sumeragi --features sim",
+            seeds + "cargo test --locked -p iroha_core --lib -- sumeragi::lanes sumeragi::node sumeragi::driver sumeragi::executor",
+        ],
+        "zk_phase_tree_measurement": [
+            "cargo test --locked -p iroha_core_privacy --features fastpq-replay-measurement --test fastpq_phase_tree_measurement",
+            "cargo test --locked -p iroha_core --lib --features state-commitment-prototypes -- keyed_commitment::candidates_tests",
+            "cargo test --locked -p iroha_core_privacy --features fastpq-replay-measurement --test state_commitment_candidates_measurement",
+        ],
+    }
+    for name, commands in expected.items():
+        job = _workflow_job(name)
+        assert '      CARGO_BUILD_JOBS: "2"' in job
+        actual = re.findall(r"(?m)^        run: (.*cargo test.*)$", job)
+        assert all(command.count("/usr/bin/time -v ") == 1 for command in actual)
+        assert [command.replace(observer, "").replace("/usr/bin/time -v ", "")
+                for command in actual] == commands
+        assert [observer in command for command in actual] == [
+            "-p iroha_core --lib" in command for command in commands
+        ]
+        assert "continue-on-error" not in job
+        assert ("      - name: Record hosted build capacity after testing\n"
+                "        if: always()\n        run: *linux_build_capacity") in job
+        assert job.index("Record hosted build capacity before testing") < job.index(actual[0])
+    assert workflow.count("run: *linux_build_capacity") == 3
+
+
+@pytest.mark.parametrize("code", [0, 9])
+def test_pre_build_capacity_observer_preserves_release_build_command(
+    tmp_path: Path, code: int,
+) -> None:
+    """Run the real shell step through the observer without compiling release binaries."""
+    job = _workflow_job("pre_build")
+    assert "    timeout-minutes: 240\n" in job
+    assert "CARGO_BUILD_JOBS" not in job
+    body = job.split("      - name: Build selected release binaries\n", 1)[1]
+    body = body.split("        run: |\n", 1)[1].split("      - name:", 1)[0]
+    command = textwrap.dedent(body)
+    original = command.replace("python3 -I -S ci/observe_build_capacity.py -- ", "")
+    assert original.splitlines() == [
+        "python3 scripts/rust_ci.py build-binaries \\",
+        '  --binaries "$REQUIRED_BINARIES" \\',
+        '  --output-dir "${RUNNER_TEMP:?}/iroha-prebuilt-binaries"',
+    ]
+    (tmp_path / "ci").mkdir()
+    (tmp_path / "ci/observe_build_capacity.py").symlink_to(CAPACITY_SCRIPT)
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/rust_ci.py").write_text(
+        "import json, sys\nprint(json.dumps(sys.argv[1:]))\n" + f"sys.exit({code})\n"
+    )
+    result = subprocess.run(
+        ["/bin/sh", "-c", command], cwd=tmp_path,
+        env={**os.environ, "REQUIRED_BINARIES": "iroha,iroha3d,kagami,koto",
+             "RUNNER_TEMP": str(tmp_path / "runner temp")},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == code, result.stderr
+    assert json.loads(result.stdout) == [
+        "build-binaries", "--binaries", "iroha,iroha3d,kagami,koto",
+        "--output-dir", str(tmp_path / "runner temp/iroha-prebuilt-binaries"),
+    ]
+    assert "[build-capacity]" in result.stderr
+
+
+def test_pre_build_stages_fresh_outputs_outside_restored_cargo_cache(tmp_path: Path) -> None:
+    """Run the workflow and real staging owner; substitute only the external Cargo producer."""
+    job = _workflow_job("pre_build")
+    body = job.split("      - name: Build selected release binaries\n", 1)[1]
+    body = body.split("        run: |\n", 1)[1].split("      - name:", 1)[0]
+    command = textwrap.dedent(body)
+    assert "          path: ${{ runner.temp }}/iroha-prebuilt-binaries\n" in job
+    workspace = tmp_path / "workspace"
+    (workspace / "scripts").mkdir(parents=True)
+    (workspace / "ci").mkdir()
+    for name in ("rust_ci.py", "check_kotodama_docs.py", "rust_test_shards.py"):
+        (workspace / "scripts" / name).write_bytes((ROOT / "scripts" / name).read_bytes())
+    (workspace / "ci/observe_build_capacity.py").write_bytes(CAPACITY_SCRIPT.read_bytes())
+    restored = workspace / "target/release/pre_build"
+    restored.mkdir(parents=True)
+    stale = restored / "iroha3d"
+    stale.write_bytes(b"previous candidate")
+    stale_inode = stale.stat().st_ino
+    runner_temp = tmp_path / "runner temp"
+    runner_temp.mkdir()
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    calls = tmp_path / "cargo-calls.jsonl"
+    cargo = tools / "cargo"
+    cargo.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\nfrom pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "with open(os.environ['CARGO_CALLS'], 'a') as log: log.write(json.dumps(args) + '\\n')\n"
+        "target = Path(args[args.index('--target-dir') + 1])\n"
+        "(target / 'release').mkdir(parents=True, exist_ok=True)\n"
+        "for index, value in enumerate(args):\n"
+        "    if value == '--bin':\n"
+        "        (target / 'release' / args[index + 1]).write_text(target.name + ':' + args[index + 1])\n"
+    )
+    cargo.chmod(0o700)
+    environment = {
+        **os.environ, "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
+        "RUNNER_TEMP": str(runner_temp), "CARGO_CALLS": str(calls),
+        "REQUIRED_BINARIES": "iroha,iroha3d,iroha3d_private_settlement_routes,iroha3d_taira,iroha_test_runtime_provider_broker,kagami,koto,sorafs_cli",
+    }
+    result = subprocess.run(["/bin/sh", "-c", command], cwd=workspace, env=environment,
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    output = runner_temp / "iroha-prebuilt-binaries"
+    assert sorted(path.name for path in output.iterdir()) == sorted(environment["REQUIRED_BINARIES"].split(","))
+    assert (output / "iroha3d").read_bytes() == b"shipping:iroha3d"
+    assert (output / "iroha3d_private_settlement_routes").read_bytes() == b"private-settlement-route-control:iroha3d"
+    assert (output / "iroha3d_taira").read_bytes() == b"shipping:iroha3d_taira"
+    assert (output / "iroha_test_runtime_provider_broker").read_bytes() == b"disposable-broker:iroha_test_runtime_provider_broker"
+    assert (output / "sorafs_cli").read_bytes() == b"sorafs-cli:sorafs_cli"
+    invocations = calls.read_bytes()
+    assert len(invocations.splitlines()) == 4
+    groups = {Path(args[args.index("--target-dir") + 1]).name: args
+              for args in map(json.loads, invocations.splitlines())}
+    assert "--features" not in groups["shipping"]
+    assert groups["disposable-broker"][-2:] == ["--features", "irohad/test-network-disposable-broker"]
+    assert groups["private-settlement-route-control"][-2:] == ["--features", "irohad/test-network-private-settlement-route-control"]
+    assert groups["sorafs-cli"][-2:] == ["--features", "sorafs_orchestrator/cli-orchestrator,sorafs_orchestrator/moderation-grpc"]
+    assert stale.read_bytes() == b"previous candidate" and stale.stat().st_ino == stale_inode
+    # Repeated publication and the old restored-cache destination both refuse
+    # before Cargo; neither can overwrite the original binaries or reuse them.
+    for refused_command in (
+        command,
+        command.replace('"${RUNNER_TEMP:?}/iroha-prebuilt-binaries"', "target/release/pre_build"),
+    ):
+        refused = subprocess.run(["/bin/sh", "-c", refused_command], cwd=workspace,
+                                 env=environment, capture_output=True, text=True, check=False)
+        assert refused.returncode == 2
+        assert "binary staging directory already exists" in refused.stderr
+        assert calls.read_bytes() == invocations
+        assert stale.read_bytes() == b"previous candidate" and stale.stat().st_ino == stale_inode
+        assert (output / "iroha3d").read_bytes() == b"shipping:iroha3d"
+
+
+@pytest.mark.parametrize("code", [0, 23])
+@pytest.mark.parametrize("packages", ["ivm,iroha_core_privacy", "iroha_core"])
+def test_affected_capacity_observer_preserves_locked_check_routing(
+    tmp_path: Path, code: int, packages: str,
+) -> None:
+    """Execute the actual folded check step with its selected packages and inherited state."""
+    observer = "python3 -I -S ci/observe_build_capacity.py -- "
+    job = _workflow_job("rust_affected")
+    assert job.count(observer) == 1
+    assert "    timeout-minutes: 240\n" in job
+    assert "      fail-fast: false\n" in job
+    assert "CARGO_BUILD_JOBS" not in job
+    assert "continue-on-error" not in job
+    assert observer not in _workflow_job("rust_network")
+    body = job.split("      - name: Run locked affected checks\n", 1)[1]
+    body = body.split("        run: >\n", 1)[1]
+    body = body.split("\n      - ", 1)[0]
+    command = " ".join(line.strip() for line in body.splitlines() if line.strip())
+    assert command == (
+        observer + 'python3 scripts/rust_ci.py run --packages "${{ matrix.packages }}" '
+        "--checks \"${{ matrix.checks || 'clippy,build,test,doc' }}\" "
+        '--native-shard "${{ matrix.native_shard }}"'
+    )
+    command = command.replace("${{ matrix.packages }}", packages)
+    command = command.replace("${{ matrix.checks || 'clippy,build,test,doc' }}", "clippy,build,test,doc")
+    command = command.replace("${{ matrix.native_shard }}", "")
+    (tmp_path / "ci").mkdir()
+    (tmp_path / "ci/observe_build_capacity.py").symlink_to(CAPACITY_SCRIPT)
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/rust_ci.py").write_text(
+        "import json, os, sys\n"
+        "print(json.dumps({'argv': sys.argv[1:], 'cwd': os.getcwd(), "
+        "'jobs': os.environ['CARGO_BUILD_JOBS'], 'seeds': os.environ['SUMERAGI_SIM_SEEDS']}))\n"
+        "print('AFFECTED_CHILD_STDERR', file=sys.stderr)\n"
+        f"sys.exit({code})\n"
+    )
+    result = subprocess.run(
+        ["/bin/sh", "-c", command], cwd=tmp_path,
+        env={**os.environ, "CARGO_BUILD_JOBS": "6", "SUMERAGI_SIM_SEEDS": "sentinel"},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == code, result.stderr
+    assert json.loads(result.stdout) == {
+        "argv": ["run", "--packages", packages, "--checks", "clippy,build,test,doc", "--native-shard", ""],
+        "cwd": str(tmp_path.resolve()), "jobs": "6", "seeds": "sentinel",
+    }
+    assert "AFFECTED_CHILD_STDERR" in result.stderr
+    assert "[build-capacity]" in result.stderr
+
+
+@pytest.mark.parametrize("code", [0, 23])
+def test_x2_capacity_observer_preserves_core_test_routing(
+    tmp_path: Path, code: int,
+) -> None:
+    """Execute the actual X.2 shell command and retain every filter and status."""
+    job = _workflow_job("x2_maximum_proof_transport")
+    observer = "python3 -I -S ci/observe_build_capacity.py -- "
+    assert job.count(observer) == 1
+    assert "    timeout-minutes: 120\n" in job
+    assert "CARGO_BUILD_JOBS" not in job
+    assert "continue-on-error" not in job
+    step = "      - name: Node admission, gossip, proposer, restore and serving bounds\n"
+    body = job.split(step, 1)[1].split("        run: |\n", 1)[1]
+    command = textwrap.dedent(body).strip()
+    assert command.startswith(observer + "cargo test --locked -p iroha_core --lib -- ")
+    (tmp_path / "ci").mkdir()
+    (tmp_path / "ci/observe_build_capacity.py").symlink_to(CAPACITY_SCRIPT)
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    cargo = tools / "cargo"
+    cargo.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "print(json.dumps({'argv': sys.argv[1:], 'env': os.environ['X2_TEST_SENTINEL']}))\n"
+        "print('X2_CHILD_STDERR', file=sys.stderr)\n"
+        f"sys.exit({code})\n"
+    )
+    cargo.chmod(0o700)
+    result = subprocess.run(
+        ["/bin/sh", "-c", command], cwd=tmp_path,
+        env={**os.environ, "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
+             "X2_TEST_SENTINEL": "unchanged"},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == code, result.stderr
+    assert json.loads(result.stdout) == {
+        "env": "unchanged",
+        "argv": [
+            "test", "--locked", "-p", "iroha_core", "--lib", "--",
+            "resource_coherence::",
+            "state::deserialize::state_snapshot_decode_error_tests::resource_restore_",
+            "gossiper::tests::shipped_gossip_frames_carry_the_maximum_admitted_signed_transaction",
+            "gossiper::tests::ordinary_gossip_exact_frame_boundary_preserves_original_body_on_requeue",
+            "queue::tests::default_limits_admit_and_select_the_largest_includable_transaction",
+            "queue::tests::transaction_cap_is_exact_at_admission_and_block_validation",
+            "queue::tests::queue_admission_and_proposer_selection_share_the_includable_bound",
+            "sumeragi::payload::resource_contract_tests::",
+            "sumeragi::executor::publication_tests::global_build_carries_a_transaction_of_the_payload_limit_less_the_reserve",
+            "sumeragi::driver::serve::tests::admitted_maximum_frames_fit_frame_overhead_and_the_block_sync_frame",
+            "sumeragi::driver::serve::tests::generic_maximum_control_frames_fit_the_control_topic",
+            "privacy::tests::privacy_block_counts_and_actual_aggregate_bytes_are_independent",
+        ],
+    }
+    assert "X2_CHILD_STDERR" in result.stderr
+    assert "[build-capacity]" in result.stderr
+
+
+@pytest.mark.parametrize("membership", ["normal", "missing", "traversal"])
+def test_host_capacity_diagnostics_read_bounded_root_and_actual_cgroup(
+    tmp_path: Path, membership: str,
+) -> None:
+    """Execute the workflow's diagnostic reader against controlled kernel-shaped files."""
+    job = _workflow_job("sumeragi")
+    body = job.split("        run: &linux_build_capacity |\n", 1)[1].split("      - name:", 1)[0]
+    assert 'df -B1 -- "$GITHUB_WORKSPACE" "$RUNNER_TEMP"' in body
+    assert "          nproc\n          free -b\n" in body
+    script = textwrap.dedent(body.split("          python3 -I -S - <<'PY'\n", 1)[1]
+                            .rsplit("          PY\n", 1)[0])
+    root = tmp_path / "cgroup"
+    root.mkdir()
+    (root / "memory.max").write_text("16000000000\n")
+    (root / "memory.events").write_text("X" * 5000)
+    selected = root / "job"
+    selected.mkdir()
+    (selected / "memory.events").write_text("oom 3\noom_kill 2\n")
+    (tmp_path / "memory.events").write_text("OUTSIDE_SENTINEL")
+    selected_membership = tmp_path / "membership"
+    if membership != "missing":
+        selected_membership.write_text("0::/job\n" if membership == "normal" else "0::/../\n")
+    script = script.replace('Path("/sys/fs/cgroup")', f"Path({str(root)!r})")
+    script = script.replace('Path("/proc/self/cgroup")', f"Path({str(selected_membership)!r})")
+    result = subprocess.run([sys.executable, "-I", "-S", "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "16000000000" in result.stdout
+    assert "X" * 1024 + " [truncated]" in result.stdout
+    assert "X" * 1025 not in result.stdout
+    assert "unavailable (FileNotFoundError)" in result.stdout
+    assert ("oom_kill 2" in result.stdout) == (membership == "normal")
+    assert "OUTSIDE_SENTINEL" not in result.stdout
+
+
+def test_capacity_reader_bounds_data_and_rejects_invalid_counters(tmp_path: Path) -> None:
+    """Truncated, missing and non-numeric kernel fields cannot create invented counters."""
+    path = tmp_path / "counter"
+    path.write_bytes(b"12345")
+    assert capacity.bounded_text(path, 4) == "1234 [truncated]"
+    assert capacity.bounded_text(path, 5) == "12345"
+    assert capacity.bounded_text(tmp_path / "missing") == "unavailable (FileNotFoundError)"
+    assert capacity.selected_numbers(
+        "MemTotal: 100 kB\nSwapFree: -1\nOther: 5\nMemAvailable: \u00b2\n"
+        "SwapTotal: " + "9" * 21, ("MemTotal", "SwapFree", "MemAvailable", "SwapTotal"),
+    ) == {"MemTotal": 100}
+
+
+@pytest.mark.parametrize("membership", [
+    "0::/../outside", "0::relative", "0::/job [truncated]", "2:memory:/job",
+    "0::/" + "/".join(["deep"] * 17), "0::/escape", "0::/loop",
+])
+def test_capacity_cgroup_reader_rejects_unbounded_or_escaping_paths(
+    tmp_path: Path, membership: str,
+) -> None:
+    """A membership path cannot read outside the cgroup root or defeat bounded depth."""
+    root = tmp_path / "cgroups"
+    root.mkdir()
+    (root / "escape").symlink_to(tmp_path)
+    (root / "loop").symlink_to(root / "loop")
+    assert capacity.cgroup_scopes(root, membership) == [root]
+    assert capacity.cgroup_scopes(root, "0::/parent/job\n0::/second/root\n") == [
+        root, root / "parent", root / "parent/job",
+    ]
+
+
+def test_capacity_snapshot_bounds_processes_and_reads_actual_cgroup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Controlled Linux views expose counters and names/RSS, never process inputs."""
+    proc = tmp_path / "proc"
+    (proc / "self").mkdir(parents=True)
+    (proc / "self/cgroup").write_text("0::/parent/job\n")
+    (proc / "meminfo").write_text("MemTotal: 1000 kB\nMemAvailable: 400 kB\nSwapFree: 200 kB\n")
+    (proc / "vmstat").write_text("oom_kill 3\npgmajfault 8\n")
+    (proc / "pressure").mkdir()
+    (proc / "pressure/memory").write_text("some avg10=1.00 total=123\n")
+    root = tmp_path / "cgroups"
+    (root / "parent/job").mkdir(parents=True)
+    (root / "parent/job/memory.events").write_text("oom_kill 2\n")
+    (root / "memory.max").write_text("max\n")
+    for pid in range(1, 8):
+        directory = proc / str(pid)
+        directory.mkdir()
+        (directory / "status").write_text(f"Name:\trustc-{pid}\nVmRSS:\t{pid * 100} kB\n")
+        (directory / "cmdline").write_text("SECRET_ARG_SENTINEL")
+        (directory / "environ").write_text("SECRET_ENV_SENTINEL")
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    observed = capacity.snapshot(proc, root)
+    assert observed["host_memory_kib"] == {"MemTotal": 1000, "MemAvailable": 400, "SwapFree": 200}
+    assert observed["host_vm_counters"] == {"oom_kill": 3, "pgmajfault": 8}
+    assert observed["cgroups"][str(root / "parent/job")]["memory.events"] == "oom_kill 2\n"
+    assert observed["cgroups"][str(root)]["memory.max"] == "max\n"
+    assert observed["processes_scanned"] == 7 and not observed["process_scan_truncated"]
+    assert observed["process_scan_error"] is None
+    assert observed["largest_sampled_processes"] == [
+        {"name": f"rustc-{pid}", "rss_kib": pid * 100} for pid in range(7, 2, -1)
+    ]
+    assert observed["disks"]["GITHUB_WORKSPACE"]["total_bytes"] > 0
+    assert "SENTINEL" not in json.dumps(observed)
+    monkeypatch.setattr(capacity, "MAX_PROCESSES", 3)
+    limited = capacity.snapshot(proc, root)
+    assert limited["processes_scanned"] == 3 and limited["process_scan_truncated"]
+    assert len(limited["largest_sampled_processes"]) == 3
+
+
+def test_capacity_snapshot_labels_unavailable_resources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing kernel files and disk inputs remain unavailable instead of zero usage."""
+    monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "missing"))
+    observed = capacity.snapshot(tmp_path / "missing", tmp_path / "cgroups")
+    for field in ("host_memory_kib", "host_vm_counters", "memory_pressure", "process_scan_error"):
+        assert observed[field] == "unavailable (FileNotFoundError)"
+    assert observed["disks"] == {
+        "GITHUB_WORKSPACE": "unavailable (KeyError)",
+        "RUNNER_TEMP": "unavailable (FileNotFoundError)",
+    }
+
+
+@pytest.mark.parametrize("code,expected", [(0, 0), (7, 7), (-15, 143)])
+def test_capacity_observer_bounds_samples_and_preserves_status(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], code: int, expected: int,
+) -> None:
+    """Exhausting observation or failing a collector never changes the child outcome."""
+    class Child:
+        waits = 0
+
+        def wait(self, timeout: int) -> int:
+            assert timeout == capacity.INTERVAL_SECONDS
+            self.waits += 1
+            if self.waits < 5:
+                raise subprocess.TimeoutExpired("child", timeout)
+            return code
+
+    child = Child()
+    commands = []
+
+    def start(command: list[str]) -> Child:
+        commands.append(command)
+        return child
+
+    def unavailable() -> dict:
+        raise OSError("SECRET_EXCEPTION_SENTINEL")
+
+    monkeypatch.setattr(capacity.subprocess, "Popen", start)
+    monkeypatch.setattr(capacity, "MAX_SAMPLES", 2)
+    monkeypatch.setattr(capacity, "snapshot", unavailable)
+    command = ["/usr/bin/time", "-v", "cargo", "test", "--", "exact filter"]
+    assert capacity.observe(command) == expected
+    assert commands == [command] and child.waits == 5
+    output = capsys.readouterr()
+    assert output.out == "" and "SENTINEL" not in output.err
+    records = [json.loads(line.removeprefix("[build-capacity] ")) for line in output.err.splitlines()]
+    assert records == [{"unavailable": "OSError"}, {"unavailable": "OSError"}, {
+        "completed": True, "child_returncode": code, "samples": 2,
+        "final": {"unavailable": "OSError"},
+    }]
+
+
+def test_capacity_snapshot_flushes_before_child_completion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each record requests an immediate flush, even if a later post-job step cannot run."""
+    writes = []
+    monkeypatch.setattr(capacity, "snapshot", lambda: {"observation": 1})
+    monkeypatch.setattr("builtins.print", lambda *args, **kwargs: writes.append((args, kwargs)))
+    capacity.emit_snapshot()
+    assert len(writes) == 1 and writes[0][1] == {"file": sys.stderr, "flush": True}
+
+
+@pytest.mark.parametrize("code", [0, 7])
+def test_capacity_cli_preserves_actual_child_argv_environment_cwd_and_streams(
+    tmp_path: Path, code: int,
+) -> None:
+    """Execute a real child through the observer; diagnostics cannot contaminate stdout."""
+    child = tmp_path / "child.py"
+    child.write_text(
+        "import json, os, sys\n"
+        "print(json.dumps({'argv': sys.argv[1:], 'cwd': os.getcwd(), "
+        "'env': os.environ['CAPACITY_TEST_SENTINEL'], 'stdin': sys.stdin.read()}))\n"
+        "print('CHILD_STDERR', file=sys.stderr)\n"
+        f"sys.exit({code})\n"
+    )
+    argv = ["--flag", "two words", "'quoted'", "$literal", ""]
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", str(CAPACITY_SCRIPT), "--", sys.executable, str(child), *argv],
+        cwd=tmp_path, env={**os.environ, "CAPACITY_TEST_SENTINEL": "preserved"},
+        input="inherited input", capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == code, result.stderr
+    assert json.loads(result.stdout) == {
+        "argv": argv, "cwd": str(tmp_path), "env": "preserved", "stdin": "inherited input",
+    }
+    assert "CHILD_STDERR" in result.stderr
+    records = [json.loads(line.removeprefix("[build-capacity] "))
+               for line in result.stderr.splitlines() if line.startswith("[build-capacity] ")]
+    assert records[-1]["completed"] and records[-1]["child_returncode"] == code
+
+
+@pytest.mark.parametrize("argv", [[], ["--"], ["cargo", "test"]])
+def test_capacity_cli_requires_explicit_command(argv: list[str]) -> None:
+    """Malformed invocations fail instead of silently omitting the actual test command."""
+    result = subprocess.run([sys.executable, "-I", "-S", str(CAPACITY_SCRIPT), *argv],
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 2
+    assert "an explicit command after -- is required" in result.stderr
+
+
+@pytest.mark.parametrize("gate", ["CLASSIFIER_RESULT", "SOURCE_GUARDS_RESULT"])
+@pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped", "", None])
+def test_required_rust_aggregate_rejects_unfinished_or_failed_guards(
+    gate: str, result: str | None,
+) -> None:
+    """Execute the real aggregator with every downstream lane passing."""
+
+    command = textwrap.dedent(_workflow_job("rust_required").split("        run: |\n", 1)[1])
+    environment = {**os.environ, "CLASSIFIER_RESULT": "success", "SOURCE_GUARDS_RESULT": "success"}
+    for lane in ("BINARY_FREE", "NETWORK", "BUILD", "CONSISTENCY", "KOTODAMA", "PYTESTS", "PARLIAMENT"):
+        environment[f"{lane}_RESULT"] = "success"
+        environment[f"{lane}_SELECTED"] = "true"
+    if result is None:
+        environment.pop(gate)
+    else:
+        environment[gate] = result
+    completed = subprocess.run(
+        ["bash", "-c", command], env=environment, capture_output=True, text=True, check=False,
+    )
+    assert (completed.returncode == 0) == (result == "success"), completed.stderr
 
 
 def _metadata(root: Path) -> dict[str, Any]:
@@ -84,6 +673,24 @@ def test_checked_in_manifest_exhaustively_maps_locked_workspace() -> None:
     manifest = rust_ci.load_lane_manifest()
     rust_ci.validate_manifest(manifest, packages)
     assert len(packages) == sum(len(packages) for packages in manifest.lanes.values())
+
+
+def test_shared_ci_setup_action_selects_every_validation_lane() -> None:
+    """A shared environment action affects every package and qualified consumer."""
+
+    metadata = rust_ci.load_cargo_metadata(root=ROOT)
+    manifest = rust_ci.load_lane_manifest()
+    path = ".github/actions/setup-native-ci/action.yml"
+    result = rust_ci.classify_paths(
+        [path], metadata=metadata, manifest=manifest, root=ROOT,
+    )
+    assert result.full and not result.foundation_only
+    assert f"full-workspace input changed: {path}" in result.reasons
+    assert result.lane_packages == {
+        lane: tuple(sorted(packages)) for lane, packages in manifest.lanes.items()
+    }
+    assert result.consumers and all(result.consumers.values())
+    assert result.deferred_packages == () and result.deferred_consumers == ()
 
 
 def test_every_active_vendor_patch_routes_to_workspace_validation() -> None:
@@ -564,6 +1171,57 @@ def test_packages_in_one_lane_can_have_different_binary_requirements(tmp_path: P
     assert document["binary_matrix"]["include"][0]["packages"] == "integration"
 
 
+@pytest.mark.parametrize("requires_binaries", (False, True))
+def test_execution_jobs_preserve_all_packages_and_checks(requires_binaries: bool) -> None:
+    """Bound hosted duration without losing owners, checks, or binary requirements."""
+
+    manifest = rust_ci.tomllib.loads((ROOT / "ci/rust_lanes.toml").read_text())
+    packages = tuple(manifest["lanes"]["execution"]["packages"])
+    result = rust_ci.Classification(
+        changed_paths=(), changed_packages=packages, impacted_packages=packages,
+        lane_packages={"execution": packages}, full=True, reasons=(),
+        package_binaries={package: ("iroha3d",) for package in packages} if requires_binaries else {},
+    )
+    document = result.as_dict()
+    rows = document["binary_matrix" if requires_binaries else "binary_free_matrix"]["include"]
+    assert document["binary_free_matrix" if requires_binaries else "binary_matrix"] == {"include": []}
+    assert {row["lane"] for row in rows} == {
+        "execution", "execution-model", "execution-vm", "execution-kagemusha",
+        "execution-privacy", *{f"execution-privacy-tests-{index}" for index in range(1, 9)},
+    }
+    observed = [package for row in rows if "native_shard" not in row for package in row["packages"].split(",")]
+    assert sorted(observed) == sorted(packages)
+    assert len(observed) == len(set(observed))
+    for row in rows:
+        if row["packages"] == "iroha_core_privacy":
+            assert row["checks"] == ("test" if "native_shard" in row else "clippy,build,doctest,doc")
+        else:
+            assert set(row) == {"lane", "packages", "package_count"}
+        assert row["package_count"] == len(row["packages"].split(","))
+    assert document["lanes"] == [{"name": "execution", "packages": list(packages)}]
+    assert document["matrix"]["include"] == [{
+        "lane": "execution", "packages": ",".join(packages), "package_count": len(packages),
+    }]
+
+
+@pytest.mark.parametrize("package,job", (
+    ("iroha_data_model", "execution-model"),
+    ("kotodama_lang", "execution-vm"),
+    ("iroha_kagemusha_proof", "execution-kagemusha"),
+    ("new_execution_package", "execution"),
+))
+def test_execution_jobs_omit_empty_groups_and_keep_future_owners(package: str, job: str) -> None:
+    """A focused edit runs only its selected owner, including newly added owners."""
+
+    result = rust_ci.Classification(
+        changed_paths=(), changed_packages=(package,), impacted_packages=(package,),
+        lane_packages={"execution": (package,)}, full=False, reasons=(),
+    )
+    assert result.as_dict()["binary_free_matrix"]["include"] == [{
+        "lane": job, "packages": package, "package_count": 1,
+    }]
+
+
 @pytest.mark.parametrize("path", ("new/unknown.rs", "Cargo.toml"))
 def test_full_and_unknown_changes_select_all_binary_consumers(tmp_path: Path, path: str) -> None:
     """Fail-closed routing selects all consumers and the complete binary union."""
@@ -611,8 +1269,14 @@ def test_checked_in_external_binary_requirements_are_package_scoped() -> None:
     manifest = rust_ci.load_lane_manifest()
     assert manifest.daemon_packages == ("irohad", "irohad_lib")
     assert manifest.package_binaries == {
-        "integration_tests": ("iroha", "iroha3d", "iroha3d_private_settlement_routes", "kagami", "sorafs_cli"),
-        "iroha_test_network": ("iroha", "iroha3d", "iroha3d_private_settlement_routes"),
+        "integration_tests": (
+            "iroha", "iroha3d", "iroha3d_private_settlement_routes",
+            "iroha_test_runtime_provider_broker", "kagami", "sorafs_cli",
+        ),
+        "iroha_test_network": (
+            "iroha", "iroha3d", "iroha3d_private_settlement_routes", "iroha3d_taira",
+            "iroha_test_runtime_provider_broker", "kagami",
+        ),
         "izanami": ("iroha", "iroha3d"),
     }
     assert manifest.consumers["consistency"].binaries == ("iroha", "kagami")
@@ -934,12 +1598,28 @@ def test_mixed_foundation_and_network_changes_select_complete_artifact_union(tmp
     assert not result.foundation_only and not result.full
     assert result.deferred_packages == result.deferred_consumers == ()
     assert "irohad" in result.lane_packages["node"]
-    assert result.binaries == ("iroha", "iroha3d", "iroha3d_private_settlement_routes", "kagami", "sorafs_cli")
-    assert result.as_dict()["binary_matrix"]["include"] == [
-        {"lane": "node", "packages": "iroha_test_network", "package_count": 1},
-        {"lane": "integration", "packages": "integration_tests", "package_count": 1},
-    ]
+    assert result.binaries == (
+        "iroha", "iroha3d", "iroha3d_private_settlement_routes", "iroha3d_taira",
+        "iroha_test_runtime_provider_broker", "kagami", "sorafs_cli",
+    )
+    network_rows = result.as_dict()["binary_matrix"]["include"]
+    assert network_rows[0] == {"lane": "node", "packages": "iroha_test_network", "package_count": 1}
+    _assert_complete_integration_shards(network_rows[1:])
     assert result.consumers["sora_parliament_lifecycle"]
+
+
+def test_integration_only_selection_requires_its_tools_without_taira(tmp_path: Path) -> None:
+    """Direct integration work builds its real external programs without widening to a launcher."""
+    metadata, manifest = _real_owner_routing_fixture(tmp_path)
+    result = rust_ci.classify_paths(
+        ["integration_tests/tests/sumeragi_npos_committee_transition.rs"],
+        metadata=metadata, manifest=manifest, root=tmp_path,
+    )
+    assert result.binaries == (
+        "iroha", "iroha3d", "iroha3d_private_settlement_routes",
+        "iroha_test_runtime_provider_broker", "kagami", "sorafs_cli",
+    )
+    _assert_complete_integration_shards(result.as_dict()["binary_matrix"]["include"])
 
 
 def test_foundation_and_direct_python_input_retains_python_network_consumer(tmp_path: Path) -> None:
@@ -1053,7 +1733,7 @@ def test_publication_cli_artifact_retains_required_feature_owners(
     rust_ci.build_binaries(("sorafs_cli",), output, root=tmp_path)
     assert calls == [[
         "cargo", "build", "--locked", "--release", "--target-dir",
-        str(tmp_path / "target/ci-binaries/shipping"),
+        str(tmp_path / "target/ci-binaries/sorafs-cli"),
         "-p", "sorafs_orchestrator", "--bin", "sorafs_cli", "--features",
         "sorafs_orchestrator/cli-orchestrator,sorafs_orchestrator/moderation-grpc",
     ]]
@@ -1117,22 +1797,37 @@ def test_rust_ownership_still_precedes_non_prose_directory_ignores(tmp_path: Pat
     assert result.has_rust
 
 
-def test_isolated_only_union_does_not_build_shipping_daemon(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Selecting only the control artifact never widens to a shipping build."""
+@pytest.mark.parametrize(("name", "package", "binary", "features", "group"), (
+    ("iroha3d_private_settlement_routes", "irohad", "iroha3d",
+     ("test-network-private-settlement-route-control",), "private-settlement-route-control"),
+    ("iroha_test_runtime_provider_broker", "irohad", "iroha_test_runtime_provider_broker",
+     ("test-network-disposable-broker",), "disposable-broker"),
+    ("sorafs_cli", "sorafs_orchestrator", "sorafs_cli",
+     ("cli-orchestrator", "moderation-grpc"), "sorafs-cli"),
+))
+def test_isolated_only_union_does_not_build_shipping_daemon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    name: str, package: str, binary: str, features: tuple[str, ...], group: str,
+) -> None:
+    """An isolated artifact never widens to a shipping build or another test feature."""
 
     calls = []
     def fake_run(command: list[str], **kwargs: Any) -> None:
         calls.append(command)
         target = Path(command[command.index("--target-dir") + 1]) / "release"
         target.mkdir(parents=True)
-        (target / "iroha3d").write_bytes(b"control only")
+        (target / binary).write_bytes(b"control only")
     monkeypatch.setattr(rust_ci, "_run", fake_run)
     output = tmp_path / "artifacts"
-    rust_ci.build_binaries(("iroha3d_private_settlement_routes",), output, root=tmp_path)
-    assert len(calls) == 1
-    assert calls[0][-2:] == ["--features", "irohad/test-network-private-settlement-route-control"]
-    assert sorted(path.name for path in output.iterdir()) == ["iroha3d_private_settlement_routes"]
-    assert (output / "iroha3d_private_settlement_routes").read_bytes() == b"control only"
+    rust_ci.build_binaries((name,), output, root=tmp_path)
+    assert calls == [[
+        "cargo", "build", "--locked", "--release", "--target-dir",
+        str(tmp_path / "target/ci-binaries" / group),
+        "-p", package, "--bin", binary, "--features",
+        ",".join(f"{package}/{feature}" for feature in features),
+    ]]
+    assert sorted(path.name for path in output.iterdir()) == [name]
+    assert (output / name).read_bytes() == b"control only"
     assert not (tmp_path / "target/ci-binaries/shipping").exists()
 
 
@@ -1239,11 +1934,15 @@ def test_torii_test_commands_keep_explicit_integration_fixtures(workspace: bool)
         ("iroha_core", "iroha_torii"), ("build", "test"), workspace=workspace,
     )
     assert "--features" not in build
-    assert test[test.index("--features") + 1] == "iroha_torii/test-fixtures"
+    assert set(test[test.index("--features") + 1].split(",")) == {
+        "iroha_core/iroha-core-tests", "iroha_core/expensive-telemetry", "iroha_core/dev-tools", "iroha_torii/test-fixtures",
+    }
     assert ("--workspace" in test) is workspace
     assert "mutation-testing" not in " ".join(test)
-    other, = rust_ci.commands_for_checks(("iroha_core",), ("test",), workspace=workspace)
-    assert "--features" not in other
+    for other in rust_ci.commands_for_checks(("iroha_core",), ("test", "doctest"), workspace=workspace):
+        assert set(other[other.index("--features") + 1].split(",")) == {
+            "iroha_core/iroha-core-tests", "iroha_core/expensive-telemetry", "iroha_core/dev-tools",
+        }
 
 
 @pytest.mark.parametrize("workspace", (False, True))
@@ -1268,6 +1967,57 @@ def test_gated_executable_owners_test_their_dev_tools_targets(workspace: bool) -
 def test_missing_mutated_or_duplicate_feature_inventory_is_refused(inventory) -> None:
     with pytest.raises(rust_ci.ClassificationError):
         rust_ci.commands_for_checks(("iroha_data_model",), ("clippy",), features_by_package=inventory)
+
+
+@pytest.mark.parametrize("workspace", (False, True))
+@pytest.mark.parametrize("helpers", (
+    ("iroha_release_bundle",),
+    ("iroha_native_source_delivery",),
+    ("iroha_release_bundle", "iroha_native_source_delivery"),
+    ("xtask",),
+    ("iroha_native_source_delivery", "xtask"),
+))
+def test_native_helper_tests_select_only_their_owned_development_features(
+    workspace: bool, helpers: tuple[str, ...],
+) -> None:
+    """Ordinary builds stay shipping-only while complete tests include helpers."""
+    build, test = rust_ci.commands_for_checks(
+        ("iroha_torii", *helpers), ("build", "test"), workspace=workspace,
+    )
+    assert "--features" not in build
+    assert test[test.index("--features") + 1].split(",") == [
+        "iroha_torii/test-fixtures", *(f"{package}/dev-tools" for package in helpers),
+    ]
+    assert ("--workspace" in test) is workspace
+
+
+@pytest.mark.parametrize("workspace", (False, True))
+def test_xtask_test_route_builds_the_manifest_required_binary(monkeypatch, workspace: bool) -> None:
+    """The actual routed Cargo command supplies the executable's declared features."""
+    manifest = rust_ci.tomllib.loads((ROOT / "xtask/Cargo.toml").read_text())
+    binary, = (target for target in manifest["bin"] if target["name"] == "xtask")
+    assert binary["required-features"] == ["dev-tools"]
+    assert manifest["features"]["default"] == []
+    required = {f"xtask/{feature}" for feature in binary["required-features"]}
+    calls = []
+    monkeypatch.setattr(rust_ci, "_run", lambda command, **kwargs: calls.append((command, kwargs)))
+    rust_ci.run_checks(("xtask",), ("build", "test"), root=ROOT, workspace=workspace)
+    (build, build_options), (test, test_options) = calls
+    assert "--features" not in build
+    assert test[:4] == ["cargo", "test", "--locked", "--no-fail-fast"]
+    assert required <= set(test[test.index("--features") + 1].split(","))
+    assert ("--workspace" in test) is workspace
+    if not workspace:
+        assert test == ["cargo", "test", "--locked", "--no-fail-fast",
+                        "--features", "xtask/dev-tools", "-p", "xtask"]
+    assert build_options == test_options == {"cwd": ROOT, "capture_output": False}
+
+
+@pytest.mark.parametrize("package", ("xtask-fixture", "xtask_tools", "iroha_schema_gen"))
+def test_xtask_test_feature_does_not_leak_to_other_package_owners(package: str) -> None:
+    """Only the exact selected executable owner can enable its development graph."""
+    command, = rust_ci.commands_for_checks((package,), ("test",))
+    assert command == ["cargo", "test", "--locked", "--no-fail-fast", "-p", package]
 
 
 def test_workspace_and_package_cli_selections_are_exclusive() -> None:
@@ -1421,3 +2171,103 @@ def test_default_base_prefers_the_configured_branch_then_falls_back(tmp_path: Pa
     assert rust_ci.default_base(tmp_path) == "origin/main"
     git("update-ref", "refs/remotes/origin/next", "HEAD")
     assert rust_ci.default_base(tmp_path) == "origin/next"
+
+
+INTEGRATION_TARGETS = {
+    "consensus_and_da", "core_api", "events_and_triggers", "network_functional",
+    "lifecycle_trace_activation",
+    "nexus_and_streaming", "queries_and_proofs", "sccp_lanes", "sumeragi",
+    "sumeragi_lanes", "sumeragi_npos_committee_transition", "torii_load_profile",
+}
+
+
+def _assert_complete_integration_shards(rows) -> None:
+    assert len(rows) == len(INTEGRATION_TARGETS) + 8
+    assert {row["test_target"] for row in rows} == INTEGRATION_TARGETS | {"library"}
+    assert len({row["lane"] for row in rows}) == len(rows)
+    npos = [row for row in rows if row["test_target"] == "sumeragi_npos_committee_transition"]
+    assert len(npos) == 8 and {row["native_shard"] for row in npos} == set(range(1, 9))
+    for row in rows:
+        assert row["packages"] == "integration_tests" and row["package_count"] == 1
+        assert row.get("checks", "clippy,build,test,doc") == (
+            "clippy,build,test,doc" if row["test_target"] == "library" else "test"
+        )
+
+
+def test_integration_shards_cover_every_default_cargo_target_and_unit_doctest() -> None:
+    """Splitting runtime jobs retains the entire previous default test selection."""
+    assert set(rust_ci.integration_test_targets()) == INTEGRATION_TARGETS
+    manifest = rust_ci.tomllib.loads((ROOT / "integration_tests/Cargo.toml").read_text())
+    deferred = {target["name"] for target in manifest["test"]} - INTEGRATION_TARGETS
+    assert deferred == {"sora_parliament_lifecycle_smoke"}
+    assert "ci/check_sora_parliament_lifecycle.sh" in _workflow_job("sora_parliament_lifecycle")
+    assert "sora_parliament_lifecycle_smoke" in (ROOT / "ci/check_sora_parliament_lifecycle.sh").read_text()
+    commands = rust_ci.commands_for_checks(
+        ("integration_tests",), ("clippy", "build", "test", "doc"),
+        features_by_package={"integration_tests": ()}, test_target="library",
+    )
+    assert [command[1] for command in commands] == ["clippy", "build", "test", "test", "doc"]
+    assert "--all-targets" in commands[0] and commands[0][-3:] == ["--", "-D", "warnings"]
+    assert "--lib" in commands[2] and "--doc" in commands[3]
+    for target in INTEGRATION_TARGETS:
+        command, = rust_ci.commands_for_checks(("integration_tests",), ("test",), test_target=target)
+        assert command == ["cargo", "test", "--locked", "--no-fail-fast", "-p",
+                           "integration_tests", "--test", target, "--", "--test-threads=1"]
+        assert "--jobs" not in command
+    job = _workflow_job("rust_network")
+    assert '--test-target "${{ matrix.test_target }}"' in job
+    assert "timeout-minutes: 220" in job and "timeout-minutes: 240" in job
+    assert "Upload failed test-network artifacts" in job
+    assert "target/sccp-continuation/" in job
+    assert 'IROHA_TEST_NETWORK_KEEP_DIRS: "1"' in job
+    assert 'python3 scripts/collect_test_network_logs.py' in job
+
+
+@pytest.mark.parametrize("packages,target,workspace", [
+    (("iroha_core",), "core_api", False),
+    (("integration_tests", "iroha_core"), "core_api", False),
+    (("integration_tests",), "nonexistent", False),
+    (("integration_tests",), "sora_parliament_lifecycle_smoke", False),
+    (("integration_tests",), "core_api;echo", False),
+    (("integration_tests",), "core_api", True),
+])
+def test_integration_target_refuses_wrong_owner_or_unselected_harness(packages, target, workspace) -> None:
+    with pytest.raises(rust_ci.ClassificationError, match="scoped integration check"):
+        rust_ci.commands_for_checks(packages, ("test",), test_target=target, workspace=workspace)
+
+
+def test_integration_inventory_adopts_new_defaults_and_refuses_implicit_targets(tmp_path: Path) -> None:
+    directory = tmp_path / "integration_tests"
+    directory.mkdir()
+    path = directory / "Cargo.toml"
+    source = '\n'.join([
+        '[package]', 'name = "integration_tests"', 'autotests = false', 'autobins = false',
+        '[features]', 'default = ["outer"]', 'outer = ["inner"]', 'inner = []', 'explicit = []',
+        '[[test]]', 'name = "new_default"', 'required-features = ["inner"]',
+        '[[test]]', 'name = "release_only"', 'required-features = ["explicit"]',
+    ])
+    path.write_text(source)
+    assert rust_ci.integration_test_targets(tmp_path) == ("new_default",)
+    for modified in (source.replace('autotests = false', 'autotests = true'),
+                     source + '\n[[test]]\nname = "new_default"\n',
+                     source.replace('required-features = ["inner"]', 'required-features = ["typo"]'),
+                     source + '\n[[bin]]\nname = "enabled"\n',
+                     source + '\n[[example]]\nname = "example"\n',
+                     source + '\n[[bench]]\nname = "benchmark"\n',
+                     source + '\n[[test]]\nname = "release_only"\nrequired-features = ["explicit"]\n'):
+        path.write_text(modified)
+        with pytest.raises(rust_ci.ClassificationError):
+            rust_ci.integration_test_targets(tmp_path)
+
+
+def test_scoped_integration_cli_preserves_command_and_failure_propagation(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(rust_ci, "workspace_check_features", lambda root: {"integration_tests": ()})
+    def child(command, **kwargs):
+        calls.append(command)
+        raise rust_ci.ClassificationError("deliberate actual child refusal")
+    monkeypatch.setattr(rust_ci, "_run", child)
+    assert rust_ci.main(["run", "--packages", "integration_tests", "--checks", "test",
+                        "--test-target", "core_api"]) == 2
+    assert calls == [["cargo", "test", "--locked", "--no-fail-fast", "-p", "integration_tests",
+                      "--test", "core_api", "--", "--test-threads=1"]]

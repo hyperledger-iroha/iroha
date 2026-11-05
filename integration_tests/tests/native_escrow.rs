@@ -311,9 +311,18 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
             "aitai_xor_native".parse()?,
         );
         let seller_asset_id = AssetId::of(asset_definition_id.clone(), seller.clone());
+        let fee_asset_definition: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?;
         let registration_hash = client.submit_all(
             [
                 InstructionBox::from(Register::account(Account::new(buyer.clone()))),
+                // Independently signed escrow actions pay ordinary transaction fees.
+                Transfer::asset_quantity(
+                    AssetId::of(fee_asset_definition, seller.clone()),
+                    100_000_u32,
+                    buyer.clone(),
+                )
+                .into(),
                 Register::asset_definition(AssetDefinition::numeric(
                     asset_definition_id.clone(),
                     "aitai_xor_native".to_owned(),
@@ -473,10 +482,25 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             "aitai_xor_lock_native".parse()?,
         );
         let source_asset_id = AssetId::of(asset_definition_id.clone(), source.clone());
+        let fee_asset_definition: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?;
         client.submit_all(
             [
                 InstructionBox::from(Register::account(Account::new(destination.clone()))),
+                // Independently signed escrow actions pay ordinary transaction fees.
+                Transfer::asset_quantity(
+                    AssetId::of(fee_asset_definition.clone(), source.clone()),
+                    100_000_u32,
+                    destination.clone(),
+                )
+                .into(),
                 InstructionBox::from(Register::account(Account::new(release_authority.clone()))),
+                Transfer::asset_quantity(
+                    AssetId::of(fee_asset_definition, source.clone()),
+                    100_000_u32,
+                    release_authority.clone(),
+                )
+                .into(),
                 Register::asset_definition(AssetDefinition::numeric(
                     asset_definition_id.clone(),
                     "aitai_xor_lock_native".to_owned(),

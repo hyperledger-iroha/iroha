@@ -4,7 +4,8 @@
 //! `CLICOLOR_FORCE` force colors on; `NO_COLOR`, `TERM=dumb` and streams that
 //! are not terminals (unless `IGNORE_IS_TERMINAL` is set) turn them off;
 //! otherwise `COLORTERM`, a color-capable `TERM`, a known `TERM_PROGRAM`,
-//! `CLICOLOR` or a CI environment turn them on.
+//! `CLICOLOR` or a CI environment turn them on. `CLICOLOR=0` supplies no positive
+//! hint; it does not override a terminal's native ANSI support.
 use std::{env, io::IsTerminal};
 
 /// Standard stream whose color support is queried.
@@ -191,8 +192,27 @@ mod tests {
             env_of(&[("TERM_PROGRAM", "Apple_Terminal")])
         ));
         assert!(supports_color_with(true, env_of(&[("CLICOLOR", "1")])));
-        assert!(!supports_color_with(true, env_of(&[("CLICOLOR", "0")])));
+        assert_eq!(
+            supports_color_with(true, env_of(&[("CLICOLOR", "0")])),
+            cfg!(windows)
+        );
         assert_eq!(supports_color_with(true, env_of(&[])), cfg!(windows));
+    }
+
+    #[test]
+    fn term_precedence_preserves_platform_defaults() {
+        assert_eq!(term_supports_ansi(None), cfg!(windows));
+        assert_eq!(term_supports_ansi(Some("cygwin")), !cfg!(windows));
+        for hint in ["0", "1"] {
+            assert!(!supports_color_with(
+                true,
+                env_of(&[("TERM", "dumb"), ("CLICOLOR", hint)])
+            ));
+            assert!(supports_color_with(
+                true,
+                env_of(&[("TERM", "xterm"), ("CLICOLOR", hint)])
+            ));
+        }
     }
 
     #[test]
@@ -219,9 +239,6 @@ mod tests {
     #[test]
     fn ci_enables_colors_only_on_terminals() {
         let var = || env_of(&[("CI", "true"), ("TERM_PROGRAM", "other")]);
-        if cfg!(windows) {
-            return;
-        }
         assert!(supports_color_with(true, var()));
         assert!(!supports_color_with(false, var()));
     }

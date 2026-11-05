@@ -44,6 +44,7 @@ fn pagination_behaves() -> Result<()> {
     // The SDK iterator fetches lazily; the page response above tests its first
     // batch directly. After four rows, two rows of its second page stay buffered.
     let mut iter = client.list(collection.clone(), query.clone());
+    assert_eq!(iter.size_hint(), (0, None));
     let mut window = Vec::new();
     for _ in 0..4 {
         window.push(iter.next().expect("row within seven-row window")?);

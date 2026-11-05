@@ -94,6 +94,12 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
         ),
     )
     .await?;
+    observe_exact_height(
+        client,
+        request_height,
+        "public-finding sortition registration",
+    )
+    .await?;
     assert_eq!(current_height(client).await?, request_height);
     // Governance-local wait for the consensus-native pre-boundary pulse at the slot;
     // the draw is consumed after the epoch boundary that the same pulse scheduled.
@@ -196,6 +202,7 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
         }),
     )
     .await?;
+    observe_exact_height(client, roster_seal_height, "public-finding roster sealing").await?;
     assert_eq!(current_height(client).await?, roster_seal_height);
 
     let rules_body_id = read_attempt(client, attempt_id)
@@ -360,6 +367,12 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
         ),
     )
     .await?;
+    observe_exact_height(
+        client,
+        retry_request_height,
+        "deadline retry sortition registration",
+    )
+    .await?;
     assert_eq!(current_height(client).await?, retry_request_height);
     let retry_pulse = await_native_sortition_pulse(
         network,
@@ -462,6 +475,12 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
                 election_attempt_id: retry_election_ids[&body],
             })
         }),
+    )
+    .await?;
+    observe_exact_height(
+        client,
+        retry_roster_seal_height,
+        "deadline retry roster sealing",
     )
     .await?;
     assert_eq!(current_height(client).await?, retry_roster_seal_height);
@@ -626,6 +645,7 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
     submit_parliament_instructions(&client, [second_retry]).await?;
     let second_retry_height = current_height(client).await?;
     network.ensure_blocks(second_retry_height).await?;
+    observe_exact_height(client, second_retry_height, "second public-finding retry").await?;
     let second_retry_state = read_attempt(client, second_retry_id).await?;
     assert_eq!(second_retry_state.attempt().sequence, 2);
     assert_eq!(
@@ -657,6 +677,12 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
     .await?;
     for peer in network.peers() {
         let peer_client = peer.client();
+        observe_exact_height(
+            &peer_client,
+            second_retry_height,
+            "public-finding peer publication",
+        )
+        .await?;
         let peer_rejected = read_on_dedicated_thread({
             let client = peer_client.client().clone();
             let attempt_id = (attempt_id).clone();
@@ -717,6 +743,12 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
     )
     .await
     .map_err(|_| eyre!("public-finding restore did not recover finalized state"))?;
+    observe_exact_height(
+        &restart_peer.client(),
+        second_retry_height,
+        "public-finding restored publication",
+    )
+    .await?;
     let restored_rejected = read_on_dedicated_thread({
         let client = restart_peer.client().client().clone();
         let attempt_id = (attempt_id).clone();

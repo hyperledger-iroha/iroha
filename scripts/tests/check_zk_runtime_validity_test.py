@@ -119,6 +119,55 @@ def test_pipeline_fee_census_tracks_retained_readers(tree_scan) -> None:
     assert "StateParameters.pipeline" in writes["decided_by"]
 
 
+def test_committed_lifecycle_evidence_keeps_its_source_and_root_owners(tree_scan) -> None:
+    """Governed selection evidence stays inventoried without declaring qualification."""
+    row = entry(CENSUS, "native_proof.committed_lifecycle_selection")
+    paths = {
+        "crates/iroha_core/src/query/native_receipts.rs",
+        "crates/iroha_core/src/query/native_receipts/lifecycle.rs",
+        "crates/iroha_core/src/runtime/lifecycle_preflight.rs",
+        "crates/iroha_core/src/state/fastpq_quantity_capture/commitment_journal/finalized_source/witness.rs",
+        "crates/iroha_data_model/src/sumeragi_finality/lifecycle_runtime.rs",
+    }
+    expected = {key: count for key, count in tree_scan.rows.items()
+                if key[0] in paths and key[1:] == ("activation", "lifecycle")}
+    assert {tuple(site[:3]): site[3] for site in row["sites"]} == expected
+    assert {site[0] for site in row["sites"]} == paths
+    assert row["status"] == "not_a_gate" and row["owner"] is None
+    assert "do not establish whole-node or network qualification" in row["note"]
+    assert {anchor["contains"] for anchor in row["anchors"]} >= {
+        "let selection = view.world().runtime_selection();",
+        "iroha_data_model::runtime::TRIGGER_LIFECYCLE_SERVICE_CLOSURE",
+        "self.execution_selection == selection",
+        "self.post_selection == selection",
+        "self.computed_root(network) == Some(root)",
+    }
+    # A lost producer row or root-owner anchor must fail the actual census checker.
+    missing = edited(lambda census: entry(
+        census, row["id"])["sites"].pop())
+    assert_fails(tree_scan, missing, "unlisted site:")
+    substituted = edited(lambda census: entry(
+        census, row["id"])["anchors"][-1].update(contains="unverified_local_readiness"))
+    assert_fails(tree_scan, substituted, "occurs 0 time(s)")
+
+
+def test_sccp_keeper_deadline_delegation_remains_source_anchored(tree_scan) -> None:
+    """Moving deadline checks to the shared owner cannot silently drop them."""
+    row = entry(CENSUS, "sccp.native_read_controls")
+    keeper = "crates/iroha_core/src/smartcontracts/isi/sccp/forgery/keeper.rs"
+    assert not any(site[0] == keeper for site in row["sites"])
+    assert {anchor["contains"] for anchor in row["anchors"]} == {
+        "check_control(control)?;",
+        "Instant::now() >= control.deadline",
+        "control.stop.load(Ordering::Acquire)",
+    }
+    assert next(anchor for anchor in row["anchors"]
+                if anchor["path"] == keeper)["count"] == 4
+    drift = edited(lambda census: entry(
+        census, row["id"])["anchors"][0].update(count=3))
+    assert_fails(tree_scan, drift, "the census records 3")
+
+
 def test_every_node_configuration_catalog_field_is_assigned_once() -> None:
     recorded = CHECKER["contract_catalog_fields"](CONTRACT)
     assert set(recorded) == set(CHECKER["CONFIG_CATALOGS"])

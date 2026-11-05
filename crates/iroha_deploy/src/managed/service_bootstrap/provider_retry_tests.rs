@@ -62,6 +62,7 @@ impl Fixture {
 
     fn run(&self, deadline: Instant) -> Run<'_> {
         Run {
+            diagnostics: None,
             authority: &self.owner.authority,
             original: &self.original,
             deadline,
@@ -216,6 +217,85 @@ fn fresh_provider_retry_stops_terminal_cancellation_and_original_deadline() {
             ManagedBootstrapFailure::Cancelled
         ))
     ));
+    assert_eq!(fixture.evidence(), evidence);
+    assert_eq!(fixture.authorization.test_ordinal(), 1);
+}
+
+#[test]
+fn provider_child_admission_preserves_original_authorization_and_expired_recovery() {
+    let _resources = crate::managed::native_test_guard();
+    let fixture = Fixture::new();
+    let evidence = fixture.evidence();
+    let provider = fixture.original.policies.providers[0].provider_id;
+    let run = fixture.run(fixture.deadline);
+    let calls = std::cell::Cell::new(0);
+    macro_rules! check_child {
+        ($owner:ty) => {{
+            let child = <$owner>::open_for_bootstrap(run.authority, provider, &|| {
+                calls.set(calls.get() + 1);
+                run.may_submit()
+            })
+            .unwrap()
+            .unwrap();
+            drop(child);
+            let expired = fixture.run(
+                Instant::now()
+                    .checked_sub(Duration::from_secs(1))
+                    .expect("one second precedes the test clock"),
+            );
+            assert!(expired.may_submit().is_err());
+            let recovered = <$owner>::open_for_bootstrap(run.authority, provider, &|| {
+                panic!(
+                    "existing child must remain recoverable after the original deadline: {:?}",
+                    expired.may_submit()
+                )
+            })
+            .unwrap()
+            .unwrap();
+            drop(recovered);
+        }};
+    }
+    check_child!(ManagedStreamTokenCustody);
+    check_child!(ManagedReserveAccountRegistration);
+    check_child!(ProviderFundingBootstrap);
+    check_child!(ManagedInitialProviderIngestAuthority);
+    check_child!(ManagedInitialGatewaySetup);
+    assert_eq!(calls.get(), 5);
+    let absent_provider = fixture.original.policies.providers[1].provider_id;
+    let expired = fixture.run(
+        Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .expect("one second precedes the test clock"),
+    );
+    assert!(
+        ManagedStreamTokenCustody::open_for_bootstrap(run.authority, absent_provider, &|| expired
+            .may_submit(),)
+        .is_err()
+    );
+    assert!(
+        ManagedStreamTokenCustody::open_existing_from_original(
+            run.authority,
+            absent_provider,
+            None,
+        )
+        .unwrap()
+        .is_none()
+    );
+    fixture.cancelled.store(true, Ordering::Release);
+    assert!(
+        ManagedStreamTokenCustody::open_for_bootstrap(run.authority, absent_provider, &|| run
+            .may_submit(),)
+        .is_err()
+    );
+    assert!(
+        ManagedStreamTokenCustody::open_existing_from_original(
+            run.authority,
+            absent_provider,
+            None,
+        )
+        .unwrap()
+        .is_none()
+    );
     assert_eq!(fixture.evidence(), evidence);
     assert_eq!(fixture.authorization.test_ordinal(), 1);
 }

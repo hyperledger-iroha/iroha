@@ -1810,7 +1810,7 @@ pub struct KagemushaWalletReceivePreparationV1 {
 /// Membership opening of `credit_id → (Payment digest, burned flag)` in an Ω's credit-digest
 /// root (§§3, 5.1; owner answer A2).
 ///
-/// The credit-digest tree is the depth-32 indexed tree of [`super::poseidon`]. The opened leaf is
+/// The credit-digest tree is the depth-32 indexed tree of [`super::KagemushaWalletIndexedTreeV1`]. The opened leaf is
 /// `(credit_id, P(kgwcdig1, [credit_id, payment_digest, burned]), next_key)` at `slot`, with
 /// exactly 32 siblings, height 0 first, as 1,024 concatenated 32-byte canonical σ-field values.
 /// The flat byte string costs 32 bytes per sibling in the canonical frame; a sequence of 32-byte

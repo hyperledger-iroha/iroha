@@ -16,7 +16,9 @@ use iroha_data_model::{
     query::error::{FindError, QueryExecutionFail},
 };
 use iroha_executor_data_model::permission::{
-    asset::CanTransferAsset, smart_contract::CanManageSmartContractCode,
+    account::{AccountAliasPermissionScope, CanManageAccountAlias},
+    asset::CanTransferAsset,
+    smart_contract::CanManageSmartContractCode,
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -33,6 +35,19 @@ use std::{
 const TX_TIMEOUT: Duration = Duration::from_secs(60);
 const CONTRACT_GAS_LIMIT: u64 = 100_000;
 const SAMPLE_ASSET_DEFINITION_LITERAL: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+const CONTRACT_ALIAS_LITERAL: &str = "threshold_escrow@universal";
+fn threshold_escrow_alias_permission() -> CanManageAccountAlias {
+    CanManageAccountAlias {
+        scope: AccountAliasPermissionScope::Alias(
+            iroha_data_model::alias_setup::ResolvedAccountAliasV1::new(
+                CONTRACT_ALIAS_LITERAL
+                    .parse()
+                    .expect("threshold escrow alias"),
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            ),
+        ),
+    }
+}
 fn sample_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::parse_address_literal(SAMPLE_ASSET_DEFINITION_LITERAL)
         .expect("sample asset definition literal must parse")
@@ -93,12 +108,9 @@ async fn deploy_threshold_escrow(
     client: &Client,
 ) -> Result<iroha_data_model::smart_contract::ContractAddress> {
     let artifact = load_sample_ivm("threshold_escrow");
-    let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
-        "threshold_escrow",
-        None,
-        "universal",
-    )
-    .expect("threshold escrow alias");
+    let contract_alias = CONTRACT_ALIAS_LITERAL
+        .parse()
+        .expect("threshold escrow alias");
     let (contract_address, _, _, _) = read_on_dedicated_thread({
         let client = client.clone();
         move || {
@@ -574,8 +586,41 @@ fn threshold_state_paths() -> [&'static str; 9] {
         "is_refunded",
     ]
 }
-#[tokio::test]
-async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
+// Native genesis/configuration construction uses the same bounded host stack
+// as the four-validator contract corridor in contracts.rs. The default libtest
+// stack overflowed before this scenario could complete; the IVM limits and all
+// transaction deadlines remain those of the original scenario.
+fn run_native_escrow_test<F, Fut>(context: &'static str, scenario: F) -> Result<()>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    const NATIVE_TEST_STACK_BYTES: usize = 64 * 1024 * 1024;
+    let worker = std::thread::Builder::new()
+        .name(context.to_owned())
+        .stack_size(NATIVE_TEST_STACK_BYTES)
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .thread_stack_size(NATIVE_TEST_STACK_BYTES)
+                .enable_all()
+                .build()?;
+            runtime.block_on(scenario())
+        })?;
+    match worker.join() {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+#[test]
+fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
+    run_native_escrow_test(
+        stringify!(threshold_escrow_releases_when_fully_funded),
+        threshold_escrow_releases_when_fully_funded_impl,
+    )
+}
+async fn threshold_escrow_releases_when_fully_funded_impl() -> Result<()> {
     let register_permission: Permission = CanManageSmartContractCode.into();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
@@ -585,7 +630,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
             ALICE_ID.clone(),
         ))
         .with_genesis_instruction(Grant::account_permission(
-            super::contracts::contract_alias_management_permission("threshold_escrow"),
+            threshold_escrow_alias_permission(),
             ALICE_ID.clone(),
         ));
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -867,8 +912,14 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     .await?;
     Ok(())
 }
-#[tokio::test]
-async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
+#[test]
+fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
+    run_native_escrow_test(
+        stringify!(threshold_escrow_refunds_when_unresolved),
+        threshold_escrow_refunds_when_unresolved_impl,
+    )
+}
+async fn threshold_escrow_refunds_when_unresolved_impl() -> Result<()> {
     let register_permission: Permission = CanManageSmartContractCode.into();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
@@ -878,7 +929,7 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
             ALICE_ID.clone(),
         ))
         .with_genesis_instruction(Grant::account_permission(
-            super::contracts::contract_alias_management_permission("threshold_escrow"),
+            threshold_escrow_alias_permission(),
             ALICE_ID.clone(),
         ));
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -1013,6 +1064,19 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
     )
     .await?;
     Ok(())
+}
+
+#[test]
+fn threshold_escrow_alias_permission_is_exact() {
+    let AccountAliasPermissionScope::Alias(resolved) = threshold_escrow_alias_permission().scope
+    else {
+        panic!("threshold deployment permission must not cover a whole domain or data space");
+    };
+    assert_eq!(resolved.canonical_text(), CONTRACT_ALIAS_LITERAL);
+    assert_eq!(
+        resolved.dataspace_id,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL
+    );
 }
 
 #[test]

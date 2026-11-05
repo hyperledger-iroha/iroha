@@ -14,6 +14,8 @@ use iroha::data_model::{
 use iroha::query::AsyncQueryBuilderExt as _;
 use iroha_model_base::peer::PeerId;
 use iroha_test_network::*;
+use rand::{SeedableRng, prelude::IteratorRandom};
+use rand_chacha::ChaCha8Rng;
 use std::{collections::BTreeSet, time::Duration};
 use tokio::time::{Instant, sleep};
 #[tokio::test]
@@ -263,6 +265,26 @@ pub(super) fn authenticated_genesis_voters(
     );
     assert_eq!(network.observers().len(), 1);
     let observer = &network.observers()[0];
+    for layer in network.config_layers().take(1) {
+        let trusted = layer
+            .get("trusted_peers")
+            .and_then(toml::Value::as_array)
+            .expect("explicit observer P2P trust");
+        assert!(
+            trusted
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .any(|entry| entry.starts_with(&format!("{}@", observer.id())))
+        );
+        assert_eq!(
+            layer
+                .get("trusted_peers_pop")
+                .and_then(toml::Value::as_array)
+                .expect("exact voting PoPs")
+                .len(),
+            expected
+        );
+    }
     assert!(!voters.contains(&observer.id()));
     assert!(
         !network
@@ -623,6 +645,7 @@ fn connected_peer_fixture_keeps_authenticated_voters_separate_from_observer() ->
     for count in [4, 7] {
         let network = connected_peer_builder(count)?.build();
         let voters = authenticated_genesis_voters(&network, count)?;
+        assert!(!network.observers()[0].is_running());
         let exact = voters.iter().cloned().collect::<Vec<_>>();
         assert!(registry_matches(&exact, &voters));
         assert!(!registry_matches(&exact[..exact.len() - 1], &voters));
@@ -654,6 +677,11 @@ fn active_voter_refusal_requires_the_exact_typed_rejection() {
     assert!(!is_active_voter_refusal(&eyre!(
         "cannot unregister a peer from the current authenticated consensus roster"
     )));
+    assert!(!is_active_voter_refusal(&eyre::Report::from(
+        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+            "cannot unregister a peer from the current authenticated consensus roster".to_owned()
+        ))
+    )));
 }
 
 async fn submit_instruction_or_warn(
@@ -674,4 +702,156 @@ async fn submit_instruction_or_warn(
     })
     .await??;
     Ok(())
+}
+
+fn leader_peer<'a>(peers: impl IntoIterator<Item = &'a NetworkPeer>) -> &'a NetworkPeer {
+    peers
+        .into_iter()
+        .min_by(|left, right| left.id().cmp(&right.id()))
+        .expect("network should have at least one peer")
+}
+
+#[allow(clippy::too_many_lines)]
+async fn connected_validators_restart_with_f(context: &'static str, faults: usize) -> Result<()> {
+    let n_peers = 3 * faults + 1;
+    let builder = NetworkBuilder::new()
+        .with_peers(n_peers)
+        .with_block_cadence(Duration::from_secs(2));
+    let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
+        return Ok(());
+    };
+    let sync_timeout = network.sync_timeout().saturating_mul(2);
+    let submit_timeout = sync_timeout.saturating_add(network.da_commit_quorum_timeout());
+    assert_peers_status(
+        network.peers(),
+        1,
+        expected_connected_peers(n_peers),
+        sync_timeout,
+    )
+    .await?;
+    let mut randomized_peers = {
+        let mut rng = ChaCha8Rng::seed_from_u64(0x434f_4e4e);
+        network.peers().iter().sample(&mut rng, n_peers)
+    };
+    let restarted_peer = randomized_peers.remove(0);
+    let client = leader_peer(randomized_peers.iter().copied()).client();
+    let client = integration_tests::sync::rebind_blocking_client(&client, |client| {
+        client.transaction_status_timeout = submit_timeout;
+        client.transaction_ttl = Some(submit_timeout.saturating_add(Duration::from_secs(120)));
+    });
+    let expected_roster = network
+        .peers()
+        .iter()
+        .map(NetworkPeer::id)
+        .collect::<BTreeSet<_>>();
+    let rejection = submit_instruction_or_warn(
+        client.clone(),
+        Unregister::peer(restarted_peer.id()),
+        context,
+    )
+    .await
+    .expect_err("an active authenticated validator cannot be unregistered");
+    assert!(
+        is_active_voter_refusal(&rejection),
+        "unexpected unregister rejection: {rejection:?}"
+    );
+    let retained_roster = client
+        .account_client()
+        .query(FindPeers)
+        .execute_all()
+        .await?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        retained_roster, expected_roster,
+        "rejected removal must preserve every roster identity"
+    );
+    // Rejection is itself a committed result; every validator must retain it before shutdown.
+    assert_peers_status(
+        network.peers(),
+        2,
+        expected_connected_peers(n_peers),
+        sync_timeout,
+    )
+    .await?;
+    restarted_peer.shutdown().await;
+    assert_peers_status(
+        randomized_peers.iter().copied(),
+        2,
+        expected_connected_peers(n_peers - 1),
+        sync_timeout,
+    )
+    .await?;
+    // The original committee still has its exact quorum (3/4 or at least 5/7).
+    // A real transaction must apply while the one owned validator is offline.
+    submit_instruction_or_warn(
+        client,
+        Log::new(
+            Level::INFO,
+            "connected_peers_with_one_validator_offline".to_owned(),
+        ),
+        context,
+    )
+    .await?;
+    assert_peers_status(
+        randomized_peers.iter().copied(),
+        3,
+        expected_connected_peers(n_peers - 1),
+        sync_timeout,
+    )
+    .await?;
+    let genesis = network.genesis();
+    restarted_peer
+        .start(
+            network.config_layers_for_peer(restarted_peer),
+            Some(&genesis),
+        )
+        .await?;
+    assert_peers_status(
+        std::iter::once(restarted_peer),
+        3,
+        expected_connected_peers(n_peers),
+        sync_timeout,
+    )
+    .await?;
+    assert_peers_status(
+        network.peers(),
+        3,
+        expected_connected_peers(n_peers),
+        sync_timeout,
+    )
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn connected_validators_restart_with_f_1() -> Result<()> {
+    Box::pin(connected_validators_restart_with_f(
+        stringify!(connected_validators_restart_with_f_1),
+        1,
+    ))
+    .await
+}
+
+#[tokio::test]
+async fn connected_validators_restart_with_f_2() -> Result<()> {
+    Box::pin(connected_validators_restart_with_f(
+        stringify!(connected_validators_restart_with_f_2),
+        2,
+    ))
+    .await
+}
+
+fn expected_connected_peers(running_peers: usize) -> u64 {
+    u64::try_from(running_peers.saturating_sub(1)).expect("fixture peer count fits u64")
+}
+
+#[test]
+fn connected_peer_counts_track_running_processes_without_resizing_quorums() {
+    assert_eq!(expected_connected_peers(4), 3);
+    assert_eq!(expected_connected_peers(3), 2);
+    assert_eq!(expected_connected_peers(7), 6);
+    assert_eq!(expected_connected_peers(6), 5);
+    assert_eq!(iroha_sumeragi::types::quorum(4), 3);
+    assert_eq!(iroha_sumeragi::types::quorum(7), 5);
 }

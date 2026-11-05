@@ -143,7 +143,7 @@ def test_helper_build_and_promotion_stay_inside_original_source_pin():
     promotion = source.index('--native-helper "${NATIVE_HELPER}"')
     assert pin < target < build < check < controls < promotion
     build_command = source[build:check]
-    assert "--features dev-tools" in build_command
+    assert "--features dev-tools --bin iroha_native_source_delivery" in build_command
     assert '--target "${NATIVE_HELPER_HOST}"' in build_command
     assert '--target-dir "${NATIVE_HELPER_TARGET}"' in build_command
     assert 'NATIVE_HELPER="$(capture_python "${VENV_PYTHON}"' in source

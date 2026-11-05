@@ -13,7 +13,9 @@ use sorafs_manifest::signer::{
     custody_control::SignerCustodyControlStateV1,
 };
 
-pub(super) const MAX_ORIGINAL_BYTES: usize = MAX_CHECKPOINT_BYTES + 128 * 1024;
+pub(super) const MAX_ORIGINAL_BYTES: usize = MAX_CHECKPOINT_BYTES
+    + iroha_data_model::sorafs::stream_token_custody::proof::MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1
+    + 128 * 1024;
 
 #[derive(Clone, Copy, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_deploy::managed::stream_token_custody::EnrollmentValidity")]
@@ -58,6 +60,7 @@ pub(super) struct Original {
     pub selection: StreamTokenCustodySelection,
     pub action: Action,
     pub checkpoint: Vec<u8>,
+    pub source: Vec<u8>,
 }
 #[expect(
     clippy::large_enum_variant,
@@ -260,6 +263,8 @@ impl Original {
     pub fn validate(&self) -> Result<()> {
         if self.checkpoint.is_empty()
             || self.checkpoint.len() > MAX_CHECKPOINT_BYTES
+            || self.source.is_empty()
+            || self.source.len() > iroha_data_model::sorafs::stream_token_custody::proof::MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1
             || norito::canonical_frame_len(&self.selection)
                 .map_err(|_| invalid("invalid custody selection"))?
                 > 64 * 1024

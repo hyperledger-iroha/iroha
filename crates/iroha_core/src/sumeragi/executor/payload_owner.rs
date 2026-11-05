@@ -2437,6 +2437,8 @@ mod tests {
 
     #[test]
     fn completed_certified_lane_payload_rechecks_actual_journal_and_mixed_queue_admission() {
+        // Pin before genesis so retired fixture State generations cannot alter exact refunds.
+        let _fixture_epoch = crossbeam_epoch::pin();
         lanes::merge::with_original_lane_merge_fixture(
             |chain, lane_blocks, certify, [first, second]| {
                 super::super::publication_tests::with_worker_chain(

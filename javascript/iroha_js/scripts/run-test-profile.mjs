@@ -16,7 +16,11 @@ const TEST_DIRECTORY = path.join(SDK_DIRECTORY, "test");
 
 const PROFILE_FILES = Object.freeze({
   heavy: Object.freeze(["sorafsChunker.oneGib.test.js"]),
-  "native-provenance": Object.freeze(["nativeBuildProvenance.test.js"]),
+  "native-provenance": Object.freeze([
+    "nativeBuildProvenance.test.js",
+    // Apple's sealed xcrun path is an actual host prerequisite of this contract.
+    ...(process.platform === "darwin" ? ["nativeBuildProfile.test.js"] : []),
+  ]),
   "sorafs-native": Object.freeze([
     "cancelAssetLockV1.test.js",
     "sorafsAppealFinanceValidation.test.js",

@@ -18,6 +18,14 @@ import pytest
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT_DIR / "scripts" / "compute_workspace_source_manifest.py"
 
+# These cases exercise the strict Unix source-seal/dirty-source owner. They run
+# on both Linux and macOS; Windows exercises the clean-index artifact owner and
+# retained native handles below, and explicitly refuses this Unix-only API.
+posix_source_walk = pytest.mark.skipif(
+    os.name != "posix", reason="source seals require POSIX descriptor-relative custody"
+)
+
+
 
 def load_module():
     spec = importlib.util.spec_from_file_location("workspace_source_manifest", SCRIPT)
@@ -45,15 +53,16 @@ def init_release_repo(path: Path, *, object_format: str = "sha1") -> None:
     subprocess.run(
         ["git", "config", "user.name", "Release Test"], cwd=path, check=True
     )
-    (path / ".gitignore").write_text("Cargo.lock\ntarget/\n", encoding="utf-8")
-    (path / "tracked.txt").write_text("source\n", encoding="utf-8")
+    subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=path, check=True)
+    (path / ".gitignore").write_bytes(b"Cargo.lock\ntarget/\n")
+    (path / "tracked.txt").write_bytes(b"source\n")
     subprocess.run(
         ["git", "add", ".gitignore", "tracked.txt"], cwd=path, check=True
     )
     subprocess.run(
         ["git", "commit", "-qm", "fixture"], cwd=path, check=True
     )
-    (path / "Cargo.lock").write_text("version = 3\n", encoding="utf-8")
+    (path / "Cargo.lock").write_bytes(b"version = 3\n")
 
 
 def _sha256(path: Path) -> str:
@@ -122,6 +131,7 @@ def _source_seal_fixture(tmp_path: Path):
     return module, source, path_list, manifest, archive, archive_sha
 
 
+@posix_source_walk
 def test_manifest_is_order_independent_and_content_sensitive(tmp_path: Path) -> None:
     module = load_module()
     (tmp_path / "a.txt").write_text("alpha\n", encoding="utf-8")
@@ -179,10 +189,13 @@ def test_source_path_list_rejects_replacement_after_read(
         return real_lstat(path)
 
     monkeypatch.setattr(Path, "lstat", replace_before_path_recheck)
-    with pytest.raises(module.SourcePathListError, match="replaced while it was read"):
+    # Windows can refuse the rename while the original reader remains open.
+    refusal = "changed after" if os.name == "nt" else "replaced while"
+    with pytest.raises(module.SourcePathListError, match=refusal + " it was read"):
         module.read_source_path_list(path_list)
 
 
+@posix_source_walk
 def test_manifest_distinguishes_deleted_and_symlink_entries(tmp_path: Path) -> None:
     module = load_module()
     (tmp_path / "target-a").write_text("same\n", encoding="utf-8")
@@ -199,6 +212,7 @@ def test_manifest_distinguishes_deleted_and_symlink_entries(tmp_path: Path) -> N
     assert second != module._manifest_for_paths(tmp_path, ["link", "missing"])
 
 
+@posix_source_walk
 def test_manifest_tracks_executable_mode(tmp_path: Path) -> None:
     module = load_module()
     script = tmp_path / "gate.sh"
@@ -309,6 +323,7 @@ def test_native_artifact_manifest_normalizes_windows_checkout_materialization(
 ) -> None:
     module = load_module()
     init_release_repo(tmp_path)
+    subprocess.run(["git", "config", "core.symlinks", "true"], cwd=tmp_path, check=True)
     runner = tmp_path / "runner.sh"
     runner.write_bytes(b"#!/bin/sh\nexit 0\n")
     runner.chmod(0o755)
@@ -318,7 +333,7 @@ def test_native_artifact_manifest_normalizes_windows_checkout_materialization(
         link.chmod(0o777, follow_symlinks=False)
     tree = tmp_path / "tree"
     tree.mkdir()
-    (tree / "payload").write_text("nested source\n", encoding="utf-8")
+    (tree / "payload").write_bytes(b"nested source\n")
     subprocess.run(
         [
             "git",
@@ -332,6 +347,7 @@ def test_native_artifact_manifest_normalizes_windows_checkout_materialization(
         cwd=tmp_path,
         check=True,
     )
+    subprocess.run(["git", "update-index", "--chmod=+x", "runner.sh"], cwd=tmp_path, check=True)
     gitlink_oid = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=tmp_path,
@@ -365,7 +381,11 @@ def test_native_artifact_manifest_normalizes_windows_checkout_materialization(
         check=True,
     )
 
-    strict = module.workspace_source_manifest(tmp_path)
+    # Captured from this exact fixture through the actual POSIX descriptor walk.
+    # Recheck it on POSIX, and use the same anchor for native Windows materialization.
+    strict = "6960b48086146ab00bff05c4252e547aa7cd10f51b367714db35e3700f8d884f"
+    if os.name == "posix":
+        assert module.workspace_source_manifest(tmp_path) == strict
     subprocess.run(
         ["git", "config", "core.filemode", "false"],
         cwd=tmp_path,
@@ -417,7 +437,7 @@ def test_native_artifact_manifest_normalizes_windows_checkout_materialization(
     (tmp_path / "tracked.txt").write_text("dirty\n", encoding="utf-8")
     with pytest.raises(module.DirtyReleaseSourceError, match="tracked changes"):
         module.native_artifact_workspace_source_manifest(tmp_path)
-    (tmp_path / "tracked.txt").write_text("source\n", encoding="utf-8")
+    (tmp_path / "tracked.txt").write_bytes(b"source\n")
     injected = tmp_path / "nested" / "injected"
     injected.write_text("unsealed\n", encoding="utf-8")
     with pytest.raises(module.DirtyReleaseSourceError, match="gitlink must be one empty"):
@@ -438,6 +458,23 @@ def test_native_artifact_manifest_normalizes_windows_checkout_materialization(
     subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True)
     with pytest.raises(module.DirtyReleaseSourceError, match="index is not HEAD"):
         module.native_artifact_workspace_source_manifest(tmp_path)
+
+
+def test_source_seal_refuses_non_posix_before_opening_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A host without the Unix owner cannot silently use a weaker source seal."""
+    module = load_module()
+    opened = []
+    def unexpected_open(*args, **kwargs):
+        opened.append(args)
+        raise AssertionError("unsupported source custody must refuse before opening")
+    with monkeypatch.context() as host:
+        host.setattr(module.os, "name", "nt")
+        host.setattr(module.os, "open", unexpected_open)
+        with pytest.raises(module.SourceSealError, match="POSIX descriptor-relative"):
+            module._open_root_directory(tmp_path, "source root")
+    assert opened == []
 
 
 def test_native_artifact_manifest_cli_uses_host_portable_entrypoint(
@@ -476,6 +513,7 @@ def test_native_artifact_manifest_cli_uses_host_portable_entrypoint(
     assert capsys.readouterr().out == f"{digest}\n"
 
 
+@posix_source_walk
 def test_source_seal_is_deterministic_and_round_trips_exact_closure(
     tmp_path: Path,
 ) -> None:
@@ -525,6 +563,7 @@ def test_source_seal_is_deterministic_and_round_trips_exact_closure(
     )
 
 
+@posix_source_walk
 def test_source_seal_rejects_parent_replacement_during_payload_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -559,6 +598,7 @@ def test_source_seal_rejects_parent_replacement_during_payload_read(
     assert not archive.exists()
 
 
+@posix_source_walk
 def test_source_seal_rejects_root_replacement_during_payload_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -592,6 +632,7 @@ def test_source_seal_rejects_root_replacement_during_payload_read(
     assert not archive.exists()
 
 
+@posix_source_walk
 def test_source_seal_rejects_deleted_member_appearing_during_seal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -648,6 +689,7 @@ def test_source_path_list_rejects_unsafe_archive_names(
         )
 
 
+@posix_source_walk
 def test_source_seal_rejects_out_of_root_symlinks_on_create_and_extract(
     tmp_path: Path,
 ) -> None:
@@ -686,6 +728,7 @@ def test_source_seal_rejects_out_of_root_symlinks_on_create_and_extract(
     assert list(destination.iterdir()) == []
 
 
+@posix_source_walk
 def test_source_seal_rejects_chained_symlink_escape_before_extract(
     tmp_path: Path,
 ) -> None:
@@ -743,6 +786,7 @@ def test_source_seal_rejects_non_posix_symlink_targets(
         module._validate_symlink_target(b"link", target)
 
 
+@posix_source_walk
 def test_in_root_dangling_symlink_cannot_smuggle_unsealed_target(
     tmp_path: Path,
 ) -> None:
@@ -803,6 +847,7 @@ def test_in_root_dangling_symlink_cannot_smuggle_unsealed_target(
     ),
     ids=("duplicate", "outside-closure", "absolute", "dotdot", "dot-git"),
 )
+@posix_source_walk
 def test_source_seal_rejects_duplicate_outside_and_unsafe_members_before_extract(
     tmp_path: Path,
     records: list[tuple[bytes, bytes, int, bytes]],
@@ -834,6 +879,7 @@ def test_source_seal_rejects_duplicate_outside_and_unsafe_members_before_extract
 
 
 @pytest.mark.parametrize("kind", (b"H", b"C", b"B", b"P", b"S"))
+@posix_source_walk
 def test_source_seal_rejects_hard_link_device_fifo_and_socket_member_kinds(
     tmp_path: Path, kind: bytes
 ) -> None:
@@ -861,6 +907,7 @@ def test_source_seal_rejects_hard_link_device_fifo_and_socket_member_kinds(
     assert list(destination.iterdir()) == []
 
 
+@posix_source_walk
 def test_source_seal_rejects_hard_link_fifo_and_socket_sources(
     tmp_path: Path,
 ) -> None:
@@ -917,6 +964,7 @@ def test_source_seal_rejects_hard_link_fifo_and_socket_sources(
                 )
 
 
+@posix_source_walk
 def test_source_seal_rejects_mutated_archive_and_path_list(
     tmp_path: Path,
 ) -> None:
@@ -963,6 +1011,7 @@ def test_source_seal_rejects_mutated_archive_and_path_list(
     assert list(destination.iterdir()) == []
 
 
+@posix_source_walk
 def test_source_seal_rejects_missing_member_trailing_bytes_and_size_overflow(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1020,6 +1069,7 @@ def test_source_seal_rejects_missing_member_trailing_bytes_and_size_overflow(
         )
 
 
+@posix_source_walk
 def test_source_seal_rejects_archive_and_member_count_overflow(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1073,6 +1123,7 @@ def test_source_seal_rejects_archive_and_member_count_overflow(
         module.read_source_path_list(path_count_overflow)
 
 
+@posix_source_walk
 def test_source_seal_validates_every_member_before_writing_destination(
     tmp_path: Path,
 ) -> None:
@@ -1109,6 +1160,7 @@ def test_source_seal_validates_every_member_before_writing_destination(
     assert list(destination.iterdir()) == []
 
 
+@posix_source_walk
 def test_source_seal_rejects_nonempty_symlink_and_hardlinked_inputs(
     tmp_path: Path,
 ) -> None:
@@ -1164,6 +1216,7 @@ def test_source_seal_rejects_nonempty_symlink_and_hardlinked_inputs(
         )
 
 
+@posix_source_walk
 def test_extracted_closure_audit_rejects_extra_members(tmp_path: Path) -> None:
     (
         module,
@@ -1210,6 +1263,7 @@ def test_extracted_closure_audit_rejects_extra_members(tmp_path: Path) -> None:
         extractor.close()
 
 
+@posix_source_walk
 def test_exact_detached_manifest_and_minimal_context_reject_extras(
     tmp_path: Path,
 ) -> None:
@@ -1244,6 +1298,7 @@ def test_exact_detached_manifest_and_minimal_context_reject_extras(
             destination, path_list
         )
 
+@posix_source_walk
 def test_workspace_manifest_binds_ignored_cargo_lock(tmp_path: Path) -> None:
     module = load_module()
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
@@ -1332,6 +1387,7 @@ def test_workspace_manifest_rejects_active_git_operations(
         module.workspace_source_manifest(tmp_path)
 
 
+@posix_source_walk
 def test_active_operation_detection_is_linked_worktree_local(tmp_path: Path) -> None:
     module = load_module()
     main = tmp_path / "main"
@@ -1394,6 +1450,7 @@ def test_workspace_manifest_rejects_resolved_but_uncommitted_merge(
 @pytest.mark.parametrize(
     ("object_format", "object_id_length"), [("sha1", 40), ("sha256", 64)]
 )
+@posix_source_walk
 def test_release_identity_binds_clean_head_tree_manifest_and_lock(
     tmp_path: Path,
     object_format: str,
@@ -1442,6 +1499,7 @@ def test_release_identity_binds_clean_head_tree_manifest_and_lock(
     )
 
 
+@posix_source_walk
 def test_release_identity_streams_lock_once_per_snapshot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1483,6 +1541,7 @@ def test_release_identity_rejects_staged_source_without_git_mutation(
     assert staged.read_bytes() == worktree_state
 
 
+@posix_source_walk
 def test_workspace_manifest_rejects_regular_file_replaced_before_open(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1513,6 +1572,7 @@ def test_workspace_manifest_rejects_regular_file_replaced_before_open(
     assert outside.read_text(encoding="utf-8") == "fn outside() {}\n"
 
 
+@posix_source_walk
 def test_workspace_manifest_rejects_parent_directory_replacement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1548,6 +1608,7 @@ def test_workspace_manifest_rejects_parent_directory_replacement(
         module._manifest_for_paths(tmp_path, ["source/member.rs"])
 
 
+@posix_source_walk
 def test_release_identity_repeats_clean_index_after_manifest_capture(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1594,6 +1655,7 @@ def test_release_identity_rejects_unmerged_before_deriving_a_tree(
         module.release_source_identity(tmp_path)
 
 
+@posix_source_walk
 def test_release_identity_rejects_tracked_worktree_drift(tmp_path: Path) -> None:
     module = load_module()
     init_release_repo(tmp_path)
@@ -1603,6 +1665,7 @@ def test_release_identity_rejects_tracked_worktree_drift(tmp_path: Path) -> None
         module.release_source_identity(tmp_path)
 
 
+@posix_source_walk
 def test_release_identity_never_executes_repository_clean_filter(tmp_path: Path) -> None:
     module = load_module()
     init_release_repo(tmp_path)
@@ -1631,6 +1694,7 @@ def test_release_identity_never_executes_repository_clean_filter(tmp_path: Path)
     assert not marker.exists()
 
 
+@posix_source_walk
 def test_release_identity_rejects_nonignored_untracked_source(tmp_path: Path) -> None:
     module = load_module()
     init_release_repo(tmp_path)
@@ -1642,6 +1706,7 @@ def test_release_identity_rejects_nonignored_untracked_source(tmp_path: Path) ->
         module.release_source_identity(tmp_path)
 
 
+@posix_source_walk
 def test_release_identity_ignores_local_untracked_exclusions(tmp_path: Path) -> None:
     module = load_module()
     init_release_repo(tmp_path)
@@ -1668,6 +1733,7 @@ def test_release_identity_ignores_local_untracked_exclusions(tmp_path: Path) -> 
         module.release_source_identity(tmp_path)
 
 
+@posix_source_walk
 def test_release_identity_pins_configured_core_worktree(tmp_path: Path) -> None:
     module = load_module()
     init_release_repo(tmp_path)
@@ -1688,6 +1754,7 @@ def test_release_identity_pins_configured_core_worktree(tmp_path: Path) -> None:
         module.release_source_identity(tmp_path)
 
 
+@posix_source_walk
 def test_release_identity_rejects_untracked_ignore_policy(tmp_path: Path) -> None:
     module = load_module()
     init_release_repo(tmp_path)
@@ -1716,6 +1783,7 @@ def ignore_policy_repo(tmp_path: Path) -> Path:
 
 
 @pytest.mark.parametrize("cache", ["target", "target/nested"])
+@posix_source_walk
 def test_manifest_ignores_policy_below_tracked_directory_exclusion(
     ignore_policy_repo: Path, cache: str
 ) -> None:
@@ -1730,6 +1798,7 @@ def test_manifest_ignores_policy_below_tracked_directory_exclusion(
     assert module.workspace_source_manifest(root) == before
 
 
+@posix_source_walk
 def test_manifest_ignored_policy_cannot_hide_tracked_input(
     ignore_policy_repo: Path,
 ) -> None:
@@ -1788,6 +1857,7 @@ def test_manifest_untracked_policy_cannot_authorize_nested_policy(
         module.workspace_source_manifest(root)
 
 
+@posix_source_walk
 def test_release_identity_rejects_populated_gitlink(tmp_path: Path) -> None:
     module = load_module()
     init_release_repo(tmp_path)
@@ -1853,6 +1923,7 @@ def test_release_identity_does_not_ignore_staged_gitlink_change(tmp_path: Path) 
         module.release_source_identity(tmp_path)
 
 
+@posix_source_walk
 def test_release_identity_rejects_missing_or_symlinked_lockfile(tmp_path: Path) -> None:
     module = load_module()
     init_release_repo(tmp_path)
@@ -1869,6 +1940,7 @@ def test_release_identity_rejects_missing_or_symlinked_lockfile(tmp_path: Path) 
         module.release_source_identity(tmp_path)
 
 
+@posix_source_walk
 def test_release_identity_detects_same_tree_head_change(tmp_path: Path) -> None:
     module = load_module()
     init_release_repo(tmp_path)
@@ -1916,6 +1988,7 @@ def test_ignore_policy_discovery_without_descriptors_keeps_source_and_policy_gua
 
 
 @pytest.mark.parametrize("directory", ["target", "cache space", "cache[1]", "cache:é"])
+@posix_source_walk
 def test_ignore_policy_discovery_prunes_only_literal_root_exclusions(
     ignore_policy_repo: Path, monkeypatch, directory: str
 ) -> None:
@@ -1937,6 +2010,7 @@ def test_ignore_policy_discovery_prunes_only_literal_root_exclusions(
     assert ":(top,exclude,literal)" + directory in discovery
 
 
+@posix_source_walk
 def test_ignore_policy_discovery_rejects_root_policy_change_before_filtering(
     ignore_policy_repo: Path, monkeypatch
 ) -> None:
@@ -1971,6 +2045,7 @@ def test_ignore_policy_discovery_does_not_prune_root_policy_from_local_excludes(
 
 
 
+@posix_source_walk
 def test_ignore_policy_discovery_keeps_force_tracked_file_and_nested_policy(
     ignore_policy_repo: Path
 ) -> None:
@@ -2018,6 +2093,7 @@ def test_ignore_policy_discovery_does_not_trust_untracked_root_policy(
         module._git_source_paths(root)
 
 
+@posix_source_walk
 def test_ignore_policy_discovery_rejects_root_policy_change_during_rule_lookup(
     ignore_policy_repo: Path, monkeypatch
 ) -> None:
@@ -2039,6 +2115,7 @@ def test_ignore_policy_discovery_rejects_root_policy_change_during_rule_lookup(
     assert changed == [True]
 
 
+@posix_source_walk
 def test_workspace_source_observation_pins_one_canonical_root_across_alias_changes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

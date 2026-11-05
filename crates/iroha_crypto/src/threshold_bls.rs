@@ -6,7 +6,8 @@
 //! timelock release protocol, while keeping their keys distinct at the Rust
 //! type level.
 //!
-//! [`AdaptiveThresholdBlsPublicTranscript`] implements Iroha's fixed profile of
+//! [`AdaptiveThresholdBlsPublicTranscript`](crate::threshold_bls::AdaptiveThresholdBlsPublicTranscript)
+//! implements Iroha's fixed profile of
 //! the three-polynomial Das--Ren construction: coefficient commitments are
 //! `g^s h^r v^u` with unblinded constants, partial signatures are
 //! `H0(m)^s H1(m)^r`, and each partial carries the paper's two-equation
@@ -36,7 +37,8 @@
 //! erasure guarantee. The surrounding protocol remains responsible for
 //! authenticated private-share transport, recipient acceptance deadlines, qualified-set
 //! agreement, retirement of dealer contributions and proof nonces, and key
-//! rotation. [`AdaptiveThresholdBlsPublicTranscript::ensure_adaptive_protocol_ready`]
+//! rotation.
+//! [`AdaptiveThresholdBlsPublicTranscript::ensure_adaptive_protocol_ready`](crate::threshold_bls::AdaptiveThresholdBlsPublicTranscript::ensure_adaptive_protocol_ready)
 //! attests only that these public cryptographic checks ran; it is not a theorem
 //! certificate or an operational release approval.
 

@@ -16,6 +16,47 @@ use ivm::execution_packets::{INSTRUCTION_WINDOWS, NativeInvocation, instruction_
 
 struct Witness([F; private_dispatch::WIDTH]);
 impl Witness {
+    /// Initialize in funded backing without placing or moving a full row on the stack.
+    fn push_with<E>(
+        rows: &mut ChargedBuffer<Self>,
+        fill: impl FnOnce(&mut [F; private_dispatch::WIDTH]) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let initialized = rows.as_slice().len();
+        let slot = rows
+            .spare_capacity_mut()
+            .first_mut()
+            .expect("one admitted instruction row remains");
+        // SAFETY: `slot` is an exclusive, aligned slot within the original
+        // allocation. Addressing its sole array field creates no reference to
+        // uninitialized storage. Each in-bounds element receives a valid F::ZERO;
+        // no zero-bit representation is assumed. These writes cannot fail and
+        // introduce no private values or destructor obligations. Only after all
+        // fields are initialized do we expose this one additional valid Witness.
+        #[allow(unsafe_code)]
+        unsafe {
+            let fields = core::ptr::addr_of_mut!((*slot.as_mut_ptr()).0).cast::<F>();
+            for column in 0..private_dispatch::WIDTH {
+                fields.add(column).write(F::ZERO);
+            }
+            rows.set_initialized_len(initialized + 1);
+        }
+        // On error or unwind, drop and wipe the unfinished row before returning
+        // to the caller, preserving its original order relative to memory rows.
+        struct PendingRow<'a> {
+            rows: &'a mut ChargedBuffer<Witness>,
+            initialized: usize,
+        }
+        impl Drop for PendingRow<'_> {
+            fn drop(&mut self) {
+                self.rows.truncate(self.initialized);
+            }
+        }
+        let mut pending = PendingRow { rows, initialized };
+        fill(&mut pending.rows.as_mut_slice()[initialized].0)?;
+        pending.initialized += 1;
+        Ok(())
+    }
+
     fn clear(&mut self) {
         for value in &mut self.0 {
             value.zeroize_v1();
@@ -61,10 +102,10 @@ impl Instructions {
             memory_access::MemoryAccesses::new(native, root, budget).map_err(Error::Allocation)?;
         for window in 0..INSTRUCTION_WINDOWS {
             let packets = original(native, window);
-            let mut row = Witness([F::ZERO; private_dispatch::WIDTH]);
-            private_dispatch::native_witness::fill(&mut row.0, &program, &packets)
-                .map_err(Error::Witness)?;
-            rows.push_reserved(row);
+            Witness::push_with(&mut rows, |row| {
+                private_dispatch::native_witness::fill(row, &program, &packets)
+            })
+            .map_err(Error::Witness)?;
         }
         Ok(Self {
             program,

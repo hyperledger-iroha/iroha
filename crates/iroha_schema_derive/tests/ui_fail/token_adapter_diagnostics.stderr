@@ -1,0 +1,5 @@
+error: invalid path `Self::validate()`: unexpected token
+ --> tests/ui_fail/token_adapter_diagnostics.rs:3:10
+  |
+3 | #[norito(validate = "Self::validate()")]
+  |          ^^^^^^^^

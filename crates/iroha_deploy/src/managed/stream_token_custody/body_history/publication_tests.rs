@@ -153,6 +153,11 @@ pub(super) fn advance_with_reads(
         2,
         &fixture.policy,
         &current,
+        fixture.native.bootstrap_custody_source(
+            &fixture.owner.authority,
+            &fixture.policy,
+            &checkpoint,
+        ),
         &checkpoint,
         &terms,
         fixture.options.deadline,

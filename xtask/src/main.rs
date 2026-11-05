@@ -3985,7 +3985,7 @@ where
         }
         "sorafs-gateway" => {
             let remaining: Vec<String> = args.collect();
-            let command = sorafs::parse_gateway_cli(remaining.into_iter())?;
+            let command = sorafs::parse_gateway_cli(remaining)?;
             Ok(CommandKind::SorafsGatewayCli {
                 command: Box::new(command),
             })
@@ -9652,6 +9652,7 @@ const OPENAPI_CARGO_LOCK_PIN_SCHEMA: &str = "iroha.openapi.cargo-lock.v1";
 const OPENAPI_CARGO_LOCK_PIN_MAX_BYTES: u64 = 1_024;
 const OPENAPI_GENERATOR_INPUT_PATHS: &[&str] = &[
     ".cargo/config.toml",
+    ".github/actions",
     ".github/workflows/openapi.yml",
     "Cargo.lock",
     "Cargo.toml",
@@ -12026,7 +12027,7 @@ mod openapi_tests {
     fn openapi_generator_input_closure_matches_the_cross_language_fixture() {
         assert_eq!(
             openapi_generator_input_closure_sha256(b"tree-fixture-v1\0", b"lock-fixture-v1\n"),
-            "5034e34e44a804546302178b2f13468096663997b2074ef0a2fe6916f654e080"
+            "93198cb581bc57981e950c5f5ea4f21c666d131e73ad0b1656e6ee3ebbadde32"
         );
     }
     #[test]
@@ -14504,7 +14505,7 @@ fn openapi_path_identity(path: &Path) -> PathBuf {
     normalized
 }
 fn parse_gate_date(value: &str) -> Result<Date, Box<dyn Error>> {
-    let spec = format_description::parse("[year]-[month]-[day]")
+    let spec = format_description::parse_borrowed::<1>("[year]-[month]-[day]")
         .map_err(|err| -> Box<dyn Error> { format!("invalid gate date spec: {err}").into() })?;
     Date::parse(value, &spec)
         .map_err(|err| -> Box<dyn Error> { format!("invalid date `{value}`: {err}").into() })

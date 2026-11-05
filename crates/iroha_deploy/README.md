@@ -289,7 +289,11 @@ rather than silently replacing the admitted origin. Generation never changes the
 `managed::ManagedStreamTokenCustody` implements shared initial Configure/Enroll and bounded renewal for
 that authenticated profile and its original signed genesis. It retains the original requests,
 UTC limits and bounded fees before dispatch, and recovers the exact wallet transaction through
-its once-only journal. Independently verified inclusion of that transaction is separate from a
+its once-only journal. Selection retains the bounded canonical native custody proof alongside
+its certified checkpoint. Recovery reauthenticates that source under the original checkpoint,
+generated owner, full binding and native schema; it does not refetch an old height from the
+current-state endpoint. Signing and dispatch still require a fresh matching native predecessor
+and live authorization. Independently verified inclusion of that transaction is separate from a
 fresh native custody-state proof; retained inclusion remains reportable during a network outage
 without granting current eligibility. This source implementation does not activate services,
 admit providers, declare capacity or publish configuration revisions. CLI/Mochi integration and

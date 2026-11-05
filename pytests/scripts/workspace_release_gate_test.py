@@ -454,7 +454,7 @@ def _aggregate_results(environment: dict[str, str]) -> subprocess.CompletedProce
 def test_required_aggregate_accepts_only_explicit_success_or_skip(selected: bool) -> None:
     """A fully selected run and an explicitly empty run both aggregate correctly."""
 
-    environment = {"CLASSIFIER_RESULT": "success"}
+    environment = {"CLASSIFIER_RESULT": "success", "SOURCE_GUARDS_RESULT": "success"}
     for name in RESULT_CONSUMERS:
         environment[f"{name}_SELECTED"] = str(selected).lower()
         environment[f"{name}_RESULT"] = "success" if selected else "skipped"
@@ -466,7 +466,7 @@ def test_required_aggregate_accepts_only_explicit_success_or_skip(selected: bool
 def test_required_aggregate_rejects_every_selected_consumer_failure(name: str, result: str) -> None:
     """A missing, cancelled, or failed selected consumer cannot produce green CI."""
 
-    environment = {"CLASSIFIER_RESULT": "success"}
+    environment = {"CLASSIFIER_RESULT": "success", "SOURCE_GUARDS_RESULT": "success"}
     for consumer in RESULT_CONSUMERS:
         environment[f"{consumer}_SELECTED"] = "false"
         environment[f"{consumer}_RESULT"] = "skipped"
@@ -478,8 +478,8 @@ def test_required_aggregate_rejects_every_selected_consumer_failure(name: str, r
 def test_required_aggregate_rejects_classifier_failure_and_absent_decisions() -> None:
     """Empty classifier outputs cannot masquerade as an intentional skipped run."""
 
-    assert _aggregate_results({"CLASSIFIER_RESULT": "failure"}).returncode != 0
-    environment = {"CLASSIFIER_RESULT": "success"}
+    assert _aggregate_results({"CLASSIFIER_RESULT": "failure", "SOURCE_GUARDS_RESULT": "success"}).returncode != 0
+    environment = {"CLASSIFIER_RESULT": "success", "SOURCE_GUARDS_RESULT": "success"}
     for name in RESULT_CONSUMERS:
         environment[f"{name}_SELECTED"] = ""
         environment[f"{name}_RESULT"] = "skipped"
@@ -491,11 +491,21 @@ def test_required_aggregate_rejects_classifier_failure_and_absent_decisions() ->
 def test_required_aggregate_rejects_unselected_jobs_that_ran(name: str, result: str) -> None:
     """A routed-off job must be skipped; execution is a classification mismatch."""
 
-    environment = {"CLASSIFIER_RESULT": "success"}
+    environment = {"CLASSIFIER_RESULT": "success", "SOURCE_GUARDS_RESULT": "success"}
     for consumer in RESULT_CONSUMERS:
         environment[f"{consumer}_SELECTED"] = "false"
         environment[f"{consumer}_RESULT"] = "skipped"
     environment[f"{name}_RESULT"] = result
+    assert _aggregate_results(environment).returncode != 0
+
+
+@pytest.mark.parametrize("result", ("failure", "cancelled", "skipped", ""))
+def test_required_aggregate_rejects_source_guard_failure(result: str) -> None:
+    """Independent source validation is mandatory even when no compiler lane is selected."""
+    environment = {"CLASSIFIER_RESULT": "success", "SOURCE_GUARDS_RESULT": result}
+    for name in RESULT_CONSUMERS:
+        environment[f"{name}_SELECTED"] = "false"
+        environment[f"{name}_RESULT"] = "skipped"
     assert _aggregate_results(environment).returncode != 0
 
 
@@ -799,18 +809,7 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             "fetch-depth: 0",
             "python3 scripts/rust_ci.py validate",
             "python3 -m pytest -q pytests/scripts/rust_ci_test.py",
-            "pytests/scripts/check_cargo_feature_hygiene_test.py",
-            "pytests/scripts/check_workspace_target_inventory_test.py",
-            BUILD_EFFICIENCY_PROVENANCE_TEST,
-            "scripts/tests/sdk_operation_inventory_test.py",
-            "scripts/tests/check_compile_unit_budget_test.py",
-            "scripts/tests/check_generated_artifacts_test.py",
-            "python3 scripts/check_cargo_feature_hygiene.py",
-            "python3 scripts/check_workspace_target_inventory.py",
             BUILD_EFFICIENCY_PROVENANCE_COMMAND,
-            "python3 scripts/check_dependency_budget.py --check-boundaries",
-            "python3 scripts/sdk_operation_inventory.py",
-            "python3 scripts/check_generated_artifacts.py",
             'FULL_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, '
             "'ci/full') }}",
             'scope_args=(--base "$BASE_SHA")',
@@ -830,11 +829,6 @@ def _validate_pr_parity(workflow: str) -> list[str]:
         provenance_followers = (
             "python3 scripts/rust_ci.py validate",
             "python3 -m pytest -q pytests/scripts/rust_ci_test.py",
-            "python3 scripts/check_cargo_feature_hygiene.py",
-            "python3 scripts/check_workspace_target_inventory.py",
-            "python3 scripts/check_compile_time_table_assets.py",
-            "python3 scripts/check_dependency_budget.py",
-            "python3 scripts/check_dependency_budget.py --check-boundaries",
         )
         if provenance_position >= 0 and any(
             normalized_classifier.find(command) < provenance_position
@@ -846,6 +840,32 @@ def _validate_pr_parity(workflow: str) -> list[str]:
                 "and Cargo-facing checks"
             )
 
+    source_job = _job_block(workflow, "rust_source_guards")
+    if not source_job:
+        errors.append("PR workflow is missing independent Rust source guards")
+    else:
+        normalized_source = _normalized(source_job)
+        source_requirements = (
+            "pytests/scripts/check_cargo_feature_hygiene_test.py",
+            "pytests/scripts/check_workspace_target_inventory_test.py",
+            BUILD_EFFICIENCY_PROVENANCE_TEST,
+            "scripts/tests/sdk_operation_inventory_test.py",
+            "scripts/tests/check_compile_unit_budget_test.py",
+            "scripts/tests/check_generated_artifacts_test.py",
+            "python3 scripts/check_cargo_feature_hygiene.py",
+            "python3 scripts/check_workspace_target_inventory.py",
+            "python3 scripts/check_compile_time_table_assets.py",
+            "python3 scripts/check_dependency_budget.py",
+            "python3 scripts/check_dependency_budget.py --check-boundaries",
+            "python3 scripts/sdk_operation_inventory.py",
+            "python3 scripts/check_generated_artifacts.py",
+        )
+        for requirement in source_requirements:
+            if requirement not in normalized_source:
+                errors.append(f"PR Rust source guards are missing required behavior: {requirement}")
+        if re.search(r"(?m)^    (?:needs|if):", source_job) or "continue-on-error:" in source_job:
+            errors.append("PR Rust source guards must run independently and fail closed")
+
     affected_job = _job_block(workflow, "rust_affected")
     if not affected_job:
         errors.append("PR workflow is missing affected Rust validation")
@@ -854,20 +874,23 @@ def _validate_pr_parity(workflow: str) -> list[str]:
         affected_requirements = (
             "matrix: ${{ fromJSON(needs.rust_changes.outputs.binary_free_matrix) }}",
             "if: needs.rust_changes.outputs.has_binary_free_rust == 'true'",
-            "needs: [rust_changes, ci_image]",
+            "needs: [rust_changes]",
             "uses: actions-rust-lang/setup-rust-toolchain@"
             f"{SETUP_RUST_TOOLCHAIN_COMMIT}",
             'cache: "false"',
             f"toolchain: {PINNED_RUST}",
             f"shared-key: rust-lane-{PINNED_RUST}-${{{{ matrix.lane }}}}",
-            "if: matrix.lane == 'execution'",
+            "name: Enforce data-model compile-unit budget if: contains(format(',{0},', matrix.packages), ',iroha_data_model,')",
             COMPILE_UNIT_GUARD_COMMAND,
-            "if: always() && matrix.lane == 'execution'",
+            "if: always() && contains(format(',{0},', matrix.packages), ',iroha_data_model,')",
             "name: compile-units-${{ matrix.lane }}",
             f"path: {COMPILE_UNIT_REPORT}",
             "if-no-files-found: error",
             'python3 scripts/rust_ci.py run --packages "${{ matrix.packages }}" '
-            "--checks clippy,build,test,doc",
+            '--checks "${{ matrix.checks || \'clippy,build,test,doc\' }}" '
+            '--native-shard "${{ matrix.native_shard }}"',
+            "name: rust-native-${{ matrix.lane }}",
+            "path: ${{ runner.temp }}/iroha-native-test-receipts/*.json",
         )
         for requirement in affected_requirements:
             if requirement not in normalized_affected:
@@ -879,28 +902,32 @@ def _validate_pr_parity(workflow: str) -> list[str]:
 
     for job_name, requirements in {
         "pre_build": (
-            "needs: [rust_changes, ci_image]",
+            "needs: [rust_changes]",
             "if: needs.rust_changes.outputs.has_binaries == 'true'",
             "REQUIRED_BINARIES: ${{ needs.rust_changes.outputs.binaries }}",
             'python3 scripts/rust_ci.py build-binaries \\ --binaries "$REQUIRED_BINARIES"',
         ),
         "rust_network": (
-            "needs: [rust_changes, pre_build, ci_image]",
+            "needs: [rust_changes, pre_build]",
             "if: needs.rust_changes.outputs.has_binary_rust == 'true'",
             "matrix: ${{ fromJSON(needs.rust_changes.outputs.binary_matrix) }}",
-            "TEST_NETWORK_BIN_IROHAD: bins/iroha3d",
-            "TEST_NETWORK_BIN_IROHA: bins/iroha",
-            "TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES: bins/iroha3d_private_settlement_routes",
-            "KAGAMI_BIN: ${{ github.workspace }}/bins/kagami",
+            "TEST_NETWORK_BIN_IROHAD: ${{ github.workspace }}/bins/iroha3d",
+            "TEST_NETWORK_BIN_IROHA: ${{ github.workspace }}/bins/iroha",
             "TEST_NETWORK_BIN_SORAFS_CLI: ${{ github.workspace }}/bins/sorafs_cli",
+            "TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES: ${{ github.workspace }}/bins/iroha3d_private_settlement_routes",
+            "KAGAMI_BIN: ${{ github.workspace }}/bins/kagami",
             'RUST_TEST_THREADS: "1"',
             'IROHA_TEST_REQUIRE_NETWORK: "1"',
-            'python3 scripts/rust_ci.py run --packages "${{ matrix.packages }}" --checks clippy,build,test,doc',
+            'IROHA_TEST_NETWORK_KEEP_DIRS: "1"',
+            'python3 scripts/rust_ci.py run --packages "${{ matrix.packages }}" '
+            '--checks "${{ matrix.checks || \'clippy,build,test,doc\' }}" '
+            '--test-target "${{ matrix.test_target }}"',
+            '--native-shard "${{ matrix.native_shard }}"',
         ),
         **{
             name: (
                 ("needs: [rust_changes, pre_build]" if name == "pytests"
-                 else "needs: [rust_changes, pre_build, ci_image]"),
+                 else "needs: [rust_changes, pre_build]"),
                 f"if: needs.rust_changes.outputs.run_{name} == 'true'",
             ) for name in ("consistency", "kotodama_docs", "pytests")
         },
@@ -914,9 +941,9 @@ def _validate_pr_parity(workflow: str) -> list[str]:
         job = _job_block(workflow, name)
         normalized_job = _normalized(job)
         for requirement in (
-            "needs: [rust_changes, ci_image]",
+            "needs: [rust_changes]",
             f"if: needs.rust_changes.outputs.run_{name} == 'true'",
-            f"run: bash ci/check_{name}.sh",
+            f"run: python3 -I -S ci/observe_build_capacity.py -- bash ci/check_{name}.sh",
             f"run_{name}: ${{{{ steps.classify.outputs.run_{name} }}}}",
         ):
             owner = _normalized(_job_block(workflow, "rust_changes")) if requirement.startswith("run_") else normalized_job
@@ -932,8 +959,12 @@ def _validate_pr_parity(workflow: str) -> list[str]:
         normalized_required = _normalized(required_job)
         for requirement in (
             "if: always()",
-            "needs: [rust_changes, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests, sora_parliament_lifecycle]",
+            "needs: [rust_changes, rust_source_guards, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests, sora_parliament_lifecycle]",
             'test "$CLASSIFIER_RESULT" = success',
+            "SOURCE_GUARDS_RESULT: ${{ needs.rust_source_guards.result }}",
+            "python3 scripts/rust_ci.py verify-native-shards",
+            "pattern: rust-native-*",
+            'test "$SOURCE_GUARDS_RESULT" = success',
             "true:success|false:skipped) return 0",
             *(
                 f'check_result "${name}_SELECTED" "${name}_RESULT"'
@@ -1461,6 +1492,45 @@ def test_pr_workflow_retains_locked_workspace_and_numeric_parity() -> None:
     assert _validate_pr_parity(workflow) == []
 
 
+@pytest.mark.parametrize("name", (
+    "TEST_NETWORK_BIN_IROHAD", "TEST_NETWORK_BIN_IROHA",
+    "TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES", "TEST_NETWORK_BIN_SORAFS_CLI",
+))
+def test_pr_network_binaries_cannot_be_package_relative(name: str) -> None:
+    """Cargo's package working directories must resolve the same selected binaries."""
+    workflow = PR_WORKFLOW.read_text(encoding="utf-8")
+    changed = _replace_once_in_job(
+        workflow, "rust_network", f"{name}: ${{{{ github.workspace }}}}/bins/",
+        f"{name}: bins/",
+    )
+    assert any(f"{name}:" in error for error in _validate_pr_parity(changed))
+
+
+@pytest.mark.parametrize("original,replacement", (
+    ('--test-target "${{ matrix.test_target }}"', ""),
+    ('--checks "${{ matrix.checks || \'clippy,build,test,doc\' }}"', '--checks test'),
+    ('--native-shard "${{ matrix.native_shard }}"', ""),
+    ('IROHA_TEST_NETWORK_KEEP_DIRS: "1"', ""),
+))
+def test_pr_network_shards_retain_selected_checks_and_target(
+    original: str, replacement: str,
+) -> None:
+    """A shard cannot drop its target or force every lane to run only tests."""
+    workflow = PR_WORKFLOW.read_text(encoding="utf-8")
+    changed = _replace_once_in_job(workflow, "rust_network", original, replacement)
+    assert any("PR rust_network" in error for error in _validate_pr_parity(changed))
+
+
+def test_pr_parliament_capacity_observer_retains_qualified_owner() -> None:
+    """The observational wrapper must still invoke the complete qualified corridor."""
+    workflow = PR_WORKFLOW.read_text(encoding="utf-8")
+    changed = _replace_once_in_job(
+        workflow, "sora_parliament_lifecycle", "-- bash ci/check_sora_parliament_lifecycle.sh",
+        "-- true",
+    )
+    assert any("qualified-owner routing" in error for error in _validate_pr_parity(changed))
+
+
 def test_compile_unit_baseline_pins_the_cross_platform_measurement_scope() -> None:
     """The checked-in ratchet describes exactly the graph enforced in CI."""
 
@@ -1640,29 +1710,29 @@ def test_release_workflow_guard_rejects_weakening(
         (
             lambda workflow: _replace_once_in_job(
                 workflow,
-                "rust_changes",
+                "rust_source_guards",
                 "python3 scripts/check_cargo_feature_hygiene.py",
                 "true # Cargo feature guard removed",
             ),
-            "PR Rust classifier is missing required behavior",
+            "PR Rust source guards are missing required behavior",
         ),
         (
             lambda workflow: _replace_once_in_job(
                 workflow,
-                "rust_changes",
+                "rust_source_guards",
                 "python3 scripts/check_workspace_target_inventory.py",
                 "true # Cargo target guard removed",
             ),
-            "PR Rust classifier is missing required behavior",
+            "PR Rust source guards are missing required behavior",
         ),
         (
             lambda workflow: _replace_once_in_job(
                 workflow,
-                "rust_changes",
+                "rust_source_guards",
                 BUILD_EFFICIENCY_PROVENANCE_TEST,
                 "scripts/tests/check_compile_unit_budget_test.py",
             ),
-            "PR Rust classifier is missing required behavior",
+            "PR Rust source guards are missing required behavior",
         ),
         (
             lambda workflow: _replace_once_in_job(
@@ -1688,7 +1758,7 @@ def test_release_workflow_guard_rejects_weakening(
             lambda workflow: _replace_once_in_job(
                 workflow,
                 "rust_affected",
-                "--checks clippy,build,test,doc",
+                '--checks "${{ matrix.checks || \'clippy,build,test,doc\' }}"',
                 "--checks build",
             ),
             "PR affected Rust job is missing required behavior",
@@ -1715,8 +1785,8 @@ def test_release_workflow_guard_rejects_weakening(
             lambda workflow: _replace_once_in_job(
                 workflow,
                 "rust_affected",
-                "if: matrix.lane == 'execution'",
-                "if: false",
+                "if: contains(format(',{0},', matrix.packages), ',iroha_data_model,')\n        run: >-",
+                "if: false\n        run: >-",
             ),
             "PR affected Rust job is missing required behavior",
         ),
@@ -1776,6 +1846,29 @@ def test_pr_workflow_guard_rejects_parity_weakening(
     assert any(
         expected_error in error for error in _validate_pr_parity(mutation(workflow))
     )
+
+
+@pytest.mark.parametrize("mutation", ("missing", "conditional", "dependency", "ignored", "result", "aggregate"))
+def test_pr_independent_source_guards_cannot_be_bypassed(mutation: str) -> None:
+    """The moved owner remains unconditional and part of the required result."""
+    workflow = PR_WORKFLOW.read_text(encoding="utf-8")
+    if mutation == "missing":
+        job = _job_block(workflow, "rust_source_guards")
+        workflow = workflow.replace(job, "", 1)
+    elif mutation in ("conditional", "dependency", "ignored"):
+        line = {
+            "conditional": "    if: false\n",
+            "dependency": "    needs: [rust_changes]\n",
+            "ignored": "    continue-on-error: true\n",
+        }[mutation]
+        workflow = _replace_once(workflow, "  rust_source_guards:\n", "  rust_source_guards:\n" + line)
+    elif mutation == "result":
+        workflow = _replace_once_in_job(workflow, "rust_required",
+                                       'test "$SOURCE_GUARDS_RESULT" = success', "true")
+    else:
+        workflow = _replace_once_in_job(workflow, "rust_required",
+                                       "rust_changes, rust_source_guards,", "rust_changes,")
+    assert _validate_pr_parity(workflow)
 
 
 @pytest.mark.parametrize("change", ("stale", "missing", "component", "late", "rewrite"))
@@ -1883,14 +1976,17 @@ def test_supported_feature_reader_command_cannot_be_removed(job: str) -> None:
 
 
 @pytest.mark.parametrize("job", ("test", "coverage"))
-def test_full_workspace_routes_cannot_omit_torii_integration_fixture_owner(job: str) -> None:
-    """Raw full-test and coverage commands must admit all required Torii targets."""
+@pytest.mark.parametrize("feature", (
+    "iroha_torii/test-fixtures",
+    "iroha_release_bundle/dev-tools",
+    "iroha_native_source_delivery/dev-tools",
+))
+def test_full_workspace_routes_cannot_omit_required_target_owners(job: str, feature: str) -> None:
+    """Full-test and coverage routes must retain every opt-in executable test owner."""
     workflow = RELEASE_WORKFLOW.read_text()
-    changed = _replace_once_in_job(
-        workflow, job, "--features iroha_torii/test-fixtures", "",
-    )
+    changed = _replace_once_in_job(workflow, job, feature, "")
     assert any(
         error.startswith(f"{job} is missing required command:")
-        and "iroha_torii/test-fixtures" in error
+        and feature in error
         for error in _validate_release_workflow(changed)
     )

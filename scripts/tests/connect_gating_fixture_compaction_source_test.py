@@ -319,6 +319,14 @@ def _validate(source: str) -> None:
     for anchor in CONFIG_ANCHORS:
         if config.count(anchor) != 1:
             raise GuardError(f"configuration override changed: {anchor}")
+    build = _function(source, "build_torii")
+    for anchor in ("fixtures::commit_signed_genesis(cfg, World::default(), Vec::new())",
+                   "native_chain.network_id()", "native_chain.kura().clone()",
+                   "native_chain.state().clone()"):
+        if build.count(anchor) != 1:
+            raise GuardError(f"signed genesis fixture changed: {anchor}")
+    if "NetworkId::from_genesis_hash(cfg.genesis.expected_hash)" not in _function(source, "connect_network_id"):
+        raise GuardError("Connect requests must bind the applied genesis network")
     diagnostics = _diagnostic_surface(source)
     if any(diagnostic not in diagnostics for diagnostic in REQUIRED_JSON_DIAGNOSTICS):
         raise GuardError("required JSON diagnostic changed")
@@ -397,6 +405,20 @@ class ConnectGatingFixtureCompactionSourceTest(unittest.TestCase):
 
     def test_seed_mutation_is_rejected(self) -> None:
         self.assert_mutation_rejected(self.source.replace("0xB4", "0xB5", 1))
+
+    def test_seed_without_applied_configuration_is_rejected(self) -> None:
+        self.assert_mutation_rejected(self.source.replace("&app2, &cfg, 0xB4", "&app2, 0xB4", 1))
+
+    def test_grouped_fixture_relocation_is_rejected(self) -> None:
+        group_source = OWNER_PATH.read_text(encoding="utf-8")
+        with self.assertRaisesRegex(GuardError, "grouped protocol test root no longer owns shared module"):
+            _validate_owner(group_source.replace("../../src/build_identity_test_fixture.rs", "other.rs"))
+
+    def test_signed_genesis_state_substitution_is_rejected(self) -> None:
+        self.assert_mutation_rejected(self.source.replace("native_chain.state().clone()", "unbound_state"))
+
+    def test_unbound_network_is_rejected(self) -> None:
+        self.assert_mutation_rejected(self.source.replace("NetworkId::from_genesis_hash(cfg.genesis.expected_hash)", "NetworkId::default()"))
 
     def test_assertion_axis_mutation_is_rejected(self) -> None:
         self.assert_mutation_rejected(self.source.replace("Some(false)", "Some(true)", 1))

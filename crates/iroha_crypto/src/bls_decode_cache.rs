@@ -3,12 +3,12 @@
 //! Every miss uses the existing complete parser, including canonical encoding,
 //! subgroup and identity checks. Entries contain public bytes, never secrets or
 //! authority/PoP verdicts. Exact bytes and orientation are compared without a
-//! digest. Fixed thread-local storage avoids additional decode allocations;
-//! successful and rejected validations allocate no diagnostic or point backing.
+//! digest. Fixed process-wide storage avoids additional decode allocations and
+//! static TLS reservations on small Linux thread stacks. A nonblocking cache cell
+//! falls back to the complete parser on contention or reentrancy; successful and
+//! rejected validations allocate no diagnostic or point backing.
 
-use std::cell::RefCell;
-
-use crate::{Algorithm, signature::bls};
+use crate::{Algorithm, decode_validation_cache::TryCell, signature::bls};
 
 const CAPACITY: usize = 128;
 const MAX_KEY_BYTES: usize = 96;
@@ -64,34 +64,33 @@ impl ValidationCache {
     }
 }
 
+static VALIDATED_KEYS: TryCell<ValidationCache> = TryCell::new(ValidationCache::new());
+
+#[cfg(test)]
 thread_local! {
-    static VALIDATED_KEYS: RefCell<ValidationCache> = const {
-        RefCell::new(ValidationCache::new())
-    };
-    #[cfg(test)]
     static UNCACHED_VALIDATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Reuse only a complete canonical validation of these exact public-key bytes.
 pub fn validate(algorithm: Algorithm, payload: &[u8]) -> Result<(), bls::canonical::Failure> {
-    let cached = VALIDATED_KEYS
-        .try_with(|cache| {
-            cache
-                .try_borrow()
-                .is_ok_and(|cache| cache.contains(algorithm, payload))
-        })
-        .unwrap_or(false);
-    if cached {
+    validate_with_cache(&VALIDATED_KEYS, algorithm, payload)
+}
+
+fn validate_with_cache(
+    cache: &TryCell<ValidationCache>,
+    algorithm: Algorithm,
+    payload: &[u8],
+) -> Result<(), bls::canonical::Failure> {
+    if cache
+        .try_with(|cache| cache.contains(algorithm, payload))
+        .unwrap_or(false)
+    {
         return Ok(());
     }
+    // Release the cache before parsing. Contention and reentrancy only remove
+    // the optimization; they never alter the complete canonical validation.
     validate_uncached(algorithm, payload)?;
-    // Reentrancy or TLS teardown only removes the optimization. Neither can
-    // skip validation or turn a successful parse into a decoding failure.
-    let _ = VALIDATED_KEYS.try_with(|cache| {
-        if let Ok(mut cache) = cache.try_borrow_mut() {
-            cache.remember_validated(algorithm, payload);
-        }
-    });
+    let _ = cache.try_with(|cache| cache.remember_validated(algorithm, payload));
     Ok(())
 }
 
@@ -110,9 +109,18 @@ mod tests {
     use super::*;
     use crate::{KeyPair, PublicKey};
 
-    fn reset() {
-        VALIDATED_KEYS.with(|cache| *cache.borrow_mut() = ValidationCache::new());
+    fn reset_count() {
         UNCACHED_VALIDATIONS.with(|count| count.set(0));
+    }
+
+    fn reset_public_cache() {
+        while VALIDATED_KEYS
+            .try_with(|cache| *cache = ValidationCache::new())
+            .is_none()
+        {
+            std::thread::yield_now();
+        }
+        reset_count();
     }
 
     fn key(algorithm: Algorithm) -> PublicKey {
@@ -160,9 +168,10 @@ mod tests {
         for algorithm in [Algorithm::BlsNormal, Algorithm::BlsSmall] {
             let key = key(algorithm);
             let (_, bytes) = key.to_bytes();
-            reset();
-            validate(algorithm, bytes).expect("complete cold validation");
-            validate(algorithm, bytes).expect("exact warm validation");
+            let cache = TryCell::new(ValidationCache::new());
+            reset_count();
+            validate_with_cache(&cache, algorithm, bytes).expect("complete cold validation");
+            validate_with_cache(&cache, algorithm, bytes).expect("exact warm validation");
             assert_eq!(UNCACHED_VALIDATIONS.with(std::cell::Cell::get), 1);
         }
     }
@@ -172,8 +181,9 @@ mod tests {
         for algorithm in [Algorithm::BlsNormal, Algorithm::BlsSmall] {
             let key = key(algorithm);
             let (_, bytes) = key.to_bytes();
-            reset();
-            validate(algorithm, bytes).expect("warm valid key");
+            let cache = TryCell::new(ValidationCache::new());
+            reset_count();
+            validate_with_cache(&cache, algorithm, bytes).expect("warm valid key");
             let mut trailing = bytes.to_vec();
             trailing.push(0);
             for invalid in [
@@ -183,29 +193,135 @@ mod tests {
                 trailing,
             ] {
                 let before = UNCACHED_VALIDATIONS.with(std::cell::Cell::get);
-                assert!(validate(algorithm, &invalid).is_err());
-                assert!(validate(algorithm, &invalid).is_err());
+                assert!(validate_with_cache(&cache, algorithm, &invalid).is_err());
+                assert!(validate_with_cache(&cache, algorithm, &invalid).is_err());
                 assert_eq!(UNCACHED_VALIDATIONS.with(std::cell::Cell::get), before + 2);
             }
-            assert!(validate(Algorithm::Ed25519, bytes).is_err());
-            validate(algorithm, bytes).expect("valid entry survives rejected inputs");
+            assert!(validate_with_cache(&cache, Algorithm::Ed25519, bytes).is_err());
+            validate_with_cache(&cache, algorithm, bytes)
+                .expect("valid entry survives rejected inputs");
         }
     }
 
     #[test]
-    fn borrowed_cache_falls_back_to_complete_validation() {
+    fn occupied_cache_falls_back_to_complete_validation() {
         let key = key(Algorithm::BlsNormal);
         let (_, bytes) = key.to_bytes();
-        reset();
-        VALIDATED_KEYS.with(|cache| {
-            let _borrow = cache.borrow_mut();
-            validate(Algorithm::BlsNormal, bytes).expect("uncached fallback");
-            assert!(validate(Algorithm::BlsNormal, &[]).is_err());
-        });
+        let cache = TryCell::new(ValidationCache::new());
+        reset_count();
+        cache
+            .try_with(|_| {
+                validate_with_cache(&cache, Algorithm::BlsNormal, bytes)
+                    .expect("uncached fallback");
+                assert!(validate_with_cache(&cache, Algorithm::BlsNormal, &[]).is_err());
+            })
+            .expect("hold local cache");
         assert_eq!(UNCACHED_VALIDATIONS.with(std::cell::Cell::get), 2);
-        VALIDATED_KEYS.with(|cache| assert!(!cache.borrow().contains(Algorithm::BlsNormal, bytes)));
-        validate(Algorithm::BlsNormal, bytes).expect("cache after reentrant fallback");
+        assert_eq!(
+            cache.try_with(|cache| cache.contains(Algorithm::BlsNormal, bytes)),
+            Some(false)
+        );
+        validate_with_cache(&cache, Algorithm::BlsNormal, bytes)
+            .expect("cache after reentrant fallback");
         assert_eq!(UNCACHED_VALIDATIONS.with(std::cell::Cell::get), 3);
+    }
+
+    #[test]
+    fn cold_warm_and_contended_validation_allocate_no_native_backing() {
+        for algorithm in [Algorithm::BlsNormal, Algorithm::BlsSmall] {
+            let key = key(algorithm);
+            let (_, bytes) = key.to_bytes();
+            let cache = TryCell::new(ValidationCache::new());
+            reset_count();
+            for _ in 0..2 {
+                let result = crate::test_allocations::without_allocations(|| {
+                    validate_with_cache(&cache, algorithm, bytes)
+                });
+                result.expect("canonical public key");
+            }
+            assert_eq!(UNCACHED_VALIDATIONS.with(std::cell::Cell::get), 1);
+            cache
+                .try_with(|_| {
+                    crate::test_allocations::without_allocations(|| {
+                        validate_with_cache(&cache, algorithm, bytes)
+                    })
+                    .expect("contended canonical validation");
+                    assert!(
+                        crate::test_allocations::without_allocations(|| {
+                            validate_with_cache(&cache, algorithm, &[])
+                        })
+                        .is_err()
+                    );
+                })
+                .expect("hold local cache");
+            assert_eq!(UNCACHED_VALIDATIONS.with(std::cell::Cell::get), 3);
+        }
+    }
+
+    #[test]
+    fn unwinding_releases_cache_without_accepting_invalid_keys() {
+        let cache = TryCell::new(ValidationCache::new());
+        let key = key(Algorithm::BlsNormal);
+        let (_, bytes) = key.to_bytes();
+        validate_with_cache(&cache, Algorithm::BlsNormal, bytes).expect("warm validated key");
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cache.try_with(|_| panic!("cache ownership unwind control"));
+        }));
+        assert!(unwind.is_err());
+        reset_count();
+        validate_with_cache(&cache, Algorithm::BlsNormal, bytes)
+            .expect("unwind released ownership");
+        assert_eq!(UNCACHED_VALIDATIONS.with(std::cell::Cell::get), 0);
+        assert!(validate_with_cache(&cache, Algorithm::BlsNormal, &[]).is_err());
+        assert_eq!(UNCACHED_VALIDATIONS.with(std::cell::Cell::get), 1);
+    }
+
+    #[test]
+    fn shared_cache_validates_and_reuses_both_orientations_on_a_small_stack() {
+        for algorithm in [Algorithm::BlsNormal, Algorithm::BlsSmall] {
+            let key = key(algorithm);
+            let (_, bytes) = key.to_bytes();
+            let cache = TryCell::new(ValidationCache::new());
+            std::thread::scope(|scope| {
+                std::thread::Builder::new()
+                    .name("bls-cache-small-stack".to_owned())
+                    .stack_size(128 * 1024)
+                    .spawn_scoped(scope, || {
+                        reset_count();
+                        validate_with_cache(&cache, algorithm, bytes)
+                            .expect("cold canonical validation");
+                        validate_with_cache(&cache, algorithm, bytes)
+                            .expect("exact shared cache hit");
+                        assert_eq!(UNCACHED_VALIDATIONS.with(std::cell::Cell::get), 1);
+                        assert!(validate_with_cache(&cache, algorithm, &[]).is_err());
+                        assert_eq!(UNCACHED_VALIDATIONS.with(std::cell::Cell::get), 2);
+                        validate(algorithm, bytes)
+                            .expect("actual public validation fits the same bounded stack");
+                    })
+                    .expect("spawn bounded BLS decoder thread")
+                    .join()
+                    .expect("bounded BLS decoder thread");
+            });
+            reset_count();
+            validate_with_cache(&cache, algorithm, bytes).expect("parent reuses child validation");
+            assert_eq!(UNCACHED_VALIDATIONS.with(std::cell::Cell::get), 0);
+            cache
+                .try_with(|_| {
+                    std::thread::scope(|scope| {
+                        scope
+                            .spawn(|| {
+                                reset_count();
+                                validate_with_cache(&cache, algorithm, bytes)
+                                    .expect("contended cross-thread fallback");
+                                assert!(validate_with_cache(&cache, algorithm, &[]).is_err());
+                                assert_eq!(UNCACHED_VALIDATIONS.with(std::cell::Cell::get), 2);
+                            })
+                            .join()
+                            .expect("contended decoder thread");
+                    });
+                })
+                .expect("hold parent cache ownership");
+        }
     }
 
     #[test]
@@ -218,7 +334,7 @@ mod tests {
             let (_, bytes) = key.to_bytes();
             let exact = bytes.len() + 1;
             for warm in [false, true] {
-                reset();
+                reset_public_cache();
                 if warm {
                     validate(algorithm, bytes).expect("warm validation cache");
                 }
@@ -231,7 +347,7 @@ mod tests {
                     key
                 );
                 assert_eq!(usage.total_allocated_bytes(), exact);
-                reset();
+                reset_public_cache();
                 if warm {
                     validate(algorithm, bytes).expect("warm validation cache");
                 }
@@ -244,13 +360,13 @@ mod tests {
             }
             let wire = norito::to_bytes(&key).expect("canonical wire");
             let json = norito::json::to_json(&key).expect("canonical JSON");
-            reset();
+            reset_public_cache();
             for _ in 0..2 {
                 let decoded: PublicKey = norito::decode_from_bytes(&wire).expect("wire decode");
                 assert_eq!(decoded, key);
                 assert_eq!(norito::to_bytes(&decoded).expect("same wire"), wire);
             }
-            reset();
+            reset_public_cache();
             for _ in 0..2 {
                 assert_eq!(
                     norito::json::from_str::<PublicKey>(&json).expect("JSON decode"),

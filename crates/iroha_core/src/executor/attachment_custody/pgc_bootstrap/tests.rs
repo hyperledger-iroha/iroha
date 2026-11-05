@@ -155,7 +155,7 @@ impl Fixture {
         }
     }
     fn prove(&self, statement_digest: [u8; 32], index: u32) -> Vec<u8> {
-        let namespace = norito::encode_canonical(&self.bootstrap.namespace).unwrap();
+        let namespace = self.bootstrap.namespace.canonical_wire_bytes_v1().unwrap();
         let parameters = AnonymousPgcParametersV1::get().unwrap();
         let native = AnonymousPgcBootstrapStatementV1::new(
             &namespace,

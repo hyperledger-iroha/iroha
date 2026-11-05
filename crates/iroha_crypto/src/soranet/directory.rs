@@ -37,7 +37,7 @@ const GUARD_DIRECTORY_DECODE_MAX_NESTING_DEPTH_V1: usize = 16;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 const GUARD_DIRECTORY_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
 #[cfg(any(target_os = "linux", target_os = "android"))]
-const GUARD_DIRECTORY_O_NOFOLLOW_FLAG: i32 = rustix::fs::OFlags::NOFOLLOW.bits() as i32;
+const GUARD_DIRECTORY_O_NOFOLLOW_FLAG: i32 = rustix::fs::OFlags::NOFOLLOW.bits().cast_signed();
 #[cfg(any(
     target_os = "freebsd",
     target_os = "netbsd",

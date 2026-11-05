@@ -307,6 +307,22 @@ async fn network_stable_after_peer_registry_and_trust_removal() -> Result<()> {
     .await?;
     wait_for_peer_registry(network.all_peers(), &voters, sync_timeout).await?;
     assert_peers_status(network.all_peers(), expected_height, 4, sync_timeout).await?;
+    // The removed candidate must still synchronize real committed work while its
+    // immutable networking trust remains authorized. Registry and P2P trust are
+    // independent; the explicit trust revocation below is a separate transition.
+    submit_or_skip(
+        client.clone(),
+        Log::new(
+            Level::INFO,
+            "candidate_removed_observer_still_synchronizes".to_owned(),
+        ),
+        tx_timeout,
+        "candidate removal retains authorized observer synchronization",
+    )
+    .await?;
+    expected_height = expected_height.saturating_add(1);
+    assert_peers_status(network.all_peers(), expected_height, 4, sync_timeout).await?;
+    wait_for_peer_registry(network.all_peers(), &voters, sync_timeout).await?;
     // Registry removal does not revoke configured P2P trust. Restart only the
     // four voters with an explicit validator-only trust layer, retaining their
     // Kura history and the exact signed genesis. The excluded observer stays

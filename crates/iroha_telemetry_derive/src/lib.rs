@@ -2,7 +2,7 @@
 //! metrics. See [`macro@metrics`] for more details.
 mod emitter_ext;
 use emitter_ext::EmitterExt;
-use manyhow::{Emitter, Result, emit, manyhow};
+use manyhow::{Emitter, Result, emit};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use syn::{FnArg, LitStr, Path, Type, parse::Parse, punctuated::Punctuated, token::Comma};
@@ -177,12 +177,15 @@ impl ToTokens for MetricSpec {
 ///     Ok(())
 /// }
 /// ```
-#[manyhow]
 #[proc_macro_attribute]
-pub fn metrics(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn metrics(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    let attr: TokenStream = attr.into();
     let mut emitter = Emitter::new();
-    let Some(func): Option<syn::ItemFn> = emitter.handle(syn::parse2(item)) else {
-        return emitter.finish_token_stream();
+    let Some(func): Option<syn::ItemFn> = emitter.handle(syn::parse2(item.into())) else {
+        return emitter.finish_token_stream().into();
     };
     // This is a good sanity check. Possibly redundant.
     if func.sig.ident != "execute" {
@@ -198,13 +201,13 @@ pub fn metrics(attr: TokenStream, item: TokenStream) -> TokenStream {
             func.sig,
             "Function must have at least one argument of type `StateTransaction` or `StateReadOnly`."
         );
-        return emitter.finish_token_stream();
+        return emitter.finish_token_stream().into();
     }
     let Some(metric_specs): Option<MetricSpecs> = emitter.handle(syn::parse2(attr)) else {
-        return emitter.finish_token_stream();
+        return emitter.finish_token_stream().into();
     };
     let result = impl_metrics(&mut emitter, &metric_specs, &func);
-    emitter.finish_token_stream_with(result)
+    emitter.finish_token_stream_with(result).into()
 }
 fn impl_metrics(emitter: &mut Emitter, specs: &MetricSpecs, func: &syn::ItemFn) -> TokenStream {
     let sig = &func.sig;

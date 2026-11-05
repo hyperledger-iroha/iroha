@@ -214,6 +214,66 @@ mod tests {
     }
 
     #[test]
+    fn fast_pause_retries_only_its_exact_busy_envelope_within_the_original_deadline() {
+        const FAST_PAUSE: &str = "sccp.fast_pause";
+        let fast_pause_refusal = |code, message| {
+            let mut error = refusal(503, code, message, 1);
+            if let iroha::Error::Http { operation, .. } = &mut error {
+                *operation = FAST_PAUSE;
+            }
+            error
+        };
+        let start = Instant::now();
+        let clock = Cell::new(start);
+        let calls = Cell::new(0);
+        let deadline = start + Duration::from_secs(2);
+        let value = read_before(
+            FAST_PAUSE,
+            deadline,
+            || {
+                calls.set(calls.get() + 1);
+                if calls.get() == 1 {
+                    Err(fast_pause_refusal(BUSY_CODE, BUSY_MESSAGE))
+                } else {
+                    Ok(7)
+                }
+            },
+            || clock.get(),
+            |delay| clock.set(clock.get() + delay),
+        )
+        .unwrap();
+        assert_eq!((value, calls.get()), (7, 2));
+        assert_eq!(clock.get(), start + Duration::from_secs(1));
+        for refusal in [
+            fast_pause_refusal("sccp_capacity", BUSY_MESSAGE),
+            fast_pause_refusal("sccp_unavailable", BUSY_MESSAGE),
+            fast_pause_refusal(BUSY_CODE, "original State reader is poisoned"),
+            busy(), // Another operation's busy response cannot authorize this retry.
+        ] {
+            clock.set(start);
+            calls.set(0);
+            let mut refusal = Some(refusal);
+            let error = read_before::<()>(
+                FAST_PAUSE,
+                deadline,
+                || {
+                    calls.set(calls.get() + 1);
+                    Err(refusal.take().expect("permanent refusal must not retry"))
+                },
+                || clock.get(),
+                |_| panic!("non-busy fast-pause refusal cannot wait"),
+            )
+            .unwrap_err();
+            assert_eq!(calls.get(), 1);
+            assert_eq!(clock.get(), start);
+            assert!(matches!(
+                error.downcast_ref::<iroha::Error>(),
+                Some(iroha::Error::Http { status: 503, .. })
+            ));
+        }
+    }
+
+    #[test]
     fn exhausted_and_late_reads_cannot_gain_another_attempt_or_success() {
         let start = Instant::now();
         let clock = Cell::new(start);

@@ -11,22 +11,20 @@ pub(super) fn mount(builder: &mut RouterBuilder, app: SharedAppState, max_body_b
     builder.route(
         &routes::ROLES_GET,
         catalog_get(roles_get)
-            .authenticated_in_handler(HandlerAuthentication::OptionalCanonicalAccountSignature),
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
     );
     builder.route(
         &routes::ROLES_QUERY_POST,
-        catalog_post(roles_query)
-            .optionally_authenticated_canonical_account_body(app.clone(), max_body_bytes),
+        catalog_post(roles_query).authenticated_canonical_account_body(app.clone(), max_body_bytes),
     );
     builder.route(
         &routes::ACCOUNTS_BY_ACCOUNT_ID_ROLES_GET,
         catalog_get(account_roles_get)
-            .authenticated_in_handler(HandlerAuthentication::OptionalCanonicalAccountSignature),
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
     );
     builder.route(
         &routes::ACCOUNTS_BY_ACCOUNT_ID_ROLES_QUERY_POST,
-        catalog_post(account_roles_query)
-            .optionally_authenticated_canonical_account_body(app, max_body_bytes),
+        catalog_post(account_roles_query).authenticated_canonical_account_body(app, max_body_bytes),
     );
 }
 
@@ -86,11 +84,12 @@ async fn roles_get(
 }
 async fn roles_query(
     State(app): State<SharedAppState>,
-    Extension(caller): Extension<ToriiAccountReadVisibility>,
+    Extension(verified): Extension<app_auth::VerifiedCanonicalRequest>,
     headers: HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<SocketAddr>,
     crate::JsonOnly(body): crate::JsonOnly<norito::json::Value>,
 ) -> Result<Response, Error> {
+    let caller = ToriiAccountReadVisibility::Signed(verified.account);
     rate_limit(&app, &headers, remote, ROLES).await?;
     read_roles(&app, &caller, list_query_from_json(body)?).await
 }
@@ -131,12 +130,13 @@ async fn account_roles_get(
 }
 async fn account_roles_query(
     State(app): State<SharedAppState>,
-    Extension(caller): Extension<ToriiAccountReadVisibility>,
+    Extension(verified): Extension<app_auth::VerifiedCanonicalRequest>,
     headers: HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<SocketAddr>,
     AxPath(account): AxPath<String>,
     crate::JsonOnly(body): crate::JsonOnly<norito::json::Value>,
 ) -> Result<Response, Error> {
+    let caller = ToriiAccountReadVisibility::Signed(verified.account);
     rate_limit(&app, &headers, remote, ACCOUNT_ROLES).await?;
     read_account_roles(&app, &caller, account, list_query_from_json(body)?).await
 }

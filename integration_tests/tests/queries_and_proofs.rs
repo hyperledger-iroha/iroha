@@ -1,4 +1,5 @@
 //! Grouped integration harness for Torii queries and proof flows.
+mod contract_fixture;
 #[path = "proof_fixtures.rs"]
 mod proof_fixtures;
 

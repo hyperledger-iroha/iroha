@@ -601,8 +601,7 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
     test_client: &Client,
 ) -> Result<()> {
     let test_client = test_client.clone();
-    // Recurring schedules may not run more often than the signed block cadence.
-    let trigger_period = network.block_cadence();
+    let trigger_period = std::cmp::max(Duration::from_secs(1), network.block_cadence());
     let expected_count: u64 = 3;
     run_or_skip(stringify!(mint_nft_for_every_user_every_1_sec), || async {
         let alice_id = ALICE_ID.clone();

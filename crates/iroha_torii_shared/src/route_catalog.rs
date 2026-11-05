@@ -3935,6 +3935,13 @@ pub mod application_api {
             .with_admission(AdmissionPolicy::DataspaceVisible)
             .with_authentication(AuthenticationPolicy::OptionalCanonicalAccountSignature)
     }
+    const fn signed_dataspace_get(id: &'static str, path: &'static str) -> RouteDescriptor {
+        dataspace_get(id, path).with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    }
+    const fn signed_dataspace_post(id: &'static str, path: &'static str) -> RouteDescriptor {
+        dataspace_post(id, path)
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    }
     const fn dataspace_sdk_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         dataspace_get(id, path).with_projections(RouteProjections::SDK)
     }
@@ -4111,10 +4118,10 @@ pub mod application_api {
         CONTRACTS_ROLLUPS_TRADER_ACCOUNT_GET => dataspace_get("application.contracts_rollups_trader_account_get", "/v1/contracts/rollups/trader/account");
         ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET => dataspace_get("application.accounts_by_account_id_assets_get", "/v1/accounts/{account_id}/assets");
         ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST => dataspace_post("application.accounts_by_account_id_assets_query_post", "/v1/accounts/{account_id}/assets/query");
-        ROLES_GET => dataspace_get("application.roles_get", "/v1/roles");
-        ROLES_QUERY_POST => dataspace_post("application.roles_query_post", "/v1/roles/query");
-        ACCOUNTS_BY_ACCOUNT_ID_ROLES_GET => dataspace_get("application.accounts_by_account_id_roles_get", "/v1/accounts/{account_id}/roles");
-        ACCOUNTS_BY_ACCOUNT_ID_ROLES_QUERY_POST => dataspace_post("application.accounts_by_account_id_roles_query_post", "/v1/accounts/{account_id}/roles/query");
+        ROLES_GET => signed_dataspace_get("application.roles_get", "/v1/roles");
+        ROLES_QUERY_POST => signed_dataspace_post("application.roles_query_post", "/v1/roles/query");
+        ACCOUNTS_BY_ACCOUNT_ID_ROLES_GET => signed_dataspace_get("application.accounts_by_account_id_roles_get", "/v1/accounts/{account_id}/roles");
+        ACCOUNTS_BY_ACCOUNT_ID_ROLES_QUERY_POST => signed_dataspace_post("application.accounts_by_account_id_roles_query_post", "/v1/accounts/{account_id}/roles/query");
         ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET => dataspace_get("application.accounts_by_account_id_permissions_get", "/v1/accounts/{account_id}/permissions");
         ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_QUERY_POST => dataspace_post("application.accounts_by_account_id_permissions_query_post", "/v1/accounts/{account_id}/permissions/query");
         ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_GET => dataspace_get("application.accounts_by_account_id_transactions_get", "/v1/accounts/{account_id}/transactions");

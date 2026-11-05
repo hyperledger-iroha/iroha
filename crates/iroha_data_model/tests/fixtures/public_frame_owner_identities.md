@@ -225,16 +225,20 @@ The event stage adds 196 explicit owner declarations: 192 checked against the
 retained compiler capture and four captured before their declarations. Sixteen
 owner-scoped library suites check the former group. The four fresh owners are
 DataEventFilter, GameSessionEventV1, EventMessage and EventSubscriptionRequest.
-Their immutable fixture contains 103 frames, with actual nominal names and both
+Their canonical fixture contains 103 frames, with actual nominal names and both
 codec-direction hashes, and uses the existing shared contract checker.
 
 | Fixture | Coverage | SHA-256 |
 | --- | --- | --- |
-| `fresh_event_identity_frames.json` | 55 data filters, five governance filters, 11 game sessions, nine event messages and 23 subscriptions | `c32171f5c8e0cf816f51912e75ff6de296c23b29d1f0b183c2c23b142719164b` |
+| `fresh_event_identity_frames.json` | 55 data filters, five governance filters, 11 game sessions, nine event messages and 23 subscriptions | `f19f7e777cd68d9de03772331b8263e55f93e79ddcd0ec6de3e840cb55bc00c6` |
 
 The default Configuration and Bridge filter masks each carry their single
 event bit in their root/Some frames and in the combined Vec. The ignored
 `capture_current_fresh_event_identity_frames` test reproduces this capture.
+The runtime-upgrade filter now includes all nine baseline `06912ee4f8` events
+(mask `0x01ff`). Only `data_filter/root_14`, `data_filter/option_14` and the
+corresponding element of `data_filter/vec_all` changed; all 100 other rows,
+schema identities and declared layouts remain byte-for-byte identical.
 
 EventMessage's slice decoder previously skipped its own field envelope and
 rejected its encoder's output. EventBox, EventFilterBox and subscriptions reset

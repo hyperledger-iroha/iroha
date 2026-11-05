@@ -123,13 +123,22 @@ mod tests {
             First => "one",
             /// Preserve an explicitly uppercase spelling.
             Second => "TWO",
+            /// A variant may share the `FromStr` error associated type's name.
+            Err => "err",
+            /// A variant may share the `TryFrom` error associated type's name.
+            Error => "error",
         }
     }
 
     #[test]
     fn exact_spelling_drives_parsing_display_and_default() {
         assert_eq!(Mode::default(), Mode::First);
-        for (mode, spelling) in [(Mode::First, "one"), (Mode::Second, "TWO")] {
+        for (mode, spelling) in [
+            (Mode::First, "one"),
+            (Mode::Second, "TWO"),
+            (Mode::Err, "err"),
+            (Mode::Error, "error"),
+        ] {
             assert_eq!(mode.as_str(), spelling);
             assert_eq!(spelling.parse::<Mode>().unwrap(), mode);
             assert_eq!(Mode::try_from(spelling).unwrap(), mode);

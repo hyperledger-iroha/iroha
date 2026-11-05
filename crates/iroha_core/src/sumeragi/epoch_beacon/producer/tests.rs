@@ -770,6 +770,10 @@ fn native_invalid_local_share_is_never_retained_or_counted() {
     );
 }
 
+#[cfg(feature = "test-network-parliament-signers")]
+#[path = "parliament_fixture_tests.rs"]
+mod parliament_fixture_tests;
+
 #[test]
 fn native_transient_signer_refusal_retains_remote_progress_and_exact_retry_payload() {
     let mut fixture = fixture();

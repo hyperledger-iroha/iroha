@@ -148,6 +148,17 @@ IVM_FUZZ_DIR="$ROOT_DIR/crates/ivm/fuzz"
 if [ ! -d "$IVM_FUZZ_DIR" ]; then
   skip_or_fail "IVM fuzz directory not found at $IVM_FUZZ_DIR"
 fi
+IVM_FUZZ_LOCK="$IVM_FUZZ_DIR/Cargo.lock"
+if [[ ! -f "$IVM_FUZZ_LOCK" || -L "$IVM_FUZZ_LOCK" ]]; then
+  skip_or_fail "IVM fuzz requires its committed regular Cargo.lock"
+fi
+# cargo-fuzz does not forward --locked. Check the isolated graph before building,
+# then refuse any lock change made by a target invocation before accepting it.
+cargo "+$PINNED_NIGHTLY" metadata --locked --format-version 1 \
+  --manifest-path "$IVM_FUZZ_DIR/Cargo.toml" >/dev/null
+ivm_lock_snapshot="$(mktemp "${TMPDIR:-/tmp}/iroha-ivm-fuzz-lock.XXXXXX")"
+trap 'rm -f "$ivm_lock_snapshot"' EXIT
+cp "$IVM_FUZZ_LOCK" "$ivm_lock_snapshot"
 pushd "$IVM_FUZZ_DIR" >/dev/null
 if ((NUMERIC_V1_ONLY)); then
   ivm_targets=(numeric_v1)
@@ -165,6 +176,10 @@ for t in "${ivm_targets[@]}"; do
     echo "[fuzz-smoke] ivm target $t failed" >&2
     exit 1
   }
+  if ! cmp -s "$ivm_lock_snapshot" "$IVM_FUZZ_LOCK"; then
+    echo "[fuzz-smoke] IVM fuzz Cargo.lock changed during $t" >&2
+    exit 1
+  fi
 done
 popd >/dev/null
 

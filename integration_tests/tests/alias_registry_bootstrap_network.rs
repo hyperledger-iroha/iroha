@@ -1,11 +1,16 @@
 //! Genuine four-validator `NPoS` alias bootstrap and retained-Kura replay.
 //!
+//! Default development coverage and explicit `bpng-release-qualification` use
+//! the same scenario. Only the latter enforces sealed release admission; see
+//! `specs/bpng_native_bootstrap_test_contract.md`.
+//!
 //! This isolated network uses the native SNS policy, signed planner and paid
 //! leases. Ordinary transaction fees are zero from genesis to isolate lease
 //! accounting; this is not production-fee qualification. Paid alias routing
 //! uses the universal registry from genesis, before any private catalog entry.
 //! No unchecked blocks, fabricated certificates, injected WSV or storage reset
 //! may substitute for the original persisted history and Strict daemon replay.
+#[cfg(feature = "bpng-release-qualification")]
 use iroha_fs::{ProcessCommand as Command, ProcessStdio as Stdio};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -22,7 +27,7 @@ use std::{
 };
 
 use eyre::{Result, WrapErr as _, bail, ensure, eyre};
-use futures_util::future::try_join_all;
+use futures_util::{StreamExt as _, future::try_join_all};
 
 use integration_tests::sandbox;
 use iroha::{blocking::Client, sns::SnsNamespacePath};
@@ -81,15 +86,17 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, SignedTransaction, TransactionEntrypoint},
 };
-use iroha_executor_data_model::permission::peer::CanManagePeers;
+use iroha_executor_data_model::permission::{peer::CanManagePeers, query::CanReadAllLedgerData};
 use iroha_genesis::{GenesisBlock, GenesisTopologyEntry};
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::json::Json;
 use iroha_sumeragi::types::{Hash32, HeightConfig};
+#[cfg(feature = "bpng-release-qualification")]
+use iroha_test_network::{BinaryKind, resolve_release_prebuilt_binary};
 use iroha_test_network::{
-    BinaryKind, NetworkBuilder, NetworkPeer, genesis_participant_committee_key_instructions,
-    init_instruction_registry, resolve_release_prebuilt_binary,
+    NetworkBuilder, NetworkPeer, genesis_participant_committee_key_instructions,
+    init_instruction_registry, resolve_development_binary,
     unexecuted_genesis_factory_with_post_topology,
 };
 use iroha_test_samples::{BOB_ID, BOB_KEYPAIR};
@@ -101,6 +108,11 @@ const BPNG_ID: u64 = 8_648_377_547_929_788_715;
 // cited as evidence that lane 8 is operator-allocated on public Taira.
 const BPNG_FIXTURE_LANE: LaneId = LaneId::new(8);
 const VALIDATOR_COUNT: usize = 4;
+// This lifecycle buys exactly three native SNS leases. Fund their signed caps in
+// the original genesis; validator bonds remain separately owned and unchanged.
+const PAID_LEASE_COUNT: u32 = 3;
+const LEASE_PAYMENT_CAP: u32 = 100;
+const LEASE_PAYER_FUNDING: u32 = PAID_LEASE_COUNT * LEASE_PAYMENT_CAP;
 const BPNG_MIN_QUORUM: u32 = 3;
 const FIXTURE_EPOCH_LENGTH_BLOCKS: u64 = 8;
 const NETWORK_SEED: &str =
@@ -116,6 +128,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const TRANSACTION_TTL: Duration = Duration::from_secs(600);
 const MAX_RETAINED_HEIGHT: u64 = 128;
 const MAX_EVIDENCE_BYTES: u64 = 128 * 1024 * 1024;
+#[cfg(feature = "bpng-release-qualification")]
 const MAX_RELEASE_IDENTITY_BYTES: u64 = 32 * 1024;
 const MAX_RELEASE_TOOL_OUTPUT_BYTES: usize = 64 * 1024;
 
@@ -128,15 +141,9 @@ fn validator_keypair(index: usize) -> KeyPair {
 }
 
 fn staking_custody_account() -> AccountId {
-    AccountId::new(
-        KeyPair::try_from_seed(
-            format!("{NETWORK_SEED}-staking-custody").into_bytes(),
-            Algorithm::Ed25519,
-        )
-        .expect("derive fixture custody identity")
-        .public_key()
-        .clone(),
-    )
+    // The custom genesis factory signs this original staking policy and registers
+    // its custody account before the fixture's post-topology transactions.
+    defaults::nexus::fees::genesis_policy().fee_sink_account_id
 }
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
@@ -199,7 +206,6 @@ fn custom_genesis_post_topology(
                 .expect("canonical original fee policy"),
         ))
         .into(),
-        Register::account(Account::new(staking_custody_account())).into(),
         Register::domain(Domain::new(
             DomainId::try_new("universal", "universal").expect("XOR domain"),
         ))
@@ -213,6 +219,13 @@ fn custom_genesis_post_topology(
         ))
         .into(),
     ];
+    bootstrap.push(
+        Mint::asset_quantity(
+            LEASE_PAYER_FUNDING,
+            AssetId::new(stake_asset_id.clone(), BOB_ID.clone()),
+        )
+        .into(),
+    );
     let mut default_lane_validators: Vec<InstructionBox> = Vec::with_capacity(VALIDATOR_COUNT * 2);
     bootstrap.extend(genesis_participant_committee_key_instructions(
         topology_entries,
@@ -290,6 +303,224 @@ async fn read<T: Send + 'static>(
     .wrap_err("fixture read task failed")
 }
 
+fn same_applied_checkpoint(
+    network_id: NetworkId,
+    before: (NetworkId, u64),
+    after: (NetworkId, u64),
+) -> Result<()> {
+    ensure!(
+        before.0 == network_id && (1..=MAX_RETAINED_HEIGHT).contains(&before.1),
+        "BPNG read checkpoint differs from the original bounded network"
+    );
+    ensure!(
+        before == after,
+        "BPNG applied checkpoint changed during observation"
+    );
+    Ok(())
+}
+
+async fn applied_checkpoint(client: &Client) -> Result<(NetworkId, u64)> {
+    let client = client.clone();
+    read(move || {
+        let manifest = client.client().get_privacy_capabilities()?;
+        Ok((manifest.network_id, manifest.committed_height))
+    })
+    .await
+}
+
+async fn at_applied_checkpoint<T, F, Fut>(client: &Client, operation: F) -> Result<T>
+where
+    F: FnOnce(Client, u64) -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    // The scenario requires the original Global root, whose applied height owns
+    // World publication. One peer's unchanged authenticated checkpoint brackets
+    // every page and singular read; the all-ledger permission makes absence exact.
+    let deadline = Instant::now() + READ_TIMEOUT;
+    let client = client.with_request_deadline(deadline.into_std())?;
+    tokio::time::timeout_at(deadline, async {
+        let before = applied_checkpoint(&client).await?;
+        same_applied_checkpoint(*client.client().network_id(), before, before)?;
+        let visibility_client = client.clone();
+        read(move || {
+            ensure!(
+                integration_tests::collections::permissions(
+                    &visibility_client,
+                    visibility_client.client().account(),
+                )?
+                .contains(&Permission::from(CanReadAllLedgerData)),
+                "BPNG observation requires complete ledger visibility"
+            );
+            Ok(())
+        })
+        .await?;
+        let observed = operation(client.clone(), before.1).await?;
+        let after = applied_checkpoint(&client).await?;
+        same_applied_checkpoint(*client.client().network_id(), before, after)?;
+        Ok(observed)
+    })
+    .await
+    .wrap_err("BPNG checkpoint observation exceeded its original read deadline")?
+}
+
+async fn canonical_blocks(client: &Client, height: u64) -> Result<Vec<SignedBlock>> {
+    ensure!(
+        (1..=MAX_RETAINED_HEIGHT).contains(&height),
+        "BPNG canonical history exceeds the retained height bound"
+    );
+    timeout(client.client().torii_request_timeout(), async {
+        let mut stream = client
+            .account_client()
+            .blocks()
+            .subscribe(NonZeroU64::MIN)
+            .await?;
+        let mut blocks = Vec::new();
+        let mut bytes = 0_u64;
+        for expected in 1..=height {
+            let block = stream
+                .next()
+                .await
+                .ok_or_else(|| eyre!("BPNG canonical replay ended before height {expected}"))??;
+            let frame_bytes = stream
+                .last_message_bytes()
+                .ok_or_else(|| eyre!("BPNG canonical replay omitted its wire size"))?;
+            bytes = bytes
+                .checked_add(u64::try_from(frame_bytes)?)
+                .ok_or_else(|| eyre!("BPNG canonical replay byte count overflow"))?;
+            validate_replayed_block(&block, expected, bytes)?;
+            blocks.push(block);
+        }
+        stream.close().await?;
+        Ok::<_, eyre::Report>(blocks)
+    })
+    .await
+    .wrap_err("BPNG canonical replay exceeded its original request deadline")?
+}
+
+fn validate_replayed_block(block: &SignedBlock, expected: u64, bytes: u64) -> Result<()> {
+    ensure!(
+        block.header().height().get() == expected,
+        "BPNG canonical replay skipped or substituted height {expected}"
+    );
+    ensure!(
+        bytes <= MAX_EVIDENCE_BYTES,
+        "BPNG canonical replay exceeds retained byte bound"
+    );
+    Ok(())
+}
+
+#[test]
+fn bpng_checkpoint_refuses_foreign_missing_or_moved_worlds() -> Result<()> {
+    let network = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(b"bpng-checkpoint"),
+    ));
+    let foreign = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(b"foreign-checkpoint"),
+    ));
+    same_applied_checkpoint(network, (network, 2), (network, 2))?;
+    for (before, after) in [
+        ((network, 2), (network, 3)),
+        ((network, 2), (network, 1)),
+        ((network, 2), (foreign, 2)),
+        ((foreign, 2), (foreign, 2)),
+        ((network, 0), (network, 0)),
+        (
+            (network, MAX_RETAINED_HEIGHT + 1),
+            (network, MAX_RETAINED_HEIGHT + 1),
+        ),
+    ] {
+        assert!(same_applied_checkpoint(network, before, after).is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn bpng_replay_history_requires_exact_bytes_once_and_successful_network_outputs() -> Result<()> {
+    use iroha_data_model::block::{
+        builder::BlockBuilder,
+        execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
+        output_budget::ExecutionOutputLimits,
+    };
+    use iroha_data_model::transaction::signed::TransactionResult;
+    // Structural decoder controls only. These outputs confer no execution or
+    // finality authority and never enter the four-validator scenario.
+    let network = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(b"bpng-history"),
+    ));
+    let transaction = TransactionBuilder::new(
+        network,
+        BOB_ID.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "BPNG observation decoder".to_owned())])
+    .sign(BOB_KEYPAIR.private_key());
+    let mut builder = BlockBuilder::new(BlockHeader::new(NonZeroU64::MIN, None, None, 7, 0));
+    builder.push_transaction(transaction.clone());
+    let proposal = builder.build_with_signature(0, BOB_KEYPAIR.private_key());
+    validate_replayed_block(&proposal, 1, MAX_EVIDENCE_BYTES)?;
+    assert!(validate_replayed_block(&proposal, 2, 1).is_err());
+    assert!(validate_replayed_block(&proposal, 1, MAX_EVIDENCE_BYTES + 1).is_err());
+    assert!(
+        assert_transaction_history(
+            std::slice::from_ref(&proposal),
+            std::slice::from_ref(&transaction)
+        )
+        .is_err()
+    );
+    let limits = ExecutionOutputLimits {
+        max_outputs: 1,
+        max_output_bytes: 1024 * 1024,
+        max_total_output_bytes: 1024 * 1024,
+        max_executed_wire_bytes: MAX_EVIDENCE_BYTES,
+    };
+    let mut rejected = proposal.clone();
+    rejected.set_execution_outputs(
+        vec![ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+            input_index: 0,
+            result: TransactionResult::new(Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted("decoder rejection control".to_owned()),
+            ))),
+            completions: Vec::new(),
+        })],
+        0,
+        BTreeMap::new(),
+        Vec::new(),
+        iroha_data_model::nexus::AxtPolicySnapshot::default(),
+        BTreeSet::new(),
+        &limits,
+    )?;
+    assert!(assert_transaction_history(&[rejected], std::slice::from_ref(&transaction)).is_err());
+    let mut executed = proposal;
+    executed.set_execution_outputs(
+        vec![ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+            input_index: 0,
+            result: TransactionResult::new(Ok(Vec::new())),
+            completions: Vec::new(),
+        })],
+        0,
+        BTreeMap::new(),
+        Vec::new(),
+        iroha_data_model::nexus::AxtPolicySnapshot::default(),
+        BTreeSet::new(),
+        &limits,
+    )?;
+    assert_transaction_history(
+        std::slice::from_ref(&executed),
+        std::slice::from_ref(&transaction),
+    )?;
+    assert!(assert_transaction_history(&[], std::slice::from_ref(&transaction)).is_err());
+    assert!(
+        assert_transaction_history(
+            &[executed.clone(), executed.clone()],
+            std::slice::from_ref(&transaction)
+        )
+        .is_err()
+    );
+    let decoded = decode_framed_signed_block(&executed.encode_wire()?)?;
+    assert_transaction_history(&[decoded], &[transaction])?;
+    Ok(())
+}
+
 async fn height(client: &Client) -> Result<u64> {
     Ok(client.client().status().get().await?.blocks)
 }
@@ -362,16 +593,19 @@ async fn observe_catalog_expansion(
 }
 
 async fn submit(client: &Client, transaction: SignedTransaction) -> Result<SignedTransaction> {
+    let client = client.clone();
     timeout(
         SUBMISSION_TASK_TIMEOUT,
-        client
-            .account_client()
-            .submit_transaction_and_wait(&transaction),
+        iroha_test_network::read_on_dedicated_thread(move || {
+            // The blocking facade preserves the exact signed bytes and enriches
+            // terminal rejection with the native authenticated execution reason.
+            client.submit_transaction_and_wait(&transaction)?;
+            Ok(transaction)
+        }),
     )
     .await
     .wrap_err("native transaction did not reach terminal status in time")?
-    .wrap_err("native submission failed")?;
-    Ok(transaction)
+    .wrap_err("native submission failed")
 }
 
 fn bpng_fixture_lane() -> ModelLaneConfig {
@@ -698,6 +932,7 @@ fn transaction(client: &Client, instruction: impl Into<InstructionBox>) -> Signe
     .expect("build integration-test transaction")
 }
 
+#[cfg(feature = "bpng-release-qualification")]
 #[derive(Debug, PartialEq, Eq)]
 struct ReleaseSourceIdentity {
     head_commit: String,
@@ -740,6 +975,7 @@ fn required_canonical_path(name: &str, directory: bool) -> Result<PathBuf> {
     Ok(path)
 }
 
+#[cfg(feature = "bpng-release-qualification")]
 fn bounded_tool_output(mut command: Command, label: &str) -> Result<Vec<u8>> {
     command.stdin(Stdio::null());
     let output = integration_tests::process::output_with_timeout(
@@ -756,6 +992,200 @@ fn bounded_tool_output(mut command: Command, label: &str) -> Result<Vec<u8>> {
     Ok(output.stdout)
 }
 
+#[derive(Clone, Copy, Debug)]
+enum DevelopmentTool {
+    Daemon,
+    Client,
+    Kagami,
+}
+
+impl DevelopmentTool {
+    fn arguments(self) -> &'static [&'static str] {
+        match self {
+            Self::Daemon | Self::Kagami => &["--version"],
+            Self::Client => &["--output-format", "json", "tools", "version"],
+        }
+    }
+}
+
+fn development_source_revision(source: Option<&str>) -> Result<&str> {
+    let source =
+        source.ok_or_else(|| eyre!("BPNG development test needs compiled VERGEN_GIT_SHA"))?;
+    ensure!(
+        matches!(source.len(), 40 | 64)
+            && source
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        "BPNG development source must be a full lowercase Git revision"
+    );
+    Ok(source)
+}
+
+fn validate_development_tool_identity(
+    tool: DevelopmentTool,
+    output: &[u8],
+    source: &str,
+    version: &str,
+) -> Result<()> {
+    match tool {
+        DevelopmentTool::Client => {
+            let value: norito::json::Value = norito::json::from_slice(output)?;
+            let object = value
+                .as_object()
+                .ok_or_else(|| eyre!("client version must be one JSON object"))?;
+            ensure!(
+                object.keys().map(String::as_str).collect::<BTreeSet<_>>()
+                    == BTreeSet::from(["client_git_sha", "client_version", "server_version"])
+                    && object
+                        .get("client_git_sha")
+                        .and_then(norito::json::Value::as_str)
+                        == Some(source)
+                    && object
+                        .get("client_version")
+                        .and_then(norito::json::Value::as_str)
+                        == Some(version)
+                    && object
+                        .get("server_version")
+                        .is_some_and(norito::json::Value::is_null),
+                "BPNG development client must match the test source/version without a node read"
+            );
+        }
+        DevelopmentTool::Daemon | DevelopmentTool::Kagami => {
+            let name = match tool {
+                DevelopmentTool::Daemon => "iroha3d",
+                DevelopmentTool::Kagami => "kagami",
+                DevelopmentTool::Client => unreachable!("client handled above"),
+            };
+            let output = std::str::from_utf8(output)?;
+            ensure!(
+                output.trim_end_matches(['\r', '\n'])
+                    == format!("{name} {version} (source {source})"),
+                "BPNG development {name} must match the test source/version"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn required_development_prebuilt_binaries() -> Result<()> {
+    let source = development_source_revision(option_env!("VERGEN_GIT_SHA"))?;
+    let directory = tempfile::tempdir()?;
+    for (name, tool) in [
+        ("TEST_NETWORK_BIN_IROHAD", DevelopmentTool::Daemon),
+        ("TEST_NETWORK_BIN_IROHA", DevelopmentTool::Client),
+        ("KAGAMI_BIN", DevelopmentTool::Kagami),
+    ] {
+        let path = required_canonical_path(name, false)?;
+        // Existing developer admission rejects active or partial release anchors.
+        // This explicit entry never converts a failed release check into a diagnostic.
+        let program = resolve_development_binary(&path)?;
+        let mut command = program.command()?;
+        command
+            .args(tool.arguments())
+            .env_clear()
+            .current_dir(directory.path());
+        let output = integration_tests::process::output_with_timeout(
+            command,
+            integration_tests::process::process_timeout(),
+        )
+        .wrap_err_with(|| format!("failed to inspect development {name}"))?;
+        ensure!(
+            output.status.success(),
+            "development {name} version probe failed"
+        );
+        ensure!(
+            output.stdout.len() <= MAX_RELEASE_TOOL_OUTPUT_BYTES
+                && output.stderr.len() <= MAX_RELEASE_TOOL_OUTPUT_BYTES,
+            "development {name} version probe exceeded its fixed output budget"
+        );
+        validate_development_tool_identity(
+            tool,
+            &output.stdout,
+            source,
+            env!("CARGO_PKG_VERSION"),
+        )?;
+    }
+    Ok(())
+}
+
+#[test]
+fn development_source_requires_an_exact_revision() {
+    for source in [
+        None,
+        Some(""),
+        Some("local-fast-build"),
+        Some("abc123"),
+        Some(&"A".repeat(40)),
+    ] {
+        assert!(development_source_revision(source).is_err());
+    }
+    for source in ["a".repeat(40), "b".repeat(64)] {
+        assert_eq!(development_source_revision(Some(&source)).unwrap(), source);
+    }
+}
+
+#[test]
+fn development_tool_identity_refuses_stale_or_unbound_binaries() {
+    let source = "a".repeat(40);
+    let version = "2.0.0-test";
+    for (tool, name) in [
+        (DevelopmentTool::Daemon, "iroha3d"),
+        (DevelopmentTool::Kagami, "kagami"),
+    ] {
+        assert_eq!(tool.arguments(), ["--version"]);
+        let matching = format!("{name} {version} (source {source})\n");
+        validate_development_tool_identity(tool, matching.as_bytes(), &source, version).unwrap();
+        for wrong in [
+            format!("{name} {version}\n"),
+            format!("{name} {version} (source {})\n", "b".repeat(40)),
+            format!("{name} 0.0.0 (source {source})\n"),
+            format!("other {version} (source {source})\n"),
+            format!("{matching}extra\n"),
+        ] {
+            assert!(
+                validate_development_tool_identity(tool, wrong.as_bytes(), &source, version)
+                    .is_err()
+            );
+        }
+    }
+}
+
+#[test]
+fn development_client_identity_requires_an_offline_exact_response() {
+    let source = "a".repeat(40);
+    let version = "2.0.0-test";
+    assert_eq!(
+        DevelopmentTool::Client.arguments(),
+        ["--output-format", "json", "tools", "version"]
+    );
+    let response = norito::json!({
+        "client_git_sha": (source.clone()), "client_version": version, "server_version": null,
+    });
+    let check = |value: &norito::json::Value| {
+        validate_development_tool_identity(
+            DevelopmentTool::Client,
+            &norito::json::to_vec(value).unwrap(),
+            &source,
+            version,
+        )
+    };
+    check(&response).unwrap();
+    for (key, value) in [
+        ("client_git_sha", norito::json::Value::from("b".repeat(40))),
+        ("client_version", norito::json::Value::from("0.0.0")),
+        ("server_version", norito::json::Value::from(version)),
+        ("extra", norito::json::Value::Null),
+    ] {
+        let mut wrong = response.clone();
+        wrong.as_object_mut().unwrap().insert(key.to_owned(), value);
+        assert!(check(&wrong).is_err());
+    }
+    let mut missing = response;
+    missing.as_object_mut().unwrap().remove("client_git_sha");
+    assert!(check(&missing).is_err());
+}
+
+#[cfg(feature = "bpng-release-qualification")]
 fn parse_release_source_identity(bytes: &[u8]) -> Result<ReleaseSourceIdentity> {
     ensure!(
         !bytes.is_empty() && u64::try_from(bytes.len())? <= MAX_RELEASE_IDENTITY_BYTES,
@@ -819,6 +1249,7 @@ fn parse_release_source_identity(bytes: &[u8]) -> Result<ReleaseSourceIdentity> 
     Ok(identity)
 }
 
+#[cfg(feature = "bpng-release-qualification")]
 fn read_release_identity(path: &Path) -> Result<Vec<u8>> {
     let before = fs::symlink_metadata(path)?;
     ensure!(
@@ -847,6 +1278,7 @@ fn read_release_identity(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+#[cfg(feature = "bpng-release-qualification")]
 fn verify_clean_release_source(repo_root: &Path) -> Result<ReleaseSourceIdentity> {
     ensure!(
         required_exact_env("IROHA_RELEASE_SEALED_WORKTREE")? == "1",
@@ -915,6 +1347,7 @@ fn verify_clean_release_source(repo_root: &Path) -> Result<ReleaseSourceIdentity
     Ok(observed)
 }
 
+#[cfg(feature = "bpng-release-qualification")]
 fn required_prebuilt_binaries() -> Result<()> {
     ensure!(
         std::env::var("IROHA_TEST_SKIP_BUILD").as_deref() == Ok("1"),
@@ -990,7 +1423,7 @@ async fn acquire(
             AliasQuoteGuardV1 {
                 expected_policy_version: policy.policy_version,
                 expected_payment_asset: payment_asset,
-                max_amount: Quantity::from(100_u32),
+                max_amount: Quantity::from(LEASE_PAYMENT_CAP),
                 valid_until_ms,
             },
         )]);
@@ -1052,12 +1485,130 @@ fn balances(client: &Client, leases: &[LeaseExpectation]) -> Result<BTreeMap<Ass
             selected.insert(AssetId::of(definition.clone(), owner), Quantity::zero());
         }
     }
-    for asset in client.client().query(FindAssets::new()).execute_all()? {
-        if let Some(amount) = selected.get_mut(asset.id()) {
-            *amount = asset.value().clone();
-        }
+    let definitions = selected
+        .keys()
+        .map(|id| id.definition().clone())
+        .collect::<BTreeSet<_>>();
+    let mut seen = BTreeSet::new();
+    for definition in definitions {
+        let rows = client
+            .list(
+                iroha::collections::Collection::AssetHolders(definition.clone()),
+                iroha::collections::ListQuery::new()
+                    .filter(iroha::collections::field("scope").eq("global")),
+            )
+            .collect::<iroha::Result<Vec<_>>>()?;
+        merge_holder_balances(&definition, &rows, &mut selected, &mut seen)?;
     }
     Ok(selected)
+}
+
+fn merge_holder_balances(
+    definition: &AssetDefinitionId,
+    rows: &[norito::json::Value],
+    selected: &mut BTreeMap<AssetId, Quantity>,
+    seen: &mut BTreeSet<AssetId>,
+) -> Result<()> {
+    for row in rows {
+        let id: AssetId = integration_tests::collections::field(row, "id")?;
+        let asset: AssetDefinitionId = integration_tests::collections::field(row, "asset")?;
+        let account: AccountId = integration_tests::collections::field(row, "account_id")?;
+        let scope: String = integration_tests::collections::field(row, "scope")?;
+        let quantity: Quantity = integration_tests::collections::field(row, "quantity")?;
+        ensure!(
+            &asset == definition
+                && id.definition() == definition
+                && id.account() == &account
+                && id.scope() == &iroha_data_model::asset::AssetBalanceScope::Global
+                && scope == "global",
+            "BPNG holder collection substituted its asset, owner or scope"
+        );
+        ensure!(
+            seen.insert(id.clone()),
+            "BPNG holder collection duplicated a balance partition"
+        );
+        if let Some(amount) = selected.get_mut(&id) {
+            *amount = quantity;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn bpng_holder_rows_preserve_exact_balances_and_reject_substitution() -> Result<()> {
+    let definition = AssetDefinitionId::parse_address_literal(TAIRA_XOR_ASSET_DEFINITION_ID)?;
+    let payer = AssetId::of(definition.clone(), BOB_ID.clone());
+    let collector = AssetId::of(definition.clone(), iroha_test_samples::ALICE_ID.clone());
+    let id = &payer;
+    let account = payer.account();
+    let good = norito::json!({
+        "id": id,
+        "asset": definition,
+        "account_id": account,
+        "scope": "global",
+        "quantity": "13",
+    });
+    let baseline = BTreeMap::from([
+        (payer.clone(), Quantity::zero()),
+        (collector.clone(), Quantity::zero()),
+    ]);
+    let mut selected = baseline.clone();
+    merge_holder_balances(
+        &definition,
+        std::slice::from_ref(&good),
+        &mut selected,
+        &mut BTreeSet::new(),
+    )?;
+    assert_eq!(selected[&payer], Quantity::from(13_u64));
+    assert_eq!(selected[&collector], Quantity::zero());
+    let mut malformed = vec![vec![good.clone(), good.clone()]];
+    for (field, value) in [
+        (
+            "asset",
+            AssetDefinitionId::derive_from_components(
+                iroha_model_base::domain::DomainId::try_new("other", "universal")?,
+                "other".parse()?,
+            )
+            .to_string(),
+        ),
+        ("account_id", collector.account().to_string()),
+        ("scope", "dataspace:1".to_owned()),
+        ("quantity", "invalid".to_owned()),
+        ("id", collector.canonical_literal()),
+    ] {
+        let mut row = good.clone();
+        row.as_object_mut()
+            .unwrap()
+            .insert(field.to_owned(), value.into());
+        malformed.push(vec![row]);
+    }
+    let mut scoped = good.clone();
+    scoped.as_object_mut().unwrap().insert(
+        "id".to_owned(),
+        AssetId::with_scope(
+            definition.clone(),
+            BOB_ID.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(1)),
+        )
+        .canonical_literal()
+        .into(),
+    );
+    malformed.push(vec![scoped]);
+    let mut missing = good;
+    missing.as_object_mut().unwrap().remove("id");
+    malformed.push(vec![missing]);
+    for rows in malformed {
+        assert!(
+            merge_holder_balances(
+                &definition,
+                &rows,
+                &mut baseline.clone(),
+                &mut BTreeSet::new()
+            )
+            .is_err()
+        );
+    }
+    Ok(())
 }
 
 fn assert_paid_once(
@@ -1100,6 +1651,7 @@ fn ledger_snapshot(
     expectations: &[LeaseExpectation],
     grant: &AliasDataspaceBootstrapGrantV1,
     transactions: &[SignedTransaction],
+    blocks: &[SignedBlock],
 ) -> Result<LedgerSnapshot> {
     let parameters: Parameters = client.client().query_single(FindParameters::new())?;
     let custom = parameters
@@ -1154,46 +1706,63 @@ fn ledger_snapshot(
         leases.push(record);
     }
     let mut domains = BTreeMap::new();
-    for domain in client.client().query(FindDomains::new()).execute_all()? {
-        if [
-            DomainId::try_new("history", "universal")?,
-            DomainId::try_new("mibank", "bpng")?,
-        ]
-        .contains(domain.id())
-        {
-            ensure!(
-                domain.owned_by() == &*BOB_ID,
-                "native domain owner mismatch"
-            );
-            domains.insert(domain.id().clone(), domain.encode());
-        }
+    for id in [
+        DomainId::try_new("history", "universal")?,
+        DomainId::try_new("mibank", "bpng")?,
+    ] {
+        let domain = client
+            .client()
+            .query_single(FindDomainById::new(id.clone()))?;
+        ensure!(
+            domain.id() == &id,
+            "native domain query substituted its identity"
+        );
+        ensure!(
+            domain.owned_by() == &*BOB_ID,
+            "native domain owner mismatch"
+        );
+        domains.insert(domain.id().clone(), domain.encode());
     }
     ensure!(domains.len() == 2, "both native domains must be present");
-    let committed = client
-        .client()
-        .query(FindTransactions::new())
-        .execute_all()?;
-    for transaction in transactions {
-        let matching = committed
-            .iter()
-            .filter(|record| record.entrypoint_hash() == &transaction.hash_as_entrypoint())
-            .collect::<Vec<_>>();
-        ensure!(
-            matching.len() == 1,
-            "exact signed transaction must appear once in committed query history"
-        );
-        ensure!(
-            matching[0].entrypoint() == &TransactionEntrypoint::External(transaction.clone())
-                && matching[0].result().0.is_ok(),
-            "committed transaction bytes/result mismatch"
-        );
-    }
+    assert_transaction_history(blocks, transactions)?;
     Ok(LedgerSnapshot {
         parameters: parameters.encode(),
         leases,
         domains,
         balances: balances(client, expectations)?,
     })
+}
+
+fn assert_transaction_history(
+    blocks: &[SignedBlock],
+    transactions: &[SignedTransaction],
+) -> Result<()> {
+    for transaction in transactions {
+        let matching = blocks
+            .iter()
+            .flat_map(|block| {
+                block
+                    .network_entrypoints()
+                    .enumerate()
+                    .map(move |(index, entrypoint)| (block, index, entrypoint))
+            })
+            .filter(|(_, _, entrypoint)| entrypoint.hash() == transaction.hash_as_entrypoint())
+            .collect::<Vec<_>>();
+        ensure!(
+            matching.len() == 1,
+            "exact signed transaction must appear once in committed query history"
+        );
+        let (block, index, entrypoint) = matching[0];
+        let (_, output) = block
+            .network_output_at(u32::try_from(index)?)
+            .ok_or_else(|| eyre!("committed transaction omitted its Network execution result"))?;
+        ensure!(
+            entrypoint == &TransactionEntrypoint::External(transaction.clone())
+                && output.result.0.is_ok(),
+            "committed transaction bytes/result mismatch"
+        );
+    }
+    Ok(())
 }
 
 async fn wait_for_snapshot(
@@ -1209,8 +1778,12 @@ async fn wait_for_snapshot(
         let expectations = expectations.to_vec();
         let grant = grant.clone();
         let transactions = transactions.to_vec();
-        let observed =
-            read(move || ledger_snapshot(&client, &expectations, &grant, &transactions)).await;
+        let observed = at_applied_checkpoint(&client, |client, height| async move {
+            let blocks = canonical_blocks(&client, height).await?;
+            read(move || ledger_snapshot(&client, &expectations, &grant, &transactions, &blocks))
+                .await
+        })
+        .await;
         match observed {
             Ok(snapshot) if expected.is_none_or(|expected| expected == &snapshot) => {
                 return Ok(snapshot);
@@ -1263,43 +1836,45 @@ async fn wait_for_bpng_frontier(
         for client in clients {
             let client = client.clone();
             let transaction = transaction.clone();
-            let observed = read(move || {
-                let statuses = client.client().get_sumeragi_lanes()?;
-                let status = statuses
-                    .into_iter()
-                    .find(|status| status.record.lane == BPNG_FIXTURE_LANE)
-                    .ok_or_else(|| eyre!("native BPNG lane is absent"))?;
-                ensure!(
-                    status
-                        .instance
-                        .as_ref()
-                        .is_some_and(|instance| instance.halted.is_none()),
-                    "native BPNG instance is unavailable or halted"
-                );
-                let mut blocks = client.client().query(FindBlocks::new()).execute_all()?;
-                blocks.sort_by_key(|block| block.header().height().get());
-                let history = RetainedHistory {
-                    blocks: blocks
-                        .iter()
-                        .map(SignedBlock::encode_wire)
-                        .collect::<Result<_, _>>()?,
-                };
-                let (_, expected) = bpng_transaction_ownership(
-                    &history,
-                    &transaction,
-                    incarnation,
-                    &status
-                        .record
-                        .committee
-                        .iter()
-                        .map(|member| member.peer.clone())
-                        .collect::<Vec<_>>(),
-                )?;
-                ensure!(
-                    status.record == expected,
-                    "live native frontier differs from the transaction's exact global merge"
-                );
-                Ok(status.record)
+            let observed = at_applied_checkpoint(&client, |client, height| async move {
+                let blocks = canonical_blocks(&client, height).await?;
+                read(move || {
+                    let statuses = client.client().get_sumeragi_lanes()?;
+                    let status = statuses
+                        .into_iter()
+                        .find(|status| status.record.lane == BPNG_FIXTURE_LANE)
+                        .ok_or_else(|| eyre!("native BPNG lane is absent"))?;
+                    ensure!(
+                        status
+                            .instance
+                            .as_ref()
+                            .is_some_and(|instance| instance.halted.is_none()),
+                        "native BPNG instance is unavailable or halted"
+                    );
+                    let history = RetainedHistory {
+                        blocks: blocks
+                            .iter()
+                            .map(SignedBlock::encode_wire)
+                            .collect::<Result<_, _>>()?,
+                    };
+                    let (_, expected) = bpng_transaction_ownership(
+                        &history,
+                        &transaction,
+                        incarnation,
+                        &status
+                            .record
+                            .committee
+                            .iter()
+                            .map(|member| member.peer.clone())
+                            .collect::<Vec<_>>(),
+                    )?;
+                    ensure!(
+                        status.record == expected,
+                        "live native frontier differs from the transaction's exact global merge"
+                    );
+                    Ok(status.record)
+                })
+                .await
             })
             .await;
             match observed {
@@ -2101,8 +2676,26 @@ async fn stop_all(peers: &[NetworkPeer]) -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bpng_development_bootstrap_survives_four_peer_retained_kura_catalog_expansion()
+-> Result<()> {
+    required_development_prebuilt_binaries()?;
+    run_bpng_retained_kura_scenario(stringify!(
+        bpng_development_bootstrap_survives_four_peer_retained_kura_catalog_expansion
+    ))
+    .await
+}
+
+#[cfg(feature = "bpng-release-qualification")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansion() -> Result<()> {
     required_prebuilt_binaries()?;
+    run_bpng_retained_kura_scenario(stringify!(
+        bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansion
+    ))
+    .await
+}
+
+async fn run_bpng_retained_kura_scenario(test_name: &'static str) -> Result<()> {
     init_instruction_registry();
     let npos = SumeragiNposParameters {
         xor_asset_definition_id: stake_asset_definition_id(),
@@ -2151,24 +2744,32 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         });
     let network = timeout(
         NETWORK_TIMEOUT,
-        sandbox::start_network_async_or_skip(
-            builder,
-            stringify!(
-                bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansion
-            ),
-        ),
+        sandbox::start_network_async_or_skip(builder, test_name),
     )
     .await??
     .ok_or_else(|| {
         eyre!(
-            "this retained-Kura qualification requires a real four-peer network; skipping is forbidden"
+            "this retained-Kura scenario requires a real four-peer network; skipping is forbidden"
         )
     })?;
+    // Native genesis needs the ordinary test-thread stack during startup. Keep the
+    // later retained-history and replay temporaries in a separate poll frame.
+    Box::pin(run_bpng_retained_kura_lifecycle(network)).await
+}
+
+async fn run_bpng_retained_kura_lifecycle(network: sandbox::SerializedNetwork) -> Result<()> {
     ensure!(
         network.peers().len() == VALIDATOR_COUNT,
         "exactly four original validators required"
     );
     let genesis = network.genesis();
+    ensure!(
+        iroha_genesis::signed_genesis_consensus_metadata(&genesis.0)?
+            .sumeragi_context
+            .root_scope
+            == iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        "BPNG scoped balances and catalogs must share the original global World checkpoint"
+    );
     let original_voters = network
         .peers()
         .iter()
@@ -2261,7 +2862,10 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     .await?;
     let read_client = authority.clone();
     let baseline_terms = baseline_leases.clone();
-    let baseline_balances = read(move || balances(&read_client, &baseline_terms)).await?;
+    let baseline_balances = at_applied_checkpoint(&read_client, |client, _| async move {
+        read(move || balances(&client, &baseline_terms)).await
+    })
+    .await?;
     let domain_intent = |domain: &str, dataspace: &str, id| -> Result<_> {
         Ok(AliasIntentV1::Domain(AliasDomainIntentV1 {
             domain: ResolvedDomainV1::new(DomainId::try_new(domain, dataspace)?, id),
@@ -2301,6 +2905,10 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     )
     .await?;
     let leases = vec![historical_lease, dataspace_lease, domain_lease];
+    ensure!(
+        leases.len() == usize::try_from(PAID_LEASE_COUNT)?,
+        "the original payer allocation must cover exactly the authored lease count"
+    );
     let mut transactions = vec![historical, granted, dataspace, domain];
     let expected = wait_for_snapshot(authority, &leases, &grant, &transactions, None).await?;
     assert_paid_once(&baseline_balances, &expected.balances, &leases)?;
@@ -2601,14 +3209,9 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     let sweep_validator = AccountId::new(validator_keypairs[0].public_key().clone());
     let sweep_reader = validator_clients[0].clone();
     let sweep_authority = sweep_validator.clone();
-    let sweep_permissions = read(move || {
-        sweep_reader
-            .client()
-            .query(FindPermissionsByAccountId::new(sweep_authority))
-            .execute_all()
-            .map_err(Into::into)
-    })
-    .await?;
+    let sweep_permissions =
+        read(move || integration_tests::collections::permissions(&sweep_reader, &sweep_authority))
+            .await?;
     ensure!(
         sweep_permissions
             .iter()
@@ -2973,9 +3576,21 @@ fn genesis_staking_plans_bind_funded_validators_to_signed_custody() {
     }
     assert_eq!(
         signed_staking_policies,
-        vec![staking_policy],
+        vec![staking_policy.clone()],
         "the original genesis must contain exactly the fixture's authored staking policy"
     );
+    let payer_asset = AssetId::new(stake_asset_definition_id(), BOB_ID.clone());
+    let payer_mints = transactions
+        .iter()
+        .flatten()
+        .filter_map(|instruction| instruction.as_any().downcast_ref::<MintBox>())
+        .filter_map(|mint| match mint {
+            MintBox::Asset(mint) if mint.destination() == &payer_asset => Some(mint.object()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(payer_mints, vec![&Quantity::from(LEASE_PAYER_FUNDING)]);
+    assert_eq!(LEASE_PAYER_FUNDING, 300);
     let fees = iroha_genesis::signed_genesis_root_fee_policy(&genesis.0)
         .expect("the original genesis contains one authenticated fee policy");
     assert_eq!(fees.fee_asset_id, stake_asset_definition_id());
@@ -3024,8 +3639,8 @@ fn genesis_staking_plans_bind_funded_validators_to_signed_custody() {
         assert_eq!(
             registration.monetary_plan.destination_asset,
             iroha_data_model::asset::AssetId::new(
-                stake_asset_definition_id(),
-                staking_custody_account()
+                staking_policy.stake_asset_id.clone(),
+                staking_policy.stake_escrow_account_id.clone()
             )
         );
         assert_eq!(

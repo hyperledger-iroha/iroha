@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
+import re
+import subprocess
+import sys
+import textwrap
 
 import pytest
 
@@ -17,6 +22,77 @@ checker = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(checker)
 CANONICAL_BUDGET_PATH = REPOSITORY_ROOT / checker.CANONICAL_ALLOCATION_BUDGET_PATH
 SOURCE_COMMIT = "1" * 40
+
+
+def test_workflow_evidence_paths_survive_cargo_benchmark_working_directory(
+    tmp_path: Path,
+) -> None:
+    """Run the workflow scripts while the Cargo fixture enters the crate directory."""
+
+    workflow = (REPOSITORY_ROOT / ".github/workflows/pr.yml").read_text()
+    job = workflow.split("  sora_parliament_lifecycle:\n", 1)[1]
+    match = re.search(r"(?m)^      SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR: (.+)$", job)
+    assert match is not None
+    repository = tmp_path / "checkout with spaces"
+    package = repository / "crates/iroha_crypto"
+    budget = package / "benches/parliament_crypto_allocation_budgets.json"
+    budget.parent.mkdir(parents=True)
+    budget.write_bytes(CANONICAL_BUDGET_PATH.read_bytes())
+    evidence_name = "sora-parliament-crypto-evidence-1234-2"
+    evidence_dir = match[1].replace("${{ github.workspace }}", str(repository))
+    evidence_dir = evidence_dir.replace("${{ github.run_id }}", "1234")
+    evidence_dir = evidence_dir.replace("${{ github.run_attempt }}", "2")
+    assert "${{" not in evidence_dir
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    driver = tmp_path / "cargo-fixture.py"
+    driver.write_text(
+        "import os, sys\n"
+        "from pathlib import Path\n"
+        "assert sys.argv[1:] == ['bench', '--locked', '-p', 'iroha_crypto', "
+        "'--bench', 'parliament_crypto', '--no-default-features', '--features', "
+        "'bls', '--', '--noplot']\n"
+        "os.chdir(os.environ['CI_TEST_PACKAGE'])\n"
+        "if 'IROHA_PARLIAMENT_CRYPTO_ALLOCATION_EVIDENCE_V1' in os.environ:\n"
+        "    with Path(os.environ['IROHA_PARLIAMENT_CRYPTO_ALLOCATION_EVIDENCE_V1']).open('x') as stream:\n"
+        "        stream.write('fixture allocation output\\n')\n"
+        "else:\n"
+        "    output = Path(os.environ['CRITERION_HOME']) / 'fixture' / 'new'\n"
+        "    output.mkdir(parents=True)\n"
+        "    (output / 'estimates.json').write_text('{}\\n')\n"
+    )
+    cargo = fake_bin / "cargo"
+    cargo.write_text('#!/bin/sh\nexec "$CI_TEST_PYTHON" "$CI_TEST_CARGO_DRIVER" "$@"\n')
+    cargo.chmod(0o700)
+    environment = {
+        **os.environ,
+        "PATH": str(fake_bin) + os.pathsep + os.environ["PATH"],
+        "CI_TEST_PYTHON": sys.executable,
+        "CI_TEST_CARGO_DRIVER": str(driver),
+        "CI_TEST_PACKAGE": str(package),
+        "SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR": evidence_dir,
+    }
+    environment.pop("IROHA_PARLIAMENT_CRYPTO_ALLOCATION_EVIDENCE_V1", None)
+    environment.pop("CRITERION_HOME", None)
+    for name in (
+        "Create fresh private Parliament crypto evidence layout",
+        "Capture Parliament crypto allocation and Criterion evidence",
+    ):
+        step = job.split(f"      - name: {name}\n", 1)[1].split("\n      - ", 1)[0]
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        completed = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-c", script],
+            cwd=repository, env=environment, capture_output=True, text=True,
+        )
+        assert completed.returncode == 0, completed.stderr
+
+    evidence = repository / "target" / evidence_name
+    for name in ("allocation", "allocation-log", "criterion", "criterion-log"):
+        assert (evidence / f"{name}-exit-status.txt").read_text().strip() == "0"
+    assert (evidence / "allocations.tsv").read_text() == "fixture allocation output\n"
+    assert (evidence / "criterion/fixture/new/estimates.json").is_file()
+    assert not (package / "target").exists()
 
 
 @pytest.fixture(autouse=True)

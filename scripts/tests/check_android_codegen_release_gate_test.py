@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import re
+import subprocess
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -96,6 +100,7 @@ def test_android_codegen_gate_obeys_shared_cargo_policy() -> None:
     assert 'run_cargo "$@"' in proxy
     assert "cargo run --locked -p norito_codegen_exporter" not in makefile
     assert "sumeragi_release_cargo_proxy.sh run --locked --offline" in makefile
+    assert "-p norito_codegen_exporter --bin norito_codegen_exporter --features dev-tools" in makefile
     assert '"--locked",\n        "--offline",' in replay
     assert "CARGO_BIN" not in replay
     assert "require_policy_cargo_proxy" in replay
@@ -110,6 +115,109 @@ def test_android_codegen_gate_obeys_shared_cargo_policy() -> None:
         "tools/openapi/scripts/provision-openapi-cargo-lock.mjs",
     ):
         assert not has_forbidden_process_control(read(relative)), relative
+
+
+def test_android_codegen_summary_is_a_source_input_checked_before_replay() -> None:
+    """A clean checkout supplies the deterministic summary before expensive replay."""
+    relative = "artifacts/android/codegen_parity_summary.json"
+    summary = REPO_ROOT / relative
+    assert summary.is_file() and not summary.is_symlink()
+    assert f"!{relative}" in read(".gitignore").splitlines()
+    gate = read("ci/check_android_codegen.sh")
+    assert gate.index("\nrequire_tracked_parity_summary\n") < gate.index(
+        'create_replay_clone "${FIRST_SOURCE}"'
+    )
+    assert gate.count("\nrequire_tracked_parity_summary\n") == 2
+
+
+@pytest.mark.parametrize("kind", ["tracked", "missing", "untracked", "symlink", "directory"])
+def test_android_codegen_summary_preflight_rejects_non_source_inputs(
+    tmp_path: Path, kind: str,
+) -> None:
+    """Exercise the actual preflight with real Git tracking and file kinds."""
+    gate = read("ci/check_android_codegen.sh")
+    start = gate.index("require_tracked_parity_summary() {\n")
+    preflight = gate[start:gate.index("\n}\n", start) + 3]
+    root = tmp_path / "source root"
+    root.mkdir()
+    subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+    relative = "artifacts/android/codegen_parity_summary.json"
+    summary = root / relative
+    summary.parent.mkdir(parents=True)
+    if kind == "directory":
+        summary.mkdir()
+    elif kind == "symlink":
+        target = root / "external.json"
+        target.write_text("{}", encoding="utf-8")
+        summary.symlink_to(target)
+    else:
+        summary.write_text("{}", encoding="utf-8")
+    if kind in {"tracked", "missing", "symlink"}:
+        subprocess.run(["git", "-C", str(root), "add", "--", relative], check=True)
+    if kind == "missing":
+        summary.unlink()
+    result = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + preflight + "\nrequire_tracked_parity_summary\n"],
+        env={**os.environ, "ROOT_DIR": str(root), "SUMMARY_REL": relative},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == (0 if kind == "tracked" else 1), result.stderr
+    if kind == "untracked":
+        assert "not tracked in the clean source" in result.stderr
+    elif kind != "tracked":
+        assert "not regular" in result.stderr
+
+
+@pytest.mark.parametrize("status", [0, 37])
+def test_android_replay_selects_exporter_and_preserves_cargo_failure(
+    tmp_path: Path, status: int,
+) -> None:
+    """Execute the actual replay prefix without building or fabricating artifacts."""
+    gate = read("ci/check_android_codegen.sh")
+    start = gate.index("run_replay() {\n")
+    replay = gate[start:gate.index("\n}\n", start) + 3]
+    source, target, stage = (tmp_path / name for name in ("source root", "target", "stage"))
+    for directory in (source, target, stage):
+        directory.mkdir()
+    arguments = tmp_path / "arguments"
+    context = tmp_path / "context"
+    boundaries = tmp_path / "boundaries"
+    script = r'''
+set -euo pipefail
+require_external_cargo_target_dir() { test "$1" = "$SOURCE_ROOT"; }
+release_gate_boundary() { printf '%s\n' "$1" >> "$BOUNDARY_LOG"; }
+run_cargo() {
+  printf '%s\0' "$@" > "$ARGUMENT_LOG"
+  printf '%s\n' "$PWD" "$CARGO_TARGET_DIR" "$TMPDIR" > "$CONTEXT_LOG"
+  printf 'exporter stdout\n'
+  printf 'exporter stderr\n' >&2
+  return "$GENERATOR_STATUS"
+}
+# Stop at the first output-validation boundary: this is command routing, not
+# a substitute publisher or a claim that generated artifacts were validated.
+validate_regular_tree() { exit 0; }
+'''
+    result = subprocess.run(
+        ["bash", "-c", script + replay + '\nrun_replay "$SOURCE_ROOT" "$TARGET_ROOT" "$STAGE_ROOT"\n'],
+        env={**os.environ, "SOURCE_ROOT": str(source), "TARGET_ROOT": str(target),
+             "STAGE_ROOT": str(stage), "ARGUMENT_LOG": str(arguments),
+             "CONTEXT_LOG": str(context), "BOUNDARY_LOG": str(boundaries),
+             "GENERATOR_STATUS": str(status)},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == status, result.stderr
+    assert result.stdout == "exporter stdout\n"
+    assert result.stderr == "exporter stderr\n"
+    assert arguments.read_bytes().split(b"\0") == [
+        b"run", b"--locked", b"--offline", b"-p", b"norito_codegen_exporter",
+        b"--bin", b"norito_codegen_exporter", b"--features", b"dev-tools",
+        b"--", b"--out", os.fsencode(stage / "codegen"), b"",
+    ]
+    assert context.read_text().splitlines() == [str(source), str(target), str(stage / "tmp")]
+    expected = ["android-codegen:before-export"]
+    if status == 0:
+        expected.append("android-codegen:after-export")
+    assert boundaries.read_text().splitlines() == expected
 
 
 def test_android_codegen_gate_owns_authenticated_release_channels() -> None:

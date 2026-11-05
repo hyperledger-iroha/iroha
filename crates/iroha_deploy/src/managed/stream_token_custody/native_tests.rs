@@ -200,6 +200,7 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
                 selection: owner.selection(&policy.binding, &state).unwrap(),
                 action: Action::Configure(policy.clone()),
                 checkpoint: checkpoint_bytes(&checkpoint).unwrap(),
+                source: native.bootstrap_custody_source(&owner.authority, &policy, &checkpoint),
             };
             let directory = metadata::ensure_operation(&owner.authority.directory, name).unwrap();
             journal::publish_intent(&directory, &original).unwrap();
@@ -215,7 +216,14 @@ fn selected_custody_recovery_keeps_unprepared_wallets_absent_and_exact_carriers_
                 deadline_unix_ms: now + 600_000,
             };
             let unsigned = owner
-                .unsigned_enrollment(&policy, &state, &checkpoint, interval, now)
+                .unsigned_enrollment(
+                    &policy,
+                    &state,
+                    native.bootstrap_custody_source(&owner.authority, &policy, &checkpoint),
+                    &checkpoint,
+                    interval,
+                    now,
+                )
                 .unwrap();
             let history = owner.bootstrap_native_body(
                 &native,

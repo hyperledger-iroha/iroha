@@ -32,6 +32,9 @@ use std::{
 };
 use tokio::time::{Instant, timeout_at};
 
+#[path = "short_epoch_genesis.rs"]
+mod short_epoch_genesis;
+
 pub(super) struct Prepared {
     pub directory: PathBuf,
     pub genesis_directory: PathBuf,
@@ -41,8 +44,8 @@ pub(super) struct Prepared {
     pub routed_client: PathBuf,
 }
 
-// One real funded account gives the retained explicit-route contract an
-// independently configured public dataspace, without a second network ceremony.
+// One real funded account gives the retained explicit-route contract a
+// distinct public data space selected by the compiled catalog, without another network ceremony.
 fn routed_account_and_snapshot_config(directory: &Path, manifest: &Path) -> Result<PathBuf> {
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
     let source = RawGenesisTransaction::from_path(directory.join("genesis.json"))?;
@@ -59,9 +62,18 @@ fn routed_account_and_snapshot_config(directory: &Path, manifest: &Path) -> Resu
         network.into_genesis_hash(),
     )?;
     let fee_asset = iroha_genesis::signed_genesis_root_fee_policy(signed.block())?.fee_asset_id;
+    let profile = iroha_config::profile::Profile::compiled(
+        iroha_config::profile::ProfileId::SoraNexusV1Qual,
+    )?;
     let key = KeyPair::try_random()?;
     let account = AccountId::new(key.public_key().clone());
     let authority = account.to_i105_for_discriminant(369)?;
+    let source = public_catalog_manifest(
+        &source,
+        &profile,
+        &directory.join("genesis.json"),
+        &authority,
+    )?;
     let private = directory.join("runtime/routed-client.private_key");
     let mut file = fs::OpenOptions::new()
         .write(true)
@@ -103,21 +115,14 @@ fn routed_account_and_snapshot_config(directory: &Path, manifest: &Path) -> Resu
             nexus.get("fees").is_none(),
             "generated peer cannot override the original signed monetary policy"
         );
+        select_public_catalog(nexus, &profile)?;
+        let routed_rule = routed_account_rule(nexus, &authority)?;
         let rules = nexus
             .get_mut("routing_policy")
             .and_then(|v| v.get_mut("rules"))
             .and_then(toml::Value::as_array_mut)
             .ok_or_else(|| eyre!("missing native routing policy"))?;
-        let matcher =
-            toml::Table::from_iter([("account".into(), toml::Value::String(authority.clone()))]);
-        rules.insert(
-            0,
-            toml::Value::Table(toml::Table::from_iter([
-                ("lane".into(), toml::Value::Integer(3)),
-                ("dataspace".into(), toml::Value::String("paynet".into())),
-                ("matcher".into(), toml::Value::Table(matcher)),
-            ])),
-        );
+        rules.insert(0, routed_rule);
         config.insert(
             "snapshot".into(),
             toml::Value::Table(toml::Table::from_iter([
@@ -172,6 +177,84 @@ fn routed_account_and_snapshot_config(directory: &Path, manifest: &Path) -> Resu
     Ok(client_path)
 }
 
+// This fixture exercises a public explicit route before adding its first DPN.
+// Author that catalog from the compiled qualification profile rather than inheriting
+// the running Taira generator's restricted DPN and already-occupied addition IDs.
+fn select_public_catalog(
+    nexus: &mut toml::Table,
+    profile: &iroha_config::profile::Profile,
+) -> Result<()> {
+    let configured = profile.static_config()["nexus"]
+        .as_table()
+        .ok_or_else(|| eyre!("qualification profile omitted its static catalog"))?;
+    for field in ["lane_count", "lane_catalog", "routing_policy"] {
+        nexus.insert(
+            field.into(),
+            configured
+                .get(field)
+                .ok_or_else(|| eyre!("qualification profile omitted {field}"))?
+                .clone(),
+        );
+    }
+    let derived = profile.derived_config(&profile.derive(4)?);
+    nexus.insert(
+        "dataspace_catalog".into(),
+        derived["nexus"]["dataspace_catalog"].clone(),
+    );
+    ensure!(
+        nexus["lane_count"].as_integer() == Some(4),
+        "beacon fixture requires four public baseline lanes"
+    );
+    ensure!(
+        short_epoch_genesis::profile_lanes(profile)? == [0, 1, 2, 3].into_iter().collect(),
+        "beacon fixture requires its exact public baseline namespace"
+    );
+    Ok(())
+}
+
+fn public_catalog_manifest(
+    raw: &RawGenesisTransaction,
+    profile: &iroha_config::profile::Profile,
+    path: &Path,
+    authority: &str,
+) -> Result<RawGenesisTransaction> {
+    let mut value = json::value::to_value(raw)?;
+    short_epoch_genesis::retarget_public_catalog(&mut value, profile, Some(authority))?;
+    RawGenesisTransaction::from_json_slice_at_path(&json::to_vec(&value)?, path)
+}
+
+// Route through the existing public lane's own data space, not an unrelated alias.
+fn routed_account_rule(nexus: &toml::Table, authority: &str) -> Result<toml::Value> {
+    let lane = nexus
+        .get("lane_catalog")
+        .and_then(toml::Value::as_array)
+        .and_then(|lanes| {
+            lanes
+                .iter()
+                .find(|lane| lane.get("index").and_then(toml::Value::as_integer) == Some(3))
+        })
+        .ok_or_else(|| eyre!("generated native fixture omitted public lane 3"))?;
+    ensure!(
+        lane.get("visibility").and_then(toml::Value::as_str) == Some("public"),
+        "routed fixture lane must be public"
+    );
+    let dataspace = lane
+        .get("dataspace")
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| eyre!("generated routed lane omitted its data space"))?;
+    Ok(toml::Value::Table(toml::Table::from_iter([
+        ("lane".into(), toml::Value::Integer(3)),
+        ("dataspace".into(), toml::Value::String(dataspace.into())),
+        (
+            "matcher".into(),
+            toml::Value::Table(toml::Table::from_iter([(
+                "account".into(),
+                toml::Value::String(authority.into()),
+            )])),
+        ),
+    ])))
+}
+
 async fn run(mut command: Command, evidence: &Path, deadline: Instant, stage: &str) -> Result<()> {
     ensure!(
         Instant::now() < deadline,
@@ -213,12 +296,12 @@ async fn run(mut command: Command, evidence: &Path, deadline: Instant, stage: &s
     Ok(())
 }
 
-/// Change only the existing native NPoS parameter, then recompute native metadata.
+/// Retarget both native epoch schedules, omit the separate SCCP scope, and recompute metadata.
 fn short_epoch_manifest(path: &Path) -> Result<()> {
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
     let raw = RawGenesisTransaction::from_path(path)?;
     raw.effective_parameters()?;
-    let mut value = json::value::to_value(&raw)?;
+    let mut value = short_epoch_genesis::manifest_value(&raw)?;
     let transactions = value
         .get_mut("transactions")
         .and_then(json::Value::as_array_mut)
@@ -246,7 +329,7 @@ fn short_epoch_manifest(path: &Path) -> Result<()> {
             "native fixture roster ceiling is not four"
         );
         // The real paid catalog operation follows installation at 5 and executes at 6.
-        // Epoch 7 requires its pulse immediately, permitting a provider-unavailable
+        // The next epoch requires its pulse, permitting a provider-unavailable
         // negative check and exact retained-transaction recovery without padding work.
         npos.epoch_length_blocks =
             NonZeroU64::new(super::epoch_retention::EPOCH_LENGTH).expect("positive fixture epoch");
@@ -537,4 +620,69 @@ pub(super) async fn prepare(
         genesis_public_key,
         routed_client,
     })
+}
+
+#[test]
+fn routed_account_rule_uses_its_existing_public_lane_and_refuses_missing_context() {
+    let nexus: toml::Table = toml::from_str(
+        r#"[[lane_catalog]]
+index=3
+visibility="public"
+dataspace="dpn"
+"#,
+    )
+    .unwrap();
+    let route = routed_account_rule(&nexus, "fixture-account").unwrap();
+    assert_eq!(route["lane"].as_integer(), Some(3));
+    assert_eq!(route["dataspace"].as_str(), Some("dpn"));
+    assert_eq!(
+        route["matcher"]["account"].as_str(),
+        Some("fixture-account")
+    );
+    assert!(routed_account_rule(&toml::Table::new(), "fixture-account").is_err());
+    for key in ["visibility", "dataspace"] {
+        let mut missing = nexus.clone();
+        missing
+            .get_mut("lane_catalog")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()[0]
+            .as_table_mut()
+            .unwrap()
+            .remove(key);
+        assert!(routed_account_rule(&missing, "fixture-account").is_err());
+    }
+    let mut restricted = nexus;
+    restricted
+        .get_mut("lane_catalog")
+        .unwrap()
+        .as_array_mut()
+        .unwrap()[0]
+        .as_table_mut()
+        .unwrap()
+        .insert("visibility".into(), "restricted".into());
+    assert!(routed_account_rule(&restricted, "fixture-account").is_err());
+}
+
+#[test]
+fn public_catalog_uses_the_compiled_four_lane_geometry_and_retains_non_catalog_settings() {
+    let profile =
+        iroha_config::profile::Profile::compiled(iroha_config::profile::ProfileId::SoraNexusV1Qual)
+            .unwrap();
+    let mut nexus = toml::Table::from_iter([("fixture_setting".into(), true.into())]);
+    select_public_catalog(&mut nexus, &profile).unwrap();
+    assert_eq!(nexus["fixture_setting"].as_bool(), Some(true));
+    assert_eq!(nexus["lane_count"].as_integer(), Some(4));
+    let route = routed_account_rule(&nexus, "fixture-account").unwrap();
+    assert_eq!(route["dataspace"].as_str(), Some("nexus"));
+    assert!(
+        nexus["dataspace_catalog"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|data_space| {
+                data_space["alias"].as_str() != Some("dpn")
+                    && data_space["fault_tolerance"].as_integer() == Some(1)
+            })
+    );
 }

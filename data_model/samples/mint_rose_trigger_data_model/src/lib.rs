@@ -73,9 +73,7 @@ impl json::JsonDeserialize for MintRoseArgs {
 }
 impl From<MintRoseArgs> for Json {
     fn from(details: MintRoseArgs) -> Self {
-        let json =
-            json::to_json(&details).expect("MintRoseArgs JSON serialization should not fail");
-        Json::from_raw_json(json).expect("MintRoseArgs serializer must emit valid bounded JSON")
+        Json::new(details)
     }
 }
 impl TryFrom<&Json> for MintRoseArgs {
@@ -113,7 +111,10 @@ mod tests {
                 json::to_json_bounded(&args, expected.len()).unwrap(),
                 expected
             );
-            assert!(json::to_json_bounded(&args, expected.len() - 1).is_err());
+            assert_eq!(
+                json::to_json_bounded(&args, expected.len() - 1),
+                Err(json::BoundedJsonError::BodyTooLarge)
+            );
             // ExecuteTrigger::with_args uses this checked constructor directly.
             let payload = Json::try_new(&args).expect("bounded trigger arguments");
             assert_eq!(payload.as_ref(), expected);

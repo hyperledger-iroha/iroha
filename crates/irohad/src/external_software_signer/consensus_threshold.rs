@@ -25,6 +25,7 @@ mod provisioning_command;
 pub use prepared::{
     RuntimePreparedGlobalBeaconCredentialV1, prepare_global_beacon_transition_credential_v1,
 };
+pub(crate) use provisioning_command::dispatch_arguments as dispatch_beacon_custody_arguments;
 pub use provisioning_command::dispatch_if_requested as dispatch_beacon_custody_preparation_if_requested;
 
 use crate::runtime_credential::{RuntimeCredentialErrorV1, load_bounded_runtime_credential_v1};

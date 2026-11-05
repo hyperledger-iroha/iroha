@@ -455,6 +455,21 @@ test('OpenAPI workflow actions and tooling tests are pinned', async () => {
 
   assert.ok(actionReferences.length > 0);
   for (const reference of actionReferences) {
+    if (reference === './.github/actions/setup-native-ci') {
+      const composite = await readFile(
+        join(repoRoot, '.github', 'actions', 'setup-native-ci', 'action.yml'),
+        'utf8',
+      );
+      const nestedReferences = Array.from(
+        composite.matchAll(/^\s*(?:-\s+)?uses:\s+([^\s#]+)\s*$/gm),
+        (match) => match[1],
+      );
+      assert.ok(nestedReferences.length > 0);
+      for (const nested of nestedReferences) {
+        assert.match(nested, /@[0-9a-f]{40}$/);
+      }
+      continue;
+    }
     assert.match(reference, /@[0-9a-f]{40}$/);
   }
   for (const testFile of [

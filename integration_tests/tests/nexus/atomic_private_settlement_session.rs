@@ -856,7 +856,7 @@ fn take_control_pipes(read_fd: i32, write_fd: i32) -> Result<(File, File)> {
 #[cfg(unix)]
 pub(super) struct RetainedBenchmarkNetwork {
     pub(super) network: sandbox::SerializedNetwork,
-    runtime: tokio::runtime::Runtime,
+    pub(super) runtime: tokio::runtime::Runtime,
     coordinator: CoordinatorProcessV1,
     shape: TopologyShape,
     activated_height: u64,

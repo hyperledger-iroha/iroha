@@ -1,12 +1,12 @@
 //! Committed ZK validity policy of a chain.
 //!
-//! [`ZkValidityPolicyV1`] is the typed payload of the custom parameter
-//! [`ZkValidityPolicyV1::PARAMETER_ID_STR`]. It carries every proof limit,
+//! [`crate::zk_validity_policy::ZkValidityPolicyV1`] is the typed payload of the custom parameter
+//! [`crate::zk_validity_policy::ZkValidityPolicyV1::PARAMETER_ID_STR`]. It carries every proof limit,
 //! window, registry cap, relation-selecting verifying-key reference and
 //! verification gas charge that validators must agree on. A chain installs it
 //! with an ordinary authorized `SetParameter`, in genesis or later; a change
 //! takes effect from the block after the one that commits it. A chain that
-//! never installs the parameter uses [`ZkValidityPolicyV1::protocol_default`].
+//! never installs the parameter uses [`crate::zk_validity_policy::ZkValidityPolicyV1::protocol_default`].
 //!
 //! This module owns the type, the protocol default and the canonical
 //! structural and coherence validation, so genesis tools and SDKs author and

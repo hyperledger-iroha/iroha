@@ -762,7 +762,7 @@ impl Walker<'_> {
                 let trait_site = value
                     .trait_
                     .as_ref()
-                    .map(|(_, path, _)| self.site(path, &conditions))
+                    .map(|(path, _)| self.site(path, &conditions))
                     .transpose()?;
                 self.report.implementations.push(ManualImpl {
                     span: source_span(self.source, value.span())?,

@@ -142,17 +142,26 @@ impl Fixture {
     }
 
     pub(super) fn current(&self) -> (FinalityVerifier, VerifiedStreamTokenCustodyStateV1) {
+        let (checkpoint, current, _) = self.current_with_source();
+        (checkpoint, current)
+    }
+
+    pub(super) fn current_with_source(
+        &self,
+    ) -> (FinalityVerifier, VerifiedStreamTokenCustodyStateV1, Vec<u8>) {
         let checkpoint =
             fixture_observe(&self.native, &self.owner.authority, self.options.deadline).unwrap();
-        let current =
-            self.native
-                .bootstrap_custody(&self.owner.authority, &self.policy, &checkpoint);
-        (checkpoint, current)
+        let (current, source) = self.native.bootstrap_custody_with_source(
+            &self.owner.authority,
+            &self.policy,
+            &checkpoint,
+        );
+        (checkpoint, current, source)
     }
     fn select(&self, sequence: u64) -> BodyHistory {
         let utc = now_ms().unwrap() + 60_000;
-        let (checkpoint, current) = self.current();
-        self.select_with_deadline(sequence, utc, &checkpoint, &current)
+        let (checkpoint, current, source) = self.current_with_source();
+        self.select_with_deadline(sequence, utc, &checkpoint, &current, source)
     }
     fn select_with_deadline(
         &self,
@@ -160,6 +169,7 @@ impl Fixture {
         utc: u64,
         checkpoint: &FinalityVerifier,
         current: &VerifiedStreamTokenCustodyStateV1,
+        source: Vec<u8>,
     ) -> BodyHistory {
         let terms = Terms::new(utc, &self.options).unwrap();
         let unsigned = self
@@ -168,6 +178,7 @@ impl Fixture {
                 sequence,
                 &self.policy,
                 current,
+                source,
                 checkpoint,
                 &terms,
                 self.options.deadline,
@@ -331,6 +342,11 @@ fixture.options.deadline,
         2,
         &fixture.policy,
         &old_current,
+        fixture.native.bootstrap_custody_source(
+            &fixture.owner.authority,
+            &fixture.policy,
+            &old_checkpoint,
+        ),
         &old_checkpoint,
         &Terms::new(selection_started + 60_000, &fixture.options).unwrap(),
         fixture.options.deadline,
@@ -447,6 +463,11 @@ fixture.options.deadline,
                 3,
                 &fixture.policy,
                 &old_current,
+                fixture.native.bootstrap_custody_source(
+                    &fixture.owner.authority,
+                    &fixture.policy,
+                    &carrier
+                ),
                 &carrier,
                 &Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
                 fixture.options.deadline
@@ -460,6 +481,11 @@ fixture.options.deadline,
                 2,
                 &fixture.policy,
                 &current,
+                fixture.native.bootstrap_custody_source(
+                    &fixture.owner.authority,
+                    &fixture.policy,
+                    &carrier
+                ),
                 &carrier,
                 &Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
                 fixture.options.deadline
@@ -858,7 +884,9 @@ fn expired_unrevoked_head_can_renew_but_real_revocation_invalidates_the_original
         })],
     );
     assert_eq!(fixture.native.chain.commit(vec![revoke]), vec![true]);
-    let (revoked_checkpoint, revoked) = fixture.current();
+    // Keep the exact source paired with its certified revocation cut. The rejected
+    // renewal below advances the chain before the foreign-network control uses it.
+    let (revoked_checkpoint, revoked, revoked_source) = fixture.current_with_source();
     assert!(revoked.current().unwrap().control().attester_revoked);
     assert!(
         fixture
@@ -884,6 +912,7 @@ fn expired_unrevoked_head_can_renew_but_real_revocation_invalidates_the_original
                 2,
                 &fixture.policy,
                 &revoked,
+                revoked_source.clone(),
                 &revoked_checkpoint,
                 &Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
                 fixture.options.deadline
@@ -974,6 +1003,7 @@ fn expired_unrevoked_head_can_renew_but_real_revocation_invalidates_the_original
                 2,
                 &fixture.policy,
                 &revoked,
+                revoked_source,
                 &revoked_checkpoint,
                 &Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
                 fixture.options.deadline
@@ -1029,9 +1059,9 @@ fn unprepared_renewal_expires_without_replacing_original_or_creating_wallet_on_r
         Duration::from_secs(6),
     );
     // Select the short absolute interval only after the genuine current proof is available.
-    let (checkpoint, current) = fixture.current();
+    let (checkpoint, current, source) = fixture.current_with_source();
     let utc = now_ms().unwrap() + 2_000;
-    let history = fixture.select_with_deadline(2, utc, &checkpoint, &current);
+    let history = fixture.select_with_deadline(2, utc, &checkpoint, &current, source);
     let (directory, original, scope) = history.dispatch().unwrap();
     let directory = PrivateDirectory::open_exact(directory.path()).unwrap();
     let account = AccountService::new(fixture.owner.authority.config.clone()).unwrap();
@@ -1319,13 +1349,13 @@ impl renewal::RenewalReads for FixtureReads<'_> {
         owner: &mut ManagedStreamTokenCustody,
         policy: &SignerCustodyPolicyV1,
         deadline: Instant,
-    ) -> Result<(FinalityVerifier, VerifiedStreamTokenCustodyStateV1)> {
+    ) -> Result<(FinalityVerifier, VerifiedStreamTokenCustodyStateV1, Vec<u8>)> {
         require_deadline(deadline)?;
         let checkpoint = fixture_observe(self.native, &owner.authority, deadline)?;
-        let current = self
-            .native
-            .bootstrap_custody(&owner.authority, policy, &checkpoint);
-        Ok((checkpoint, current))
+        let (current, source) =
+            self.native
+                .bootstrap_custody_with_source(&owner.authority, policy, &checkpoint);
+        Ok((checkpoint, current, source))
     }
     fn retain_carrier(
         &self,
@@ -1718,9 +1748,9 @@ fn expired_original_attester_body_is_terminal_without_epoch_or_wallet_replacemen
         Duration::from_secs(4),
     );
     // Select the short absolute interval only after the genuine current proof is available.
-    let (checkpoint, current) = fixture.current();
+    let (checkpoint, current, source) = fixture.current_with_source();
     let utc = now_ms().unwrap() + 2_000;
-    let history = fixture.select_with_deadline(2, utc, &checkpoint, &current);
+    let history = fixture.select_with_deadline(2, utc, &checkpoint, &current, source);
     let (directory, original, scope) = history.dispatch().unwrap();
     let directory = PrivateDirectory::open_exact(directory.path()).unwrap();
     let Action::Enroll { validity, .. } = &original.action else {

@@ -135,6 +135,30 @@ pub(super) struct ServiceAuthority {
     pub(super) peers: Vec<(PeerId, Client)>,
 }
 
+// Creation permission is consulted only after canonical existing-only admission returns
+// genuine absence. The callback grants no signing or current-state authority.
+enum ChildAdmission<'a> {
+    Existing,
+    Create,
+    IfAbsent(&'a dyn Fn() -> Result<bool>),
+}
+impl ChildAdmission<'_> {
+    fn open<T>(self, mut open: impl FnMut(bool) -> Result<Option<T>>) -> (bool, Result<Option<T>>) {
+        match self {
+            Self::Existing => (false, open(false)),
+            Self::Create => (true, open(true)),
+            Self::IfAbsent(authorize) => match open(false) {
+                Ok(None) => match authorize() {
+                    Ok(true) => (true, open(true)),
+                    Ok(false) => (false, Ok(None)),
+                    Err(error) => (false, Err(error)),
+                },
+                result => (false, result),
+            },
+        }
+    }
+}
+
 /// Borrowed original public intent inside one synchronous projection scope.
 ///
 /// This is neither current native state nor a signing capability. The sole projection owner
@@ -404,6 +428,26 @@ impl ServiceAuthority {
             .ok_or_else(|| invalid("new native operation custody was not created"))
     }
 
+    /// Admit an existing provider child, creating it only after fresh startup permission.
+    /// One parent entry/exit surrounds both native admissions; the child retains its own
+    /// complete profile and lock. Existing children never consult creation permission.
+    /// Active decode limits and owned originals retain the two standalone producers.
+    pub(super) fn open_provider_for_bootstrap(
+        parent: &Self,
+        provider: ProviderId,
+        purpose: ProviderPurpose,
+        authorize_creation: &dyn Fn() -> Result<bool>,
+    ) -> Result<Option<Self>> {
+        Self::open_from_original_with_read(
+            parent,
+            Some(provider),
+            purpose.directory_name(),
+            ChildAdmission::IfAbsent(authorize_creation),
+            None,
+            None,
+        )
+    }
+
     /// Observe the actual creating-child return before its original parent exit check.
     /// This delegates the existing one-shot test hook and restores it when the guard drops.
     #[cfg(test)]
@@ -490,7 +534,14 @@ impl ServiceAuthority {
                 "runtime constructor belongs to another original owner",
             ));
         }
-        Self::open_from_original_with_read(parent, provider, purpose, false, imports, Some(read))
+        Self::open_from_original_with_read(
+            parent,
+            provider,
+            purpose,
+            ChildAdmission::Existing,
+            imports,
+            Some(read),
+        )
     }
 
     fn open(
@@ -544,38 +595,55 @@ impl ServiceAuthority {
         create: bool,
         scope: Option<&CheckpointImportScope>,
     ) -> Result<Option<Self>> {
-        Self::open_from_original_with_read(parent, provider, purpose, create, scope, None)
+        Self::open_from_original_with_read(
+            parent,
+            provider,
+            purpose,
+            if create {
+                ChildAdmission::Create
+            } else {
+                ChildAdmission::Existing
+            },
+            scope,
+            None,
+        )
     }
 
     fn open_from_original_with_read(
         parent: &Self,
         provider: Option<ProviderId>,
         purpose: &'static str,
-        create: bool,
+        admission: ChildAdmission<'_>,
         scope: Option<&CheckpointImportScope>,
         read: Option<&RuntimeOriginalRead<'_>>,
     ) -> Result<Option<Self>> {
         if norito::core::decode_limits_active() {
-            return Self::open(&parent.prepared, provider, purpose, create);
+            return admission
+                .open(|create| Self::open(&parent.prepared, provider, purpose, create))
+                .1;
         }
         let AuthorityProfile::Shared(captured) = &parent.profile else {
-            return Self::open(&parent.prepared, provider, purpose, create);
+            return admission
+                .open(|create| Self::open(&parent.prepared, provider, purpose, create))
+                .1;
         };
         #[cfg(test)]
         inventory::record_authority_open();
         parent.validate_profile_with_runtime(read)?;
-        let mut result = Self::open_profile(
-            &parent.prepared,
-            provider,
-            purpose,
-            create,
-            AuthorityProfile::Shared(Arc::clone(captured)),
-            captured.config.clone(),
-            captured.genesis.clone(),
-            captured.peer_ids.clone(),
-            Some(&parent.transport_seed),
-            read,
-        );
+        let (_created, mut result) = admission.open(|create| {
+            Self::open_profile(
+                &parent.prepared,
+                provider,
+                purpose,
+                create,
+                AuthorityProfile::Shared(Arc::clone(captured)),
+                captured.config.clone(),
+                captured.genesis.clone(),
+                captured.peer_ids.clone(),
+                Some(&parent.transport_seed),
+                read,
+            )
+        });
         if let Ok(Some(owner)) = &mut result {
             // Eligible construction is outside active admission and from the shared profile.
             // Default/profile-only callers supply None and retain their original local memo.
@@ -585,7 +653,7 @@ impl ServiceAuthority {
             }
         }
         #[cfg(test)]
-        if create {
+        if _created {
             creating_original_tests::after_child();
         } else {
             profile_validation_test_support::after_existing_child(&result);
@@ -941,6 +1009,10 @@ mod creating_original_tests;
 #[cfg(test)]
 #[path = "service_authority/creating_custody_tests.rs"]
 mod creating_custody_tests;
+
+#[cfg(test)]
+#[path = "service_authority/bootstrap_admission_tests.rs"]
+mod bootstrap_admission_tests;
 
 // The seed is private original constructor state, never a mutable account/peer projection.
 // Rebuilding resets all compatibility/probe state while retaining only transport owners.

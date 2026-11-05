@@ -1,4 +1,4 @@
-//! Immutable original parent-service QC bytes with the existing Vec<u8> payload layout.
+//! Immutable original parent-service QC bytes with the existing `Vec<u8>` payload layout.
 //!
 //! Custody of these opaque bytes is not QC verification or historical authority.
 //! Semantic QC preparation uses the Sumeragi owner over the immutable admitted source.

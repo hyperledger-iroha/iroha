@@ -58,8 +58,8 @@ pub const MIN_ENACTMENT_DELAY: u64 = 4;
 
 // One signed NPoS epoch length for every converted sortition corridor. A sortition slot
 // is a consensus-native pre-boundary pulse height, so each draw waits for `(h + 1) % L == 0`.
-// The corridors submit at exact heights, one carrier per height, and a native pulse height
-// finalizes without a carrier. `L` therefore has to exceed the longest exact-height run
+// The corridors submit at exact heights, one carrier per height, including native pulse
+// heights. `L` has to exceed the longest exact-height run
 // between two draws: the invitation window (40, 56 or 68 blocks), the roster seal, and the
 // public-finding phases with their 8 or 20 block deadline. 128 covers each of those runs
 // with margin while the first slot (height 127) stays reachable by plain carriers.
@@ -80,7 +80,9 @@ pub const POSITIVE_BEACON_SIGNER_MODES: [ParliamentBeaconSignerMode; VALIDATOR_C
 
 #[path = "support/parliament_submission.rs"]
 pub mod submission;
-pub use submission::{OPERATION_TIMEOUT, submit_parliament_instructions};
+pub use submission::{
+    OPERATION_TIMEOUT, current_height, observe_exact_height, submit_parliament_instructions,
+};
 
 pub fn citizen_keys() -> Vec<KeyPair> {
     (0..CITIZEN_COUNT)
@@ -117,87 +119,6 @@ pub fn client_for(base: &Client, account: &AccountId, keys: &[KeyPair]) -> Clien
         builder.account = account.clone();
         builder.key_pair = key;
     })
-}
-
-const STATUS_RETRY_DELAY: Duration = Duration::from_millis(150);
-const STATUS_RETRY_WINDOW: Duration = Duration::from_secs(30);
-
-/// Classify the two typed transient status refusals; every other error is final.
-///
-/// Same policy as `support/committee_status.rs`: only the SDK's typed `StateBusy` and
-/// `DeadlineElapsed` reasons are retry authority, and never past the remaining window.
-fn status_retry_delay(error: &iroha::Error, remaining: Duration) -> Option<Duration> {
-    let iroha::Error::StatusUnavailable {
-        reason:
-            Some(iroha::StatusFailureReason::DeadlineElapsed | iroha::StatusFailureReason::StateBusy),
-        retry_after,
-    } = error
-    else {
-        return None;
-    };
-    let delay = retry_after
-        .unwrap_or(STATUS_RETRY_DELAY)
-        .max(STATUS_RETRY_DELAY);
-    (delay < remaining).then_some(delay)
-}
-
-/// Read the finalized height from the status projection.
-///
-/// A status read that lost the State publication race answers HTTP 503 `status_state_busy`
-/// without publishing a snapshot. That is a property of the read, not of the chain, so it is
-/// retried inside one bounded window; any other failure is returned unchanged.
-pub async fn current_height(client: &Client) -> Result<u64> {
-    let deadline = Instant::now() + STATUS_RETRY_WINDOW;
-    loop {
-        match client.client().status().get().await {
-            Ok(status) => return Ok(status.blocks),
-            Err(error) => {
-                let Some(delay) =
-                    status_retry_delay(&error, deadline.saturating_duration_since(Instant::now()))
-                else {
-                    return Err(error.into());
-                };
-                tokio::time::sleep(delay).await;
-            }
-        }
-    }
-}
-
-#[test]
-fn status_retry_accepts_only_typed_busy_or_deadline_inside_the_window() {
-    use iroha::StatusFailureReason;
-    let window = Duration::from_secs(1);
-    for reason in [
-        StatusFailureReason::StateBusy,
-        StatusFailureReason::DeadlineElapsed,
-    ] {
-        let error = iroha::Error::StatusUnavailable {
-            reason: Some(reason),
-            retry_after: None,
-        };
-        assert_eq!(status_retry_delay(&error, window), Some(STATUS_RETRY_DELAY));
-        assert_eq!(status_retry_delay(&error, STATUS_RETRY_DELAY), None);
-        let advised = iroha::Error::StatusUnavailable {
-            reason: Some(reason),
-            retry_after: Some(Duration::from_millis(400)),
-        };
-        assert_eq!(
-            status_retry_delay(&advised, window),
-            Some(Duration::from_millis(400))
-        );
-    }
-    for reason in [
-        None,
-        Some(StatusFailureReason::StateUnavailable),
-        Some(StatusFailureReason::MissingBlock),
-        Some(StatusFailureReason::MetricsStale),
-    ] {
-        let error = iroha::Error::StatusUnavailable {
-            reason,
-            retry_after: None,
-        };
-        assert_eq!(status_retry_delay(&error, window), None);
-    }
 }
 
 pub async fn tick(client: &Client, label: impl Into<String>) -> Result<u64> {
@@ -258,36 +179,6 @@ pub async fn advance_to_height_with_carriers(
     }
 }
 
-/// Observe one exact finalized height through the client's status projection.
-///
-/// `ensure_blocks` can return from durable block storage before the status projection
-/// publishes the same height. The projection may therefore trail by a bounded interval,
-/// but it must never pass the expected height.
-pub async fn observe_exact_height(
-    client: &Client,
-    expected_height: u64,
-    label: &str,
-) -> Result<()> {
-    let deadline = Instant::now() + OPERATION_TIMEOUT;
-    loop {
-        let observed_height = current_height(client).await?;
-        if observed_height == expected_height {
-            return Ok(());
-        }
-        if observed_height > expected_height {
-            return Err(eyre!(
-                "{label}: expected exact height {expected_height}, observed {observed_height}"
-            ));
-        }
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "{label}: status stayed at height {observed_height} below committed height {expected_height} for {OPERATION_TIMEOUT:?}"
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
 pub async fn advance_to_execution_predecessor(
     network: &iroha_test_network::Network,
     client: &Client,
@@ -302,18 +193,6 @@ pub async fn advance_to_execution_predecessor(
             )
         })?;
     advance_to_height_with_carriers(network, client, authority_height, label).await
-}
-
-pub async fn advance_to_autonomous_predecessor(
-    network: &iroha_test_network::Network,
-    client: &Client,
-    target_height: u64,
-    label: &str,
-) -> Result<()> {
-    let predecessor_height = target_height.checked_sub(1).ok_or_else(|| {
-        eyre!("{label}: autonomous target height {target_height} has no predecessor")
-    })?;
-    advance_to_height_with_carriers(network, client, predecessor_height, label).await
 }
 
 pub async fn submit_transition(
@@ -420,6 +299,51 @@ pub async fn ordered_validator_roster(
     Ok(roster)
 }
 
+/// Borrow the harness-owned BLS keys in the independently certified roster order.
+pub fn ordered_validator_signers<'a>(
+    network: &'a iroha_test_network::Network,
+    ordered_roster: &[PeerId],
+) -> Result<Vec<&'a KeyPair>> {
+    ordered_roster
+        .iter()
+        .map(|peer_id| {
+            network
+                .peers()
+                .iter()
+                .find(|peer| peer.id() == *peer_id)
+                .ok_or_else(|| eyre!("signed roster peer is absent from the network"))?
+                .bls_key_pair()
+                .ok_or_else(|| eyre!("validator lacks its normal BLS keypair"))
+        })
+        .collect()
+}
+
+#[test]
+fn validator_signer_lookup_preserves_certified_order_and_refuses_absent_peers() {
+    let network = NetworkBuilder::new()
+        .with_base_seed("parliament-validator-signer-order")
+        .with_peers(VALIDATOR_COUNT)
+        .build();
+    let mut roster = network
+        .peers()
+        .iter()
+        .rev()
+        .map(|peer| peer.id())
+        .collect::<Vec<_>>();
+    let signers = ordered_validator_signers(&network, &roster).unwrap();
+    assert_eq!(signers.len(), VALIDATOR_COUNT);
+    for (signer, peer) in signers.iter().zip(&roster) {
+        assert_eq!(signer.public_key(), peer.public_key());
+    }
+    let foreign = KeyPair::try_from_seed(
+        b"absent Parliament validator".to_vec(),
+        Algorithm::BlsNormal,
+    )
+    .expect("derive absent validator");
+    roster[0] = PeerId::new(foreign.public_key().clone());
+    assert!(ordered_validator_signers(&network, &roster).is_err());
+}
+
 pub fn lifecycle_certificate(
     network: &iroha_test_network::Network,
     ordered_roster: &[PeerId],
@@ -499,11 +423,11 @@ pub async fn pulse_at(
     height: u64,
     network: &iroha_test_network::Network,
 ) -> Result<iroha::data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1> {
-    exact_block(client, height, network)
-        .await?
-        .global_beacon_pulse()
-        .copied()
-        .ok_or_else(|| eyre!("block {height} does not carry a finalized global beacon pulse"))
+    let (_, authenticated) = finality::certified_block(network, client, height).await?;
+    authenticated
+        .commitment()
+        .beacon
+        .ok_or_else(|| eyre!("block {height} does not certify a finalized global beacon pulse"))
 }
 
 pub fn public_finding_root(attempt_id: GovernanceAttemptId, body: ParliamentBody) -> [u8; 32] {
@@ -650,15 +574,15 @@ pub async fn expected_sortition_slot(
     Ok(slot)
 }
 
-/// Governance-local wait: carry the chain to the slot's predecessor, then observe the
-/// consensus-native pre-boundary pulse that every validator finalized at the slot.
+/// Governance-local wait: submit ordinary work through the native slot, then observe the
+/// consensus-native pre-boundary pulse that every validator finalized with that work.
 pub async fn await_native_sortition_pulse(
     network: &iroha_test_network::Network,
     client: &Client,
     slot: u64,
     label: &str,
 ) -> Result<iroha::data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1> {
-    advance_to_autonomous_predecessor(network, client, slot, label).await?;
+    advance_to_height_with_carriers(network, client, slot, label).await?;
     network.ensure_blocks(slot).await?;
     // The native pre-boundary pulse must finalize exactly the slot height.
     observe_exact_height(client, slot, label).await?;
@@ -709,6 +633,14 @@ pub async fn cross_native_boundary_after_pulse(
     let successor_height = boundary_height
         .checked_add(1)
         .ok_or_else(|| eyre!("{label}: successor height overflow"))?;
+    admit_parliament_height_carrier(
+        client,
+        [Log::new(
+            Level::INFO,
+            format!("{label} successor carrier {successor_height}"),
+        )],
+    )
+    .await?;
     network.ensure_blocks(successor_height).await?;
     observe_exact_height(client, successor_height, label).await?;
     let successor_epoch = boundary_height / epoch_length_blocks;

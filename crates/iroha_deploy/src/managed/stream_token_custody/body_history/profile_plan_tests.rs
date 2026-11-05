@@ -26,6 +26,11 @@ fn pending(fixture: &Fixture) -> (BodyHistory, VerifiedStreamTokenCustodyStateV1
             2,
             &fixture.policy,
             &current,
+            fixture.native.bootstrap_custody_source(
+                &fixture.owner.authority,
+                &fixture.policy,
+                &checkpoint,
+            ),
             &checkpoint,
             &terms,
             fixture.options.deadline,
@@ -180,12 +185,13 @@ impl EnrollmentReads for ChangeProfileDuringHistorical<'_> {
         &self,
         owner: &ManagedStreamTokenCustody,
         policy: &SignerCustodyPolicyV1,
+        unsigned: &UnsignedEnrollment,
         checkpoint: &FinalityVerifier,
         deadline: Instant,
     ) -> Result<VerifiedStreamTokenCustodyStateV1> {
         let current = self
             .native
-            .historical(owner, policy, checkpoint, deadline)?;
+            .historical(owner, policy, unsigned, checkpoint, deadline)?;
         assert!(!self.called.replace(true));
         self.generation
             .write_atomic("peer3.toml", self.changed, PublishMode::Replace)?;

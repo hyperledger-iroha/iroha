@@ -1022,7 +1022,7 @@ V2 output leaf, not a reconstructed V1 projection. Reader migrations use the
 common borrowed Network view only after preserving that commitment.
 
 `trigger_lifecycle_preflight PARAMETERS.json TRIGGERS.json CUTS ORDINARY_WRITES_PER_BLOCK [--rekey-to CANONICAL_ACCOUNT_ID]`
-is a read-only binary taking Torii-exported Parameters and a complete JSON array
+is a read-only developer binary (build with `cargo build -p iroha_core --features dev-tools,json --bin trigger_lifecycle_preflight`) taking Torii-exported Parameters and a complete JSON array
 of canonical registered Trigger frames (base64 JSON strings) from one authenticated
 committed cut. It requires exact canonical Trigger frame identity through decoding; changed/refused exports
 are errors, not silently normalized sources. This cannot detect an upstream

@@ -8,7 +8,7 @@ pub mod fse;
 pub mod huffman;
 pub mod zstd_frame;
 
-#[cfg(feature = "test-support")]
+#[cfg(feature = "fixtures")]
 pub mod test_support;
 
 /// Deterministic Zstd sequence emitted by GPU match-finding kernels.

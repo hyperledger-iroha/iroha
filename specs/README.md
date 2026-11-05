@@ -70,5 +70,10 @@ CI
   `*.ko` heredoc below the roots in `kotodama_v1_docs.json`, then checks the
   unique sources with the canonical Rust driver. Run the same guard locally
   with `python3 scripts/check_kotodama_docs.py --koto target/debug/koto`.
+- The Kotodama artifact job stages freshly built `koto` and `ivm_artifact_admit`
+  with `scripts/stage_kotodama_artifact_tools.py --build-directory <Cargo profile
+  directory> --output <new private directory>` before running the documentation
+  and golden guards. Cargo's hard-linked build outputs become verified mode-0700,
+  single-link copies; the generator's sealed-input requirement stays unchanged.
 - Generated syscall documentation drift is checked with the commands above.
 - [Governance Playbook](governance_playbook.md)

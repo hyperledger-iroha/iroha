@@ -1,6 +1,6 @@
 //! Finite-state entropy tables used by deterministic Zstd sequence coding.
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "fixtures"))]
 use crate::bitstream::BitWriter;
 use crate::bitstream::BitstreamError;
 /// Invalid entropy tables, symbols or encoded bits.
@@ -42,7 +42,7 @@ pub(crate) struct DecodeEntry {
     pub(crate) nb_bits: u8,
     pub(crate) new_state: u32,
 }
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "fixtures"))]
 pub(crate) fn normalize_counts(counts: &[u32], table_log: u8) -> Result<Vec<i16>, FseError> {
     if table_log > MAX_TABLE_LOG {
         return Err(FseError::InvalidTable);
@@ -228,7 +228,7 @@ pub(crate) fn build_tables(
         FseDTable { table_log, decode },
     ))
 }
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "fixtures"))]
 pub(crate) fn encode_symbols(symbols: &[u16], ct: &FseCTable) -> Result<Vec<u8>, FseError> {
     if symbols.is_empty() {
         return Ok(0u32.to_le_bytes().to_vec());
@@ -275,7 +275,7 @@ pub(crate) fn encode_symbols(symbols: &[u16], ct: &FseCTable) -> Result<Vec<u8>,
     Ok(out)
 }
 /// Decode an `encode_symbols` payload; test oracle for the FSE encoder.
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "fixtures"))]
 pub(crate) fn decode_symbols(
     encoded: &[u8],
     out_len: usize,
@@ -307,12 +307,12 @@ pub(crate) fn decode_symbols(
     }
     Ok(output)
 }
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "fixtures"))]
 struct BitReaderRev<'a> {
     data: &'a [u8],
     bit_pos: u32,
 }
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "fixtures"))]
 impl<'a> BitReaderRev<'a> {
     fn new(data: &'a [u8], bit_len: u32) -> Self {
         Self {
