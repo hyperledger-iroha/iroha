@@ -10078,6 +10078,43 @@ fn anonymous_ballot_tags_hash_records_without_an_authoritative_state_owner() {
     );
 }
 
+/// Adoption attestations sign supplied records without authenticating State or startup.
+#[test]
+fn adoption_attestation_domain_keeps_its_exact_record_owner() {
+    let path = "crates/iroha_data_model/src/runtime/adoption.rs";
+    let text = source(path);
+    let scan = scan_sources([(path, text.as_str())]);
+    assert!(
+        scan.unlisted_domains.is_empty(),
+        "{:?}",
+        scan.unlisted_domains
+    );
+    let literal = r"iroha:runtime:adoption-attestation:v1\0";
+    assert_eq!(
+        iroha_data_model::runtime::adoption::ADOPTION_ATTESTATION_DOMAIN,
+        b"iroha:runtime:adoption-attestation:v1\0"
+    );
+    assert_eq!(
+        domain_owners().get(literal),
+        Some(&DomainOwner::Other(Use::Record))
+    );
+    assert_eq!(
+        scan.literal_uses.get(literal),
+        Some(&BTreeMap::from([(path.to_owned(), 1)])),
+        "the original signing domain retains its exact defining source and occurrence"
+    );
+    let shadow = r"iroha:runtime:adoption-attestation:shadow:v1\0";
+    let changed = format!("{text}\nconst SHADOW: &str = r\"{shadow}\";\n");
+    assert_eq!(
+        scan_sources([(path, changed.as_str())])
+            .unlisted_domains
+            .into_iter()
+            .collect::<Vec<_>>(),
+        [format!("{shadow} in {path}")],
+        "classifying one attestation record must not exempt another domain under its prefix"
+    );
+}
+
 /// The expiry journal schema and filename digest retain exact local storage roles.
 #[test]
 fn enrollment_expiry_journal_domains_are_exact_local_storage_names() {
