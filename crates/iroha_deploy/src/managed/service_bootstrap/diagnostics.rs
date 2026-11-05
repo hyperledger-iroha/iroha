@@ -23,6 +23,9 @@ pub(in crate::managed) enum ErrorClass {
     NoSelection,
     Io(std::io::ErrorKind),
     Invalid,
+    CapacityPredecessor,
+    CapacityPreparation,
+    CapacityRecovery,
     RuntimeMismatch,
     CheckpointHttp(iroha::http::PublicHttpError),
     CheckpointProof,
@@ -40,7 +43,19 @@ impl ErrorClass {
             Error::Bootstrap(value) => Self::Bootstrap(*value),
             Error::NoSelection => Self::NoSelection,
             Error::Io(value) => Self::Io(value.kind()),
-            Error::Invalid(_) => Self::Invalid,
+            Error::Invalid(message) => match message.as_str() {
+                "fresh capacity predecessor unavailable"
+                | "fresh capacity declaration predecessor unavailable; retain original intent" => {
+                    Self::CapacityPredecessor
+                }
+                "provider capacity declaration preparation failed; retain original intent and journal" => {
+                    Self::CapacityPreparation
+                }
+                "provider capacity declaration transaction unresolved; recover its original journal" => {
+                    Self::CapacityRecovery
+                }
+                _ => Self::Invalid,
+            },
             Error::RuntimeMismatch(_) => Self::RuntimeMismatch,
             Error::ParentCheckpoint { source, .. } => match source.as_ref() {
                 crate::bootstrap::CheckpointReadError::Http(value) => Self::CheckpointHttp(*value),

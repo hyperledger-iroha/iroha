@@ -3,6 +3,40 @@
 use super::*;
 
 #[test]
+fn capacity_refusals_report_only_exact_closed_reasons() {
+    for (message, expected) in [
+        (
+            "fresh capacity predecessor unavailable",
+            ErrorClass::CapacityPredecessor,
+        ),
+        (
+            "fresh capacity declaration predecessor unavailable; retain original intent",
+            ErrorClass::CapacityPredecessor,
+        ),
+        (
+            "provider capacity declaration preparation failed; retain original intent and journal",
+            ErrorClass::CapacityPreparation,
+        ),
+        (
+            "provider capacity declaration transaction unresolved; recover its original journal",
+            ErrorClass::CapacityRecovery,
+        ),
+    ] {
+        assert_eq!(ErrorClass::of(&Error::Invalid(message.into())), expected);
+        // A prefix, suffix, or embedded remote/private detail is never retained.
+        for altered in [
+            format!("{message}: PRIVATE_KEY_AND_REMOTE_BODY"),
+            format!("remote: {message}"),
+        ] {
+            assert_eq!(
+                ErrorClass::of(&Error::Invalid(altered)),
+                ErrorClass::Invalid
+            );
+        }
+    }
+}
+
+#[test]
 fn closed_error_classes_discard_paths_bodies_and_signing_material() {
     let secret = "PRIVATE_KEY_AND_REMOTE_BODY_51c7";
     let errors = [
