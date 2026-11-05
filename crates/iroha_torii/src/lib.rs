@@ -20142,10 +20142,12 @@ fn torii_external_read_path(request: &ToriiReadProxyRequestV1) -> Result<String,
         ToriiReadEndpointV1::RolesList => "/v1/roles".to_owned(),
         ToriiReadEndpointV1::RolesQuery => "/v1/roles/query".to_owned(),
         ToriiReadEndpointV1::AccountRolesGet => format!(
-            "/v1/accounts/{}/roles", torii_read_path_arg_encoded(request, 0, "account_id")?
+            "/v1/accounts/{}/roles",
+            torii_read_path_arg_encoded(request, 0, "account_id")?
         ),
         ToriiReadEndpointV1::AccountRolesQuery => format!(
-            "/v1/accounts/{}/roles/query", torii_read_path_arg_encoded(request, 0, "account_id")?
+            "/v1/accounts/{}/roles/query",
+            torii_read_path_arg_encoded(request, 0, "account_id")?
         ),
         ToriiReadEndpointV1::AccountPermissionsGet => format!(
             "/v1/accounts/{}/permissions",
@@ -20675,7 +20677,11 @@ async fn execute_torii_read_request_locally_admitted(
                     visibility.clone()
                 };
             let visibility = match role_collection_routes::authorize_routed(
-                app, &request, routing_decision, &target, visibility,
+                app,
+                &request,
+                routing_decision,
+                &target,
+                visibility,
             ) {
                 Ok(visibility) => visibility,
                 Err(error) => return error.into_response(),

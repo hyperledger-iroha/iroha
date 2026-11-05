@@ -904,13 +904,17 @@ fn runtime_catalog_rejects_native_lane_conflict_without_partial_state() {
         policy.fixed.push(SumeragiFixedLane {
             lane: LaneId::new(5),
             dataspace: DataSpaceId::new(99),
-            committee: keys
-                .iter()
-                .map(|key| SumeragiLaneMember {
-                    peer: PeerId::new(key.public_key().clone()),
-                    pop: iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap(),
-                })
-                .collect(),
+            committee: {
+                let mut committee = keys
+                    .iter()
+                    .map(|key| SumeragiLaneMember {
+                        peer: PeerId::new(key.public_key().clone()),
+                        pop: iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap(),
+                    })
+                    .collect::<Vec<_>>();
+                committee.sort_by(|left, right| left.peer.cmp(&right.peer));
+                committee
+            },
         });
         block
             .world

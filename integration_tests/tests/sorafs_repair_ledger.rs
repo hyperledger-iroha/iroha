@@ -3,6 +3,7 @@
 //! These exercise native ledger transitions. Provider storage execution and
 //! production evidence collection remain separate qualification requirements.
 
+use super::sorafs_network::{prepare_transaction, submit_transaction};
 use iroha_model_base::metadata::Metadata;
 use std::time::Duration;
 
@@ -31,7 +32,7 @@ use iroha::{
                 RepairFinalizedTaskV1, RepairLedgerTerminalKindV1,
             },
         },
-        transaction::{FeePaymentIntent, error::TransactionRejectionReason},
+        transaction::error::TransactionRejectionReason,
     },
 };
 use iroha_executor_data_model::permission::{
@@ -52,32 +53,12 @@ const SOURCE: [u8; 32] = [0xD2; 32];
 const EVIDENCE: [u8; 32] = [0xD3; 32];
 const DEADLINE: Duration = Duration::from_secs(180);
 
-fn no_fee() -> FeePaymentIntent {
-    FeePaymentIntent::authority(Vec::new(), None)
-}
-
 async fn submit_instructions(
     client: &Client,
     instructions: impl IntoIterator<Item = impl Into<InstructionBox>>,
 ) -> Result<HashOf<SignedTransaction>> {
-    let account = client.account_client();
-    let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
-        instructions,
-        no_fee(),
-        Metadata::default(),
-    ))?;
-    let quote = account
-        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
-        .await?;
-    ensure!(
-        payload
-            .fee_payment
-            .has_same_payer_and_gas_bound(&quote.intent),
-        "fee quote changed the selected payer, sponsor revision, or gas bound"
-    );
-    payload.fee_payment = quote.intent;
-    let transaction = account.sign_transaction(payload)?;
-    account.submit_transaction_and_wait(&transaction).await
+    let transaction = prepare_transaction(client, instructions, Metadata::default()).await?;
+    submit_transaction(client, &transaction).await
 }
 
 fn client(network: &Network, peer: usize, account: &AccountId, keys: &KeyPair) -> Client {
@@ -148,26 +129,9 @@ async fn race(
     left_metadata.insert("repair_race_route".parse()?, 0u32);
     let mut right_metadata = Metadata::default();
     right_metadata.insert("repair_race_route".parse()?, 1u32);
-    let left_transaction = {
-        let account = left.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                [left_instruction],
-                no_fee(),
-                left_metadata,
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }?;
-    let right_transaction = {
-        let account = right.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                [right_instruction],
-                no_fee(),
-                right_metadata,
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }?;
+    let left_transaction = prepare_transaction(&left, [left_instruction], left_metadata).await?;
+    let right_transaction =
+        prepare_transaction(&right, [right_instruction], right_metadata).await?;
     ensure!(
         left_transaction.hash() != right_transaction.hash(),
         "distinct transactions must exercise instruction replay, not transaction deduplication"
@@ -176,16 +140,11 @@ async fn race(
     let (left, right) = tokio::join!(
         async {
             barrier.wait().await;
-            left.account_client()
-                .submit_transaction_and_wait(&left_transaction)
-                .await
+            submit_transaction(&left, &left_transaction).await
         },
         async {
             barrier.wait().await;
-            right
-                .account_client()
-                .submit_transaction_and_wait(&right_transaction)
-                .await
+            submit_transaction(&right, &right_transaction).await
         },
     );
     Ok([left, right])

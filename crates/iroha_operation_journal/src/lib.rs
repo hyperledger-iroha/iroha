@@ -95,6 +95,9 @@ fn decode_native<T: JsonDeserialize + JsonSerialize>(bytes: &[u8]) -> Result<T> 
 }
 
 /// Retained private operation directory and its exclusive native process lock.
+///
+/// Dropping the journal releases its lock even while an unrelated forked child
+/// still retains a duplicate descriptor before executing its new program.
 pub struct Journal {
     path: PathBuf,
     directory: PrivateDirectory,
@@ -245,6 +248,16 @@ impl NativeJournalReadScope<'_, '_> {
             Some(_) => eyre::bail!("submission marker differs from the exact retained operation"),
             None => Ok(false),
         }
+    }
+}
+
+impl Drop for Journal {
+    fn drop(&mut self) {
+        // Closing this descriptor alone can leave the lock held by an unrelated
+        // child between fork and exec, before CLOEXEC takes effect. Only a
+        // successful acquisition constructs this owner, so a refused contender
+        // never releases another journal's lock.
+        let _ = self.lock.unlock();
     }
 }
 
@@ -712,15 +725,15 @@ impl Journal {
     }
 
     fn lock_directory(directory: PrivateDirectory, create: bool) -> Result<Self> {
-        Self::lock_directory_with_sync(directory, create, PrivateDirectory::sync)
+        Self::lock_directory_with_sync(directory, create, |journal| journal.directory.sync())
     }
 
-    // The injected durability operation keeps native lock admission and post-lock custody
-    // identical in production and in tests that exercise publication failure.
+    // The injected durability operation borrows the acquired owner, keeping native
+    // lock admission and post-lock custody identical when publication fails.
     fn lock_directory_with_sync(
         directory: PrivateDirectory,
         create: bool,
-        sync: impl FnOnce(&PrivateDirectory) -> std::io::Result<()>,
+        sync: impl FnOnce(&Self) -> std::io::Result<()>,
     ) -> Result<Self> {
         let lock = if create {
             directory.create_lock("lock")?
@@ -729,19 +742,21 @@ impl Journal {
         };
         lock.try_lock()
             .wrap_err("another account operation holds this journal")?;
-        if create {
-            sync(&directory)?;
-        } else {
-            // Keep sync's fresh custody checkpoint, but an existing lock creates no
-            // directory entry to publish. Original records and atomic publication
-            // retain their own file and directory durability boundaries.
-            directory.revalidate()?;
-        }
+        // Own explicit release before either fallible post-lock boundary. A
+        // durability or custody refusal must not leave an inherited lock held.
         let result = Self {
             path: directory.path().to_owned(),
             directory,
             lock,
         };
+        if create {
+            sync(&result)?;
+        } else {
+            // Keep sync's fresh custody checkpoint, but an existing lock creates no
+            // directory entry to publish. Original records and atomic publication
+            // retain their own file and directory durability boundaries.
+            result.directory.revalidate()?;
+        }
         result.revalidate()?;
         Ok(result)
     }
@@ -929,6 +944,9 @@ impl Journal {
         Ok(())
     }
 }
+
+#[cfg(all(test, unix))]
+mod lock_release_tests;
 
 #[cfg(test)]
 mod submission_digest_tests;

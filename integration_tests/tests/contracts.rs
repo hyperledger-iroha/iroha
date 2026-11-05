@@ -858,6 +858,67 @@ seiyaku DynamicAccessCounter { import permission "CanEnactGovernance" as CanEnac
     }
     artifact
 }
+// Dynamic int arguments narrow to signed offset/unsigned limit before the host
+// query. Failed narrowing preserves NumericFaultV1::InexactConversion (ABI 7);
+// values inside those scalar ranges reach the host's DecodeError bounds checks.
+const INVALID_PAGINATION_BOUNDS: [(&str, &str, &str, &str, &str); 8] = [
+    (
+        "negative offset",
+        "-1",
+        "1",
+        "DecodeError",
+        "instruction decode error",
+    ),
+    (
+        "negative limit",
+        "0",
+        "-1",
+        "NumericFault",
+        "numeric operation failed with ABI fault 7",
+    ),
+    (
+        "offset-plus-limit overflow",
+        "9223372036854775807",
+        "1",
+        "DecodeError",
+        "instruction decode error",
+    ),
+    (
+        "zero limit",
+        "0",
+        "0",
+        "DecodeError",
+        "instruction decode error",
+    ),
+    (
+        "limit above the maximum",
+        "0",
+        "65",
+        "DecodeError",
+        "instruction decode error",
+    ),
+    (
+        "offset above the signed host range",
+        "9223372036854775808",
+        "1",
+        "NumericFault",
+        "numeric operation failed with ABI fault 7",
+    ),
+    (
+        "offset above the unsigned host range",
+        "18446744073709551616",
+        "1",
+        "NumericFault",
+        "numeric operation failed with ABI fault 7",
+    ),
+    (
+        "limit above the unsigned host range",
+        "0",
+        "18446744073709551616",
+        "NumericFault",
+        "numeric operation failed with ABI fault 7",
+    ),
+];
 fn typed_core_query_pager_artifact() -> Vec<u8> {
     let source = r"
 seiyaku TypedCoreQueryPager {
@@ -896,6 +957,179 @@ fn typed_core_query_page_payload_literals(offset: &str, limit: &str) -> norito::
 fn typed_core_query_page_payload(offset: i64, limit: i64) -> norito::json::Value {
     typed_core_query_page_payload_literals(&offset.to_string(), &limit.to_string())
 }
+#[test]
+fn typed_core_query_pager_preserves_numeric_narrowing_faults() {
+    use std::collections::BTreeMap;
+
+    use ivm::{IVM, VMError, error::VmTrapKind, numeric::NumericFaultV1};
+    use ivm_abi::pointer_abi::{PointerType, encode_tlv};
+
+    let artifact = typed_core_query_pager_artifact();
+    let parsed = ivm::ProgramMetadata::parse(&artifact).unwrap();
+    let interface = parsed.contract_interface.as_ref().unwrap();
+    let run = |entrypoint_name: &str, offset: &str, limit: &str| {
+        let entrypoint = interface
+            .entrypoints
+            .iter()
+            .find(|entrypoint| entrypoint.name == entrypoint_name)
+            .unwrap();
+        let payload = iroha_primitives::json::Json::try_new(
+            typed_core_query_page_payload_literals(offset, limit),
+        )
+        .unwrap();
+        let record = ivm_abi::arguments::encode_argument_record_from_json(
+            entrypoint.argument_schema.as_ref().unwrap(),
+            &payload,
+        )
+        .unwrap();
+        let key: Name = ivm_abi::arguments::ENTRYPOINT_ARGUMENT_RECORD_PUBLIC_INPUT_KEY
+            .parse()
+            .unwrap();
+        let host = ivm::host::DefaultHost::new().with_public_inputs(BTreeMap::from([(
+            key,
+            encode_tlv(PointerType::NoritoBytes, &record).unwrap(),
+        )]));
+        let mut vm = IVM::new(1_000_000);
+        vm.load_program(&artifact).unwrap();
+        vm.select_entrypoint(entrypoint_name).unwrap();
+        vm.set_host(host);
+        let error = vm
+            .run()
+            .expect_err("this host has no committed query state");
+        assert!(
+            vm.public_call_result_word(0).is_err(),
+            "a failed pager must not publish a page"
+        );
+        let trap = vm
+            .last_diagnostic()
+            .expect("capture semantic fault")
+            .trap_kind;
+        (error, trap)
+    };
+    let narrowing_cases = [
+        "negative limit",
+        "offset above the signed host range",
+        "offset above the unsigned host range",
+        "limit above the unsigned host range",
+    ];
+    for entrypoint in ["accounts", "assets", "asset_definitions", "domains", "nfts"] {
+        // This is an execution control, not a successful ledger query: valid
+        // scalar arguments reach the real query syscall, which DefaultHost
+        // deliberately cannot serve. Invalid narrowing must fail before it.
+        let (error, trap) = run(entrypoint, "0", "1");
+        assert!(matches!(
+            error.as_unmetered(),
+            VMError::NotImplemented { syscall }
+                if *syscall == ivm::syscalls::SYSCALL_CORE_QUERY_PAGE
+        ));
+        assert_eq!(trap, VmTrapKind::NotImplemented);
+        for label in narrowing_cases {
+            let (_, offset, limit, expected_trap, expected_message) = INVALID_PAGINATION_BOUNDS
+                .iter()
+                .find(|case| case.0 == label)
+                .unwrap();
+            let (error, trap) = run(entrypoint, offset, limit);
+            assert!(
+                matches!(
+                    error.as_unmetered(),
+                    VMError::NumericFault(NumericFaultV1::InexactConversion)
+                ),
+                "{entrypoint}: {label}: {error}"
+            );
+            assert_eq!(trap, VmTrapKind::NumericFault, "{entrypoint}: {label}");
+            assert_eq!(format!("{trap:?}"), *expected_trap, "{entrypoint}: {label}");
+            assert_eq!(
+                error.as_unmetered().to_string(),
+                *expected_message,
+                "{entrypoint}: {label}"
+            );
+        }
+    }
+}
+
+fn typed_core_query_bounds_batch_request(
+    authority: &AccountId,
+    contract_address: &ContractAddress,
+    entrypoint: &str,
+) -> Result<norito::json::Value> {
+    let items = INVALID_PAGINATION_BOUNDS
+        .iter()
+        .map(|(label, offset, limit, _, _)| {
+            norito::json::object([
+                ("request_id", norito::json::Value::from((*label).to_owned())),
+                (
+                    "contract_address",
+                    norito::json::to_value(contract_address)?,
+                ),
+                (
+                    "entrypoint",
+                    norito::json::Value::from(entrypoint.to_owned()),
+                ),
+                (
+                    "payload",
+                    typed_core_query_page_payload_literals(offset, limit),
+                ),
+                ("gas_limit", norito::json::Value::from(1_000_000_u64)),
+            ])
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(norito::json::object([
+        ("authority", norito::json::to_value(authority)?),
+        ("gas_limit", norito::json::Value::from(1_000_000_u64)),
+        ("items", norito::json::Value::Array(items)),
+    ])?)
+}
+
+#[test]
+fn typed_core_query_bounds_batch_preserves_all_single_view_inputs() {
+    let authority = &*iroha_test_samples::ALICE_ID;
+    let address = ContractAddress::derive(
+        &NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"typed-query-batch-fixture",
+        ))),
+        authority,
+        0,
+        DataSpaceId::UNIVERSAL,
+    )
+    .unwrap();
+    let request = typed_core_query_bounds_batch_request(authority, &address, "accounts").unwrap();
+    let fields = request.as_object().unwrap();
+    assert_eq!(fields.len(), 3);
+    assert_eq!(
+        fields.get("authority"),
+        Some(&norito::json::to_value(authority).unwrap())
+    );
+    assert_eq!(
+        fields
+            .get("gas_limit")
+            .and_then(norito::json::Value::as_u64),
+        Some(1_000_000)
+    );
+    let items = fields.get("items").unwrap().as_array().unwrap();
+    assert_eq!(items.len(), 8);
+    for (item, (label, offset, limit, _, _)) in items.iter().zip(INVALID_PAGINATION_BOUNDS) {
+        let mut item = item.as_object().unwrap().clone();
+        assert_eq!(item.remove("request_id").unwrap().as_str(), Some(label));
+        item.insert("authority".to_owned(), fields["authority"].clone());
+        // The batch execution owner constructs this same single-view DTO per
+        // item. Decode through that public type to check its complete inputs.
+        let item: iroha_torii::ContractViewDto =
+            norito::json::from_value(norito::json::Value::Object(item)).unwrap();
+        assert_eq!(&item.authority, authority);
+        assert_eq!(item.contract_address.as_ref(), Some(&address));
+        assert!(item.contract_alias.is_none());
+        assert_eq!(item.entrypoint, "accounts");
+        assert_eq!(item.gas_limit, 1_000_000);
+        assert_eq!(
+            item.payload
+                .as_ref()
+                .unwrap()
+                .try_into_any_norito::<norito::json::Value>()
+                .unwrap(),
+            typed_core_query_page_payload_literals(offset, limit)
+        );
+    }
+}
 async fn post_typed_core_query_page(
     http: &reqwest::Client,
     client: &iroha::blocking::Client,
@@ -903,8 +1137,6 @@ async fn post_typed_core_query_page(
     entrypoint: &str,
     payload: norito::json::Value,
 ) -> Result<(StatusCode, norito::json::Value)> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NONCE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
     let bound_client = client.client();
     let request = norito::json::object([
         (
@@ -922,10 +1154,21 @@ async fn post_typed_core_query_page(
         ("payload", payload),
         ("gas_limit", norito::json::Value::from(1_000_000_u64)),
     ])?;
+    post_signed_contract_view_request(http, client, "v1/contracts/view", request).await
+}
+async fn post_signed_contract_view_request(
+    http: &reqwest::Client,
+    client: &iroha::blocking::Client,
+    path: &str,
+    request: norito::json::Value,
+) -> Result<(StatusCode, norito::json::Value)> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NONCE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let bound_client = client.client();
     // Retain raw status/error access for semantic-negative assertions, while
     // authenticating the same exact network, target and body as the SDK.
     let body = norito::json::to_vec(&request)?;
-    let url = bound_client.endpoint().join("v1/contracts/view")?;
+    let url = bound_client.endpoint().join(path)?;
     let timestamp_ms: u64 = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_millis()
@@ -2140,6 +2383,60 @@ async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> R
     .await
 }
 
+fn manifest_response_code_hash(manifest: &norito::json::Value) -> Result<Hash> {
+    let value = manifest
+        .get("code_hash")
+        .ok_or_else(|| eyre!("contract manifest is missing its typed code_hash"))?;
+    // ContractManifest owns a typed Hash. Only the response's separate
+    // convenience field uses bare hexadecimal text.
+    norito::json::from_value(value.clone()).map_err(Into::into)
+}
+
+#[test]
+fn manifest_response_code_hash_preserves_canonical_hash_identity() {
+    let artifact = minimal_contract_artifact();
+    let verified = ivm::verify_contract_artifact(&artifact).unwrap();
+    let mut manifest = norito::json::to_value(&verified.manifest).unwrap();
+    assert_eq!(
+        manifest_response_code_hash(&manifest).unwrap(),
+        verified.code_hash
+    );
+    let norito::json::Value::Object(fields) = &mut manifest else {
+        panic!("manifest must serialize as an object");
+    };
+    fields.insert(
+        "code_hash".to_owned(),
+        norito::json::Value::String(hex::encode(verified.code_hash.as_ref())),
+    );
+    assert!(
+        manifest_response_code_hash(&manifest).is_err(),
+        "typed manifest hashes must not accept the bare convenience representation"
+    );
+    let norito::json::Value::Object(fields) = &mut manifest else {
+        unreachable!()
+    };
+    fields.insert("code_hash".to_owned(), norito::json::Value::Null);
+    assert!(manifest_response_code_hash(&manifest).is_err());
+    let norito::json::Value::Object(fields) = &mut manifest else {
+        unreachable!()
+    };
+    fields.remove("code_hash");
+    assert!(manifest_response_code_hash(&manifest).is_err());
+    let other = Hash::new(b"another contract artifact");
+    let norito::json::Value::Object(fields) = &mut manifest else {
+        unreachable!()
+    };
+    fields.insert(
+        "code_hash".to_owned(),
+        norito::json::to_value(&other).unwrap(),
+    );
+    assert_eq!(manifest_response_code_hash(&manifest).unwrap(), other);
+    assert_ne!(
+        manifest_response_code_hash(&manifest).unwrap(),
+        verified.code_hash
+    );
+}
+
 #[allow(clippy::too_many_lines)]
 #[tokio::test]
 async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
@@ -2254,11 +2551,9 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
         ),
         _ => (norito::json::Value::Null, norito::json::Value::Null),
     };
-    let got_code = match &got_manifest {
-        norito::json::Value::Object(m) => m.get("code_hash").and_then(|v| v.as_str()),
-        _ => None,
-    };
-    assert_eq!(got_code, Some(code_hash_hex.as_str()));
+    let got_code = manifest_response_code_hash(&got_manifest)?;
+    assert_eq!(got_code, artifact_id.code_hash);
+    assert_eq!(hex::encode(got_code.as_ref()), code_hash_hex);
     assert!(got_bytes.is_null(), "code_bytes must be null/absent");
     Ok(())
 }
@@ -2429,64 +2724,6 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
 #[tokio::test]
 async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<()> {
     const CURSOR_PAGE_LIMIT: i64 = 3;
-    const INVALID_PAGINATION_BOUNDS: [(&str, &str, &str, &str, &str); 8] = [
-        (
-            "negative offset",
-            "-1",
-            "1",
-            "DecodeError",
-            "instruction decode error",
-        ),
-        (
-            "negative limit",
-            "0",
-            "-1",
-            "AssertionFailed",
-            "assertion failed (constraint violation)",
-        ),
-        (
-            "offset-plus-limit overflow",
-            "9223372036854775807",
-            "1",
-            "DecodeError",
-            "instruction decode error",
-        ),
-        (
-            "zero limit",
-            "0",
-            "0",
-            "DecodeError",
-            "instruction decode error",
-        ),
-        (
-            "limit above the maximum",
-            "0",
-            "65",
-            "DecodeError",
-            "instruction decode error",
-        ),
-        (
-            "offset above the signed host range",
-            "9223372036854775808",
-            "1",
-            "AssertionFailed",
-            "assertion failed (constraint violation)",
-        ),
-        (
-            "offset above the unsigned host range",
-            "18446744073709551616",
-            "1",
-            "AssertionFailed",
-            "assertion failed (constraint violation)",
-        ),
-        (
-            "limit above the unsigned host range",
-            "0",
-            "18446744073709551616",
-            "AssertionFailed",
-            "assertion failed (constraint violation)",
-        ),
-    ];
     let seeded_accounts = (0..6)
         .map(|index| {
             KeyPair::try_from_seed(
@@ -2761,11 +2998,62 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
     }
     for (entrypoint, _, _, _) in &families {
         let entrypoint = *entrypoint;
-        for &(bound_class, offset, limit, expected_trap, expected_message) in
-            &INVALID_PAGINATION_BOUNDS
+        // Single-view failures use the public ErrorEnvelope. A bounded view
+        // batch retains per-item VM diagnostics from the same
+        // evaluate_contract_view_request owner, with identical authority,
+        // target, argument strings and per-item gas. Keep both contracts:
+        // transport refusal for every single request and exact semantic faults.
+        // Batch items have no numeric status field; the single request owns 422.
+        let mut batch_rejections = Vec::with_capacity(network.peers().len());
+        for peer in network.peers() {
+            let peer_client = peer.client();
+            let request = typed_core_query_bounds_batch_request(
+                peer_client.client().account(),
+                &contract_address,
+                entrypoint,
+            )?;
+            let (status, body) = post_signed_contract_view_request(
+                &http,
+                &peer_client,
+                "v1/contracts/view/batch",
+                request,
+            )
+            .await?;
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "{entrypoint} diagnostic batch failed: {body:?}"
+            );
+            assert_eq!(
+                body.get("ok").and_then(norito::json::Value::as_bool),
+                Some(false)
+            );
+            let items = body
+                .get("items")
+                .and_then(norito::json::Value::as_array)
+                .ok_or_else(|| eyre!("{entrypoint} diagnostic batch has no items: {body:?}"))?;
+            assert_eq!(items.len(), INVALID_PAGINATION_BOUNDS.len());
+            for (item, (bound_class, _, _, _, _)) in items.iter().zip(INVALID_PAGINATION_BOUNDS) {
+                assert_eq!(
+                    item.get("request_id").and_then(norito::json::Value::as_str),
+                    Some(bound_class)
+                );
+                assert_eq!(
+                    item.get("contract_address"),
+                    Some(&norito::json::to_value(&contract_address)?)
+                );
+                assert!(
+                    item.get("result").is_none(),
+                    "invalid bounds must not yield a query page"
+                );
+            }
+            batch_rejections.push(items.clone());
+        }
+        for (bound_index, &(bound_class, offset, limit, expected_trap, expected_message)) in
+            INVALID_PAGINATION_BOUNDS.iter().enumerate()
         {
             let mut peer_rejections = Vec::with_capacity(network.peers().len());
-            for peer in network.peers() {
+            for (peer_index, peer) in network.peers().iter().enumerate() {
                 let peer_client = peer.client();
                 let (status, body) = post_typed_core_query_page(
                     &http,
@@ -2781,6 +3069,15 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
                     "{entrypoint} {bound_class} must be a semantic rejection on every peer: \
                      offset={offset}, limit={limit}, body={body:?}"
                 );
+                assert_eq!(
+                    body,
+                    norito::json::to_value(&iroha_torii_shared::ErrorEnvelope::new(
+                        "unprocessable_entity",
+                        "The request cannot be processed as submitted.",
+                    ))?,
+                    "{entrypoint} {bound_class} must retain the exact public refusal envelope"
+                );
+                let body = &batch_rejections[peer_index][bound_index];
                 assert_eq!(
                     body.get("ok").and_then(norito::json::Value::as_bool),
                     Some(false),

@@ -600,16 +600,47 @@ async fn sealed_commitment_reveal_gossips_and_explorer_lookup_uses_entrypoint_ha
         "explorer detail lookup failed with {status}: {body}"
     );
     let payload: norito::json::Value = norito::json::from_str(&body)?;
-    assert_eq!(
-        payload.get("hash").and_then(norito::json::Value::as_str),
-        Some(reveal_entrypoint_hash.to_string().as_str())
-    );
+    require_explorer_entrypoint_hash(&payload, reveal_entrypoint_hash)?;
     assert_eq!(
         payload.get("status").and_then(norito::json::Value::as_str),
         Some("Committed")
     );
     Ok(())
 }
+
+fn require_explorer_entrypoint_hash(
+    payload: &norito::json::Value,
+    expected: HashOf<TransactionEntrypoint>,
+) -> Result<()> {
+    // Explorer detail uses the canonical Hash DTO; collection summaries use a
+    // different, explicitly raw string field. Compare the complete identity.
+    let value = payload
+        .get("hash")
+        .ok_or_else(|| eyre!("explorer hash missing"))?;
+    let actual: Hash = norito::json::from_value(value.clone())?;
+    ensure!(
+        actual == Hash::from(expected),
+        "explorer entrypoint hash mismatch"
+    );
+    Ok(())
+}
+
+#[test]
+fn explorer_detail_requires_the_exact_canonical_entrypoint_hash() -> Result<()> {
+    let expected =
+        HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(b"entrypoint"));
+    require_explorer_entrypoint_hash(&norito::json!({"hash": (expected)}), expected)?;
+    for payload in [
+        norito::json!({"hash": (expected.to_string())}),
+        norito::json!({"hash": (Hash::new(b"different entrypoint"))}),
+        norito::json!({"hash": null}),
+        norito::json!({}),
+    ] {
+        assert!(require_explorer_entrypoint_hash(&payload, expected).is_err());
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(

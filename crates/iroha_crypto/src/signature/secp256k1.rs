@@ -197,7 +197,7 @@ mod tests {
 mod ecdsa_secp256k1 {
     use super::{PrivateKey, PublicKey};
     use crate::{Error, KeyGenOption, ParseError, rng::rng_from_seed};
-    use elliptic_curve::{Generate as _, sec1::ToSec1Point as _};
+    use elliptic_curve::sec1::ToSec1Point as _;
     use k256::ecdsa::{
         RecoveryId, Signature, SigningKey, VerifyingKey,
         signature::hazmat::{PrehashSigner as _, PrehashVerifier as _},
@@ -229,7 +229,15 @@ mod ecdsa_secp256k1 {
                         ));
                     }
                     let mut rng = rng_from_seed(seed);
-                    PrivateKey::generate_from_rng(&mut rng)
+                    // The seeded identity takes each 32-byte ChaCha20 draw in SEC1
+                    // big-endian order, rejecting zero or out-of-range candidates.
+                    let mut candidate = Zeroizing::new([0_u8; 32]);
+                    loop {
+                        rand_core::Rng::fill_bytes(&mut rng, candidate.as_mut());
+                        if let Ok(key) = PrivateKey::from_slice(candidate.as_ref()) {
+                            break key;
+                        }
+                    }
                 }
                 KeyGenOption::FromPrivateKey(ref s) => s.clone(),
             };

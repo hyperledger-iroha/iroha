@@ -162,7 +162,7 @@ fn privacy_verification_error(
         }
         PrivacyVerificationErrorV1::NativeAnonymousPgc(source) => {
             use crate::privacy_engines::anonymous_pgc::AnonymousPgcReadError;
-            return match *source {
+            return match source {
                 AnonymousPgcReadError::Codec(original) => {
                     crate::execution_attempt::canonical_decode_attempt_error(original, |error| {
                         invalid_privacy_parameter(format!(
@@ -9697,11 +9697,9 @@ mod tests {
         )
         .unwrap_err();
         let owner = codec.local_refusal().expect("actual local decoder scope");
-        let ExecutionAttemptError::Deferred(deferred) =
-            privacy_verification_error(PrivacyVerificationErrorV1::NativeAnonymousPgc(Box::new(
-                AnonymousPgcReadError::Codec(codec),
-            )))
-        else {
+        let ExecutionAttemptError::Deferred(deferred) = privacy_verification_error(
+            PrivacyVerificationErrorV1::NativeAnonymousPgc(AnonymousPgcReadError::Codec(codec)),
+        ) else {
             panic!("native original local cause must defer")
         };
         assert_eq!(deferred.decode_refusal(), Some(&owner));
@@ -9715,9 +9713,7 @@ mod tests {
             AnonymousPgcReadError::Relation(AnonymousPgcError::InvalidPaymentProofShape),
         ] {
             assert!(matches!(
-                privacy_verification_error(PrivacyVerificationErrorV1::NativeAnonymousPgc(
-                    Box::new(cause)
-                )),
+                privacy_verification_error(PrivacyVerificationErrorV1::NativeAnonymousPgc(cause)),
                 ExecutionAttemptError::Rejected(_)
             ));
         }

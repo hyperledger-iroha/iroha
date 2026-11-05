@@ -173,16 +173,34 @@ mod shutdown_tests {
         command
     }
 
-    #[test]
-    fn peer_shutdown_child_fixture() {
+    #[tokio::test]
+    async fn peer_shutdown_child_fixture() {
         let Ok(mode) = std::env::var(SHUTDOWN_FIXTURE_MODE) else {
             return;
         };
         if mode == "exit" {
             return;
         }
-        assert!(matches!(mode.as_str(), "eof" | "ignore-eof"));
         use std::io::Write as _;
+        #[cfg(unix)]
+        if matches!(mode.as_str(), "drain-term" | "ignore-term") {
+            use tokio::signal::unix::{SignalKind, signal};
+            let mut term = signal(SignalKind::terminate()).expect("install TERM handler");
+            let mut quit = signal(SignalKind::quit()).expect("install QUIT handler");
+            println!("\npeer-shutdown-ready");
+            std::io::stdout().flush().expect("flush ready");
+            term.recv().await.expect("original TERM signal");
+            println!("peer-shutdown-term");
+            std::io::stdout().flush().expect("flush TERM receipt");
+            // A real validator can spend more than five seconds draining a worker.
+            let drain_seconds = if mode == "drain-term" { 6 } else { 120 };
+            tokio::select! {
+                _ = quit.recv() => panic!("validator shutdown requested a core dump"),
+                _ = tokio::time::sleep(Duration::from_secs(drain_seconds)) => {}
+            }
+            return;
+        }
+        assert!(matches!(mode.as_str(), "eof" | "eof-failed" | "ignore-eof"));
         let mut output = std::io::stdout().lock();
         output.write_all(b"\npeer-shutdown-ready\n").expect("ready");
         output.flush().expect("flush ready");
@@ -192,54 +210,140 @@ mod shutdown_tests {
             .write_all(b"peer-shutdown-eof\n")
             .expect("EOF receipt");
         output.flush().expect("flush EOF receipt");
+        if mode == "eof-failed" {
+            std::process::exit(23);
+        }
         if mode == "ignore-eof" {
             std::thread::sleep(Duration::from_secs(60));
         }
     }
 
-    #[cfg(target_family = "unix")]
+    #[cfg(unix)]
     #[tokio::test]
-    async fn shutdown_prefers_sigterm_before_sigquit() {
-        let dir = tempdir().expect("tempdir");
-        let signal_log = dir.path().join("signals.log");
-        let mut cmd = development_process_command("sh").expect("required Unix shell");
-        cmd.arg("-c").arg(
-            r#": > "$SIGNAL_LOG"; trap 'echo SIGTERM >> "$SIGNAL_LOG"; exit 0' TERM; trap 'echo SIGQUIT >> "$SIGNAL_LOG"; exit 0' QUIT; while true; do sleep 1; done"#,
+    async fn shutdown_waits_for_a_draining_validator_after_sigterm() {
+        use tokio::io::AsyncReadExt as _;
+        let (mut peer, mut output, _fatal_tx) = native_shutdown_fixture("drain-term").await;
+        let mut events = peer.events.subscribe();
+        let status = peer.shutdown_or_kill().await.expect("reap draining peer");
+        assert!(
+            status.success(),
+            "validator must finish its original drain: {status:?}"
         );
-        cmd.env("SIGNAL_LOG", &signal_log);
-        cmd.stdout(Stdio::null()).stderr(Stdio::null());
-        let child = cmd
-            .spawn()
-            .and_then(ResolvedAsyncChild::from_development_child)
-            .expect("spawn signal trapper");
-        let (events, _rx) = broadcast::channel(4);
-        let (block_height, _rx) = watch::channel(None);
-        let (_fatal_tx, fatal_rx) = watch::channel(false);
-        let mut peer_exit = PeerExit {
-            child,
-            span: tracing::Span::none(),
-            is_running: Arc::new(AtomicBool::new(true)),
-            is_normal_shutdown_started: Arc::new(AtomicBool::new(false)),
-            events,
-            block_height,
-            fatal_rx,
-            stderr_log_ready: Arc::new(Notify::new()),
-            stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
-        };
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let _status = peer_exit
-            .shutdown_or_kill()
+        assert!(matches!(
+            events.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+        let mut receipt = String::new();
+        output
+            .read_to_string(&mut receipt)
             .await
-            .expect("shutdown should complete");
-        let log = std::fs::read_to_string(&signal_log).expect("read signal log");
+            .expect("signal receipt");
+        assert!(receipt.contains("peer-shutdown-term"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_reaps_an_unresponsive_validator_without_requesting_a_core_dump() {
+        use std::os::unix::process::ExitStatusExt as _;
+        use tokio::io::AsyncReadExt as _;
+        let (peer, mut output, _fatal_tx) = native_shutdown_fixture("ignore-term").await;
+        let mut events = peer.events.subscribe();
+        let (request, shutdown) = oneshot::channel();
+        request.send(()).expect("request peer shutdown");
+        peer.monitor(shutdown)
+            .await
+            .expect("reap unresponsive peer");
+        assert!(matches!(events.try_recv(), Ok(PeerLifecycleEvent::Killed)));
+        let PeerLifecycleEvent::Terminated { status } =
+            events.try_recv().expect("original terminal observation")
+        else {
+            panic!("missing original exit status");
+        };
+        assert_eq!(status.signal(), Some(nix::libc::SIGKILL));
+        let mut receipt = String::new();
+        output
+            .read_to_string(&mut receipt)
+            .await
+            .expect("signal receipt");
+        assert!(receipt.contains("peer-shutdown-term"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn signal_errors_preserve_the_original_exit_and_only_esrch_waits_for_it() {
+        use nix::errno::Errno;
+
+        let (mut peer, _output, _fatal) = native_shutdown_fixture("eof-failed").await;
+        let mut events = peer.events.subscribe();
+        let input = peer.child.stdin.take().expect("retain the original input");
+        let short = Duration::from_millis(50);
+        let denied = peer
+            .observe_term_race(Err(Errno::EPERM), short)
+            .await
+            .unwrap_err();
+        assert_eq!(denied.downcast_ref::<Errno>(), Some(&Errno::EPERM));
+        let denied = peer
+            .observe_forced_shutdown(Err(std::io::Error::from_raw_os_error(nix::libc::EPERM)))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            denied
+                .downcast_ref::<std::io::Error>()
+                .unwrap()
+                .raw_os_error(),
+            Some(nix::libc::EPERM)
+        );
+
+        let pending = peer
+            .observe_term_race(Err(Errno::ESRCH), short)
+            .await
+            .unwrap_err();
         assert!(
-            log.contains("SIGTERM"),
-            "expected SIGTERM handler to run, log: {log:?}"
+            pending
+                .downcast_ref::<tokio::time::error::Elapsed>()
+                .is_some()
         );
         assert!(
-            !log.contains("SIGQUIT"),
-            "SIGQUIT should not be used for a responsive shutdown, log: {log:?}"
+            peer.child
+                .try_wait()
+                .expect("poll original child")
+                .is_none()
         );
+        let observed = peer.observe_term_race(Err(Errno::ESRCH), Duration::from_secs(10));
+        tokio::pin!(observed);
+        assert!(timeout(short, &mut observed).await.is_err());
+        drop(input);
+        let status = observed
+            .await
+            .unwrap()
+            .expect("ESRCH must observe the original");
+        assert_eq!(status.code(), Some(23));
+        assert!(matches!(
+            events.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failed_forced_signal_preserves_a_racing_terminal_without_a_killed_event() {
+        let (mut peer, _output, _fatal) = native_shutdown_fixture("eof-failed").await;
+        let mut events = peer.events.subscribe();
+        // Waiting on this original closes stdin and observes its nonzero exit.
+        let status = peer
+            .observe_forced_shutdown(Err(std::io::Error::from_raw_os_error(nix::libc::ESRCH)))
+            .await
+            .expect("bound the original wait after ESRCH");
+        assert_eq!(status.code(), Some(23));
+        let observed = peer
+            .observe_forced_shutdown(Err(std::io::Error::from_raw_os_error(nix::libc::EPERM)))
+            .await
+            .expect("independently observed terminal");
+        assert_eq!(observed, status);
+        assert!(matches!(
+            events.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
     }
     #[tokio::test]
     async fn shutdown_treats_already_exited_child_as_graceful_completion() {
@@ -322,8 +426,8 @@ mod shutdown_tests {
             .expect("peer monitor should complete")
             .expect("already-exited child should be treated as graceful during shutdown race");
     }
-    #[cfg(windows)]
-    async fn native_eof_fixture(
+    #[cfg(any(unix, windows))]
+    async fn native_shutdown_fixture(
         mode: &str,
     ) -> (
         PeerExit,
@@ -336,7 +440,8 @@ mod shutdown_tests {
         let mut child = command
             .spawn()
             .and_then(ResolvedAsyncChild::from_development_child)
-            .expect("spawn native EOF child");
+            .expect("spawn native shutdown child");
+        #[cfg(windows)]
         let shutdown_input = Some(child.stdin.take().expect("original stdin writer"));
         let mut output = tokio::io::BufReader::new(child.stdout.take().expect("child stdout"));
         timeout(Duration::from_secs(10), async {
@@ -357,6 +462,7 @@ mod shutdown_tests {
         stderr_log_ready.notify_one();
         let peer = PeerExit {
             child,
+            #[cfg(windows)]
             shutdown_input,
             span: tracing::Span::none(),
             is_running: Arc::new(AtomicBool::new(true)),
@@ -374,7 +480,7 @@ mod shutdown_tests {
     #[tokio::test]
     async fn native_shutdown_closes_original_input_and_waits_for_clean_exit() {
         use tokio::io::AsyncReadExt as _;
-        let (mut peer, mut output, _fatal_tx) = native_eof_fixture("eof").await;
+        let (mut peer, mut output, _fatal_tx) = native_shutdown_fixture("eof").await;
         assert!(peer.child.try_wait().expect("child is live").is_none());
         assert!(peer.shutdown_input.is_some());
         let status = timeout(Duration::from_secs(3), peer.shutdown_or_kill())
@@ -398,7 +504,7 @@ mod shutdown_tests {
     #[tokio::test]
     async fn native_monitor_retains_input_until_shutdown_is_requested() {
         use tokio::io::AsyncReadExt as _;
-        let (peer, mut output, _fatal_tx) = native_eof_fixture("eof").await;
+        let (peer, mut output, _fatal_tx) = native_shutdown_fixture("eof").await;
         let running = Arc::clone(&peer.is_running);
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let monitor = peer.monitor(shutdown_rx);
@@ -428,13 +534,15 @@ mod shutdown_tests {
     #[tokio::test]
     async fn native_shutdown_escalates_only_after_unresponsive_eof_child() {
         use tokio::io::AsyncReadExt as _;
-        let (mut peer, mut output, _fatal_tx) = native_eof_fixture("ignore-eof").await;
+        let (mut peer, mut output, _fatal_tx) = native_shutdown_fixture("ignore-eof").await;
+        let mut events = peer.events.subscribe();
         let started = Instant::now();
-        let status = timeout(Duration::from_secs(12), peer.shutdown_or_kill())
+        let status = timeout(PEER_SHUTDOWN_TIMEOUT, peer.shutdown_or_kill())
             .await
             .expect("bounded forced shutdown")
             .expect("forced child exit is reaped");
-        assert!(started.elapsed() >= Duration::from_secs(5));
+        assert!(started.elapsed() >= PEER_GRACEFUL_EXIT_TIMEOUT);
+        assert!(matches!(events.try_recv(), Ok(PeerLifecycleEvent::Killed)));
         assert!(
             !status.success(),
             "unresponsive child must not claim clean shutdown"
@@ -448,6 +556,64 @@ mod shutdown_tests {
         assert!(
             receipt.contains("peer-shutdown-eof"),
             "EOF precedes escalation"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn task_timeout_leaves_the_live_owner_of_a_stale_diagnostic_pid_untouched() {
+        let environment = Environment::new();
+        let peer = NetworkPeer::builder().build(&environment);
+        let (original, _output, fatal_tx) = native_shutdown_fixture("eof").await;
+        let mut terminal = original.events.subscribe();
+        let (shutdown, request) = oneshot::channel();
+        let mut tasks = JoinSet::new();
+        tasks.spawn(async move {
+            original
+                .monitor(request)
+                .await
+                .expect("reap original child")
+        });
+        let event = timeout(Duration::from_secs(10), terminal.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(event, PeerLifecycleEvent::Terminated { status } if status.success()));
+
+        // Model PID reuse deterministically: only our separate, independently owned
+        // live fixture is named by the stale diagnostic value in the finished run.
+        let (mut sentinel, _output, _fatal) = native_shutdown_fixture("eof").await;
+        let input = sentinel.child.stdin.take().expect("keep sentinel alive");
+        let (pending, cancelled) = oneshot::channel::<()>();
+        tasks.spawn(async move {
+            let _retained = pending;
+            std::future::pending::<()>().await;
+        });
+        *peer.run.lock().await = Some(PeerRun {
+            tasks,
+            shutdown,
+            fatal_tx,
+            pid: Some(sentinel.child.id().expect("live sentinel")),
+            broker_child: None,
+            broker_shutdown: None,
+        });
+        assert!(peer.shutdown_if_started().await);
+        assert!(
+            cancelled.await.is_err(),
+            "outer deadline must abort the pending task"
+        );
+        assert!(
+            sentinel.child.try_wait().unwrap().is_none(),
+            "sentinel was signalled"
+        );
+        drop(input);
+        let status = timeout(Duration::from_secs(10), sentinel.child.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            status.success(),
+            "sentinel must exit cleanly on its own EOF"
         );
     }
 

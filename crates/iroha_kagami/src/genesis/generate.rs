@@ -1018,7 +1018,16 @@ mod consensus_manifest_tests {
         use iroha_data_model::sumeragi_lanes::{
             SumeragiFixedLane, SumeragiLaneMember, SumeragiLaneRoute,
         };
-        let key = iroha_crypto::KeyPair::from_seed(vec![7; 32], Algorithm::BlsNormal);
+        let mut committee = (7..=10)
+            .map(|seed| {
+                let key = iroha_crypto::KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal);
+                SumeragiLaneMember {
+                    peer: iroha_model_base::peer::PeerId::new(key.public_key().clone()),
+                    pop: iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("pop"),
+                }
+            })
+            .collect::<Vec<_>>();
+        committee.sort_by(|left, right| left.peer.cmp(&right.peer));
         let policy = SumeragiLanePolicy {
             da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
             anchor_freshness: 16,
@@ -1028,10 +1037,7 @@ mod consensus_manifest_tests {
             fixed: vec![SumeragiFixedLane {
                 lane: iroha_model_base::topology::LaneId::new(2),
                 dataspace: iroha_model_base::topology::DataSpaceId::new(0),
-                committee: vec![SumeragiLaneMember {
-                    peer: iroha_model_base::peer::PeerId::new(key.public_key().clone()),
-                    pop: iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("pop"),
-                }],
+                committee,
             }],
             routes: vec![SumeragiLaneRoute {
                 lane: iroha_model_base::topology::LaneId::new(2),

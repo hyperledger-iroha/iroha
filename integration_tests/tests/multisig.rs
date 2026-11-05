@@ -476,6 +476,71 @@ fn multisig_role_suffix(role: &RoleId) -> Option<&str> {
         .rsplit_once('/')
         .map(|(_, suffix)| suffix)
 }
+/// Decode the complete bounded assignment page for a freshly registered signatory.
+fn account_role_ids_from_complete_page(
+    page: iroha::collections::Page<JsonValue>,
+) -> Result<Vec<RoleId>> {
+    eyre::ensure!(
+        page.items.len() <= 64 && page.next_cursor.is_none() && page.total.is_none(),
+        "fresh signatory role page is incomplete, oversized, or supplies an unrequested total"
+    );
+    let roles = page
+        .items
+        .into_iter()
+        .map(|row| {
+            let id = row
+                .get("id")
+                .cloned()
+                .ok_or_else(|| eyre!("account role assignment omitted its exact id"))?;
+            norito::json::from_value::<RoleId>(id).map_err(Into::into)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    eyre::ensure!(
+        roles.windows(2).all(|pair| pair[0] < pair[1]),
+        "account role assignments are duplicated or out of order"
+    );
+    Ok(roles)
+}
+#[test]
+fn account_role_page_preserves_exact_ids_and_rejects_incomplete_assignments() -> Result<()> {
+    use iroha::collections::Page;
+
+    let row = |id: &str| norito::json!({"id": id});
+    let page = |items| Page {
+        items,
+        next_cursor: None,
+        total: None,
+    };
+    let hashed: RoleId = format!(
+        "MULTISIG_SIGNATORY/domain/{}",
+        iroha_crypto::HashOf::new(&*ALICE_ID)
+    )
+    .parse()?;
+    assert_eq!(
+        account_role_ids_from_complete_page(page(vec![row(&hashed.to_string())]))?,
+        vec![hashed]
+    );
+    let roles = account_role_ids_from_complete_page(page(vec![row("a"), row("b")]))?;
+    assert_eq!(roles, vec!["a".parse::<RoleId>()?, "b".parse()?]);
+    for invalid in [
+        page(vec![row("a"), row("a")]),
+        page(vec![row("b"), row("a")]),
+        page(vec![row("")]),
+        page(vec![norito::json!({"other": "a"})]),
+        page(vec![row("a"); 65]),
+        Page {
+            next_cursor: Some("continued".to_owned()),
+            ..page(vec![row("a")])
+        },
+        Page {
+            total: Some(1),
+            ..page(vec![row("a")])
+        },
+    ] {
+        assert!(account_role_ids_from_complete_page(invalid).is_err());
+    }
+    Ok(())
+}
 const COLLECTING_SIGNATURES_STATUS: &str = "COLLECTING_SIGNATURES";
 fn collect_multisig_proposals(
     client: &Client,
@@ -807,11 +872,22 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
         .next()
         .map(|(account_id, key_pair)| (account_id.clone(), key_pair.clone()))
         .expect("signatory set must not be empty");
-    let proposer_roles = test_client
-        .client()
-        .query(FindRolesByAccountId::new(proposer.0.clone()))
-        .execute_all()
-        .wrap_err("fetch proposer roles after multisig registration")?;
+    // Account assignments use the signed collection endpoint. The fresh
+    // signatory has a finite role set, so require its entire page, not a prefix.
+    let proposer_roles = account_role_ids_from_complete_page(
+        test_client
+            .list_page(
+                &iroha::collections::Collection::AccountRoles(proposer.0.clone()),
+                &iroha::collections::ListQuery::new().limit(64),
+            )
+            .wrap_err("fetch proposer roles after multisig registration")?,
+    )?;
+    let expected_multisig_role: RoleId = format!(
+        "MULTISIG_SIGNATORY/{domain}/{}",
+        iroha_crypto::HashOf::new(&multisig_account_id)
+    )
+    .parse()?;
+    assert!(proposer_roles.contains(&expected_multisig_role));
     assert!(
         proposer_roles
             .iter()
@@ -821,6 +897,7 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
             }),
         "proposer should receive a hashed MULTISIG_SIGNATORY role for the long multisig account"
     );
+    fund_runtime_signers(&test_client, [proposer.0.clone()])?;
     let proposer_client = alt_client(proposer.clone(), &test_client);
     let mut expected_proposal_ids = Vec::new();
     for suffix in ["a", "b", "c"] {
