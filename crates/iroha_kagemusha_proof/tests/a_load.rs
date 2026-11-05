@@ -24,7 +24,7 @@ fn load_policy_requires_fixed_nonzero_provider_and_finite_root() {
 #[test]
 fn genuine_load_sigma_signed_objects_and_recovery_share_exact_roots() {
     let (circuit, sigma) = fixture();
-    assert_eq!(sigma.len(), 3296);
+    assert_eq!(sigma.len(), 3424);
     assert!(
         check_circuit(&circuit, 16, &circuit.public(), CheckMode::Strict)
             .unwrap()
