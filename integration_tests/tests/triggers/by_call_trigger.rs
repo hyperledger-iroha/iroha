@@ -1,4 +1,5 @@
 //! Tests for executing triggers directly
+use crate::contract_fixture;
 use crate::triggers::get_asset_value;
 use eyre::{Result, WrapErr};
 use futures_util::StreamExt as _;
@@ -21,25 +22,54 @@ use iroha::{
         transaction::error::TransactionRejectionReason,
     },
 };
+use iroha_data_model::smart_contract::ContractAlias;
 use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
-use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, load_sample_ivm};
 use mint_rose_trigger_data_model::MintRoseArgs;
 use tokio::time::{Duration, Instant, sleep, timeout};
 const TRIGGER_NAME: &str = "mint_rose";
-fn contract_entrypoint_metadata(entrypoint: &str) -> Metadata {
-    let mut metadata = Metadata::default();
-    metadata.insert(
-        "contract_entrypoint"
-            .parse::<Name>()
-            .expect("static contract entrypoint metadata key is valid"),
-        Json::new(entrypoint.to_owned()),
-    );
-    metadata
+fn sample_contract_alias() -> ContractAlias {
+    ContractAlias::from_components("mint_rose_fixture", None, "universal")
+        .expect("canonical trigger fixture alias")
 }
+fn contract_entrypoint_metadata(entrypoint: &str) -> Metadata {
+    assert_eq!(entrypoint, "run", "sample has only the run callback");
+    contract_fixture::call_metadata(&sample_contract_alias())
+}
+fn sample_contract_builder() -> NetworkBuilder {
+    contract_fixture::deployment_permissions(&ALICE_ID, &[sample_contract_alias()])
+        .into_iter()
+        .fold(
+            NetworkBuilder::new(),
+            NetworkBuilder::with_genesis_instruction,
+        )
+}
+async fn deploy_sample_contract(client: &iroha::blocking::Client) -> Result<()> {
+    let client = client.clone();
+    spawn_blocking(move || {
+        let artifact = load_sample_ivm("mint_rose_trigger");
+        let permission = iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition {
+            asset_definition: AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal")?,
+                "rose".parse()?,
+            ),
+        }
+        .into();
+        contract_fixture::deploy(
+            &client,
+            artifact.as_ref(),
+            sample_contract_alias(),
+            &[permission],
+        )
+        .map(drop)
+    })
+    .await??;
+    Ok(())
+}
+
 async fn start_network(context: &'static str) -> Result<Option<sandbox::SerializedNetwork>> {
     sandbox::start_network_async_or_skip(NetworkBuilder::new(), context).await
 }
@@ -975,7 +1005,7 @@ async fn trigger_in_genesis() -> Result<()> {
         .with_metadata(contract_entrypoint_metadata("run")),
     );
     let Some(network) = sandbox::start_network_async_or_skip(
-        NetworkBuilder::new().with_genesis_instruction(Register::trigger(trigger)),
+        sample_contract_builder().with_genesis_instruction(Register::trigger(trigger)),
         stringify!(trigger_in_genesis),
     )
     .await?
@@ -984,6 +1014,7 @@ async fn trigger_in_genesis() -> Result<()> {
     };
     network.ensure_blocks_with(|h| h.total >= 1).await?;
     let test_client = network.client();
+    deploy_sample_contract(&test_client).await?;
     run_or_skip(stringify!(trigger_in_genesis), || async {
         let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal")?,
@@ -1354,12 +1385,13 @@ async fn trigger_burn_repetitions() -> Result<()> {
 async fn unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss()
 -> Result<()> {
     let Some(network) =
-        start_network(stringify!(unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss))
+        sandbox::start_network_async_or_skip(sample_contract_builder(), stringify!(unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss))
             .await?
     else {
         return Ok(());
     };
     let test_client = network.client();
+    deploy_sample_contract(&test_client).await?;
     run_or_skip(
         stringify!(unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss),
         || async {
@@ -1444,11 +1476,17 @@ fn build_register_trigger_isi(
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn call_execute_trigger_with_args() -> Result<()> {
-    let Some(network) = start_network(stringify!(call_execute_trigger_with_args)).await? else {
+    let Some(network) = sandbox::start_network_async_or_skip(
+        sample_contract_builder(),
+        stringify!(call_execute_trigger_with_args),
+    )
+    .await?
+    else {
         return Ok(());
     };
     let test_client = network.client();
     network.ensure_blocks_with(|h| h.total >= 1).await?;
+    deploy_sample_contract(&test_client).await?;
     run_or_skip(stringify!(call_execute_trigger_with_args), || async {
         let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal")?,

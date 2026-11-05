@@ -396,7 +396,7 @@ async fn data_event_scenarios() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new()
             .with_peers(4)
-            .with_genesis_post_topology_isi(payment_bootstrap),
+            .with_genesis_post_bootstrap_isi(payment_bootstrap),
         "data_events",
     )
     .await?

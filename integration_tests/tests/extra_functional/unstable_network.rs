@@ -809,13 +809,26 @@ async fn network_doesnt_start_without_relay_being_started() -> Result<()> {
         return Ok(());
     }
     let client = network.client();
-    spawn_blocking(move || {
-        client.submit(
-            Log::new(Level::INFO, "relay stalled".to_owned()),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-    })
-    .await??;
+    // The relay deliberately prevents finality here. Wait only for authenticated
+    // Torii acceptance, then let the unchanged block assertions own progress.
+    let account = client.account_client();
+    let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        vec![Log::new(Level::INFO, "relay stalled".to_owned())],
+        FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    ))?;
+    let quote = account
+        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+        .await?;
+    ensure!(
+        payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent),
+        "fee quote changed the selected payer, sponsor revision, or gas bound"
+    );
+    payload.fee_payment = quote.intent;
+    let transaction = account.sign_transaction(payload)?;
+    account.submit_transaction(&transaction).await?;
     let Err(_) = timeout(
         Duration::from_secs(3),
         once_blocks_sync(network.peers().iter(), BlockHeight::predicate_non_empty(2)),
@@ -938,13 +951,26 @@ async fn block_after_genesis_is_synced() -> Result<()> {
         relay.suspend(&peer.id()).activate();
     }
     let client = network.client();
-    spawn_blocking(move || {
-        client.submit(
-            Log::new(Level::INFO, "tick".to_owned()),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-    })
-    .await??;
+    // The relay deliberately prevents finality here. Wait only for authenticated
+    // Torii acceptance, then let the unchanged block assertions own progress.
+    let account = client.account_client();
+    let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        vec![Log::new(Level::INFO, "tick".to_owned())],
+        FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    ))?;
+    let quote = account
+        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+        .await?;
+    ensure!(
+        payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent),
+        "fee quote changed the selected payer, sponsor revision, or gas bound"
+    );
+    payload.fee_payment = quote.intent;
+    let transaction = account.sign_transaction(payload)?;
+    account.submit_transaction(&transaction).await?;
     let Err(_) = timeout(
         pipeline_window,
         once_blocks_sync(network.peers().iter(), BlockHeight::predicate_non_empty(2)),
@@ -999,7 +1025,8 @@ impl UnstableNetwork {
             ));
         }
         let account_id = ALICE_ID.clone();
-        let asset_owning_domain = DomainId::try_new("wonderland", "universal").expect("Valid");
+        let asset_owning_domain =
+            DomainId::try_new("unstable_network", "universal").expect("Valid");
         let asset_definition_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             asset_owning_domain.clone(),
             "unstable".parse().expect("Valid"),
@@ -1171,6 +1198,7 @@ impl UnstableNetwork {
             .with_genesis_instruction(SetParameter::new(Parameter::Block(
                 BlockParameter::MaxTransactions(nonzero!(1u64)),
             )))
+            .with_genesis_instruction(Register::domain(Domain::new(asset_owning_domain.clone())))
             .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
                 asset_definition_id.clone(),
                 "unstable".to_owned(),

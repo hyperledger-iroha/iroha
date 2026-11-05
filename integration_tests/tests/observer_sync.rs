@@ -27,6 +27,7 @@ fn observer_node_catches_up() -> Result<()> {
     let observer = NetworkPeerBuilder::new()
         .with_seed(Some(b"observer"))
         .build(network.env());
+    network.attach_peer(&observer)?;
     // Prepare a trusted_peers override including existing peers and the observer itself.
     // The observer is trusted for networking/block sync, but it is intentionally omitted
     // from `trusted_peers_pop` so the validator roster remains the four validator peers.

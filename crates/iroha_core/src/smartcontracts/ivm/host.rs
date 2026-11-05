@@ -6348,7 +6348,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 Metadata::default(),
             ))));
             let transfer = InstructionBox::from(TransferBox::from(Transfer::nft(
-                self.authority.clone(),
+                self.effect_authority(),
                 nft_id,
                 account_id.clone(),
             )));
@@ -15401,6 +15401,66 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
             host.queued[1].authority, caller,
             "the transaction caller must not become the contract NFT issuer",
         );
+    }
+    #[test]
+    fn create_nfts_for_all_uses_effect_authority_as_issuer_and_transfer_source() {
+        let caller = fixture_account("alice");
+        let recipients = Arc::new(vec![fixture_account("bob"), fixture_account("carol")]);
+        let contract_address = ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
+            &caller,
+            92,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let subject = contract_address.subject_id();
+        assert_ne!(caller, subject);
+        for contract_frame in [false, true] {
+            let mut host = CoreHost::with_accounts(caller.clone(), Arc::clone(&recipients));
+            if contract_frame {
+                host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+                    contract_address: contract_address.clone(),
+                    contract_subject: subject.clone(),
+                    contract_alias: None,
+                    entrypoint: "create_for_all".to_owned(),
+                }));
+            }
+            let issuer = if contract_frame { &subject } else { &caller };
+            let mut vm = IVM::new(1_000_000);
+            host.syscall(ivm::syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS, &mut vm)
+                .expect("queue NFT creation for every recipient");
+            assert_eq!(host.queued.len(), recipients.len() * 2);
+            for (effects, recipient) in host.queued.chunks_exact(2).zip(recipients.iter()) {
+                assert_eq!(&effects[0].authority, issuer);
+                assert_eq!(&effects[1].authority, issuer);
+                let instruction = effects[0].instruction().expect("registration instruction");
+                let RegisterBox::Nft(register) = instruction
+                    .as_any()
+                    .downcast_ref::<RegisterBox>()
+                    .expect("native NFT registration")
+                else {
+                    panic!("expected NFT registration")
+                };
+                let expected_transfer = InstructionBox::from(TransferBox::from(Transfer::nft(
+                    issuer.clone(),
+                    register.object().id().clone(),
+                    recipient.clone(),
+                )));
+                assert_eq!(effects[1].instruction(), Some(&expected_transfer));
+                if contract_frame {
+                    assert_ne!(effects[0].authority, caller);
+                    let wrong_transfer = InstructionBox::from(TransferBox::from(Transfer::nft(
+                        caller.clone(),
+                        register.object().id().clone(),
+                        recipient.clone(),
+                    )));
+                    assert_ne!(effects[1].instruction(), Some(&wrong_transfer));
+                }
+            }
+            assert_eq!(host.nft_seq, u64::try_from(recipients.len()).unwrap());
+        }
     }
     #[test]
     fn mint_asset_syscall_accepts_allocated_heap_quantity_tlv() {

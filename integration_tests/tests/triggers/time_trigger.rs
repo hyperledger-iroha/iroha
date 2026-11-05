@@ -1,13 +1,13 @@
 //! Time-based trigger execution paths using bounded async waits.
-use crate::triggers::get_asset_value;
+use crate::{contract_fixture, triggers::get_asset_value};
 use eyre::{Result, WrapErr};
 use integration_tests::{sandbox, sync::spawn_blocking};
 use iroha::{
     blocking::Client,
     data_model::{Level, asset::AssetId, prelude::*},
 };
+use iroha_data_model::smart_contract::ContractAlias;
 use iroha_model_base::domain::DomainId;
-use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_test_network::*;
@@ -18,15 +18,9 @@ use std::{
 };
 use tokio::time::{sleep, timeout};
 static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
-fn contract_entrypoint_metadata(entrypoint: &str) -> Metadata {
-    let mut metadata = Metadata::default();
-    metadata.insert(
-        "contract_entrypoint"
-            .parse::<Name>()
-            .expect("static contract entrypoint metadata key is valid"),
-        Json::new(entrypoint.to_owned()),
-    );
-    metadata
+fn nft_contract_alias() -> ContractAlias {
+    ContractAlias::from_components("nft_for_all_fixture", None, "universal")
+        .expect("canonical NFT fixture alias")
 }
 fn curr_time() -> Duration {
     use std::time::SystemTime;
@@ -199,16 +193,44 @@ async fn time_trigger_scenarios() -> Result<()> {
     loop {
         attempt += 1;
         let result = Box::pin(async {
-            let Some(network) = sandbox::start_network_async_or_skip(
-                NetworkBuilder::new().with_default_block_cadence(),
-                stringify!(time_trigger_scenarios),
-            )
-            .await?
+            let nft_permission: Permission =
+                iroha_executor_data_model::permission::nft::CanRegisterNft {
+                    domain: iroha_genesis::GENESIS_DOMAIN_ID.clone(),
+                }
+                .into();
+            let builder =
+                contract_fixture::deployment_permissions(&ALICE_ID, &[nft_contract_alias()])
+                    .into_iter()
+                    .fold(
+                        NetworkBuilder::new().with_default_block_cadence(),
+                        NetworkBuilder::with_genesis_instruction,
+                    )
+                    .with_genesis_instruction(Grant::account_permission(
+                        nft_permission.clone(),
+                        ALICE_ID.clone(),
+                    ));
+            let Some(network) =
+                sandbox::start_network_async_or_skip(builder, stringify!(time_trigger_scenarios))
+                    .await?
             else {
                 return Ok(());
             };
             let test_client = network.client();
             network.ensure_blocks_with(|h| h.total >= 1).await?;
+            spawn_blocking({
+                let client = test_client.clone();
+                move || {
+                    let artifact = load_sample_ivm("create_nft_for_every_user_trigger");
+                    contract_fixture::deploy(
+                        &client,
+                        artifact.as_ref(),
+                        nft_contract_alias(),
+                        &[nft_permission],
+                    )
+                    .map(drop)
+                }
+            })
+            .await??;
             mint_asset_after_3_sec_scenario(&network, &test_client).await?;
             pre_commit_trigger_should_be_executed_scenario(&network, &test_client).await?;
             mint_nft_for_every_user_every_1_sec_scenario(&network, &test_client).await?;
@@ -481,13 +503,7 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
     test_client: &Client,
 ) -> Result<()> {
     let test_client = test_client.clone();
-    let trigger_period = std::cmp::max(
-        Duration::from_millis(300),
-        network
-            .block_cadence()
-            .checked_div(2)
-            .unwrap_or_else(|| network.block_cadence()),
-    );
+    let trigger_period = std::cmp::max(Duration::from_secs(1), network.block_cadence());
     let expected_count: u64 = 3;
     run_or_skip(stringify!(mint_nft_for_every_user_every_1_sec), || async {
         let alice_id = ALICE_ID.clone();
@@ -559,7 +575,7 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
                 filter,
             )
             .expect("trigger action fixture satisfies validation invariants")
-            .with_metadata(contract_entrypoint_metadata("run")),
+            .with_metadata(contract_fixture::call_metadata(&nft_contract_alias())),
         ));
         submit_with_context(
             network,
