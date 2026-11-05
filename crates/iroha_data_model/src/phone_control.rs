@@ -1,7 +1,7 @@
 //! Provider-backed phone-control challenge, credential and provider policy.
 //!
 //! A verification provider checks control of a phone number with a fresh SMS
-//! or carrier challenge and signs a short-lived [`PhoneControlCredentialV1`].
+//! or carrier challenge and signs a short-lived [`crate::phone_control::PhoneControlCredentialV1`].
 //! The credential binds the provider key, the network, the identifier
 //! namespace, the complete RAM-LFE policy, the beneficiary account, one
 //! challenge, a validity interval and a hiding commitment to the canonical
@@ -21,8 +21,8 @@
 //! - TODO(R.2): the private relation proves that the commitment a verified
 //!   credential carries opens to the encrypted canonical input and to the
 //!   keyed nullifier preimage.
-//! - TODO(R.4): State registers [`PhoneControlProviderPolicyV1`], applies
-//!   [`PhoneControlEvidenceV1::verify`] in the claim transition, consumes the
+//! - TODO(R.4): State registers [`crate::phone_control::PhoneControlProviderPolicyV1`], applies
+//!   [`crate::phone_control::PhoneControlEvidenceV1::verify`] in the claim transition, consumes the
 //!   challenge, applies the earliest expiry and evicts bindings of a revoked
 //!   key.
 //! - TODO(R.5): the one-call claim runs the provider challenge; the SDK and

@@ -11,7 +11,7 @@
 //! Ω(pred) for Send, Unload and Retiring — is consumed only after its receipt verifies natively
 //! (§3.1); a proof alone is never a transferable credit.
 //!
-//! The data model computes every Poseidon value natively with `iroha_pasta` ([`super::poseidon`]):
+//! The data model computes every Poseidon value natively with `iroha_pasta` ([`super::KagemushaWalletIndexedTreeV1`]):
 //! the commitment and rest digest, the chain appends, the map leaves and roots, the σ statement
 //! digest, the packed-byte `proof_digest` and the lineage digest.
 
@@ -547,7 +547,7 @@ impl KagemushaWalletStateV1 {
     }
 
     /// σ-field elements of the core, in commitment order (§3, element rule of
-    /// [`super::poseidon`]).
+    /// [`super::kagemusha_wallet_poseidon_v1`]).
     ///
     /// Order (29 elements): lifecycle; scheme id (2); asset digest (2); wallet id (2);
     /// credential digest (1); balance, `burned_total`, sequence, `next_send`, `next_load`,
@@ -1538,7 +1538,7 @@ impl KagemushaWalletRecvChainEntryV1 {
 ///
 /// `Λ_recv` inserts it into the credit-digest root that Ω exposes and `CreditStatus` opens; it
 /// is not part of the state commitment. The tree is the depth-32 indexed tree of
-/// [`super::poseidon`] keyed by `credit_id` (owner answer A2).
+/// [`super::KagemushaWalletIndexedTreeV1`] keyed by `credit_id` (owner answer A2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KagemushaWalletCreditDigestLeafV1 {
     /// Credit identity (the tree key), a canonical σ-field value.

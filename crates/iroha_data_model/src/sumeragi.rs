@@ -1,6 +1,6 @@
 //! Node-facing Sumeragi status (`specs/sumeragi.md` §12.1 `status()`).
 //!
-//! [`SumeragiStatus`] is the Norito/JSON projection of the consensus core's read-only
+//! [`crate::sumeragi::SumeragiStatus`] is the Norito/JSON projection of the consensus core's read-only
 //! diagnostics (`iroha_sumeragi::api::CoreStatus`) that the node serves on its status endpoint.
 //! The driver fills it from `Core::status()`; hashes become 32-byte arrays and core keys the
 //! validators' consensus [`PublicKey`]s. The data model does not depend on the core crate.

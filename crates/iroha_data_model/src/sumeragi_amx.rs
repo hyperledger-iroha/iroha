@@ -1,23 +1,23 @@
 //! Atomic cross-dataspace transactions (AMX) by two-phase commit through the global chain
 //! (`specs/sumeragi.md` §11).
 //!
-//! An AMX transaction `X` ([`AmxTransactionV1`]) names its participant dataspaces, one opaque
+//! An AMX transaction `X` ([`crate::sumeragi_amx::AmxTransactionV1`]) names its participant dataspaces, one opaque
 //! leg per participant and a global deadline height `d`; its id is `x = H(X)`
-//! ([`AmxTransactionV1::id`]). The global chain `G` records [`AmxBeginV1`] and, by `d + 1`, one
-//! immutable [`AmxDecisionV1`]; each participant records one [`AmxPreparedV1`] vote.
+//! ([`crate::sumeragi_amx::AmxTransactionV1::id`]). The global chain `G` records [`crate::sumeragi_amx::AmxBeginV1`] and, by `d + 1`, one
+//! immutable [`crate::sumeragi_amx::AmxDecisionV1`]; each participant records one [`crate::sumeragi_amx::AmxPreparedV1`] vote.
 //!
 //! **Records are World writes.** The executor that creates a record writes it into the block's
-//! execution witness under [`amx_record_witness_key`] with the canonical record as value, so the
+//! execution witness under [`crate::sumeragi_amx::amx_record_witness_key`] with the canonical record as value, so the
 //! ordinary-write root of the block's certified result `R` commits the record without any change
-//! to `R`'s layout. A record proof ([`AmxRecordProofV1`]) is the certified block (core header,
-//! `CommitQC`, result preimage, [`AmxCertifiedBlockV1`]) plus the sparse-Merkle path of the write
-//! ([`AmxWriteProofV1`]). Another instance verifies it with its [`AmxForeignInstanceV1`] tracker,
+//! to `R`'s layout. A record proof ([`crate::sumeragi_amx::AmxRecordProofV1`]) is the certified block (core header,
+//! `CommitQC`, result preimage, [`crate::sumeragi_amx::AmxCertifiedBlockV1`]) plus the sparse-Merkle path of the write
+//! ([`crate::sumeragi_amx::AmxWriteProofV1`]). Another instance verifies it with its [`crate::sumeragi_amx::AmxForeignInstanceV1`] tracker,
 //! which follows the foreign instance's committees epoch by epoch through handoff proofs
-//! ([`AmxHandoffProofV1`], §11.7).
+//! ([`crate::sumeragi_amx::AmxHandoffProofV1`], §11.7).
 //!
-//! **State.** [`SumeragiAmxState`] is the global chain's AMX World state: the registered
+//! **State.** [`crate::sumeragi_amx::SumeragiAmxState`] is the global chain's AMX World state: the registered
 //! participant dataspaces with their foreign-committee trackers and the transactions whose
-//! deadline has not passed. It is bounded ([`MAX_AMX_DATASPACES`], [`MAX_AMX_PENDING`]): every
+//! deadline has not passed. It is bounded ([`crate::sumeragi_amx::MAX_AMX_DATASPACES`], [`crate::sumeragi_amx::MAX_AMX_PENDING`]): every
 //! transaction is decided by `d + 1` and dropped from the state in the first block after `d`,
 //! which cannot readmit it because a `Begin` must precede its deadline.
 //!

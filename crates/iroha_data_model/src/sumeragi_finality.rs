@@ -2,7 +2,7 @@
 //!
 //! Proofs carry the canonical block and its embedded commit certificate. A structural
 //! decode is never an authenticated execution capability: only the contiguous verifier
-//! constructs [`VerifiedSumeragiBlock`]. The receipt proves exact-quorum execution finality;
+//! constructs [`crate::sumeragi_finality::VerifiedSumeragiBlock`]. The receipt proves exact-quorum execution finality;
 //! with the signed RS16 availability binding. Genesis has no quorum certificate; its
 //! execution result is authenticated by a successor's parent-result binding or independent node
 //! attestations, not by inventing a genesis quorum certificate.

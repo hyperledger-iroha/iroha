@@ -1,14 +1,14 @@
 //! Committed execution-limit policy of a chain.
 //!
-//! [`PipelineValidityPolicyV1`] is the typed payload of the custom parameter
-//! [`PipelineValidityPolicyV1::PARAMETER_ID_STR`]. It carries the limits of
+//! [`crate::pipeline_validity_policy::PipelineValidityPolicyV1`] is the typed payload of the custom parameter
+//! [`crate::pipeline_validity_policy::PipelineValidityPolicyV1::PARAMETER_ID_STR`]. It carries the limits of
 //! the transaction pipeline that decide whether a transaction, a contract
 //! program or a query is accepted: overlay size, IVM cycle and decoded-program
 //! bounds, the quarantine lane, stored-query limits and the AMX budget model,
 //! and the access-set derivation mode. A chain installs it with an ordinary
 //! authorized `SetParameter`, in genesis or later; a change takes effect from
 //! the block after the one that commits it. A chain that never installs the
-//! parameter uses [`PipelineValidityPolicyV1::protocol_default`].
+//! parameter uses [`crate::pipeline_validity_policy::PipelineValidityPolicyV1::protocol_default`].
 //!
 //! This module owns the type, the protocol default and the canonical
 //! validation, so genesis tools and SDKs author and check a policy without a

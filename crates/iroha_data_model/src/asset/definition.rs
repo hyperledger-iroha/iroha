@@ -29,7 +29,7 @@ pub const MAX_ASSET_DESCRIPTION_LEN: usize = 2048;
 /// Validate human-facing asset name.
 ///
 /// # Errors
-/// Returns [`crate::error::ParseError`] when `name` is blank, too long, or contains
+/// Returns [`iroha_model_base::error::ParseError`] when `name` is blank, too long, or contains
 /// reserved alias separators (`#`/`@`).
 pub fn validate_asset_name(name: &str) -> Result<(), iroha_model_base::error::ParseError> {
     let trimmed = name.trim();
@@ -58,7 +58,7 @@ pub fn validate_asset_name(name: &str) -> Result<(), iroha_model_base::error::Pa
 /// Validate optional human-facing description.
 ///
 /// # Errors
-/// Returns [`crate::error::ParseError`] when provided description is blank, too long,
+/// Returns [`iroha_model_base::error::ParseError`] when provided description is blank, too long,
 /// or contains control characters.
 pub fn validate_asset_description(
     description: Option<&str>,
@@ -89,7 +89,7 @@ pub fn validate_asset_description(
 /// such as `cbdc#centralbank`.
 ///
 /// # Errors
-/// Returns [`crate::error::ParseError`] when the alias does not match the allowed asset name stem.
+/// Returns [`iroha_model_base::error::ParseError`] when the alias does not match the allowed asset name stem.
 pub fn validate_asset_alias(
     alias: Option<&AssetDefinitionAlias>,
     expected_name: &str,
@@ -101,7 +101,7 @@ pub fn validate_asset_alias(
 /// ASCII case differences are ignored for each allowed stem.
 ///
 /// # Errors
-/// Returns [`crate::error::ParseError`] when the alias does not match any allowed asset name stem.
+/// Returns [`iroha_model_base::error::ParseError`] when the alias does not match any allowed asset name stem.
 pub fn validate_asset_alias_against_names<I, S>(
     alias: Option<&AssetDefinitionAlias>,
     expected_names: I,

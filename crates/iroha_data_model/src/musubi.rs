@@ -1,7 +1,7 @@
 //! First-release Musubi registry wire model.
 //!
 //! Musubi package identity is structural and stable: a package is keyed by its
-//! home [`DataSpaceId`], package scope, and package name.  Human-facing
+//! home [`iroha_model_base::topology::DataSpaceId`], package scope, and package name.  Human-facing
 //! `namespace/package` selectors are resolved through immutable namespace
 //! bindings before they enter releases, resolver rows, or lock graphs.
 use core::cmp::Ordering;

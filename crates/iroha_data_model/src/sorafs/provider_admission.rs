@@ -1,6 +1,6 @@
 //! Canonical provider-admission council policy and exact signed-claim validation.
 //!
-//! Parliament enacts this policy and the signed admission effects in [`governance`]. Constructing
+//! Parliament enacts this policy and the signed admission effects in [`crate::sorafs::provider_admission::governance`]. Constructing
 //! or decoding a value does not enact it. Core reads policy, provider owner and admission history
 //! from one State view and authenticates its exact committed head against durable Kura finality.
 

@@ -1,6 +1,6 @@
 //! Generic hidden-program RAM-LFE policy and receipt types.
 //!
-//! [`RamLfeReceiptV1`] and [`RamLfeOpeningV1`] are the canonical V1 execution
+//! [`crate::ram_lfe::RamLfeReceiptV1`] and [`crate::ram_lfe::RamLfeOpeningV1`] are the canonical V1 execution
 //! receipt and opening. Together with `iroha_crypto::RamLfePolicyV1` they are
 //! specified in `specs/ram_lfe_execution_proof.md`. The signed policy, receipt
 //! and opening types beside them are superseded and stay only until the tasks

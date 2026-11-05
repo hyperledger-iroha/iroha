@@ -29,7 +29,7 @@ pub const KAGEMUSHA_WALLET_SIGNED_OBJECT_TRANSCRIPT_BYTES_V1: usize = 96;
 /// instead (§3): `credit_id`, map leaves and roots, chains, the state commitment, the statement,
 /// object, certificate-set, package, operation and nullifier digests, the local blacklist's
 /// entries root, the quota-window, quota-usage and credit-digest trees, every signing message, and the
-/// large-input digests (`P_bytes`, [`super::poseidon`]).
+/// large-input digests (`P_bytes`, [`super::kagemusha_wallet_poseidon_bytes_v1`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KagemushaWalletDigestRoleV1 {
     /// `scheme`: scheme identity (§§2.2, 3.3).

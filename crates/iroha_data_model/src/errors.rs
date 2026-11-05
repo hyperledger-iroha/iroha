@@ -25,7 +25,7 @@ use norito::codec::{Decode, Encode};
 )]
 #[norito_schema(name = "iroha_data_model::errors::CanonicalError")]
 pub struct CanonicalError {
-    /// Stable reason code associated with [`detail`].
+    /// Stable reason code associated with [`Self::detail`].
     pub reason_code: u16,
     /// Structured error payload.
     pub detail: CanonicalErrorKind,

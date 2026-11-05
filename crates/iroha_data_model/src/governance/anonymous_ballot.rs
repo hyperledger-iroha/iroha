@@ -9,28 +9,28 @@
 //! This module holds the V1 wire types, their pinned canonical encodings, and the public
 //! digests whose formulas need no proof-profile constant:
 //!
-//! - fixed-length values with raw codecs ([`Digest512`], [`CredentialCommitmentV1`],
-//!   [`NullifierV1`], ...) and the exact-length proofs ([`BallotProofBytesV1`],
-//!   [`RegistrationProofBytesV1`]);
-//! - the ballot and its envelope ([`AnonymousBallotV1`], [`AnonymousBallotEnvelopeV1`],
-//!   [`CanonicalAnonymousBallotEnvelopeV1`]), the stamp preimages (with the once-per-scope
-//!   [`EncodedBallotContextV1`]) and the compact corpus entry;
+//! - fixed-length values with raw codecs ([`crate::governance::anonymous_ballot::Digest512`], [`crate::governance::anonymous_ballot::CredentialCommitmentV1`],
+//!   [`crate::governance::anonymous_ballot::NullifierV1`], ...) and the exact-length proofs ([`crate::governance::anonymous_ballot::BallotProofBytesV1`],
+//!   [`crate::governance::anonymous_ballot::RegistrationProofBytesV1`]);
+//! - the ballot and its envelope ([`crate::governance::anonymous_ballot::AnonymousBallotV1`], [`crate::governance::anonymous_ballot::AnonymousBallotEnvelopeV1`],
+//!   [`crate::governance::anonymous_ballot::CanonicalAnonymousBallotEnvelopeV1`]), the stamp preimages (with the once-per-scope
+//!   [`crate::governance::anonymous_ballot::EncodedBallotContextV1`]) and the compact corpus entry;
 //! - the sealed list, registration mapping, roster preimage and authenticated context;
 //! - the attempt policy frozen at admission from `gov.parliament_lifecycle` and
-//!   `gov.parliament_ballot` ([`FrozenParliamentAttemptPolicyV1`]) and the binding-body
-//!   ballot policies derived from it at the risk lock ([`FrozenBallotPolicyV1`]);
+//!   `gov.parliament_ballot` ([`crate::governance::anonymous_ballot::FrozenParliamentAttemptPolicyV1`]) and the binding-body
+//!   ballot policies derived from it at the risk lock ([`crate::governance::anonymous_ballot::FrozenBallotPolicyV1`]);
 //! - the closure record with its checked outcome arithmetic, the committed governance
 //!   block-start outputs with their anchors and the output partition, and the pass's
-//!   height-progress ticket ([`AdvanceToNativeSlotV1`]);
+//!   height-progress ticket ([`crate::governance::anonymous_ballot::AdvanceToNativeSlotV1`]);
 //! - the qualification record and the release-controlled gate constant.
 //!
-//! [`framing`] implements `Frame`, SHA3-512 and the pinned `Enc`; [`digests`] implements
+//! [`crate::governance::anonymous_ballot::framing`] implements `Frame`, SHA3-512 and the pinned `Enc`; [`crate::governance::anonymous_ballot::digests`] implements
 //! the formulas of the integration decisions of 2026-10-18. The digests that bind the
 //! construction domain `P16` (`B`, `R`, `scope`, `policy_hash`, `D_reg`, `D_v`) belong to
 //! `iroha_parliament_ballot_proof`, which takes the `Enc` bytes produced here as its
 //! opaque inputs.
 //!
-//! **Nothing here is qualified.** [`PARLIAMENT_BALLOT_QUALIFICATION_V1`] is `None`, so
+//! **Nothing here is qualified.** [`crate::governance::anonymous_ballot::PARLIAMENT_BALLOT_QUALIFICATION_V1`] is `None`, so
 //! binding production use stays disabled until the owner records qualification. Core
 //! wiring (the transaction entrypoint, the rejection reason, block-start outputs and their
 //! partition, chain parameters, the governance block-start pass, state tables and the gate)

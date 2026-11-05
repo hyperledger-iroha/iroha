@@ -1,4 +1,4 @@
-//! Module with [`SorafsUri`] and related impls.
+//! Module with [`crate::sorafs_uri::SorafsUri`] and related impls.
 pub use self::model::*;
 use iroha_data_model_derive::model;
 use iroha_model_base::error::ParseError;

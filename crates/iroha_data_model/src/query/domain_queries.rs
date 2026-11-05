@@ -892,7 +892,7 @@ pub mod endorsement {
 pub mod peer {
     //! Peer-related query definitions.
     //!
-    //! Queries related to [`crate::peer`].
+    //! Queries related to [`iroha_model_base::peer::Peer`].
     use derive_more::Display;
     use std::{format, string::String, vec::Vec};
     queries! {

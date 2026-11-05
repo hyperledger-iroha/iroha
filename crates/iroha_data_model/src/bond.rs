@@ -1,18 +1,18 @@
 //! Native bond-servicing kernel records.
 //!
 //! A bond is an ordinary scale-0 fungible asset definition whose identifier is
-//! also the bond identifier. [`BondRecord`] stores the immutable registered
-//! [`BondTerms`] (including the fully materialised schedule) and the mutable
-//! [`BondState`] (lifecycle and cash-flow accounting). Every
+//! also the bond identifier. [`crate::bond::BondRecord`] stores the immutable registered
+//! [`crate::bond::BondTerms`] (including the fully materialised schedule) and the mutable
+//! [`crate::bond::BondState`] (lifecycle and cash-flow accounting). Every
 //! legally material cash-flow operation is a native instruction in
 //! [`crate::isi::bond`]; see `specs/finance/bond_ops.md` for the normative
 //! contract.
 //!
 //! Record-date entitlements live outside the record, one
-//! [`BondEntitlement`] per holder and cash flow, so a record stays small however
+//! [`crate::bond::BondEntitlement`] per holder and cash flow, so a record stays small however
 //! widely the bond is held.
 //!
-//! All arithmetic is exact decimal arithmetic on [`Quantity`]; no floating point
+//! All arithmetic is exact decimal arithmetic on [`iroha_primitives::numeric::Quantity`]; no floating point
 //! is used. Validation that depends only on the terms lives here so that SDKs and
 //! Core share one implementation.
 use iroha_crypto::derive_non_signing_ed25519_public_key;

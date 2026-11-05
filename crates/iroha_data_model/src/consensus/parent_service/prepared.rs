@@ -66,7 +66,7 @@ pub struct PreparedParentServiceCommitQc {
     pool: AllocationBudget,
 }
 impl PreparedParentServiceCommitQc {
-    /// Inspect the original Vec<u8> field without allocating a destination.
+    /// Inspect the original `Vec<u8>` field without allocating a destination.
     /// # Errors
     /// Rejects foreign pools, invalid ranges, missing layout or canonical framing.
     pub fn from_source(

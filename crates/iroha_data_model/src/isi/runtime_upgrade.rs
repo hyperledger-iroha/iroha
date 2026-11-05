@@ -3,9 +3,9 @@
 //!
 //! Change sets are proposed and cancelled through SORA Parliament
 //! ([`crate::isi::governance::ProposeRuntimeUpgradeProposal`]). A validator states with
-//! [`AttestRuntimeSupportV1`] that its release executes a scheduled change set's exact
+//! [`crate::isi::runtime_upgrade::AttestRuntimeSupportV1`] that its release executes a scheduled change set's exact
 //! successor selection; activation needs the attestation of every validator. The runtime
-//! emergency panel closes admission of definitions with [`ContainRuntimeV1`].
+//! emergency panel closes admission of definitions with [`crate::isi::runtime_upgrade::ContainRuntimeV1`].
 use super::*;
 use crate::runtime::lifecycle::{ContainmentV1, EndorsementV1, SignedSupportAttestationV1};
 

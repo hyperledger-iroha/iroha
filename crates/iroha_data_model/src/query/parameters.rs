@@ -1,6 +1,6 @@
 //! Defines parameters that can be sent along with a query.
 //!
-//! They are used together with [`QueryBox`](crate::query::QueryBox) to
+//! They are used together with [`QueryBox`] to
 //! configure execution of trait-object queries.
 use derive_more::Constructor;
 use getset::Getters;

@@ -142,7 +142,7 @@ impl RegisterPeerWithPop {
 }
 /// Register a non-global-voting peer identity for participant-lane committee service.
 ///
-/// This instruction stores a live, unbounded [`ConsensusKeyRole::Committee`]
+/// This instruction stores a live, unbounded [`crate::consensus::ConsensusKeyRole::Committee`]
 /// key for the peer. It is intentionally not a [`RegisterBox`] variant:
 /// genesis global-voter extraction recognizes only [`RegisterPeerWithPop`].
 #[derive(
