@@ -79,7 +79,7 @@ use sorafs_manifest::pop_credentials::{
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::{
     task::JoinSet,
-    time::{Instant, sleep, timeout, timeout_at},
+    time::{Instant, sleep, timeout_at},
 };
 
 const CASE_ID: &str = "four-peer-anchor";

@@ -28,6 +28,7 @@ use iroha_executor_data_model::permission::account::{
 };
 use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
 use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_test_network::{

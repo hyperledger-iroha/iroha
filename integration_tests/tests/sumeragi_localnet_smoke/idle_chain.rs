@@ -1,6 +1,10 @@
 //! Four-validator qualification for bounded progress, clean idle, and proposal work.
 use super::*;
-use iroha::data_model::{block::execution_output::ExecutionOutputV1, prelude::FindAccountById};
+use iroha::data_model::{
+    block::execution_output::ExecutionOutputV1,
+    events::{EventFilter, time::TimeInterval},
+    prelude::FindAccountById,
+};
 
 /// Bind the governed fee quote before fixing the transaction's entrypoint identity.
 async fn paid_transaction(
@@ -461,10 +465,6 @@ pub(super) async fn run() -> Result<()> {
         let registration = committed.iter().find(|block| {
             block.network_input_hashes().any(|hash| hash == registration_entrypoint)
         }).ok_or_else(|| eyre!("confirmed schedule registration is absent from canonical history"))?;
-        ensure!(
-            registration.header().creation_time() < schedule_at,
-            "one-shot native progress schedule must follow its registration block"
-        );
         wait_for_converged_height(
             &network,
             internal_height,
@@ -518,6 +518,26 @@ pub(super) async fn run() -> Result<()> {
                     && trigger_block.external_entrypoint_count() == 1
                     && trigger_block.execution_outputs().iter().filter(|output| matches!(output, ExecutionOutputV1::Time(_))).count() == 1,
                 "peer {index} did not commit one native scheduled trigger carrier: {trigger_block:?}"
+            );
+            let scheduled_event = trigger_block.execution_outputs().iter().find_map(|output| {
+                match output {
+                    ExecutionOutputV1::Time(row) if row.invocation.trigger.trigger_id == trigger_id => {
+                        Some(&row.invocation.event)
+                    }
+                    _ => None,
+                }
+            }).expect("the scheduled carrier contains the matching time output");
+            // The periodic schedule may start before registration commits. Its
+            // actual invocation must match a tick in the successor's interval,
+            // whose authenticated lower bound is the registration block time.
+            ensure!(
+                trigger_block.header().creation_time() > registration.header().creation_time()
+                    && *scheduled_event.interval() == TimeInterval::new_since_to(
+                        registration.header().creation_time(),
+                        trigger_block.header().creation_time(),
+                    )
+                    && TimeEventFilter::new(ExecutionTime::Schedule(schedule)).matches(scheduled_event),
+                "peer {index} native progress did not match the periodic schedule after registration"
             );
             let [iroha::data_model::transaction::TransactionEntrypoint::External(carrier)] =
                 trigger_block.external_entrypoints_slice()
@@ -618,18 +638,4 @@ pub(super) async fn run() -> Result<()> {
         return Ok(());
     }
     Ok(())
-}
-
-async fn query_tips(network: &Network) -> Result<Vec<(u64, HashOf<Header>)>> {
-    let mut tips = Vec::with_capacity(network.peers().len());
-    for peer in network.peers() {
-        let blocks = integration_tests::blocks::canonical_history(&peer.client())
-            .await
-            .wrap_err_with(|| format!("query blocks from {}", peer.mnemonic()))?;
-        let latest = blocks
-            .first()
-            .ok_or_else(|| eyre!("peer {} returned an empty chain", peer.mnemonic()))?;
-        tips.push((latest.header().height().get(), latest.hash()));
-    }
-    Ok(tips)
 }

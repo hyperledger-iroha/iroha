@@ -1,7 +1,7 @@
 //! Integration tests for basic asset lifecycle operations.
 use eyre::{Report, Result, WrapErr, eyre};
 use integration_tests::{
-    collections, sandbox,
+    sandbox,
     sync::{get_status_with_retry_or_storage, sync_after_submission},
 };
 use iroha::query::QueryError;

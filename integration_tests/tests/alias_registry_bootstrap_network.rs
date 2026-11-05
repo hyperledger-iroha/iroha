@@ -3576,7 +3576,7 @@ fn genesis_staking_plans_bind_funded_validators_to_signed_custody() {
     }
     assert_eq!(
         signed_staking_policies,
-        vec![staking_policy],
+        vec![staking_policy.clone()],
         "the original genesis must contain exactly the fixture's authored staking policy"
     );
     let payer_asset = AssetId::new(stake_asset_definition_id(), BOB_ID.clone());
@@ -3639,8 +3639,8 @@ fn genesis_staking_plans_bind_funded_validators_to_signed_custody() {
         assert_eq!(
             registration.monetary_plan.destination_asset,
             iroha_data_model::asset::AssetId::new(
-                policy.stake_asset_id.clone(),
-                policy.stake_escrow_account_id.clone()
+                staking_policy.stake_asset_id.clone(),
+                staking_policy.stake_escrow_account_id.clone()
             )
         );
         assert_eq!(

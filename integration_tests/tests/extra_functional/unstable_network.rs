@@ -7,12 +7,7 @@ use iroha_config_base::toml::WriteExt;
 use iroha_core::sumeragi::network_topology::Topology;
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::*;
-use iroha_data_model::{
-    Level,
-    asset::AssetDefinition,
-    isi::Register,
-    parameter::{BlockParameter, SumeragiParameter},
-};
+use iroha_data_model::{Level, asset::AssetDefinition, isi::Register, parameter::BlockParameter};
 use iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition;
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;

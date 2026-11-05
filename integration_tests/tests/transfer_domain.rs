@@ -17,7 +17,7 @@ use iroha_executor_data_model::permission::{
     asset_definition::{CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition},
     domain::CanUnregisterDomain,
     nft::{CanRegisterNft, CanUnregisterNft},
-    trigger::{CanModifyTrigger, CanUnregisterTrigger},
+    trigger::{CanExecuteTrigger, CanModifyTrigger, CanUnregisterTrigger},
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;

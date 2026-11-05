@@ -1,6 +1,6 @@
 //! Integration tests ensuring executor-enforced permission policies.
 use eyre::Result;
-use integration_tests::{sandbox, sync::sync_after_submission};
+use integration_tests::{collections, sandbox, sync::sync_after_submission};
 use iroha::{
     blocking::Client,
     collections::{Collection, ListQuery, Page, field},

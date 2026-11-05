@@ -1,7 +1,6 @@
 //! Miscellaneous integration coverage for status endpoints and helpers.
 use eyre::{Result, ensure};
 use integration_tests::sandbox;
-use integration_tests::sync::spawn_blocking;
 use iroha::{
     blocking,
     client::{AccountTransactionDraft, FeeQuoteRequest},

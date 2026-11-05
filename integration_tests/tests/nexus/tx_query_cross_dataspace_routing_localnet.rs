@@ -1970,13 +1970,20 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         };
         signed_instructions.extend(instructions.iter());
     }
-    for (lane, expected) in [
-        (DS1_LANE_INDEX, &expected_ds1_validators),
-        (DS2_LANE_INDEX, &expected_ds2_validators),
+    for (lane, offset) in [
+        (DS1_LANE_INDEX, DS1_VALIDATOR_INDEX),
+        (DS2_LANE_INDEX, DS2_VALIDATOR_INDEX),
     ] {
+        let expected = peers
+            .iter()
+            .enumerate()
+            .skip(offset)
+            .take(VALIDATORS_PER_LANE)
+            .map(|(index, peer)| expected_lane_binding_for_peer(index, &peer.id()))
+            .collect::<BTreeSet<_>>();
         ensure!(
             genesis_active_lane_bindings(signed_instructions.iter().copied(), LaneId::new(lane))?
-                == *expected,
+                == expected,
             "restricted lane {lane} must carry its exact signed validator bindings"
         );
     }
@@ -2696,6 +2703,7 @@ mod tests {
             "message": "Query not found in the live query store."
         });
         let response = |status, body| RoutedJsonResponse {
+            permission_semantics: None,
             status,
             body,
             body_text: String::new(),

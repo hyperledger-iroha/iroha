@@ -384,16 +384,6 @@ fn post_torii_app_json<T: norito::json::JsonSerialize + ?Sized>(
     let response_body = rt.block_on(async {
         let response = integration_tests::http::client()
             .post(endpoint)
-            .header(
-                iroha_torii::HEADER_ACCOUNT,
-                client.client().account().to_canonical_hex()?,
-            )
-            .header(
-                iroha_torii::HEADER_SIGNATURE,
-                iroha_torii::signature_header_value(&signature)?,
-            )
-            .header(iroha_torii::HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
-            .header(iroha_torii::HEADER_NONCE, nonce)
             .header(CONTENT_TYPE, "application/json")
             .header(HEADER_ACCOUNT, account_header)
             .header(HEADER_SIGNATURE, signature_header_value(&signature)?)
