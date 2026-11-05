@@ -1488,7 +1488,8 @@ class TrackedSummary(unittest.TestCase):
             self.assertEqual(runs[entry["first_run"]], runs[entry["further_run"]])
             self.assertGreater(entry["timed_phases"], 0)
             further.setdefault(entry["first_run"], set()).add(entry["further_run"])
-        self.assertIn("native_blake2b", {entry["test"] for entry in table})
+        # This source-matched campaign repeats the whole BLAKE3 test in a new process.
+        self.assertIn("native_blake3", {entry["test"] for entry in table})
         rows = self.tracked["native"]["rows"] + self.tracked["in_circuit"]["rows"]
         for row in rows:
             record = row["record"]

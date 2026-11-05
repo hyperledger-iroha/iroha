@@ -76,10 +76,11 @@
    "path": "crates/iroha_core_zk",
    "depends_on": ["fastpq_isi", "iroha_crypto", "iroha_zkp_halo2", "iroha_data_model", "fastpq_prover"]
   },
+  {"name": "iroha_execution_stark", "path": "crates/iroha_execution_stark", "depends_on": []},
   {
    "name": "iroha_core_privacy",
    "path": "crates/iroha_core_privacy",
-   "depends_on": ["fastpq_isi", "soranet_pq", "iroha_fhe", "iroha_crypto", "iroha_zkp_halo2", "iroha_data_model", "fastpq_prover"]
+   "depends_on": ["fastpq_isi", "soranet_pq", "iroha_fhe", "iroha_crypto", "iroha_zkp_halo2", "iroha_data_model", "fastpq_prover", "iroha_execution_stark"]
   },
   {
    "name": "iroha_core",
@@ -2870,6 +2871,13 @@
     {"path": "crates/iroha_crypto/src/fhe_bfv.rs", "symbol": "BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1"},
     {"path": "crates/iroha_core_zk/src/stark.rs", "symbol": "Fq::reduce"}
    ]
+  },
+  {
+   "id": "execution_stark.goldilocks_transform_permutation",
+   "owner": {"crate": "iroha_execution_stark", "path": "crates/iroha_execution_stark/src/ntt.rs"},
+   "tasks": [],
+   "reason": "Bit-reversal permutation used by the execution STARK Goldilocks/Fp4 subgroup and coset transforms. It serves proof trace interpolation and low-degree extension, not an FHE ring; its implementation remains with the execution proof-field transform owner.",
+   "symbols": [{"path": "crates/iroha_execution_stark/src/ntt.rs", "symbol": "bit_reverse_permute"}]
   }
  ],
  "unrelated_kernel_named": [
@@ -13180,6 +13188,18 @@
      "path": "vendor/nearby/third_party/ukey2/ukey2/src/securemessage/src/securemessage/crypto_ops.cc",
      "purpose": "Vendored Nearby advertisement or UKEY2/securemessage HKDF key derivation and API; unrelated to RAM-LFE. SwiftPM dependency edge: vendor/nearby/Package.swift.",
      "evidence": "unique_ptr<ByteBuffer> CryptoOps::HkdfSha256Extract("
+    },
+    {
+     "path": "docs/validation/parliament_ballot_current_candidate_20261104/campaign/report.json",
+     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
+    },
+    {
+     "path": "docs/validation/parliament_ballot_current_candidate_20261104/fatal-output/report.json",
+     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
+    },
+    {
+     "path": "docs/validation/parliament_ballot_current_candidate_20261104/stack-v2/receipt.json",
+     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
     }
    ]
   },
@@ -17007,7 +17027,7 @@
    "component": "docs/validation",
    "role": "documentation",
    "tasks": [],
-   "summary": "Dependency manifests and lockfiles, Cargo metadata, build and source receipts, reports and compiler logs of recorded validation runs (the parliament ballot bundles and the rejected FAEST cross-verification publication of crates/iroha_zkp_vole). They name the hkdf crate, the iroha_fhe package and the bfv-accel and bfv-test-fixtures features only as dependency facts of the recorded build; they record completed runs and implement or invoke nothing.",
+   "summary": "Dependency manifests and lockfiles, Cargo metadata, source inventories, native symbol listings, build and source receipts, reports and compiler logs of recorded validation runs (the parliament ballot bundles and the rejected FAEST cross-verification publication of crates/iroha_zkp_vole). They name the hkdf crate, the iroha_fhe package and the bfv-accel and bfv-test-fixtures features only as dependency facts of the recorded build; they record completed runs and implement or invoke nothing.",
    "files": [
     {
      "path": "crates/iroha_zkp_vole/tests/fixtures/faest_v3_0_2/cross_verification_evidence/rejected_publication/build-root-Cargo.lock.template",
@@ -17131,7 +17151,38 @@
     {"path": "docs/validation/parliament_ballot_resource_contract/dependency-change/root-Cargo.lock.after.template", "patterns": ["fhe", "hkdf"]},
     {"path": "docs/validation/parliament_ballot_resource_contract/dependency-change/root-Cargo.lock.before.template", "patterns": ["fhe", "hkdf"]},
     {"path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/crates/iroha_core/Cargo.toml.template", "patterns": ["bfv"]},
-    {"path": "docs/validation/parliament_ballot_typed_decoder_bound/analysis/report.json", "patterns": ["hkdf"]}
+    {"path": "docs/validation/parliament_ballot_typed_decoder_bound/analysis/report.json", "patterns": ["hkdf"]},
+    {
+     "path": "docs/validation/panic_recovery_takeover_20261104/rechecks/20261104T051527Z-push-jwt/before-refresh-observed.inventory",
+     "patterns": ["bfv", "ram_lfe", "rns"]
+    },
+    {
+     "path": "docs/validation/panic_recovery_takeover_20261104/rechecks/20261104T051527Z-push-jwt/before-refresh-receipt.json",
+     "patterns": ["bfv", "ram_lfe", "rns"]
+    },
+    {
+     "path": "docs/validation/panic_recovery_takeover_20261104/rechecks/20261104T051527Z-push-jwt/prior-reviewed.inventory",
+     "patterns": ["bfv", "ram_lfe", "rns"]
+    },
+    {
+     "path": "docs/validation/panic_recovery_takeover_20261104/rechecks/20261104T051527Z-push-jwt/receipt.json",
+     "patterns": ["bfv", "ram_lfe", "rns"]
+    },
+    {
+     "path": "docs/validation/panic_recovery_takeover_20261104/rechecks/20261104T051527Z-push-jwt/reviewed-current.inventory",
+     "patterns": ["bfv", "ram_lfe", "rns"]
+    },
+    {"path": "docs/validation/parliament_ballot_current_candidate_20261104/campaign/report.json", "patterns": ["hkdf"]},
+    {"path": "docs/validation/parliament_ballot_current_candidate_20261104/fatal-output/report.json", "patterns": ["hkdf"]},
+    {"path": "docs/validation/parliament_ballot_current_candidate_20261104/stack-v2/accel/starts.txt", "patterns": ["rns"]},
+    {"path": "docs/validation/parliament_ballot_current_candidate_20261104/stack-v2/portable/starts.txt", "patterns": ["rns"]},
+    {"path": "docs/validation/parliament_ballot_current_candidate_20261104/stack-v2/receipt.json", "patterns": ["hkdf"]},
+    {"path": "docs/validation/parliament_ballot_stack_v3_20261104/accel/starts.txt", "patterns": ["rns"]},
+    {"path": "docs/validation/parliament_ballot_stack_v3_20261104/portable/starts.txt", "patterns": ["rns"]},
+    {"path": "docs/validation/parliament_ballot_stack_v4_20261104/accel/starts.txt", "patterns": ["rns"]},
+    {"path": "docs/validation/parliament_ballot_stack_v4_20261104/portable/starts.txt", "patterns": ["rns"]},
+    {"path": "docs/validation/parliament_ballot_stack_v5_20261104/accel/starts.txt", "patterns": ["rns"]},
+    {"path": "docs/validation/parliament_ballot_stack_v5_20261104/portable/starts.txt", "patterns": ["rns"]}
    ]
   },
   {
@@ -17379,6 +17430,29 @@
      "evidence": "control Ed25519, FHE or other libraries' independent dispatch."
     }
    ]
+  },
+  {
+   "id": "execution_stark.proof_transforms",
+   "component": "iroha_execution_stark",
+   "role": "distinct_arithmetic",
+   "tasks": [],
+   "summary": "Execution STARK Goldilocks/Fp4 subgroup and coset transforms, their FRI/prover/verifier callers and module root, plus the privacy execution-proof source-digest binding. These are proof-field transforms owned by iroha_execution_stark, not FHE ring arithmetic; this inventory entry makes no proof-system qualification claim.",
+   "files": [
+    {"path": "crates/iroha_core_privacy/src/execution_proofs/proof.rs", "patterns": ["ntt"]},
+    {"path": "crates/iroha_execution_stark/src/fri.rs", "patterns": ["ntt"]},
+    {"path": "crates/iroha_execution_stark/src/lib.rs", "patterns": ["ntt"]},
+    {"path": "crates/iroha_execution_stark/src/ntt.rs", "patterns": ["ntt"]},
+    {"path": "crates/iroha_execution_stark/src/prover.rs", "patterns": ["ntt"]},
+    {"path": "crates/iroha_execution_stark/src/verifier.rs", "patterns": ["ntt"]}
+   ]
+  },
+  {
+   "id": "integration.soracloud_control_plane",
+   "component": "integration_tests",
+   "role": "consumer",
+   "tasks": [],
+   "summary": "CLI lifecycle fixture tests retain client-encrypted SoraCloud service state and explicitly exclude unavailable FHE ciphertext bindings. This test-only consumer contains no FHE arithmetic or runtime activation.",
+   "files": [{"path": "integration_tests/tests/iroha_cli.rs", "patterns": ["fhe"], "test_only": true}]
   }
  ]
 }

@@ -6734,13 +6734,17 @@
         {
           "stage": "vm",
           "path": "crates/iroha_core/src/state.rs",
-          "contains": "let result = if self.active_trigger_execution_depth >= max_depth {"
+          "contains": "let result = if tx.active_trigger_execution_depth >= max_depth {"
         },
         {
           "stage": "vm",
           "path": "crates/iroha_core/src/state.rs",
-          "contains": "let max_depth = u16::from(self.world.parameters.smart_contract().execution_depth());",
-          "count": 2
+          "contains": "let max_depth = u16::from(self.world.parameters.smart_contract().execution_depth());"
+        },
+        {
+          "stage": "vm",
+          "path": "crates/iroha_core/src/state.rs",
+          "contains": "let max_depth = u16::from(tx.world.parameters.smart_contract().execution_depth());"
         }
       ],
       "tests": [
@@ -11851,6 +11855,56 @@
           "name": "policy_key_roundtrip_is_bounded_and_canonical"
         }
       ]
+    },
+    {
+      "id": "work_budget.lifecycle_root_max_frame_bytes",
+      "group": "work_budget",
+      "what": "Fixed selected-runtime ceiling for one lifecycle action frame and the aggregate retained lifecycle frames of one execution root; a smaller selected output allowance still wins.",
+      "unit": "bytes",
+      "value": 16777216,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_lifecycle_journal.rs",
+        "symbol": "max_frame_bytes",
+        "kind": "field",
+        "anchor": [
+          "impl LifecycleJournalLimits {",
+          "pub(crate) fn selected(maximum: u64) -> Self {"
+        ],
+        "expr": "16 * 1024 * 1024"
+      },
+      "inclusive": true,
+      "enforcement": [
+        {
+          "stage": "vm",
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_lifecycle_journal.rs",
+          "contains": "total_frame_bytes: usize::try_from(maximum) .unwrap_or(usize::MAX) .min(16 * 1024 * 1024)"
+        },
+        {
+          "stage": "vm",
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_lifecycle_journal.rs",
+          "contains": "if total > self.limits.total_frame_bytes { return Err(LifecycleJournalFailure::OutputLimit( \"lifecycle aggregate frame limit exceeded\", )); }"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_lifecycle_journal_tests.rs",
+          "name": "lifecycle_selected_frame_ceiling_preserves_smaller_output_bounds"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_lifecycle_journal_tests.rs",
+          "name": "lifecycle_frame_budget_accepts_exact_retained_bytes_and_rejects_one_over"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_lifecycle_journal_tests.rs",
+          "name": "lifecycle_deterministic_limits_are_root_rejections_not_local_refusals"
+        },
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_lifecycle_journal_tests.rs",
+          "name": "lifecycle_local_frame_allocation_refusal_remains_distinct"
+        }
+      ]
     }
   ],
   "relations": [
@@ -14663,6 +14717,12 @@
         "kind": "const",
         "matching": "^NATIVE_PRIVATE_SETTLEMENT_DESCRIPTOR_MAX_BYTES$",
         "why": "Pin the sole native closed path/control descriptor input ceiling under its source owner; arbitrary local path lengths are not a committed payment-validity bound."
+      },
+      {
+        "path": "crates/iroha_core/src/smartcontracts/isi/query/ordinary_memory.rs",
+        "kind": "const",
+        "matching": "(?:(?:^|_)(?:MAX|MAXIMUM)(?:_|$)|LIMIT|BUDGET|CEILING|OVERHEAD|RESERVE|(?:^|_)CAP(?:ACITY)?(?:_|$))|^ORDINARY_NAME_ID_SOURCE_BYTES$",
+        "why": "Keep the existing conservative name-identifier source charge pinned after source admission moved behind ensure_source_bound. The default limit-name matcher and inherited Core comparison scan remain active; the exact additional symbol is still used by bounded ordinary-query memory accounting."
       }
     ],
     "excluded": [
@@ -18899,7 +18959,7 @@
         ]
       },
       {
-        "reason": "Parliament anonymous-ballot wire-schema caps and the still-unavailable node verifier budget: the canonical envelope of one anonymous input (E_max, 262,144 bytes) and its complete entrypoint wire reservation (E_wire, 263,168 bytes), the authenticated ballot context and published sealed list (C_max, 163,840 bytes), the verifier input charged to one verification (E_max + C_max = 425,984 bytes), the structural ceilings of the committed per-block ballot verification budgets (8 reservations, 3,407,872 verifier-input bytes) and governance block-start row caps (256 KiB, 1 KiB and 16 KiB). These are fixed product schema bounds, not local scheduling allowances. TransactionEntrypoint now carries the canonical anonymous input, whose data-model codec enforces its structure and byte cap. Governance block-start row types exist separately but are not yet variants of ExecutionOutputV1. Core and Torii recognize these carriers but defer anonymous-ballot admission and execution because the authenticated State/context adapter is unavailable; no node depends on the standalone iroha_parliament_ballot crate or executes its verifier budget. The declared item proof.anonymous_ballot_verifier_budget owns full node integration and classification of each verifier and output budget with its enforcement sites and boundary tests.",
+        "reason": "Parliament anonymous-ballot wire-schema caps and the still-unavailable node verifier budget: the canonical envelope of one anonymous input (E_max, 262,144 bytes) and its complete entrypoint wire reservation (E_wire, 263,168 bytes), the authenticated ballot context and published sealed list (C_max, 163,840 bytes), the verifier input charged to one verification (E_max + C_max = 425,984 bytes), the structural ceilings of the committed per-block ballot verification budgets (8 reservations, 3,407,872 verifier-input bytes) and governance block-start row caps (256 KiB, 1 KiB and 16 KiB). These are fixed product schema bounds, not local scheduling allowances. TransactionEntrypoint now carries the canonical anonymous input, whose data-model codec enforces its structure and byte cap. Governance block-start row types exist separately but are not yet variants of ExecutionOutputV1. Core and Torii recognize these carriers but defer anonymous-ballot admission and execution because the authenticated State/context adapter is unavailable; Core links the standalone crate only for private candidate registration preparation and native tests. That preparation borrows the authenticated State cut and original signed input; it registers no executable instruction, writes no credential State, seals no roster and enables no ballot profile. AnonymousBallot admission/execution still returns VerifierInitializationUnavailable, PARLIAMENT_BALLOT_QUALIFICATION_V1 remains None, and parliament_ballot_qualified_v1() remains false. No node executes the ballot verifier budget; production registration/casting/closure integration and qualification remain open. The declared item proof.anonymous_ballot_verifier_budget owns full node integration and classification of each verifier and output budget with its enforcement sites and boundary tests.",
         "files": [
           {
             "path": "crates/iroha_data_model/src/governance/anonymous_ballot.rs",
@@ -19176,13 +19236,13 @@
             "exprs": {
               "MAX_LAYERS": "32",
               "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1": "256 * 1024",
-              "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1": "PrivacyProtocolIdV1::COUNT",
-              "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_TOTAL_ELEMENTS_V1": "PrivacyProtocolIdV1::COUNT",
+              "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1": "PrivacyRuntimeProtocolIdV1::EXACT12_COUNT",
+              "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_TOTAL_ELEMENTS_V1": "PrivacyRuntimeProtocolIdV1::EXACT12_COUNT",
               "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_FIELD_BYTES_V1": "128 * 1024",
               "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_TOTAL_ALLOCATION_BYTES_V1": "256 * 1024",
               "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_NESTING_DEPTH_V1": "32",
               "PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1": "256 * 1024",
-              "PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1": "PrivacyProtocolIdV1::COUNT",
+              "PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1": "PrivacyRuntimeProtocolIdV1::EXACT12_COUNT",
               "PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ELEMENTS_V1": "PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1",
               "PRIVACY_CAPABILITY_ARCHIVE_MAX_FIELD_BYTES_V1": "PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1",
               "PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ALLOCATION_BYTES_V1": "16 * PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1",
@@ -22665,7 +22725,7 @@
             ],
             "exprs": {
               "PRIVACY_RELEASE_PROOF_ARTIFACT_COUNT_V1": "PRIVACY_RELEASE_STAGE_COUNT_V1 + 6",
-              "PRIVACY_RELEASE_STAGE_COUNT_V1": "PrivacyProtocolIdV1::COUNT * PRIVACY_RELEASE_CASE_COUNT_V1",
+              "PRIVACY_RELEASE_STAGE_COUNT_V1": "PrivacyRuntimeProtocolIdV1::EXACT12_COUNT * PRIVACY_RELEASE_CASE_COUNT_V1",
               "PRIVACY_RELEASE_CASE_COUNT_V1": "4"
             },
             "term_of": {
@@ -25523,7 +25583,7 @@
               "canonical_instruction_box_frame_byte_limit_v1"
             ],
             "exprs": {
-              "canonical_frame_byte_limit_v1": "let flags = norito::core::default_encode_flags(); let field = |bytes: usize| norito::core::len_prefix_len_with_flags(bytes, flags) + bytes; let reference_payload = 2 * field(core::mem::size_of::<u32>()); let statement_framing = crate::isi::framed_instruction_payload_len_for::<PrivacyStatementV1>(0) .expect(\"fixed statement framing fits usize\"); let payload = crate::privacy::TAIRA_PRIVACY_MAX_STATEMENT_AND_ENCRYPTED_OUTPUT_BYTES_PER_TRANSACTION_V1 as usize - statement_framing - core::mem::size_of::<u32>() + field(reference_payload); crate::isi::framed_instruction_payload_len_for::<Self>(payload) .expect(\"fixed request ceiling fits usize\")",
+              "canonical_frame_byte_limit_v1": "let flags = norito::core::default_encode_flags(); let field = |bytes: usize| norito::core::len_prefix_len_with_flags(bytes, flags) + bytes; let reference_payload = 2 * field(core::mem::size_of::<u32>()); let statement_framing = crate::isi::framed_instruction_payload_len_for::<PrivacyRuntimeStatementV1>(0) .expect(\"fixed statement framing fits usize\"); let payload = crate::privacy::TAIRA_PRIVACY_MAX_STATEMENT_AND_ENCRYPTED_OUTPUT_BYTES_PER_TRANSACTION_V1 as usize - statement_framing - core::mem::size_of::<u32>() + field(reference_payload); crate::isi::framed_instruction_payload_len_for::<Self>(payload) .expect(\"fixed request ceiling fits usize\")",
               "canonical_instruction_box_frame_byte_limit_v1": "let _canonical = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags()); let tuple = crate::isi::encoded_instruction_tuple_len( Self::WIRE_ID, Self::canonical_frame_byte_limit_v1(), ) .expect(\"fixed registered request tuple fits usize\"); crate::isi::framed_instruction_payload_len_for::<crate::isi::InstructionBox>(tuple) .expect(\"fixed instruction box ceiling fits usize\")"
             }
           }
@@ -25823,6 +25883,136 @@
             }
           }
         ]
+      },
+      {
+        "path": "crates/ivm_abi/src/metadata.rs",
+        "reason": "The fixed 49-byte IVM V1 header is an encoding width, not a variable program budget. The body remains bounded by guest_memory.max_program_image_bytes; both header and body participate in artifact identity.",
+        "symbols": [
+          "HEADER_SIZE"
+        ],
+        "exprs": {
+          "HEADER_SIZE": "49"
+        }
+      },
+      {
+        "path": "crates/iroha_data_model/src/governance/anonymous_ballot/registration_input.rs",
+        "reason": "The reserved Parliament credential-registration input has a fixed 164 KiB canonical frame ceiling. Core uses it only for private candidate registration preparation; no current instruction registry or runtime selection activates this opaque input. It grants no credential State, roster, ballot execution or qualification. A containing transaction remains subject to transaction.max_tx_bytes.",
+        "symbols": [
+          "MAX_FRAME_BYTES"
+        ],
+        "exprs": {
+          "MAX_FRAME_BYTES": "164 * 1024"
+        }
+      },
+      {
+        "path": "crates/iroha_data_model/src/query/parameters.rs",
+        "reason": "The fallback page size of a read-only iterable query is 100 items. MAX_FETCH_SIZE separately caps that query shape, while work_budget.config_query_max_fetch_size owns the in-VM fetch ceiling; this default is not an additional transaction or proof limit.",
+        "symbols": [
+          "DEFAULT_FETCH_SIZE"
+        ],
+        "exprs": {
+          "DEFAULT_FETCH_SIZE": "nonzero!(100_u64)"
+        }
+      },
+      {
+        "path": "crates/iroha_torii/src/push/jwt.rs",
+        "reason": "The node-local FCM/APNs credential parser refuses PEM signing-key files above 64 KiB before decoding. These operator credentials are not transaction, proof, block or committed State inputs.",
+        "symbols": [
+          "MAX_PRIVATE_KEY_PEM_BYTES"
+        ],
+        "exprs": {
+          "MAX_PRIVATE_KEY_PEM_BYTES": "64 * 1024"
+        }
+      },
+      {
+        "path": "crates/iroha_core/src/query/native_receipts/lifecycle.rs",
+        "reason": "Conservative capacity accounting for one fixed-shape lifecycle runtime branch in a read-only activation-witness response: 256 digest siblings fit 32 KiB of JSON. The original request frame pool and response ceiling still own every byte; refusal serves no partial witness and makes no transaction/block validity decision.",
+        "symbols": [
+          "MAX_RUNTIME_BRANCH_JSON_BYTES"
+        ],
+        "exprs": {
+          "MAX_RUNTIME_BRANCH_JSON_BYTES": "32 * 1024"
+        }
+      },
+      {
+        "path": "crates/iroha_core/src/query/native_receipts/lifecycle.rs",
+        "reason": "The read-only lifecycle activation-witness service caps its complete JSON response at 32 MiB, further restricted by the original caller response limit and physical pool. This response cap does not change transaction execution, certified roots or committed lifecycle limits. The production owner and its test-only reference reader each declare the same fixed ceiling.",
+        "symbols": [
+          "MAX_BYTES"
+        ],
+        "exprs": {
+          "MAX_BYTES": "32 * 1024 * 1024 | 32 * 1024 * 1024"
+        }
+      },
+      {
+        "path": "crates/iroha_core/src/smartcontracts/isi/query/ordinary_iterable/asset_escrow_scope.rs",
+        "reason": "Ordinary asset-escrow query accounting prepays five traversals of each canonical frame: bounded preflight, encoder recount/checksum/write and decode. This fixed accounting coefficient consumes the existing query execution byte budget; it creates no independent transaction or proof allowance.",
+        "symbols": [
+          "FRAME_TRAVERSALS"
+        ],
+        "exprs": {
+          "FRAME_TRAVERSALS": "5"
+        }
+      },
+      {
+        "path": "crates/iroha_core/src/smartcontracts/isi/query/ordinary_iterable.rs",
+        "reason": "An ordinary composite query row spans at most eight source-item slots, further clamped by the original max_page_items. Its checked product with max_source_item_bytes sizes the existing page, scratch and frame corridor; this is query row geometry, not a separate transaction/proof budget.",
+        "symbols": [
+          "COMPOSITE_ROW_SOURCE_ITEMS"
+        ],
+        "exprs": {
+          "COMPOSITE_ROW_SOURCE_ITEMS": "8"
+        }
+      },
+      {
+        "path": "crates/iroha_core/src/state/tiered.rs",
+        "reason": "Tiered State snapshot persistence uses at most three leading hash digits to partition its local manifest. This changes only disk layout and write granularity, never keyed State contents or the certified root.",
+        "symbols": [
+          "MANIFEST_CHUNK_MAX_DIGITS"
+        ],
+        "exprs": {
+          "MANIFEST_CHUNK_MAX_DIGITS": "3"
+        }
+      },
+      {
+        "path": "crates/iroha_core/src/state/tiered.rs",
+        "reason": "Tiered State snapshot manifest partitioning grows a digit above 256 average rows per chunk. This local persistence-layout threshold does not change State contents, execution or proof validity.",
+        "symbols": [
+          "MANIFEST_CHUNK_GROW_ROWS"
+        ],
+        "exprs": {
+          "MANIFEST_CHUNK_GROW_ROWS": "256"
+        }
+      },
+      {
+        "path": "crates/iroha_core/src/state/tiered.rs",
+        "reason": "Tiered State snapshot manifest partitioning shrinks a digit below eight average rows per chunk, preserving hysteresis. This local persistence-layout threshold does not change State contents, execution or proof validity.",
+        "symbols": [
+          "MANIFEST_CHUNK_SHRINK_ROWS"
+        ],
+        "exprs": {
+          "MANIFEST_CHUNK_SHRINK_ROWS": "8"
+        }
+      },
+      {
+        "path": "crates/iroha_core/src/state/tiered.rs",
+        "reason": "At most sixteen threads write and synchronize local manifest chunks. The caller also writes when a helper cannot spawn, and every file is synchronized before publication; this bounds parallelism, not committed State or validity.",
+        "symbols": [
+          "MANIFEST_CHUNK_WRITERS"
+        ],
+        "exprs": {
+          "MANIFEST_CHUNK_WRITERS": "16"
+        }
+      },
+      {
+        "path": "crates/iroha_zkp_vole/src/crt/codec.rs",
+        "reason": "The fixed little-endian FAESTCRT word identifies the canonical CRT table encoding. It is a format discriminator, not a byte/count/work ceiling or a cryptographic parameter.",
+        "symbols": [
+          "MAGIC"
+        ],
+        "exprs": {
+          "MAGIC": "u64::from_le_bytes(*b\"FAESTCRT\")"
+        }
       }
     ],
     "literals": {
@@ -25941,7 +26131,7 @@
             {
               "path": "crates/iroha_core/src/state/world_state_snapshot.rs",
               "sites": {
-                "tip.height() < 2": 2
+                "tip.height() < 2": 1
               }
             },
             {
@@ -29304,51 +29494,6 @@
         {
           "files": [
             {
-              "path": "crates/iroha_data_model/src/block/trigger_action_scanner.rs",
-              "sites": {
-                "text.len() > 255": 1
-              }
-            }
-          ],
-          "reason": "Closed Action-frame scanner field shapes: one metadata Name and one executable entrypoint are limited to 255 bytes. The scanner supports only its documented incomplete canonical subset and is not installed as TriggerLifecycleActionValidatorV1. These per-field checks do not establish a generic transaction/proof ceiling or authorize missing lifecycle coverage."
-        },
-        {
-          "files": [
-            {
-              "path": "crates/iroha_data_model/src/block/trigger_action_scanner.rs",
-              "sites": {
-                "(0x20..=0x7e).contains(byte)": 1,
-                "(0x21..=0x7e).contains(&byte)": 1
-              }
-            }
-          ],
-          "reason": "ASCII code-unit ranges of the deliberately closed Action-frame scanner subset: visible ASCII for a Name and unescaped printable ASCII inside a JSON string. They reject unsupported character spellings while preserving the original frame; they are lexical ranges, not byte-count, allocation or work limits. The scanner remains incomplete and is not a lifecycle validation authority."
-        },
-        {
-          "files": [
-            {
-              "path": "crates/iroha_data_model/src/block/trigger_action_scanner.rs",
-              "sites": {
-                "bytes.len() < 2": 1
-              }
-            }
-          ],
-          "reason": "Minimum lexical shape of an unescaped JSON string in the closed Action-frame scanner: at least two bytes are required for the opening and closing quotes before indexing their positions. This minimum refuses malformed short values and supplies no size or work ceiling."
-        },
-        {
-          "files": [
-            {
-              "path": "crates/iroha_data_model/src/block/trigger_action_scanner.rs",
-              "sites": {
-                "text.len() > 20": 1
-              }
-            }
-          ],
-          "reason": "Canonical decimal spelling of the two original trigger-registration u64 metadata numbers: at most twenty digits can represent u64. The scanner additionally rejects non-digits, leading zeroes and checked-arithmetic overflow, charging the original finite digit pass. This is numeric representation geometry, not a new generic byte or work cap; registration and execution semantics remain separate."
-        },
-        {
-          "files": [
-            {
               "path": "crates/iroha_data_model/src/sumeragi_finality/compact.rs",
               "sites": {
                 "proof.height() >= 2": 2,
@@ -29448,6 +29593,133 @@
                 "proof.block.commit_qc.len() > 128 * 1024": 1,
                 "proof.block.result_preimage.len() > GAME_PARTITION_MAX_PROOF_BYTES - 140 * 1024": 1,
                 "proof.path.siblings.len() > 256": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "The first certified successor of genesis is height two. These lifecycle activation, witness, current-cut, snapshot and SNS readers refuse genesis or inconsistent history; the comparisons select which authenticated history exists and bound no size, count or work.",
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/sumeragi_finality/lifecycle_runtime.rs",
+              "sites": {
+                "height < 2": 1,
+                "self.height < 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_torii/src/ironwood_pool_cut.rs",
+              "sites": {
+                "*h >= 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_torii/src/sns_lease.rs",
+              "sites": {
+                "height < 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/query/native_receipts/lifecycle.rs",
+              "sites": {
+                "start_height < 2": 2
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/runtime/lifecycle_activation.rs",
+              "sites": {
+                "activated_height < 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/state/world_state_snapshot.rs",
+              "sites": {
+                "self.height() >= 2": 2
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/sumeragi/certified_chain/current_cut.rs",
+              "sites": {
+                "original.height() >= 2": 1,
+                "height < 2": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Lifecycle unavailable reasons are the closed semantic codes one through five. The decoder rejects unknown codes and claimed identities on unavailable records; the numeric range does not bound resources.",
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+              "sites": {
+                "(1..=5).contains(&reason)": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "A lifecycle runtime branch follows a 256-bit key. Its sibling levels are strictly increasing u8 positions with nonempty hashes, so 256 is the exact binary-tree path geometry; this structural proof rule is not a configurable execution or proving allowance.",
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/sumeragi_finality/lifecycle_runtime.rs",
+              "sites": {
+                "self.siblings.len() > 256": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "The authenticated, full-ledger Ironwood pool-cut read accepts at most 4,096 selector bytes. Its native journal reader receives two of the original request budget eight units, capped by the separately pinned native journal ceiling. These service-request limits retain the original frame pool and never reject a transaction or alter a certified root.",
+          "files": [
+            {
+              "path": "crates/iroha_torii/src/ironwood_pool_cut.rs",
+              "sites": {
+                "body.len() > 4096": 1,
+                "(unit * 2).min(NATIVE_FINALITY_MAX_JOURNAL_BYTES)": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "The read-only lifecycle activation witness serves at most 4,096 consecutive certified cuts, in batches of sixteen, under the same original deadline, cancellation owner, frame pool and response cap. Its checked capacity estimate adds 128 fixed framing bytes to bounded branches. These local response/work partitions produce no transaction execution or consensus verdict.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/query/native_receipts/lifecycle.rs",
+              "sites": {
+                "end_height - start_height >= 4096": 2,
+                "usize::try_from(end_height - start_height + 1) .ok() .and_then(|cuts| cuts.checked_mul(MAX_RUNTIME_BRANCH_JSON_BYTES)) .and_then(|branches| branches.checked_add(count.length)) .and_then(|bytes| bytes.checked_add(128)) .ok_or(LifecycleWitnessReadError::Invalid( \"lifecycle response demand overflow\", ))? .min(response_limit)": 1,
+                "first.saturating_add(15).min(end_height)": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Disposable lifecycle and Ironwood preflight diagnostics accept bounded operator evidence/witness requests, report only the twenty largest actions and cap a predicted binary proof path at its 256-bit geometry. These report/input bounds neither activate a runtime nor establish qualification, gas, transaction admission or consensus validity.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/bin/ironwood_activation_preflight.rs",
+              "sites": {
+                "evidence.len() > 16 * 1024 * 1024": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/runtime/lifecycle_preflight.rs",
+              "sites": {
+                "(1..=4096).contains(&witness_cuts)": 1,
+                "index < 20": 1,
+                "largest_actions.truncate(20)": 1,
+                "estimated_levels.min(256)": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "The lifecycle retry-state decoder admits at most twenty canonical decimal digits for its u64 scalar, followed by ordinary integer parsing. This is the fixed scalar representation width, not a resource budget.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_lifecycle_journal.rs",
+              "sites": {
+                "text.len() > 20": 1
               }
             }
           ]

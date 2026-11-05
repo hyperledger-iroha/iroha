@@ -3586,7 +3586,7 @@
    "status": "not_a_gate",
    "owner": null,
    "path": "crates/iroha_data_model/src/privacy/statements.rs",
-   "symbol": "impl PrivacyProtocolLimitsV1",
+   "symbol": "impl PrivacyRuntimeProtocolLimitsV1",
    "gates": "Statement shape and counts validated against bounded per-protocol resource limits.",
    "decided_by": "The native compiled profile and committed resource policy.",
    "attribution": "read",
@@ -3654,21 +3654,25 @@
    "gates": "Canonical wire catalog tags, public capability snapshots and retained release/deployment diagnostic evidence.",
    "decided_by": "A selected native implementation and its semantic profile; documentary release/deployment evidence does not authorize transactions.",
    "attribution": "read",
-   "note": "The fixed Exact12 catalog commitment identifies the canonical wire layout. Torii projects actual native availability and optional ordinary policy for each row; admission does not require a qualification singleton or membership in a release receipt. Retained release/deployment manifests remain signed diagnostic records with restart/canary/convergence evidence. Native implementation incompleteness and semantic identity derivations remain explicit in their own entries.",
+   "note": "The fixed Exact12 catalog commitment identifies the canonical wire layout. Torii projects actual native availability and optional ordinary policy for each row; admission does not require a qualification singleton or membership in a release receipt. Retained release/deployment manifests remain signed diagnostic records with restart/canary/convergence evidence. Native implementation incompleteness and semantic identity derivations remain explicit in their own entries. The separate Exact12 wire grammar and runtime conversion retain the frozen catalog; the dedicated Ironwood wire grammar carries its own protocol/profile identities. Neither that base catalog commitment nor the signed-transaction submission variant activates an extension or supplies native implementation readiness.",
    "sites": [
-    ["crates/iroha_core/src/privacy_release_evidence.rs", "global_manifest", "exact12", 4],
+    ["crates/iroha_core/src/privacy_release_evidence.rs", "global_manifest", "exact12", 6],
     ["crates/iroha_core_privacy/src/privacy_engines/transparent_stark.rs", "global_manifest", "exact12", 4],
+    ["crates/iroha_core_privacy/src/privacy_profiles.rs", "global_manifest", "exact12", 1],
     ["crates/iroha_crypto/src/privacy.rs", "global_manifest", "exact12", 1],
     ["crates/iroha_data_model/src/privacy.rs", "global_manifest", "capability_manifest", 2],
-    ["crates/iroha_data_model/src/privacy.rs", "global_manifest", "exact12", 22],
+    ["crates/iroha_data_model/src/privacy.rs", "global_manifest", "exact12", 26],
     ["crates/iroha_data_model/src/privacy.rs", "global_manifest", "release_manifest", 2],
-    ["crates/iroha_data_model/src/privacy/action_role.rs", "global_manifest", "exact12", 2],
-    ["crates/iroha_data_model/src/privacy/capability_manifest.rs", "global_manifest", "exact12", 50],
+    ["crates/iroha_data_model/src/privacy/action_role.rs", "global_manifest", "exact12", 5],
+    ["crates/iroha_data_model/src/privacy/capability_manifest.rs", "global_manifest", "exact12", 53],
+    ["crates/iroha_data_model/src/privacy/exact12_wire.rs", "global_manifest", "exact12", 14],
+    ["crates/iroha_data_model/src/privacy/ironwood_wire.rs", "global_manifest", "exact12", 17],
     ["crates/iroha_data_model/src/privacy/proofs.rs", "global_manifest", "exact12", 1],
     ["crates/iroha_data_model/src/privacy/protocol.rs", "global_manifest", "capability_manifest", 21],
-    ["crates/iroha_data_model/src/privacy/protocol.rs", "global_manifest", "exact12", 3],
-    ["crates/iroha_data_model/src/privacy/release_manifest.rs", "global_manifest", "exact12", 130],
+    ["crates/iroha_data_model/src/privacy/protocol.rs", "global_manifest", "exact12", 12],
+    ["crates/iroha_data_model/src/privacy/release_manifest.rs", "global_manifest", "exact12", 137],
     ["crates/iroha_data_model/src/privacy/release_manifest.rs", "global_manifest", "release_manifest", 13],
+    ["crates/iroha_data_model/src/transaction/signed.rs", "global_manifest", "exact12", 9],
     ["crates/iroha_kagami/src/privacy_bootstrap/release.rs", "global_manifest", "exact12", 4]
    ]
   },
@@ -3716,9 +3720,9 @@
    "gates": "Exact12 privacy protocol registry: typed unavailable, suspended or unsupported outcomes other than local-resource failures and version checks, which have their own entries. The names fall into two groups, which `note` separates for this entry: outcomes of an engine, profile, provider or protocol that is not available or not finished (EngineUnavailable, ProtocolUnavailable, CompiledProfileUnavailable, NotImplemented and the like), and rejections of a carried parameter value this release does not define (an unsupported degree, bit length, authority kind or layout).",
    "decided_by": "For the first group: an unfinished operation keeps an accurate typed error that no configuration, feature or environment changes, and stays mandatory work of the owner; a finished operation removes it. For the second group nothing changes: it is ordinary validation of carried bytes, identical on every validator.",
    "attribution": "read",
-   "note": "Two groups. The accurate errors of an engine or profile this binary does not complete: `EngineUnavailable`, `ProtocolUnavailable`, `CompiledProfileUnavailable`, `PrivacyCompiledProfileUnavailableReasonV1` and `UnsupportedCompression`, and the typed refusal of the single Exact12 dispatch, `PrivacyVerificationErrorV1::UnsupportedOperation` carrying `PrivacyUnsupportedOperationV1` (crates/iroha_core_privacy/src/privacy_dispatch.rs, privacy_verifier.rs; mapped to an instruction error in crates/iroha_core/src/smartcontracts/isi/privacy.rs). That refusal names the role and one concrete limitation of the typed dispatch registry, is returned before any proof byte is read, depends on no activation record, configuration or feature, and replaced the variant that existed only without the `zk-stark` feature, `PrivacyEngineUnavailableFailureV1` (P.1); the owners of the five refused roles are P.15, C.5, P.14 and X.3. Retired protocol lifecycle reasons and activation records are removed; remaining unavailable outcomes represent actual missing native constructions or invalid carried parameters. Issuance-service answers, statement validation and local entropy have their own entries (privacy.issuance_service, privacy.statement_validation, privacy.local_resource). The privacy.rs unsupported-class row aggregates two different identifiers: UnsupportedOperation is the unfinished dispatch refusal above, while TransactionSignatureError::UnsupportedImplementation preserves the original build-dependent crypto implementation cause as CryptoImplementationUnavailable/ExecutionAttemptError::Deferred. The latter is not an invalid-signature verdict; its unavailable-class hit is crypto.implementation_unavailable. The row remains conservatively unsupported because it still includes the unfinished dispatch.",
+   "note": "Two groups. The accurate errors of an engine or profile this binary does not complete: `EngineUnavailable`, `ProtocolUnavailable`, `CompiledProfileUnavailable`, `PrivacyCompiledProfileUnavailableReasonV1` and `UnsupportedCompression`, and the typed refusal of the single Exact12 dispatch, `PrivacyVerificationErrorV1::UnsupportedOperation` carrying `PrivacyUnsupportedOperationV1` (crates/iroha_core_privacy/src/privacy_dispatch.rs, privacy_verifier.rs; mapped to an instruction error in crates/iroha_core/src/smartcontracts/isi/privacy.rs). That refusal names the role and one concrete limitation of the typed dispatch registry, is returned before any proof byte is read, depends on no activation record, configuration or feature, and replaced the variant that existed only without the `zk-stark` feature, `PrivacyEngineUnavailableFailureV1` (P.1); the owners of the five refused roles are P.15, C.5, P.14 and X.3. Retired protocol lifecycle reasons and activation records are removed; remaining unavailable outcomes represent actual missing native constructions or invalid carried parameters. Issuance-service answers, statement validation and local entropy have their own entries (privacy.issuance_service, privacy.statement_validation, privacy.local_resource). The privacy.rs unsupported-class row aggregates two different identifiers: UnsupportedOperation is the unfinished dispatch refusal above, while TransactionSignatureError::UnsupportedImplementation preserves the original build-dependent crypto implementation cause as CryptoImplementationUnavailable/ExecutionAttemptError::Deferred. The latter is not an invalid-signature verdict; its unavailable-class hit is crypto.implementation_unavailable. The row remains conservatively unsupported because it still includes the unfinished dispatch. The dedicated Ironwood arm of run_privacy_release_stage_v1 returns ProtocolUnavailable rather than manufacturing release evidence; this source census does not qualify its prover, verifier or deployment.",
    "sites": [
-    ["crates/iroha_core/src/privacy_release_evidence.rs", "unavailable", "unavailable", 4],
+    ["crates/iroha_core/src/privacy_release_evidence.rs", "unavailable", "unavailable", 5],
     ["crates/iroha_core/src/privacy_release_evidence/network_actions.rs", "unavailable", "unavailable", 6],
     ["crates/iroha_core/src/privacy_release_evidence/network_actions/retained.rs", "unavailable", "unavailable", 2],
     ["crates/iroha_core/src/smartcontracts/isi/privacy.rs", "unavailable", "unsupported", 2],
@@ -4094,7 +4098,7 @@
    "gates": "Local admitted native proof reads and committed-view forgery prechecks use the original request deadline and cancellation token.",
    "decided_by": "Local expiry stops the read/precheck. Synchronous execution reauthenticates the original parent with VerificationControl::Synchronous and committed liability time; a precheck grants no execution authority.",
    "attribution": "read",
-   "note": "Instant::now comparisons in read/native.rs and forgery.rs produce Deadline or Cancelled, not an invalid-evidence verdict. The HTTP owner preserves its incoming RouteExecutionDeadline; it does not reset a clock per stage. The execution.rs Deadline occurrence is a defensive local-refusal match which arms StateStorageAdmissionError and cannot publish an R-EX rejection; synchronous verification carries no local timer. The scanner aggregates all deadline identifiers per file, so the read/native.rs row also includes deadline_ms copied from and compared against the committed message record: that field binds original payload terms and is not a wall-clock expiration check. These are distinct from the committed registration/generation deadlines in sccp.time_budget. No new runtime qualification is claimed by this source census. Coalition, evidence, fast-pause and metadata reads and the forgery keeper retain the same original request deadline. Their committed message/deployment deadline projections do not introduce a second local validity clock.",
+   "note": "Instant::now comparisons in read/native.rs and forgery.rs produce Deadline or Cancelled, not an invalid-evidence verdict. The HTTP owner preserves its incoming RouteExecutionDeadline; it does not reset a clock per stage. The execution.rs Deadline occurrence is a defensive local-refusal match which arms StateStorageAdmissionError and cannot publish an R-EX rejection; synchronous verification carries no local timer. The scanner aggregates all deadline identifiers per file, so the read/native.rs row also includes deadline_ms copied from and compared against the committed message record: that field binds original payload terms and is not a wall-clock expiration check. These are distinct from the committed registration/generation deadlines in sccp.time_budget. No new runtime qualification is claimed by this source census. Coalition, evidence, fast-pause and metadata reads and the forgery keeper retain the same original request deadline. Their committed message/deployment deadline projections do not introduce a second local validity clock. The keeper delegates each original-request check to forgery::check_control instead of spelling the deadline locally; its absence from the per-file identifier rows does not remove cancellation or expiry checks.",
    "tests": [
     {
      "path": "crates/iroha_core/src/smartcontracts/isi/sccp/forgery/tests.rs",
@@ -4105,7 +4109,6 @@
     ["crates/iroha_core/src/smartcontracts/isi/sccp/forgery.rs", "time_budget", "deadline", 3],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/forgery.rs", "wall_clock", "instant", 1],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/forgery/execution.rs", "time_budget", "deadline", 1],
-    ["crates/iroha_core/src/smartcontracts/isi/sccp/forgery/keeper.rs", "time_budget", "deadline", 3],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/read/coalition.rs", "time_budget", "deadline", 9],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/read/native.rs", "time_budget", "deadline", 30],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/read/native.rs", "wall_clock", "instant", 1],
@@ -4116,6 +4119,24 @@
     ["crates/iroha_core/src/smartcontracts/isi/sccp/read/native/light_client_metadata.rs", "time_budget", "deadline", 18],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/read/native/message_metadata.rs", "time_budget", "deadline", 13],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/read/native/reconciliation.rs", "time_budget", "deadline", 4]
+   ],
+   "anchors": [
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/sccp/forgery/keeper.rs",
+     "function": "anchor_witness",
+     "contains": "check_control(control)?;",
+     "count": 4
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/sccp/forgery.rs",
+     "function": "check_control",
+     "contains": "Instant::now() >= control.deadline"
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/sccp/forgery.rs",
+     "function": "check_control",
+     "contains": "control.stop.load(Ordering::Acquire)"
+    }
    ]
   },
   {
@@ -5538,7 +5559,7 @@
    "gates": "Python SDK: words that a detector matches in names and comments.",
    "decided_by": "Committed State already decides it.",
    "attribution": "read",
-   "note": "Qualified struct identifiers (`qualifiedStruct`, `isCanonicalQualifiedStructIdentifier`, `fully-qualified`), the word `qualifier`, retail `qualifying_payments`, account onboarding and dataspace readiness, consensus seat readiness, accelerator qualification, and doc comments. A few of the comments describe the Exact12 admission of entry `sdk_python.exact12_capability` (HttpClientTransport.kt, tx.py, crypto.py, crypto.js); a comment gates nothing and the code they describe is counted there.",
+   "note": "Qualified struct identifiers (`qualifiedStruct`, `isCanonicalQualifiedStructIdentifier`, `fully-qualified`), the word `qualifier`, retail `qualifying_payments`, account onboarding and dataspace readiness, consensus seat readiness, accelerator qualification, and doc comments. A few of the comments describe the Exact12 admission of entry `sdk_python.exact12_capability` (HttpClientTransport.kt, tx.py, crypto.py, crypto.js); a comment gates nothing and the code they describe is counted there. scheduled_execution.py mentions readiness only in its verifier docstring, explicitly stating that the optional activation-policy response cannot replace native selection and finality proofs; the wrapper calls the native verifier with original inputs.",
    "sites": [
     ["python/iroha_python/scripts/run_integration.py", "sdk_availability", "readiness", 1],
     ["python/iroha_python/src/iroha_python/_validation.py", "sdk_availability", "qualification", 2],
@@ -5550,6 +5571,7 @@
     ["python/iroha_python/src/iroha_python/dataspaces.py", "sdk_availability", "readiness", 2],
     ["python/iroha_python/src/iroha_python/kaigi.py", "sdk_availability", "qualification", 6],
     ["python/iroha_python/src/iroha_python/privacy_wallet_worker.py", "sdk_availability", "qualification", 1],
+    ["python/iroha_python/src/iroha_python/scheduled_execution.py", "sdk_availability", "readiness", 1],
     ["python/iroha_python/src/iroha_python/sorafs.py", "sdk_availability", "qualification", 2],
     ["python/iroha_torii_client/client.py", "sdk_availability", "qualification", 4],
     ["python/iroha_torii_client/native_sumeragi.py", "sdk_availability", "readiness", 2]
@@ -5672,7 +5694,7 @@
    "gates": "SCCP original source and restoration custody, native-only decoder boundaries, compiled light-client profile availability, pending settlement reasons and incomplete destination operations.",
    "decided_by": "Outside the ZK delivery plan; native SCCP source and operation requirements remain independently enforced.",
    "attribution": "read",
-   "note": "Native committee, rotation, finality, message and control HTTP reads now invoke the admitted original native reader. Missing or inconsistent original source/rotation custody remains unavailable, not authenticated absence; actual Pruned has its own response. UnsupportedScope requires the actual Global root. Request deadline/cancellation is 408 and local capacity or source refusal is 503, with no-store responses. Forgery synchronous execution rechecks the original parent and uses a sticky local storage refusal for missing/inconsistent source or resource failure before any deterministic result can publish; bad signed evidence remains a separate protocol rejection. Native evidence-record and funded-attribution decoders explicitly refuse SCCP data: they are not the independent SccpRestore archive reauthentication owner selected by sumeragi/evidence/restoration.rs. Missing required original anchors refuse that SCCP restoration; decoded snapshot claims are not authority. Light-client profile absence still arms VerifierArtifactsUnavailable during execution, and fee-sink absence remains a deterministic pending reason. RegisterRoute launch gaps remain sccp.qualification. The block hook now calls generation/anchor pruning, which preserves pending forgery penalties and retained generation boundaries. Generation/anchor allocation failure remains Deferred rather than deterministic Degraded. This inventory does not qualify complete SCCP delivery. The CLI TON evidence helper (iroha_cli sccp/ton.rs) turns BuildError::Unavailable of the account-state proof builder into no evidence (`Ok(None)`): a local client outcome, not authenticated absence. Current forgery/read proofs preserve UnsupportedGeometry and the original physical pairing/allocation refusal; neither is authenticated absence. ForgeryLocalRefusal now distinguishes Storage(original), armed on State, from Execution(original), retained in World as execution deferral. Count changes do not qualify SCCP delivery. The borrowed source_error signature preserves original refusal classification. Coalition collateral additionally refuses missing committed staking policy explicitly; this new unavailable occurrence is not a readiness gate.",
+   "note": "Native committee, rotation, finality, message and control HTTP reads now invoke the admitted original native reader. Missing or inconsistent original source/rotation custody remains unavailable, not authenticated absence; actual Pruned has its own response. UnsupportedScope requires the actual Global root. Request deadline/cancellation is 408 and local capacity or source refusal is 503, with no-store responses. Forgery synchronous execution rechecks the original parent and uses a sticky local storage refusal for missing/inconsistent source or resource failure before any deterministic result can publish; bad signed evidence remains a separate protocol rejection. Native evidence-record and funded-attribution decoders explicitly refuse SCCP data: they are not the independent SccpRestore archive reauthentication owner selected by sumeragi/evidence/restoration.rs. Missing required original anchors refuse that SCCP restoration; decoded snapshot claims are not authority. Light-client profile absence still arms VerifierArtifactsUnavailable during execution, and fee-sink absence remains a deterministic pending reason. RegisterRoute launch gaps remain sccp.qualification. The block hook now calls generation/anchor pruning, which preserves pending forgery penalties and retained generation boundaries. Generation/anchor allocation failure remains Deferred rather than deterministic Degraded. This inventory does not qualify complete SCCP delivery. The CLI TON evidence helper (iroha_cli sccp/ton.rs) turns BuildError::Unavailable of the account-state proof builder into no evidence (`Ok(None)`): a local client outcome, not authenticated absence. Current forgery/read proofs preserve UnsupportedGeometry and the original physical pairing/allocation refusal; neither is authenticated absence. ForgeryLocalRefusal now distinguishes Storage(original), armed on State, from Execution(original), retained in World as execution deferral. Count changes do not qualify SCCP delivery. The borrowed source_error signature preserves original refusal classification. Coalition collateral additionally refuses missing committed staking policy explicitly; this new unavailable occurrence is not a readiness gate. Bounded anchor reconstruction now propagates original canonical-history errors through AnchorWitnessReadError::Source instead of collapsing them into Unavailable. Torii classifies those retained resource causes as capacity and retains its separate state-busy/source-refusal responses; no source refusal becomes authenticated absence.",
    "sites": [
     ["crates/iroha_cli/src/sccp/mod.rs", "unavailable", "unavailable", 1],
     ["crates/iroha_cli/src/sccp/recipient_claim.rs", "unavailable", "unavailable", 1],
@@ -5684,7 +5706,7 @@
     ["crates/iroha_core/src/smartcontracts/isi/sccp/forgery.rs", "unavailable", "unsupported", 3],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/forgery/execution.rs", "unavailable", "unavailable", 4],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/forgery/execution.rs", "unavailable", "unsupported", 1],
-    ["crates/iroha_core/src/smartcontracts/isi/sccp/forgery/keeper.rs", "unavailable", "unavailable", 4],
+    ["crates/iroha_core/src/smartcontracts/isi/sccp/forgery/keeper.rs", "unavailable", "unavailable", 2],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/forgery/restoration.rs", "unavailable", "unavailable", 1],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/generations.rs", "unavailable", "local_resource", 1],
     ["crates/iroha_core/src/smartcontracts/isi/sccp/governance_clock.rs", "unavailable", "unavailable", 9],
@@ -5704,7 +5726,7 @@
     ["crates/iroha_core/src/sumeragi/evidence_history/funded_attribution/restore.rs", "unavailable", "unsupported", 1],
     ["crates/iroha_data_model/src/sccp/events.rs", "unavailable", "unavailable", 5],
     ["crates/iroha_data_model/src/sccp/inbound.rs", "unavailable", "unavailable", 1],
-    ["crates/iroha_torii/src/sccp/native.rs", "unavailable", "unavailable", 4],
+    ["crates/iroha_torii/src/sccp/native.rs", "unavailable", "unavailable", 6],
     ["crates/iroha_torii/src/sccp/native.rs", "unavailable", "unsupported", 1],
     ["crates/irohad/src/sccp_keeper.rs", "unavailable", "unavailable", 3]
    ],
@@ -6310,6 +6332,70 @@
    ],
    "sites": [
     ["crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_refresh.rs", "unavailable", "unsupported", 1]
+   ]
+  },
+  {
+   "id": "native_proof.committed_lifecycle_selection",
+   "kind": "activation_lifecycle",
+   "status": "not_a_gate",
+   "owner": null,
+   "path": "crates/iroha_data_model/src/sumeragi_finality/lifecycle_runtime.rs",
+   "symbol": "impl LifecycleRuntimeProofV1",
+   "gates": "Native proof transport of the committed runtime selection for scheduled trigger execution, and read-only sizing of its original source inputs.",
+   "decided_by": "The original certified ordinary-write root, exact network and height, both selected execution cuts, and the committed immutable services/implementation closure.",
+   "attribution": "read",
+   "note": "These lifecycle identifiers name governed State and evidence of its existing selection, not a process-local activation switch or qualification record. The original quantity witness adds the service-owned anchor with retained allocation custody and rejects an existing caller-supplied native key. The query requires the selected trigger_lifecycle service closure and original consecutive certified cuts; the model verifies both execution/post selections and the certified write root. The preflight only reports sizes and actual selected output support from supplied parameters/registrations; it neither changes State nor authorizes activation or transactions. Missing support, source custody and local resource refusals remain explicit. Component/source checks do not establish whole-node or network qualification.",
+   "anchors": [
+    {
+     "path": "crates/iroha_core/src/query/native_receipts/lifecycle.rs",
+     "function": "lifecycle_activation_witness_owned",
+     "contains": "let selection = view.world().runtime_selection();"
+    },
+    {
+     "path": "crates/iroha_core/src/query/native_receipts/lifecycle.rs",
+     "function": "lifecycle_activation_witness_owned",
+     "contains": "iroha_data_model::runtime::TRIGGER_LIFECYCLE_SERVICE_CLOSURE"
+    },
+    {
+     "path": "crates/iroha_data_model/src/sumeragi_finality/lifecycle_runtime.rs",
+     "function": "verify",
+     "contains": "self.execution_selection == selection"
+    },
+    {
+     "path": "crates/iroha_data_model/src/sumeragi_finality/lifecycle_runtime.rs",
+     "function": "verify",
+     "contains": "self.post_selection == selection"
+    },
+    {
+     "path": "crates/iroha_data_model/src/sumeragi_finality/lifecycle_runtime.rs",
+     "function": "verify",
+     "contains": "self.computed_root(network) == Some(root)"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/iroha_data_model/src/sumeragi_finality/lifecycle_runtime.rs",
+     "name": "lifecycle_runtime_selective_branch_binds_exact_native_value_and_root"
+    },
+    {
+     "path": "crates/iroha_data_model/src/sumeragi_finality/lifecycle_runtime.rs",
+     "name": "lifecycle_runtime_branch_rejects_noncanonical_paths_and_unowned_anchor"
+    },
+    {
+     "path": "crates/iroha_core/src/query/native_receipts/lifecycle.rs",
+     "name": "lifecycle_live_witness_requires_selected_consecutive_original_archives"
+    },
+    {
+     "path": "crates/iroha_core/src/runtime/lifecycle_preflight.rs",
+     "name": "lifecycle_preflight_reports_production_cap_failure_and_unavailable_sources"
+    }
+   ],
+   "sites": [
+    ["crates/iroha_core/src/query/native_receipts.rs", "activation", "lifecycle", 3],
+    ["crates/iroha_core/src/query/native_receipts/lifecycle.rs", "activation", "lifecycle", 3],
+    ["crates/iroha_core/src/runtime/lifecycle_preflight.rs", "activation", "lifecycle", 4],
+    ["crates/iroha_core/src/state/fastpq_quantity_capture/commitment_journal/finalized_source/witness.rs", "activation", "lifecycle", 18],
+    ["crates/iroha_data_model/src/sumeragi_finality/lifecycle_runtime.rs", "activation", "lifecycle", 17]
    ]
   }
  ],
@@ -6946,9 +7032,9 @@
   }
  },
  "summary": {
-  "entries": 241,
-  "sites": 1513,
-  "by_status": {"done": 13, "local_resource": 24, "not_a_gate": 124, "open": 40, "out_of_plan": 21, "unsupported": 19},
-  "by_owner": {"-": 145, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
+  "entries": 242,
+  "sites": 1522,
+  "by_status": {"done": 13, "local_resource": 24, "not_a_gate": 125, "open": 40, "out_of_plan": 21, "unsupported": 19},
+  "by_owner": {"-": 146, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }
 }
