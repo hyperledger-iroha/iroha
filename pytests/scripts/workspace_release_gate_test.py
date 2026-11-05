@@ -881,7 +881,10 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             f"path: {COMPILE_UNIT_REPORT}",
             "if-no-files-found: error",
             'python3 scripts/rust_ci.py run --packages "${{ matrix.packages }}" '
-            "--checks clippy,build,test,doc",
+            '--checks "${{ matrix.checks || \'clippy,build,test,doc\' }}" '
+            '--native-shard "${{ matrix.native_shard }}"',
+            "name: rust-native-${{ matrix.lane }}",
+            "path: ${{ runner.temp }}/iroha-native-test-receipts/*.json",
         )
         for requirement in affected_requirements:
             if requirement not in normalized_affected:
@@ -907,9 +910,11 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             "TEST_NETWORK_BIN_SORAFS_CLI: ${{ github.workspace }}/bins/sorafs_cli",
             "TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES: ${{ github.workspace }}/bins/iroha3d_private_settlement_routes",
             'IROHA_TEST_REQUIRE_NETWORK: "1"',
+            'IROHA_TEST_NETWORK_KEEP_DIRS: "1"',
             'python3 scripts/rust_ci.py run --packages "${{ matrix.packages }}" '
             '--checks "${{ matrix.checks || \'clippy,build,test,doc\' }}" '
             '--test-target "${{ matrix.test_target }}"',
+            '--native-shard "${{ matrix.native_shard }}"',
         ),
         **{
             name: (
@@ -949,6 +954,8 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             "needs: [rust_changes, rust_source_guards, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests, sora_parliament_lifecycle]",
             'test "$CLASSIFIER_RESULT" = success',
             "SOURCE_GUARDS_RESULT: ${{ needs.rust_source_guards.result }}",
+            "python3 scripts/rust_ci.py verify-native-shards",
+            "pattern: rust-native-*",
             'test "$SOURCE_GUARDS_RESULT" = success',
             "true:success|false:skipped) return 0",
             *(
@@ -1494,6 +1501,8 @@ def test_pr_network_binaries_cannot_be_package_relative(name: str) -> None:
 @pytest.mark.parametrize("original,replacement", (
     ('--test-target "${{ matrix.test_target }}"', ""),
     ('--checks "${{ matrix.checks || \'clippy,build,test,doc\' }}"', '--checks test'),
+    ('--native-shard "${{ matrix.native_shard }}"', ""),
+    ('IROHA_TEST_NETWORK_KEEP_DIRS: "1"', ""),
 ))
 def test_pr_network_shards_retain_selected_checks_and_target(
     original: str, replacement: str,
@@ -1740,7 +1749,7 @@ def test_release_workflow_guard_rejects_weakening(
             lambda workflow: _replace_once_in_job(
                 workflow,
                 "rust_affected",
-                "--checks clippy,build,test,doc",
+                '--checks "${{ matrix.checks || \'clippy,build,test,doc\' }}"',
                 "--checks build",
             ),
             "PR affected Rust job is missing required behavior",

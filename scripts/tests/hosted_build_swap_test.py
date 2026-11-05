@@ -180,7 +180,7 @@ def test_only_observed_build_owners_provision_before_their_work():
     # Comma boundaries select the exact router package, including first/last positions;
     # similarly named packages such as iroha_core_privacy cannot match the Core arm.
     assert step == (
-        "        if: contains(',execution,execution-model,execution-vm,execution-kagemusha,', format(',{0},', matrix.lane)) || contains(format(',{0},', matrix.packages), ',iroha_core,')\n"
+        "        if: contains(',execution,execution-model,execution-vm,execution-kagemusha,', format(',{0},', matrix.lane)) || contains(format(',{0},', matrix.packages), ',iroha_core,') || contains(format(',{0},', matrix.packages), ',iroha_core_privacy,')\n"
         f"        run: {command}"
     )
     assert generic.index(command) < generic.index("      - name: Run locked affected checks")
@@ -204,7 +204,8 @@ def test_only_observed_build_owners_provision_before_their_work():
     ("node", "iroha_core,iroha", True),
     ("node", "iroha,iroha_core,irohad", True),
     ("node", "iroha,iroha_core", True),
-    ("node", "iroha_core_privacy,iroha_core_zk", False),
+    ("node", "iroha_core_privacy,iroha_core_zk", True),
+    ("execution-privacy-tests-8", "iroha_core_privacy", True),
     ("hardware", "gpuzstd_cuda", False),
     ("tooling", "xtask", False),
     ("execution_extra", "ivm", False),

@@ -209,7 +209,7 @@ def test_pre_build_stages_fresh_outputs_outside_restored_cargo_cache(tmp_path: P
     workspace = tmp_path / "workspace"
     (workspace / "scripts").mkdir(parents=True)
     (workspace / "ci").mkdir()
-    for name in ("rust_ci.py", "check_kotodama_docs.py"):
+    for name in ("rust_ci.py", "check_kotodama_docs.py", "rust_test_shards.py"):
         (workspace / "scripts" / name).write_bytes((ROOT / "scripts" / name).read_bytes())
     (workspace / "ci/observe_build_capacity.py").write_bytes(CAPACITY_SCRIPT.read_bytes())
     restored = workspace / "target/release/pre_build"
@@ -290,12 +290,16 @@ def test_affected_capacity_observer_preserves_locked_check_routing(
     assert observer not in _workflow_job("rust_network")
     body = job.split("      - name: Run locked affected checks\n", 1)[1]
     body = body.split("        run: >\n", 1)[1]
+    body = body.split("\n      - ", 1)[0]
     command = " ".join(line.strip() for line in body.splitlines() if line.strip())
     assert command == (
         observer + 'python3 scripts/rust_ci.py run --packages "${{ matrix.packages }}" '
-        "--checks clippy,build,test,doc"
+        "--checks \"${{ matrix.checks || 'clippy,build,test,doc' }}\" "
+        '--native-shard "${{ matrix.native_shard }}"'
     )
     command = command.replace("${{ matrix.packages }}", packages)
+    command = command.replace("${{ matrix.checks || 'clippy,build,test,doc' }}", "clippy,build,test,doc")
+    command = command.replace("${{ matrix.native_shard }}", "")
     (tmp_path / "ci").mkdir()
     (tmp_path / "ci/observe_build_capacity.py").symlink_to(CAPACITY_SCRIPT)
     (tmp_path / "scripts").mkdir()
@@ -313,7 +317,7 @@ def test_affected_capacity_observer_preserves_locked_check_routing(
     )
     assert result.returncode == code, result.stderr
     assert json.loads(result.stdout) == {
-        "argv": ["run", "--packages", packages, "--checks", "clippy,build,test,doc"],
+        "argv": ["run", "--packages", packages, "--checks", "clippy,build,test,doc", "--native-shard", ""],
         "cwd": str(tmp_path.resolve()), "jobs": "6", "seeds": "sentinel",
     }
     assert "AFFECTED_CHILD_STDERR" in result.stderr
@@ -1181,12 +1185,16 @@ def test_execution_jobs_preserve_all_packages_and_checks(requires_binaries: bool
     assert document["binary_free_matrix" if requires_binaries else "binary_matrix"] == {"include": []}
     assert {row["lane"] for row in rows} == {
         "execution", "execution-model", "execution-vm", "execution-kagemusha",
+        "execution-privacy", *{f"execution-privacy-tests-{index}" for index in range(1, 9)},
     }
-    observed = [package for row in rows for package in row["packages"].split(",")]
+    observed = [package for row in rows if "native_shard" not in row for package in row["packages"].split(",")]
     assert sorted(observed) == sorted(packages)
     assert len(observed) == len(set(observed))
     for row in rows:
-        assert set(row) == {"lane", "packages", "package_count"}
+        if row["packages"] == "iroha_core_privacy":
+            assert row["checks"] == ("test" if "native_shard" in row else "clippy,build,doctest,doc")
+        else:
+            assert set(row) == {"lane", "packages", "package_count"}
         assert row["package_count"] == len(row["packages"].split(","))
     assert document["lanes"] == [{"name": "execution", "packages": list(packages)}]
     assert document["matrix"]["include"] == [{
@@ -1899,11 +1907,15 @@ def test_torii_test_commands_keep_explicit_integration_fixtures(workspace: bool)
         ("iroha_core", "iroha_torii"), ("build", "test"), workspace=workspace,
     )
     assert "--features" not in build
-    assert test[test.index("--features") + 1] == "iroha_torii/test-fixtures"
+    assert set(test[test.index("--features") + 1].split(",")) == {
+        "iroha_core/iroha-core-tests", "iroha_core/expensive-telemetry", "iroha_torii/test-fixtures",
+    }
     assert ("--workspace" in test) is workspace
     assert "mutation-testing" not in " ".join(test)
-    other, = rust_ci.commands_for_checks(("iroha_core",), ("test",), workspace=workspace)
-    assert "--features" not in other
+    for other in rust_ci.commands_for_checks(("iroha_core",), ("test", "doctest"), workspace=workspace):
+        assert set(other[other.index("--features") + 1].split(",")) == {
+            "iroha_core/iroha-core-tests", "iroha_core/expensive-telemetry",
+        }
 
 
 @pytest.mark.parametrize("inventory", ({}, {"iroha_data_model": ("mutation-testing",)},
@@ -2125,9 +2137,11 @@ INTEGRATION_TARGETS = {
 
 
 def _assert_complete_integration_shards(rows) -> None:
-    assert len(rows) == len(INTEGRATION_TARGETS) + 1
+    assert len(rows) == len(INTEGRATION_TARGETS) + 8
     assert {row["test_target"] for row in rows} == INTEGRATION_TARGETS | {"library"}
     assert len({row["lane"] for row in rows}) == len(rows)
+    npos = [row for row in rows if row["test_target"] == "sumeragi_npos_committee_transition"]
+    assert len(npos) == 8 and {row["native_shard"] for row in npos} == set(range(1, 9))
     for row in rows:
         assert row["packages"] == "integration_tests" and row["package_count"] == 1
         assert row.get("checks", "clippy,build,test,doc") == (
@@ -2160,6 +2174,8 @@ def test_integration_shards_cover_every_default_cargo_target_and_unit_doctest() 
     assert "timeout-minutes: 220" in job and "timeout-minutes: 240" in job
     assert "Upload failed test-network artifacts" in job
     assert "target/sccp-continuation/" in job
+    assert 'IROHA_TEST_NETWORK_KEEP_DIRS: "1"' in job
+    assert 'python3 scripts/collect_test_network_logs.py' in job
 
 
 @pytest.mark.parametrize("packages,target,workspace", [

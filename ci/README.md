@@ -15,10 +15,25 @@ test, and documentation commands for the resulting package sets, then exposes
 one required aggregate result.
 
 The execution lane retains its logical package ownership and splits selected
-packages into four independent hosted jobs: data models, IVM/Kotodama,
-KAGEMUSHA proofs, and the remaining execution packages. Each selected package
-still runs all four checks exactly once. Empty groups are omitted, and newly
-added execution packages remain in the general execution job.
+packages into independent hosted jobs for data models, IVM/Kotodama, KAGEMUSHA
+proofs, privacy proofs, and remaining execution packages. Core also has a
+separate owner. Core's native tests use four shards and privacy's use eight;
+their owner jobs retain Clippy, build, doctests and documentation. Core test and
+doctest commands explicitly retain `iroha-core-tests` and `expensive-telemetry`,
+which the previous grouped node test command enabled through its dependency
+graph. Each shard
+admits Cargo's complete compiled target inventory, lists every actual libtest
+test and ignored test, and executes only its deterministic exact-name partition.
+Cargo retains the runtime environment and target selection. The required result
+checks source, features, profiles, identical inventories and every shard receipt
+for complete, disjoint coverage. Empty groups are omitted, new tests enter the
+compiled inventory automatically, and unknown custom harnesses fail closed.
+The existing four-hour job limits and proof workloads remain unchanged.
+The NPoS committee-transition integration target uses eight partitions of its
+own compiled inventory, with `--test-threads=1` retained inside each partition.
+All other integration targets and the integration library/doctest owner keep
+their existing coverage. Receipts live in the job's temporary directory, so
+restored Cargo caches cannot supply stale coverage records.
 
 Torii integration tests require its explicit `test-fixtures` feature. The routed
 test command enables it whenever Torii is selected; a direct full Torii run uses
@@ -54,6 +69,9 @@ also supplies exact source metadata to test executables whose macros capture
 metadata without a build script. The binding does not set a sealed release
 marker or change benchmark source selection; release admission remains owned
 by the existing qualification checks.
+Network jobs retain test directories through `IROHA_TEST_NETWORK_KEEP_DIRS` so
+the existing failure collector can recover peer stdout/stderr after a test
+returns. Its artifact allowlist continues to exclude runtime signing material.
 
 Foundation-only source changes retain the affected library and local CLI
 checks, while deferring node-launching packages and the manifest's

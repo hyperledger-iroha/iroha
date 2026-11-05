@@ -394,7 +394,7 @@ jobs:
         run: |
           python3 -I -S scripts/check_build_efficiency_provenance.py
           python3 scripts/rust_ci.py validate
-          python3 -m pytest -q pytests/scripts/rust_ci_test.py scripts/tests/hosted_build_swap_test.py pytests/scripts/ci_private_fixture_root_test.py
+          python3 -m pytest -q pytests/scripts/rust_ci_test.py pytests/scripts/rust_test_shards_test.py scripts/tests/hosted_build_swap_test.py pytests/scripts/ci_private_fixture_root_test.py
       - name: Classify the PR reverse-dependency closure
         id: classify
         env:
@@ -580,7 +580,7 @@ jobs:
           cache-on-failure: "true"
           shared-key: rust-lane-1.99.1-${{ matrix.lane }}
       - name: Provision bounded hosted build swap for Core and execution checks
-        if: contains(',execution,execution-model,execution-vm,execution-kagemusha,', format(',{0},', matrix.lane)) || contains(format(',{0},', matrix.packages), ',iroha_core,')
+        if: contains(',execution,execution-model,execution-vm,execution-kagemusha,', format(',{0},', matrix.lane)) || contains(format(',{0},', matrix.packages), ',iroha_core,') || contains(format(',{0},', matrix.packages), ',iroha_core_privacy,')
         run: python3 -I -S ci/provision_hosted_build_swap.py
       - name: Enforce data-model compile-unit budget
         if: contains(format(',{0},', matrix.packages), ',iroha_data_model,')
@@ -606,7 +606,15 @@ jobs:
         run: >
           python3 -I -S ci/observe_build_capacity.py -- python3 scripts/rust_ci.py run
           --packages "${{ matrix.packages }}"
-          --checks clippy,build,test,doc
+          --checks "${{ matrix.checks || 'clippy,build,test,doc' }}"
+          --native-shard "${{ matrix.native_shard }}"
+      - name: Retain native test shard receipt
+        if: always() && matrix.native_shard
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: rust-native-${{ matrix.lane }}
+          path: ${{ runner.temp }}/iroha-native-test-receipts/*.json
+          if-no-files-found: error
 
   rust_network:
     name: Rust network ${{ matrix.lane }} (${{ matrix.package_count }} packages)
@@ -619,6 +627,7 @@ jobs:
       matrix: ${{ fromJSON(needs.rust_changes.outputs.binary_matrix) }}
     env:
       IROHA_TEST_REQUIRE_NETWORK: "1"
+      IROHA_TEST_NETWORK_KEEP_DIRS: "1"
       VERGEN_GIT_SHA: ${{ github.sha }}
       TEST_NETWORK_BIN_IROHAD: ${{ github.workspace }}/bins/iroha3d
       TEST_NETWORK_BIN_IROHA: ${{ github.workspace }}/bins/iroha
@@ -662,6 +671,14 @@ jobs:
           --packages "${{ matrix.packages }}"
           --checks "${{ matrix.checks || 'clippy,build,test,doc' }}"
           --test-target "${{ matrix.test_target }}"
+          --native-shard "${{ matrix.native_shard }}"
+      - name: Retain native test shard receipt
+        if: always() && matrix.native_shard
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: rust-native-${{ matrix.lane }}
+          path: ${{ runner.temp }}/iroha-native-test-receipts/*.json
+          if-no-files-found: error
       - name: Stage failed test-network process logs
         if: failure()
         run: >-
@@ -685,6 +702,24 @@ jobs:
     needs: [rust_changes, rust_source_guards, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests, sora_parliament_lifecycle]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Download native test shard receipts
+        if: contains(needs.rust_changes.outputs.binary_free_matrix, 'native_shard') || contains(needs.rust_changes.outputs.binary_matrix, 'native_shard')
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: rust-native-*
+          path: native-test-receipts
+      - name: Verify complete native test coverage
+        if: needs.rust_changes.result == 'success'
+        env:
+          BINARY_FREE_MATRIX: ${{ needs.rust_changes.outputs.binary_free_matrix }}
+          BINARY_MATRIX: ${{ needs.rust_changes.outputs.binary_matrix }}
+        run: >-
+          python3 scripts/rust_ci.py verify-native-shards
+          --matrix "$BINARY_FREE_MATRIX" --matrix "$BINARY_MATRIX"
+          --receipts native-test-receipts
       - name: Aggregate dynamic Rust lane results
         env:
           CLASSIFIER_RESULT: ${{ needs.rust_changes.result }}
