@@ -351,6 +351,7 @@ mod da_hydration;
 mod exec_witness_capture;
 mod kagemusha_load_entrypoint;
 pub(crate) mod parliament_candidate_testing;
+pub(crate) mod parliament_registration;
 mod privacy_transaction_intent;
 mod sccp_forgery_entrypoint;
 pub(crate) mod sccp_pause_entrypoint;
@@ -14532,6 +14533,8 @@ pub struct StateTransaction<'block, 'state> {
     /// One-use native instruction frame from the exact original candidate-testing selection.
     direct_parliament_candidate_testing:
         Option<parliament_candidate_testing::DirectCandidateTesting>,
+    /// One-use original anonymous credential instruction; absent in nested execution.
+    direct_parliament_registration: Option<parliament_registration::DirectRegistrationCapture>,
     /// Canonical hash of the current signed transaction, when executing a transaction.
     pub current_tx_hash: Option<HashOf<SignedTransaction>>,
     /// One-shot binding to the exact standalone ballot in the signed payload.
@@ -39494,6 +39497,7 @@ impl<'state> StateBlock<'state> {
             current_network_entrypoint_hash: None,
             genesis_execution_scope: None,
             direct_parliament_candidate_testing: None,
+            direct_parliament_registration: None,
             current_tx_hash: None,
             governance_ballot_entrypoint_binding: None,
             kagemusha_load_entrypoint_binding: None,

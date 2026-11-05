@@ -6908,6 +6908,13 @@ impl Executor {
                         index,
                         contract_runtime_context.is_none() && entrypoint_authorization.is_none(),
                     );
+                    state_transaction.arm_direct_parliament_registration(
+                        transaction,
+                        authority,
+                        isi,
+                        index,
+                        contract_runtime_context.is_none() && entrypoint_authorization.is_none(),
+                    );
                     state_transaction.current_direct_kagemusha_load_instruction_index =
                         (contract_runtime_context.is_none() && entrypoint_authorization.is_none())
                             .then_some(index);

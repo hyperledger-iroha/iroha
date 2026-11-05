@@ -440,7 +440,10 @@ Tracked in [`live_runtime_upgrades.md`](live_runtime_upgrades.md) §14 and `road
 - **Anchor:** ratifying Taira's adoption record (`AdoptionRecordV1`) in committed State through
   governance, with every validator's attestation, which a node starting from the anchor needs
   (with checkpoint bootstrap); then deleting the startup re-validation of Taira's signed genesis
-  policy.
+  policy. `iroha_data_model::runtime::adoption` provides purpose-separated signatures over the
+  exact record and checks all-member coverage of a supplied committee. This primitive does not
+  authenticate that committee, the governance record or the complete-State import, and does not
+  construct a startup capability; those joins and the startup consumer remain unimplemented.
 
 Parliament lifecycle parameter updates are validated, but Core still needs the frozen
 governance-clock policy and anonymous-ballot integration owned by

@@ -1047,24 +1047,15 @@ impl ParliamentAttemptStateV1 {
         Ok(())
     }
 
-    /// Record one selected citizen's immutable invitation decision.
-    ///
-    /// The transaction authority is passed as `member`; callers cannot choose
-    /// another assignment identifier. Both primaries and alternates respond up
-    /// front so the final roster is a pure function of the ranked draw and the
-    /// response transcript.
-    ///
-    /// # Errors
-    /// Returns an error for a wrong attempt, unknown invitation, replay, wrong
-    /// lifecycle, or a response after the committed close height.
-    pub fn record_invitation_response(
-        &mut self,
+    /// Validate an original invitation response without cloning or mutating its attempt.
+    /// The returned assignment is derived from the authoritative ranked draw.
+    pub(crate) fn check_invitation_response(
+        &self,
         governance_attempt_id: GovernanceAttemptId,
         election_attempt_id: BodyElectionAttemptId,
         member: &AccountId,
-        accept: bool,
         current_height: u64,
-    ) -> Result<(), ParliamentReducerErrorV1> {
+    ) -> Result<AssignmentId, ParliamentReducerErrorV1> {
         self.ensure_active(governance_attempt_id)?;
         let election = self.elections.get(&election_attempt_id).ok_or(
             ParliamentReducerErrorV1::UnknownEntity(ParliamentReducerEntityV1::BodyElection),
@@ -1102,6 +1093,33 @@ impl ParliamentAttemptStateV1 {
         {
             return Err(ParliamentReducerErrorV1::InvitationResponseReplay);
         }
+        Ok(assignment_id)
+    }
+
+    /// Record one selected citizen's immutable invitation decision.
+    ///
+    /// The transaction authority is passed as `member`; callers cannot choose
+    /// another assignment identifier. Both primaries and alternates respond up
+    /// front so the final roster is a pure function of the ranked draw and the
+    /// response transcript.
+    ///
+    /// # Errors
+    /// Returns an error for a wrong attempt, unknown invitation, replay, wrong
+    /// lifecycle, or a response after the committed close height.
+    pub fn record_invitation_response(
+        &mut self,
+        governance_attempt_id: GovernanceAttemptId,
+        election_attempt_id: BodyElectionAttemptId,
+        member: &AccountId,
+        accept: bool,
+        current_height: u64,
+    ) -> Result<(), ParliamentReducerErrorV1> {
+        let assignment_id = self.check_invitation_response(
+            governance_attempt_id,
+            election_attempt_id,
+            member,
+            current_height,
+        )?;
         let election = self
             .elections
             .get_mut(&election_attempt_id)
