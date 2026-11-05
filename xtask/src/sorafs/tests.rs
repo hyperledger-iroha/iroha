@@ -369,7 +369,22 @@ fn gateway_probe_rejects_cross_origin_head_and_get_redirects() {
         let origin_addr = origin.local_addr().expect("probe origin address");
         let server = std::thread::spawn(move || {
             let (mut stream, _) = origin.accept().expect("accept probe request");
-            let response = format!("HTTP/1.1 {status} X\r\nLocation: {location}\r\n\r\n");
+            // Consume the request before closing; otherwise Linux can reset the
+            // connection with unread request bytes and discard the redirect.
+            let mut request = Vec::new();
+            loop {
+                let mut byte = [0];
+                std::io::Read::read_exact(&mut stream, &mut byte).expect("read probe request");
+                request.push(byte[0]);
+                assert!(request.len() <= 16 * 1024, "bounded fixture request");
+                if request.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            assert!(request.starts_with(format!("{method} /probe HTTP/1.1\r\n").as_bytes()));
+            let response = format!(
+                "HTTP/1.1 {status} X\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
             std::io::Write::write_all(&mut stream, response.as_bytes()).unwrap();
         });
         let response = probe_headers_via_http(&GatewayProbeRequest {
