@@ -20229,10 +20229,12 @@
           {
             "path": "crates/iroha_core/src/smartcontracts/isi/query/ordinary_memory.rs",
             "symbols": [
+              "ORDINARY_NAME_ID_SOURCE_BYTES",
               "ORDINARY_QUERY_FIXED_CONTAINER_OVERHEAD_BYTES",
               "ORDINARY_QUERY_RETAINED_ITEM_OVERHEAD_BYTES"
             ],
             "exprs": {
+              "ORDINARY_NAME_ID_SOURCE_BYTES": "1_024",
               "ORDINARY_QUERY_FIXED_CONTAINER_OVERHEAD_BYTES": "4 * 1_024",
               "ORDINARY_QUERY_RETAINED_ITEM_OVERHEAD_BYTES": "128"
             }
