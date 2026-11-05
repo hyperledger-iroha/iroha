@@ -434,8 +434,8 @@ impl<'a> FrameWindows<'a> {
         T: for<'de> norito::core::DeserializePayload<'de> + norito::core::SerializePayload,
     {
         let bytes = self.read(span)?;
-        norito::with_decode_limits(limits, || {
-            norito::core::classify_decode_attempt(|| {
+        norito::core::classify_decode_attempt(|| {
+            norito::with_decode_limits(limits, || {
                 norito::codec::decode_adaptive::<T>(bytes.as_slice())
             })
         })
