@@ -1,4 +1,4 @@
-//! Peer unregister flows under churn.
+//! Candidate registration/removal preserves the committee and explicit observer sync trust.
 use eyre::{Report, Result, WrapErr, eyre};
 use integration_tests::{sandbox, sync::spawn_blocking};
 use iroha::{
@@ -7,13 +7,16 @@ use iroha::{
 };
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::nonzero;
-use iroha_test_network::{NetworkBuilder, NetworkPeer, domain_setup_instruction};
+use iroha_test_network::{NetworkBuilder, domain_setup_instruction};
 use iroha_test_samples::gen_account_in;
-use std::time::{Duration, Instant};
+use std::{
+    collections::BTreeSet,
+    time::{Duration, Instant},
+};
 use tokio::time::{sleep, timeout};
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
-async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
+async fn candidate_registry_removal_preserves_four_voters_and_observer_sync() -> Result<()> {
     const PIPELINE_TIME: Duration = Duration::from_secs(2);
     // Given a network
     let builder = NetworkBuilder::new()
@@ -23,16 +26,16 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
         )));
-    let Some(network) = sandbox::start_network_async_or_skip(
+    let Some(network) = super::connected_peers::start_validators_with_offline_observer(
         builder,
-        stringify!(network_stable_after_add_and_after_remove_peer),
+        stringify!(candidate_registry_removal_preserves_four_voters_and_observer_sync),
     )
     .await?
     else {
         return Ok(());
     };
-    // Late-join and removal flows replay DA/RBC history while the validator set is changing, so
-    // give them a wider budget than steady-state block waits.
+    // Preserve the existing bounded history-sync budget. Candidate registry churn
+    // does not change the authenticated four-validator committee.
     let sync_timeout = network.sync_timeout().saturating_mul(3);
     let tx_timeout = sync_timeout;
     let client = network.client();
@@ -42,9 +45,9 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
         DomainId::try_new("peer-churn", "universal")?,
         "xor".parse()?,
     );
-    // Register a new peer early to keep the pre-join block history short.
-    let new_peer = NetworkPeer::builder().build(network.env());
-    network.attach_peer(&new_peer)?;
+    // The offline replica has explicit P2P trust, independently of this candidate
+    // key registration. It remains outside the four signed voting positions.
+    let new_peer = &network.observers()[0];
     let new_peer_id = new_peer.id();
     let new_peer_client = new_peer.client();
     let register_peer = RegisterPeerWithPop::new(
@@ -58,12 +61,12 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
         client.clone(),
         register_peer,
         tx_timeout,
-        "network_stable_after_add_and_after_remove_peer register_peer",
+        "candidate_registry_removal_preserves_four_voters_and_observer_sync register_peer",
     )
     .await?;
     if sandbox::handle_result(
         wait_for_peer_count(&client, 5, sync_timeout).await,
-        stringify!(network_stable_after_add_and_after_remove_peer),
+        stringify!(candidate_registry_removal_preserves_four_voters_and_observer_sync),
     )?
     .is_none()
     {
@@ -72,15 +75,12 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     let mut expected_height = timeout(tx_timeout, client.client().status().get())
         .await
         .map_err(|_| {
-            eyre!("network_stable_after_add_and_after_remove_peer fetch status timed out")
+            eyre!("candidate_registry_removal_preserves_four_voters_and_observer_sync fetch status timed out")
         })??
         .blocks;
     let genesis = network.genesis();
     if let Err(err) = new_peer
-        .start(
-            network.config_layers_with_additional_peers([&new_peer]),
-            Some(&genesis),
-        )
+        .start(network.config_layers_for_peer(new_peer), Some(&genesis))
         .await
     {
         if let Some(reason) = sandbox::sandbox_reason(&err) {
@@ -96,7 +96,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
             .wrap_err_with(|| {
                 format!("new peer did not sync to height {expected_height} before timeout")
             }),
-        stringify!(network_stable_after_add_and_after_remove_peer),
+        stringify!(candidate_registry_removal_preserves_four_voters_and_observer_sync),
     )?
     .is_none()
     {
@@ -136,13 +136,13 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
             }
         },
         tx_timeout,
-        "network_stable_after_add_and_after_remove_peer register bootstrap",
+        "candidate_registry_removal_preserves_four_voters_and_observer_sync register bootstrap",
     )
     .await?;
     expected_height = expected_height.saturating_add(1);
     if sandbox::handle_result(
         network.ensure_blocks(expected_height).await,
-        stringify!(network_stable_after_add_and_after_remove_peer),
+        stringify!(candidate_registry_removal_preserves_four_voters_and_observer_sync),
     )?
     .is_none()
     {
@@ -153,7 +153,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     expected_height = expected_height.saturating_add(1);
     if sandbox::handle_result(
         network.ensure_blocks(expected_height).await,
-        stringify!(network_stable_after_add_and_after_remove_peer),
+        stringify!(candidate_registry_removal_preserves_four_voters_and_observer_sync),
     )?
     .is_none()
     {
@@ -168,7 +168,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
             Some(100_u32.into()),
         )
         .await,
-        stringify!(network_stable_after_add_and_after_remove_peer),
+        stringify!(candidate_registry_removal_preserves_four_voters_and_observer_sync),
     )? {
         Some(value) => value,
         None => return Ok(()),
@@ -184,7 +184,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
             Some(100_u32.into()),
         )
         .await,
-        stringify!(network_stable_after_add_and_after_remove_peer),
+        stringify!(candidate_registry_removal_preserves_four_voters_and_observer_sync),
     )? {
         Some(value) => value,
         None => return Ok(()),
@@ -195,27 +195,42 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
         client.clone(),
         Unregister::peer(new_peer_id),
         tx_timeout,
-        "network_stable_after_add_and_after_remove_peer unregister_peer",
+        "candidate_registry_removal_preserves_four_voters_and_observer_sync unregister_peer",
     )
     .await?;
     if sandbox::handle_result(
         wait_for_peer_count(&client, 4, sync_timeout).await,
-        stringify!(network_stable_after_add_and_after_remove_peer),
+        stringify!(candidate_registry_removal_preserves_four_voters_and_observer_sync),
     )?
     .is_none()
     {
         return Ok(());
     }
+    let roster_client = client.clone();
+    let retained_voters =
+        spawn_blocking(move || roster_client.client().query(FindPeers).execute_all())
+            .await??
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+    assert_eq!(
+        retained_voters,
+        network
+            .validators()
+            .iter()
+            .map(iroha_test_network::NetworkPeer::id)
+            .collect(),
+        "candidate removal must retain exactly the original four voter identities"
+    );
     expected_height = timeout(tx_timeout, client.client().status().get())
         .await
-        .map_err(|_| eyre!("network_stable_after_add_and_after_remove_peer refresh status after unregister timed out"))??
+        .map_err(|_| eyre!("candidate_registry_removal_preserves_four_voters_and_observer_sync refresh status after unregister timed out"))??
         .blocks;
     // We can mint without an error.
     mint(&client, &asset_def, &account, 200_u32.into(), tx_timeout).await?;
     expected_height = expected_height.saturating_add(1);
     if sandbox::handle_result(
         network.ensure_blocks(expected_height).await,
-        stringify!(network_stable_after_add_and_after_remove_peer),
+        stringify!(candidate_registry_removal_preserves_four_voters_and_observer_sync),
     )?
     .is_none()
     {
@@ -231,29 +246,29 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
             Some(300_u32.into()),
         )
         .await,
-        stringify!(network_stable_after_add_and_after_remove_peer),
+        stringify!(candidate_registry_removal_preserves_four_voters_and_observer_sync),
     )? {
         Some(value) => value,
         None => return Ok(()),
     };
     assert_eq!(main_asset, Quantity::from(300_u32));
-    // Removed peers should not observe new mints after unregister.
-    sleep(PIPELINE_TIME * 5).await;
+    // Removing a candidate key does not revoke immutable observer networking
+    // trust. The still-authorized replica must continue to sync real execution.
     let unregistered_asset = match sandbox::handle_result(
         wait_for_asset(
             &new_peer_client,
             &account,
             &asset_def,
             sync_timeout,
-            Some(100_u32.into()),
+            Some(300_u32.into()),
         )
         .await,
-        stringify!(network_stable_after_add_and_after_remove_peer),
+        stringify!(candidate_registry_removal_preserves_four_voters_and_observer_sync),
     )? {
         Some(value) => value,
         None => return Ok(()),
     };
-    assert_eq!(unregistered_asset, Quantity::from(100_u32));
+    assert_eq!(unregistered_asset, Quantity::from(300_u32));
     Ok(())
 }
 async fn find_asset(
@@ -314,7 +329,7 @@ async fn mint(
         client,
         mint_asset,
         timeout_duration,
-        "network_stable_after_add_and_after_remove_peer mint",
+        "candidate_registry_removal_preserves_four_voters_and_observer_sync mint",
     )
     .await
 }

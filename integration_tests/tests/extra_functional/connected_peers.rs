@@ -1,6 +1,6 @@
-//! Connected peers count and reconfiguration under register/unregister.
+//! Connected peer counts under safe validator restarts and candidate registration.
 use eyre::{Result, WrapErr, eyre};
-use futures_util::{StreamExt, stream::FuturesUnordered};
+use futures_util::{StreamExt, future::try_join_all, stream::FuturesUnordered};
 use integration_tests::{sandbox, sync::spawn_blocking};
 use iroha::data_model::{
     Level,
@@ -11,7 +11,7 @@ use iroha::data_model::{
 use iroha_test_network::*;
 use rand::{SeedableRng, prelude::IteratorRandom};
 use rand_chacha::ChaCha8Rng;
-use std::{fmt::Write as _, time::Duration};
+use std::{collections::BTreeSet, fmt::Write as _, time::Duration};
 use tokio::time::{Instant, sleep, timeout};
 fn leader_peer<'a>(peers: impl IntoIterator<Item = &'a NetworkPeer>) -> &'a NetworkPeer {
     peers
@@ -37,7 +37,7 @@ async fn connected_peers_with_f_1_0_1() -> Result<()> {
 }
 #[tokio::test]
 async fn register_new_peer() -> Result<()> {
-    let Some(network) = sandbox::start_network_async_or_skip(
+    let Some(network) = start_validators_with_offline_observer(
         NetworkBuilder::new()
             .with_block_cadence(std::time::Duration::from_secs(2))
             .with_peers(4)
@@ -48,8 +48,9 @@ async fn register_new_peer() -> Result<()> {
     else {
         return Ok(());
     };
-    let peer = NetworkPeerBuilder::new().build(network.env());
-    network.attach_peer(&peer)?;
+    // Networking trust is predeclared; on-chain registration creates a candidate
+    // key and never changes the original four-validator voting committee.
+    let peer = &network.observers()[0];
     let submit_timeout = network
         .sync_timeout()
         .saturating_add(network.da_commit_quorum_timeout());
@@ -77,11 +78,8 @@ async fn register_new_peer() -> Result<()> {
         return Ok(());
     }
     let genesis = network.genesis();
-    peer.start(
-        network.config_layers_with_additional_peers([&peer]),
-        Some(&genesis),
-    )
-    .await?;
+    peer.start(network.config_layers_for_peer(peer), Some(&genesis))
+        .await?;
     if sandbox::handle_result(
         timeout(peer_sync_timeout, peer.once_block(2))
             .await
@@ -122,162 +120,217 @@ async fn register_new_peer() -> Result<()> {
     }
     Ok(())
 }
-/// Test the number of connected peers, changing the number of faults tolerated down and up.
+/// Start the four original voters while retaining one authorized, offline sync replica.
+/// Candidate registration and immutable P2P trust are separate authorities.
+pub(super) async fn start_validators_with_offline_observer(
+    builder: NetworkBuilder,
+    context: &'static str,
+) -> Result<Option<sandbox::SerializedNetwork>> {
+    let builder = builder.with_observer_p2p_bootstrap(ObserverP2pBootstrap::new(1)?)?;
+    let Some(network) = sandbox::build_network_or_skip(builder, context) else {
+        return Ok(None);
+    };
+    assert_eq!(network.validators().len(), 4);
+    assert_eq!(network.observers().len(), 1);
+    let genesis = network.genesis();
+    let voters = iroha_core::sumeragi::schedule::genesis_validators(&genesis)?;
+    assert_eq!(voters.len(), 4);
+    assert!(!voters.contains_key(&network.observers()[0].id()));
+    timeout(network.peer_startup_timeout(), async {
+        try_join_all(
+            network.validators().iter().map(|peer| {
+                peer.start_checked(network.config_layers_for_peer(peer), Some(&genesis))
+            }),
+        )
+        .await?;
+        network.ensure_blocks(1).await?;
+        Ok::<(), eyre::Report>(())
+    })
+    .await??;
+    assert!(!network.observers()[0].is_running());
+    Ok(Some(network))
+}
+
+#[test]
+fn offline_replica_bootstrap_preserves_four_signed_voters_and_explicit_trust() -> Result<()> {
+    let network = NetworkBuilder::new()
+        .with_peers(4)
+        .with_max_validator_capacity(5)
+        .with_observer_p2p_bootstrap(ObserverP2pBootstrap::new(1)?)?
+        .build();
+    let replica = &network.observers()[0];
+    assert!(!replica.is_running());
+    let voters = iroha_core::sumeragi::schedule::genesis_validators(&network.genesis())?;
+    assert_eq!(voters.len(), 4);
+    assert!(!voters.contains_key(&replica.id()));
+    let layers = network.config_layers_for_peer(replica).collect::<Vec<_>>();
+    let base = &layers[0];
+    let trusted = base
+        .get("trusted_peers")
+        .and_then(toml::Value::as_array)
+        .expect("explicit P2P trust");
+    assert!(
+        trusted
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .any(|entry| entry.starts_with(&format!("{}@", replica.id())))
+    );
+    let pops = base
+        .get("trusted_peers_pop")
+        .and_then(toml::Value::as_array)
+        .expect("exact voting PoPs");
+    assert_eq!(pops.len(), 4);
+    assert!(pops.iter().all(
+        |entry| entry.get("public_key").and_then(toml::Value::as_str)
+            != Some(replica.id().public_key().to_string().as_str())
+    ));
+    assert_eq!(
+        layers
+            .last()
+            .unwrap()
+            .get("sumeragi")
+            .unwrap()
+            .get("role")
+            .and_then(toml::Value::as_str),
+        Some("observer")
+    );
+    Ok(())
+}
+
+/// The authenticated `3f + 1` roster stays fixed while one validator disconnects and rejoins.
 #[allow(clippy::too_many_lines)]
 async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<()> {
     let n_peers = 3 * faults + 1;
     let builder = NetworkBuilder::new()
         .with_peers(n_peers)
-        .with_block_cadence(std::time::Duration::from_secs(2));
+        .with_block_cadence(Duration::from_secs(2));
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         return Ok(());
     };
-    // This scenario performs two roster reconfigurations and can exceed the generic sync budget on
-    // loaded CI hosts.
     let sync_timeout = network.sync_timeout().saturating_mul(2);
-    let da_commit_timeout = network.da_commit_quorum_timeout();
-    let expected_connected = expected_connected_peers(n_peers);
-    if sandbox::handle_result(
-        assert_peers_status(network.peers().iter(), 1, expected_connected, sync_timeout).await,
-        context,
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
+    let submit_timeout = sync_timeout.saturating_add(network.da_commit_quorum_timeout());
+    assert_peers_status(
+        network.peers(),
+        1,
+        expected_connected_peers(n_peers),
+        sync_timeout,
+    )
+    .await?;
     let mut randomized_peers = {
         let mut rng = ChaCha8Rng::seed_from_u64(0x434f_4e4e);
         network.peers().iter().sample(&mut rng, n_peers)
     };
-    let removed_peer = randomized_peers.remove(0);
-    let roster_client = leader_peer(randomized_peers.iter().copied()).client();
-    let submit_timeout = sync_timeout.saturating_add(da_commit_timeout);
-    // Unregister a peer and wait for the roster to reflect the change.
-    let unregister_peer = Unregister::peer(removed_peer.id());
-    if sandbox::handle_result(
-        submit_instruction_until_peer_roster(
-            randomized_peers.iter().copied(),
-            &roster_client,
-            unregister_peer.into(),
-            n_peers - 1,
-            context,
-            submit_timeout,
-            sync_timeout,
-        )
-        .await,
-        context,
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
-    wait_for_block_height(randomized_peers.iter().copied(), 2, sync_timeout).await?;
-    let expected_connected = expected_connected_peers(n_peers - 1);
-    if sandbox::handle_result(
-        assert_peers_status(
-            randomized_peers.iter().copied(),
-            2,
-            expected_connected,
-            sync_timeout,
-        )
-        .await,
-        context,
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
-    // Removed peers remain connected to continue block sync; ensure they still observe block 2.
-    if sandbox::handle_result(
-        wait_for_block_height(std::iter::once(removed_peer), 2, sync_timeout).await,
-        context,
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
-    let status = removed_peer.status().await?;
-    // Removed peer might see one extra commit while transitioning to follower mode.
-    assert!(
-        matches!(status.blocks_non_empty, 1 | 2 | 3),
-        "removed peer reported {} non-empty blocks, expected 1..=3",
-        status.blocks_non_empty
-    );
-    // Re-register the peer using the same join flow as a new peer. Keeping the
-    // removed peer process online while it is outside the roster is flaky on
-    // 4-peer localnets; restarting it after the register block is more stable.
-    removed_peer.shutdown().await;
-    let re_register_timeout = sync_timeout.saturating_add(da_commit_timeout);
-    let register_peer: InstructionBox = RegisterPeerWithPop::new(
-        removed_peer.id(),
-        removed_peer
-            .bls_pop()
-            .expect("network peer should have BLS PoP")
-            .to_vec(),
-    )
-    .into();
+    let restarted_peer = randomized_peers.remove(0);
     let client = leader_peer(randomized_peers.iter().copied()).client();
     let client = integration_tests::sync::rebind_blocking_client(&client, |client| {
         client.transaction_status_timeout = submit_timeout;
         client.transaction_ttl = Some(submit_timeout.saturating_add(Duration::from_secs(120)));
     });
-    if sandbox::handle_result(
-        submit_instruction_or_warn(client, register_peer, context).await,
+    let expected_roster = network
+        .peers()
+        .iter()
+        .map(NetworkPeer::id)
+        .collect::<BTreeSet<_>>();
+    let rejection = submit_instruction_or_warn(
+        client.clone(),
+        Unregister::peer(restarted_peer.id()),
         context,
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
-    if sandbox::handle_result(
-        wait_for_block_height(randomized_peers.iter().copied(), 3, re_register_timeout).await,
+    )
+    .await
+    .expect_err("an active authenticated validator cannot be unregistered");
+    assert!(
+        is_active_roster_rejection(&rejection),
+        "unexpected unregister rejection: {rejection:?}"
+    );
+    let roster_client = client.clone();
+    let retained_roster =
+        spawn_blocking(move || roster_client.client().query(FindPeers).execute_all())
+            .await??
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+    assert_eq!(
+        retained_roster, expected_roster,
+        "rejected removal must preserve every roster identity"
+    );
+    // Rejection is itself a committed result; every validator must retain it before shutdown.
+    wait_for_block_height(network.peers(), 2, sync_timeout).await?;
+    restarted_peer.shutdown().await;
+    assert_peers_status(
+        randomized_peers.iter().copied(),
+        2,
+        expected_connected_peers(n_peers - 1),
+        sync_timeout,
+    )
+    .await?;
+    // The original committee still has its exact quorum (3/4 or at least 5/7).
+    // A real transaction must apply while the one owned validator is offline.
+    submit_instruction_or_warn(
+        client,
+        Log::new(
+            Level::INFO,
+            "connected_peers_with_one_validator_offline".to_owned(),
+        ),
         context,
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
+    )
+    .await?;
+    wait_for_block_height(randomized_peers.iter().copied(), 3, sync_timeout).await?;
     let genesis = network.genesis();
-    if sandbox::handle_result(
-        removed_peer
-            .start(
-                network.config_layers_with_additional_peers([removed_peer]),
-                Some(&genesis),
-            )
-            .await,
-        context,
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
-    if sandbox::handle_result(
-        wait_for_block_height(std::iter::once(removed_peer), 3, sync_timeout).await,
-        context,
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
-    if sandbox::handle_result(
-        wait_for_peer_roster(&roster_client, n_peers, re_register_timeout).await,
-        context,
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
-    let expected_connected = expected_connected_peers(n_peers);
-    if sandbox::handle_result(
-        assert_peers_status(network.peers().iter(), 3, expected_connected, sync_timeout).await,
-        context,
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
+    restarted_peer
+        .start(
+            network.config_layers_for_peer(restarted_peer),
+            Some(&genesis),
+        )
+        .await?;
+    wait_for_block_height(std::iter::once(restarted_peer), 3, sync_timeout).await?;
+    assert_peers_status(
+        network.peers(),
+        3,
+        expected_connected_peers(n_peers),
+        sync_timeout,
+    )
+    .await?;
     Ok(())
 }
+
+fn is_active_roster_rejection(error: &eyre::Report) -> bool {
+    use iroha_data_model::{
+        ValidationFail,
+        isi::error::{InstructionExecutionError, InvalidParameterError},
+        transaction::error::TransactionRejectionReason,
+    };
+    error.chain().any(|cause| matches!(
+        cause.downcast_ref::<TransactionRejectionReason>(),
+        Some(TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(reason))
+        ))) if reason == "cannot unregister a peer from the current authenticated consensus roster"
+    ))
+}
+
+#[test]
+fn active_roster_rejection_requires_the_exact_native_reason() {
+    use iroha_data_model::{
+        ValidationFail,
+        isi::error::{InstructionExecutionError, InvalidParameterError},
+        transaction::error::TransactionRejectionReason,
+    };
+    let original = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            "cannot unregister a peer from the current authenticated consensus roster".to_owned(),
+        )),
+    ));
+    assert!(is_active_roster_rejection(
+        &eyre::Report::new(original).wrap_err("submission failed")
+    ));
+    assert!(!is_active_roster_rejection(&eyre!(
+        "cannot unregister a peer from the current authenticated consensus roster"
+    )));
+    assert!(!is_active_roster_rejection(&eyre::Report::new(
+        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+            "cannot unregister a peer from the current authenticated consensus roster".to_owned()
+        ),)
+    )));
+}
+
 async fn assert_peers_status(
     peers: impl IntoIterator<Item = &'_ NetworkPeer>,
     expected_blocks: u64,
@@ -300,8 +353,9 @@ async fn assert_peers_status(
                     Ok(status) => {
                         let fallback_height = peer.best_effort_block_height();
                         let last_peers = peer.last_known_peers();
-                        let peers_ok = status.peers >= expected_peers
-                            || last_peers.is_some_and(|peers| peers >= expected_peers);
+                        // Only a current response proves that the disconnected peer count fell;
+                        // cached larger counts must not satisfy the down-transition assertion.
+                        let peers_ok = status.peers == expected_peers;
                         let blocks_ok = status.blocks >= expected_blocks
                             || fallback_height
                                 .is_some_and(|height| height.total >= expected_blocks);
@@ -330,12 +384,6 @@ async fn assert_peers_status(
                     Err(err) => {
                         let fallback_height = peer.best_effort_block_height();
                         let last_peers = peer.last_known_peers();
-                        if let (Some(height), Some(peers)) = (fallback_height, last_peers)
-                            && height.total >= expected_blocks
-                            && peers >= expected_peers
-                        {
-                            return None;
-                        }
                         let mut message = format!(
                             "{}: status error: {err}; stdout={:?} stderr={:?}",
                             peer.id(),
@@ -474,141 +522,16 @@ async fn submit_instruction_or_warn(
     .await??;
     Ok(())
 }
-async fn submit_instruction_until_peer_roster(
-    peers: impl IntoIterator<Item = &'_ NetworkPeer>,
-    roster_client: &iroha::blocking::Client,
-    instruction: InstructionBox,
-    expected_roster: usize,
-    context: &str,
-    submit_timeout: Duration,
-    timeout: Duration,
-) -> Result<()> {
-    let peers: Vec<_> = peers.into_iter().collect();
-    let deadline = Instant::now() + timeout;
-    let mut last_submit_err: Option<String> = None;
-    let mut last_roster_err: Option<String> = None;
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(eyre!(
-                "timed out waiting for peer roster size {expected_roster}; last_submit_err={last_submit_err:?}; last_roster_err={last_roster_err:?}"
-            ));
-        }
-        let tx_timeout = submit_timeout.min(remaining);
-        let client = leader_peer(peers.iter().copied()).client();
-        let client = integration_tests::sync::rebind_blocking_client(&client, |client| {
-            client.transaction_status_timeout = tx_timeout;
-            client.transaction_ttl = Some(tx_timeout.saturating_add(Duration::from_secs(120)));
-        });
-        match submit_instruction_or_warn(client, instruction.clone(), context).await {
-            Ok(()) => {}
-            Err(err) if is_submit_timeout_error(&err) || is_register_duplicate_error(&err) => {
-                last_submit_err = Some(err.to_string());
-            }
-            Err(err) => return Err(err),
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(eyre!(
-                "timed out waiting for peer roster size {expected_roster}; last_submit_err={last_submit_err:?}; last_roster_err={last_roster_err:?}"
-            ));
-        }
-        let probe_timeout = remaining.min(Duration::from_secs(10));
-        match wait_for_peer_roster(roster_client, expected_roster, probe_timeout).await {
-            Ok(()) => return Ok(()),
-            Err(err) => {
-                let (matched, samples) = sample_peer_rosters(&peers, expected_roster).await;
-                if matched {
-                    return Ok(());
-                }
-                last_roster_err = Some(format!("{err}; peer_samples={samples:?}"));
-                sleep(Duration::from_millis(200)).await;
-            }
-        }
-    }
+fn expected_connected_peers(running_peers: usize) -> u64 {
+    u64::try_from(running_peers.saturating_sub(1)).expect("fixture peer count fits u64")
 }
-fn is_submit_timeout_error(err: &eyre::Report) -> bool {
-    err.chain().any(|cause| {
-        let message = cause.to_string();
-        message.contains("queued for too long")
-            || message.contains("haven't got tx confirmation within")
-            || message.contains("operation timed out")
-            || message.contains("timed out")
-    })
-}
-fn is_register_duplicate_error(err: &eyre::Report) -> bool {
-    err.chain().any(|cause| {
-        let message = cause.to_string();
-        message.contains("RepetitionError") || message.contains("Repetition of")
-    })
-}
-fn expected_connected_peers(roster_len: usize) -> u64 {
-    iroha_sumeragi::types::quorum(roster_len)
-        .saturating_sub(1)
-        .try_into()
-        .unwrap_or(0)
-}
-async fn wait_for_peer_roster(
-    client: &iroha::blocking::Client,
-    expected: usize,
-    timeout: Duration,
-) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    let mut last_err = None;
-    let mut last_count = None;
-    loop {
-        let client = client.clone();
-        let result = spawn_blocking(move || {
-            client
-                .client()
-                .query(FindPeers)
-                .execute_all()
-                .map(|peers| peers.len())
-        })
-        .await?;
-        match result {
-            Ok(count) => {
-                last_count = Some(count);
-                if count == expected {
-                    return Ok(());
-                }
-            }
-            Err(err) => {
-                last_err = Some(err);
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "timed out waiting for peer roster size {expected}; last_count={last_count:?} last_err={last_err:?}"
-            ));
-        }
-        sleep(Duration::from_millis(200)).await;
-    }
-}
-async fn sample_peer_rosters(peers: &[&NetworkPeer], expected: usize) -> (bool, Vec<String>) {
-    let samples = peers
-        .iter()
-        .map(|peer| async {
-            let peer_id = peer.id().to_string();
-            let client = peer.client();
-            let result = spawn_blocking(move || {
-                client
-                    .client()
-                    .query(FindPeers)
-                    .execute_all()
-                    .map(|roster| roster.len())
-            })
-            .await;
-            match result {
-                Ok(Ok(count)) => (count == expected, format!("{peer_id}={count}")),
-                Ok(Err(err)) => (false, format!("{peer_id}=err({err})")),
-                Err(err) => (false, format!("{peer_id}=join_err({err})")),
-            }
-        })
-        .collect::<FuturesUnordered<_>>()
-        .collect::<Vec<_>>()
-        .await;
-    let matched = samples.iter().any(|(matched, _)| *matched);
-    let details = samples.into_iter().map(|(_, detail)| detail).collect();
-    (matched, details)
+
+#[test]
+fn connected_peer_counts_track_running_processes_without_resizing_quorums() {
+    assert_eq!(expected_connected_peers(4), 3);
+    assert_eq!(expected_connected_peers(3), 2);
+    assert_eq!(expected_connected_peers(7), 6);
+    assert_eq!(expected_connected_peers(6), 5);
+    assert_eq!(iroha_sumeragi::types::quorum(4), 3);
+    assert_eq!(iroha_sumeragi::types::quorum(7), 5);
 }

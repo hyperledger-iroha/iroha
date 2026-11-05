@@ -108,6 +108,11 @@ const BPNG_ID: u64 = 8_648_377_547_929_788_715;
 // cited as evidence that lane 8 is operator-allocated on public Taira.
 const BPNG_FIXTURE_LANE: LaneId = LaneId::new(8);
 const VALIDATOR_COUNT: usize = 4;
+// This lifecycle buys exactly three native SNS leases. Fund their signed caps in
+// the original genesis; validator bonds remain separately owned and unchanged.
+const PAID_LEASE_COUNT: u32 = 3;
+const LEASE_PAYMENT_CAP: u32 = 100;
+const LEASE_PAYER_FUNDING: u32 = PAID_LEASE_COUNT * LEASE_PAYMENT_CAP;
 const BPNG_MIN_QUORUM: u32 = 3;
 const FIXTURE_EPOCH_LENGTH_BLOCKS: u64 = 8;
 const NETWORK_SEED: &str =
@@ -209,6 +214,13 @@ fn custom_genesis_post_topology(
         ))
         .into(),
     ];
+    bootstrap.push(
+        Mint::asset_quantity(
+            LEASE_PAYER_FUNDING,
+            AssetId::new(stake_asset_id.clone(), BOB_ID.clone()),
+        )
+        .into(),
+    );
     let mut default_lane_validators: Vec<InstructionBox> = Vec::with_capacity(VALIDATOR_COUNT * 2);
     bootstrap.extend(genesis_participant_committee_key_instructions(
         topology_entries,
@@ -576,16 +588,19 @@ async fn observe_catalog_expansion(
 }
 
 async fn submit(client: &Client, transaction: SignedTransaction) -> Result<SignedTransaction> {
+    let client = client.clone();
     timeout(
         SUBMISSION_TASK_TIMEOUT,
-        client
-            .account_client()
-            .submit_transaction_and_wait(&transaction),
+        iroha_test_network::read_on_dedicated_thread(move || {
+            // The blocking facade preserves the exact signed bytes and enriches
+            // terminal rejection with the native authenticated execution reason.
+            client.submit_transaction_and_wait(&transaction)?;
+            Ok(transaction)
+        }),
     )
     .await
     .wrap_err("native transaction did not reach terminal status in time")?
-    .wrap_err("native submission failed")?;
-    Ok(transaction)
+    .wrap_err("native submission failed")
 }
 
 fn bpng_fixture_lane() -> ModelLaneConfig {
@@ -1403,7 +1418,7 @@ async fn acquire(
             AliasQuoteGuardV1 {
                 expected_policy_version: policy.policy_version,
                 expected_payment_asset: payment_asset,
-                max_amount: Quantity::from(100_u32),
+                max_amount: Quantity::from(LEASE_PAYMENT_CAP),
                 valid_until_ms,
             },
         )]);
@@ -2884,6 +2899,10 @@ async fn run_bpng_retained_kura_lifecycle(network: sandbox::SerializedNetwork) -
     )
     .await?;
     let leases = vec![historical_lease, dataspace_lease, domain_lease];
+    ensure!(
+        leases.len() == usize::try_from(PAID_LEASE_COUNT)?,
+        "the original payer allocation must cover exactly the authored lease count"
+    );
     let mut transactions = vec![historical, granted, dataspace, domain];
     let expected = wait_for_snapshot(authority, &leases, &grant, &transactions, None).await?;
     assert_paid_once(&baseline_balances, &expected.balances, &leases)?;
@@ -3557,6 +3576,18 @@ fn genesis_staking_plans_bind_funded_validators_to_original_signed_custody() {
     assert_eq!(policy.stake_asset_id, stake_asset_definition_id());
     assert_eq!(policy.stake_escrow_account_id, staking_custody_account());
     assert_eq!(policy.slash_sink_account_id, staking_custody_account());
+    let payer_asset = AssetId::new(stake_asset_definition_id(), BOB_ID.clone());
+    let payer_mints = transactions
+        .iter()
+        .flatten()
+        .filter_map(|instruction| instruction.as_any().downcast_ref::<MintBox>())
+        .filter_map(|mint| match mint {
+            MintBox::Asset(mint) if mint.destination() == &payer_asset => Some(mint.object()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(payer_mints, vec![&Quantity::from(LEASE_PAYER_FUNDING)]);
+    assert_eq!(LEASE_PAYER_FUNDING, 300);
     let committee_registrations = transactions
         .iter()
         .flatten()

@@ -1,5 +1,5 @@
 //! Tests that a restarted peer restores its state.
-use eyre::{Result, eyre};
+use eyre::{Result, ensure, eyre};
 use integration_tests::{sandbox, sync::spawn_blocking};
 use iroha::data_model::prelude::*;
 use iroha::{blocking::Client, crypto::KeyPair};
@@ -28,6 +28,8 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
             .with_config_layer(|layer| {
                 layer
                     .write(["snapshot", "mode"], "read_write")
+                    // Keep the configured snapshot root explicit for the disk-readiness probe.
+                    .write(["snapshot", "store_dir"], "./storage/snapshot")
                     .write(["snapshot", "create_every_ms"], 200_i64);
             }),
         stringify!(restarted_peer_should_restore_its_state),
@@ -116,22 +118,10 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
     let snapshot_deadline = Instant::now() + network.sync_timeout();
     let expected_snapshot_height = 2_u64;
     let snapshot_ready = loop {
-        let data = snapshot_dir.join("snapshot.data");
-        let digest = snapshot_dir.join("snapshot.sha256");
-        let sig = snapshot_dir.join("snapshot.sig");
-        let merkle = snapshot_dir.join("snapshot.merkle.json");
-        let ready = data.exists() && digest.exists() && sig.exists() && merkle.exists();
-        if ready
-            && let Ok(snapshot_bytes) = std::fs::read(&data)
-            && let Ok(value) = norito::json::from_slice::<norito::json::Value>(&snapshot_bytes)
+        if published_snapshot_height(&snapshot_dir)?
+            .is_some_and(|height| height >= expected_snapshot_height)
         {
-            let height = value
-                .get("block_hashes")
-                .and_then(norito::json::Value::as_array)
-                .map_or(0, |entries| entries.len() as u64);
-            if height >= expected_snapshot_height {
-                break true;
-            }
+            break true;
         }
         if Instant::now() >= snapshot_deadline {
             break false;
@@ -218,6 +208,19 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
             .with_peers(4)
             .with_genesis_instruction(Grant::account_permission(
                 Permission::from(manage_alias_permission),
+                ALICE_ID.clone(),
+            ))
+            .with_genesis_instruction(Grant::account_permission(
+                Permission::from(
+                    iroha_executor_data_model::permission::account::CanResolveAccountAlias {
+                        scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Alias(
+                            iroha_data_model::alias_setup::ResolvedAccountAliasV1::new(
+                                "merchant@universal".parse()?,
+                                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                            ),
+                        ),
+                    },
+                ),
                 ALICE_ID.clone(),
             )),
         test_name,
@@ -418,6 +421,92 @@ async fn route_sensitive_state_digest(
     .await
     .map_err(eyre::Report::from)?
 }
+/// Inspect publication readiness only; the native daemon authenticates the signed
+/// generation and reconstructs the state during the actual restart below.
+fn published_snapshot_height(root: &Path) -> Result<Option<u64>> {
+    let pointer = match std::fs::read_to_string(root.join("current")) {
+        Ok(pointer) => pointer,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let digest = pointer
+        .strip_suffix('\n')
+        .ok_or_else(|| eyre!("snapshot generation pointer lacks its canonical newline"))?;
+    ensure!(
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        "snapshot generation pointer is not canonical lowercase SHA-256 hex"
+    );
+    let generation = root.join("generations").join(digest);
+    for artifact in [
+        "snapshot.data",
+        "snapshot.sha256",
+        "snapshot.sig",
+        "snapshot.fast.norito",
+        "snapshot.merkle.json",
+    ] {
+        let metadata = std::fs::symlink_metadata(generation.join(artifact))?;
+        ensure!(
+            metadata.is_file() && metadata.len() > 0,
+            "published snapshot lacks the complete signed artifact set"
+        );
+    }
+    let snapshot: norito::json::Value =
+        norito::json::from_slice(&std::fs::read(generation.join("snapshot.data"))?)?;
+    let hashes = snapshot
+        .get("block_hashes")
+        .and_then(norito::json::Value::as_array)
+        .ok_or_else(|| eyre!("published snapshot has no committed block-hash vector"))?;
+    Ok(Some(u64::try_from(hashes.len())?))
+}
+
+#[test]
+fn published_snapshot_readiness_requires_a_complete_canonical_generation() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    assert_eq!(published_snapshot_height(root.path())?, None);
+    let digest = "ab".repeat(32);
+    for malformed in [
+        digest.clone(),
+        format!("{digest}\n\n"),
+        format!("{}\n", digest.to_uppercase()),
+        "../snapshot\n".to_owned(),
+    ] {
+        std::fs::write(root.path().join("current"), malformed)?;
+        assert!(published_snapshot_height(root.path()).is_err());
+    }
+    std::fs::write(root.path().join("current"), format!("{digest}\n"))?;
+    let generation = root.path().join("generations").join(&digest);
+    std::fs::create_dir_all(&generation)?;
+    for artifact in [
+        "snapshot.data",
+        "snapshot.sha256",
+        "snapshot.sig",
+        "snapshot.merkle.json",
+    ] {
+        std::fs::write(generation.join(artifact), b"fixture")?;
+    }
+    std::fs::write(
+        generation.join("snapshot.data"),
+        br#"{"block_hashes":["one","two"]}"#,
+    )?;
+    // The retired four-file layout cannot establish readiness.
+    assert!(published_snapshot_height(root.path()).is_err());
+    std::fs::write(generation.join("snapshot.fast.norito"), b"fixture")?;
+    assert_eq!(published_snapshot_height(root.path())?, Some(2));
+    std::fs::write(
+        generation.join("snapshot.data"),
+        br#"{"block_hashes":["one"]}"#,
+    )?;
+    assert_eq!(published_snapshot_height(root.path())?, Some(1));
+    std::fs::write(generation.join("snapshot.data"), b"{}")?;
+    assert!(published_snapshot_height(root.path()).is_err());
+    std::fs::write(generation.join("snapshot.sig"), b"")?;
+    assert!(published_snapshot_height(root.path()).is_err());
+    Ok(())
+}
+
 fn remove_optional_recovery_sidecars(root: &Path) -> Result<()> {
     const SIDE_CAR_DIRS: [&str; 3] = ["snapshot", "wsv_checkpoints", "commit_manifests"];
     if !root.exists() {
