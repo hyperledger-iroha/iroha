@@ -4510,7 +4510,9 @@ async fn collect_statuses(
     status_timeout: Duration,
 ) -> Result<Vec<iroha_torii_shared::status::Status>> {
     try_join_all(network.peers().iter().map(|peer| async move {
-        tokio::time::timeout(status_timeout, peer.status())
+        tokio::time::timeout(status_timeout, integration_tests::sync::status_until(
+            peer.client().client(), Instant::now() + status_timeout,
+        ))
             .await
             .map_or_else(
                 |_| {

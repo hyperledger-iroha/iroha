@@ -72,6 +72,54 @@ impl Drop for NativeBlockingThread {
 const STATUS_RETRY_DELAY: Duration = Duration::from_millis(100);
 const STATUS_RETRY_DEFAULT: Duration = Duration::from_secs(120);
 
+/// Read complete authoritative status within one original observation deadline.
+/// Only the SDK's typed busy/deadline responses may be retried. Authentication,
+/// malformed data, transport failures and other service errors remain terminal.
+///
+/// # Errors
+/// Returns the original terminal response or expiration of the caller's deadline.
+pub async fn status_until(client: &iroha::client::Client, deadline: Instant) -> Result<Status> {
+    tokio::time::timeout_at(deadline.into(), async {
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            eyre::ensure!(!remaining.is_zero(), "status observation deadline elapsed");
+            let mut builder = client.with_request_deadline(deadline).to_builder();
+            builder.torii_request_timeout = builder.torii_request_timeout.min(remaining);
+            match builder.build()?.status().get().await {
+                Ok(status) => {
+                    eyre::ensure!(
+                        Instant::now() < deadline,
+                        "status observation deadline elapsed"
+                    );
+                    return Ok(status);
+                }
+                Err(error) => {
+                    let iroha::Error::StatusUnavailable {
+                        reason:
+                            Some(
+                                iroha::StatusFailureReason::DeadlineElapsed
+                                | iroha::StatusFailureReason::StateBusy,
+                            ),
+                        retry_after,
+                    } = &error
+                    else {
+                        return Err(error.into());
+                    };
+                    let delay = retry_after
+                        .unwrap_or(Duration::from_millis(150))
+                        .max(Duration::from_millis(150));
+                    if delay >= deadline.saturating_duration_since(Instant::now()) {
+                        return Err(error.into());
+                    }
+                    tokio::time::sleep(delay).await;
+                }
+            }
+        }
+    })
+    .await
+    .wrap_err("status observation exceeded its original deadline")?
+}
+
 /// Check one complete observation of the peers a Sumeragi progress wait selected.
 ///
 /// Failed queries remain pending; callers must keep querying the original peers so a
