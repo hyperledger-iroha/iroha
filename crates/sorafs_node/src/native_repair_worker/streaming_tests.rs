@@ -2,7 +2,7 @@
 fn repair_stream_fixture() -> (
     tempfile::TempDir,
     StorageBackend,
-    StoredManifest,
+    std::sync::Arc<StoredManifest>,
     Vec<Vec<u8>>,
 ) {
     use sorafs_car::{CarBuildPlan, CarChunk, CarWriter, FilePlan};

@@ -10,7 +10,7 @@ struct TokenTestContext {
 }
 
 impl TokenTestContext {
-    fn manifest(&self) -> sorafs_node::store::StoredManifest {
+    fn manifest(&self) -> Arc<sorafs_node::store::StoredManifest> {
         self.app
             .sorafs_node
             .manifest_metadata(&self.manifest_id_hex)

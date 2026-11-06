@@ -322,6 +322,8 @@ use sorafs_node::{
     NodeStorageError,
     store::{StorageError, StoredFileRecord, StoredManifest},
 };
+#[cfg(not(feature = "app_api"))]
+use std::sync::Arc;
 
 #[cfg(not(feature = "app_api"))]
 fn storage_disabled_response() -> Response {
@@ -410,7 +412,7 @@ fn canonical_content_cid(raw: &str) -> Option<Vec<u8>> {
 }
 
 #[cfg(not(feature = "app_api"))]
-fn resolve_local_cid(state: &SharedAppState, cid: &str) -> Result<StoredManifest, Response> {
+fn resolve_local_cid(state: &SharedAppState, cid: &str) -> Result<Arc<StoredManifest>, Response> {
     if !state.sorafs_node.is_enabled() {
         return Err(storage_disabled_response());
     }
@@ -467,7 +469,7 @@ struct ResolvedHost {
     hostname: String,
     index_document: String,
     spa_fallback: bool,
-    stored: StoredManifest,
+    stored: Arc<StoredManifest>,
 }
 
 #[cfg(not(feature = "app_api"))]
@@ -578,8 +580,8 @@ fn resolve_local_host(
 }
 
 #[cfg(not(feature = "app_api"))]
-async fn validate_canonical_local_manifest(stored: &StoredManifest) -> Result<(), Response> {
-    let stored = stored.clone();
+async fn validate_canonical_local_manifest(stored: &Arc<StoredManifest>) -> Result<(), Response> {
+    let stored = Arc::clone(stored);
     let task = crate::panic_recovery::spawn_blocking_recoverable(move || {
         let manifest_bytes = stored.load_manifest_bytes().map_err(|_| {
             json_error(
@@ -788,7 +790,7 @@ fn compliance_decision_response(
 async fn enforce_local_pre_read(
     state: &SharedAppState,
     headers: &HeaderMap,
-    stored: &StoredManifest,
+    stored: &Arc<StoredManifest>,
 ) -> Result<(), Response> {
     use super::gateway::{CanonicalHost, ClientFingerprint, PolicyDecision, RequestContext};
     validate_canonical_local_manifest(stored).await?;

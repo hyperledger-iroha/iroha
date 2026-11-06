@@ -288,7 +288,7 @@ async fn car_route_late_finality_and_clock_drift_never_admit_or_penalize_provide
 }
 #[tokio::test]
 async fn car_route_static_token_rejections_perform_zero_observer_io() {
-    for attack in 0..4 {
+    for attack in 0..5 {
         let (context, signer, admission, cleanup) = custody_admission_context();
         let encoded = issue_token_base64(&context, TokenOverrides::default()).await;
         let mut token = decode_token_base64(&encoded).unwrap();
@@ -305,20 +305,21 @@ async fn car_route_static_token_rejections_perform_zero_observer_io() {
                 token.body.token_pk_version += 1;
                 (signed_test_token(token.body), StatusCode::UNAUTHORIZED)
             }
-            _ => {
+            3 => {
                 token.body.max_streams = 0;
                 (signed_test_token(token.body), StatusCode::BAD_REQUEST)
             }
+            // No token header at all.
+            _ => (String::new(), StatusCode::UNAUTHORIZED),
         };
+        let mut headers = custody_route_headers(&context, &encoded, "static-rejection");
+        if encoded.is_empty() {
+            assert!(headers.remove(HEADER_SORA_STREAM_TOKEN).is_some());
+        }
         let before = signer
             .observer_calls
             .load(std::sync::atomic::Ordering::SeqCst);
-        let response = context
-            .car_range(
-                custody_route_headers(&context, &encoded, "static-rejection"),
-                8101,
-            )
-            .await;
+        let response = context.car_range(headers, 8101).await;
         assert_eq!(response.status(), expected, "attack {attack}");
         assert_eq!(
             signer
@@ -326,15 +327,11 @@ async fn car_route_static_token_rejections_perform_zero_observer_io() {
                 .load(std::sync::atomic::Ordering::SeqCst),
             before
         );
+        // A token that never authenticated identifies no holder. Nothing is captured natively,
+        // so anonymous requests cannot make the gateway sign or wait on transactions.
+        assert!(admission.requests().is_empty(), "attack {attack}");
+        assert!(admission.outcomes().is_empty(), "attack {attack}");
         assert_eq!(admission.active_leases(), 0);
-        let outcomes = admission.outcomes();
-        assert_eq!(outcomes.len(), 1);
-        assert!(
-            outcomes
-                .iter()
-                .all(|outcome| !outcome.status.counts_for_provider()
-                    && !outcome.status.is_violation())
-        );
         cleanup.finish().await;
     }
 }

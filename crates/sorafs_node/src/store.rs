@@ -1421,17 +1421,6 @@ struct StoredChunkRole {
     #[norito(default)]
     group_id: u32,
 }
-fn reserve_refcount_entries(
-    entries: &mut Vec<ChunkRefcountEntry>,
-    additional: usize,
-) -> Result<(), StorageError> {
-    entries.try_reserve(additional).map_err(|_| {
-        StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
-            context: "chunk reference counts",
-            requested: additional,
-        })
-    })
-}
 fn try_clone_refcount_entries(
     entries: &[ChunkRefcountEntry],
 ) -> Result<Vec<ChunkRefcountEntry>, StorageError> {
@@ -1543,21 +1532,113 @@ fn try_clone_retention_source(
         sources,
     }))
 }
-fn increment_refcount(
-    entries: &mut Vec<ChunkRefcountEntry>,
-    digest: [u8; 32],
+fn refcount_allocation_failed(context: &'static str, requested: usize) -> StorageError {
+    StorageError::ChunkStore(ChunkStoreError::AllocationFailed { context, requested })
+}
+/// Count each distinct chunk digest, ordered by digest.
+///
+/// One sort replaces a sorted-vector insertion per chunk, so building counts for `n` chunks is
+/// `O(n log n)` instead of `O(n * distinct)` element moves.
+fn counted_refcounts(
+    mut digests: Vec<[u8; 32]>,
     path: &Path,
-) -> Result<(), StorageError> {
-    match entries.binary_search_by_key(&digest, |entry| entry.digest) {
-        Ok(index) => {
-            entries[index].count = entries[index]
-                .count
-                .checked_add(1)
-                .ok_or_else(|| corrupt_storage_state(path, "chunk reference count overflow"))?;
+) -> Result<Vec<ChunkRefcountEntry>, StorageError> {
+    digests.sort_unstable();
+    let mut counts: Vec<ChunkRefcountEntry> = Vec::new();
+    counts
+        .try_reserve_exact(digests.len())
+        .map_err(|_| refcount_allocation_failed("chunk reference counts", digests.len()))?;
+    for digest in digests {
+        match counts.last_mut() {
+            Some(last) if last.digest == digest => {
+                last.count = last
+                    .count
+                    .checked_add(1)
+                    .ok_or_else(|| corrupt_storage_state(path, "chunk reference count overflow"))?;
+            }
+            _ => counts.push(ChunkRefcountEntry { digest, count: 1 }),
         }
-        Err(index) => entries.insert(index, ChunkRefcountEntry { digest, count: 1 }),
     }
-    Ok(())
+    Ok(counts)
+}
+fn collect_refcount_digests(
+    digests: impl ExactSizeIterator<Item = [u8; 32]>,
+) -> Result<Vec<[u8; 32]>, StorageError> {
+    let mut collected = Vec::new();
+    collected
+        .try_reserve_exact(digests.len())
+        .map_err(|_| refcount_allocation_failed("chunk reference count batch", digests.len()))?;
+    collected.extend(digests);
+    Ok(collected)
+}
+/// Return `existing` with one more reference for every digest in `digests`.
+///
+/// The result is exactly what one increment per digest would produce, including the overflow
+/// refusal, built in one merge over the sorted table instead of shifting it once per chunk.
+fn refcounts_with_added(
+    existing: &[ChunkRefcountEntry],
+    digests: impl ExactSizeIterator<Item = [u8; 32]>,
+    path: &Path,
+) -> Result<Vec<ChunkRefcountEntry>, StorageError> {
+    let added = counted_refcounts(collect_refcount_digests(digests)?, path)?;
+    let capacity = existing.len().saturating_add(added.len());
+    let mut merged = Vec::new();
+    merged
+        .try_reserve_exact(capacity)
+        .map_err(|_| refcount_allocation_failed("chunk reference counts", capacity))?;
+    let mut current = existing.iter().peekable();
+    for addition in added {
+        while let Some(entry) = current.next_if(|entry| entry.digest < addition.digest) {
+            merged.push(entry.clone());
+        }
+        match current.next_if(|entry| entry.digest == addition.digest) {
+            Some(entry) => merged.push(ChunkRefcountEntry {
+                digest: entry.digest,
+                count: entry
+                    .count
+                    .checked_add(addition.count)
+                    .ok_or_else(|| corrupt_storage_state(path, "chunk reference count overflow"))?,
+            }),
+            None => merged.push(addition),
+        }
+    }
+    merged.extend(current.cloned());
+    Ok(merged)
+}
+/// Return `existing` with one reference fewer for every digest in `digests`.
+///
+/// Entries reaching zero are removed. A digest without enough positive references is refused,
+/// exactly as one decrement per digest would be, in one merge over the sorted table.
+fn refcounts_with_removed(
+    existing: &[ChunkRefcountEntry],
+    digests: impl ExactSizeIterator<Item = [u8; 32]>,
+    path: &Path,
+) -> Result<Vec<ChunkRefcountEntry>, StorageError> {
+    let removed = counted_refcounts(collect_refcount_digests(digests)?, path)?;
+    let mut remaining = Vec::new();
+    remaining.try_reserve_exact(existing.len()).map_err(|_| {
+        refcount_allocation_failed("chunk reference count snapshot", existing.len())
+    })?;
+    let mut current = existing.iter().peekable();
+    for removal in removed {
+        while let Some(entry) = current.next_if(|entry| entry.digest < removal.digest) {
+            remaining.push(entry.clone());
+        }
+        let count = current
+            .next_if(|entry| entry.digest == removal.digest)
+            .and_then(|entry| entry.count.checked_sub(removal.count))
+            .ok_or_else(|| {
+                corrupt_storage_state(path, "manifest chunk is missing a positive reference count")
+            })?;
+        if count > 0 {
+            remaining.push(ChunkRefcountEntry {
+                digest: removal.digest,
+                count,
+            });
+        }
+    }
+    remaining.extend(current.cloned());
+    Ok(remaining)
 }
 fn corrupt_storage_state(path: &Path, reason: impl Into<String>) -> StorageError {
     StorageError::CorruptStorageState {
@@ -2548,7 +2629,7 @@ impl StorageBackend {
         let mut total_bytes = 0_u64;
         let mut pdp_tree_bytes = 0_u64;
         let mut manifests = BTreeMap::new();
-        let mut chunk_refcounts = Vec::new();
+        let mut startup_refcount_digests: Vec<[u8; 32]> = Vec::new();
         let mut access_counter = 0u64;
         for entry in &mut index.entries {
             let manifest_dir = manifests_dir.join(&entry.manifest_id);
@@ -2635,10 +2716,16 @@ impl StorageBackend {
                 Err(error) => return Err(error),
             }
             stored_manifest.pdp_tree_memory_bytes = candidate_pdp_bytes;
-            reserve_refcount_entries(&mut chunk_refcounts, stored_manifest.chunk_files.len())?;
-            for chunk in &stored_manifest.chunk_files {
-                increment_refcount(&mut chunk_refcounts, chunk.digest, &index_path)?;
-            }
+            startup_refcount_digests
+                .try_reserve(stored_manifest.chunk_files.len())
+                .map_err(|_| {
+                    refcount_allocation_failed(
+                        "chunk reference count batch",
+                        stored_manifest.chunk_files.len(),
+                    )
+                })?;
+            startup_refcount_digests
+                .extend(stored_manifest.chunk_files.iter().map(|chunk| chunk.digest));
             total_bytes = total_bytes
                 .checked_add(stored_manifest.content_length)
                 .ok_or_else(|| corrupt_storage_state(&index_path, "total byte count overflow"))?;
@@ -2652,6 +2739,7 @@ impl StorageBackend {
                 Arc::new(stored_manifest),
             );
         }
+        let chunk_refcounts = counted_refcounts(startup_refcount_digests, &index_path)?;
         let max_capacity = config.max_capacity_bytes().0;
         if total_bytes > max_capacity {
             return Err(StorageError::CapacityExceeded {
@@ -2815,15 +2903,19 @@ impl StorageBackend {
     pub fn root_dir(&self) -> &Path {
         self.root_dir.as_path()
     }
-    /// Returns a clone of all stored manifest descriptors.
+    /// Returns shared handles to all stored manifest descriptors, ordered by manifest identifier.
+    ///
+    /// Stored descriptors are immutable: every metadata update installs a new descriptor. A
+    /// handle is therefore the same snapshot a deep copy would give, at the cost of one pointer
+    /// per manifest instead of copying every file and chunk record in the store.
     #[must_use]
-    pub fn manifests(&self) -> Vec<StoredManifest> {
+    pub fn manifests(&self) -> Vec<Arc<StoredManifest>> {
         self.state
             .read()
             .expect("storage state poisoned")
             .manifests
             .values()
-            .map(|manifest| manifest.as_ref().clone())
+            .cloned()
             .collect()
     }
     /// Returns the count of manifests recorded in the on-disk index.
@@ -2893,23 +2985,11 @@ impl StorageBackend {
                 })?
                 .to_path_buf();
             let mut new_index = try_clone_manifest_index(&state.index)?;
-            let mut refcounts = try_clone_refcount_entries(&state.chunk_refcounts)?;
-            for chunk in &stored.chunk_files {
-                match refcounts.binary_search_by_key(&chunk.digest, |entry| entry.digest) {
-                    Ok(index) if refcounts[index].count == 1 => {
-                        refcounts.remove(index);
-                    }
-                    Ok(index) if refcounts[index].count > 1 => {
-                        refcounts[index].count -= 1;
-                    }
-                    _ => {
-                        return Err(corrupt_storage_state(
-                            &self.index_path,
-                            "manifest chunk is missing a positive reference count",
-                        ));
-                    }
-                }
-            }
+            let refcounts = refcounts_with_removed(
+                &state.chunk_refcounts,
+                stored.chunk_files.iter().map(|chunk| chunk.digest),
+                &self.index_path,
+            )?;
             let entries_before = new_index.entries.len();
             new_index
                 .entries
@@ -3477,11 +3557,14 @@ impl StorageBackend {
                     .available_pdp_tree_memory(self.config.pdp_tree_memory_limit_bytes().0),
             });
         }
-        let mut refcounts = try_clone_refcount_entries(&state.chunk_refcounts)?;
-        reserve_refcount_entries(&mut refcounts, stored_manifest.chunk_files.len())?;
-        for record in &stored_manifest.chunk_files {
-            increment_refcount(&mut refcounts, record.digest, &self.index_path)?;
-        }
+        let refcounts = refcounts_with_added(
+            &state.chunk_refcounts,
+            stored_manifest
+                .chunk_files
+                .iter()
+                .map(|record| record.digest),
+            &self.index_path,
+        )?;
         new_index.chunk_refcounts = try_clone_refcount_entries(&refcounts)?;
         new_index.entries.try_reserve(1).map_err(|_| {
             StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
@@ -5325,6 +5408,8 @@ mod tests {
     include!("store_repair_cursor_tests.rs");
     include!("store_fixture_and_ownership_tests.rs");
     include!("store_manifest_payload_integrity_tests.rs");
+    include!("store_manifest_lookup_tests.rs");
+    include!("store_refcount_tests.rs");
     include!("store_lifecycle_recovery_tests.rs");
     include!("store_publisher_source_tests.rs");
     #[test]

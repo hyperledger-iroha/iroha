@@ -150,6 +150,51 @@ impl GatewayRateLimiter {
         self.buckets.insert(*client, bucket);
         result
     }
+    /// Refuse a client that is banned or out of credits without charging it.
+    ///
+    /// Gateway handlers call this before expensive manifest, token or storage work so an
+    /// exhausted client is refused cheaply. Admitted requests are still charged exactly once by
+    /// [`Self::check`]; a client this limiter has not seen yet always passes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RateLimitError`] when the next [`Self::check`] would refuse the client.
+    pub fn precheck(&self, client: &ClientFingerprint, now: Instant) -> Result<(), RateLimitError> {
+        let Some(max_requests) = self.config.max_requests else {
+            return Ok(());
+        };
+        let Some(bucket) = self.buckets.get(client) else {
+            return Ok(());
+        };
+        let now = now.max(bucket.last_seen);
+        if let Some(retry_after) = self.active_ban(&bucket, now) {
+            return Err(RateLimitError::Banned {
+                retry_after: Some(retry_after),
+            });
+        }
+        let elapsed = now.saturating_duration_since(bucket.last_refill);
+        let credits = bucket
+            .credits
+            .saturating_add(elapsed.as_nanos().saturating_mul(u128::from(max_requests)))
+            .min(self.capacity(max_requests));
+        if credits >= self.request_cost() {
+            return Ok(());
+        }
+        Err(RateLimitError::Limited {
+            retry_after: self.limited_retry_after(credits, max_requests),
+        })
+    }
+    fn limited_retry_after(&self, credits: u128, max_requests: u32) -> Duration {
+        if max_requests == 0 {
+            return self.config.window.max(Duration::from_nanos(1));
+        }
+        let nanos = (self.request_cost() - credits).div_ceil(u128::from(max_requests));
+        // The wait is at most one configured window, so it fits Duration.
+        Duration::new(
+            u64::try_from(nanos / 1_000_000_000).unwrap_or(u64::MAX),
+            (nanos % 1_000_000_000) as u32,
+        )
+    }
     fn request_cost(&self) -> u128 {
         // Normalize a zero interval to a nanosecond, keeping the credit cost
         // positive without division by zero.
@@ -199,17 +244,9 @@ impl GatewayRateLimiter {
                 retry_after: Some(ban_duration),
             });
         }
-        let retry_after = if max_requests == 0 {
-            self.config.window.max(Duration::from_nanos(1))
-        } else {
-            let nanos = (cost - bucket.credits).div_ceil(u128::from(max_requests));
-            // The wait is at most one configured window, so it fits Duration.
-            Duration::new(
-                u64::try_from(nanos / 1_000_000_000).unwrap_or(u64::MAX),
-                (nanos % 1_000_000_000) as u32,
-            )
-        };
-        Err(RateLimitError::Limited { retry_after })
+        Err(RateLimitError::Limited {
+            retry_after: self.limited_retry_after(bucket.credits, max_requests),
+        })
     }
     fn prune_inactive(&self, now: Instant) {
         self.buckets.retain(|_, bucket| {
@@ -221,6 +258,49 @@ impl GatewayRateLimiter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn precheck_refuses_exhausted_and_banned_clients_without_charging() {
+        let limiter = GatewayRateLimiter::new(GatewayRateLimitConfig {
+            max_requests: Some(2),
+            window: Duration::from_secs(10),
+            ban_duration: None,
+        });
+        let client = ClientFingerprint::from_identifier("precheck-client");
+        let start = Instant::now();
+        // Unknown clients pass and the precheck allocates no bucket.
+        assert!(limiter.precheck(&client, start).is_ok());
+        assert!(limiter.buckets.is_empty());
+        assert!(limiter.check(&client, start).is_ok());
+        // A precheck never consumes credit: repeated prechecks leave the one remaining request.
+        for _ in 0..8 {
+            assert!(limiter.precheck(&client, start).is_ok());
+        }
+        assert!(limiter.check(&client, start).is_ok());
+        let exhausted = limiter.precheck(&client, start);
+        assert_eq!(exhausted, limiter.check(&client, start));
+        assert!(matches!(exhausted, Err(RateLimitError::Limited { .. })));
+        // Refill is observed without charging, and the following check still succeeds.
+        let refilled = start + Duration::from_secs(5);
+        assert!(limiter.precheck(&client, refilled).is_ok());
+        assert!(limiter.check(&client, refilled).is_ok());
+
+        let banning = GatewayRateLimiter::new(GatewayRateLimitConfig {
+            max_requests: Some(1),
+            window: Duration::from_secs(10),
+            ban_duration: Some(Duration::from_secs(30)),
+        });
+        assert!(banning.check(&client, start).is_ok());
+        assert!(banning.check(&client, start).is_err());
+        assert!(matches!(
+            banning.precheck(&client, start + Duration::from_secs(20)),
+            Err(RateLimitError::Banned { .. })
+        ));
+        assert!(
+            banning
+                .precheck(&client, start + Duration::from_secs(31))
+                .is_ok()
+        );
+    }
     #[test]
     fn rate_limiter_permits_within_budget() {
         let limiter = GatewayRateLimiter::new(GatewayRateLimitConfig {
