@@ -56,6 +56,23 @@ class KagemushaWalletRequestBoundReviewV1Test {
                 KagemushaWalletUInt128V1(1, 0))
         }
     }
+    @Test fun retainedPreparingCarriesOnlyTheExactRequestIdentityAndOriginals() {
+        val expected = KagemushaWalletReviewExpectationV1.RetainedPreparing
+        assertEquals(2, expected.tag)
+        assertArrayEquals(byteArrayOf(), expected.bytes())
+        val identity = id(); val request = byteArrayOf(2); val account = byteArrayOf(3)
+        val send = KagemushaWalletReviewInputV1(identity, 1, expected, first = request, second = account)
+        val unload = KagemushaWalletReviewInputV1(identity, 8, expected, KagemushaWalletUInt128V1(7, 0))
+        identity.fill(0); request.fill(0); account.fill(0)
+        assertArrayEquals(id(), send.requestId()); assertArrayEquals(id(), unload.requestId())
+        assertArrayEquals(byteArrayOf(2), send.first()); assertArrayEquals(byteArrayOf(3), send.second())
+        assertSame(expected, send.expectation); assertSame(expected, unload.expectation)
+        for (invalid in listOf(ByteArray(31), ByteArray(32), ByteArray(33))) {
+            assertThrows(IllegalArgumentException::class.java) {
+                KagemushaWalletReviewInputV1(invalid, 1, expected, first = byteArrayOf(2), second = byteArrayOf(3))
+            }
+        }
+    }
     @Test fun existingPreservesAllCurrentCompletionBitsAndExactPayload() {
         for (kind in listOf(1, 2, 3, 4, 5, 10)) {
             val payload = if (kind == 1 || kind == 10) byteArrayOf(3, 4) else byteArrayOf()

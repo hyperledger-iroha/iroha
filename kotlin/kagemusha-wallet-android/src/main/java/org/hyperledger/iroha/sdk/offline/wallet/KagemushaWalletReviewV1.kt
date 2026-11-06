@@ -61,18 +61,25 @@ class KagemushaWalletReviewProjectionV1 internal constructor(original: ByteArray
     override fun toString() = "KagemushaWalletReviewProjectionV1(kind=$kind, source=[REDACTED])"
 }
 
-/** Comparison DATA for a new Native review; never a reconstructed approval or capability. */
+/** Intent or comparison DATA for a new Native review; never a reconstructed approval or capability. */
 sealed class KagemushaWalletReviewExpectationV1 {
     object Fresh : KagemushaWalletReviewExpectationV1()
     class OriginalUnstarted(originalProjection: ByteArray) : KagemushaWalletReviewExpectationV1() {
         private val retained = KagemushaWalletReviewProjectionV1(originalProjection)
         internal fun projection() = retained
     }
+    /** Review only the exact already-bound PREPARING request. Native refuses an absent binding and
+     * authenticates its retained source and terms; the returned review still needs fresh confirmation. */
+    object RetainedPreparing : KagemushaWalletReviewExpectationV1()
     internal fun bytes(): ByteArray = when (this) {
-        Fresh -> byteArrayOf()
+        Fresh, RetainedPreparing -> byteArrayOf()
         is OriginalUnstarted -> projection().bytes()
     }
-    internal val tag: Int get() = if (this === Fresh) 0 else 1
+    internal val tag: Int get() = when (this) {
+        Fresh -> 0
+        is OriginalUnstarted -> 1
+        RetainedPreparing -> 2
+    }
 }
 
 /** Only genuine preflight maintenance reasons, without permission to dispatch. */
