@@ -17,21 +17,31 @@ final class KagemushaWalletFoldProgressV1Tests: XCTestCase {
 
   private func name(_ value: String?) -> String { value.map { "\"\($0)\"" } ?? "null" }
 
+  // The `running` object Native writes for the turn that runs now.
+  private func runningTurn(_ started: UInt64, _ sequence: UInt64, _ operation: String?, _ ordinal: UInt64,
+                           _ stages: UInt64?) -> String {
+    "{\"startedNativeMicros\":\(started * second),\"sequence\":\(sequence),\"operation\":\(name(operation)),"
+      + "\"ordinal\":\(ordinal),\"stages\":\(stages.map(String.init) ?? "null")}"
+  }
+
   // The shape Native's FoldMetricsV1::to_json writes, including the fields a progress reading ignores.
-  private func telemetry(_ sampled: UInt64, _ rows: [Row], schema: String = KagemushaWalletFoldProgressV1.schema) -> String {
+  private func telemetry(_ sampled: UInt64, _ rows: [Row], schema: String = KagemushaWalletFoldProgressV1.schema,
+                         running: String = "null") -> String {
     let records = rows.map {
       "{\"startedNativeMicros\":\($0.started),\"endedNativeMicros\":\($0.ended),\"sequence\":\($0.sequence),"
         + "\"operation\":\(name($0.operation)),\"stage\":\(name($0.stage)),\"ordinal\":\($0.ordinal),"
         + "\"stages\":\($0.stages.map(String.init) ?? "null"),\"outcome\":\"\($0.outcome)\",\"cause\":null,\"ingests\":0,"
         + "\"peakRssBytes\":null,\"micros\":{\"prove\":\(Int64($0.ended) - Int64($0.started))}}"
     }.joined(separator: ",")
-    return "{\"schema\":\"\(schema)\",\"sampledNativeMicros\":\(sampled * second),\"counts\":{\"subProofs\":\(rows.count)},"
+    let head = "{\"schema\":\"\(schema)\",\"sampledNativeMicros\":\(sampled * second),\"running\":\(running),"
+    return head + "\"counts\":{\"subProofs\":\(rows.count)},"
       + "\"processScratch\":{\"limitBytes\":1,\"inUseBytes\":0,\"peakBytes\":0},\"processPeakRssBytes\":null,"
       + "\"records\":[\(records)],\"nativeWorkCount\":0,\"nativeWork\":[]}"
   }
 
-  private func progress(_ sampled: UInt64, _ rows: [Row]) throws -> KagemushaWalletFoldProgressV1 {
-    try KagemushaWalletFoldProgressV1.parse(telemetry(sampled, rows))
+  private func progress(_ sampled: UInt64, _ rows: [Row], running: String = "null") throws
+    -> KagemushaWalletFoldProgressV1 {
+    try KagemushaWalletFoldProgressV1.parse(telemetry(sampled, rows, running: running))
   }
 
   private var loadThenReceive: [Row] {
@@ -150,6 +160,120 @@ final class KagemushaWalletFoldProgressV1Tests: XCTestCase {
     XCTAssertFalse(untimed.timed)
     XCTAssertEqual(untimed.remainingWeight, 3)
     XCTAssertNil(untimed.remainingMicros)
+  }
+
+  func testARunningTurnSizesAndTimesTheFirstSubProofOfAnOperationThePhoneNeverFolded() throws {
+    // This phone has folded Receives only, at 30 s a sub-proof; no Load schedule or cost is known.
+    let schedules = ["receive": 12]
+    let costs: [String: [UInt32: UInt64]] = ["receive": [0: 30 * second]]
+    // A new process: Native's first turn, on Load head 3, started at 5 s; the app's wait began at 15 s.
+    let reading = try progress(17, [], running: runningTurn(5, 3, "load", 0, 3))
+    XCTAssertEqual(reading.head, 3)
+    XCTAssertEqual(reading.schedules, ["load": 3])
+    XCTAssertEqual(reading.costs, [:])
+    let estimate = try XCTUnwrap(reading.estimate(backlog: 1, running: true, firstHead: 3, schedules: schedules,
+                                                  costs: costs, since: 15 * second))
+    // The head counts at its own three sub-proofs at this phone's pace, the first running since 5 s.
+    XCTAssertEqual(estimate.proved, 0)
+    XCTAssertEqual(estimate.remaining, 3)
+    XCTAssertTrue(estimate.timed)
+    XCTAssertEqual(estimate.remainingWeight, micros(90), accuracy: 1e-3)
+    XCTAssertEqual(estimate.runningWeight, micros(12), accuracy: 1e-3)
+    XCTAssertEqual(estimate.fraction, 12.0 / 90, accuracy: 1e-9)
+    XCTAssertEqual(estimate.remainingMicros, 78 * second)
+    // A reading that found the worker parked still times the turn Native reports running.
+    let parked = try XCTUnwrap(reading.estimate(backlog: 1, running: false, firstHead: 3, schedules: schedules,
+                                                costs: costs))
+    XCTAssertEqual(parked.runningWeight, micros(12), accuracy: 1e-3)
+    // Without it the head would count at the largest schedule, timed from the wait's first reading.
+    let unreported = try XCTUnwrap(try progress(17, []).estimate(backlog: 1, running: true, firstHead: 3,
+                                                                 schedules: schedules, costs: costs, since: 15 * second))
+    XCTAssertEqual(unreported.remaining, 12)
+    XCTAssertEqual(unreported.fraction, 2.0 / 360, accuracy: 1e-9)
+    // Its record and the next running turn carry the share on: the 24 s Load q is done, its a runs since 29 s.
+    let next = try progress(35, [row(5, 29, 3, "load", "q", 0, 3, "checkpoint")],
+                            running: runningTurn(29, 3, "load", 1, 3))
+    let after = try XCTUnwrap(next.estimate(backlog: 1, running: true, firstHead: 3, schedules: schedules, costs: costs,
+                                            since: 15 * second))
+    XCTAssertEqual(after.proved, 1)
+    XCTAssertEqual(after.remaining, 2)
+    XCTAssertEqual(after.runningWeight, micros(6), accuracy: 1e-3)
+    XCTAssertEqual(after.fraction, 30.0 / 72, accuracy: 1e-9)
+  }
+
+  func testAFirstEverFoldHasAnImmediateSizeButNoInventedClock() throws {
+    let reading = try progress(100, [], running: runningTurn(1, 3, "load", 0, 3))
+    let estimate = try XCTUnwrap(reading.estimate(backlog: 1, running: true, firstHead: 3))
+    XCTAssertEqual(estimate.remaining, 3)
+    XCTAssertEqual(estimate.fraction, 0)
+    XCTAssertFalse(estimate.timed)
+    XCTAssertNil(estimate.remainingMicros)
+  }
+
+  func testACancelledTurnSpendsNoTimeWhileParkedAndRetryTimesOnlyItsNewTurn() throws {
+    let cancelled = row(10, 30, 3, "load", "q", 0, 3, "cancelled")
+    let costs: [String: [UInt32: UInt64]] = ["load": [0: 40 * second]]
+    let parked = try XCTUnwrap(try progress(90, [cancelled]).estimate(backlog: 1, running: false,
+      firstHead: 3, costs: costs))
+    XCTAssertEqual(parked.proved, 0)
+    XCTAssertEqual(parked.runningWeight, 0)
+    XCTAssertEqual(parked.remainingMicros, 120 * second)
+    let resumed = try progress(105, [cancelled], running: runningTurn(100, 3, "load", 0, 3))
+    let estimate = try XCTUnwrap(resumed.estimate(backlog: 1, running: true, firstHead: 3, costs: costs,
+      since: 10 * second))
+    XCTAssertEqual(estimate.proved, 0)
+    XCTAssertEqual(estimate.runningWeight, micros(5), accuracy: 1e-3)
+    XCTAssertEqual(estimate.remainingMicros, 115 * second)
+    XCTAssertEqual(resumed.costs, [:])
+  }
+
+  func testALongRunningOmegaNeverCompletesTheWalletWait() throws {
+    let reading = try progress(1000, [], running: runningTurn(1, 3, "load", 2, 3))
+    let estimate = try XCTUnwrap(reading.estimate(backlog: 1, running: true, firstHead: 3,
+      costs: ["load": [0: second]]))
+    XCTAssertEqual(estimate.proved, 2)
+    XCTAssertEqual(estimate.remaining, 1)
+    XCTAssertEqual(estimate.runningWeight, micros(0.9), accuracy: 1e-3)
+    XCTAssertLessThan(estimate.fraction, 1)
+    XCTAssertNil(reading.estimate(backlog: 0, running: true, firstHead: 3))
+  }
+
+  func testARunningTurnSaysWhereItsHeadStandsBeforeAnyRecord() throws {
+    // Native restarted with the app: its first turn works on the sixth of a Receive head's twelve sub-proofs.
+    let costs: [String: [UInt32: UInt64]] = ["receive": [0: 30 * second, 1: 30 * second, 2: 30 * second,
+                                                         3: 30 * second, 4: 30 * second]]
+    let reading = try progress(110, [], running: runningTurn(100, 7, "receive", 5, 12))
+    XCTAssertEqual(reading.head, 7)
+    XCTAssertEqual(reading.schedules, ["receive": 12])
+    let estimate = try XCTUnwrap(reading.estimate(backlog: 1, running: true, firstHead: 7, costs: costs))
+    XCTAssertEqual(estimate.proved, 5)
+    XCTAssertEqual(estimate.remaining, 7)
+    XCTAssertEqual(estimate.provedWeight, micros(150), accuracy: 1e-3)
+    XCTAssertEqual(estimate.remainingWeight, micros(210), accuracy: 1e-3)
+    XCTAssertEqual(estimate.runningWeight, micros(10), accuracy: 1e-3)
+    XCTAssertEqual(estimate.fraction, 160.0 / 360, accuracy: 1e-9)
+    // A running turn of a head before the wait's first neither names nor times the wait's head.
+    let before = try XCTUnwrap(reading.estimate(backlog: 1, running: true, firstHead: 8, costs: costs,
+                                                since: 105 * second))
+    XCTAssertEqual(before.proved, 0)
+    XCTAssertEqual(before.remaining, 12)
+    XCTAssertEqual(before.runningWeight, micros(5), accuracy: 1e-3)
+  }
+
+  func testARunningTurnBeforeItReadItsStepCountsByWhatTheCallerNamed() throws {
+    let schedules = ["load": 3, "receive": 12]
+    let costs: [String: [UInt32: UInt64]] = ["load": [0: 24 * second, 1: 48 * second, 2: 49 * second],
+                                             "receive": [0: 30 * second]]
+    let operations: [UInt64: String] = [3: "load"]
+    // Selected at 5 s and still reading its predecessor Ω: head and ordinal only. The wait began at 15 s.
+    let reading = try progress(17, [], running: runningTurn(5, 3, nil, 0, nil))
+    XCTAssertEqual(reading.schedules, [:])
+    let estimate = try XCTUnwrap(reading.estimate(backlog: 1, running: true, firstHead: 3, schedules: schedules,
+                                                  costs: costs, operations: operations, since: 15 * second))
+    XCTAssertEqual(estimate.remaining, 3)
+    XCTAssertEqual(estimate.runningWeight, micros(12), accuracy: 1e-3)
+    XCTAssertEqual(estimate.fraction, 12.0 / 121, accuracy: 1e-9)
+    XCTAssertEqual(estimate.remainingMicros, 109 * second)
   }
 
   func testTheRunningSubProofIsTimedFromTheLaterOfTheLastTurnAndSince() throws {
@@ -272,13 +396,16 @@ final class KagemushaWalletFoldProgressV1Tests: XCTestCase {
     XCTAssertEqual(estimate.remainingMicros, .max)
   }
 
-  func testRefusesMalformedOrForeignTelemetry() {
+  func testRefusesMalformedOrForeignTelemetry() throws {
     let good = row(0, 20, 1, "load", "q", 0, 3, "checkpoint")
+    let running = runningTurn(20, 1, "load", 0, 3)
     let inputs = [
       "", "[]", "{}",
-      // A Native without schedules in its records.
+      // A Native without schedules in its records, and one without the running turn.
       telemetry(30, [good], schema: "iroha.kagemusha.fold-metrics.v2").replacingOccurrences(of: ",\"stages\":3", with: ""),
       telemetry(30, [good], schema: "iroha.kagemusha.fold-metrics.v2"),
+      telemetry(30, [good], schema: "iroha.kagemusha.fold-metrics.v3").replacingOccurrences(of: "\"running\":null,", with: ""),
+      telemetry(30, [good], schema: "iroha.kagemusha.fold-metrics.v3"),
       telemetry(10, [good]), // ended after the sample
       telemetry(30, [row(20, 10, 1, "load", "q", 0, 3, "checkpoint")]),
       telemetry(30, [row(0, 20, 1, "load", "q", 0, 3, "finished")]),
@@ -293,12 +420,24 @@ final class KagemushaWalletFoldProgressV1Tests: XCTestCase {
       telemetry(30, [good]).replacingOccurrences(of: "\"operation\":\"load\"", with: "\"operation\":7"),
       telemetry(30, [good]).replacingOccurrences(of: "\"records\":[", with: "\"records\":{\"x\":["),
       telemetry(30, [good]).replacingOccurrences(of: ",\"outcome\":\"checkpoint\"", with: ""),
+      // The running turn is required, an object or null, and as exact as a record.
+      telemetry(30, [good]).replacingOccurrences(of: "\"running\":null,", with: ""),
+      telemetry(30, [good], running: "[]"),
+      telemetry(30, [good], running: "{}"),
+      telemetry(30, [good], running: runningTurn(31, 1, "load", 0, 3)), // started after the sample
+      telemetry(30, [good], running: runningTurn(20, 1, "load", 4_294_967_296, 3)),
+      telemetry(30, [good], running: runningTurn(20, 1, "load", 0, 0)),
+      telemetry(30, [good], running: running.replacingOccurrences(of: ",\"stages\":3", with: "")),
+      telemetry(30, [good], running: running.replacingOccurrences(of: "\"sequence\":1", with: "\"sequence\":\"1\"")),
+      telemetry(30, [good], running: running.replacingOccurrences(of: "\"operation\":\"load\"", with: "\"operation\":7")),
     ]
     for input in inputs {
       XCTAssertThrowsError(try KagemushaWalletFoldProgressV1.parse(input), input) {
         XCTAssertEqual($0 as? KagemushaWalletErrorV1, .invalidNativeOutput)
       }
     }
+    // The same running turn, well formed, is read.
+    XCTAssertEqual(try KagemushaWalletFoldProgressV1.parse(telemetry(30, [good], running: running)).head, 1)
   }
 
   func testTheLargestScheduleNativeCanReportStillCounts() throws {
@@ -306,5 +445,9 @@ final class KagemushaWalletFoldProgressV1Tests: XCTestCase {
     let estimate = try XCTUnwrap(reading.estimate(backlog: 1, running: false, firstHead: 1, schedules: [:]))
     XCTAssertEqual(estimate.proved, 1)
     XCTAssertEqual(estimate.remaining, 4_294_967_294)
+    // A running turn may report it too.
+    let running = try progress(30, [], running: runningTurn(20, 1, "load", 0, 4_294_967_295))
+    XCTAssertEqual(try XCTUnwrap(running.estimate(backlog: 1, running: false, firstHead: 1, schedules: [:])).remaining,
+                   4_294_967_295)
   }
 }

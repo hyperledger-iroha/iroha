@@ -19,8 +19,10 @@ import kotlinx.serialization.json.JsonPrimitive
  * records every turn that selected one once the turn ends: the head's sequence, its operation, the
  * ordinal it worked on, which is the head's durable sub-proof count when the turn began, and, once the
  * turn read the head's schedule, the head's whole schedule with Ω (`stages`). A turn cancelled by a
- * payment therefore still says where its head stands and how far it has to go. A head Native has not
- * started, or whose first sub-proof is still running, has no record, so callers pass what earlier
+ * payment therefore still says where its head stands and how far it has to go. While a turn runs,
+ * Native reports the same facts as far as the turn has read them, with its start (`running`), so the
+ * running sub-proof of a head is sized and timed before its first record, even for an operation this
+ * phone never folded. A head Native has not started has neither, so callers pass what earlier
  * readings of the same owner taught them for those heads: sub-proofs per head and the time each
  * sub-proof took by operation name ([schedules], [costs]), and the operations of heads they released.
  */
@@ -28,6 +30,7 @@ class KagemushaWalletFoldProgressV1 private constructor(
     /** Native's monotonic time of this reading, in microseconds from its process-local origin. */
     val sampledNativeMicros: Long,
     private val turns: List<Turn>,
+    private val runningTurn: RunningTurn?,
 ) {
     private class Turn(
         val startedNativeMicros: Long,
@@ -47,15 +50,27 @@ class KagemushaWalletFoldProgressV1 private constructor(
         val proved: Boolean get() = outcome == "checkpoint" || outcome == "folded"
     }
 
-    /** The head Native is folding as of this reading: the last turn's, or the next one after its Ω; null before a turn. */
-    val head: BigInteger? = turns.lastOrNull()?.let { if (it.folded) it.sequence + BigInteger.ONE else it.sequence }
+    /** The turn running at this reading, as far as it has read its head. */
+    private class RunningTurn(
+        val startedNativeMicros: Long,
+        val sequence: BigInteger,
+        val operation: String?,
+        val ordinal: Long,
+        val stages: Long?,
+    )
 
-    /** Sub-proofs per head by operation name: the largest schedule a retained turn of that operation reported. */
+    /**
+     * The head Native is folding as of this reading: the running turn's, else the last turn's or the next one after its
+     * Ω; null before a turn.
+     */
+    val head: BigInteger? = runningTurn?.sequence
+        ?: turns.lastOrNull()?.let { if (it.folded) it.sequence + BigInteger.ONE else it.sequence }
+
+    /** Sub-proofs per head by operation name: the largest schedule a retained or running turn of that operation reported. */
     val schedules: Map<String, Int> = buildMap {
-        for (turn in turns) {
-            val operation = turn.operation ?: continue
-            val stages = turn.stages ?: continue
-            if (stages > Int.MAX_VALUE) continue
+        val reported = turns.map { it.operation to it.stages } + listOfNotNull(runningTurn?.let { it.operation to it.stages })
+        for ((operation, stages) in reported) {
+            if (operation == null || stages == null || stages > Int.MAX_VALUE) continue
             if (stages > (get(operation) ?: 0)) put(operation, stages.toInt())
         }
     }
@@ -102,19 +117,20 @@ class KagemushaWalletFoldProgressV1 private constructor(
      * Estimate the wait until every released head is folded.
      *
      * [backlog] counts the released heads still needing folds, as the latest snapshot reports it. [running] says
-     * Native's worker is proving now. [firstHead] is where the caller's wait began: the [head] of its first reading, or
-     * before any turn the snapshot's oldest unfolded head (its sequence minus its backlog, plus one). Every head folded
-     * since then counts in full, from its own Ω. A reading with no turn of the current head knows none of its sub-proofs
-     * durable, so the head after the last Ω, or [firstHead] before any turn, counts from its first.
+     * Native's worker is proving now; a running turn of the current head in this reading says so too. [firstHead] is
+     * where the caller's wait began: the [head] of its first reading, or before any turn the snapshot's oldest unfolded
+     * head (its sequence minus its backlog, plus one). Every head folded since then counts in full, from its own Ω. A
+     * reading with no turn of the current head, running or recorded, knows none of its sub-proofs durable, so the head
+     * after the last Ω, or [firstHead] before any turn, counts from its first.
      *
-     * A head counts at the schedule its own turns reported. Heads without one count by their operation, named by a turn
-     * or by the caller in [operations] (such as the heads its own Load, Send, Receive or Unload released), in [schedules]
-     * merged with this reading's, and at the largest schedule when no operation is known. Each sub-proof weighs what
-     * this reading's or the caller's [costs] say it took, else its operation's mean, else the mean of every known one.
-     * The running sub-proof is timed from the last turn's end or [since], whichever is later: the caller's earliest
-     * reading at which it may have started, such as its first reading of the wait or its last that found the worker
-     * parked. No head is counted finished before its Ω. Null when nothing is known yet: no backlog, or no size for a
-     * head still to fold.
+     * A head counts at the schedule its own running or recorded turns reported. Heads without one count by their
+     * operation, named by a turn or by the caller in [operations] (such as the heads its own Load, Send, Receive or
+     * Unload released), in [schedules] merged with this reading's, and at the largest schedule when no operation is
+     * known. Each sub-proof weighs what this reading's or the caller's [costs] say it took, else its operation's mean,
+     * else the mean of every known one. The running sub-proof is timed from the start of the current head's running
+     * turn; without one, from the last turn's end or [since], whichever is later: the caller's earliest reading at which
+     * it may have started, such as its first reading of the wait or its last that found the worker parked. No head is
+     * counted finished before its Ω. Null when nothing is known yet: no backlog, or no size for a head still to fold.
      */
     fun estimate(
         backlog: Long,
@@ -144,15 +160,18 @@ class KagemushaWalletFoldProgressV1 private constructor(
         val largest = sizes.values.filter { it > 0 }.maxOrNull()?.toLong()
         val last = turns.lastOrNull()
         val head = head?.takeIf { it >= firstHead } ?: firstHead
-        val done = when {
+        // Native's turn running on this head names its operation, its durable sub-proofs, its size and its start.
+        val current = runningTurn?.takeIf { it.sequence == head }
+        val recorded = when {
             last == null || last.sequence != head -> 0L
             last.durable -> last.ordinal + 1
             else -> last.ordinal
         }
+        val done = maxOf(recorded, current?.ordinal ?: 0L)
         val ofHead = turns.filter { it.sequence == head }
         // Native's own schedule for a head it has started; otherwise the head's operation, or the largest.
-        val operation = ofHead.lastOrNull { it.operation != null }?.operation ?: operations[head]
-        val known = ofHead.lastOrNull { it.stages != null }?.stages
+        val operation = current?.operation ?: ofHead.lastOrNull { it.operation != null }?.operation ?: operations[head]
+        val known = current?.stages ?: ofHead.lastOrNull { it.stages != null }?.stages
             ?: operation?.let(sizes::get)?.takeIf { it > 0 }?.toLong() ?: largest ?: return null
         val size = maxOf(known, done + 1)
         var proved = done
@@ -180,8 +199,8 @@ class KagemushaWalletFoldProgressV1 private constructor(
                 remainingWeight += unnamed.toDouble() * weight(null, 0, each)
             }
         }
-        val start = listOfNotNull(last?.endedNativeMicros, since).maxOrNull()
-        val runningWeight = if (running && pace != null && start != null) {
+        val start = current?.startedNativeMicros ?: listOfNotNull(last?.endedNativeMicros, since).maxOrNull()
+        val runningWeight = if ((running || current != null) && pace != null && start != null) {
             (sampledNativeMicros - start).coerceAtLeast(0).toDouble()
                 .coerceAtMost(RUNNING_SHARE_MAX * weight(operation, done, done + 1))
         } else 0.0
@@ -190,7 +209,7 @@ class KagemushaWalletFoldProgressV1 private constructor(
 
     companion object {
         /** The telemetry schema this reading accepts. */
-        const val SCHEMA = "iroha.kagemusha.fold-metrics.v3"
+        const val SCHEMA = "iroha.kagemusha.fold-metrics.v4"
         /** The running sub-proof never counts as more than this share of its cost before Native records it. */
         const val RUNNING_SHARE_MAX = 0.9
         /** Only the snapshot's folded head completes a wait. */
@@ -210,20 +229,32 @@ class KagemushaWalletFoldProgressV1 private constructor(
                 val started = number(record, "startedNativeMicros").toLong()
                 val ended = number(record, "endedNativeMicros").toLong()
                 require(started <= ended && ended <= sampled)
-                val ordinal = number(record, "ordinal").toLong()
-                require(ordinal <= UInt.MAX_VALUE.toLong())
-                // A schedule always ends in Ω, so a reported one has at least one sub-proof.
-                val stages = nullableNumber(record, "stages")?.toLong()
-                require(stages == null || stages in 1..UInt.MAX_VALUE.toLong())
                 val outcome = text(record, "outcome")
                 require(outcome in OUTCOMES)
                 Turn(started, ended, BigInteger(number(record, "sequence")), name(record, "operation"),
-                    name(record, "stage"), ordinal, stages, outcome)
+                    name(record, "stage"), ordinal(record), stages(record), outcome)
             }
-            KagemushaWalletFoldProgressV1(sampled, turns)
+            // Every reading names it: null while no selected turn runs.
+            val running = when (val value = root.getValue("running")) {
+                JsonNull -> null
+                else -> (value as JsonObject).let { turn ->
+                    val started = number(turn, "startedNativeMicros").toLong()
+                    require(started <= sampled)
+                    RunningTurn(started, BigInteger(number(turn, "sequence")), name(turn, "operation"), ordinal(turn),
+                        stages(turn))
+                }
+            }
+            KagemushaWalletFoldProgressV1(sampled, turns, running)
         } catch (_: Exception) {
             throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
         }
+
+        private fun ordinal(record: JsonObject): Long =
+            number(record, "ordinal").toLong().also { require(it <= UInt.MAX_VALUE.toLong()) }
+
+        // A schedule always ends in Ω, so a reported one has at least one sub-proof.
+        private fun stages(record: JsonObject): Long? =
+            nullableNumber(record, "stages")?.toLong()?.also { require(it in 1..UInt.MAX_VALUE.toLong()) }
 
         private fun number(record: JsonObject, key: String): String {
             val value = record.getValue(key) as JsonPrimitive

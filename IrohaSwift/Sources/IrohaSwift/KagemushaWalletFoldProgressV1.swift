@@ -8,14 +8,16 @@ import Foundation
 /// records every turn that selected one once the turn ends: the head's sequence, its operation, the
 /// ordinal it worked on, which is the head's durable sub-proof count when the turn began, and, once
 /// the turn read the head's schedule, the head's whole schedule with Ω (`stages`). A turn cancelled
-/// by a payment therefore still says where its head stands and how far it has to go. A head Native
-/// has not started, or whose first sub-proof is still running, has no record, so callers pass what
-/// earlier readings of the same owner taught them for those heads: sub-proofs per head and the time
-/// each sub-proof took by operation name (`schedules`, `costs`), and the operations of heads they
-/// released.
+/// by a payment therefore still says where its head stands and how far it has to go. While a turn
+/// runs, Native reports the same facts as far as the turn has read them, with its start (`running`),
+/// so the running sub-proof of a head is sized and timed before its first record, even for an
+/// operation this phone never folded. A head Native has not started has neither, so callers pass
+/// what earlier readings of the same owner taught them for those heads: sub-proofs per head and the
+/// time each sub-proof took by operation name (`schedules`, `costs`), and the operations of heads
+/// they released.
 public struct KagemushaWalletFoldProgressV1: Equatable, Sendable {
   /// The telemetry schema this reading accepts.
-  public static let schema = "iroha.kagemusha.fold-metrics.v3"
+  public static let schema = "iroha.kagemusha.fold-metrics.v4"
   /// The running sub-proof never counts as more than this share of its cost before Native records it.
   public static let runningShareMaximum = 0.9
   /// Only the snapshot's folded head completes a wait.
@@ -40,22 +42,48 @@ public struct KagemushaWalletFoldProgressV1: Equatable, Sendable {
     var proved: Bool { outcome == "checkpoint" || outcome == "folded" }
   }
 
+  /// The turn running at this reading, as far as it has read its head.
+  struct RunningTurn: Decodable, Equatable, Sendable {
+    let startedNativeMicros: UInt64
+    let sequence: UInt64
+    let operation: String?
+    let ordinal: UInt32
+    let stages: UInt32?
+
+    private enum CodingKeys: String, CodingKey {
+      case startedNativeMicros, sequence, operation, ordinal, stages
+    }
+
+    // Every field is required; only operation and stages may be null.
+    init(from decoder: Decoder) throws {
+      let fields = try decoder.container(keyedBy: CodingKeys.self)
+      startedNativeMicros = try fields.decode(UInt64.self, forKey: .startedNativeMicros)
+      sequence = try fields.decode(UInt64.self, forKey: .sequence)
+      operation = try fields.decode(String?.self, forKey: .operation)
+      ordinal = try fields.decode(UInt32.self, forKey: .ordinal)
+      stages = try fields.decode(UInt32?.self, forKey: .stages)
+    }
+  }
+
   /// Native's monotonic time of this reading, in microseconds from its process-local origin.
   public let sampledNativeMicros: UInt64
-  /// The head Native is folding as of this reading: the last turn's, or the next one after its Ω; nil before a turn.
+  /// The head Native is folding as of this reading: the running turn's, else the last turn's or the next one after
+  /// its Ω; nil before a turn.
   public let head: UInt64?
-  /// Sub-proofs per head by operation name: the largest schedule a retained turn of that operation reported.
+  /// Sub-proofs per head by operation name: the largest schedule a retained or running turn of that operation reported.
   public let schedules: [String: Int]
   /// The wall time of each sub-proof on this phone, in microseconds by operation name and ordinal: the mean of the
   /// retained turns that proved it. Sub-proofs of one schedule differ in cost, so a caller that keeps these between
   /// readings can weight a wait by time before its turns are recorded.
   public let costs: [String: [UInt32: UInt64]]
   private let turns: [Turn]
+  private let runningTurn: RunningTurn?
 
-  init(sampledNativeMicros: UInt64, turns: [Turn]) {
+  init(sampledNativeMicros: UInt64, turns: [Turn], runningTurn: RunningTurn?) {
     self.sampledNativeMicros = sampledNativeMicros
     self.turns = turns
-    head = turns.last.map { $0.folded ? $0.sequence &+ 1 : $0.sequence }
+    self.runningTurn = runningTurn
+    head = runningTurn?.sequence ?? turns.last.map { $0.folded ? $0.sequence &+ 1 : $0.sequence }
     var schedules: [String: Int] = [:]
     var sums: [String: [UInt32: (total: UInt64, count: UInt64)]] = [:]
     for turn in turns {
@@ -65,6 +93,9 @@ public struct KagemushaWalletFoldProgressV1: Equatable, Sendable {
       let before = sums[operation]?[turn.ordinal] ?? (0, 0)
       sums[operation, default: [:]][turn.ordinal] =
         (before.total + (turn.endedNativeMicros - turn.startedNativeMicros), before.count + 1)
+    }
+    if let operation = runningTurn?.operation, let stages = runningTurn?.stages {
+      schedules[operation] = max(schedules[operation] ?? 0, Int(stages))
     }
     self.schedules = schedules
     costs = sums.compactMapValues { byOrdinal in
@@ -106,19 +137,21 @@ public struct KagemushaWalletFoldProgressV1: Equatable, Sendable {
   /// Estimate the wait until every released head is folded.
   ///
   /// `backlog` counts the released heads still needing folds, as the latest snapshot reports it. `running` says
-  /// Native's worker is proving now. `firstHead` is where the caller's wait began: the `head` of its first reading,
-  /// or before any turn the snapshot's oldest unfolded head (its sequence minus its backlog, plus one). Every head
-  /// folded since then counts in full, from its own Ω. A reading with no turn of the current head knows none of its
-  /// sub-proofs durable, so the head after the last Ω, or `firstHead` before any turn, counts from its first.
+  /// Native's worker is proving now; a running turn of the current head in this reading says so too. `firstHead` is
+  /// where the caller's wait began: the `head` of its first reading, or before any turn the snapshot's oldest unfolded
+  /// head (its sequence minus its backlog, plus one). Every head folded since then counts in full, from its own Ω. A
+  /// reading with no turn of the current head, running or recorded, knows none of its sub-proofs durable, so the head
+  /// after the last Ω, or `firstHead` before any turn, counts from its first.
   ///
-  /// A head counts at the schedule its own turns reported. Heads without one count by their operation, named by a
-  /// turn or by the caller in `operations` (such as the heads its own Load, Send, Receive or Unload released), in
-  /// `schedules` merged with this reading's, and at the largest schedule when no operation is known. Each sub-proof
-  /// weighs what this reading's or the caller's `costs` say it took, else its operation's mean, else the mean of every
-  /// known one. The running sub-proof is timed from the last turn's end or `since`, whichever is later: the caller's
-  /// earliest reading at which it may have started, such as its first reading of the wait or its last that found
-  /// the worker parked. No head is counted finished before its Ω. Nil when nothing is known yet: no backlog, or no
-  /// size for a head still to fold.
+  /// A head counts at the schedule its own running or recorded turns reported. Heads without one count by their
+  /// operation, named by a turn or by the caller in `operations` (such as the heads its own Load, Send, Receive or
+  /// Unload released), in `schedules` merged with this reading's, and at the largest schedule when no operation is
+  /// known. Each sub-proof weighs what this reading's or the caller's `costs` say it took, else its operation's mean,
+  /// else the mean of every known one. The running sub-proof is timed from the start of the current head's running
+  /// turn; without one, from the last turn's end or `since`, whichever is later: the caller's earliest reading at
+  /// which it may have started, such as its first reading of the wait or its last that found the worker parked. No
+  /// head is counted finished before its Ω. Nil when nothing is known yet: no backlog, or no size for a head still to
+  /// fold.
   public func estimate(backlog: UInt64, running: Bool, firstHead: UInt64, schedules: [String: Int] = [:],
                        costs: [String: [UInt32: UInt64]] = [:], operations: [UInt64: String] = [:],
                        since: UInt64? = nil) -> Estimate? {
@@ -143,13 +176,17 @@ public struct KagemushaWalletFoldProgressV1: Equatable, Sendable {
     let largest = sizes.values.filter { $0 > 0 }.max().map(UInt64.init)
     let last = turns.last
     let head = self.head.flatMap { $0 >= firstHead ? $0 : nil } ?? firstHead
+    // Native's turn running on this head names its operation, its durable sub-proofs, its size and its start.
+    let current = runningTurn.flatMap { $0.sequence == head ? $0 : nil }
     var done: UInt64 = 0
     if let last, last.sequence == head { done = UInt64(last.ordinal) + (last.durable ? 1 : 0) }
+    if let current { done = max(done, UInt64(current.ordinal)) }
     let ofHead = turns.filter { $0.sequence == head }
     // Native's own schedule for a head it has started; otherwise the head's operation, or the largest.
-    let operation = ofHead.last { $0.operation != nil }?.operation ?? operations[head]
+    let operation = current?.operation ?? ofHead.last { $0.operation != nil }?.operation ?? operations[head]
     let named = operation.flatMap { sizes[$0] }.flatMap { $0 > 0 ? UInt64($0) : nil }
-    guard let schedule = ofHead.last(where: { $0.stages != nil })?.stages.map(UInt64.init) ?? named ?? largest else {
+    guard let schedule = current?.stages.map(UInt64.init)
+      ?? ofHead.last(where: { $0.stages != nil })?.stages.map(UInt64.init) ?? named ?? largest else {
       return nil
     }
     let size = max(schedule, done + 1)
@@ -183,7 +220,8 @@ public struct KagemushaWalletFoldProgressV1: Equatable, Sendable {
       }
     }
     var runningWeight = 0.0
-    if running, pace != nil, let start = [last?.endedNativeMicros, since].compactMap({ $0 }).max() {
+    let start = current.map(\.startedNativeMicros) ?? [last?.endedNativeMicros, since].compactMap { $0 }.max()
+    if running || current != nil, pace != nil, let start {
       runningWeight = min(Double(sampledNativeMicros - min(start, sampledNativeMicros)),
                           Self.runningShareMaximum * weight(operation, from: done, until: done + 1))
     }
@@ -194,7 +232,21 @@ public struct KagemushaWalletFoldProgressV1: Equatable, Sendable {
   private struct Wire: Decodable {
     let schema: String
     let sampledNativeMicros: UInt64
+    let running: RunningTurn?
     let records: [Record]
+
+    private enum CodingKeys: String, CodingKey {
+      case schema, sampledNativeMicros, running, records
+    }
+
+    // Every reading names the running turn: null while no selected turn runs.
+    init(from decoder: Decoder) throws {
+      let fields = try decoder.container(keyedBy: CodingKeys.self)
+      schema = try fields.decode(String.self, forKey: .schema)
+      sampledNativeMicros = try fields.decode(UInt64.self, forKey: .sampledNativeMicros)
+      running = try fields.decode(RunningTurn?.self, forKey: .running)
+      records = try fields.decode([Record].self, forKey: .records)
+    }
   }
 
   private struct Record: Decodable {
@@ -240,6 +292,12 @@ public struct KagemushaWalletFoldProgressV1: Equatable, Sendable {
                   sequence: record.sequence, operation: record.operation, stage: record.stage,
                   ordinal: record.ordinal, stages: record.stages, outcome: record.outcome)
     }
-    return KagemushaWalletFoldProgressV1(sampledNativeMicros: wire.sampledNativeMicros, turns: turns)
+    if let running = wire.running {
+      guard running.startedNativeMicros <= wire.sampledNativeMicros, running.stages != 0 else {
+        throw KagemushaWalletErrorV1.invalidNativeOutput
+      }
+    }
+    return KagemushaWalletFoldProgressV1(sampledNativeMicros: wire.sampledNativeMicros, turns: turns,
+                                         runningTurn: wire.running)
   }
 }

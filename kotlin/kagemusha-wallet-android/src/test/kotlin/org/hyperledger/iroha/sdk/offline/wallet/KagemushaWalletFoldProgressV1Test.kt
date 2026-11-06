@@ -17,9 +17,16 @@ class KagemushaWalletFoldProgressV1Test {
 
     private fun name(value: String?) = value?.let { "\"$it\"" } ?: "null"
 
+    // The `running` object Native writes for the turn that runs now.
+    private fun runningTurn(startedSeconds: Long, sequence: Long, operation: String?, ordinal: Long, stages: Long?) =
+        "{\"startedNativeMicros\":${startedSeconds * second},\"sequence\":$sequence,\"operation\":${name(operation)}," +
+            "\"ordinal\":$ordinal,\"stages\":${stages ?: "null"}}"
+
     // The shape Native's FoldMetricsV1::to_json writes, including the fields a progress reading ignores.
-    private fun telemetry(sampledSeconds: Long, vararg rows: Row, schema: String = KagemushaWalletFoldProgressV1.SCHEMA) =
-        "{\"schema\":\"$schema\",\"sampledNativeMicros\":${sampledSeconds * second},\"counts\":{\"subProofs\":${rows.size}}," +
+    private fun telemetry(sampledSeconds: Long, vararg rows: Row, schema: String = KagemushaWalletFoldProgressV1.SCHEMA,
+        running: String = "null") =
+        "{\"schema\":\"$schema\",\"sampledNativeMicros\":${sampledSeconds * second},\"running\":$running," +
+            "\"counts\":{\"subProofs\":${rows.size}}," +
             "\"processScratch\":{\"limitBytes\":1,\"inUseBytes\":0,\"peakBytes\":0},\"processPeakRssBytes\":null,\"records\":[" +
             rows.joinToString(",") {
                 "{\"startedNativeMicros\":${it.started},\"endedNativeMicros\":${it.ended},\"sequence\":${it.sequence}," +
@@ -28,8 +35,8 @@ class KagemushaWalletFoldProgressV1Test {
                     "\"peakRssBytes\":null,\"micros\":{\"prove\":${it.ended - it.started}}}"
             } + "],\"nativeWorkCount\":0,\"nativeWork\":[]}"
 
-    private fun progress(sampledSeconds: Long, vararg rows: Row) =
-        KagemushaWalletFoldProgressV1.parse(telemetry(sampledSeconds, *rows))
+    private fun progress(sampledSeconds: Long, vararg rows: Row, running: String = "null") =
+        KagemushaWalletFoldProgressV1.parse(telemetry(sampledSeconds, *rows, running = running))
 
     private val loadThenReceive = arrayOf(
         row(0, 20, 1, "load", "q", 0, 3, "checkpoint"),
@@ -145,6 +152,109 @@ class KagemushaWalletFoldProgressV1Test {
         assertFalse(untimed.timed)
         assertEquals(3.0, untimed.remainingWeight)
         assertNull(untimed.remainingMicros)
+    }
+
+    @Test fun aRunningTurnSizesAndTimesTheFirstSubProofOfAnOperationThePhoneNeverFolded() {
+        // This phone has folded Receives only, at 30 s a sub-proof; no Load schedule or cost is known.
+        val schedules = mapOf("receive" to 12)
+        val costs = mapOf("receive" to mapOf(0L to 30 * second))
+        // A new process: Native's first turn, on Load head 3, started at 5 s; the app's wait began at 15 s.
+        val reading = progress(17, running = runningTurn(5, 3, "load", 0, 3))
+        assertEquals(head(3), reading.head)
+        assertEquals(mapOf("load" to 3), reading.schedules)
+        assertEquals(emptyMap(), reading.costs)
+        val estimate = assertNotNull(reading.estimate(1, true, head(3), schedules, costs, since = 15 * second))
+        // The head counts at its own three sub-proofs at this phone's pace, the first running since 5 s.
+        assertEquals(0L, estimate.proved)
+        assertEquals(3L, estimate.remaining)
+        assertTrue(estimate.timed)
+        assertEquals(micros(90.0), estimate.remainingWeight, 1e-3)
+        assertEquals(micros(12.0), estimate.runningWeight, 1e-3)
+        assertEquals(12.0 / 90, estimate.fraction, 1e-9)
+        assertEquals(78 * second, estimate.remainingMicros)
+        // A reading that found the worker parked still times the turn Native reports running.
+        val parked = assertNotNull(reading.estimate(1, false, head(3), schedules, costs))
+        assertEquals(micros(12.0), parked.runningWeight, 1e-3)
+        // Without it the head would count at the largest schedule, timed from the wait's first reading.
+        val unreported = assertNotNull(progress(17).estimate(1, true, head(3), schedules, costs, since = 15 * second))
+        assertEquals(12L, unreported.remaining)
+        assertEquals(2.0 / 360, unreported.fraction, 1e-9)
+        // Its record and the next running turn carry the share on: the 24 s Load q is done, its a runs since 29 s.
+        val next = progress(35, row(5, 29, 3, "load", "q", 0, 3, "checkpoint"), running = runningTurn(29, 3, "load", 1, 3))
+        val after = assertNotNull(next.estimate(1, true, head(3), schedules, costs, since = 15 * second))
+        assertEquals(1L, after.proved)
+        assertEquals(2L, after.remaining)
+        assertEquals(micros(6.0), after.runningWeight, 1e-3)
+        assertEquals(30.0 / 72, after.fraction, 1e-9)
+    }
+
+    @Test fun aFirstEverFoldHasAnImmediateSizeButNoInventedClock() {
+        val reading = progress(100, running = runningTurn(1, 3, "load", 0, 3))
+        val estimate = assertNotNull(reading.estimate(1, true, head(3)))
+        assertEquals(3L, estimate.remaining)
+        assertEquals(0.0, estimate.fraction)
+        assertFalse(estimate.timed)
+        assertNull(estimate.remainingMicros)
+    }
+
+    @Test fun aCancelledTurnSpendsNoTimeWhileParkedAndRetryTimesOnlyItsNewTurn() {
+        val cancelled = row(10, 30, 3, "load", "q", 0, 3, "cancelled")
+        val costs = mapOf("load" to mapOf(0L to 40 * second))
+        val parked = assertNotNull(progress(90, cancelled).estimate(1, false, head(3), costs = costs))
+        assertEquals(0L, parked.proved)
+        assertEquals(0.0, parked.runningWeight)
+        assertEquals(120 * second, parked.remainingMicros)
+        val resumed = progress(105, cancelled, running = runningTurn(100, 3, "load", 0, 3))
+        val estimate = assertNotNull(resumed.estimate(1, true, head(3), costs = costs, since = 10 * second))
+        assertEquals(0L, estimate.proved)
+        assertEquals(micros(5.0), estimate.runningWeight, 1e-3)
+        assertEquals(115 * second, estimate.remainingMicros)
+        assertEquals(emptyMap(), resumed.costs)
+    }
+
+    @Test fun aLongRunningOmegaNeverCompletesTheWalletWait() {
+        val reading = progress(1000, running = runningTurn(1, 3, "load", 2, 3))
+        val estimate = assertNotNull(reading.estimate(1, true, head(3), costs = mapOf("load" to mapOf(0L to second))))
+        assertEquals(2L, estimate.proved)
+        assertEquals(1L, estimate.remaining)
+        assertEquals(micros(0.9), estimate.runningWeight, 1e-3)
+        assertTrue(estimate.fraction < 1)
+        assertNull(reading.estimate(0, true, head(3)))
+    }
+
+    @Test fun aRunningTurnSaysWhereItsHeadStandsBeforeAnyRecord() {
+        // Native restarted with the app: its first turn works on the sixth of a Receive head's twelve sub-proofs.
+        val costs = mapOf("receive" to (0L..4L).associateWith { 30 * second })
+        val reading = progress(110, running = runningTurn(100, 7, "receive", 5, 12))
+        assertEquals(head(7), reading.head)
+        assertEquals(mapOf("receive" to 12), reading.schedules)
+        val estimate = assertNotNull(reading.estimate(1, true, head(7), costs = costs))
+        assertEquals(5L, estimate.proved)
+        assertEquals(7L, estimate.remaining)
+        assertEquals(micros(150.0), estimate.provedWeight, 1e-3)
+        assertEquals(micros(210.0), estimate.remainingWeight, 1e-3)
+        assertEquals(micros(10.0), estimate.runningWeight, 1e-3)
+        assertEquals(160.0 / 360, estimate.fraction, 1e-9)
+        // A running turn of a head before the wait's first neither names nor times the wait's head.
+        val before = assertNotNull(reading.estimate(1, true, head(8), costs = costs, since = 105 * second))
+        assertEquals(0L, before.proved)
+        assertEquals(12L, before.remaining)
+        assertEquals(micros(5.0), before.runningWeight, 1e-3)
+    }
+
+    @Test fun aRunningTurnBeforeItReadItsStepCountsByWhatTheCallerNamed() {
+        val schedules = mapOf("load" to 3, "receive" to 12)
+        val costs = mapOf("load" to mapOf(0L to 24 * second, 1L to 48 * second, 2L to 49 * second),
+            "receive" to mapOf(0L to 30 * second))
+        val operations = mapOf(head(3) to "load")
+        // Selected at 5 s and still reading its predecessor Ω: head and ordinal only. The wait began at 15 s.
+        val reading = progress(17, running = runningTurn(5, 3, null, 0, null))
+        assertEquals(emptyMap(), reading.schedules)
+        val estimate = assertNotNull(reading.estimate(1, true, head(3), schedules, costs, operations, since = 15 * second))
+        assertEquals(3L, estimate.remaining)
+        assertEquals(micros(12.0), estimate.runningWeight, 1e-3)
+        assertEquals(12.0 / 121, estimate.fraction, 1e-9)
+        assertEquals(109 * second, estimate.remainingMicros)
     }
 
     @Test fun theRunningSubProofIsTimedFromTheLaterOfTheLastTurnAndSince() {
@@ -267,11 +377,14 @@ class KagemushaWalletFoldProgressV1Test {
 
     @Test fun refusesMalformedOrForeignTelemetry() {
         val good = row(0, 20, 1, "load", "q", 0, 3, "checkpoint")
+        val running = runningTurn(20, 1, "load", 0, 3)
         val inputs = listOf(
             "", "[]", "{}",
-            // A Native without schedules in its records.
+            // A Native without schedules in its records, and one without the running turn.
             telemetry(30, good, schema = "iroha.kagemusha.fold-metrics.v2").replace(",\"stages\":3", ""),
             telemetry(30, good, schema = "iroha.kagemusha.fold-metrics.v2"),
+            telemetry(30, good, schema = "iroha.kagemusha.fold-metrics.v3").replace("\"running\":null,", ""),
+            telemetry(30, good, schema = "iroha.kagemusha.fold-metrics.v3"),
             telemetry(10, good), // ended after the sample
             telemetry(30, row(20, 10, 1, "load", "q", 0, 3, "checkpoint")),
             telemetry(30, row(0, 20, 1, "load", "q", 0, 3, "finished")),
@@ -286,11 +399,23 @@ class KagemushaWalletFoldProgressV1Test {
             telemetry(30, good).replace("\"operation\":\"load\"", "\"operation\":7"),
             telemetry(30, good).replace("\"records\":[", "\"records\":{\"x\":["),
             telemetry(30, good).replace(",\"outcome\":\"checkpoint\"", ""),
+            // The running turn is required, an object or null, and as exact as a record.
+            telemetry(30, good).replace("\"running\":null,", ""),
+            telemetry(30, good, running = "[]"),
+            telemetry(30, good, running = "{}"),
+            telemetry(30, good, running = runningTurn(31, 1, "load", 0, 3)), // started after the sample
+            telemetry(30, good, running = runningTurn(20, 1, "load", 4_294_967_296, 3)),
+            telemetry(30, good, running = runningTurn(20, 1, "load", 0, 0)),
+            telemetry(30, good, running = running.replace(",\"stages\":3", "")),
+            telemetry(30, good, running = running.replace("\"sequence\":1", "\"sequence\":\"1\"")),
+            telemetry(30, good, running = running.replace("\"operation\":\"load\"", "\"operation\":7")),
         )
         for (input in inputs) {
             val failure = assertFailsWith<KagemushaWalletExceptionV1>(input) { KagemushaWalletFoldProgressV1.parse(input) }
             assertEquals(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT, failure.status)
         }
+        // The same running turn, well formed, is read.
+        assertEquals(head(1), KagemushaWalletFoldProgressV1.parse(telemetry(30, good, running = running)).head)
     }
 
     @Test fun theLargestScheduleNativeCanReportStillCounts() {
@@ -298,5 +423,8 @@ class KagemushaWalletFoldProgressV1Test {
         val estimate = assertNotNull(reading.estimate(1, false, head(1), emptyMap()))
         assertEquals(1L, estimate.proved)
         assertEquals(4_294_967_294L, estimate.remaining)
+        // A running turn may report it too.
+        val running = progress(30, running = runningTurn(20, 1, "load", 0, 4_294_967_295))
+        assertEquals(4_294_967_295L, assertNotNull(running.estimate(1, false, head(1), emptyMap())).remaining)
     }
 }
