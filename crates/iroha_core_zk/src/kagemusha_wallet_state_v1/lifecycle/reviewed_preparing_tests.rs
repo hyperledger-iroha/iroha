@@ -181,6 +181,7 @@ fn retained_review_rechecks_presence_after_maintenance_before_planning() {
     let (_, binding) = wallet
         .retained_preparation_review_binding(&request())
         .unwrap();
+    let retained_checkpoint = wallet.custody.checkpoint.clone();
     let before = (
         derivations(&wallet),
         wallet.custody.signatures,
@@ -206,9 +207,12 @@ fn retained_review_rechecks_presence_after_maintenance_before_planning() {
         ),
         before
     );
+    // The fault substitutes only that checkpoint read. Refusal must not rewrite the
+    // actual retained map to match the transient absent observation.
+    assert_eq!(wallet.custody.checkpoint, retained_checkpoint);
     assert_eq!(
         wallet.retry_request(&request().request_id).unwrap(),
-        RequestStatusV1::Unknown
+        RequestStatusV1::Preparing
     );
 }
 
