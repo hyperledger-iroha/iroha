@@ -424,9 +424,26 @@ test("native build uses stock Cargo with exact live root manifest, root lock, an
   );
 });
 
-test("macOS native build seals SDK, deployment target, and Apple tools into Cargo fingerprints", {
-  skip: process.platform !== "darwin",
-}, (t) => {
+test("native builds bind Apple SDK and tool identity only to macOS artifacts", (t) => {
+  const linux = createFixture(t);
+  const status = runNativeBuild({
+    repoRoot: linux.repoRoot,
+    env: linux.env,
+    platform: "linux",
+    runTool: linux.runTool,
+    readSourceState: () => sourceState(),
+    runCargo(_cargo, args, { cargoEnv }) {
+      assert.ok(!args.includes("strip=none"));
+      assert.ok(!String(cargoEnv.RUSTFLAGS).includes("iroha_js_macos_"));
+      writeNativeOutput(linux, "non-Apple native output");
+      return { status: 0, stdout: successfulCargoJson(linux) };
+    },
+  });
+  assert.equal(status, 0);
+  assert.ok(!Object.hasOwn(readNativeBuildProvenance(linux.nativePath), "macos_build"));
+  // Resolving the real /usr/bin/xcrun requires a macOS host.
+  if (process.platform !== "darwin") return;
+
   const fixture = createFixture(t);
   fixture.nativePath = nativeBuildOutputPath({
     repoRoot: fixture.repoRoot,

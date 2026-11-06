@@ -349,7 +349,13 @@ class Status(Base):
 
         def only_ignored(inventory: dict) -> None:
             item = operation(inventory, "game::VerifyExecutionProofV1")
-            self.assertEqual(item["test_evidence"], "not_default")
+            # Keep only the real ignored full-duration proof. The production
+            # inventory also cites a default-running verifier test now.
+            item["tests"] = [{
+                "path": "crates/iroha_core_privacy/src/execution_proofs/proof_tests.rs",
+                "test": "full_duration_eight_car_proof_is_thread_deterministic_and_round_trips",
+                "ignored": True,
+            }]
             item["test_evidence"] = "default"
         self.assert_fails(run("check_registry", edited(only_ignored)),
                           "operations[game::VerifyExecutionProofV1]: test_evidence is `not_default`")

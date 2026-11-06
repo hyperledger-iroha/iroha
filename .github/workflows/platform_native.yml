@@ -298,7 +298,29 @@ jobs:
           cargo test --locked -p iroha_native_source_delivery --features dev-tools 2>&1 | tee target/platform-native/source-delivery-rust.log
           cargo clippy --locked -p iroha_native_source_delivery --features dev-tools --all-targets -- -D warnings 2>&1 | tee target/platform-native/source-delivery-clippy.log
           cargo build --locked -p iroha_native_source_delivery --features dev-tools
-          python -m pip install --require-hashes --only-binary=:all: -r python/iroha_python/requirements-ci.lock
+          if [[ "${RUNNER_OS}" == "macOS" && "${RUNNER_ARCH}" == "X64" ]]; then
+            # cryptography 50 publishes ARM64 macOS wheels only. Preserve its pinned
+            # source hash and use the hashed maturin/cffi/setuptools already in this lock.
+            python - <<'PYTHON'
+          from pathlib import Path
+          import re
+
+          lock = Path("python/iroha_python/requirements-ci.lock").read_text()
+          entries = re.split(r"(?m)^(?=[A-Za-z][A-Za-z0-9_.-]*==)", lock)
+          crypto = [entry for entry in entries if entry.startswith("cryptography==")]
+          if len(crypto) != 1 or "--hash=sha256:" not in crypto[0]:
+              raise ValueError("expected exactly one hashed cryptography requirement")
+          destination = Path("target/platform-native")
+          (destination / "python-build-dependencies.lock").write_text("".join(entry for entry in entries if entry not in crypto))
+          (destination / "python-cryptography.lock").write_text(crypto[0])
+          PYTHON
+            python -m pip install --require-hashes --only-binary=:all: -r target/platform-native/python-build-dependencies.lock
+            OPENSSL_DIR="$(brew --prefix openssl@3)" OPENSSL_STATIC=1 \
+              python -m pip install --require-hashes --no-build-isolation --no-deps --no-binary=cryptography \
+              -r target/platform-native/python-cryptography.lock
+          else
+            python -m pip install --require-hashes --only-binary=:all: -r python/iroha_python/requirements-ci.lock
+          fi
           export IROHA_NATIVE_SOURCE_DELIVERY_TEST_HELPER="$(python -c 'import os; from pathlib import Path; print(Path("target/debug/iroha_native_source_delivery" + (".exe" if os.name == "nt" else "")).resolve(), end="")')"
           python -m pytest -q \
             scripts/tests/python_native_source_delivery_test.py \
@@ -316,7 +338,9 @@ jobs:
           set -euo pipefail
           # Give fixture callers a valid explicit compiler environment; refusal tests inject overrides.
           # setup-python exports its pkg-config search path on hosted Linux.
+          # setup-rust-toolchain exports a dev-debug override even when it equals our default.
           unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN PKG_CONFIG_PATH
+          unset CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_TEST_DEBUG
           export IROHA_TEST_PROCESS_BRIDGE_LIBRARY="$(python -c 'import os; from pathlib import Path; print((Path("target/debug") / ("iroha_process_bridge.dll" if os.name == "nt" else "libiroha_process_bridge.so")).resolve(), end="")')"
           export IROHA_TEST_PROVENANCE_EMITTER="$(python -c 'import os; from pathlib import Path; print(Path("target/debug/examples/provenance_fixture" + (".exe" if os.name == "nt" else "")).resolve(), end="")')"
           python -m pytest -q --junitxml=target/platform-native/release-process-python.xml \

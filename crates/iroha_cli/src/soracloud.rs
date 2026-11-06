@@ -8539,7 +8539,7 @@ pub fn stage_taira_inrou_canary_deployment(
         }
         #[cfg(windows)]
         let source_metadata = &source_guards;
-        let source_sizes = source_metadata.iter().map(std::fs::Metadata::len);
+        let source_sizes = source_metadata.iter().map(|source| source.len());
         taira_stage_guest_total_bytes(source_sizes.clone())?;
         let rootfs_source_bytes = logical_member_paths
             .iter()
