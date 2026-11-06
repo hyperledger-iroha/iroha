@@ -8,8 +8,8 @@ enum PrivateSettlementAuthContract {
 #[test]
 fn private_settlement_policy_extension_keeps_original_privacy_and_context_shapes() {
     use iroha_data_model::privacy::{
-        PrivacyConsensusLimitsV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsUpdateV1,
-        PrivacyProtocolLimitsV1, PrivateSettlementPolicyUpdateV1, PrivateSettlementPolicyV1,
+        PrivacyConsensusLimitsV1, PrivacyRuntimeProtocolIdV1, PrivacyProtocolLimitsUpdateV1,
+        PrivacyRuntimeProtocolLimitsV1, PrivateSettlementPolicyUpdateV1, PrivateSettlementPolicyV1,
         PrivateSettlementProtocolClosureDrainV1,
     };
     let private = PrivateSettlementPolicyV1::protocol_default();
@@ -18,11 +18,11 @@ fn private_settlement_policy_extension_keeps_original_privacy_and_context_shapes
         effective_at_height: 2,
         next_limits: private.current_limits,
     };
-    let protocol_id = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
     let protocol_update = PrivacyProtocolLimitsUpdateV1 {
         scheduled_at_height: 1,
         effective_at_height: 2,
-        next_limits: PrivacyProtocolLimitsV1::canonical_default_v1(protocol_id),
+        next_limits: PrivacyRuntimeProtocolLimitsV1::canonical_default_v1(protocol_id),
     };
     let drain = PrivateSettlementProtocolClosureDrainV1::capture(
         protocol_id,

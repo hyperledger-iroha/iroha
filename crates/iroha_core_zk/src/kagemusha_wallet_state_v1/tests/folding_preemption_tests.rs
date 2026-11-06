@@ -166,6 +166,12 @@ impl FoldObserverV1 for Observed {
     fn sub_proof(&self, record: &FoldSubProofV1) {
         self.0.lock().expect("fold telemetry").record(record);
     }
+    fn running(&self, running: &FoldRunningV1) {
+        self.0.lock().expect("fold telemetry").set_running(running);
+    }
+    fn ended(&self, running: &FoldRunningV1) {
+        self.0.lock().expect("fold telemetry").end_running(running);
+    }
 }
 impl Observed {
     fn metrics(&self) -> FoldMetricsV1 {
@@ -617,6 +623,80 @@ fn a_proof_is_discarded_when_its_fold_fields_change_before_publication() {
         }
     );
     assert_eq!(calls.load(Ordering::SeqCst), 4);
+}
+
+#[test]
+fn a_running_turn_is_reported_from_its_selection_until_its_own_record() {
+    let (mut wallet, _, observed) = folding_wallet();
+    // The turn that proved checkpoint 0 was recorded and runs no longer.
+    assert_eq!(observed.metrics().running(), None);
+    // A proved sub-proof runs until its publication records it. Its prepare named the head,
+    // the head's operation and its whole schedule: three checkpoints and Ω.
+    let first = prepared(&mut wallet).prove().unwrap();
+    let running = observed.metrics().running().expect("runs until recorded");
+    assert_eq!(
+        running,
+        FoldRunningV1 {
+            started_native_micros: running.started_native_micros,
+            sequence: 0,
+            operation: Some(KagemushaWalletOperationKindV1::Bootstrap),
+            ordinal: 1,
+            stages: Some(4),
+        }
+    );
+    // The proof released the slot: a second turn of the same sub-proof starts later and
+    // replaces it while the first awaits its publication.
+    let second = prepared(&mut wallet);
+    let replaced = observed.metrics().running().expect("the second turn runs");
+    assert!(replaced.started_native_micros > running.started_native_micros);
+    assert_eq!((replaced.sequence, replaced.ordinal), (0, 1));
+    // The first turn's record ends only the first turn.
+    assert_eq!(
+        wallet.fold_publish(first).unwrap().status,
+        FoldStatus::Checkpoint {
+            sequence: 0,
+            ordinal: 1
+        }
+    );
+    let record = *observed.metrics().records().back().unwrap();
+    assert_eq!(
+        (record.started_native_micros, record.outcome),
+        (running.started_native_micros, FoldOutcomeV1::Checkpoint)
+    );
+    assert_eq!(observed.metrics().running(), Some(replaced));
+    // The second turn, dropped before its proof, ends its own facts without a record.
+    let recorded = observed.metrics().counts().sub_proofs;
+    drop(second);
+    assert_eq!(observed.metrics().running(), None);
+    assert_eq!(observed.metrics().counts().sub_proofs, recorded);
+    // The next turn proves ordinal 2; its record ends it.
+    assert_eq!(
+        wallet.fold_once().unwrap(),
+        FoldStatus::Checkpoint {
+            sequence: 0,
+            ordinal: 2
+        }
+    );
+    assert_eq!(observed.metrics().running(), None);
+}
+
+#[test]
+fn replacing_an_observer_does_not_strand_the_running_turn_in_its_previous_observer() {
+    let (mut wallet, _, previous) = folding_wallet();
+    let first = prepared(&mut wallet).prove().unwrap();
+    let replacement = Arc::new(Observed::default());
+    wallet.scheduler().observe(replacement.clone());
+    assert!(previous.metrics().running().is_some());
+    assert_eq!(replacement.metrics().running(), None);
+    let previous_count = previous.metrics().counts().sub_proofs;
+    wallet.fold_publish(first).unwrap();
+    assert_eq!(previous.metrics().running(), None);
+    assert_eq!(previous.metrics().counts().sub_proofs, previous_count + 1);
+    assert_eq!(replacement.metrics().counts().sub_proofs, 0);
+    wallet.fold_once().unwrap();
+    assert_eq!(replacement.metrics().running(), None);
+    assert_eq!(replacement.metrics().counts().sub_proofs, 1);
+    assert_eq!(previous.metrics().counts().sub_proofs, previous_count + 1);
 }
 
 #[test]

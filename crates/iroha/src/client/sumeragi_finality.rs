@@ -93,7 +93,7 @@ impl Client {
     pub fn get_provider_discovery(
         &self,
         provider: iroha_data_model::sorafs::capacity::ProviderId,
-        native_schema: iroha_crypto::Hash,
+        native_schema: impl iroha_data_model::sumeragi_finality::WorldStateSchemaPolicyV1,
         block: &iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
         now_unix_seconds: u64,
     ) -> Result<iroha_data_model::sorafs::provider_admission::discovery::VerifiedProviderDiscoveryV1>
@@ -102,7 +102,7 @@ impl Client {
         let verified = proof.verify(
             self.network_id,
             provider,
-            native_schema,
+            native_schema.select_schema(proof.world.schema_hash)?,
             block,
             now_unix_seconds,
         )?;
@@ -116,7 +116,7 @@ impl Client {
     /// Refuses missing policy, expired/revoked custody, wrong exact scope, or bounded transport failure.
     pub fn get_account_read_provider_discovery(
         &self, provider: iroha_data_model::sorafs::capacity::ProviderId,
-        native_schema: iroha_crypto::Hash,
+        native_schema: impl iroha_data_model::sumeragi_finality::WorldStateSchemaPolicyV1,
         block: &iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
         now_unix_ms: u64,
     ) -> Result<iroha_data_model::sorafs::provider_admission::discovery::account_read::VerifiedAccountReadProviderV1>{
@@ -125,7 +125,7 @@ impl Client {
             self.chain.as_ref(),
             self.network_id,
             provider,
-            native_schema,
+            native_schema.select_schema(proof.world.schema_hash)?,
             block,
             now_unix_ms,
         )?;
@@ -149,7 +149,7 @@ impl Client {
         &self,
         provider: iroha_data_model::sorafs::capacity::ProviderId,
         expected_binding: &sorafs_manifest::signer::custody::SignerCustodyBindingV1,
-        native_schema: iroha_crypto::Hash,
+        native_schema: impl iroha_data_model::sumeragi_finality::WorldStateSchemaPolicyV1,
         block: &iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
         now_unix_ms: u64,
     ) -> Result<iroha_data_model::sorafs::provider_admission::discovery::stream_token_control::VerifiedStreamTokenCustodyControlV1>{
@@ -171,7 +171,7 @@ impl Client {
         let verified = proof.verify_stream_token_custody_control(
             self.network_id,
             provider,
-            native_schema,
+            native_schema.select_schema(proof.world.schema_hash)?,
             expected_binding,
             block,
             now_unix_ms,
@@ -194,7 +194,7 @@ impl Client {
         provider: iroha_data_model::sorafs::capacity::ProviderId,
         expected_owner: &iroha_data_model::account::AccountId,
         expected_binding: &sorafs_manifest::signer::custody::SignerCustodyBindingV1,
-        native_schema: iroha_crypto::Hash,
+        native_schema: impl iroha_data_model::sumeragi_finality::WorldStateSchemaPolicyV1,
         block: &iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
     ) -> Result<
         iroha_data_model::sorafs::stream_token_custody::proof::VerifiedStreamTokenCustodyStateV1,
@@ -243,7 +243,7 @@ impl Client {
             provider,
             expected_owner,
             expected_binding,
-            native_schema,
+            native_schema.select_schema(proof.world.schema_hash)?,
             block,
         )?;
         self.ensure_activation_evidence_deadline()?;

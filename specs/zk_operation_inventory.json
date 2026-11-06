@@ -317,6 +317,13 @@
    "requirements": ["REQ-024", "REQ-101", "REQ-102", "REQ-103"],
    "owner_tasks": ["C.9", "C.6", "C.7"],
    "summary": "Policy, job and decryption-request instructions exist. FHE state is refused as unavailable, so no job executes."
+  },
+  {
+   "id": "ironwood",
+   "title": "Governed Ironwood Halo2 actions",
+   "requirements": ["REQ-017", "REQ-087"],
+   "owner_tasks": ["P.16"],
+   "summary": "Distinct Ironwood relation, namespace and wire grammar sharing the native pool effect owner; runtime activation and network qualification remain separate."
   }
  ],
  "relations": [
@@ -2048,7 +2055,11 @@
    },
    "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for SchedulePrivacyProtocolLimitsUpdateV1"},
    "authority": [
-    {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "ensure_privacy_governance"}
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+     "symbol": "schedule_privacy_protocol_limits_v1",
+     "what": "The shared implementation performs native governance authorization before any policy write."
+    }
    ],
    "kotodama": {"binding": "none"},
    "routes": [],
@@ -5581,17 +5592,136 @@
    },
    "owner_tasks": ["C.7"],
    "note": "`RecordSoracloudDecryptionRequest` records a request; no instruction carries or verifies decryption shares."
+  },
+  {
+   "id": "privacy::BootstrapPrivacyIronwoodPoolV1",
+   "product": "ironwood",
+   "role": "administrative",
+   "isi": {
+    "type": "privacy::BootstrapPrivacyIronwoodPoolV1",
+    "wire_id": "iroha.privacy.bootstrap_ironwood_pool.v1",
+    "defined_in": {"path": "crates/iroha_data_model/src/isi/privacy.rs", "symbol": "pub struct BootstrapPrivacyIronwoodPoolV1"}
+   },
+   "handler": {
+    "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+    "symbol": "impl Execute for iroha_data_model::isi::privacy::BootstrapPrivacyIronwoodPoolV1"
+   },
+   "authority": [
+    {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "ensure_privacy_governance"}
+   ],
+   "kotodama": {"binding": "none"},
+   "routes": [],
+   "sdk": {"rust": [], "kotlin_java_android": [], "swift": [], "javascript": [], "python": [], "csharp": []},
+   "status": {
+    "presence": "registered",
+    "verification": "not_applicable",
+    "state_effects": "implemented",
+    "delivery": "not_delivered",
+    "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+   },
+   "owner_tasks": ["P.16"],
+   "note": "Independent additive Ironwood wire, admitted only by its governed runtime selection. Frozen Exact12 wire definitions remain unchanged; component implementation is not qualification.",
+   "native_bridges": []
+  },
+  {
+   "id": "privacy::SchedulePrivacyIronwoodLimitsUpdateV1",
+   "product": "ironwood",
+   "role": "administrative",
+   "isi": {
+    "type": "privacy::SchedulePrivacyIronwoodLimitsUpdateV1",
+    "wire_id": "iroha.privacy.schedule_ironwood_limits_update.v1",
+    "defined_in": {"path": "crates/iroha_data_model/src/isi/privacy.rs", "symbol": "pub struct SchedulePrivacyIronwoodLimitsUpdateV1"}
+   },
+   "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for SchedulePrivacyIronwoodLimitsUpdateV1"},
+   "authority": [
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+     "symbol": "schedule_privacy_protocol_limits_v1",
+     "what": "The shared implementation performs native governance authorization before any policy write."
+    }
+   ],
+   "kotodama": {"binding": "none"},
+   "routes": [],
+   "sdk": {"rust": [], "kotlin_java_android": [], "swift": [], "javascript": [], "python": [], "csharp": []},
+   "status": {
+    "presence": "registered",
+    "verification": "not_applicable",
+    "state_effects": "implemented",
+    "delivery": "not_delivered",
+    "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+   },
+   "owner_tasks": ["P.1", "P.5", "I.1"],
+   "note": "Independent additive Ironwood wire, admitted only by its governed runtime selection. Frozen Exact12 wire definitions remain unchanged; component implementation is not qualification.",
+   "native_bridges": []
+  },
+  {
+   "id": "privacy::SubmitPrivacyIronwoodProofV1",
+   "product": "ironwood",
+   "role": "proof_effect",
+   "isi": {
+    "type": "privacy::SubmitPrivacyIronwoodProofV1",
+    "wire_id": "iroha.privacy.submit_ironwood_proof.v1",
+    "defined_in": {"path": "crates/iroha_data_model/src/isi/privacy.rs", "symbol": "pub struct SubmitPrivacyIronwoodProofV1"}
+   },
+   "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for SubmitPrivacyIronwoodProofV1"},
+   "relation_ref": "exact12",
+   "authority": [
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+     "symbol": "prepare_original",
+     "what": "PreparedPrivacySubmissionV1::prepare binds the signed transaction intent and signer context before budget preflight and admission."
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+     "symbol": "execute_after_admission",
+     "what": "Delegate to the effect executor, which requires the signer to be the wallet account a statement names and refuses the pool reserve account as signer."
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/privacy/x509_submission.rs",
+     "symbol": "if authority != &statement.wallet_account {",
+     "scope": "file",
+     "what": "Inside the effect executor: the signer must be the wallet account the statement names."
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+     "symbol": "if authority == snapshot.state().reserve_account()",
+     "scope": "file",
+     "what": "Inside the effect executor: the pool reserve account is refused as signer."
+    }
+   ],
+   "kotodama": {"binding": "none"},
+   "routes": [],
+   "sdk": {"rust": [], "kotlin_java_android": [], "swift": [], "javascript": [], "python": [], "csharp": []},
+   "tests": [
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/privacy/ironwood_execution_tests.rs",
+     "test": "ironwood_real_recipient_deposit_applies_and_rolls_back_all_effects",
+     "covers": "Dedicated governed Ironwood owner applies a native proof and rolls back state effects; network qualification remains open."
+    }
+   ],
+   "test_evidence": "none",
+   "status": {
+    "presence": "registered",
+    "verification": "implemented",
+    "state_effects": "implemented",
+    "delivery": "not_delivered",
+    "missing": "ordered intent and signed attachment carrier for ceiling-sized proofs (I.1, X.2); per-protocol one-call SDK operations; one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+   },
+   "owner_tasks": ["P.1", "P.5", "I.1"],
+   "note": "Independent additive Ironwood wire, admitted only by its governed runtime selection. Frozen Exact12 wire definitions remain unchanged; component implementation is not qualification.",
+   "native_bridges": [],
+   "test_note": "The cited component owner test is not independent network or cryptographic qualification."
   }
  ],
  "exact12": {
   "what": "The closed twelve-protocol list. registered means the enum variant, canonical label and dispatch arm exist. compiled_profile.state records whether the actual native construction is available or refused. Admission selects that implementation and optional bounded current policy; there are no protocol activation or all-protocol qualification records. The thirteen roles keep presence, verification, effects and delivery distinct. Each role has one original-source owner: X509 uses its dedicated signed-attachment request; other roles use the generic proof envelope and shared typed verifier. Source implementation is not cryptographic, platform, network or release qualification.",
   "count": 12,
-  "source": {"path": "crates/iroha_data_model/src/privacy.rs", "enum": "PrivacyProtocolIdV1"},
+  "source": {"path": "crates/iroha_data_model/src/privacy/exact12_wire.rs", "enum": "PrivacyProtocolIdV1"},
   "instruction": "privacy::SubmitPrivacyProofV1",
   "dispatch": {
    "path": "crates/iroha_core_privacy/src/privacy_verifier.rs",
    "function": "verify_privacy_envelope_after_compiled_profile_v1",
-   "statement_enum": "PrivacyStatementV1",
+   "statement_enum": "PrivacyRuntimeStatementV1",
    "entry": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "pub fn verify_privacy_envelope_v1("},
    "note": "One closed match on the statement enum; adding a protocol does not compile without an arm. The dispatch resolves the one role of the envelope, asks the typed registry (`roles.registry`) whether that role is verified, and seals only an effect of that role."
   },
@@ -5620,7 +5750,7 @@
     "proof_system": "StarkFriSha3_384Goldilocks",
     "engine": "NativeGoldilocksSha3_384StarkFri",
     "security_model": "PostQuantumQrom",
-    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::ZkAcePqAuthorizationV1("},
+    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::ZkAcePqAuthorizationV1("},
     "verifier": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "verify_zk_ace_privacy_v1("},
     "ledger_effect": ["ZkAceAuthorization"],
     "effect_executor": [
@@ -5665,7 +5795,7 @@
     "proof_system": "AnonymousPgcP256",
     "engine": "NativeAnonymousPgcP256",
     "security_model": "ClassicalRom",
-    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::AnonymousPgcKOutOfNV1("},
+    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::AnonymousPgcKOutOfNV1("},
     "verifier": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "fn verify_anonymous_pgc_payment_v1("},
     "ledger_effect": ["AnonymousPgcPayment"],
     "effect_executor": [
@@ -5704,7 +5834,7 @@
     "proof_system": "IrohaVeRangeP256",
     "engine": "NativeVeRangeP256",
     "security_model": "ClassicalRom",
-    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::VeRangeTransparentRangeV1("},
+    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::VeRangeTransparentRangeV1("},
     "verifier": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "verify_batch_encoded(&native_statement, proof.as_bytes())"},
     "ledger_effect": ["None"],
     "effect_executor": [
@@ -5732,7 +5862,7 @@
     "proof_system": "ZkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512",
     "engine": "NativeZkAmsMaskedRelaxedSpartanT256Ristretto255",
     "security_model": "ClassicalRom",
-    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::IrohaZkAmsV1("},
+    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::IrohaZkAmsV1("},
     "verifier": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "fn verify_zk_ams_v1("},
     "ledger_effect": ["ZkAmsBatchAdmission", "ZkAmsProvisionAccount"],
     "effect_executor": [
@@ -5788,7 +5918,7 @@
     "proof_system": "VegaNeutronNovaSpartanHyraxT256",
     "engine": "NativeVega",
     "security_model": "ClassicalRom",
-    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::VegaExistingCredentialZkV1("},
+    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::VegaExistingCredentialZkV1("},
     "verifier": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "fn verify_vega_existing_credential_v1("},
     "ledger_effect": ["None"],
     "effect_executor": [
@@ -5799,7 +5929,7 @@
      "state": "refused",
      "gate": {
       "path": "crates/iroha_core_privacy/src/privacy_profiles.rs",
-      "symbol": "PrivacyProtocolIdV1::VegaExistingCredentialZkV1 => { Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id }) }"
+      "symbol": "PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1 => { Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id }) }"
      },
      "tests": [
       {"path": "crates/iroha_core_privacy/src/privacy_profiles_tests.rs", "test": "vega_engine_remains_unavailable_until_exact12_qualification"}
@@ -5819,7 +5949,7 @@
     "owner_tasks": ["P.14"],
     "refusal": {
      "path": "crates/iroha_core_privacy/src/privacy_profiles.rs",
-     "symbol": "PrivacyProtocolIdV1::VegaExistingCredentialZkV1 => { Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id }) }"
+     "symbol": "PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1 => { Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id }) }"
     },
     "relation_ref": "exact12/compiled_profiles"
    },
@@ -5830,7 +5960,7 @@
     "proof_system": "StarkFriSha3_384Goldilocks",
     "engine": "NativeGoldilocksSha3_384StarkFri",
     "security_model": "ClassicalRom",
-    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::IrohaZkX509StarkP256V1("},
+    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1("},
     "verifier": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "fn verify_zk_x509_certificate_v1("},
     "ledger_effect": ["ZkX509Certificate"],
     "effect_executor": [
@@ -5882,7 +6012,7 @@
     "proof_system": "JindoPolynomialCommitment",
     "engine": "NativeJindo",
     "security_model": "PostQuantumQrom",
-    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1("},
+    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::IrohaJindoPolynomialCommitmentV1("},
     "verifier": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "fn verify_jindo_batched_evaluation_v1("},
     "ledger_effect": ["None"],
     "effect_executor": [
@@ -5917,7 +6047,7 @@
     "proof_system": "LanternLnp22ModuleLinearNorm",
     "engine": "NativeLanternLnp22",
     "security_model": "PostQuantumQrom",
-    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::IrohaBootleLanternAnoncredV1("},
+    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::IrohaBootleLanternAnoncredV1("},
     "verifier": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "fn verify_bootle_lantern_presentation_v1("},
     "ledger_effect": ["None"],
     "effect_executor": [
@@ -5959,7 +6089,7 @@
     "proof_system": "Halo2IpaPasta",
     "engine": "NativeHalo2Orchard",
     "security_model": "ClassicalRom",
-    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::OrchardHalo2ActionsV1("},
+    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1("},
     "verifier": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "fn verify_orchard_actions_v1("},
     "ledger_effect": ["OrchardActions"],
     "effect_executor": [
@@ -5994,7 +6124,7 @@
     "proof_system": "FcmpPlusPlusCurveTreeBulletproofs",
     "engine": "NativeFcmpPlusPlus",
     "security_model": "ClassicalRom",
-    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::MoneroFcmpPlusPlusV1("},
+    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1("},
     "verifier": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "fn verify_fcmp_plus_plus_action_v1("},
     "ledger_effect": ["ProofManagedPool"],
     "effect_executor": [
@@ -6023,7 +6153,7 @@
     "proof_system": "StarkFriSha3_384Goldilocks",
     "engine": "NativeGoldilocksSha3_384StarkFri",
     "security_model": "PostQuantumQrom",
-    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1("},
+    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::IrohaIvmPrivateNoteStarkV1("},
     "verifier": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "fn verify_ivm_private_note_action_v1("},
     "ledger_effect": ["ProofManagedPool"],
     "effect_executor": [
@@ -6070,7 +6200,7 @@
     "proof_system": "StarkFriSha3_384Goldilocks",
     "engine": "NativeGoldilocksSha3_384StarkFri",
     "security_model": "PostQuantumQrom",
-    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::PqMaspStarkV1("},
+    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::PqMaspStarkV1("},
     "verifier": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "fn verify_pq_masp_action_v1("},
     "ledger_effect": ["ProofManagedPool"],
     "effect_executor": [
@@ -6108,7 +6238,7 @@
    "what": "The thirteen roles of the twelve protocols (ZK-AMS has two actions). A role is one statement shape, one proof shape, one native verifier and one ledger-effect class. Four facts are separate: the role is a variant of the closed enum (presence); `verification` says whether the dispatch runs a native verifier for it or returns the typed refusal with `limitation`; `state_effects` says whether its effect is applied, absent because the role only verifies (`none`), or `unreachable`; `delivery` is `not_delivered` for all. `implemented` means a compiled verifier is dispatched; it is not a soundness or deployment claim.",
    "count": 13,
    "source": {"path": "crates/iroha_data_model/src/privacy/action_role.rs", "enum": "PrivacyActionRoleV1"},
-   "protocol_of": {"path": "crates/iroha_data_model/src/privacy/action_role.rs", "symbol": "pub const fn protocol_id(self) -> PrivacyProtocolIdV1 {"},
+   "protocol_of": {"path": "crates/iroha_data_model/src/privacy/action_role.rs", "symbol": "pub const fn protocol_id(self) -> PrivacyRuntimeProtocolIdV1 {"},
    "resolver": {
     "path": "crates/iroha_data_model/src/privacy/action_role.rs",
     "symbol": "pub fn action_role_v1(",
@@ -6173,7 +6303,7 @@
      "state_effects": "unreachable",
      "delivery": "not_delivered",
      "missing": "A completed qROM soundness derivation and multi-target hash accounting for the dedicated STARK (P.15); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
-     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::ZkAcePqAuthorizationV1("},
+     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::ZkAcePqAuthorizationV1("},
      "native_verifiers": [
       {"name": "verify_zk_ace_privacy_v1", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/zk_ace.rs"}
      ],
@@ -6190,7 +6320,7 @@
      "state_effects": "implemented",
      "delivery": "not_delivered",
      "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
-     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::AnonymousPgcKOutOfNV1("},
+     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::AnonymousPgcKOutOfNV1("},
      "native_verifiers": [
       {"name": "verify_payment_encoded", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/anonymous_pgc/"}
      ],
@@ -6210,7 +6340,7 @@
      "state_effects": "none",
      "delivery": "not_delivered",
      "missing": "ledger composition (P.11); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
-     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::VeRangeTransparentRangeV1("},
+     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::VeRangeTransparentRangeV1("},
      "native_verifiers": [
       {"name": "verify_batch_encoded", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/verange.rs"}
      ],
@@ -6228,7 +6358,7 @@
      "state_effects": "unreachable",
      "delivery": "not_delivered",
      "missing": "The production source replay and composite admission verifier (C.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
-     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::IrohaZkAmsV1("},
+     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::IrohaZkAmsV1("},
      "native_verifiers": [
       {"name": "verify_zk_ams_batch_admission_v1", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/zk_ams.rs"}
      ],
@@ -6249,7 +6379,7 @@
      "state_effects": "unreachable",
      "delivery": "not_delivered",
      "missing": "The production source replay and composite admission verifier (C.5); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
-     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::IrohaZkAmsV1("},
+     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::IrohaZkAmsV1("},
      "native_verifiers": [
       {"name": "verify_zk_ams_provision_statement_v1", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/zk_ams.rs"}
      ],
@@ -6270,7 +6400,7 @@
      "state_effects": "unreachable",
      "delivery": "not_delivered",
      "missing": "A complete compiled Figure 9 relation with fixed keys (P.14); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
-     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::VegaExistingCredentialZkV1("},
+     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::VegaExistingCredentialZkV1("},
      "native_verifiers": [
       {"name": "verify_mdl_figure9_v1", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/vega"}
      ],
@@ -6288,7 +6418,7 @@
      "state_effects": "unreachable",
      "delivery": "not_delivered",
      "missing": "Canonical maximum-proof transport (X.2) and the complete bounded joint relation (X.3); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
-     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::IrohaZkX509StarkP256V1("},
+     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1("},
      "native_verifiers": [
       {"name": "verify_zk_x509_credential_proof_v1", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/"}
      ],
@@ -6308,7 +6438,7 @@
      "state_effects": "none",
      "delivery": "not_delivered",
      "missing": "ledger composition (P.12); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
-     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1("},
+     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::IrohaJindoPolynomialCommitmentV1("},
      "native_verifiers": [
       {"name": "verify_batched_evaluation_v1", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/jindo"}
      ],
@@ -6325,7 +6455,7 @@
      "state_effects": "none",
      "delivery": "not_delivered",
      "missing": "issuer lifecycle (P.13); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
-     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::IrohaBootleLanternAnoncredV1("},
+     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::IrohaBootleLanternAnoncredV1("},
      "native_verifiers": [
       {"name": "verify_bound_presentation_encoded_v1", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/bootle_lantern/"}
      ],
@@ -6342,9 +6472,13 @@
      "state_effects": "implemented",
      "delivery": "not_delivered",
      "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
-     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::OrchardHalo2ActionsV1("},
+     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1("},
      "native_verifiers": [
-      {"name": "verify_orchard_bundle_v1", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/orchard.rs"}
+      {
+       "name": "verify_orchard_bundle_v1",
+       "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/orchard.rs",
+       "dispatch_selector": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "function": "verify_orchard_actions_v1", "protocol": "OrchardHalo2ActionsV1"}
+      }
      ],
      "executor_arm": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"},
      "driver_operation": "build-orchard-action-v1",
@@ -6359,7 +6493,7 @@
      "state_effects": "implemented",
      "delivery": "not_delivered",
      "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
-     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::MoneroFcmpPlusPlusV1("},
+     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1("},
      "native_verifiers": [
       {"name": "verify_fcmp_transaction_v1", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/fcmp_plus_plus/"}
      ],
@@ -6376,7 +6510,7 @@
      "state_effects": "implemented",
      "delivery": "not_delivered",
      "missing": "a default test that calls the verifier (P.18); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
-     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1("},
+     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::IrohaIvmPrivateNoteStarkV1("},
      "native_verifiers": [
       {"name": "verify_private_note_stark_v1", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/ivm_private_note/"}
      ],
@@ -6393,7 +6527,7 @@
      "state_effects": "implemented",
      "delivery": "not_delivered",
      "missing": "one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay",
-     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyStatementV1::PqMaspStarkV1("},
+     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::PqMaspStarkV1("},
      "native_verifiers": [
       {"name": "verify_pq_masp_stark_v1", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/pq_masp/"},
       {"name": "verify_pq_masp_authorization_v1", "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/pq_masp/"}
@@ -6401,6 +6535,28 @@
      "executor_arm": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "VerifiedPrivacyLedgerEffectsV1::ProofManagedPool(effect) => {"},
      "driver_operation": "build-pq-masp-action-v1",
      "owner_tasks": ["P.19"]
+    }
+   ],
+   "runtime_extensions": [
+    {
+     "role": "IronwoodActions",
+     "protocol": "IronwoodHalo2ActionsV1",
+     "verification": "implemented",
+     "effect_class": "OrchardActions",
+     "ledger_effect": "OrchardActions",
+     "state_effects": "implemented",
+     "delivery": "not_delivered",
+     "missing": "Governed runtime activation and end-to-end qualification; the dedicated Ironwood wire cannot be used through the frozen Exact12 instruction.",
+     "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::IronwoodHalo2ActionsV1("},
+     "native_verifiers": [
+      {
+       "name": "verify_ironwood_bundle_v1",
+       "engine_scope": "crates/iroha_core_privacy/src/privacy_engines/orchard.rs",
+       "dispatch_selector": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "function": "verify_orchard_actions_v1", "protocol": "IronwoodHalo2ActionsV1"}
+      }
+     ],
+     "executor_arm": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"},
+     "owner_tasks": ["P.16"]
     }
    ]
   },
@@ -6413,14 +6569,14 @@
     "limit": "Reading is textual, on code without comments, literals, `#[cfg(test)]` items and items gated by `test_gates`. A destructuring pattern of the envelope type counts as an assembly. An envelope built through a type alias or a macro is not seen."
    },
    "envelope": {
-    "type": "PrivacyProofEnvelopeV1",
+    "type": "PrivacyRuntimeProofEnvelopeV1",
     "assembler": {"path": "crates/iroha_data_model/src/privacy/action_role.rs", "symbol": "pub fn bind_v1("},
     "what": "`bind_v1` derives the protocol, proof system, engine, the five artifact identities and the statement digest from the typed statement. No other production code writes an envelope literal.",
     "field_assignments": [
      {
       "path": "crates/iroha_data_model/src/transaction/signed.rs",
-      "count": 1,
-      "why": "Transaction-intent normalization zeroes the statement digest of its private copy; the projection is hashed and never submitted."
+      "count": 2,
+      "why": "The original Exact12 and dedicated Ironwood intent projections each clear their own digest; neither projection is an admissible operation."
      },
      {
       "path": "crates/iroha_core/src/privacy_release_evidence/zk_x509.rs",
@@ -6458,7 +6614,7 @@
     "entry": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for SubmitPrivacyProofV1"},
     "single_calls": [
      {"call": "PreparedPrivacySubmissionV1::prepare", "inside": "SubmitPrivacyProofV1"},
-     {"call": "execute_after_admission", "inside": "SubmitPrivacyProofV1"},
+     {"call": "execute_after_admission", "inside_all": ["SubmitPrivacyProofV1", "SubmitPrivacyIronwoodProofV1"]},
      {"call": "action_role_v1", "inside": "execute_after_admission"},
      {"call": "verify_privacy_envelope_v1", "inside": "execute_after_admission"},
      {"call": "into_ledger", "inside": "execute_after_admission"}
@@ -6723,7 +6879,43 @@
      "what": "Request-only X509 carrier bound to its original signed attachment; generic envelope/effect paths refuse this role."
     }
    ]
-  }
+  },
+  "runtime_source": {"path": "crates/iroha_data_model/src/privacy.rs", "enum": "PrivacyRuntimeProtocolIdV1"},
+  "runtime_extensions": [
+   {
+    "variant": "IronwoodHalo2ActionsV1",
+    "product": "ironwood",
+    "label": "ironwood-halo2-actions-v1",
+    "proof_system": "Halo2IpaPasta",
+    "engine": "NativeHalo2Orchard",
+    "security_model": "ClassicalRom",
+    "dispatch_arm": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "PrivacyRuntimeStatementV1::IronwoodHalo2ActionsV1("},
+    "verifier": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "fn verify_orchard_actions_v1("},
+    "ledger_effect": ["OrchardActions"],
+    "effect_executor": [
+     {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"}
+    ],
+    "compiled_profile": {"arm": "compiled_ironwood_profile_v1", "state": "constructed"},
+    "tests": [
+     {
+      "path": "crates/iroha_core/src/smartcontracts/isi/privacy/ironwood_execution_tests.rs",
+      "test": "ironwood_real_recipient_deposit_applies_and_rolls_back_all_effects",
+      "covers": "Dedicated governed Ironwood owner applies a native proof and rolls back state effects; network qualification remains open."
+     }
+    ],
+    "test_evidence": "none",
+    "status": {
+     "presence": "registered",
+     "verification": "implemented",
+     "state_effects": "implemented",
+     "delivery": "not_delivered",
+     "missing": "Governed runtime activation and end-to-end qualification; the dedicated Ironwood wire cannot be used through the frozen Exact12 instruction."
+    },
+    "owner_tasks": ["P.16"],
+    "relation_ref": "exact12/dispatch",
+    "test_note": "The cited component owner test is not independent network or cryptographic qualification."
+   }
+  ]
  },
  "generic_relations": {
   "what": "The closed list of relations generic OpenVerify can establish. The caller names the required relation; a proof cannot select it.",
@@ -7473,6 +7665,10 @@
     {
      "id": "contracts.amx_debit_approval_proof_post",
      "reason": "Read of one native AMX debit approval with its World snapshot at a certified dataspace root tip, for a canonical-account-signed caller with current CanReadAllLedgerData, checked again before disclosure (crates/iroha_torii/src/amx_approval_proof.rs). Consensus record evidence of registry.modules.sumeragi_amx (specs/sumeragi.md section 11); not a ZK or FHE proof admission and not AXT."
+    },
+    {
+     "id": "trigger.lifecycle_witness",
+     "reason": "Read-only source-authenticated scheduled lifecycle witnesses with consensus finality, Merkle inclusion and state-binding evidence. This is a native execution receipt route, not ZK/FHE proof admission."
     }
    ]
   },
@@ -9026,6 +9222,21 @@
     }
    },
    {
+    "id": "privacy.ironwood.pool_cut",
+    "method": "POST",
+    "path": "/v1/privacy/ironwood/pool-cut/{height}",
+    "surface": "public",
+    "effect": "read",
+    "sdk": "true",
+    "product": "ironwood",
+    "does": "Read exact current-cut Ironwood pool/root and Global payer/reserve originals with full World hashes. Requires canonical account authentication and current CanReadAllLedgerData, rechecked before egress. Merchant note discovery uses anonymous public bridge finality frames instead. The Python verifier authenticates the cut against independently selected finality; this route grants no execution authority.",
+    "operations": [],
+    "handler": {"path": "crates/iroha_torii/src/ironwood_pool_cut.rs", "symbol": "pub async fn handler("},
+    "sdk_literal": "/v1/privacy/ironwood/pool-cut/",
+    "sdk_files": {"rust": [], "kotlin_java_android": [], "swift": [], "javascript": [], "python": [], "csharp": []},
+    "catalog_row": {"path": "crates/iroha_torii_shared/src/route_catalog.rs", "symbol": "privacy.ironwood.pool_cut"}
+   },
+   {
     "id": "private_settlement.auditor.approval",
     "method": "POST",
     "path": "/v1/nexus/private-settlements/legs/{payload_digest}/audit-approvals",
@@ -10279,6 +10490,11 @@
     {
      "path": "crates/iroha_core/src/state/deserialize_world_proof_tag_index.rs",
      "symbol": "if tags.is_empty() || tags.windows(2).any(|pair| pair[0] >= pair[1]) {"
+    },
+    {
+     "path": "crates/iroha_core/src/state/deserialize_world.rs",
+     "symbol": "crate::runtime::validate_privacy_world_storage_v1(",
+     "what": "Restore validates that original or successor selection owns the persisted privacy namespaces; it neither activates a runtime selection nor verifies a new proof."
     }
    ],
    "tests": [
@@ -10761,6 +10977,13 @@
     {
      "token": "restore_validator",
      "name": "validate_privacy_public_reserve_dependencies_v1",
+     "path": "crates/iroha_core/src/state/deserialize_world.rs",
+     "count": 1,
+     "route": "restore"
+    },
+    {
+     "token": "restore_validator",
+     "name": "validate_privacy_world_storage_v1",
      "path": "crates/iroha_core/src/state/deserialize_world.rs",
      "count": 1,
      "route": "restore"
@@ -11578,6 +11801,20 @@
      }
     ],
     "in_circuit": {"none": "The native wrapper replays governed material; the BFV statement hash is carried as eight u32 limbs, not hashed in a circuit."}
+   },
+   {
+    "product": "ironwood",
+    "owner_paths": ["crates/iroha_core_privacy/src/privacy_engines/orchard.rs"],
+    "census": {"sha2_256": 3},
+    "native": [
+     {
+      "role": "bundle sighash",
+      "algorithm": "SHA-256",
+      "path": "crates/iroha_core_privacy/src/privacy_engines/orchard.rs",
+      "symbol": "pub fn derive_orchard_bundle_sighash_v1("
+     }
+    ],
+    "in_circuit": {"none": "The Orchard Halo2 circuit and its Sinsemilla and Poseidon hashes live in the upstream Orchard dependency."}
    }
   ],
   "limit": "The token list is closed: a primitive whose type name is not listed is not counted. The names cover the SHA-2, SHA-3, SHAKE, cSHAKE, TurboSHAKE, BLAKE2, BLAKE3, Keccak, HKDF, HMAC, RIPEMD, SM3, Poseidon, Rescue, Pedersen and Sinsemilla families as they are spelled in the tree, including the `Core` types."
@@ -14307,6 +14544,7 @@
      "_privacy_output_archive",
      "_privacy_unsigned_byte_view",
      "inspect_privacy_exact12_action_driver_transaction_context_v1",
+     "inspect_signed_privacy_ironwood_note_action_v1",
      "inspect_signed_privacy_ivm_private_note_action_v1",
      "is_privacy_native_available",
      "privacy_bridge_abi_version",

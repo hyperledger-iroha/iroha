@@ -16,9 +16,9 @@ fn statement() -> IrohaZkX509StarkP256StatementV1 {
     let row = bundle
         .rows
         .into_iter()
-        .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)
+        .find(|row| row.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1)
         .expect("X509 row");
-    let PrivacyStatementV1::IrohaZkX509StarkP256V1(statement) =
+    let PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement) =
         norito::decode_canonical(&row.statement_norito).expect("statement")
     else {
         panic!("X509 fixture")
@@ -26,7 +26,7 @@ fn statement() -> IrohaZkX509StarkP256StatementV1 {
     statement
 }
 fn archive(statement: &IrohaZkX509StarkP256StatementV1) -> Vec<u8> {
-    norito::encode_canonical(&PrivacyStatementV1::IrohaZkX509StarkP256V1(
+    norito::encode_canonical(&PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(
         statement.clone(),
     ))
     .expect("canonical statement")
@@ -165,7 +165,7 @@ fn canonical_input_admission_and_failure_outputs_are_bounded() {
     through_c(&changed, NON_CANONICAL);
     let bundle = privacy_exact12_fixture_bundle_v1().unwrap();
     for row in bundle.rows {
-        if row.protocol_id != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
+        if row.protocol_id != PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 {
             through_c(&row.statement_norito, WRONG_PROTOCOL);
         }
     }

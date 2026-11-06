@@ -520,6 +520,11 @@ jobs:
       TEST_NETWORK_BIN_IROHAD: bins/iroha3d
       TEST_NETWORK_BIN_IROHA: bins/iroha
       TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES: bins/iroha3d_private_settlement_routes
+      KAGAMI_BIN: ${{ github.workspace }}/bins/kagami
+      TEST_NETWORK_BIN_SORAFS_CLI: ${{ github.workspace }}/bins/sorafs_cli
+      # These packages own real networks; parallel harness tests exhaust the
+      # bounded network-permit queue before queued scenarios can start.
+      RUST_TEST_THREADS: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

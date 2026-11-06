@@ -238,7 +238,7 @@ mod tests {
         const ROWS: usize = 32;
         const WIDTH: usize = 45;
         let context = TransparentStarkDigestContextV1::new(
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
             b"coalescing-test-v1",
         );
         let make = || {
@@ -279,7 +279,7 @@ mod tests {
     fn initial_stream_refuses_oversized_or_noncanonical_batches_before_any_hash_mutation() {
         const ROWS: usize = 4;
         let context = TransparentStarkDigestContextV1::new(
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
             b"coalescing-refusal-v1",
         );
         let make = || {

@@ -5,7 +5,9 @@ use crate::executor::attachment_custody::AttachmentCustody;
 use iroha_data_model::{
     Level,
     isi::{InstructionBox, Log},
-    privacy::{PrivacyProtocolIdV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1},
+    privacy::{
+        PrivacyRuntimeProtocolIdV1, PrivacyRuntimeStatementV1, PrivacyTransactionIntentDigestV1,
+    },
     transaction::{Executable, FeePaymentIntent, TransactionBuilder, signed_attachments::*},
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
@@ -15,9 +17,9 @@ pub fn request(network: NetworkId, wallet: AccountId) -> SubmitPrivacyZkX509Cert
     let row = bundle
         .rows
         .iter()
-        .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)
+        .find(|row| row.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1)
         .unwrap();
-    let PrivacyStatementV1::IrohaZkX509StarkP256V1(mut statement) =
+    let PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(mut statement) =
         norito::decode_canonical(&row.statement_norito).unwrap()
     else {
         panic!("typed X.509 row")

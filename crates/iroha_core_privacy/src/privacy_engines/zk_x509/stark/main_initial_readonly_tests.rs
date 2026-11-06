@@ -64,7 +64,7 @@ fn fixture(width: usize) -> (Plan, Plan, aggregate::AggregateStarkDomainsV1) {
     let domains = aggregate::AggregateStarkDomainsV1 {
         digest_context:
             crate::privacy_engines::transparent_stark::TransparentStarkDigestContextV1::new(
-                iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+                iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
                 b"initial-readonly-tests-v1",
             ),
         base_leaf: b"readonly-base-leaf",

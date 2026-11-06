@@ -44,7 +44,7 @@ fn public_reserve_key_ignores_ambient_norito_layout_flags() {
         state.reserve_account().clone(),
         state.public_balance_scope(),
     );
-    let protocol = PrivacyProtocolIdV1::OrchardHalo2ActionsV1;
+    let protocol = PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1;
     let canonical = PrivacyCommitmentKeyV1::public_reserve_custody(protocol, &asset_id)
         .expect("canonical custody key");
     let alternate = norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;

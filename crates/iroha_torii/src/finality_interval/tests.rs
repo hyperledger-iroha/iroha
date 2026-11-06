@@ -853,3 +853,89 @@ async fn prefix_ladder_worker_climbs_from_genesis_follows_the_tip_and_stops_at_s
         ToriiCriticalWorkerExit::StoppedByShutdown
     );
 }
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ironwood_discovery_uses_anonymous_public_exact_certified_frames() {
+    use crate::router::builder::{RouterBuilder, catalog_get};
+    use iroha_torii_shared::route_catalog::{
+        EnabledFeatures, RouteCatalog,
+        sumeragi::{BRIDGE_FINALITY, BRIDGE_FINALITY_INTERVAL},
+    };
+    let _guard = crate::tests_runtime_handlers::app_auth_test_guard(
+        crate::app_auth::CanonicalRequestAuthConfig::default(),
+    );
+    let config = TestChainConfig::new(World::new(), 10_000);
+    let mut chain = CertifiedTestChain::start(config).unwrap();
+    while chain.height() < 4 {
+        chain.commit(Vec::new());
+    }
+    let expected = (2..=4)
+        .map(|height| build_proof(&chain.state().view(), height).unwrap())
+        .collect::<Vec<_>>();
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+    let fixture = Arc::get_mut(&mut app).unwrap();
+    fixture.state = Arc::clone(chain.state());
+    fixture.kura = Arc::clone(chain.kura());
+    fixture.chain_id = Arc::new(chain.state().view().chain_id().clone());
+    fixture.signed_query_admission = Arc::new(
+        routing::SignedQueryAdmission::new(
+            chain.network_id(),
+            Duration::from_secs(1),
+            Duration::from_secs(120),
+            std::num::NonZeroUsize::new(1_024).unwrap(),
+        )
+        .expect("authentication and proof production share the certified network"),
+    );
+    assert_eq!(
+        fixture.signed_query_admission.network_id(),
+        *fixture.state.network_id_ref()
+    );
+    let mut builder = RouterBuilder::new(
+        app.clone(),
+        RouteCatalog::new(&[BRIDGE_FINALITY, BRIDGE_FINALITY_INTERVAL]),
+        EnabledFeatures::new(&[]),
+    )
+    .unwrap();
+    builder.route(&BRIDGE_FINALITY, catalog_get(handler_bridge_finality_proof));
+    builder.route(
+        &BRIDGE_FINALITY_INTERVAL,
+        catalog_get(handler_bridge_finality_interval),
+    );
+    let (router, manifest) = builder.finish().unwrap();
+    let router = router
+        .layer(axum::middleware::from_fn_with_state(
+            manifest.route_index(),
+            attach_matched_route_metadata,
+        ))
+        .layer(axum::middleware::from_fn(enforce_route_timeout))
+        .with_state(app);
+    for path in ["/v1/bridge/finality/interval/2/4", "/v1/bridge/finality/4"] {
+        {
+            let uri: axum::http::Uri = path.parse().unwrap();
+            let mut request = axum::http::Request::builder()
+                .uri(uri.clone())
+                .header(axum::http::header::ACCEPT, "application/x-norito")
+                .body(Body::empty())
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(crate::loopback_connect_info());
+            assert!(!request.headers().contains_key("x-iroha-account"));
+            let response = router.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), 16 * 1024 * 1024)
+                .await
+                .unwrap();
+            if path.ends_with("2/4") {
+                assert_eq!(
+                    norito::decode_canonical::<Vec<SumeragiFinalityProof>>(&bytes).unwrap(),
+                    expected
+                );
+            } else {
+                assert_eq!(
+                    norito::decode_canonical::<SumeragiFinalityProof>(&bytes).unwrap(),
+                    expected[2]
+                );
+            }
+        }
+    }
+}

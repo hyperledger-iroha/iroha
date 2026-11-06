@@ -19,6 +19,11 @@ crossterm = { version = "0.29" }
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 
+[dev-dependencies]
+rcgen = "0.14.10"
+tokio = { workspace = true, features = ["io-util", "net"] }
+tokio-rustls = { workspace = true, features = ["aws-lc-rs"] }
+
 [features]
 default = []
 linux-builtin-synth = []

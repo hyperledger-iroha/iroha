@@ -21,8 +21,8 @@ use iroha_data_model::{
         IROHA_JINDO_FIELD_ELEMENT_BYTES_V1, IROHA_JINDO_MAX_POLYNOMIALS_V1,
         IROHA_JINDO_RING_DEGREE_V1, IrohaJindoPolynomialCommitmentStatementV1,
         PrivacyConsensusLimitsV1, PrivacyJindoFieldElementV1, PrivacyProofBytesV1,
-        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementContextV1,
-        PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+        PrivacyRuntimeProofEnvelopeV1, PrivacyRuntimeProofV1, PrivacyRuntimeProtocolIdV1,
+        PrivacyRuntimeStatementV1, PrivacyStatementContextV1, PrivacyTransactionIntentDigestV1,
     },
     transaction::{
         FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload,
@@ -659,14 +659,18 @@ fn validate_signing_authority_v1(
 }
 fn transaction_payload_v1(
     context: &JindoPrivacyActionTransactionContextV1,
-    envelope: PrivacyProofEnvelopeV1,
+    envelope: PrivacyRuntimeProofEnvelopeV1,
 ) -> Result<TransactionPayload, JindoPrivacyActionBuildErrorV1> {
     let mut builder = TransactionBuilder::new(
         context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
-    .with_instructions([SubmitPrivacyProofV1::new(envelope)])
+    .with_instructions([SubmitPrivacyProofV1::new(
+        envelope
+            .try_into()
+            .map_err(|_| JindoPrivacyActionBuildErrorV1::InvalidTransactionContext)?,
+    )])
     .with_metadata(context.metadata.clone());
     builder.set_creation_time(context.creation_time);
     if let Some(ttl) = context.time_to_live {
@@ -687,11 +691,13 @@ fn transaction_payload_v1(
 /// be returned, signed, or submitted through the public prepared-action API.
 fn derive_canonical_transaction_intent_digest_v1(
     context: &JindoPrivacyActionTransactionContextV1,
-    statement: PrivacyStatementV1,
+    statement: PrivacyRuntimeStatementV1,
 ) -> Result<PrivacyTransactionIntentDigestV1, JindoPrivacyActionBuildErrorV1> {
-    let normalized_projection_envelope = PrivacyProofEnvelopeV1::bind_v1(
+    let normalized_projection_envelope = PrivacyRuntimeProofEnvelopeV1::bind_v1(
         statement,
-        PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(PrivacyProofBytesV1::new(Vec::new())),
+        PrivacyRuntimeProofV1::IrohaJindoPolynomialCommitmentV1(PrivacyProofBytesV1::new(
+            Vec::new(),
+        )),
     )
     .map_err(|_| JindoPrivacyActionBuildErrorV1::StatementDigest)?;
     transaction_payload_v1(context, normalized_projection_envelope)?
@@ -732,7 +738,7 @@ where
     validate_transaction_context_v1(context)?;
     witness.validate()?;
     let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+        PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
     )
     .map_err(|_| JindoPrivacyActionBuildErrorV1::CompiledProfileUnavailable)?;
     let polynomial_count = u32::try_from(witness.polynomials.len())
@@ -775,18 +781,19 @@ where
         claimed_evaluations,
     };
     let draft_statement =
-        PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(native_statement.clone());
+        PrivacyRuntimeStatementV1::IrohaJindoPolynomialCommitmentV1(native_statement.clone());
     let transaction_intent_digest =
         derive_canonical_transaction_intent_digest_v1(context, draft_statement)?;
     let mut final_statement = native_statement;
     final_statement.context.transaction_intent_digest = transaction_intent_digest;
     let typed_statement =
-        PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(final_statement.clone());
+        PrivacyRuntimeStatementV1::IrohaJindoPolynomialCommitmentV1(final_statement.clone());
     let statement_digest = typed_statement
         .digest()
         .map_err(|_| JindoPrivacyActionBuildErrorV1::StatementDigest)?;
     let statement_bytes = u32::try_from(
-        norito::to_bytes(&typed_statement)
+        typed_statement
+            .canonical_wire_bytes_v1()
             .map_err(|_| JindoPrivacyActionBuildErrorV1::StatementEncoding)?
             .len(),
     )
@@ -812,9 +819,9 @@ where
     )?;
     let proof_bytes = u32::try_from(proof.len())
         .map_err(|_| JindoPrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
-    let final_envelope = PrivacyProofEnvelopeV1::bind_v1(
+    let final_envelope = PrivacyRuntimeProofEnvelopeV1::bind_v1(
         typed_statement,
-        PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(PrivacyProofBytesV1::new(proof)),
+        PrivacyRuntimeProofV1::IrohaJindoPolynomialCommitmentV1(PrivacyProofBytesV1::new(proof)),
     )
     .map_err(|_| JindoPrivacyActionBuildErrorV1::EnvelopeValidation)?;
     if !profile.matches_envelope_v1(&final_envelope) {
@@ -823,7 +830,8 @@ where
     final_envelope
         .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| JindoPrivacyActionBuildErrorV1::EnvelopeValidation)?;
-    let envelope_encoding = norito::to_bytes(&final_envelope)
+    let envelope_encoding = final_envelope
+        .canonical_wire_bytes_v1()
         .map_err(|_| JindoPrivacyActionBuildErrorV1::EnvelopeEncoding)?;
     let encoded_proof_envelope_bytes = u32::try_from(envelope_encoding.len())
         .map_err(|_| JindoPrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
@@ -897,7 +905,7 @@ pub fn sign_prepared_jindo_privacy_action_v1(
         return Err(JindoPrivacyActionBuildErrorV1::SignedIntentMismatch);
     }
     signed_submission
-        .envelope
+        .runtime_envelope()
         .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| JindoPrivacyActionBuildErrorV1::SignedIntentMismatch)?;
     let transaction_hash = *signed_transaction.hash().as_ref();
@@ -1308,9 +1316,9 @@ mod tests {
                 .expect("canonical direct privacy scan")
                 .expect("exactly one direct Jindo action");
             assert_eq!(observed.0.as_bytes(), &prepared.transaction_intent_digest());
-            let envelope = &observed.1.envelope;
+            let envelope = observed.1.runtime_envelope();
             let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
-                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+                PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
             )
             .expect("compiled Jindo profile");
             assert_eq!(envelope.protocol_id, profile.protocol_id);
@@ -1330,14 +1338,16 @@ mod tests {
             assert_eq!(
                 prepared.statement_bytes(),
                 u32::try_from(
-                    norito::to_bytes(&envelope.statement)
+                    envelope
+                        .statement
+                        .canonical_wire_bytes_v1()
                         .expect("typed statement encodes")
                         .len()
                 )
                 .expect("bounded statement bytes"),
                 "the statement metric must bind the exact canonical encoding"
             );
-            let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement) =
+            let PrivacyRuntimeStatementV1::IrohaJindoPolynomialCommitmentV1(statement) =
                 &envelope.statement
             else {
                 panic!("typed Jindo statement changed variant")
@@ -1347,7 +1357,8 @@ mod tests {
                 statement.context.transaction_intent_digest.as_bytes(),
                 &prepared.transaction_intent_digest()
             );
-            let PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(proof) = &envelope.proof else {
+            let PrivacyRuntimeProofV1::IrohaJindoPolynomialCommitmentV1(proof) = &envelope.proof
+            else {
                 panic!("typed Jindo proof changed variant")
             };
             assert!(
@@ -1355,7 +1366,7 @@ mod tests {
                 "the proof-empty intent projection must never escape as a prepared action"
             );
             let mut proof_empty_escape = envelope.clone();
-            proof_empty_escape.proof = PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(
+            proof_empty_escape.proof = PrivacyRuntimeProofV1::IrohaJindoPolynomialCommitmentV1(
                 PrivacyProofBytesV1::new(Vec::new()),
             );
             assert!(
@@ -1495,8 +1506,9 @@ mod tests {
             .privacy_transaction_intent_binding_if_present_v1()
             .expect("signed direct privacy scan")
             .expect("signed Jindo submission");
-        let PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(signed_proof) =
-            &signed_submission.envelope.proof
+        let signed_submission_envelope = signed_submission.runtime_envelope();
+        let PrivacyRuntimeProofV1::IrohaJindoPolynomialCommitmentV1(signed_proof) =
+            &signed_submission_envelope.proof
         else {
             panic!("signed Jindo proof changed variant")
         };
@@ -1504,8 +1516,7 @@ mod tests {
             !signed_proof.as_bytes().is_empty(),
             "the canonical normalized projection cannot cross the signing boundary"
         );
-        signed_submission
-            .envelope
+        signed_submission_envelope
             .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
             .expect("the signed boundary contains only the final valid Jindo envelope");
         assert_eq!(

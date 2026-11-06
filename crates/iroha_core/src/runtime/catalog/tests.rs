@@ -68,7 +68,7 @@ fn inventory(catalog: &ReleaseCatalog) -> String {
 }
 
 #[test]
-fn the_baseline_is_closed_and_binds_every_built_in_instruction() {
+fn the_baseline_is_closed_and_binds_every_foundation_instruction() {
     let catalog = release_catalog().expect("release catalog");
     catalog
         .baseline
@@ -84,6 +84,7 @@ fn the_baseline_is_closed_and_binds_every_built_in_instruction() {
     let wire_ids: BTreeSet<&str> = iroha_data_model::isi::registry::built_in_instruction_schemas()
         .map(|instruction| instruction.wire_id)
         .filter(|wire_id| !added.contains(wire_id))
+        .filter(|wire_id| is_baseline_instruction(wire_id))
         .collect();
     let bound: BTreeSet<&str> = catalog
         .baseline
@@ -109,6 +110,128 @@ fn the_baseline_is_closed_and_binds_every_built_in_instruction() {
         &implementation.code,
         ImplementationCodeV1::Native { module, .. } if module == BASELINE_MODULE
     ));
+}
+
+pub(crate) fn privacy_resolution_instructions() -> (
+    iroha_data_model::isi::InstructionBox,
+    iroha_data_model::isi::InstructionBox,
+    iroha_data_model::isi::InstructionBox,
+) {
+    use iroha_data_model::{
+        isi::privacy::{
+            BootstrapPrivacyIronwoodPoolV1, SubmitPrivacyIronwoodProofV1, SubmitPrivacyProofV1,
+        },
+        privacy::{
+            PrivacyActionRoleV1, PrivacyIronwoodActionsStatementV1, PrivacyIronwoodPoolBootstrapV1,
+            PrivacyIronwoodProofEnvelopeV1, PrivacyProofEnvelopeV1, PrivacyStatementV1,
+            privacy_action_role_samples_v1,
+        },
+    };
+    let old: PrivacyProofEnvelopeV1 = privacy_action_role_samples_v1()
+        .unwrap()
+        .into_iter()
+        .find(|sample| sample.role == PrivacyActionRoleV1::OrchardActions)
+        .unwrap()
+        .envelope
+        .try_into()
+        .unwrap();
+    let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = old.statement.clone() else {
+        unreachable!()
+    };
+    let bootstrap = PrivacyIronwoodPoolBootstrapV1::new(
+        statement.pool_id,
+        statement.asset_definition_id.clone(),
+        statement.public_balance_scope,
+        iroha_test_samples::ALICE_ID.clone(),
+    )
+    .unwrap();
+    let new = PrivacyIronwoodProofEnvelopeV1::bind_v1(
+        PrivacyIronwoodActionsStatementV1::from(statement),
+        old.proof.bytes().clone(),
+    )
+    .unwrap();
+    (
+        SubmitPrivacyProofV1::new(old).into(),
+        SubmitPrivacyIronwoodProofV1::new(new).into(),
+        BootstrapPrivacyIronwoodPoolV1::new(bootstrap).into(),
+    )
+}
+
+#[test]
+fn ironwood_storage_transition_is_required_for_every_native_admission() {
+    use iroha_data_model::{
+        isi::{
+            InstructionBox,
+            error::{InstructionExecutionError, InvalidParameterError},
+            privacy::SchedulePrivacyIronwoodLimitsUpdateV1,
+        },
+        privacy::{OrchardLimitsV1, PrivacyProtocolIdV1, PrivacyRuntimeProtocolIdV1},
+        runtime::lifecycle::RuntimeRejectionV1,
+    };
+    let catalog = release_catalog().unwrap();
+    assert!(catalog.definitions.len() > catalog.baseline_definitions.len());
+    let successor = &catalog.ironwood.as_ref().unwrap().selection;
+    successor.check_closure(&catalog.definitions).unwrap();
+    let (old, new, bootstrap) = privacy_resolution_instructions();
+    assert_eq!(
+        crate::runtime::resolve(&old, &catalog.baseline, 1, || None),
+        Ok(Some(catalog.baseline.bindings[0].implementation))
+    );
+    let limits: InstructionBox = SchedulePrivacyIronwoodLimitsUpdateV1::new(
+        2,
+        OrchardLimitsV1 {
+            max_action_count: 2,
+        },
+    )
+    .into();
+    for instruction in [&new, &bootstrap, &limits] {
+        let wire_id = iroha_data_model::isi::instruction_wire_id(instruction).unwrap();
+        assert_eq!(
+            crate::runtime::resolve(instruction, &catalog.baseline, 1, || None),
+            Err(InstructionExecutionError::Runtime(
+                RuntimeRejectionV1::DefinitionInactive {
+                    wire_id: wire_id.into()
+                },
+            )),
+            "each additive wire is absent from the baseline"
+        );
+        let mut forged = catalog.baseline.clone();
+        let mut binding = forged.bindings[0].clone();
+        binding.wire_id = wire_id.into();
+        forged.bindings.retain(|old| old.wire_id != wire_id);
+        forged.bindings.push(binding);
+        forged.bindings.sort_by(|a, b| a.wire_id.cmp(&b.wire_id));
+        assert_eq!(
+            crate::runtime::resolve(instruction, &forged, 1, || None),
+            Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(format!(
+                    "Ironwood protocol storage is inactive for {wire_id}; the committed selection does not admit ironwood-halo2-actions-v1",
+                )),
+            )),
+            "binding a known native handler cannot authorize successor storage"
+        );
+    }
+    for protocol in PrivacyProtocolIdV1::ALL {
+        assert_eq!(
+            crate::runtime::ensure_privacy_protocol_storage_v1(
+                protocol.into(),
+                &catalog.baseline,
+                iroha_data_model::isi::privacy::SubmitPrivacyProofV1::WIRE_ID
+            ),
+            Ok(())
+        );
+    }
+    assert!(
+        crate::runtime::ensure_privacy_protocol_storage_v1(
+            PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1,
+            &catalog.baseline,
+            iroha_data_model::isi::privacy::SubmitPrivacyIronwoodProofV1::WIRE_ID,
+        )
+        .is_err()
+    );
+    for instruction in [&old, &new, &bootstrap, &limits] {
+        crate::runtime::resolve(instruction, successor, 1, || None).unwrap();
+    }
 }
 
 #[test]
@@ -234,10 +357,18 @@ mod addition_tests {
         for addition in &catalog.additions {
             expected.extend(addition.definitions());
         }
+        let ironwood = catalog.ironwood.as_ref().unwrap();
+        expected.extend(ironwood.definitions.iter().copied());
+        let mut composed = catalog.clone();
+        for predecessor in [&catalog.baseline, &ironwood.selection] {
+            let selected = composed.lifecycle_successor(predecessor).unwrap();
+            expected.insert(selected.services_profile);
+            expected.extend(selected.active);
+        }
         assert_eq!(
             catalog.definitions.keys().copied().collect::<BTreeSet<_>>(),
             expected,
-            "every definition is the baseline's or an addition's"
+            "every definition belongs to the baseline or an explicitly compiled addition"
         );
     }
 
@@ -256,7 +387,8 @@ mod addition_tests {
         for instruction in iroha_data_model::isi::registry::built_in_instruction_schemas() {
             assert_eq!(
                 registry.is_tolerant(instruction.wire_id),
-                added.contains(instruction.wire_id),
+                added.contains(instruction.wire_id)
+                    || !is_baseline_instruction(instruction.wire_id),
                 "{} must be registered tolerantly exactly when an addition adds it",
                 instruction.wire_id
             );
@@ -608,4 +740,244 @@ mod addition_tests {
             "rebinding a baseline wire ID leaves the baseline intact"
         );
     }
+}
+
+#[test]
+fn lifecycle_successor_preserves_baseline_and_requires_committed_services() {
+    let catalog = release_catalog().unwrap();
+    catalog
+        .lifecycle
+        .check_closure(&catalog.definitions)
+        .unwrap();
+    assert_ne!(catalog.lifecycle_id, catalog.baseline_id);
+    // Count the standalone lifecycle delta, not unrelated compiled Ironwood
+    // definitions. Its builder must preserve every frozen baseline preimage and
+    // add exactly the reviewed services profile and native bundle.
+    let mut lifecycle_only = catalog.clone();
+    lifecycle_only
+        .definitions
+        .retain(|id, _| catalog.baseline_definitions.contains(id));
+    let frozen_baseline = lifecycle_only.definitions.clone();
+    let successor = lifecycle_only
+        .lifecycle_successor(&catalog.baseline)
+        .unwrap();
+    assert_eq!(successor, catalog.lifecycle);
+    let expected_added = BTreeSet::from([
+        catalog.lifecycle.services_profile,
+        catalog.lifecycle.bindings[0].implementation,
+    ]);
+    assert_eq!(expected_added.len(), 2);
+    assert_eq!(
+        lifecycle_only.definitions.len(),
+        frozen_baseline.len() + expected_added.len()
+    );
+    assert_eq!(
+        lifecycle_only
+            .definitions
+            .keys()
+            .filter(|id| !frozen_baseline.contains_key(*id))
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        expected_added
+    );
+    for (id, descriptor) in &frozen_baseline {
+        assert_eq!(lifecycle_only.definitions.get(id), Some(descriptor));
+    }
+    assert!(
+        !catalog
+            .baseline_definitions
+            .contains(&catalog.lifecycle.services_profile)
+    );
+    assert!(catalog.unsupported(&catalog.lifecycle).is_none());
+    assert_eq!(inventory(catalog), std::fs::read_to_string(PINNED).unwrap());
+    assert!(!super::super::trigger_lifecycle_enabled(&catalog.baseline).unwrap());
+    assert!(super::super::trigger_lifecycle_enabled(&catalog.lifecycle).unwrap());
+}
+
+#[test]
+fn lifecycle_services_reject_unknown_or_incompletely_rebound_selection() {
+    let catalog = release_catalog().unwrap();
+    let mut selection = catalog.baseline.clone();
+    selection.services_profile = DefinitionId([0xa3; 32]);
+    assert!(super::super::trigger_lifecycle_enabled(&selection).is_err());
+    selection.services_profile = catalog.lifecycle.services_profile;
+    assert!(selection.check_closure(&catalog.definitions).is_err());
+}
+
+#[test]
+fn lifecycle_successor_composes_with_current_ironwood_owners_in_both_orders() {
+    use super::super::{ironwood::activation_change_set_for_selection, lifecycle_activation};
+
+    let catalog = release_catalog().unwrap();
+    let baseline = catalog.baseline.clone();
+    let baseline_published: BTreeMap<_, _> = catalog
+        .baseline_definitions
+        .iter()
+        .map(|id| (*id, catalog.definitions[id].clone()))
+        .collect();
+    let network = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x22; 32])),
+    );
+
+    // Publish only what the actual Ironwood transition adds to the committed
+    // baseline. Being compiled into this release does not publish future rows.
+    let ironwood_change = activation_change_set_for_selection(
+        network,
+        99,
+        [0x32; 32],
+        &baseline,
+        &baseline_published,
+    )
+    .unwrap();
+    let installed = ironwood_change
+        .apply(&baseline, &baseline_published)
+        .unwrap();
+    let ironwood = installed.selection;
+    assert_eq!(ironwood, catalog.ironwood.as_ref().unwrap().selection);
+    let mut published = baseline_published.clone();
+    published.extend(installed.published);
+    ironwood.check_closure(&published).unwrap();
+
+    let mut first = catalog.clone();
+    let compiled = first.definitions.clone();
+    first.compile_lifecycle_compositions().unwrap();
+    let composed = first.lifecycle_successor(&ironwood).unwrap();
+    assert_eq!(
+        first.definitions, compiled,
+        "composition must be compiled before governance proposes it"
+    );
+    assert_eq!(composed.installed_storage, ironwood.installed_storage);
+    assert_eq!(
+        composed
+            .bindings
+            .iter()
+            .map(|b| (&b.wire_id, b.interface))
+            .collect::<Vec<_>>(),
+        ironwood
+            .bindings
+            .iter()
+            .map(|b| (&b.wire_id, b.interface))
+            .collect::<Vec<_>>()
+    );
+    assert_ne!(composed.installed_storage, baseline.installed_storage);
+    let change = lifecycle_activation::from_selection(
+        first.clone(),
+        &ironwood,
+        &published,
+        network,
+        100,
+        [0x33; 32],
+    )
+    .unwrap();
+    assert_eq!(change.predecessor, ironwood.id().unwrap());
+    assert_eq!(
+        change
+            .publish
+            .iter()
+            .map(|descriptor| descriptor.id().unwrap())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            composed.services_profile,
+            composed.bindings[0].implementation,
+        ]),
+        "the actual network still needs the exact compiled lifecycle pair published"
+    );
+    let applied = change.apply(&ironwood, &published).unwrap();
+    assert_eq!(applied.selection, composed);
+    assert_eq!(
+        applied.selection.installed_storage,
+        ironwood.installed_storage
+    );
+    published.extend(applied.published);
+    composed.check_closure(&published).unwrap();
+
+    // Reverse order uses the same production constructors and its own actual
+    // publication history, never the complete compiled inventory as network State.
+    let reverse = catalog.clone();
+    let lifecycle_change = lifecycle_activation::from_selection(
+        reverse.clone(),
+        &baseline,
+        &baseline_published,
+        network,
+        99,
+        [0x34; 32],
+    )
+    .unwrap();
+    let lifecycle_applied = lifecycle_change
+        .apply(&baseline, &baseline_published)
+        .unwrap();
+    let lifecycle = lifecycle_applied.selection;
+    assert_eq!(lifecycle, catalog.lifecycle);
+    let mut reverse_published = baseline_published.clone();
+    reverse_published.extend(lifecycle_applied.published);
+    lifecycle.check_closure(&reverse_published).unwrap();
+    let reverse_change = activation_change_set_for_selection(
+        network,
+        100,
+        [0x35; 32],
+        &lifecycle,
+        &reverse_published,
+    )
+    .unwrap();
+    assert_eq!(reverse_change.predecessor, lifecycle.id().unwrap());
+    let reverse_applied = reverse_change
+        .apply(&lifecycle, &reverse_published)
+        .unwrap();
+    let reverse_composed = reverse_applied.selection;
+    reverse_published.extend(reverse_applied.published);
+    reverse_composed.check_closure(&reverse_published).unwrap();
+    assert_eq!(composed, reverse_composed);
+    assert!(first.unsupported(&composed).is_none());
+    assert!(reverse.unsupported(&reverse_composed).is_none());
+    assert_eq!(reverse.definitions, compiled);
+    for (id, descriptor) in &baseline_published {
+        assert_eq!(published.get(id), Some(descriptor));
+        assert_eq!(reverse_published.get(id), Some(descriptor));
+    }
+}
+
+#[test]
+fn lifecycle_successor_preserves_retained_restrictions_and_consumes_retired_bundle_restriction() {
+    use iroha_data_model::runtime::definition::{RestrictionEntryV1, RestrictionV1};
+    let mut catalog = release_catalog().unwrap().clone();
+    let mut current = catalog.baseline.clone();
+    let old = current.bindings[0].implementation;
+    let interface = current.bindings[0].interface;
+    current.restrictions = vec![
+        RestrictionEntryV1 {
+            definition: old,
+            restriction: RestrictionV1::AdmissionClosed(2),
+        },
+        RestrictionEntryV1 {
+            definition: interface,
+            restriction: RestrictionV1::AdmissionClosed(3),
+        },
+    ];
+    current.restrictions.sort_by_key(|entry| entry.definition);
+    let successor = catalog.lifecycle_successor(&current).unwrap();
+    assert_eq!(
+        successor.restrictions,
+        vec![RestrictionEntryV1 {
+            definition: interface,
+            restriction: RestrictionV1::AdmissionClosed(3)
+        }]
+    );
+    let change = super::super::lifecycle_activation::from_selection(
+        catalog.clone(),
+        &current,
+        &catalog.definitions,
+        iroha_data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x22; 32])),
+        ),
+        100,
+        [0x33; 32],
+    )
+    .unwrap();
+    assert_eq!(
+        change
+            .apply(&current, &catalog.definitions)
+            .unwrap()
+            .selection,
+        successor
+    );
 }

@@ -44,7 +44,7 @@ impl Drop for Census {
 }
 fn context() -> TransparentStarkDigestContextV1 {
     TransparentStarkDigestContextV1::new(
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
         b"retained-scalar-reference",
     )
 }

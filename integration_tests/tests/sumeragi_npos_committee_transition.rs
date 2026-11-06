@@ -761,22 +761,35 @@ async fn advance_to_height_with_workload(
     target: u64,
     workload: Option<&rotation_payments::CustomerWorkload>,
 ) -> Result<()> {
+    advance_progress_window(network, voters, target, target, 0, workload)
+        .await
+        .map(|_| ())
+}
+
+/// Wait for every voter at the checkpoint while preserving the signed progress sequence.
+async fn advance_progress_window(
+    network: &Network,
+    voters: &[PeerId],
+    checkpoint: u64,
+    target: u64,
+    mut tick: u64,
+    workload: Option<&rotation_payments::CustomerWorkload>,
+) -> Result<u64> {
     let peers = exact_process_roster(network, voters)?;
     let deadline = Instant::now() + WAIT;
     let clients = peers
         .iter()
         .map(|peer| peer.client().client().clone())
         .collect::<Vec<_>>();
-    let mut tick = 0_u64;
     let mut pending_height = None;
     loop {
         let heights = committee_status::heights_until(&clients, deadline).await?;
         ensure!(
             Instant::now() < deadline,
-            "current validator quorum stalled before height {target}; heights={heights:?}"
+            "current validator quorum stalled before height {checkpoint}; heights={heights:?}"
         );
-        match progress_action(&heights, target, pending_height)? {
-            ProgressAction::Complete => return Ok(()),
+        match progress_action(&heights, checkpoint, pending_height)? {
+            ProgressAction::Complete => return Ok(tick),
             ProgressAction::AwaitCatchup => {}
             ProgressAction::SubmitAt(height) => {
                 let client = peers[usize::try_from(tick)? % peers.len()].client();
@@ -2847,6 +2860,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
 // Bound its owning thread and runtime stacks explicitly, without an inherited env setting.
 #[cfg(unix)]
 fn run_network_qualification(scenario: QualificationScenario) -> Result<()> {
+    let _descriptor_slots = iroha_test_network::reserve_disposable_ceremony_descriptors()?;
     const NETWORK_STACK_BYTES: usize = 32 * 1024 * 1024;
     let handle = std::thread::Builder::new()
         .name(scenario.seed().to_owned())

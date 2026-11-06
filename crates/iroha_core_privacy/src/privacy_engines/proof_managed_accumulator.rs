@@ -11,7 +11,7 @@
 //! the Selene/Helios curve tree from the FCMP++ construction.
 use incrementalmerkletree::{Hashable, Level, Position, frontier::Frontier};
 use iroha_data_model::privacy::{
-    PrivacyCommitmentV1, PrivacyNamespaceV1, PrivacyProtocolIdV1, PrivacyRootV1,
+    PrivacyCommitmentV1, PrivacyRootV1, PrivacyRuntimeNamespaceV1, PrivacyRuntimeProtocolIdV1,
 };
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeSet;
@@ -112,21 +112,22 @@ pub enum ProofManagedAccumulatorErrorV1 {
     TreeFull,
 }
 fn validate_namespace_v1(
-    namespace: PrivacyNamespaceV1,
+    namespace: PrivacyRuntimeNamespaceV1,
 ) -> Result<(), ProofManagedAccumulatorErrorV1> {
     namespace
         .validate()
         .map_err(|_| ProofManagedAccumulatorErrorV1::Namespace)?;
     if !matches!(
         namespace.protocol_id(),
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 | PrivacyProtocolIdV1::PqMaspStarkV1
+        PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1
+            | PrivacyRuntimeProtocolIdV1::PqMaspStarkV1
     ) {
         return Err(ProofManagedAccumulatorErrorV1::Namespace);
     }
     Ok(())
 }
 fn commitment_leaf_v1(
-    namespace: PrivacyNamespaceV1,
+    namespace: PrivacyRuntimeNamespaceV1,
     commitment: PrivacyCommitmentV1,
     index: usize,
 ) -> Result<NoteTreeNodeV1, ProofManagedAccumulatorErrorV1> {
@@ -134,7 +135,8 @@ fn commitment_leaf_v1(
     if commitment.is_zero() {
         return Err(ProofManagedAccumulatorErrorV1::ZeroCommitment { index });
     }
-    let encoded_namespace = norito::to_bytes(&namespace)
+    let encoded_namespace = namespace
+        .canonical_wire_bytes_v1()
         .map_err(|_| ProofManagedAccumulatorErrorV1::NamespaceEncoding)?;
     let mut hasher = Sha256::new();
     hasher.update(LEAF_DOMAIN_V1);
@@ -212,7 +214,7 @@ pub(crate) fn canonical_single_leaf_authentication_path_v1() -> [[u8; 32]; TREE_
 /// or a set that exceeds the depth-32 tree.
 #[doc(hidden)]
 pub fn build_proof_managed_frontier_v1(
-    namespace: PrivacyNamespaceV1,
+    namespace: PrivacyRuntimeNamespaceV1,
     commitments: &[PrivacyCommitmentV1],
 ) -> Result<ProofManagedFrontierPartsV1, ProofManagedAccumulatorErrorV1> {
     validate_namespace_v1(namespace)?;
@@ -239,7 +241,7 @@ pub fn build_proof_managed_frontier_v1(
 /// Rejects a malformed namespace/frontier or a substituted root.
 #[doc(hidden)]
 pub fn validate_proof_managed_frontier_v1(
-    namespace: PrivacyNamespaceV1,
+    namespace: PrivacyRuntimeNamespaceV1,
     tree_size: u64,
     leaf: Option<[u8; 32]>,
     ommers: &[[u8; 32]],
@@ -260,7 +262,7 @@ pub fn validate_proof_managed_frontier_v1(
 /// root, or capacity exhaustion.
 #[doc(hidden)]
 pub fn append_proof_managed_commitments_v1(
-    namespace: PrivacyNamespaceV1,
+    namespace: PrivacyRuntimeNamespaceV1,
     tree_size: u64,
     leaf: Option<[u8; 32]>,
     ommers: &[[u8; 32]],
@@ -302,7 +304,7 @@ pub fn append_proof_managed_commitments_v1(
 /// Rejects zero/duplicate commitments, malformed namespaces, duplicate output
 /// commitments, or an accumulator capacity failure.
 pub(crate) fn plan_two_leaf_proof_managed_transition_v1(
-    namespace: PrivacyNamespaceV1,
+    namespace: PrivacyRuntimeNamespaceV1,
     input_commitments: [PrivacyCommitmentV1; 2],
     output_commitments: &[PrivacyCommitmentV1],
 ) -> Result<ProofManagedTwoLeafPlanV1, ProofManagedAccumulatorErrorV1> {
@@ -330,7 +332,7 @@ pub(crate) fn plan_two_leaf_proof_managed_transition_v1(
 /// # Errors
 /// Invalid namespace, zero/duplicate original commitments or canonical frontier refusal.
 pub(crate) fn plan_two_leaf_proof_managed_inputs_v1(
-    namespace: PrivacyNamespaceV1,
+    namespace: PrivacyRuntimeNamespaceV1,
     input_commitments: [PrivacyCommitmentV1; 2],
 ) -> Result<ProofManagedTwoLeafInputsV1, ProofManagedAccumulatorErrorV1> {
     let mut initial_commitments = input_commitments;
@@ -393,17 +395,17 @@ mod tests {
     fn commitment(byte: u8) -> PrivacyCommitmentV1 {
         PrivacyCommitmentV1::new([byte; 32])
     }
-    fn pq_namespace() -> PrivacyNamespaceV1 {
-        PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::PqMaspStarkV1,
+    fn pq_namespace() -> PrivacyRuntimeNamespaceV1 {
+        PrivacyRuntimeNamespaceV1::new(
+            PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
             PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                 pool_id: PrivacyPoolIdV1::new([0x31; 32]),
             }),
         )
     }
-    fn ivm_namespace() -> PrivacyNamespaceV1 {
-        PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+    fn ivm_namespace() -> PrivacyRuntimeNamespaceV1 {
+        PrivacyRuntimeNamespaceV1::new(
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             PrivacyNamespaceScopeV1::PoolProgram(PrivacyPoolProgramNamespaceV1 {
                 pool_id: PrivacyPoolIdV1::new([0x41; 32]),
                 program_id: PrivacyProgramIdV1::new([0x42; 32]),
@@ -530,8 +532,8 @@ mod tests {
         let ivm =
             build_proof_managed_frontier_v1(ivm_namespace(), &commitments).expect("IVM frontier");
         assert_ne!(pq.root, ivm.root);
-        let other_pq = PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::PqMaspStarkV1,
+        let other_pq = PrivacyRuntimeNamespaceV1::new(
+            PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
             PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                 pool_id: PrivacyPoolIdV1::new([0x32; 32]),
             }),

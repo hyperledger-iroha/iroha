@@ -437,8 +437,8 @@ mod tests {
         load_privacy_zk_x509_authoritative_state_v1, privacy_zk_x509_ca_namespace_v1,
     };
     use iroha_data_model::privacy::{
-        PrivacyConsensusLimitsV1, PrivacyPolicyDigestV1, PrivacyRootPublicationV1,
-        PrivacyRootRoleV1, PrivacyRootV1, PrivacyX509TrustStoreDigestV1,
+        PrivacyConsensusLimitsV1, PrivacyPolicyDigestV1, PrivacyRootRoleV1, PrivacyRootV1,
+        PrivacyRuntimeRootPublicationV1, PrivacyX509TrustStoreDigestV1,
         PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordV1,
         PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordV1,
         validate_zk_x509_certificate_policy_rotation_v1, validate_zk_x509_crl_revocation_v1,
@@ -488,7 +488,7 @@ mod tests {
             )
             .expect("CA root key");
             let publication =
-                PrivacyRootPublicationV1::new(namespace, role, key.epoch(), key.root())
+                PrivacyRuntimeRootPublicationV1::new(namespace, role, key.epoch(), key.root())
                     .expect("CA publication");
             let provenance = PrivacyRootProvenanceV1::zk_x509_ca_governance(
                 publication.digest().expect("CA publication digest"),

@@ -23,7 +23,7 @@ use iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V1_CIRCUIT_ID;
 use iroha_data_model::{
     NetworkId,
     privacy::{
-        GoldilocksDigest384V1, PrivacyConsensusLimitsV1, PrivacyStatementV1,
+        GoldilocksDigest384V1, PrivacyConsensusLimitsV1, PrivacyRuntimeStatementV1,
         PrivacyZkAceIdentityCommitmentV1, PrivacyZkAceReplayNullifierV1,
     },
     zk::{
@@ -172,8 +172,8 @@ pub const ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1: u32 = {
 /// used by a Merkle tree, Fiat--Shamir transcript, challenge, FRI phase, or
 /// query sampler.
 pub const ZK_ACE_COMPILED_PROFILE_DIGEST_V1: [u8; 32] = [
-    0xb3, 0xee, 0xcf, 0x3d, 0x57, 0x82, 0x6f, 0xbc, 0x6f, 0xa0, 0xdc, 0x68, 0x11, 0x63, 0x17, 0x71,
-    0x62, 0x97, 0x71, 0xee, 0x1f, 0x30, 0xe7, 0x97, 0x57, 0xd9, 0x30, 0x09, 0xf9, 0xe1, 0xeb, 0x4d,
+    0x91, 0x67, 0x3f, 0x73, 0xd5, 0x46, 0x56, 0x73, 0x5f, 0x5d, 0x87, 0x5d, 0x0e, 0x03, 0x1d, 0x2a,
+    0x01, 0xc2, 0x37, 0xb2, 0x16, 0x12, 0x34, 0x63, 0x65, 0xc3, 0x36, 0x7c, 0xb1, 0xc3, 0x3f, 0xc2,
 ];
 /// Return the frozen digest of the exact verifier profile.
 #[must_use]
@@ -354,7 +354,7 @@ fn validate_privacy_public_inputs(
     if public_inputs.genesis_hash == [0; 32] {
         return Err(ZkAceNativeErrorV1::ZeroGenesisHash);
     }
-    PrivacyStatementV1::ZkAcePqAuthorizationV1(public_inputs.statement.clone())
+    PrivacyRuntimeStatementV1::ZkAcePqAuthorizationV1(public_inputs.statement.clone())
         .validate(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| ZkAceNativeErrorV1::InvalidStatement)
 }

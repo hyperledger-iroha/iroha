@@ -50,7 +50,7 @@ use iroha_data_model::{
     NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
-    privacy::{GoldilocksDigest384V1 as PublicDigest384V1, PrivacyProtocolIdV1},
+    privacy::{GoldilocksDigest384V1 as PublicDigest384V1, PrivacyRuntimeProtocolIdV1},
     proof::VerifyingKeyId,
     zk::{
         ZK_ACE_IDENTITY_COMMITMENT_PHASE_V1, ZK_ACE_IDENTITY_COMMITMENT_ROLE_V1,
@@ -343,7 +343,7 @@ const FIXED_WIDTH: usize = FIX_OUTPUT_OFFSET + PUBLIC_OUTPUTS;
 const STARK_PROFILE_V1: &[u8] = b"zk-ace-poseidon-x7-goldilocks-fp4-fri-v1";
 const STARK_SUITE_V1: &[u8] = b"StarkFriSha3_384Goldilocks";
 const DIGEST_CONTEXT_V1: TransparentStarkDigestContextV1 = TransparentStarkDigestContextV1::new(
-    PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
+    PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1,
     STARK_PROFILE_V1,
 );
 const PROFILE_DIGEST_ROLE_V1: &[u8] = b"compiled-profile";
@@ -3441,7 +3441,7 @@ mod tests {
             base,
             frame(
                 TransparentStarkDigestContextV1::new(
-                    PrivacyProtocolIdV1::PqMaspStarkV1,
+                    PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
                     STARK_PROFILE_V1,
                 ),
                 b"role-a",
@@ -3455,7 +3455,7 @@ mod tests {
             base,
             frame(
                 TransparentStarkDigestContextV1::new(
-                    PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
+                    PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1,
                     b"counterfactual-profile",
                 ),
                 b"role-a",

@@ -231,6 +231,9 @@ impl_direct_instruction_box!(crate::isi::privacy::SchedulePrivacyConsensusPolicy
 impl_direct_instruction_box!(crate::isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1);
 impl_direct_instruction_box!(crate::isi::privacy::PublishPrivacyRootV1);
 impl_direct_instruction_box!(crate::isi::privacy::BootstrapPrivacyOrchardPoolV1);
+impl_direct_instruction_box!(crate::isi::privacy::BootstrapPrivacyIronwoodPoolV1);
+impl_direct_instruction_box!(crate::isi::privacy::SubmitPrivacyIronwoodProofV1);
+impl_direct_instruction_box!(crate::isi::privacy::SchedulePrivacyIronwoodLimitsUpdateV1);
 impl_direct_instruction_box!(crate::isi::privacy::BootstrapPrivacyProofManagedPoolV1);
 impl_direct_instruction_box!(crate::isi::privacy::BootstrapPrivacyPgcAccountsV1);
 impl_direct_instruction_box!(crate::isi::privacy::BootstrapPrivacyZkAmsRegistryV1);
@@ -1393,6 +1396,9 @@ pub fn decode_instruction_from_pair(
     wire_id: &str,
     payload: &[u8],
 ) -> Result<InstructionBox, norito::Error> {
+    if lifecycle_instruction_validation_active() {
+        return registry::decode_lifecycle_frame(wire_id, payload);
+    }
     let entry = {
         let registry = instruction_registry();
         registry.entry_for_wire_id(wire_id).copied()
@@ -1911,6 +1917,28 @@ macro_rules! instruction_registry_with_ids {
         registry
     }};
 }
+// Semantic validator policy is private to the data-model scanner. The public
+// Norito prepaid capability only routes allocation and diagnostics; it cannot
+// substitute the installed instruction registry or normalize Action evidence.
+thread_local! {
+    static LIFECYCLE_INSTRUCTION_VALIDATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(crate) fn lifecycle_instruction_validation_active() -> bool {
+    LIFECYCLE_INSTRUCTION_VALIDATION.get()
+}
+
+pub(crate) fn with_lifecycle_instruction_validation<T>(validate: impl FnOnce() -> T) -> T {
+    struct Guard(bool);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            LIFECYCLE_INSTRUCTION_VALIDATION.set(self.0);
+        }
+    }
+    let _guard = Guard(LIFECYCLE_INSTRUCTION_VALIDATION.replace(true));
+    validate()
+}
+
 static INSTRUCTION_REGISTRY: OnceLock<RwLock<Arc<InstructionRegistry>>> = OnceLock::new();
 #[cfg(test)]
 thread_local! {
@@ -3217,5 +3245,167 @@ mod checked_container_cleanup_tests {
             expected: 7_u64,
             actual: 9_u64,
         });
+    }
+}
+
+// These explicit transient validators share the sole built-in inventory. They
+// run only inside the lifecycle scanner's prepaid scope, never as fallback
+// decoders for ordinary instruction admission.
+fn validate_instruction_frame_for_lifecycle<T>(
+    frame: &[u8],
+    limits: norito::core::EncodeWorkLimits,
+) -> Result<(), norito::Error>
+where
+    T: Instruction + norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+{
+    norito::core::with_bounded_encode_work(limits, || {
+        let payload =
+            norito::canonical_frame_payload::<T>(frame, norito::core::default_encode_flags())?;
+        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let (value, used) = norito::core::decode_field_canonical::<T>(payload)?;
+        if used != payload.len() {
+            return Err(norito::Error::LengthMismatch);
+        }
+        norito::codec::verify_exact_payload(&value, payload)
+    })
+    .map_err(|error| match error {
+        norito::core::BoundedEncodeWorkError::Codec(error) => error,
+        norito::core::BoundedEncodeWorkError::Refused(_) => norito::Error::InvalidValue {
+            context: "instruction canonical comparison work limit",
+        },
+    })
+}
+
+fn decode_instruction_frame_for_lifecycle<T>(frame: &[u8]) -> Result<InstructionBox, norito::Error>
+where
+    T: Instruction + norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+{
+    crate::block::execution_output::charge_typed_nested_frame(frame.len(), true)?;
+    let payload =
+        norito::canonical_frame_payload::<T>(frame, norito::core::default_encode_flags())?;
+    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let (value, used) = norito::core::decode_field_canonical::<T>(payload)?;
+    if used != payload.len() {
+        return Err(norito::Error::LengthMismatch);
+    }
+    Ok(InstructionBox::from_boxed(
+        norito::core::try_box_for_decode(value)?,
+    ))
+}
+
+#[cfg(test)]
+mod lifecycle_registry_identity_tests {
+    use super::*;
+    use iroha_allocation::AllocationBudget;
+
+    struct RegistryGuard(Option<Arc<InstructionRegistry>>);
+    impl RegistryGuard {
+        fn install(registry: InstructionRegistry) -> Self {
+            Self(INSTRUCTION_REGISTRY_OVERRIDE.with(|cell| cell.replace(Some(Arc::new(registry)))))
+        }
+    }
+    impl Drop for RegistryGuard {
+        fn drop(&mut self) {
+            INSTRUCTION_REGISTRY_OVERRIDE.with(|cell| {
+                cell.replace(self.0.take());
+            });
+        }
+    }
+
+    fn bounded_frame(
+        value: &InstructionBox,
+    ) -> Result<Vec<u8>, norito::core::BoundedEncodeWorkError> {
+        // InstructionBox's root frame intentionally projects to a generic
+        // tuple identity. The production hash encloses instruction payloads in
+        // its audited vector frame; this standalone regression supplies the
+        // equally audited exact tuple descriptor, without weakening the generic
+        // bounded-source refusal or changing type alignment.
+        const FRAME: &str = "(alloc::string::String, alloc::vec::Vec<u8>)";
+        assert_eq!(
+            <InstructionBox as norito::NoritoSchema>::frame_name(),
+            FRAME
+        );
+        let pool = AllocationBudget::new(1_000_000);
+        let reservation = pool.try_reserve_bytes(500_000).unwrap();
+        let context = norito::core::DecodeBudgetContext::try_new_owned(
+            norito::core::DecodeLimits::new(100_000, 100_000, 100_000, 500_000, 64),
+            &pool,
+        )
+        .unwrap();
+        let mut result = None;
+        norito::core::with_prepaid_validation(&reservation, &context, || {
+            result = Some(norito::core::with_bounded_encode_work(
+                norito::core::EncodeWorkLimits {
+                    max_frame_bytes: 100_000,
+                    max_byte_visits: 1_000_000,
+                    max_operations: 100_000,
+                    max_depth: 64,
+                },
+                || {
+                    let mut bytes = Vec::new();
+                    norito::core::write_canonical_payload_with_identity::<InstructionBox, _, _>(
+                        value, &mut bytes, FRAME,
+                    )?;
+                    Ok(bytes)
+                },
+            ));
+            Ok(())
+        })
+        .unwrap();
+        result.unwrap()
+    }
+
+    #[test]
+    fn lifecycle_hash_encoding_uses_the_installed_registry_in_prepaid_mode() {
+        let _registry = RegistryGuard::install(
+            InstructionRegistry::new().register_with_id::<Log>("test.installed.log"),
+        );
+        let value = InstructionBox::from(Log::new(Level::INFO, "installed identity".into()));
+        let ordinary = norito::encode_canonical(&value).unwrap();
+        let bounded = bounded_frame(&value).unwrap();
+        assert_eq!(ordinary, bounded);
+        assert!(
+            bounded
+                .windows(b"test.installed.log".len())
+                .any(|bytes| bytes == b"test.installed.log")
+        );
+    }
+
+    #[test]
+    fn lifecycle_prepaid_encoding_respects_intentionally_missing_registry_entries() {
+        let _registry = RegistryGuard::install(InstructionRegistry::new());
+        let value = InstructionBox::from(Log::new(Level::INFO, "not installed".into()));
+        assert!(norito::encode_canonical(&value).is_err());
+        assert!(bounded_frame(&value).is_err());
+    }
+
+    #[test]
+    fn lifecycle_semantic_validator_scope_is_private_nested_and_unwind_safe() {
+        assert!(!lifecycle_instruction_validation_active());
+        with_lifecycle_instruction_validation(|| {
+            assert!(lifecycle_instruction_validation_active());
+            with_lifecycle_instruction_validation(|| {
+                assert!(lifecycle_instruction_validation_active())
+            });
+            assert!(lifecycle_instruction_validation_active());
+        });
+        assert!(!lifecycle_instruction_validation_active());
+        let result = std::panic::catch_unwind(|| {
+            with_lifecycle_instruction_validation(|| panic!("validator unwind"))
+        });
+        assert!(result.is_err());
+        assert!(!lifecycle_instruction_validation_active());
+        let pool = AllocationBudget::new(1024);
+        let reservation = pool.try_reserve_bytes(256).unwrap();
+        let context = norito::core::DecodeBudgetContext::try_new_owned(
+            norito::core::DecodeLimits::new(32, 256, 32, 256, 8),
+            &pool,
+        )
+        .unwrap();
+        norito::core::with_prepaid_validation(&reservation, &context, || {
+            assert!(!lifecycle_instruction_validation_active());
+            Ok(())
+        })
+        .unwrap();
     }
 }

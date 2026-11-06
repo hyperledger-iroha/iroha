@@ -5,7 +5,6 @@ use iroha::{blocking::Client as IrohaClient, sns::SnsNamespacePath};
 use iroha_data_model::{
     account::AccountId,
     alias_setup::{ALIAS_LEASE_YEAR_MS, AliasQuoteGuardV1, AliasTargetV1, ResolvedDomainV1},
-    asset::AssetDefinitionId,
     isi::alias_setup::RenewAliasLease,
     sns::{NameRecordV1, NameStatus},
 };
@@ -75,27 +74,19 @@ async fn sns_registration_emits_metrics_and_gateway_bindings() -> Result<()> {
     let client = network.client();
     let metrics_endpoint = client.client().endpoint().join("metrics")?;
     let http = HttpClient::new();
-    let metric_labels = [("result", "ok"), ("suffix", "domain")];
-    let baseline = read_metric_sample(
-        &http,
-        &metrics_endpoint,
-        "sns_registrar_status_total",
-        &metric_labels,
-    )
-    .await?
-    .unwrap_or(0.0);
+    // Domain registration executes the canonical EnsureAlias instruction.
+    // Its native instrumentation records successful execution in `isi`; the
+    // retired registrar HTTP operation does not own this transaction path.
+    let metric_labels = [("type", "ensure_alias"), ("success_status", "success")];
+    let baseline = read_metric_sample(&http, &metrics_endpoint, "isi", &metric_labels)
+        .await?
+        .unwrap_or(0.0);
     let label = unique_label("telemetry");
     let literal = domain_literal(&label);
     setup_domain(&client, &label).await?;
     let mut observed_after = None;
     for _ in 0..METRIC_READY_RETRIES {
-        let current = read_metric_sample(
-            &http,
-            &metrics_endpoint,
-            "sns_registrar_status_total",
-            &metric_labels,
-        )
-        .await?;
+        let current = read_metric_sample(&http, &metrics_endpoint, "isi", &metric_labels).await?;
         if let Some(value) = current.filter(|value| *value >= baseline + 1.0) {
             observed_after = Some(value);
             break;
@@ -105,7 +96,7 @@ async fn sns_registration_emits_metrics_and_gateway_bindings() -> Result<()> {
     let observed_after = observed_after.unwrap_or(baseline);
     assert!(
         observed_after >= baseline + 1.0,
-        "sns_registrar_status_total did not advance (baseline {baseline}, observed {observed_after})"
+        "successful ensure_alias counter did not advance (baseline {baseline}, observed {observed_after})"
     );
     let bindings = derive_gateway_hosts(&format!("{literal}.domain"))
         .map_err(|err| eyre!("gateway host derivation failed: {err}"))?;
@@ -140,6 +131,8 @@ async fn sns_renewal_uses_expiry_cas() -> Result<()> {
     let label = unique_label("renew-cas");
     let literal = domain_literal(&label);
     let record = setup_domain(&client, &label).await?;
+    let policy = get_sns_policy(&client, record.selector.suffix_id).await?;
+    assert_eq!(policy.suffix_key(), "domain");
     let original_expiry = record.expires_at_ms;
     let target_expiry = original_expiry
         .checked_add(ALIAS_LEASE_YEAR_MS)
@@ -150,9 +143,9 @@ async fn sns_renewal_uses_expiry_cas() -> Result<()> {
         original_expiry,
         target_expiry,
         AliasQuoteGuardV1 {
-            expected_policy_version: 1,
-            expected_payment_asset: AssetDefinitionId::parse_address_literal(
-                "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            expected_policy_version: policy.policy_version,
+            expected_payment_asset: iroha_data_model::sns::pricing::payment_asset_definition_id(
+                &policy,
             )?,
             max_amount: test_sns_lease_payment(),
             valid_until_ms: u64::MAX,

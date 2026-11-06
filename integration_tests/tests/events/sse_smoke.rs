@@ -14,10 +14,10 @@ use std::{
     ops::Deref,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender},
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 // Match the client status timeout so slow test networks don't drop SSE readers early.
 const SSE_TIMEOUT: Duration = Duration::from_secs(300);
@@ -71,7 +71,10 @@ fn sse_smoke_scenarios() -> Result<()> {
     let client = peer.client();
     // Scenario 1: Execute trigger event + data event.
     {
-        let rx = spawn_sse_reader(peer.api_address());
+        let signing_client = client.clone();
+        let rx = spawn_sse_reader(peer.api_address(), move || {
+            signed_sse_headers(&signing_client)
+        });
         wait_for_sse_ready(&rx)?;
         let trigger_id: TriggerId = "sse_smoke_trigger_exec".parse()?;
         let asset_id = AssetId::new(
@@ -117,15 +120,19 @@ fn sse_smoke_scenarios() -> Result<()> {
             return Ok(());
         }
         let result: Result<()> = (|| {
-            let exec_evt = wait_for_sse(&rx, SSE_TIMEOUT, |val| {
-                summary_contains(val, "ExecuteTriggerEvent")
-            })?;
+            // The callback's data event precedes its successful ExecuteTrigger event.
+            // Retain both matches instead of discarding the earlier one while waiting.
+            let (exec_evt, data_evt) = wait_for_sse_pair(
+                &rx,
+                SSE_TIMEOUT,
+                |val| summary_contains(val, "ExecuteTriggerEvent"),
+                |val| {
+                    val["category"].as_str() == Some("Data")
+                        && summary_contains(val, "Asset(Added")
+                        && summary_contains(val, &asset_id_literal)
+                },
+            )?;
             assert_eq!(exec_evt["category"].as_str(), Some("Other"));
-            let data_evt = wait_for_sse(&rx, SSE_TIMEOUT, |val| {
-                val["category"].as_str() == Some("Data")
-                    && summary_contains(val, "Asset(Added")
-                    && summary_contains(val, &asset_id_literal)
-            })?;
             assert_eq!(data_evt["category"].as_str(), Some("Data"));
             Ok(())
         })();
@@ -135,7 +142,10 @@ fn sse_smoke_scenarios() -> Result<()> {
     }
     // Scenario 2: Time trigger + metadata event.
     {
-        let rx = spawn_sse_reader(peer.api_address());
+        let signing_client = client.clone();
+        let rx = spawn_sse_reader(peer.api_address(), move || {
+            signed_sse_headers(&signing_client)
+        });
         wait_for_sse_ready(&rx)?;
         let key: Name = "sse_tick".parse()?;
         let time_trigger = Trigger::new(
@@ -175,14 +185,17 @@ fn sse_smoke_scenarios() -> Result<()> {
             return Ok(());
         }
         let result: Result<()> = (|| {
-            let time_evt =
-                wait_for_sse(&rx, SSE_TIMEOUT, |val| summary_contains(val, "TimeEvent"))?;
+            let (time_evt, meta_evt) = wait_for_sse_pair(
+                &rx,
+                SSE_TIMEOUT,
+                |val| summary_contains(val, "TimeEvent"),
+                |val| {
+                    val["category"].as_str() == Some("Data")
+                        && summary_contains(val, "MetadataInserted")
+                        && summary_contains(val, key.as_ref())
+                },
+            )?;
             assert_eq!(time_evt["category"].as_str(), Some("Other"));
-            let meta_evt = wait_for_sse(&rx, SSE_TIMEOUT, |val| {
-                val["category"].as_str() == Some("Data")
-                    && summary_contains(val, "MetadataInserted")
-                    && summary_contains(val, key.as_ref())
-            })?;
             assert_eq!(meta_evt["category"].as_str(), Some("Data"));
             Ok(())
         })();
@@ -197,7 +210,49 @@ fn sse_smoke_scenarios() -> Result<()> {
     }
     Ok(())
 }
-fn spawn_sse_reader(addr: IrohaSocketAddr) -> SseReader {
+fn signed_sse_headers(client: &iroha::blocking::Client) -> Result<String> {
+    use iroha_torii::{
+        HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
+        canonical_network_request_signature_message, signature_header_value,
+    };
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let timestamp = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
+    let nonce = format!("sse-{timestamp}-{}", NONCE.fetch_add(1, Ordering::Relaxed));
+    let uri: Uri = "/v1/events/sse".parse()?;
+    let message = canonical_network_request_signature_message(
+        client.client().network_id(),
+        &Method::GET,
+        &uri,
+        &[],
+        timestamp,
+        &nonce,
+    )?;
+    let signature =
+        iroha_crypto::Signature::try_new(client.client().key_pair().private_key(), &message)?;
+    Ok(format!(
+        "{HEADER_ACCOUNT}: {}\r\n{HEADER_SIGNATURE}: {}\r\n{HEADER_TIMESTAMP_MS}: {timestamp}\r\n{HEADER_NONCE}: {nonce}\r\n",
+        client.account_client().authority().to_canonical_hex()?,
+        signature_header_value(&signature)?
+    ))
+}
+fn validate_sse_status(line: &str) -> Result<()> {
+    eyre::ensure!(
+        line.trim_end() == "HTTP/1.1 200 OK",
+        "SSE connection rejected: {}",
+        line.trim_end()
+    );
+    Ok(())
+}
+#[test]
+fn sse_status_rejects_unauthorized_and_other_failure_responses() {
+    assert!(validate_sse_status("HTTP/1.1 200 OK\r\n").is_ok());
+    assert!(validate_sse_status("HTTP/1.1 401 Unauthorized\r\n").is_err());
+    assert!(validate_sse_status("HTTP/1.1 503 Service Unavailable\r\n").is_err());
+}
+fn spawn_sse_reader(
+    addr: IrohaSocketAddr,
+    headers: impl Fn() -> Result<String> + Send + 'static,
+) -> SseReader {
     let (tx, rx) = mpsc::channel::<String>();
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_flag = shutdown.clone();
@@ -214,8 +269,15 @@ fn spawn_sse_reader(addr: IrohaSocketAddr) -> SseReader {
         while !sse_reader_should_stop(deadline, &shutdown_flag) {
             if let Ok(mut stream) = TcpStream::connect(target) {
                 stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
+                let authentication = match headers() {
+                    Ok(headers) => headers,
+                    Err(error) => {
+                        eprintln!("SSE authentication failed: {error:?}");
+                        return;
+                    }
+                };
                 let req = format!(
-                    "GET /v1/events/sse HTTP/1.1\r\nHost: {host}\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n\r\n"
+                    "GET /v1/events/sse HTTP/1.1\r\nHost: {host}\r\nAccept: text/event-stream\r\n{authentication}Connection: keep-alive\r\n\r\n"
                 );
                 if stream.write_all(req.as_bytes()).is_err() {
                     std::thread::sleep(backoff);
@@ -225,6 +287,14 @@ fn spawn_sse_reader(addr: IrohaSocketAddr) -> SseReader {
                 let _ = stream.flush();
                 let mut reader = BufReader::new(stream);
                 let mut line = String::new();
+                // Refused admission is not an established event subscription.
+                if reader.read_line(&mut line).is_err() {
+                    continue;
+                }
+                if let Err(error) = validate_sse_status(&line) {
+                    eprintln!("{error:?}");
+                    return;
+                }
                 // Consume headers.
                 let mut headers_complete = false;
                 loop {
@@ -281,16 +351,76 @@ fn spawn_sse_reader(addr: IrohaSocketAddr) -> SseReader {
     });
     SseReader { rx, shutdown }
 }
+fn wait_for_sse_pair(
+    rx: &Receiver<String>,
+    timeout: Duration,
+    first: impl Fn(&JsonValue) -> bool,
+    second: impl Fn(&JsonValue) -> bool,
+) -> Result<(JsonValue, JsonValue)> {
+    let deadline = Instant::now() + timeout;
+    let mut first_match = None;
+    let mut second_match = None;
+    loop {
+        let event = wait_for_sse(
+            rx,
+            deadline.saturating_duration_since(Instant::now()),
+            |value| {
+                first_match.is_none() && first(value) || second_match.is_none() && second(value)
+            },
+        )?;
+        if first_match.is_none() && first(&event) {
+            first_match = Some(event.clone());
+        }
+        if second_match.is_none() && second(&event) {
+            second_match = Some(event);
+        }
+        if let (Some(first), Some(second)) = (&first_match, &second_match) {
+            return Ok((first.clone(), second.clone()));
+        }
+    }
+}
+#[test]
+fn sse_pair_retains_reverse_order_and_requires_both_events() {
+    for order in [["first", "second"], ["second", "first"]] {
+        let (tx, rx) = mpsc::channel();
+        for event in order {
+            tx.send(format!(r#"{{"event":"{event}"}}"#)).unwrap();
+        }
+        drop(tx);
+        let (first, second) = wait_for_sse_pair(
+            &rx,
+            Duration::from_secs(1),
+            |value| value["event"].as_str() == Some("first"),
+            |value| value["event"].as_str() == Some("second"),
+        )
+        .unwrap();
+        assert_eq!(first["event"].as_str(), Some("first"));
+        assert_eq!(second["event"].as_str(), Some("second"));
+    }
+    let (tx, rx) = mpsc::channel();
+    tx.send(r#"{"event":"first"}"#.to_owned()).unwrap();
+    drop(tx);
+    assert!(
+        wait_for_sse_pair(
+            &rx,
+            Duration::from_secs(1),
+            |value| value["event"].as_str() == Some("first"),
+            |value| value["event"].as_str() == Some("second")
+        )
+        .is_err()
+    );
+}
 fn wait_for_sse<F>(rx: &Receiver<String>, timeout: Duration, predicate: F) -> Result<JsonValue>
 where
     F: Fn(&JsonValue) -> bool,
 {
     let deadline = Instant::now() + timeout;
+    let mut last_payload = None;
     loop {
         let now = Instant::now();
         if now >= deadline {
             return Err(eyre::eyre!(
-                "timed out waiting for SSE payload matching predicate"
+                "timed out waiting for SSE payload matching predicate; last payload: {last_payload:?}"
             ));
         }
         let remaining = deadline.saturating_duration_since(now);
@@ -298,14 +428,37 @@ where
             Ok(raw) => raw,
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(eyre::eyre!("SSE channel closed before matching event"));
+                return Err(eyre::eyre!(
+                    "SSE channel closed before matching event; last payload: {last_payload:?}"
+                ));
             }
         };
-        let val: JsonValue = json::from_str(raw.trim()).expect("valid SSE JSON");
+        let val: JsonValue = json::from_str(raw.trim())?;
+        eyre::ensure!(
+            val.get("code").is_none(),
+            "SSE stream refused events: {raw}"
+        );
         if predicate(&val) {
             return Ok(val);
         }
+        last_payload = Some(raw);
     }
+}
+#[test]
+fn sse_wait_reports_stream_refusals_and_last_unmatched_payload() {
+    let (tx, rx) = mpsc::channel();
+    tx.send(r#"{"code":"stream_history_capacity","message":"capacity"}"#.to_owned())
+        .expect("send stream refusal");
+    let error = wait_for_sse(&rx, Duration::from_secs(1), |_| false)
+        .expect_err("terminal stream errors must be surfaced");
+    assert!(error.to_string().contains("stream_history_capacity"));
+    let (tx, rx) = mpsc::channel();
+    tx.send(r#"{"event":"unmatched"}"#.to_owned())
+        .expect("send event");
+    drop(tx);
+    let error = wait_for_sse(&rx, Duration::from_secs(1), |_| false)
+        .expect_err("closed stream cannot satisfy the predicate");
+    assert!(error.to_string().contains("unmatched"));
 }
 fn summary_contains(val: &JsonValue, needle: &str) -> bool {
     val.get("summary")
@@ -387,7 +540,7 @@ fn sse_reader_connects_and_reads_data_lines() -> Result<()> {
         let _ = stream.flush();
         std::thread::sleep(Duration::from_millis(50));
     });
-    let rx = spawn_sse_reader(addr.into());
+    let rx = spawn_sse_reader(addr.into(), || Ok(String::new()));
     wait_for_sse_ready(&rx)?;
     let _ = data_tx.send(());
     let payload = wait_for_sse(&rx, SSE_TIMEOUT, |val| {

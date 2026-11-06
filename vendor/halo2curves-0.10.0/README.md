@@ -19,16 +19,14 @@ The implementations were originally ported from [matterlabs/pairing](https://git
 
 ## Controlling parallelism
 
-`halo2curves` currently uses [rayon](https://github.com/rayon-rs/rayon) for parallel
-computation. 
+This Iroha-maintained copy always uses the Rust standard library. The `std`
+feature retains upstream's name for enabling [Rayon](https://github.com/rayon-rs/rayon)
+parallel computation; without it, MSM and FFT use ordinary sequential iteration.
+The call sites select Rayon or standard-library operations directly. Curve arithmetic,
+window ordering and FFT butterflies are shared by both paths.
 
 The `RAYON_NUM_THREADS` environment variable can be used to set the number of
 threads.
-
-When compiling to WASM-targets, notice that since version `1.7`, `rayon` will fallback automatically (with no need to handle features) to require `getrandom` in order to be able to work.
-For more info related to WASM-compilation.
-
-See: [Rayon: Usage with WebAssembly](https://github.com/rayon-rs/rayon#usage-with-webassembly) for more info.  
 
 ## Benchmarks
 

@@ -2104,6 +2104,22 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let table: Table = toml::from_str(MINIMAL_CONFIG).expect("parse minimal config table");
         Root::from_toml_source(TomlSource::inline(table)).expect("load minimal config")
     }
+    #[test]
+    fn lifecycle_protocol_configuration_is_rejected() {
+        let _baseline = minimal_root();
+        for field in [
+            "v2_activation_height = 42",
+            "enabled = true",
+            "activation_height = 42",
+        ] {
+            let source = format!("{MINIMAL_CONFIG}\n[lifecycle_trace]\n{field}\n");
+            let error =
+                Root::from_toml_source(TomlSource::inline(toml::from_str(&source).unwrap()))
+                    .expect_err("local configuration cannot activate a runtime protocol");
+            assert!(format!("{error:?}").contains("lifecycle_trace"));
+        }
+    }
+
     fn minimal_root_with_sorafs_admission() -> Root {
         let config = format!(
             r"{MINIMAL_CONFIG}

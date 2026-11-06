@@ -24144,8 +24144,9 @@ mod tests {
             PrivacyCompiledProfileSnapshotV1, PrivacyCompiledProfileUnavailableReasonV1,
             PrivacyConsensusPolicyV1, PrivacyEngineManifestDigestV1,
             PrivacyExact12CapabilityManifestV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
-            PrivacyProtocolIdV1, PrivacyProtocolLimitsUpdateV1, PrivacyProtocolLimitsV1,
-            PrivacyProtocolPolicyV1, PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
+            PrivacyProtocolLimitsUpdateV1, PrivacyProtocolPolicyV1, PrivacyRuntimeProtocolIdV1,
+            PrivacyRuntimeProtocolLimitsV1, PrivacyStatementSchemaDigestV1,
+            PrivacyVerifierDigestV1,
         },
         sorafs::{
             moderation::{
@@ -35363,13 +35364,13 @@ mod tests {
             network_id: test_network_id(),
             committed_height: 42,
             consensus_policy: PrivacyConsensusPolicyV1::taira_default(),
-            protocols: PrivacyProtocolIdV1::ALL
+            protocols: PrivacyRuntimeProtocolIdV1::ALL
                 .into_iter()
                 .map(|protocol_id| PrivacyCapabilityRowV1 {
                     protocol_id,
                     // This HTTP decoding fixture is not native admission evidence.
                     compiled_profile: if protocol_id
-                        == PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
+                        == PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1
                     {
                         PrivacyCompiledProfileResultV1::Available(PrivacyCompiledProfileSnapshotV1 {
                             protocol_id,
@@ -35380,11 +35381,11 @@ mod tests {
                             verifier_digest: PrivacyVerifierDigestV1::new([0x13; 32]),
                             statement_schema_digest: PrivacyStatementSchemaDigestV1::new([0x14; 32]),
                             engine_manifest_digest: PrivacyEngineManifestDigestV1::new([0x15; 32]),
-                            protocol_limits: PrivacyProtocolLimitsV1::canonical_default_v1(protocol_id),
+                            protocol_limits: PrivacyRuntimeProtocolLimitsV1::canonical_default_v1(protocol_id),
                         })
                     } else {
                         PrivacyCompiledProfileResultV1::Unavailable(
-                            if protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
+                            if protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 {
                                 PrivacyCompiledProfileUnavailableReasonV1::JointSecurityReductionIncomplete
                             } else {
                                 PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable
@@ -35719,12 +35720,12 @@ mod tests {
         for (current, next) in [(2, 3), (3, 2)] {
             let mut manifest = default.clone();
             let limits = |count| {
-                PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+                PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
                     max_polynomial_count: count,
                 })
             };
             manifest.protocols[6].policy = Some(PrivacyProtocolPolicyV1 {
-                protocol_id: PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+                protocol_id: PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
                 current_limits: limits(current),
                 pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
                     scheduled_at_height: 42,
@@ -35753,10 +35754,10 @@ mod tests {
     #[test]
     fn privacy_capability_clients_preserve_exact_joint_security_refusal_with_policy() {
         let mut manifest = sample_privacy_capabilities();
-        let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+        let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1;
         manifest.protocols[5].policy = Some(PrivacyProtocolPolicyV1 {
             protocol_id,
-            current_limits: PrivacyProtocolLimitsV1::canonical_default_v1(protocol_id),
+            current_limits: PrivacyRuntimeProtocolLimitsV1::canonical_default_v1(protocol_id),
             pending_update: None,
         });
         manifest.manifest_digest = manifest.computed_manifest_digest().expect("bind policy");
@@ -35856,11 +35857,11 @@ mod tests {
         else {
             panic!("Jindo profile")
         };
-        profile.engine_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1.expected_engine();
+        profile.engine_id = PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1.expected_engine();
         let mut malformed_policy = valid.clone();
         malformed_policy.protocols[6].policy = Some(PrivacyProtocolPolicyV1 {
-            protocol_id: PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
-            current_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
+            protocol_id: PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+            current_limits: PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
                 JindoLimitsV1 {
                     max_polynomial_count: 0,
                 },
@@ -35868,11 +35869,12 @@ mod tests {
             pending_update: None,
         });
         let mut no_op = valid.clone();
-        let limits = PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
-            max_polynomial_count: 2,
-        });
+        let limits =
+            PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+                max_polynomial_count: 2,
+            });
         no_op.protocols[6].policy = Some(PrivacyProtocolPolicyV1 {
-            protocol_id: PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+            protocol_id: PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
             current_limits: limits,
             pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
                 scheduled_at_height: 42,
@@ -35891,7 +35893,7 @@ mod tests {
         update.scheduled_at_height = 41;
         update.effective_at_height = 42;
         update.next_limits =
-            PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+            PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
                 max_polynomial_count: 3,
             });
         for (mut invalid, reason) in [

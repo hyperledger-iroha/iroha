@@ -125,7 +125,7 @@ pub struct PreparedResponse {
     pub(crate) bytes: usize,
 }
 impl PreparedResponse {
-    fn deadline(format: ResponseFormat) -> Self {
+    pub(crate) fn deadline(format: ResponseFormat) -> Self {
         Self {
             response: route_timeout_error_response(format),
             bytes: 0,
@@ -140,7 +140,7 @@ fn invalid_interval() -> Error {
     }
 }
 // Prepay the worker's busy-State waiter from the request's own control corridor.
-fn state_view_waiter(
+pub(crate) fn state_view_waiter(
     owner: &history_producer::HistoryProducerOwner,
 ) -> Result<StateViewWaiter, Error> {
     let mut reservation = owner
@@ -150,7 +150,7 @@ fn state_view_waiter(
     StateViewWaiter::for_current_thread(&mut reservation)
         .map_err(|_| native_projection_response::capacity())
 }
-fn source_error(error: FinalityProofIntervalReadError) -> Error {
+pub(crate) fn source_error(error: FinalityProofIntervalReadError) -> Error {
     use iroha_core::sumeragi::finality::NativeFinalityProofRefusal;
 
     match error {

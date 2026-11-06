@@ -445,13 +445,13 @@ fn contract<S: Strategy>(
     strategy: &mut S,
 ) -> Result<(), S::Error> {
     strategy.control(1)?;
-    let lookup = strategy.lookup_hash(&entry.original_contract)?;
+    let lookup = strategy.lookup_hash(entry.original_contract.bytecode())?;
     let matches = strategy.equal(&lookup, key)?;
     strategy.control(1)?;
     if !matches {
         return Err(strategy.failure(SemanticFailure::Lookup));
     }
-    let code = strategy.code_hash(&entry.original_contract)?;
+    let code = strategy.code_hash(entry.original_contract.bytecode())?;
     let matches = strategy.equal(&code, &entry.code_hash)?;
     strategy.control(1)?;
     if !matches {

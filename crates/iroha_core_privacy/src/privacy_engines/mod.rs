@@ -42,7 +42,7 @@ use self::zk_x509::credential_stark::{
 };
 use iroha_data_model::privacy::{
     IrohaZkX509StarkP256StatementV1, PrivacyConsensusLimitsV1, PrivacyProofManagedPoolBootstrapV1,
-    PrivacyProtocolIdV1, PrivacyRootV1, PrivacyStatementV1,
+    PrivacyRootV1, PrivacyRuntimeProtocolIdV1, PrivacyRuntimeStatementV1,
 };
 use thiserror::Error;
 /// Exact maximum byte length of one canonical first-release `X5S1` proof.
@@ -78,7 +78,7 @@ pub fn validate_zk_x509_credential_proof_container_v1(
     canonical_genesis_hash: [u8; 32],
     encoded_proof: &[u8],
 ) -> Result<(), ZkX509CredentialProofContainerErrorV1> {
-    PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone())
+    PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement.clone())
         .validate(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| ZkX509CredentialProofContainerErrorV1::InvalidStatement)?;
     let expected = ZkX509CredentialPublicBindingV1::from_consensus_context_v1(
@@ -117,7 +117,7 @@ pub enum ProofManagedPoolRootErrorV1 {
     #[error("native accumulator for {protocol_id:?} rejected its genesis set: {source}")]
     InvalidGenesis {
         /// Exact note protocol.
-        protocol_id: PrivacyProtocolIdV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1,
         /// Structural accumulator failure.
         source: ProofManagedAccumulatorErrorV1,
     },
@@ -195,7 +195,7 @@ mod tests {
     fn fixture() -> (IrohaZkX509StarkP256StatementV1, [u8; 32], Vec<u8>) {
         let (mut statement, _) = crate::privacy_engines::zk_x509::projection_air::tests::fixture();
         statement.context.action_index = 0;
-        PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone())
+        PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement.clone())
             .validate(&PrivacyConsensusLimitsV1::taira_default())
             .expect("canonical worker statement");
         let genesis = *statement.context.network_id.as_bytes();

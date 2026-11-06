@@ -2,7 +2,7 @@
 """Check conditional source-model sufficiency of the standalone ballot arena.
 
 Python 3.11+, adjacent arena model/frontend/backend helpers, and reviewed Rust
-1.93.1 sources. No environment variables, network, builds or production writes.
+1.99.1 sources. No environment variables, network, builds or production writes.
 Default runs all retained-layout classes and writes JSON only to stdout;
 --output saves the result. --require-qualified deliberately fails: this source
 model does not certify compiled allocation correspondence, stack or native heap.

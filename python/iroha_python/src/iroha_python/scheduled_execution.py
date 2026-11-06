@@ -21,13 +21,30 @@ def verify_scheduled_trigger_execution_v1(
     expected_chain: str,
     trusted_checkpoint: bytes,
     expected_chain_discriminant: int,
+    lifecycle_activation_json: str | None = None,
+    lifecycle_activation_policy_json: str | None = None,
 ) -> dict[str, Any]:
     """Authenticate the complete consecutive prefix including registration.
 
     The result contains Time execution-call identities, never synthetic
     transaction hashes. Its internal route is the authenticated Global root
     with no Network lane assignment. Keep the registration's external route
-    receipt separately. Persist original wires and replay them on recovery.
+    receipt separately. Persist original wires and the activation witness for recovery.
+
+    V2 lifecycle rows additionally require ``lifecycle_activation_json``: the
+    registration block's native ``runtime_proof``, ordered ``continuation_proofs``
+    for every later block, and typed runtime selection, services and implementation
+    originals. Bounded sparse branches prove the same native selection at every
+    certified cut without enumerating World entries. Row variants alone never
+    establish activation. Registrations preceding activation are refused if the
+    proof window reaches lifecycle-selected execution. The optional argument
+    leaves V1 verification unchanged.
+
+    ``lifecycle_activation_policy_json`` optionally pins the PoC validator's
+    explicit activation policy response. Every certified row must match its
+    height boundary. A supplied policy with a null height means never; omitting
+    the argument permits the committed-runtime corridor. Neither the response
+    nor its readiness flag replaces native selection and finality proofs.
     """
     network = _require_network_id(expected_network_id, "expected_network_id")
     prefix = _require_chain_discriminant(expected_chain_discriminant, "expected_chain_discriminant")
@@ -44,13 +61,26 @@ def verify_scheduled_trigger_execution_v1(
     ):
         if type(text_value) is not str or not 0 < len(text_value.encode("utf-8")) <= maximum:
             raise ValueError(f"{name} must be bounded exact UTF-8 text")
+    native_options: dict[str, Any] = {"expected_chain_discriminant": prefix}
+    if lifecycle_activation_json is not None:
+        if (type(lifecycle_activation_json) is not str
+                or not 0 < len(lifecycle_activation_json) <= 32 * 1024 * 1024
+                or len(lifecycle_activation_json.encode("utf-8")) > 32 * 1024 * 1024):
+            raise ValueError("lifecycle_activation_json must be bounded exact UTF-8 text")
+        native_options["lifecycle_activation_json"] = lifecycle_activation_json
+    if lifecycle_activation_policy_json is not None:
+        if (type(lifecycle_activation_policy_json) is not str
+                or not 0 < len(lifecycle_activation_policy_json) <= 4096
+                or len(lifecycle_activation_policy_json.encode("utf-8")) > 4096):
+            raise ValueError("lifecycle_activation_policy_json must be bounded exact UTF-8 text")
+        native_options["lifecycle_activation_policy_json"] = lifecycle_activation_policy_json
     verify = getattr(_crypto, "verify_scheduled_trigger_execution_v1", None)
     if not callable(verify):
         raise RuntimeError("selected native SDK lacks scheduled Time authentication")
     result = verify(
         original_signed_registration, trigger_id, native_finality_proof_chain_json,
         network, expected_chain, trusted_checkpoint,
-        expected_chain_discriminant=prefix,
+        **native_options,
     )
     if type(result) is not tuple or len(result) != 2:
         raise RuntimeError("native Time verifier returned a malformed result")

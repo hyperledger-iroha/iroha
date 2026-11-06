@@ -6947,7 +6947,7 @@ pub struct Torii {
     pub query_fanout_max_retained_bytes: Bytes,
     /// Maximum complete working set for one query, independent of aggregate capacity.
     pub query_fanout_max_working_set_bytes: Bytes,
-    /// Maximum initial full-native-finality working set within the same shared fanout pool.
+    /// Maximum initial native-finality/anchor working set within the same shared fanout pool.
     pub finality_max_working_set_bytes: Bytes,
     /// Bytes retained by this node's authenticated SCCP history-node cache.
     pub sccp_history_cache_max_bytes: Bytes,

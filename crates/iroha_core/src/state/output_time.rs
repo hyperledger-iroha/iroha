@@ -101,15 +101,29 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             self.skip_uninvoked(ExecutionOutputPhase::Time, 1)?;
             return Ok(false);
         };
+        let source = if self.lifecycle {
+            Some(lifecycle::internal_source(
+                self.state,
+                id,
+                height,
+                iroha_data_model::block::execution_output::TriggerLifecycleStateKindV1::Time,
+            )?)
+        } else {
+            None
+        };
         let invocation = TimeInvocationV1 {
             schedule_index,
             event,
-            trigger: time_trigger_use_v1(&self.state.world.triggers, id, height)?,
+            trigger: match &source {
+                Some(source) => source.identity().clone(),
+                None => time_trigger_use_v1(&self.state.world.triggers, id, height)?,
+            },
         };
         let disposition = self.try_apply_internal(
             InternalInvocation::Time(invocation),
             EventBox::Time(event),
             &action,
+            source,
         )?;
         Ok(disposition == InternalOutputDisposition::Rejected && action.retry_policy.is_some())
     }

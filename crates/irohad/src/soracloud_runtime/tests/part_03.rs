@@ -183,7 +183,7 @@ fn ingest_operator_preseed_payload(
     plan: &CarBuildPlan,
     manifest: &sorafs_manifest::ManifestV1,
     payload: &[u8],
-) -> Result<StoredManifest> {
+) -> Result<Arc<StoredManifest>> {
     let mut reader = payload;
     let manifest_id = store.ingest_manifest(manifest, plan, &mut reader)?;
     store
@@ -223,7 +223,7 @@ fn build_sorafs_manifest_from_plan(
         })
         .build()?)
 }
-fn ingest_sorafs_payload(node: &NodeHandle, payload: &[u8]) -> Result<StoredManifest> {
+fn ingest_sorafs_payload(node: &NodeHandle, payload: &[u8]) -> Result<Arc<StoredManifest>> {
     let (plan, manifest) = build_sorafs_manifest(payload)?;
     let mut reader = payload;
     let manifest_id = node.ingest_manifest(&manifest, &plan, &mut reader)?;
@@ -232,7 +232,7 @@ fn ingest_sorafs_payload(node: &NodeHandle, payload: &[u8]) -> Result<StoredMani
 fn approve_sorafs_manifests(
     state: &Arc<State>,
     node: &NodeHandle,
-    manifests: &[StoredManifest],
+    manifests: &[Arc<StoredManifest>],
 ) -> Result<()> {
     let fixtures = manifests
         .iter()

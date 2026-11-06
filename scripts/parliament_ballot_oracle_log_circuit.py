@@ -13,12 +13,12 @@ import hashlib
 import json
 from pathlib import Path
 
-RECEIPT = "docs/validation/parliament_ballot_ideal_sampler_accounting/receipt.json"
-REPORT = "docs/validation/parliament_ballot_ideal_sampler_accounting/report.json"
+RECEIPT = "docs/validation/parliament_ballot_ideal_sampler_accounting_20261104_model_refresh/receipt.json"
+REPORT = "docs/validation/parliament_ballot_ideal_sampler_accounting_20261104_model_refresh/report.json"
 PINS = {
-    RECEIPT: "65281fa88da41ce17e63265d0d6c04ad763427e9c8f79d1b74a9829f54bd74d1",
-    REPORT: "32f13e842ac39f7f3c3d08ae2135a8ebdffd442acc776002e2229c36610ad043",
-    "scripts/parliament_ballot_ideal_sampler_accounting.py": "b375d40189b1440404f48e124e7655fa54792c1f75289baad9978760f4c759d0",
+    RECEIPT: "1b1517be0421aff81906d66f47e1f346b2ee984b155fd2e700ffb48d757344bf",
+    REPORT: "28f9f50f376d1aee6f03738744acfbba27e4c6cab6a40555b64d983803e96805",
+    "scripts/parliament_ballot_ideal_sampler_accounting.py": "dba52c66d04b77959d17315b319f1c7a8f6ae223fc216d358c5a425ace2c2978",
     "specs/parliament_ballot_b6_ideal_sampler_accounting.md": "c022d1f76360dfe4bdd6934fe352d5d87e7b9f63df3828608230f759cb1e22c5",
     "specs/parliament_ballot_b6_ideal_public_sampler.md": "eeea377a3686fcd31c1c77b8ea576d6f72895789389ed4c2d99d9107a5f0ab74",
 }
@@ -240,6 +240,7 @@ def report(root: Path, requests: int, external_queries: int, length_bits: int) -
             lookup_elementary_gates=lookup_gates, append_elementary_gates_upper_bound=append_gates,
             overlay_elementary_gates_upper_bound=lookup_gates + append_gates),
         source_sha256_before=before, source_sha256_after=after,
+        row_build_scope=accounting["row_build_scope"],
         exact_overlay_circuit_proposal=True, full_resource_vector=False,
         concrete_backend_gate_bound=False, actual_input_collision_bridge=False,
         primitive_advantage_assumed=False, independent_cryptographic_review=False,

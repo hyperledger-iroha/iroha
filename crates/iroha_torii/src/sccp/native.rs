@@ -1,4 +1,8 @@
 //! Original native certificate DATA under one admitted request and destination-independent source.
+//!
+//! An original State-view acquisition refusal with a release owner is HTTP 503
+//! `sccp_state_busy`; it retains the ordinary canonical retry metadata. This code
+//! never describes changed/poisoned state, invalid sources or capacity refusal.
 
 use std::{net::SocketAddr, num::NonZeroU64, sync::atomic::Ordering, time::Instant};
 
@@ -298,6 +302,26 @@ pub(super) fn source_error(error: &SccpNativeReadError) -> Response {
     use iroha_data_model::sumeragi_finality::{
         CommitmentError, certified_result::CertifiedResultError,
     };
+    // Only an original publishing/reader owner with a release source is transient.
+    // Keep the one-shot acquisition and all permanent source classifications intact.
+    if matches!(
+        error,
+        SccpNativeReadError::View(iroha_core::state::StateViewError::Busy(_))
+    ) {
+        let mut response = crate::utils::respond_with_status_and_format(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &iroha_torii_shared::ErrorEnvelope::new(
+                "sccp_state_busy",
+                "The SCCP committed state is temporarily busy.",
+            ),
+            crate::utils::current_response_format(),
+        );
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("private, no-store"),
+        );
+        return response;
+    }
     let (status, code) = match error {
         SccpNativeReadError::Request(_) => (StatusCode::BAD_REQUEST, "sccp_invalid_query"),
         SccpNativeReadError::NotFound(_) => (StatusCode::NOT_FOUND, "sccp_not_found"),
@@ -406,6 +430,33 @@ fn encode_value<T: norito::core::NoritoSerialize + norito::json::JsonSerialize>(
     Ok(PreparedResponse { response, bytes })
 }
 
+// Completed anchors read an entire 4096-successor chunk. Their original admission
+// uses the configured native-finality corridor, since the ordinary query grant
+// cannot fund that cumulative scan even when only one frame is live at a time.
+// A present outer owner is never replaced, enlarged or reset by this selection.
+fn admit_memory(
+    app: &SharedAppState,
+    selection: Selection,
+    admission: &mut crate::QueryAdmissionPermit,
+) -> Result<Option<Response>, Error> {
+    let anchor = matches!(selection, Selection::Anchor(_));
+    if anchor {
+        HistoryProducerOwner::validate_finality_inheritance(admission)?;
+    }
+    if admission.fanout_memory.is_none() {
+        let original = if anchor {
+            crate::try_acquire_native_finality_memory(app)
+        } else {
+            crate::try_acquire_new_query_fanout_memory(app)
+        };
+        admission.fanout_memory = Some(match original {
+            Ok(reservation) => reservation,
+            Err(response) => return Ok(Some(response)),
+        });
+    }
+    Ok(None)
+}
+
 async fn serve(
     app: SharedAppState,
     selection: Selection,
@@ -425,11 +476,8 @@ async fn serve(
     let key = crate::rate_limit_key(&headers, Some(remote.ip()), route.path(), principal);
     crate::rate_limit_requests_with_cost(&app, &key, crate::FINALITY_HEAVY_QUERY_RATE_COST).await?;
     let mut admission = crate::acquire_query_admission(app.as_ref(), true).await?;
-    if admission.fanout_memory.is_none() {
-        admission.fanout_memory = Some(match crate::try_acquire_new_query_fanout_memory(&app) {
-            Ok(reservation) => reservation,
-            Err(response) => return Ok(response),
-        });
+    if let Some(response) = admit_memory(&app, selection, &mut admission)? {
+        return Ok(response);
     }
     let owner = HistoryProducerOwner::from_admission(&admission)?;
     let state = app.state.clone();

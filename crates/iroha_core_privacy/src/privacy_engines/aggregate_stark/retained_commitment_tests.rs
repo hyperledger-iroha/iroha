@@ -20,7 +20,7 @@ pub(super) fn observe_cut_clear_v1(roots: &[PrivacyOuterDigestV1]) {
 }
 fn context() -> TransparentStarkDigestContextV1 {
     TransparentStarkDigestContextV1::new(
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
         b"retained-cut-reference",
     )
 }

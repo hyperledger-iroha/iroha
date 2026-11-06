@@ -46,7 +46,8 @@ impl ParentFinalityStore {
             .with_request_deadline(deadline);
         self.discover_build_provider_with(bootstrap, config, provider, deadline, &source, |block| {
             client.get_account_read_provider_discovery(
-                provider, bootstrap.metadata().native_world_schema, block, unix_ms()?,
+                provider, iroha_core::state::State::native_world_schemas_for_anchor_v1(bootstrap.metadata().native_world_schema)
+                    .map_err(|_| BootstrapError::Invalid("native registry schema unavailable"))?.as_slice(), block, unix_ms()?,
             ).map_err(|_| BootstrapError::Invalid("cannot authenticate current build provider; retry from fresh parent quorum"))
         })
     }

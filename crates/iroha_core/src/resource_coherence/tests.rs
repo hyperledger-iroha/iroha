@@ -826,8 +826,8 @@ fn signed_genesis_installs_initial_private_policy_at_the_first_successor() {
     use iroha_data_model::{
         isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1,
         privacy::{
-            IvmPrivateNoteLimitsV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
-            PrivacyProtocolPolicyKeyV1,
+            IvmPrivateNoteLimitsV1, PrivacyProtocolPolicyKeyV1, PrivacyRuntimeProtocolIdV1,
+            PrivacyRuntimeProtocolLimitsV1,
         },
     };
     // The reduced generic transaction cap needs its own privacy-policy successor;
@@ -847,15 +847,17 @@ fn signed_genesis_installs_initial_private_policy_at_the_first_successor() {
         .to_custom_parameter()
         .unwrap(),
     ));
-    let protocol = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+    let protocol = PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
     config.genesis_instructions.push(
         SchedulePrivacyProtocolLimitsUpdateV1::new(
-            protocol,
+            (protocol).try_into().expect("frozen Exact12 test input"),
             2,
-            PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
+            (PrivacyRuntimeProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
                 max_input_count: 1,
                 max_output_count: 1,
-            }),
+            }))
+            .try_into()
+            .expect("frozen Exact12 test input"),
         )
         .into(),
     );

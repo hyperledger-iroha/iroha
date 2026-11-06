@@ -11,7 +11,7 @@ hold detailed acceptance criteria. Routine repair receipts belong in PRs and CI.
 | Area | Current state | Remaining qualification |
 | --- | --- | --- |
 | Contract-controlled asset locks | Typed native lock instructions, immutable controller terms, authenticated executor dispatch and Kotodama host operations are implemented in source. Original payer ownership and independent claim/refund windows are retained. | Current-source compilation, ABI inventory/hash regeneration, native authority/custody tests, controlled waterfall composition and application integration remain open. Existing deployed hosts do not qualify the added contract ABI. |
-| Live runtime upgrades | [Design](specs/live_runtime_upgrades.md): definition and lifecycle contracts (`iroha_data_model::runtime`); the release catalog with its frozen, pinned baseline (`specs/runtime_baseline_catalog.json`) and release additions after it (the endorsed runtime-upgrade proposal, then native game partitions), each published as its own native implementation, interfaces and storage and activated by a change set the catalog drafts (`runtime::draft_addition`); a new World is founded on the baseline and holds its definitions and root selection; the World root and snapshots hold only storage the selection installs (a restore reads an uninstalled top-level member as its empty default), and installing storage starts a table empty and a cell at its published initial bytes; execution runs the implementation the selection binds, resolving every instruction, with its restrictions and the obligation it acts on, before any type-dependent check on every execution path; stable envelopes: a wire ID a release does not register decodes to an opaque envelope that re-encodes byte for byte, and every release stops at the same envelope with `definition_inactive` or `malformed_payload` (the mempool refuses such transactions); change sets of the universal root are proposed through Parliament under the committed `runtime_upgrade_policy_v1` notice, the baseline proposal in its frozen layout and the endorsements of the `runtime_provenance_policy_v1` release signers in the endorsed-proposal release addition (binding once a change set activates it and restricts the baseline proposal), attested by every committee member, each node signing for its own release, and activate or lapse at block start, and a node whose release cannot execute the resulting selection stops as recovery-required with a reason naming the selection, which `GET /v1/runtime/release` reports before the boundary; peers refuse a peer whose release lacks an active host profile; the committed runtime emergency panel contains definitions from the next block under a renewable lease, and its ratification case records governance review and resolves once change sets take over its restrictions; live escrows and AMX participations keep completing through admission closure and completion-only, no activation strands them and executor replacement waits until they drain; `iroha3d --check-replay` replays a copy of a stopped store with a candidate release and names the first differing commitment component; an operator drafts an addition's activation from the node's release catalog (`POST /v1/runtime/upgrades/draft`, `iroha runtime upgrade draft`); Taira adopted the foundation at its upgrade checkpoint with a660d601da, whose configuration-authorized import is deleted with the predecessor's root rule; the checkpoint stays as the history boundary, which Kura checks against the stored block and below which nothing is re-executed or replayed ([as built](specs/runtime_upgrades.md)). | Current-candidate validation (focused Core, data-model, Torii and irohad tests pass; no network qualification); snapshots of a nested World field, before an addition adds one; in-flight game-unit exports as live obligations before the game-partition addition activates on a live network, and governed activation in the real-network test harness; kernel registration of contract-created obligations and migration cursors, retained completion capabilities, deferred multisig/trigger consent as a release addition and explicit current-binding consent; migrations, storage retirement and storage capabilities; Parliament governance-clock/ballot integration; complete-State coverage, which first needs the node-configured policy cells in committed State and a decision on the pinned history; checkpoints and the startup floor; ratifying Taira's adoption record in committed State through governance with every validator's attestation; qualifying each later release against a copy of a Taira store with `--check-replay`. The retained earlier-history fixture replays unchanged to its original root and execution tip. |
+| Live runtime upgrades | [Design](specs/live_runtime_upgrades.md): definition and lifecycle contracts (`iroha_data_model::runtime`); the release catalog with its frozen, pinned baseline (`specs/runtime_baseline_catalog.json`) and release additions after it (the endorsed runtime-upgrade proposal, then native game partitions), each published as its own native implementation, interfaces and storage and activated by a change set the catalog drafts (`runtime::draft_addition`); a new World is founded on the baseline and holds its definitions and root selection; the World root and snapshots hold only storage the selection installs (a restore reads an uninstalled top-level member as its empty default), and installing storage starts a table empty and a cell at its published initial bytes; execution runs the implementation the selection binds, resolving every instruction, with its restrictions and the obligation it acts on, before any type-dependent check on every execution path; stable envelopes: a wire ID a release does not register decodes to an opaque envelope that re-encodes byte for byte, and every release stops at the same envelope with `definition_inactive` or `malformed_payload` (the mempool refuses such transactions); change sets of the universal root are proposed through Parliament under the committed `runtime_upgrade_policy_v1` notice, the baseline proposal in its frozen layout and the endorsements of the `runtime_provenance_policy_v1` release signers in the endorsed-proposal release addition (binding once a change set activates it and restricts the baseline proposal), attested by every committee member, each node signing for its own release, and activate or lapse at block start, and a node whose release cannot execute the resulting selection stops as recovery-required with a reason naming the selection, which `GET /v1/runtime/release` reports before the boundary; peers refuse a peer whose release lacks an active host profile; the committed runtime emergency panel contains definitions from the next block under a renewable lease, and its ratification case records governance review and resolves once change sets take over its restrictions; live escrows and AMX participations keep completing through admission closure and completion-only, no activation strands them and executor replacement waits until they drain; `iroha3d --check-replay` replays a copy of a stopped store with a candidate release and names the first differing commitment component; an operator drafts an addition's activation from the node's release catalog (`POST /v1/runtime/upgrades/draft`, `iroha ops runtime upgrade draft`); Taira adopted the foundation at its upgrade checkpoint with a660d601da, whose configuration-authorized import is deleted with the predecessor's root rule; the checkpoint stays as the history boundary, which Kura checks against the stored block and below which nothing is re-executed or replayed ([as built](specs/runtime_upgrades.md)). | Current-candidate validation (focused Core, data-model, Torii and irohad tests pass; no network qualification); snapshots of a nested World field, before an addition adds one; in-flight game-unit exports as live obligations before the game-partition addition activates on a live network, and governed activation in the real-network test harness; kernel registration of contract-created obligations and migration cursors, retained completion capabilities, deferred multisig/trigger consent as a release addition and explicit current-binding consent; migrations, storage retirement and storage capabilities; Parliament governance-clock/ballot integration; complete-State coverage, which first needs the node-configured policy cells in committed State and a decision on the pinned history; checkpoints and the startup floor; ratifying Taira's adoption record in committed State through governance with every validator's attestation; qualifying each later release against a copy of a Taira store with `--check-replay`. Public Taira's serving releases lack `/v1/runtime/release` (404); operator-signed upgrade reads work with a current client, while a current-node rollout still requires the absent committed crypto and staking policies. The retained earlier-history fixture replays unchanged to its original root and execution tip. |
 | Sumeragi | The sans-IO core, simulator and node driver are integrated; the previous consensus runtime is removed. Certified results bind World roots and ordered events. Restored body requests retain verified live Sync responders through source-list saturation; invalid deferred certificates trigger a bounded refresh. | Current-source qualification remains open: all simulator scenarios at 10,000 seeds, the complete current mutation registry with nonignored native controls, full workspace tests and strict lint, rebuilt native SDK artifacts, signed RS16 loss/withholding, lane isolation/restart and authenticated accelerated restoration. Test discovery and exact terminal accounting follow the [current validation contract](specs/sumeragi_goals.md#current-validation-contract-2026-10-12); earlier source results and fixed historical test counts do not qualify the current candidate. |
 | Lanes and dataspaces | Fixed/elastic lanes run as Sumeragi instances; the global chain merges certified lane blocks. The daemon can host an independent signed dataspace root with its own State, Kura, allocation pool and native context archive. Explicit and managed Kagami AMX bootstrap retain the parent's original G1/H2 and stage the participant in private genesis. Explicit administrative parent registration retains its original signed request and authenticated native outcome; the resumable proof source can detach from its State view. Lifecycle/restart have component and node coverage. | Current-source qualification of managed registration and detached proof custody, complete outbound funding, durable validator relaying, network isolation, scale and restart. |
 | Storage and execution | `lanes::LaneRunner` and `SumeragiLaneMerge` are the production path. Kura owns a shared fail-stop gate and authenticated native tips/journals. | Original funded execution custody through acquisition, certification, publication, replay and retained-generation reclamation. |
@@ -180,11 +180,16 @@ carrier/business outcome evidence across restart. Its cold-resume regression pas
 under the original proof-read allowance. AMX bounded pending custody, fair source
 admission and separate handoff capacity are implemented. Cold handoff recovery and
 cancellation during native checkpoint work now pass on the default stack under
-the original worker and workflow leases. Full 16 MiB paid blocks settle, but the
-Torii receipt regression exhausts its 384 MB native proof allowance. A reviewed
-source repair preserves all retained lifetimes while deriving smaller bounds for
-validated committee authority. Execution of that repair and fresh network
-qualification await build space.
+the original worker and workflow leases. Full 16 MiB paid blocks settle. SNS
+lease-proof reconstruction now retires each checked history graph before reusing
+its bounded decode stage; [focused component evidence](docs/validation/sns_current_cut_takeover_20261104/README.md)
+preserves logical charges and the 384 MB request allowance on its recorded
+candidate. The [later lock change](docs/validation/sns_current_cut_lock_drift_20261104/README.md)
+requires fresh evidence for the changed dependency candidate. The
+[separate native HTTP receipt-owner regression](docs/validation/torii_receipt_owner_retained_20261104.md)
+also passes on the retained artifact, including final-slice custody and complete
+pool release. Current-candidate build custody and fresh network qualification
+remain open.
 
 The private-settlement five-second proof-through-settlement target is unmet.
 Current-source happy-day settlements and serial restart have functional coverage;
@@ -207,14 +212,15 @@ five `address_parsing::explorer` tests of `torii_core_routes` and 15 of 54
 `agent_alias` tests of `torii_protocols` fail; `irohad_lib` aborts on a stack
 overflow in `beacon_bootstrap::seat_attempt::aggregate_tests` after five
 `durable::tests` failures, and two `musubi_publication_service::finality`
-tests fail. Three guards are red on the merged tree: the trusted
-release-surface digest (stale across the upstream merges), the
-generated-artifact guard (325 tracked capture and build files under seven
-`docs/validation/parliament_ballot_*` folders, and eight generated
-`crates/iroha_zkp_vole` FAEST tables without a `generated-files.toml` owner), and
-`scripts/check_state_commitment_candidates.py`, because the merge
-removed State tables and the candidates were measured over the previous table
-schema (to be measured again by G.2 or G.3).
+tests fail. The trusted release-surface digest was stale across the upstream
+merges and still needs candidate-bound validation. The generated-artifact guard
+passes: retained capture text has narrow manifest exemptions and all eight
+FAEST tables have a registered owner. The [refreshed State comparison](docs/validation/state_candidates_takeover_20261104/README.md)
+passes the unchanged checker and exact raw-record reproduction: seven retained
+runs supply 151 records, 95 native rows and 210 circuit rows for the matching
+canonical table schema. The original timeout remains excluded. This is
+frozen-source candidate evidence; no construction is selected, and current-source,
+lifecycle-witness and release qualification remain open.
 
 ## Deployment state
 
@@ -572,8 +578,13 @@ passes.
   page after reproducing a blocking stdout failure. Its new 122 observations
   and full/broken-output controls pass, with 41.109375 MiB reserved on this Mac;
   all-input completion and full native-memory coverage remain unqualified.
-  Fresh stack captures decode both images after tested `STLUR`/`EON` support,
-  retaining native, indirect, exceptional and recursive costs as unresolved.
+  The [retained-image stack-v5 diagnostic](docs/validation/parliament_ballot_stack_v5_20261104/README.md)
+  adds reviewed instruction coverage and image-bound ordinary control-flow facts.
+  Every original resource obligation remains active, including the deferred
+  Shape merge; all ten complete stack bounds remain unknown.
+  The [retained frontend composition](docs/validation/parliament_ballot_frontend_composition_20261104/README.md)
+  bounds one ordinary wrapper and its record leaf at 139 instruction events;
+  all other callees and the 17 exceptional-entry words remain unbounded.
   A [conditional adapter bound](docs/validation/parliament_ballot_adapter_bound/README.md)
   isolates the ordinary wrapper's stack, instructions and owned input block;
   native and complete verifier costs remain opaque.
@@ -586,19 +597,27 @@ passes.
   separate profile and typed-decoder checks bound their outer ordinary paths.
   Lower constructor/validation, cryptography, allocation, cleanup, native and
   exceptional costs stay open.
-  A [fresh current-source worker](docs/validation/parliament_ballot_current_candidate/README.md)
-  passes both-mode builds and finite resource/output controls; its fresh stack
-  capture retains the same unresolved runtime costs. A test/comment-only waker
-  correction preserves actual custody checks and passes focused allocation tests.
-  A separate compiled correspondence check reruns the four unchanged component
-  analyzers on current captures, retaining their premises and unresolved costs.
-  Later root-lock changes and six integration-source changes are recorded as
-  post-capture drift; prior results retain their captured source scope.
-  The repaired phase, construction, Torii release, daemon startup, beacon-witness
-  and execution-result source guards have passing captured controls. The full
-  Python regression result retains its sources before two constructor-migration
-  edits; the post-merge source check passes on those changes. Shared qualification
-  dispatch now passes both host bridge modes' checks; runtime qualification stays open.
+  The [November 4 worker capture](docs/validation/parliament_ballot_current_candidate_20261104/README.md)
+  retains passing portable/accelerated finite resource and fatal-output controls.
+  Later rustup/Cargo.lock drift prevents latest-source qualification; stack-v5
+  analyzes the retained images only. The [selected 160-node historical rerun](docs/validation/parliament_ballot_takeover_20261104/historical-nodes-current-rerun.json)
+  reports 47 passed and 113 failed. This is not a full script-suite result, and
+  no historical certificates were repinned.
+  Earlier candidate evidence remains separate. A test/comment-only waker
+  correction preserved custody checks and passed focused allocation tests.
+  The [earlier compiled correspondence check](docs/validation/parliament_ballot_current_correspondence/README.md)
+  reran four unchanged component analyzers on that worker's captures, retaining
+  their premises and unresolved costs. That worker's later root-lock drift and
+  the [construction-guard capture's six-file drift](docs/validation/parliament_ballot_construction_guard/README.md)
+  remain recorded separately.
+  Earlier captured controls cover the repaired phase, construction, Torii release,
+  daemon startup, beacon-witness and execution-result source guards. The
+  [historical result for the full source-contract test module](docs/validation/parliament_ballot_source_guard_regressions/README.md)
+  remains bound to its inputs before two constructor-migration edits; the
+  [separate post-merge source check](docs/validation/parliament_ballot_post_merge_source_check/README.md)
+  passed on those changes without transferring that regression result. The earlier
+  shared-dispatch capture passed both host bridge modes' checks; runtime
+  qualification stays open.
   A standalone finish-and-discard
   adapter passes both-mode lifecycle and selected-buffer cleanup tests; it
   does not establish prompt cancellation or comprehensive secret erasure.

@@ -513,8 +513,11 @@ fn terminal_decode_retry(expired: bool) {
                             &test_id(&network_id, &account, &hash),
                         )
                         .expect("the funded retained row read completes first");
-                        let child = proposal_instruction_attempt(&exact.instructions[0])
-                            .expect_err("the child proposal instruction must defer");
+                        let child = proposal_instruction_attempt(
+                            &exact.instructions[0],
+                            tx.world.runtime_selection.get(),
+                        )
+                        .expect_err("the child proposal instruction must defer");
                         let ExecutionAttemptError::Deferred(actual) = child else {
                             panic!("expected an unfinished local attempt");
                         };

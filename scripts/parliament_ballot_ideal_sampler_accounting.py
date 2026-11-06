@@ -15,8 +15,10 @@ from pathlib import Path
 import types
 
 MODEL = "scripts/check_parliament_ballot_resource_accounting.py"
-INPUT_DIGEST = "cb689c24e83fb9703a848c9ac83df66e5828b57a8efa5591bfb392d62267d7f8"
-MODEL_DIGEST = "18a6fdd3f808f1b73d3e2e6c9903a0a069f1866c0af04783eb03b0c21e7841f1"
+# Reviewed current logical source scope. The retained earlier report remains
+# historical; this pin does not import its allocator or compiled-image claims.
+INPUT_DIGEST = "165bc9065313e3841258f35b7111c3c32cadf8dc50779aeaf8b069b93bd4f50f"
+MODEL_DIGEST = "e1b30a670c12b265170200b0fedefffcf9fbf9f0c4eb6fc171667f8c5e8c3033"
 MAX_TRIALS = 1 << 20
 MAX_REQUESTS = 1 << 64
 ROWS = {"candidate": (33, 8, 229, 704), "comparator": (22, 6, 225, 696)}
@@ -368,6 +370,12 @@ def report(root: Path, requests: int = 1, external_queries: int = 0) -> dict:
             "source_sha256_before": before, "source_sha256_after": after,
             "source_manifest_sha256": INPUT_DIGEST, "loaded_model_sha256": MODEL_DIGEST,
             "source_unchanged": True, "checked_logical_accounting": True,
+            "row_build_scope": {"candidate": "ordinary and diagnostic builds",
+                                "comparator": "unit tests or the non-default diagnostics feature only"},
+            "primitive_accounting_scope": {
+                "AES256_blocks": "input blocks at the unchanged PRG interface; provider-internal batching and key schedule are not priced",
+                "keccak_f1600": "one permutation per source dispatch call; runtime backend selection and its physical cost are not priced",
+                "provider_or_compiler_qualified": False},
             "cases": cases, "all_opening_lifetime_envelope": total,
             "actual_simulator_execution": False, "complete_resource_vector": False,
             "compiled_memory_or_allocator_bound": False, "quantum_gate_bound": False,

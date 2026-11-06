@@ -27,7 +27,7 @@ fn fixture() -> (
     };
     let domains = AggregateStarkDomainsV1 {
         digest_context: TransparentStarkDigestContextV1::new(
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
             b"joined-trace-tests-v1",
         ),
         base_leaf: b"joined-test-base-leaf",

@@ -1,6 +1,8 @@
 //! Four-validator regressions for `SoraFS` moderation proof admission, sortition and bond settlement.
 
+use super::sorafs_network::{prepare_transaction, submit_transaction};
 use eyre::{Result, WrapErr as _, ensure, eyre};
+use futures_util::TryStreamExt as _;
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
@@ -19,9 +21,8 @@ use iroha::{
         },
         prelude::*,
         query::{
-            asset::prelude::{FindAssetDefinitionById, FindAssetsByAccountId},
-            block::prelude::FindBlocks,
-            dsl::IntoPredicate as _,
+            asset::prelude::{FindAssetById, FindAssetDefinitionById},
+            error::{FindError, QueryExecutionFail},
             sorafs::prelude::{
                 FindSorafsModerationAppeal, FindSorafsModerationCase,
                 FindSorafsModerationChallenge, FindSorafsModerationSnapshot,
@@ -46,8 +47,9 @@ use iroha::{
                 pop_credential_payload_commitment_v1, pop_revocation_nonce_commitment_v1,
             },
         },
-        transaction::{FeePaymentIntent, error::TransactionRejectionReason},
+        transaction::error::TransactionRejectionReason,
     },
+    query::QueryError,
 };
 use iroha_executor_data_model::permission::{
     query::CanReadAllLedgerData,
@@ -78,7 +80,7 @@ use sorafs_manifest::pop_credentials::{
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::{
     task::JoinSet,
-    time::{Instant, sleep, timeout_at},
+    time::{Instant, sleep, timeout, timeout_at},
 };
 
 const CASE_ID: &str = "four-peer-anchor";
@@ -90,32 +92,12 @@ const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(180);
 const TRANSACTION_TIMEOUT: Duration = Duration::from_secs(180);
 
-fn no_fee() -> FeePaymentIntent {
-    FeePaymentIntent::authority(Vec::new(), None)
-}
-
 async fn submit_instructions(
     client: &Client,
     instructions: impl IntoIterator<Item = impl Into<InstructionBox>>,
 ) -> Result<HashOf<SignedTransaction>> {
-    let account = client.account_client();
-    let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
-        instructions,
-        no_fee(),
-        Metadata::default(),
-    ))?;
-    let quote = account
-        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
-        .await?;
-    ensure!(
-        payload
-            .fee_payment
-            .has_same_payer_and_gas_bound(&quote.intent),
-        "fee quote changed the selected payer, sponsor revision, or gas bound"
-    );
-    payload.fee_payment = quote.intent;
-    let transaction = account.sign_transaction(payload)?;
-    account.submit_transaction_and_wait(&transaction).await
+    let transaction = prepare_transaction(client, instructions, Metadata::default()).await?;
+    submit_transaction(client, &transaction).await
 }
 
 fn unix_time_ms() -> Result<u64> {
@@ -437,59 +419,6 @@ fn pop_policy(issuer: &KeyPair) -> PopIssuerPolicyV1 {
     }
 }
 
-fn pop_batch(issuer: &KeyPair, published_at_epoch: u64) -> PopCredentialCommitmentBatchV1 {
-    let root_digest = [0x41; 32];
-    let root = sign_pop_root(
-        PopCommitmentRootV1 {
-            version: POP_COMMITMENT_ROOT_VERSION_V1,
-            root_digest,
-            tree_size: 1,
-            tree_depth: POP_CREDENTIAL_TREE_DEPTH_V1,
-            tree_version: 1,
-            issuer_id: "pop-issuer-sora-foundation".to_owned(),
-            published_at_epoch,
-            previous_root_digest: None,
-            governance_event_digest: [0x42; 32],
-            publisher_signature: empty_pop_signature(issuer),
-        },
-        issuer,
-    );
-    let revocations = sign_pop_revocations(
-        PopRevocationListV1 {
-            version: POP_REVOCATION_LIST_VERSION_V1,
-            list_version: 1,
-            commitment_root: root_digest,
-            revocation_root: pop_revocation_root_v1(&[])
-                .expect("empty PoP revocation tree has a canonical root"),
-            revocation_tree_depth: POP_REVOCATION_TREE_DEPTH_V1,
-            issuer_id: "pop-issuer-sora-foundation".to_owned(),
-            published_at_epoch,
-            entries: Vec::new(),
-            publisher_signature: empty_pop_signature(issuer),
-        },
-        issuer,
-    );
-    PopCredentialCommitmentBatchV1 {
-        version: POP_CREDENTIAL_COMMITMENT_BATCH_VERSION_V1,
-        issuer_policy_digest: pop_policy(issuer)
-            .digest()
-            .expect("fixture PoP policy digest"),
-        commitment_root_payload: norito::encode_canonical(&root)
-            .expect("encode canonical signed PoP root"),
-        revocation_list_payload: norito::encode_canonical(&revocations)
-            .expect("encode canonical signed PoP revocations"),
-        commitments: vec![PopCredentialCommitmentV1 {
-            credential_commitment: [0x51; 32],
-            revocation_nonce_commitment: [0x52; 32],
-            commitment_root: root_digest,
-            commitment_tree_version: 1,
-            revocation_list_version: 1,
-            issued_at_epoch: published_at_epoch.saturating_sub(10).max(1),
-            expires_at_epoch: published_at_epoch.saturating_add(3_600),
-        }],
-    }
-}
-
 fn valid_pop_batch(issuer: &KeyPair, material: &PopMaterial) -> PopCredentialCommitmentBatchV1 {
     let canonical_credential =
         norito::encode_canonical(&material.credential).expect("encode canonical PoP credential");
@@ -742,13 +671,18 @@ fn voting_asset_balance(
     voting_asset_id: &AssetDefinitionId,
     account: &AccountId,
 ) -> Result<Quantity> {
-    Ok(client
+    let asset_id = AssetId::new(voting_asset_id.clone(), account.clone());
+    match client
         .client()
-        .query(FindAssetsByAccountId::new(account.clone()))
-        .execute_all()?
-        .into_iter()
-        .find(|asset| asset.id().definition() == voting_asset_id)
-        .map_or_else(Quantity::zero, |asset| asset.value().clone()))
+        .query_single(FindAssetById::new(asset_id.clone()))
+    {
+        Ok(asset) if asset.id() == &asset_id => Ok(asset.value().clone()),
+        Ok(_) => Err(eyre!("exact voting asset query returned a different asset")),
+        Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+            FindError::Asset(missing),
+        )))) if missing.as_ref() == &asset_id => Ok(Quantity::zero()),
+        Err(error) => Err(eyre!(error)),
+    }
 }
 
 fn settlement_observation(
@@ -885,16 +819,21 @@ async fn wait_for_settlement_convergence(
 }
 
 async fn exact_block(client: &Client, height: u64) -> Result<SignedBlock> {
-    let client = client.clone();
-    let block = read_on_dedicated_thread(move || {
-        client
-            .client()
-            .query(FindBlocks)
-            .filter_with(|block| block.equals("height", height).into_predicate())
-            .execute_single()
-            .map_err(|error| eyre!("query exact finalized block {height}: {error}"))
+    let nonzero_height = std::num::NonZeroU64::new(height)
+        .ok_or_else(|| eyre!("exact finalized block height must be nonzero"))?;
+    let block = timeout(client.client().torii_request_timeout(), async {
+        let mut blocks = client
+            .account_client()
+            .blocks()
+            .subscribe(nonzero_height)
+            .await?;
+        blocks
+            .try_next()
+            .await?
+            .ok_or_else(|| eyre!("canonical replay ended before finalized block {height}"))
     })
-    .await?;
+    .await
+    .wrap_err_with(|| format!("query exact finalized block {height} deadline elapsed"))??;
     ensure!(
         block.header().height().get() == height,
         "exact finalized-block query returned height {} for requested height {height}",
@@ -995,8 +934,11 @@ async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_delay_stable
         [
             InstructionBox::from(SetSorafsPopIssuerPolicy::new(pop_policy)),
             InstructionBox::from(CommitSorafsPopCredentialBatch::new(
-                norito::encode_canonical(&pop_batch(&BOB_KEYPAIR, now_epoch.saturating_sub(1)))
-                    .expect("encode canonical PoP registry batch"),
+                norito::encode_canonical(&valid_pop_batch(
+                    &BOB_KEYPAIR,
+                    &pop_material(&BOB_KEYPAIR, now_epoch.saturating_sub(1)),
+                ))
+                .expect("encode canonical PoP registry batch"),
             )),
             InstructionBox::from(SetSorafsModerationPolicy::new(moderation_policy)),
         ],
@@ -1109,8 +1051,10 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds_
             .parse()
             .wrap_err("parse default governance voting asset")?;
     let voting_domain = DomainId::try_new("sora", "universal")?;
-    let escrow_literal = BOB_ID.to_string();
-    let slash_receiver_literal = SAMPLE_GENESIS_ACCOUNT_ID.to_string();
+    let discriminant = iroha_config::parameters::defaults::common::chain_discriminant();
+    let escrow_literal = BOB_ID.to_i105_for_discriminant(discriminant)?;
+    let slash_receiver_literal =
+        SAMPLE_GENESIS_ACCOUNT_ID.to_i105_for_discriminant(discriminant)?;
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -1118,18 +1062,15 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds_
         .with_npos_consensus()
         .with_config_layer(move |writer| {
             writer
-                .write(["governance", "bond_escrow_account"], escrow_literal)
-                .write(
-                    ["governance", "slash_receiver_account"],
-                    slash_receiver_literal,
-                );
+                .write(["gov", "bond_escrow_account"], escrow_literal)
+                .write(["gov", "slash_receiver_account"], slash_receiver_literal);
         })
-        .with_genesis_instruction(Register::domain(Domain::new(voting_domain)))
+        .with_genesis_instruction(Register::domain(Domain::new(voting_domain.clone())))
         .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
             voting_asset_id.clone(),
             "moderation challenge XOR".to_owned(),
             AssetBalancePolicy::Global,
-            None,
+            Some(voting_domain),
         )))
         .with_genesis_instruction(Mint::asset_quantity(
             1_000_u32,
@@ -1668,6 +1609,52 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds_
         },
     )
     .await?;
+    Ok(())
+}
+
+#[test]
+fn moderation_pop_batch_binds_a_real_canonical_signed_credential() -> Result<()> {
+    let material = pop_material(&BOB_KEYPAIR, 1_700_000_000);
+    let batch = valid_pop_batch(&BOB_KEYPAIR, &material);
+    batch.validate()?;
+    let root: PopCommitmentRootV1 = norito::decode_canonical(&batch.commitment_root_payload)?;
+    let revocations: PopRevocationListV1 =
+        norito::decode_canonical(&batch.revocation_list_payload)?;
+    verify_pop_credential_signature_v1(&material.credential)?;
+    verify_pop_commitment_root_signature_v1(&root)?;
+    verify_pop_revocation_list_signature_v1(&revocations)?;
+    assert_eq!(root, material.root);
+    assert_eq!(revocations, material.revocations);
+    assert_eq!(batch.commitments.len(), 1);
+    let commitment = &batch.commitments[0];
+    assert_eq!(
+        commitment.credential_commitment,
+        pop_credential_payload_commitment_v1(&norito::encode_canonical(&material.credential)?)
+    );
+    assert_eq!(
+        root.root_digest,
+        pop_credential_root_from_path_v1(
+            pop_credential_leaf_v1(&material.credential)?,
+            &material.credential_path,
+        )?
+    );
+    assert_eq!(commitment.commitment_root, root.root_digest);
+    assert_eq!(revocations.commitment_root, root.root_digest);
+    assert_eq!(
+        batch.issuer_policy_digest,
+        pop_policy(&BOB_KEYPAIR).digest()?
+    );
+
+    let mut noncanonical = root;
+    noncanonical.root_digest = [0x41; 32];
+    assert!(matches!(
+        verify_pop_commitment_root_signature_v1(&noncanonical),
+        Err(
+            sorafs_manifest::pop_credentials::PopCredentialValidationError::InvalidScalarEncoding {
+                field: "commitment root"
+            }
+        )
+    ));
     Ok(())
 }
 

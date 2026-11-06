@@ -32,6 +32,8 @@ pub(super) struct FrozenExecutionOutputCapacity {
     // public metadata writes cannot forge that reserved lifecycle field.
     pipeline_candidates: u32,
     terminals: ExecutionOutputTerminalCeilings,
+    lifecycle: bool,
+    lifecycle_selection: Option<iroha_data_model::runtime::definition::SelectionId>,
 }
 
 /// Sole retained terminal plan for the authenticated input projection.
@@ -157,11 +159,26 @@ impl StateBlock<'_> {
             {
                 return Err("trigger registry exceeds agreed execution capacity".into());
             }
+            let lifecycle =
+                crate::runtime::trigger_lifecycle_enabled(self.world.runtime_selection.get())
+                    .map_err(|error| error.to_string())?;
             Ok(FrozenExecutionOutputCapacity {
                 policy,
                 time_invocations,
                 pipeline_candidates,
-                terminals: ExecutionOutputTerminalCeilings::derive()?,
+                terminals: ExecutionOutputTerminalCeilings::derive_for_lifecycle(lifecycle)?,
+                lifecycle,
+                lifecycle_selection: if lifecycle {
+                    Some(
+                        self.world
+                            .runtime_selection
+                            .get()
+                            .id()
+                            .map_err(|error| error.to_string())?,
+                    )
+                } else {
+                    None
+                },
             })
         })());
     }
@@ -172,6 +189,18 @@ impl StateBlock<'_> {
             .ok_or_else(|| "execution requires captured carrier output capacity".to_owned())?
             .as_ref()
             .map_err(Clone::clone)
+    }
+
+    /// Semantics frozen from the committed selection at the beginning of this block.
+    pub(super) fn lifecycle_output_enabled(&self) -> Result<bool, String> {
+        Ok(self.frozen_output_capacity()?.lifecycle)
+    }
+
+    /// Exact committed selection frozen before roots execute; absent for predecessor output.
+    pub(super) fn lifecycle_execution_selection(
+        &self,
+    ) -> Result<Option<iroha_data_model::runtime::definition::SelectionId>, String> {
+        Ok(self.frozen_output_capacity()?.lifecycle_selection)
     }
 
     /// Frozen row ceiling for transaction-owned callback capture.

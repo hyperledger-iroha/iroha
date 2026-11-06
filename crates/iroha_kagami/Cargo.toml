@@ -37,7 +37,7 @@ iroha_config.workspace = true
 iroha_swarm = { path = "../iroha_swarm" }
 
 clap = { workspace = true, features = ["derive"] }
-clap-markdown = "0.1.5"
+iroha_cli_docs = { workspace = true }
 color-eyre.workspace = true
 toml = { workspace = true }
 

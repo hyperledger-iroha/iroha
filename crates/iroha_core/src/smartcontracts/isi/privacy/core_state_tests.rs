@@ -6,7 +6,8 @@ fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_stat
     let namespace = fixture.snapshot.namespace();
     let config_key =
         PrivacyCommitmentKeyV1::proof_managed_pool_config(namespace).expect("FCMP++ config key");
-    let PrivacyStatementV1::MoneroFcmpPlusPlusV1(valid_statement) = &fixture.envelope.statement
+    let PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1(valid_statement) =
+        &fixture.envelope.statement
     else {
         unreachable!("FCMP++ runtime fixture")
     };
@@ -34,7 +35,11 @@ fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_stat
         );
         assert_proof_managed_submit_rejection_is_atomic(
             &mut transaction,
-            SubmitPrivacyProofV1::new(fixture.envelope.clone()),
+            SubmitPrivacyProofV1::new(
+                (fixture.envelope.clone())
+                    .try_into()
+                    .expect("frozen Exact12 test input"),
+            ),
             config_key,
             "FCMP++ key image was already consumed",
         );
@@ -66,7 +71,11 @@ fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_stat
         );
         assert_proof_managed_submit_rejection_is_atomic(
             &mut transaction,
-            SubmitPrivacyProofV1::new(fixture.envelope.clone()),
+            SubmitPrivacyProofV1::new(
+                (fixture.envelope.clone())
+                    .try_into()
+                    .expect("frozen Exact12 test input"),
+            ),
             config_key,
             "persisted FCMP++ key image has cross-bootstrap provenance",
         );
@@ -93,14 +102,22 @@ fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_stat
         );
         assert_proof_managed_submit_rejection_is_atomic(
             &mut transaction,
-            SubmitPrivacyProofV1::new(fixture.envelope.clone()),
+            SubmitPrivacyProofV1::new(
+                (fixture.envelope.clone())
+                    .try_into()
+                    .expect("frozen Exact12 test input"),
+            ),
             config_key,
             "FCMP++ output key or provenance differs from its complete tuple",
         );
     }
     {
-        let mut duplicate_output = SubmitPrivacyProofV1::new(fixture.envelope.clone());
-        let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) =
+        let mut duplicate_output = SubmitPrivacyProofV1::new(
+            (fixture.envelope.clone())
+                .try_into()
+                .expect("frozen Exact12 test input"),
+        );
+        let iroha_data_model::privacy::PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) =
             &mut duplicate_output.envelope.statement
         else {
             unreachable!("FCMP++ runtime fixture")
@@ -126,8 +143,12 @@ fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_stat
             .derive_fcmp_successor(&valid_statement.outputs)
             .expect("FCMP++ successor")
             .root();
-        let mut wrong_root = SubmitPrivacyProofV1::new(fixture.envelope.clone());
-        let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) =
+        let mut wrong_root = SubmitPrivacyProofV1::new(
+            (fixture.envelope.clone())
+                .try_into()
+                .expect("frozen Exact12 test input"),
+        );
+        let iroha_data_model::privacy::PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) =
             &mut wrong_root.envelope.statement
         else {
             unreachable!("FCMP++ runtime fixture")
@@ -167,7 +188,11 @@ fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_stat
         );
         assert_proof_managed_submit_rejection_is_atomic(
             &mut transaction,
-            SubmitPrivacyProofV1::new(fixture.envelope.clone()),
+            SubmitPrivacyProofV1::new(
+                (fixture.envelope.clone())
+                    .try_into()
+                    .expect("frozen Exact12 test input"),
+            ),
             config_key,
             "trusted proof-managed pool state failed validation",
         );
@@ -178,7 +203,11 @@ fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_stat
         {
             let mut transaction = block.transaction();
             baseline = proof_managed_state_snapshot(&transaction, config_key);
-            let valid = SubmitPrivacyProofV1::new(fixture.envelope.clone());
+            let valid = SubmitPrivacyProofV1::new(
+                (fixture.envelope.clone())
+                    .try_into()
+                    .expect("frozen Exact12 test input"),
+            );
             bind_submit_privacy_instruction(&mut transaction, &valid);
             execute_privacy_proof_after_admission_for_test(valid, &ALICE_ID, &mut transaction)
                 .expect("valid native FCMP++ submission");
@@ -208,9 +237,13 @@ fn fcmp_submit_rejections_and_transaction_drop_preserve_exact_proof_managed_stat
                 staged.commitments.len() > baseline.commitments.len(),
                 "valid FCMP++ execution must stage every output and successor frontier"
             );
-            let late_error = SubmitPrivacyProofV1::new(fixture.envelope.clone())
-                .execute(&ALICE_ID, &mut transaction)
-                .expect_err("consumed direct submission must reject after staged writes");
+            let late_error = SubmitPrivacyProofV1::new(
+                (fixture.envelope.clone())
+                    .try_into()
+                    .expect("frozen Exact12 test input"),
+            )
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("consumed direct submission must reject after staged writes");
             assert!(
                 format!("{late_error:?}")
                     .contains("the signed privacy submission has already been consumed"),

@@ -61,7 +61,10 @@ Why this shape:
   (`SumeragiLanePolicy`): freshness bound, merge bound, stall window, the chain parameters pinned
   into new lanes, the fixed lanes with their committees, explicit routes and the autoscale
   settings. Without it the chain has lane `0` only. `SetParameter` validates it (structure,
-  pinned parameters, every fixed member's BLS-normal key and proof of possession).
+  pinned parameters, every fixed member's BLS-normal key and proof of possession). Fixed committees
+  must be strictly ascending by peer identity, and fixed and elastic committee sizes must be
+  `3f + 1` for `1 <= f <= 10`; invalid input is rejected before the committed policy is
+  installed, without reordering the signed input.
 - `A` — freshness bound: the policy's `anchor_freshness` (default 16), **pinned into each
   incarnation** at creation, so a policy change never alters an existing lane's rules.
 

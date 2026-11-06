@@ -26,8 +26,8 @@ use iroha_data_model::{
         JindoLimitsV1, PrivacyCapabilityReadinessV1, PrivacyCompiledProfileResultV1,
         PrivacyCompiledProfileSnapshotV1, PrivacyExact12CapabilityManifestV1,
         PrivacyExact12CapabilityRowV1, PrivacyParameterDigestV1, PrivacyProofBytesV1,
-        PrivacyProofV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsUpdateV1,
-        PrivacyProtocolLimitsV1, PrivacyProtocolPolicyV1, PrivacyStatementDigestV1,
+        PrivacyProtocolLimitsUpdateV1, PrivacyProtocolPolicyV1, PrivacyRuntimeProofV1,
+        PrivacyRuntimeProtocolIdV1, PrivacyRuntimeProtocolLimitsV1, PrivacyStatementDigestV1,
         PrivacyTransactionIntentDigestV1,
     },
     transaction::{Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder},
@@ -40,7 +40,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::time::{Instant, sleep, timeout};
-const JINDO_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
+const JINDO_PROTOCOL: PrivacyRuntimeProtocolIdV1 =
+    PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
 const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 // An ordinary transaction executes in one certified native global carrier.
 // Leave deterministic headroom for healthy view churn.
@@ -369,10 +370,12 @@ fn independently_resigned_jindo_tamper(
     let (original_intent, submission) = transaction
         .privacy_transaction_intent_binding_if_present_v1()?
         .ok_or_else(|| eyre!("canonical Jindo transaction omitted its direct submission"))?;
-    let mut envelope = submission.envelope.clone();
+    let submission_envelope = submission.runtime_envelope();
+    let mut envelope = submission_envelope.clone();
     match tamper {
         JindoTamper::ProofMagic => {
-            let PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(proof) = &mut envelope.proof
+            let PrivacyRuntimeProofV1::IrohaJindoPolynomialCommitmentV1(proof) =
+                &mut envelope.proof
             else {
                 return Err(eyre!("Jindo tamper reached a different native proof"));
             };
@@ -395,7 +398,10 @@ fn independently_resigned_jindo_tamper(
     let mut payload = transaction.payload().clone();
     let executable = |value| {
         Executable::Instructions(
-            vec![InstructionBox::from(SubmitPrivacyProofV1::new(value))].into(),
+            vec![InstructionBox::from(SubmitPrivacyProofV1::new(
+                (value).try_into().expect("frozen Exact12 test input"),
+            ))]
+            .into(),
         )
     };
     payload.instructions = executable(envelope.clone());
@@ -557,26 +563,26 @@ async fn canonical_jindo_actions_survive_four_peer_policy_replay_and_restart() -
         ensure!(committed_height(&client, "exact replay height").await? == default_height,
             "exact Jindo replay committed another block");
 
-        let restricted_limits = PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
+        let restricted_limits = PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
             JindoLimitsV1 { max_polynomial_count: 3 });
         let incoming = next_execution_height(&client).await?;
         let effective = incoming.checked_add(1).ok_or_else(|| eyre!("policy height overflowed"))?;
         let atomic_error = submit_instructions(&client, vec![
-            SchedulePrivacyProtocolLimitsUpdateV1::new(JINDO_PROTOCOL, effective, restricted_limits).into(),
-            SchedulePrivacyProtocolLimitsUpdateV1::new(PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
-                incoming, PrivacyProtocolLimitsV1::VegaExistingCredentialZkV1).into(),
+            SchedulePrivacyProtocolLimitsUpdateV1::new((JINDO_PROTOCOL).try_into().expect("frozen Exact12 test input"), effective, (restricted_limits).try_into().expect("frozen Exact12 test input")).into(),
+            SchedulePrivacyProtocolLimitsUpdateV1::new((PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1).try_into().expect("frozen Exact12 test input"),
+                incoming, (PrivacyRuntimeProtocolLimitsV1::VegaExistingCredentialZkV1).try_into().expect("frozen Exact12 test input")).into(),
         ], "invalid second policy schedule rolls back the first").await
             .expect_err("non-future atomic policy schedule was accepted");
         ensure!(error_chain_contains(&atomic_error, "must be later than scheduled height"),
             "atomic policy schedule failed for wrong reason: {atomic_error:?}");
         wait_for_all_peer_policies(&network, incoming, compiled_snapshot, None,
             "failed atomic schedule leaves no Jindo policy on any peer").await?;
-        let bad_limits = PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
+        let bad_limits = PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
             JindoLimitsV1 { max_polynomial_count: 5 });
         let incoming = next_execution_height(&client).await?;
         let invalid_limit_error = submit_instruction(&client,
-            SchedulePrivacyProtocolLimitsUpdateV1::new(JINDO_PROTOCOL,
-                incoming.checked_add(1).ok_or_else(|| eyre!("policy height overflowed"))?, bad_limits),
+            SchedulePrivacyProtocolLimitsUpdateV1::new((JINDO_PROTOCOL).try_into().expect("frozen Exact12 test input"),
+                incoming.checked_add(1).ok_or_else(|| eyre!("policy height overflowed"))?, (bad_limits).try_into().expect("frozen Exact12 test input")),
             "protocol policy cannot exceed the canonical hard ceiling").await
             .expect_err("oversized Jindo policy was accepted");
         ensure!(error_chain_contains(&invalid_limit_error, "privacy protocol-limit update rejected"),
@@ -588,7 +594,7 @@ async fn canonical_jindo_actions_survive_four_peer_policy_replay_and_restart() -
         let effective_at_height = scheduled_at_height.checked_add(1)
             .ok_or_else(|| eyre!("policy height overflowed"))?;
         submit_instruction(&client, SchedulePrivacyProtocolLimitsUpdateV1::new(
-            JINDO_PROTOCOL, effective_at_height, restricted_limits), "schedule ordinary Jindo limits").await?;
+            (JINDO_PROTOCOL).try_into().expect("frozen Exact12 test input"), effective_at_height, (restricted_limits).try_into().expect("frozen Exact12 test input")), "schedule ordinary Jindo limits").await?;
         let pending_policy = PrivacyProtocolPolicyV1 { protocol_id: JINDO_PROTOCOL,
             current_limits: compiled_snapshot.protocol_limits,
             pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
@@ -611,8 +617,8 @@ async fn canonical_jindo_actions_survive_four_peer_policy_replay_and_restart() -
         let scheduled_at_height = next_execution_height(&client).await?;
         let effective_at_height = scheduled_at_height.checked_add(1)
             .ok_or_else(|| eyre!("policy height overflowed"))?;
-        submit_instruction(&client, SchedulePrivacyProtocolLimitsUpdateV1::new(JINDO_PROTOCOL,
-            effective_at_height, compiled_snapshot.protocol_limits),
+        submit_instruction(&client, SchedulePrivacyProtocolLimitsUpdateV1::new((JINDO_PROTOCOL).try_into().expect("frozen Exact12 test input"),
+            effective_at_height, (compiled_snapshot.protocol_limits).try_into().expect("frozen Exact12 test input")),
             "restore ordinary Jindo limits within the same canonical ceiling").await?;
         let pending_restore = PrivacyProtocolPolicyV1 { pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
             scheduled_at_height, effective_at_height, next_limits: compiled_snapshot.protocol_limits }),

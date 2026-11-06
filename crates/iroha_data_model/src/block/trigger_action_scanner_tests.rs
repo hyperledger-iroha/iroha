@@ -1,4 +1,4 @@
-//! Authored controls only; this detached candidate has not been compiled or run.
+//! Complete canonical Action validation and original allocation custody controls.
 use super::*;
 use crate::{
     HasMetadata,
@@ -127,11 +127,11 @@ fn original_codec_ivm_payload_is_fully_consumed() {
         0, 1, 255,
     ])));
     let mut budget = Budget::new(limits());
-    assert!(scan_executable(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget).is_ok());
+    assert!(test_scan_executable(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget).is_ok());
     bytes.push(0);
     let mut budget = Budget::new(limits());
     assert_eq!(
-        scan_executable(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget),
+        test_scan_executable(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget),
         Err(ScanError::Length)
     );
 }
@@ -142,8 +142,8 @@ fn nonempty_dynamic_instructions_are_never_skipped_by_length() {
     bytes.extend(field(&1u64.to_le_bytes()));
     let mut budget = Budget::new(limits());
     assert_eq!(
-        scan_executable(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget),
-        Err(ScanError::UnsupportedExecutable)
+        test_scan_executable(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget),
+        Err(ScanError::Length)
     );
 }
 
@@ -201,7 +201,7 @@ fn by_call_missing_normalized_authority_is_not_canonical() {
     bytes.extend(field(&inner));
     let mut budget = Budget::new(limits());
     assert!(matches!(
-        scan_filter(Cursor::root(&bytes, &mut budget).unwrap(), &[], &mut budget),
+        test_scan_filter(Cursor::root(&bytes, &mut budget).unwrap(), &[], &mut budget),
         Err(ScanError::NonCanonical)
     ));
 }
@@ -221,27 +221,31 @@ fn metadata_subset_checks_every_value_and_strict_key_order() {
     for entries in [vec![("a", "null"), ("b", "\"hello\"")], vec![]] {
         let bytes = metadata(&entries);
         let mut budget = Budget::new(limits());
-        assert!(scan_metadata(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget).is_ok());
+        assert!(
+            test_scan_metadata(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget).is_ok()
+        );
     }
     for entries in [
         vec![("a", "null"), ("a", "true")],
         vec![("b", "null"), ("a", "true")],
-        vec![("a", "[1]")],
-        vec![("a", "0")],
-        vec![("a", "\"x\\ny\"")],
+        vec![("a", "[1,]")],
+        vec![("a", "01")],
+        vec![("a", "\"x\\u000ay\"")],
     ] {
         let bytes = metadata(&entries);
         let mut budget = Budget::new(limits());
-        assert!(scan_metadata(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget).is_err());
+        assert!(
+            test_scan_metadata(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget).is_err()
+        );
     }
 }
 
 #[test]
 fn name_subset_refuses_normalization_and_control_paths() {
-    for name in ["", "bad name", "a@b", "a#b", "a$b", "é", "\u{202e}"] {
+    for name in ["", "bad name", "a@b", "a#b", "a$b", "e\u{301}", "\u{202e}"] {
         let bytes = field(name.as_bytes());
         let mut budget = Budget::new(limits());
-        assert!(scan_name(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget).is_err());
+        assert!(test_scan_name(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget).is_err());
     }
 }
 
@@ -501,17 +505,17 @@ fn json_protocol_byte_ceiling_is_independent_of_larger_scan_limits() {
     let mut bounds = limits();
     bounds.max_frame_bytes = 4_194_304;
     bounds.max_total_frame_bytes = 4_194_304;
-    bounds.max_work = 16_777_216;
+    bounds.max_work = 64_000_000;
     let boundary_bytes = payload(&real);
     let mut boundary_budget = Budget::new(bounds);
-    scan_metadata(
+    test_scan_metadata(
         Cursor::root(&boundary_bytes, &mut boundary_budget).unwrap(),
         &mut boundary_budget,
     )
     .unwrap();
     let mut budget = Budget::new(bounds);
     assert_eq!(
-        scan_metadata(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget),
+        test_scan_metadata(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget),
         Err(ScanError::InvalidValue),
     );
     // Enough work for the framing, but not for the oversized text. The protocol
@@ -519,7 +523,7 @@ fn json_protocol_byte_ceiling_is_independent_of_larger_scan_limits() {
     bounds.max_work = 128;
     let mut budget = Budget::new(bounds);
     assert_eq!(
-        scan_metadata(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget),
+        test_scan_metadata(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget),
         Err(ScanError::InvalidValue),
     );
 }
@@ -559,7 +563,7 @@ fn original_codec_reconciles_time_data_by_call_and_metadata_payload_layouts() {
     for (filter, kind, scheduled) in filters {
         let bytes = payload(&filter);
         let mut budget = Budget::new(limits());
-        let result = scan_filter(
+        let result = test_scan_filter(
             Cursor::root(&bytes, &mut budget).unwrap(),
             &owner_bytes,
             &mut budget,
@@ -574,5 +578,382 @@ fn original_codec_reconciles_time_data_by_call_and_metadata_payload_layouts() {
     );
     let bytes = payload(&metadata);
     let mut budget = Budget::new(limits());
-    scan_metadata(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget).unwrap();
+    test_scan_metadata(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget).unwrap();
+}
+
+#[test]
+fn canonical_metadata_accepts_full_json_and_nfc_names() {
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        "café".parse().unwrap(),
+        Json::from_raw_json(
+            r#"{"array":[1,-2,3.5,null,true,"line\n😀"],"object":{"é":false}}"#.into(),
+        )
+        .unwrap(),
+    );
+    let action = action().with_metadata(metadata);
+    let frame = norito::encode_canonical(&action).unwrap();
+    let pool = AllocationBudget::new(65_536);
+    let mut scanner = BoundedActionFrameScannerV1::try_new(
+        &pool,
+        limits(),
+        DecodeLimits::new(1000, 65_536, 1000, 65_536, 32),
+    )
+    .unwrap();
+    scanner.scan(&frame).unwrap();
+    // All decoded JSON strings and normalization scratch have retired.
+    assert_eq!(
+        pool.reserved_bytes(),
+        DecodeBudgetContext::allocation_layout().size()
+    );
+}
+
+#[test]
+fn multisig_authority_uses_complete_funded_controller_validation() {
+    use crate::account::{MultisigMember, MultisigPolicy};
+    let first = KeyPair::try_from_seed(vec![11; 32], Algorithm::Ed25519).unwrap();
+    let second = KeyPair::try_from_seed(vec![12; 32], Algorithm::Ed25519).unwrap();
+    let policy = MultisigPolicy::new(
+        2,
+        vec![
+            MultisigMember::new(first.public_key().clone(), 1).unwrap(),
+            MultisigMember::new(second.public_key().clone(), 1).unwrap(),
+        ],
+    )
+    .unwrap();
+    let action = Action::new(
+        Executable::Ivm(IvmBytecode::from_compiled(vec![1, 2, 3])),
+        Repeats::Exactly(1),
+        AccountId::new_multisig(policy),
+        DataEventFilter::Any,
+    )
+    .unwrap();
+    let frame = norito::encode_canonical(&action).unwrap();
+    let pool = AllocationBudget::new(65_536);
+    let mut scanner = BoundedActionFrameScannerV1::try_new(
+        &pool,
+        limits(),
+        DecodeLimits::new(1000, 65_536, 1000, 65_536, 32),
+    )
+    .unwrap();
+    assert_eq!(
+        scanner.scan(&frame).unwrap().filter_kind,
+        TriggerLifecycleStateKindV1::Data
+    );
+    assert_eq!(
+        pool.reserved_bytes(),
+        DecodeBudgetContext::allocation_layout().size()
+    );
+}
+
+#[test]
+fn canonical_metadata_scratch_refusal_latches_without_escaping_a_charge() {
+    let mut metadata = Metadata::default();
+    metadata.insert("payload".parse().unwrap(), Json::new("x".repeat(8192)));
+    let action = action().with_metadata(metadata);
+    let frame = norito::encode_canonical(&action).unwrap();
+    // Enough to decode the small single-key authority, not the JSON string.
+    let pool = AllocationBudget::new(1024);
+    let mut scanner = BoundedActionFrameScannerV1::try_new(
+        &pool,
+        limits(),
+        DecodeLimits::new(1000, 65_536, 1000, 65_536, 32),
+    )
+    .unwrap();
+    let first = core::ptr::from_ref(scanner.scan(&frame).unwrap_err());
+    let second = core::ptr::from_ref(scanner.scan(&frame).unwrap_err());
+    assert_eq!(first, second);
+    assert_eq!(
+        pool.reserved_bytes(),
+        DecodeBudgetContext::allocation_layout().size()
+    );
+}
+
+fn complete_limits() -> ActionScannerLimitsV1 {
+    ActionScannerLimitsV1 {
+        max_frame_bytes: 2_000_000,
+        max_total_frame_bytes: 32_000_000,
+        max_frames: 128,
+        max_work: 100_000_000,
+        max_fields: 100_000,
+        max_sequence_elements: 2_000_000,
+        max_depth: 32,
+    }
+}
+
+fn complete_scanner(pool: &AllocationBudget) -> BoundedActionFrameScannerV1<'_> {
+    BoundedActionFrameScannerV1::try_new(
+        pool,
+        complete_limits(),
+        DecodeLimits::new(100_000, 2_000_000, 2_000_000, 1_000_000, 32),
+    )
+    .unwrap()
+}
+
+fn full_call() -> crate::transaction::executable::ContractInvocation {
+    use crate::smart_contract::entrypoint::{EntrypointArgumentRecordV1, EntrypointValueAtomV1};
+    crate::transaction::executable::ContractInvocation {
+        contract_address: "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh"
+            .parse()
+            .unwrap(),
+        expected_code_hash: iroha_crypto::Hash::prehashed([1; 32]),
+        entrypoint: "callback".into(),
+        arguments: Some(
+            crate::transaction::executable::ContractArgumentRecord::try_new(
+                norito::encode_canonical(&EntrypointArgumentRecordV1 {
+                    schema_hash: [7; 32],
+                    atoms: vec![EntrypointValueAtomV1::Unit],
+                })
+                .unwrap(),
+            )
+            .unwrap(),
+        ),
+    }
+}
+
+#[test]
+fn complete_scanner_covers_every_executable_and_mixed_batch_without_root_decode() {
+    use crate::{
+        Level,
+        isi::{InstructionBox, Log, Register},
+        transaction::{ExecutableBatchItem, IvmProved},
+        trigger::Trigger,
+    };
+    let log: InstructionBox = Log::new(Level::INFO, "all executable variants".into()).into();
+    let nested: InstructionBox =
+        Register::trigger(Trigger::new("nested".parse().unwrap(), action())).into();
+    let call = full_call();
+    let hash = iroha_crypto::Hash::prehashed([1; 32]);
+    let values = [
+        Executable::Instructions(ConstVec::from(vec![log.clone(), nested.clone()])),
+        Executable::ContractCall(call.clone()),
+        Executable::Ivm(IvmBytecode::from_compiled(vec![0, 1, 255])),
+        Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![1, 2, 3]),
+            overlay: ConstVec::from(vec![log.clone()]),
+            events_commitment: hash,
+            gas_policy_commitment: hash,
+        }),
+        Executable::Batch(ConstVec::from(vec![
+            ExecutableBatchItem::Instruction(log),
+            ExecutableBatchItem::ContractCall(call.clone()),
+            ExecutableBatchItem::Instruction(nested),
+            ExecutableBatchItem::ContractCall(call),
+        ])),
+    ];
+    for executable in values {
+        let action = Action::new(
+            executable,
+            Repeats::Exactly(1),
+            fixture_authority(7),
+            DataEventFilter::Any,
+        )
+        .unwrap();
+        let frame = norito::encode_canonical(&action).unwrap();
+        let pool = AllocationBudget::new(4_000_000);
+        let mut scanner = complete_scanner(&pool);
+        let baseline = pool.reserved_bytes();
+        assert_eq!(
+            scanner.scan(&frame).unwrap().filter_kind,
+            TriggerLifecycleStateKindV1::Data
+        );
+        assert_eq!(
+            pool.reserved_bytes(),
+            baseline,
+            "typed subtrees retire before refund"
+        );
+    }
+}
+
+#[test]
+fn complete_scanner_covers_pipeline_and_scoped_data_filters() {
+    use crate::events::{
+        data::prelude::{AccountEventFilter, TriggerEventFilter},
+        pipeline::{
+            BlockEventFilter, BlockStatus, PipelineEventFilterBox, TransactionEventFilter,
+            TransactionStatus, WitnessEventFilter,
+        },
+    };
+    let filters: Vec<EventFilterBox> = vec![
+        PipelineEventFilterBox::Block(BlockEventFilter::new().for_status(BlockStatus::Applied))
+            .into(),
+        PipelineEventFilterBox::Transaction(
+            TransactionEventFilter::new().for_status(TransactionStatus::Queued),
+        )
+        .into(),
+        PipelineEventFilterBox::Witness(WitnessEventFilter::default()).into(),
+        DataEventFilter::Account(AccountEventFilter::new().for_account(fixture_authority(9)))
+            .into(),
+        DataEventFilter::Trigger(TriggerEventFilter::new().for_trigger("café".parse().unwrap()))
+            .into(),
+    ];
+    for (index, filter) in filters.into_iter().enumerate() {
+        let expected = if matches!(filter, EventFilterBox::Pipeline(_)) {
+            TriggerLifecycleStateKindV1::Pipeline
+        } else {
+            TriggerLifecycleStateKindV1::Data
+        };
+        let frame = norito::encode_canonical(&fixture_action(filter)).unwrap();
+        let pool = AllocationBudget::new(4_000_000);
+        assert_eq!(
+            complete_scanner(&pool)
+                .scan(&frame)
+                .unwrap_or_else(|error| panic!("filter {index}: {error:?}"))
+                .filter_kind,
+            expected
+        );
+    }
+}
+
+#[test]
+fn concrete_validator_checks_borrowed_payload_identity_and_retains_typed_refusal() {
+    use super::super::TriggerLifecycleActionValidatorV1;
+    let action = Action::new(
+        Executable::Instructions(ConstVec::from(vec![
+            crate::isi::Log::new(crate::Level::INFO, "owned transient".into()).into(),
+        ])),
+        Repeats::Exactly(1),
+        fixture_authority(7),
+        DataEventFilter::Any,
+    )
+    .unwrap();
+    let frame = norito::encode_canonical(&action).unwrap();
+    let payload = norito::canonical_frame_payload::<Action>(&frame, SCANNER_FLAGS).unwrap();
+    let pool = AllocationBudget::new(4_000_000);
+    complete_scanner(&pool)
+        .validate_canonical_action(&frame, payload)
+        .unwrap();
+    assert!(
+        complete_scanner(&pool)
+            .validate_canonical_action(&frame, &payload[1..])
+            .is_err()
+    );
+    let duplicate = payload.to_vec();
+    let mut scanner = complete_scanner(&pool);
+    assert!(
+        scanner
+            .validate_canonical_action(&frame, &duplicate)
+            .is_err()
+    );
+    assert!(scanner.validate_canonical_action(&frame, payload).is_err());
+}
+
+#[test]
+fn canonical_model_keeps_opaque_call_records_while_explicit_strict_scan_checks_nested_wire() {
+    use crate::{
+        isi::Register,
+        transaction::{ExecutableBatchItem, executable::ContractArgumentRecord},
+        trigger::Trigger,
+    };
+    let mut call = full_call();
+    call.arguments = Some(ContractArgumentRecord::try_new(vec![0, 1, 2]).unwrap());
+    let nested = Action::new(
+        Executable::ContractCall(call.clone()),
+        Repeats::Exactly(1),
+        fixture_authority(7),
+        DataEventFilter::Any,
+    )
+    .unwrap();
+    let executables = [
+        Executable::ContractCall(call.clone()),
+        Executable::Batch(ConstVec::from(vec![ExecutableBatchItem::ContractCall(
+            call,
+        )])),
+        Executable::Instructions(ConstVec::from(vec![
+            Register::trigger(Trigger::new("nested_call".parse().unwrap(), nested)).into(),
+        ])),
+    ];
+    for executable in executables {
+        let action = Action::new(
+            executable,
+            Repeats::Exactly(1),
+            fixture_authority(7),
+            DataEventFilter::Any,
+        )
+        .unwrap();
+        let frame = norito::encode_canonical(&action).unwrap();
+        assert_eq!(norito::decode_canonical::<Action>(&frame).unwrap(), action);
+        let pool = AllocationBudget::new(4_000_000);
+        complete_scanner(&pool).scan(&frame).unwrap();
+        let mut strict = complete_scanner(&pool);
+        let owner = RetainedActionFrameBytesV1::try_copy(&frame, &pool).unwrap();
+        assert!(strict.scan_owned_with_canonical_arguments(owner).is_err());
+        // A strict failure cannot leak its extra policy into another scanner.
+        complete_scanner(&pool).scan(&frame).unwrap();
+    }
+}
+
+#[test]
+fn typed_nested_instruction_frames_share_the_original_scanner_allowance() {
+    use crate::{
+        Level,
+        isi::{InstructionBox, Log, Register},
+        trigger::Trigger,
+    };
+    let log: InstructionBox = Log::new(Level::INFO, "nested frame".into()).into();
+    let child = Action::new(
+        Executable::Instructions(ConstVec::from(vec![log])),
+        Repeats::Exactly(1),
+        fixture_authority(7),
+        DataEventFilter::Any,
+    )
+    .unwrap();
+    let root = Action::new(
+        Executable::Instructions(ConstVec::from(vec![
+            Register::trigger(Trigger::new("nested".parse().unwrap(), child)).into(),
+        ])),
+        Repeats::Exactly(1),
+        fixture_authority(7),
+        DataEventFilter::Any,
+    )
+    .unwrap();
+    let frame = norito::encode_canonical(&root).unwrap();
+    for (frames, accepted) in [(2, false), (3, true)] {
+        let pool = AllocationBudget::new(4_000_000);
+        let mut limits = complete_limits();
+        limits.max_frames = frames;
+        let mut scanner = BoundedActionFrameScannerV1::try_new(
+            &pool,
+            limits,
+            DecodeLimits::new(100_000, 2_000_000, 100_000, 1_000_000, 32),
+        )
+        .unwrap();
+        assert_eq!(scanner.scan(&frame).is_ok(), accepted);
+        if !accepted {
+            assert!(scanner.scan(&frame).is_err());
+        }
+    }
+}
+
+#[test]
+fn prepaid_nested_leaf_failures_do_not_format_owned_diagnostics() {
+    use iroha_primitives::{bigint::BigInt, numeric::Numeric};
+    let pool = AllocationBudget::new(8192);
+    let context =
+        DecodeBudgetContext::try_new_owned(DecodeLimits::new(128, 4096, 128, 4096, 32), &pool)
+            .unwrap();
+    let reservation = pool.try_reserve_bytes(4096).unwrap();
+    let bad_name = payload(&"contains space");
+    let bad_numeric = payload(&(BigInt::from(10_u32), 1_u32));
+    ncore::with_prepaid_validation(&reservation, &context, || {
+        assert!(matches!(
+            ncore::decode_field_canonical::<Name>(&bad_name),
+            Err(norito::Error::InvalidValue {
+                context: "invalid Name"
+            })
+        ));
+        assert!(matches!(
+            ncore::decode_field_canonical::<Numeric>(&bad_numeric),
+            Err(norito::Error::InvalidValue {
+                context: "invalid numeric value"
+            })
+        ));
+        Ok(())
+    })
+    .unwrap();
+    // Ordinary decoding retains the exact existing diagnostic category.
+    assert!(matches!(
+        ncore::decode_field_canonical::<Name>(&bad_name),
+        Err(norito::Error::Message(_))
+    ));
 }

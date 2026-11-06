@@ -1,0 +1,102 @@
+"""Review and retain a metadata-only dependency refresh of the fixed-slot writer."""
+import ast
+import datetime
+import difflib
+import hashlib
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import types
+
+root = Path('/Users/takemiyamakoto/dev/iroha')
+out = root / 'docs/validation/parliament_ballot_static_overlay_20261104'
+out.mkdir(exist_ok=True)
+sha = lambda p: hashlib.sha256(Path(p).read_bytes()).hexdigest()
+def save(name, value):
+    (out / name).write_text(json.dumps(value, indent=2, sort_keys=True) + '\n')
+def load(path, name):
+    module = types.ModuleType(name)
+    module.__file__ = str(path)
+    exec(compile(path.read_bytes(), str(path), 'exec'), module.__dict__)
+    return module
+def functions(text):
+    return {node.name: ast.dump(node, include_attributes=False) for node in ast.parse(text).body
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef))}
+prior = root / 'docs/validation/parliament_ballot_component_families/record/capture/source/scripts'
+expected = {'parliament_ballot_write_framing.py': 'ad5230fdcd01b52588b40d29a2e766625050ef530dfba4cb529350f993a21617',
+            'parliament_ballot_oracle_log_circuit.py': 'd045f66581f7a50bcb4e696b0346a192724f5d0858a21c23343bb35478d5c558'}
+review = []
+for name, old_sha in expected.items():
+    old = prior / (name + '.template')
+    current = root / 'scripts' / name
+    assert sha(old) == old_sha
+    old_text, text = old.read_text(), current.read_text()
+    old_defs, defs = functions(old_text), functions(text)
+    assert old_defs.keys() == defs.keys()
+    changed = [name for name in defs if old_defs[name] != defs[name]]
+    assert changed == ['report'], changed
+    # Both report differences only propagate the existing diagnostic row scope.
+    if name == 'parliament_ballot_write_framing.py':
+        restored = text.replace('            "row_build_scope": accounting["row_build_scope"],\n', '')
+    else:
+        restored = text.replace('        row_build_scope=accounting["row_build_scope"],\n', '')
+    assert functions(restored) == old_defs
+    # Every top-level non-metadata expression is identical as well.
+    def structural(source):
+        tree = ast.parse(source)
+        tree.body = [n for n in tree.body if not (isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id in {'PINS','RECEIPT','REPORT','ACCOUNTING'} for t in n.targets))]
+        return ast.dump(tree, include_attributes=False)
+    assert structural(restored) == structural(old_text)
+    shutil.copy2(old, out / (name + '.historical.template'))
+    shutil.copy2(current, out / (name + '.current.template'))
+    (out / (name + '.diff')).write_text(''.join(difflib.unified_diff(old_text.splitlines(True), text.splitlines(True), fromfile=str(old.relative_to(root)), tofile=str(current.relative_to(root)))))
+    review.append({'path':str(current.relative_to(root)), 'historical_path':str(old.relative_to(root)), 'historical_sha256':old_sha, 'current_sha256':sha(current), 'unchanged_functions_and_classes':sorted(n for n in defs if n!='report'), 'report_change':'Only row_build_scope diagnostic field added; all body ASTs identical after removing that field.'})
+model_path = root / 'scripts/parliament_ballot_static_overlay.py'
+model = load(model_path, 'reviewed_static_overlay')
+script_before = subprocess.check_output(['git', 'show', 'HEAD:scripts/parliament_ballot_static_overlay.py'], cwd=root, text=True)
+assert functions(script_before) == functions(model_path.read_text())
+reports = []
+for row in ('candidate','comparator'):
+    for role in ('registration','vote'):
+        name = row+'-'+role+'.json'
+        historical = root / 'docs/validation/parliament_ballot_static_overlay' / name
+        old = json.loads(historical.read_text())
+        value = json.loads(json.dumps(model.report(root, old['request_cap'], old['request_index'], row, role, old['length_bits'])))
+        assert set(old) == set(value)
+        changed = [k for k in value if old[k] != value[k]]
+        assert set(changed) == {'source_sha256_before','source_sha256_after'}, changed
+        save(name, value)
+        reports.append({'report':name,'historical_sha256':sha(historical),'current_sha256':sha(out/name),'changed_fields':changed,'all_other_fields_identical':True})
+cmd = [str(Path('/Users/takemiyamakoto/Library/Caches/iroha-script-tests/venv/bin/python')),str(model_path),'--request-cap',str(1<<44),'--row','candidate','--role','vote']
+normal = subprocess.run(cmd,cwd=root,capture_output=True)
+refusal = subprocess.run(cmd+['--require-qualified'],cwd=root,capture_output=True)
+assert normal.returncode == 0 and refusal.returncode == 2
+assert normal.stdout == refusal.stdout
+assert json.loads(normal.stdout) == json.loads((out/'candidate-vote.json').read_text())
+shutil.copy2(model_path,out/'parliament_ballot_static_overlay.py.template')
+shutil.copy2(root/'scripts/tests/parliament_ballot_static_overlay_test.py',out/'parliament_ballot_static_overlay_test.py.template')
+shutil.copy2('/tmp/iroha-static-overlay-before.log',out/'tests-before.txt')
+shutil.copy2('/tmp/iroha-static-overlay-after.log',out/'tests.txt')
+assert '9 passed' in (out/'tests.txt').read_text()
+save('source-review.json',{'observed_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'scope':'Exact fixed-slot writer dependency review; mathematical component only, no full source/build/physical custody.','helpers':review,'writer_function_class_AST_unchanged':True,'reports':reports,'ordinary_exit':normal.returncode,'require_qualified_exit':refusal.returncode,'ordinary_and_refusal_bytes_identical':True,'profile_qualified':False,'production_gate_changed':False})
+shutil.copy2(__file__,out/'review.py.template')
+(out/'README.md').write_text('''# Current fixed-slot writer diagnostics
+
+The source guard now accepts the two reviewed helper revisions. Their circuit,
+framing, layout and resource formulas are unchanged; only antecedent evidence
+paths/hashes and a diagnostic row-scope field changed. The fixed-slot writer
+itself changes only those two authenticated helper hashes.
+
+All nine circuit, composition, source-refusal and CLI tests pass. All four
+row/role reports are identical to the historical outputs except their two
+source-hash maps. Ordinary output exits 0; `--require-qualified` exits 2 with
+identical JSON. Full request/root integration, physical costs and cryptographic
+qualification remain open. Historical artifacts retain their original bytes.
+
+`source-review.json`, exact helper snapshots/diffs and `review.py.template`
+retain this bounded review. Run tests with
+`python -m pytest -q scripts/tests/parliament_ballot_static_overlay_test.py`.
+''')
+(out/'SHA256SUMS').write_text(''.join(f'{sha(p)}  {p.relative_to(out).as_posix()}\n' for p in sorted(out.rglob('*')) if p.is_file() and p.name!='SHA256SUMS'))
+print(json.dumps({'artifact':str(out),'reports':len(reports),'tests':9,'qualification':False}))

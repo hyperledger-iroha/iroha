@@ -9,8 +9,9 @@ use iroha_data_model::{
     privacy::{
         PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1, PrivacyCapabilityArchiveValidationStatusV1,
         PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1, PrivacyConsensusLimitsV1,
-        PrivacyExact12CapabilityManifestV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
-        PrivacyStatementV1, validate_privacy_capability_archive_v1,
+        PrivacyExact12CapabilityManifestV1, PrivacyRuntimeProtocolIdV1,
+        PrivacyRuntimeProtocolLimitsV1, PrivacyRuntimeStatementV1,
+        validate_privacy_capability_archive_v1,
     },
     transaction::signed_attachments::SIGNED_ATTACHMENTS_MAX_ACTIONS_V1,
 };
@@ -28,7 +29,7 @@ pub(crate) fn tuple_admitted(archive: &[u8], index: usize, network: &[u8; 32]) -
     if network[31] & 1 != 1 || !validate_privacy_capability_archive_v1(archive).is_valid() {
         return false;
     }
-    let Some(protocol) = PrivacyProtocolIdV1::ALL.get(index).copied() else {
+    let Some(protocol) = PrivacyRuntimeProtocolIdV1::ALL.get(index).copied() else {
         return false;
     };
     let Ok(manifest) = norito::decode_from_bytes::<PrivacyExact12CapabilityManifestV1>(archive)
@@ -55,11 +56,11 @@ pub(crate) fn tuple_admitted(archive: &[u8], index: usize, network: &[u8; 32]) -
 pub(crate) fn request_matches_profile(
     request: &SubmitPrivacyZkX509CertificateV1,
     profile: &PrivacyCompiledProfileSnapshotV1,
-    protocol_limits: &PrivacyProtocolLimitsV1,
+    protocol_limits: &PrivacyRuntimeProtocolLimitsV1,
     limits: &PrivacyConsensusLimitsV1,
     network: &[u8; 32],
 ) -> bool {
-    let protocol = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+    let protocol = PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1;
     let context = &request.statement.context;
     profile.validate().is_ok()
         && profile.protocol_id == protocol
@@ -76,7 +77,7 @@ pub(crate) fn request_matches_profile(
             .validate_with_ceiling(&profile.protocol_limits)
             .is_ok()
         && protocol_limits
-            .validate_statement(&PrivacyStatementV1::IrohaZkX509StarkP256V1(
+            .validate_statement(&PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(
                 request.statement.clone(),
             ))
             .is_ok()
@@ -108,7 +109,7 @@ pub(crate) fn construction_admitted(
     let Some(protocol_limits) = committed.effective_protocol_limits_v1() else {
         return false;
     };
-    if committed.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
+    if committed.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 {
         if instruction_archive.len()
             > SubmitPrivacyZkX509CertificateV1::canonical_frame_byte_limit_v1()
         {
@@ -145,16 +146,11 @@ pub(crate) fn construction_admitted(
     else {
         return false;
     };
-    instruction.envelope.protocol_id == committed.protocol_id
-        && instruction
-            .envelope
-            .statement
-            .context()
-            .network_id
-            .as_bytes()
-            == network
-        && instruction
-            .envelope
+    let envelope =
+        iroha_data_model::privacy::PrivacyRuntimeProofEnvelopeV1::from(instruction.envelope);
+    envelope.protocol_id == committed.protocol_id
+        && envelope.statement.context().network_id.as_bytes() == network
+        && envelope
             .validate_against_profile_v1(
                 &profile,
                 &protocol_limits,
@@ -200,7 +196,7 @@ pub unsafe extern "C" fn iroha_privacy_validate_exact12_submit_proof_constructio
     {
         return Status::ArchiveTooLarge.code();
     }
-    if network_len != 32 || protocol_index as usize >= PrivacyProtocolIdV1::ALL.len() {
+    if network_len != 32 || protocol_index as usize >= PrivacyRuntimeProtocolIdV1::ALL.len() {
         return Status::InvalidManifest.code();
     }
     let manifest = unsafe { slice::from_raw_parts(manifest_ptr, manifest_len) };

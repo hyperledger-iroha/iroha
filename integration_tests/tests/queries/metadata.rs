@@ -1,13 +1,21 @@
-//! Tests querying metadata via `FindAccounts`.
+//! Account collection metadata, exact account reads and missing-key predicates.
 use integration_tests::sandbox;
-use iroha::{client::QueryError, data_model::prelude::*};
-use iroha_data_model::query::error::{FindError, QueryExecutionFail};
+use iroha::{
+    collections::{Collection, ListQuery, field},
+    data_model::prelude::*,
+};
 use iroha_executor_data_model::permission::account::CanRegisterAccount;
 use iroha_model_base::domain::DomainId;
+use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
 use std::{collections::BTreeMap, str::FromStr};
+#[derive(norito::JsonDeserialize)]
+struct AccountMetadata {
+    id: AccountId,
+    metadata: Metadata,
+}
 #[test]
 #[allow(clippy::too_many_lines)]
 fn find_accounts_with_asset() {
@@ -37,12 +45,16 @@ fn find_accounts_with_asset() {
             )
             .unwrap();
         // Ensure Bob account exists (defaults genesis may omit it).
-        let existing_accounts = test_client
-            .client()
-            .query(FindAccounts)
-            .execute_all()
-            .expect("fetch accounts");
-        let bob_missing = existing_accounts.iter().all(|acc| acc.id() != &*BOB_ID);
+        let read_accounts = || -> eyre::Result<Vec<AccountMetadata>> {
+            test_client
+                .list(Collection::Accounts, ListQuery::new().limit(64))
+                .map(|row| norito::json::from_value(row?).map_err(Into::into))
+                .collect()
+        };
+        let existing_accounts = read_accounts()?;
+        let bob_missing = existing_accounts
+            .iter()
+            .all(|account| account.id != *BOB_ID);
         if bob_missing {
             test_client
                 .submit(
@@ -62,6 +74,15 @@ fn find_accounts_with_asset() {
                 )
                 .expect("Failed to register Bob account");
         }
+        let fee_asset = iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?;
+        test_client.submit(
+            Transfer::asset_quantity(
+                AssetId::new(fee_asset, ALICE_ID.clone()),
+                100u32,
+                BOB_ID.clone(),
+            ),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
         let bob_client = network
             .peers()
             .first()
@@ -94,21 +115,13 @@ fn find_accounts_with_asset() {
         // ALICE    "value"             -
         // BOB      {"funny": "value"}  "value"
         // check that bulk retrieval works as expected
-        let key_values = test_client
-            .client()
-            .query(FindAccounts)
-            .execute_all()
-            .unwrap()
+        let key_values = read_accounts()?
             .into_iter()
-            .filter(|account| account.id() == &*ALICE_ID || account.id() == &*BOB_ID)
+            .filter(|account| account.id == *ALICE_ID || account.id == *BOB_ID)
             .map(|account| {
                 (
-                    account.id().clone(),
-                    account
-                        .metadata()
-                        .get(&key)
-                        .cloned()
-                        .expect("key must exist"),
+                    account.id,
+                    account.metadata.get(&key).cloned().expect("key must exist"),
                 )
             })
             .collect::<BTreeMap<_, _>>();
@@ -123,56 +136,31 @@ fn find_accounts_with_asset() {
             .expect("serialize metadata object"),
         );
         assert_eq!(key_values.get(&*BOB_ID), Some(&expected_bob));
-        // check that missing metadata key produces an error
-        let alice_no_key_err = test_client
+        // Native exact account reads return the metadata map. Absence is
+        // asserted directly, without constructing a synthetic query error.
+        let alice = test_client
             .client()
-            .query(FindAccounts)
-            .execute_all()
-            .unwrap()
-            .into_iter()
-            .find(|account| account.id() == &*ALICE_ID)
-            .and_then(|account| account.metadata().get(&another_key).cloned())
-            .ok_or_else(|| {
-                QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
-                    FindError::MetadataKey(another_key.clone()),
-                )))
-            })
-            .unwrap_err();
-        let QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
-            FindError::MetadataKey(returned_key),
-        ))) = alice_no_key_err
-        else {
-            panic!("Got unexpected query error on missing metadata key {alice_no_key_err:?}");
-        };
-        assert_eq!(returned_key, another_key);
-        // check single key retrieval
-        let another_key_value = test_client
+            .query_single(FindAccountById::new(ALICE_ID.clone()))?;
+        assert_eq!(alice.id(), &*ALICE_ID);
+        assert!(alice.metadata().get(&another_key).is_none());
+        let bob = test_client
             .client()
-            .query(FindAccounts)
-            .execute_all()
-            .unwrap()
-            .into_iter()
-            .find(|account| account.id() == &*BOB_ID)
-            .and_then(|account| account.metadata().get(&another_key).cloned())
-            .unwrap();
-        assert_eq!(another_key_value, "value".into());
-        // check predicates on non-existing metadata (they should just evaluate to false)
+            .query_single(FindAccountById::new(BOB_ID.clone()))?;
+        assert_eq!(bob.id(), &*BOB_ID);
+        assert_eq!(bob.metadata().get(&another_key), Some(&"value".into()));
+        // The server evaluates the missing-key predicate across the complete
+        // account collection: Alice must not match, while Bob must match once.
         let accounts = test_client
-            .client()
-            .query(FindAccounts)
-            .execute_all()
-            .unwrap()
-            .into_iter()
-            .filter(|account| {
-                account
-                    .metadata()
-                    .get(&another_key)
-                    .is_some_and(|v| v.as_ref() == "value")
-            })
-            .map(|account| account.id().clone())
-            .collect::<Vec<_>>();
+            .list(
+                Collection::Accounts,
+                ListQuery::new()
+                    .limit(64)
+                    .filter(field("metadata.another_key").eq("value")),
+            )
+            .map(|row| norito::json::from_value::<AccountMetadata>(row?).map_err(Into::into))
+            .collect::<eyre::Result<Vec<_>>>()?;
         assert_eq!(accounts.len(), 1);
-        assert_eq!(accounts[0], BOB_ID.clone());
+        assert_eq!(accounts[0].id, *BOB_ID);
         Ok(())
     })();
     let _ = sandbox::handle_result(result, stringify!(find_accounts_with_asset_metadata)).unwrap();

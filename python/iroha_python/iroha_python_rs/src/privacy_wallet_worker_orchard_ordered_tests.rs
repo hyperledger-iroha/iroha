@@ -38,7 +38,7 @@ mod orchard_ordered {
         ContractArgumentRecord::try_new(ivm::codec::encode_canonical_norito(&record).unwrap())
             .unwrap()
     }
-    fn calls() -> Value {
+    pub(super) fn calls() -> Value {
         let (_, _, authority) = test_signer();
         let call = |name: &str, nonce| {
             norito::json::to_value(&ContractInvocation {
@@ -591,7 +591,7 @@ mod orchard_ordered {
             wallet_id: "alice@wonderland".into(),
             authority,
             public_key,
-            protocol_id: PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            protocol_id: PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
             operation_schema: OPERATION,
         };
         let mut response = signed_action_response_v1(signed, &manifest, [1; 32]).unwrap();

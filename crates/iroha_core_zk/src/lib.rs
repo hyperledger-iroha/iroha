@@ -59,6 +59,8 @@ pub mod kagemusha_wallet_proofs_v1;
 /// Immutable arbitrary-asset registration transport verified against installed native genesis.
 pub mod kagemusha_wallet_registration_v1;
 pub mod kagemusha_wallet_state_v1;
+/// Native suffix Unload verification: complete step-by-step checks from a genuine anchor.
+pub mod kagemusha_wallet_suffix_unload_v1;
 /// Client-side construction of final Kaigi authorization and usage artifacts.
 pub mod kaigi_client_v1;
 /// Exact native PIPA-R built-in relations and their canonical proof containers.
@@ -1972,7 +1974,7 @@ mod stark_backend_tag_tests {
         pipa_r_open_verify_circuit_id_matches_backend, production_verify_backend_tag,
         stark_open_verify_circuit_id_matches_backend, verify_backend,
     };
-    use iroha_data_model::privacy::PrivacyProtocolIdV1;
+    use iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1;
     use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
     use iroha_data_model::zk::BackendTag;
     #[test]
@@ -2553,7 +2555,7 @@ mod stark_backend_tag_tests {
                 );
             }
         }
-        for protocol in PrivacyProtocolIdV1::ALL {
+        for protocol in PrivacyRuntimeProtocolIdV1::ALL {
             assert_reserved(protocol.canonical_label());
         }
     }

@@ -752,6 +752,84 @@ fn state_after_genesis(world: World) -> State {
     state_after_genesis_with_instructions(world, |_| Vec::new())
 }
 
+#[test]
+fn ironwood_opaque_custom_signed_execution_preserves_the_predecessor_rejection() {
+    let state = state_after_genesis(World::with(
+        [],
+        [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+        [],
+    ));
+    let instruction = crate::runtime::ironwood::admission::tests::opaque_proposal(
+        iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1,
+    );
+    let mut builder = TransactionBuilder::new(
+        *state.network_id_ref(),
+        ALICE_ID.clone(),
+        FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(50_000)),
+    );
+    builder.set_creation_time(std::time::Duration::from_millis(0));
+    let signed = builder
+        .with_instructions([instruction])
+        .sign(ALICE_KEYPAIR.private_key());
+    let bytes = norito::encode_canonical(&signed).unwrap();
+    let decoded: SignedTransaction = norito::decode_canonical(&bytes).unwrap();
+    assert_eq!(norito::encode_canonical(&decoded).unwrap(), bytes);
+    crate::runtime::ironwood::admission::transaction(
+        &decoded,
+        state.view().world().runtime_selection(),
+    )
+    .expect("opaque Custom remains includable under the predecessor wire grammar");
+    let mut block = state.block(BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    ));
+    let mut tx = block.transaction_for_fastpq_testing(Hash::from(decoded.hash_as_entrypoint()));
+    tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+    let before = tx
+        .world
+        .smart_contract_state
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let privacy_before = tx
+        .world
+        .privacy_protocol_policies
+        .iter()
+        .map(|(key, value)| (*key, value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let result = super::Executor::Initial.execute_transaction(
+        &mut tx,
+        &ALICE_ID,
+        &decoded,
+        &mut IvmCache::new(),
+    );
+    // This exact rejection is the predecessor Initial executor's source-defined fallback.
+    // The test exercises today's selected parser; it does not claim a separate baseline run.
+    assert!(matches!(result,
+        Err(crate::execution_attempt::ExecutionAttemptError::Rejected(ValidationFail::NotPermitted(message)))
+            if message == "custom instructions require an executor upgrade"));
+    assert_eq!(
+        tx.world
+            .smart_contract_state
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>(),
+        before
+    );
+    assert_eq!(
+        tx.world
+            .privacy_protocol_policies
+            .iter()
+            .map(|(key, value)| (*key, value.clone()))
+            .collect::<BTreeMap<_, _>>(),
+        privacy_before
+    );
+}
+
 fn state_after_genesis_with_instructions(
     world: World,
     instructions: impl FnOnce(&AccountId) -> Vec<InstructionBox>,
@@ -2255,7 +2333,11 @@ fn fee_sponsor_operations_preserve_every_mixed_batch_item() {
         ]
         .into(),
     );
-    let operations = fee_sponsor_operations(&executable).expect("resolve sponsor operations");
+    let operations = fee_sponsor_operations(
+        &executable,
+        &crate::runtime::release_catalog().unwrap().baseline,
+    )
+    .expect("resolve sponsor operations");
     assert_eq!(operations.len(), 2);
     assert!(matches!(
         &operations[0],
@@ -2319,8 +2401,11 @@ fn fee_sponsor_multisig_operations_decode_variant_and_exact_target_account() {
     ];
     for (instruction, expected_operation) in instructions.iter().zip(expected) {
         assert_eq!(
-            fee_sponsor_instruction_operation(instruction)
-                .expect("decode exact multisig sponsor operation"),
+            fee_sponsor_instruction_operation(
+                instruction,
+                &crate::runtime::release_catalog().unwrap().baseline
+            )
+            .expect("decode exact multisig sponsor operation"),
             FeeSponsorOperation::Multisig {
                 operation: expected_operation,
                 account_id: target.clone(),
@@ -2343,8 +2428,11 @@ fn fee_sponsor_multisig_selector_is_exact_and_register_is_opt_in() {
         Some("iroha.custom"),
         "regression fixture must exercise a custom multisig instruction"
     );
-    let propose = fee_sponsor_instruction_operation(&propose_instruction)
-        .expect("decode propose sponsor operation");
+    let propose = fee_sponsor_instruction_operation(
+        &propose_instruction,
+        &crate::runtime::release_catalog().unwrap().baseline,
+    )
+    .expect("decode propose sponsor operation");
     let approve = FeeSponsorOperation::Multisig {
         operation: FeeSponsorMultisigOperation::Approve,
         account_id: target.clone(),
@@ -3908,16 +3996,16 @@ fn initial_executor_routes_native_privacy_corridor_to_core() {
         isi::privacy::SubmitPrivacyProofV1,
         privacy::{
             IrohaJindoPolynomialCommitmentStatementV1, PrivacyJindoFieldElementV1,
-            PrivacyJindoLatticeCommitmentV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
-            PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementContextV1, PrivacyStatementV1,
-            PrivacyTransactionIntentDigestV1,
+            PrivacyJindoLatticeCommitmentV1, PrivacyProofBytesV1, PrivacyRuntimeProofEnvelopeV1,
+            PrivacyRuntimeProofV1, PrivacyRuntimeProtocolIdV1, PrivacyRuntimeStatementV1,
+            PrivacyStatementContextV1, PrivacyTransactionIntentDigestV1,
         },
     };
 
     let profile =
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
+        compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
             .expect("load compiled Jindo profile");
-    let statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(
+    let statement = PrivacyRuntimeStatementV1::IrohaJindoPolynomialCommitmentV1(
         IrohaJindoPolynomialCommitmentStatementV1 {
             context: PrivacyStatementContextV1 {
                 network_id: executor_test_network_id(b"initial-privacy-corridor"),
@@ -3935,7 +4023,7 @@ fn initial_executor_routes_native_privacy_corridor_to_core() {
         },
     );
     let statement_digest = statement.digest().expect("hash Jindo statement fixture");
-    let envelope = PrivacyProofEnvelopeV1 {
+    let envelope = PrivacyRuntimeProofEnvelopeV1 {
         wire_magic: iroha_data_model::privacy::PrivacyProofWireMagicV1::default(),
         catalog_commitment: iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::default(),
         protocol_id: profile.protocol_id,
@@ -3948,11 +4036,15 @@ fn initial_executor_routes_native_privacy_corridor_to_core() {
         engine_manifest_digest: profile.engine_manifest_digest,
         statement_digest,
         statement,
-        proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(PrivacyProofBytesV1::new(vec![
-            0x55,
-        ])),
+        proof: PrivacyRuntimeProofV1::IrohaJindoPolynomialCommitmentV1(PrivacyProofBytesV1::new(
+            vec![0x55],
+        )),
     };
-    let instructions: [InstructionBox; 1] = [SubmitPrivacyProofV1::new(envelope).into()];
+    let instructions: [InstructionBox; 1] =
+        [
+            SubmitPrivacyProofV1::new((envelope).try_into().expect("frozen Exact12 test input"))
+                .into(),
+        ];
     for instruction in &instructions {
         assert!(
             initial_native_instruction_is_explicitly_admitted(instruction),

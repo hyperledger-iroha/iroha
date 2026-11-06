@@ -1677,8 +1677,8 @@ fn original_time_sns_sweep_uses_only_capacity_left_by_exact_retail_prefix() {
 fn privacy_fee_test_owner() -> crate::privacy_state::PrivacyPublicReserveOwnerV1 {
     use iroha_data_model::privacy::*;
     crate::privacy_state::PrivacyPublicReserveOwnerV1::Orchard {
-        namespace: PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+        namespace: PrivacyRuntimeNamespaceV1::new(
+            PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
             PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                 pool_id: PrivacyPoolIdV1::new([0xD1; 32]),
             }),

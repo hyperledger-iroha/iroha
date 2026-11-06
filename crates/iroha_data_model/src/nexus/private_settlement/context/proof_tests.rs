@@ -248,3 +248,38 @@ fn private_pool_public_keys_roundtrip_once_with_exact_canonical_json_spelling() 
         commitment: PrivacyCommitmentV1::new([42; 32]),
     });
 }
+
+#[test]
+fn ironwood_private_pool_schema_family_authenticates_each_certified_height() {
+    let (key, mut proof) = fixture();
+    let baseline = proof.world.schema_hash;
+    let successor = Hash::new(b"independently qualified successor schema");
+    let schemas = [baseline, successor];
+    let mut native = NativeFinalityFixture::new();
+    let before = certify(&mut native, &proof);
+    proof
+        .verify(native.network_id(), schemas.as_slice(), key, &before)
+        .unwrap();
+    let old = proof.clone();
+    proof.world.schema_hash = successor;
+    let after = certify(&mut native, &proof);
+    proof
+        .verify(native.network_id(), schemas.as_slice(), key, &after)
+        .unwrap();
+    assert!(
+        proof
+            .verify(native.network_id(), baseline, key, &after)
+            .is_err()
+    );
+    assert!(
+        old.verify(native.network_id(), schemas.as_slice(), key, &after)
+            .is_err()
+    );
+    assert!(
+        proof
+            .verify(native.network_id(), schemas.as_slice(), key, &before)
+            .is_err()
+    );
+    old.verify(native.network_id(), schemas.as_slice(), key, &before)
+        .unwrap();
+}

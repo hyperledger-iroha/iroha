@@ -108,7 +108,9 @@ fn refresh(proof: &mut PrivateSettlementContextProofV1) {
     if let Some(policy) = &proof.protocol_policy {
         proof.pool.world.entries.push(entry(
             "world.privacy_protocol_policies",
-            &PrivacyProtocolPolicyKeyV1::new(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1),
+            &PrivacyProtocolPolicyKeyV1::new(
+                PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            ),
             policy,
         ));
     }
@@ -554,10 +556,10 @@ fn private_context_json_rejects_nonfour_arrays_unknown_root_and_key_fields() {
 #[test]
 fn private_context_authenticates_policy_value_absence_and_original_drain() {
     let (key, mut proof) = fixture();
-    let protocol = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
-    let current = PrivacyProtocolLimitsV1::canonical_default_v1(protocol);
+    let protocol = PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+    let current = PrivacyRuntimeProtocolLimitsV1::canonical_default_v1(protocol);
     let mut next = current;
-    let PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(ref mut limits) = next else {
+    let PrivacyRuntimeProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(ref mut limits) = next else {
         unreachable!()
     };
     limits.max_input_count = 1;
@@ -687,10 +689,10 @@ fn private_context_rejects_committed_malformed_extension_and_preserves_codec_ref
 #[test]
 fn authenticated_baseline_protocol_closure_keeps_original_row_only_semantics() {
     let (key, mut proof) = fixture();
-    let protocol_id = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
     let mut policy = PrivacyProtocolPolicyV1::canonical_default_v1(protocol_id);
     let mut next = policy.current_limits;
-    let PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(ref mut limits) = next else {
+    let PrivacyRuntimeProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(ref mut limits) = next else {
         unreachable!()
     };
     limits.max_input_count = 1;

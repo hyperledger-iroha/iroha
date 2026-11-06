@@ -16,7 +16,7 @@ fn release_manifest_placeholder_signature() -> Signature {
 }
 
 fn synthetic_valid_release_manifest() -> PrivacyExact12ReleaseManifestV1 {
-    let protocols = PrivacyProtocolIdV1::ALL
+    let protocols = PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS
         .into_iter()
         .enumerate()
         .map(|(index, protocol_id)| {
@@ -63,7 +63,10 @@ fn synthetic_valid_release_manifest() -> PrivacyExact12ReleaseManifestV1 {
 
     let mut stage_receipts = Vec::with_capacity(PRIVACY_EXACT12_RELEASE_STAGE_RECEIPTS_V1);
     let mut proof_artifacts = Vec::with_capacity(PRIVACY_EXACT12_RELEASE_PROOF_ARTIFACTS_V1);
-    for (protocol_index, protocol_id) in PrivacyProtocolIdV1::ALL.into_iter().enumerate() {
+    for (protocol_index, protocol_id) in PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS
+        .into_iter()
+        .enumerate()
+    {
         let binding = &protocols[protocol_index];
         for (stage_index, stage) in PrivacyReleaseStageV1::ALL.into_iter().enumerate() {
             let stage_ordinal =
@@ -233,7 +236,7 @@ fn synthetic_valid_release_manifest() -> PrivacyExact12ReleaseManifestV1 {
         receipt.security_claim_digest = manifest.protocols[protocol_index].security_claim_digest;
     }
     for artifact in &mut manifest.proof_artifacts {
-        let protocol_index = PrivacyProtocolIdV1::ALL
+        let protocol_index = PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS
             .iter()
             .position(|protocol_id| *protocol_id == artifact.protocol_id)
             .expect("closed protocol is present");
@@ -379,7 +382,7 @@ fn release_artifact_digest_is_an_exact_fixed_width_type() {
 #[test]
 fn proof_artifact_distribution_is_the_frozen_fifty_four() {
     let mut count = 0_usize;
-    for protocol_id in PrivacyProtocolIdV1::ALL {
+    for protocol_id in PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS {
         for stage in PrivacyReleaseStageV1::ALL {
             count += usize::from(privacy_exact12_release_proof_artifact_count_v1(
                 protocol_id,
@@ -390,14 +393,14 @@ fn proof_artifact_distribution_is_the_frozen_fifty_four() {
     assert_eq!(count, PRIVACY_EXACT12_RELEASE_PROOF_ARTIFACTS_V1);
     assert_eq!(
         privacy_exact12_release_proof_artifact_count_v1(
-            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
             PrivacyReleaseStageV1::PositiveCanonicalEndToEnd,
         ),
         2
     );
     assert_eq!(
         privacy_exact12_release_proof_artifact_count_v1(
-            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
             PrivacyReleaseStageV1::PublicStatementBindingMutation,
         ),
         1
@@ -405,7 +408,7 @@ fn proof_artifact_distribution_is_the_frozen_fifty_four() {
     for stage in PrivacyReleaseStageV1::ALL {
         assert_eq!(
             privacy_exact12_release_proof_artifact_count_v1(
-                PrivacyProtocolIdV1::IrohaZkAmsV1,
+                PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1,
                 stage,
             ),
             2
@@ -870,7 +873,7 @@ fn rebind_synthetic_release_audit_bundle(manifest: &mut PrivacyExact12ReleaseMan
         receipt.security_claim_digest = manifest.protocols[protocol_index].security_claim_digest;
     }
     for artifact in &mut manifest.proof_artifacts {
-        let protocol_index = PrivacyProtocolIdV1::ALL
+        let protocol_index = PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS
             .iter()
             .position(|protocol_id| *protocol_id == artifact.protocol_id)
             .expect("the fixture uses a catalog protocol");

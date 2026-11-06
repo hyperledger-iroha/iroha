@@ -251,6 +251,54 @@ fn derive(
     })
 }
 
+/// Exact Unload successor of [`derive`] for native suffix verification (option a,
+/// 2026-11-06): the same amount, adjusted-balance, quote, nullifier, recovery-insertion and
+/// statement owner as [`PreparationV1::prepare_consuming`], applied to an opened tip whose
+/// lineage-adjusted projection the suffix owner verified natively instead of a folded Omega.
+/// The projection is not an Omega and grants no Send, fold or Advance authority.
+pub(crate) struct SuffixUnloadSuccessorV1 {
+    pub(crate) state: KagemushaWalletStateV1,
+    pub(crate) statement: KagemushaWalletStatementV1,
+    pub(crate) projection: KagemushaWalletLineagePublicV1,
+    pub(crate) openings: Vec<Vec<u8>>,
+}
+
+/// Derive one Unload from the natively verified tip `before` and its adjusted `lineage`.
+///
+/// # Errors
+/// What [`derive`] rejects: foreign credential/state, insufficient adjusted balance, zero
+/// amount, invalid or mismatched signed charge, nonempty recovery slot or overflow.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn suffix_unload_successor_v1(
+    scheme: &KagemushaWalletSchemeV1,
+    credential: &KagemushaWalletCredentialV1,
+    before: &KagemushaWalletStateV1,
+    lineage: &KagemushaWalletLineagePublicV1,
+    amount: u128,
+    insertion: &KagemushaWalletIndexedInsertV1,
+    charge: Option<UnloadChargeOriginalsV1<'_>>,
+    nonce: [u8; 32],
+) -> Result<SuffixUnloadSuccessorV1, Error> {
+    let derived = derive(
+        scheme,
+        credential,
+        before,
+        lineage,
+        ConsumingActionV1::Unload {
+            amount,
+            insertion,
+            charge,
+        },
+        nonce,
+    )?;
+    Ok(SuffixUnloadSuccessorV1 {
+        state: derived.state,
+        statement: derived.statement,
+        projection: derived.projection,
+        openings: derived.openings,
+    })
+}
+
 impl PreparationV1<'_> {
     // Reuse the genuine Unload amount/quote predicates without a recovery insertion,
     // successor nonce, proving, signing or durable state change.

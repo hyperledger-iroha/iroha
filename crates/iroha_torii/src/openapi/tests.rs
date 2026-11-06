@@ -808,22 +808,26 @@ fn package_openapi_authority_is_canonical_norito_json() {
 fn privacy_protocol_policy_schema_matches_native_limits_and_future_updates() {
     use iroha_data_model::privacy::{
         JindoLimitsV1, PrivacyConsensusLimitsV1, PrivacyConsensusPolicyUpdateV1,
-        PrivacyConsensusPolicyV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsUpdateV1,
-        PrivacyProtocolLimitsV1, PrivacyProtocolPolicyV1,
+        PrivacyConsensusPolicyV1, PrivacyProtocolLimitsUpdateV1, PrivacyProtocolPolicyV1,
+        PrivacyRuntimeProtocolIdV1, PrivacyRuntimeProtocolLimitsV1,
     };
-    let protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
     let update = PrivacyProtocolLimitsUpdateV1 {
         scheduled_at_height: 7,
         effective_at_height: 8,
-        next_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
-            max_polynomial_count: 3,
-        }),
+        next_limits: PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
+            JindoLimitsV1 {
+                max_polynomial_count: 3,
+            },
+        ),
     };
     let policy = PrivacyProtocolPolicyV1 {
         protocol_id,
-        current_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
-            max_polynomial_count: 2,
-        }),
+        current_limits: PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
+            JindoLimitsV1 {
+                max_polynomial_count: 2,
+            },
+        ),
         pending_update: Some(update),
     };
     policy
@@ -928,9 +932,9 @@ fn privacy_protocol_policy_schema_matches_native_limits_and_future_updates() {
         let variants = schemas["PrivacyProtocolLimitsV1"]["oneOf"]
             .as_array()
             .expect("closed native protocol limits");
-        assert_eq!(variants.len(), PrivacyProtocolIdV1::COUNT);
-        for (variant, protocol_id) in variants.iter().zip(PrivacyProtocolIdV1::ALL) {
-            let limits = PrivacyProtocolLimitsV1::canonical_default_v1(protocol_id);
+        assert_eq!(variants.len(), PrivacyRuntimeProtocolIdV1::COUNT);
+        for (variant, protocol_id) in variants.iter().zip(PrivacyRuntimeProtocolIdV1::ALL) {
+            let limits = PrivacyRuntimeProtocolLimitsV1::canonical_default_v1(protocol_id);
             let native = norito::json::to_value(&limits).unwrap();
             assert_eq!(
                 native

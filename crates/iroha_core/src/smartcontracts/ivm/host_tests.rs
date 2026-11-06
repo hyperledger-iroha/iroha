@@ -20,7 +20,7 @@ use iroha_data_model::query::{
 };
 use iroha_data_model::{
     parameter::{CustomParameter, Parameter, SmartContractParameter},
-    privacy::PrivacyProtocolIdV1,
+    privacy::PrivacyRuntimeProtocolIdV1,
     proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId},
     query::{QueryRequest, QueryResponse, SingularQueryBox, prelude::FindParameters},
     smart_contract::ContractArtifactId,
@@ -8185,7 +8185,9 @@ fn set_verifying_keys_rejects_malformed_circuit_ids() {
 }
 #[test]
 fn set_verifying_keys_rejects_exact12_privacy_ids_during_state_rehydration() {
-    for circuit_id in PrivacyProtocolIdV1::ALL.map(PrivacyProtocolIdV1::canonical_label) {
+    for circuit_id in
+        PrivacyRuntimeProtocolIdV1::ALL.map(PrivacyRuntimeProtocolIdV1::canonical_label)
+    {
         let mut host = CoreHost::new(fixture_account("alice"));
         let backend = "pipa-r/pasta";
         let vk_bytes = vec![1, 2, 3, 4];
@@ -8200,7 +8202,7 @@ fn set_verifying_keys_rejects_exact12_privacy_ids_during_state_rehydration() {
         );
         assert!(host.prepared_verifying_keys.is_empty());
     }
-    let exact12 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1.canonical_label();
+    let exact12 = PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1.canonical_label();
     for (case, circuit_id) in [
         ("leading-whitespace", format!(" {exact12}")),
         ("trailing-whitespace", format!("{exact12} ")),
@@ -8651,6 +8653,7 @@ fn set_verifying_keys_rejects_readiness_claim_and_unsupported_backend_labels() {
     }
 }
 include!("host/contract_state_namespace_tests.rs");
+include!("host/ironwood_proposal_tests.rs");
 include!("host/stream_token_custody_namespace_tests.rs");
 #[test]
 fn contract_address_bytes_roundtrip_through_typed_durable_state() {

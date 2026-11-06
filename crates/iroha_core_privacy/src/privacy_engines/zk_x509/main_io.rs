@@ -20,7 +20,7 @@ use super::{
     },
 };
 use iroha_data_model::privacy::{
-    IrohaZkX509StarkP256StatementV1, PrivacyConsensusLimitsV1, PrivacyStatementV1,
+    IrohaZkX509StarkP256StatementV1, PrivacyConsensusLimitsV1, PrivacyRuntimeStatementV1,
     ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1,
 };
 use thiserror::Error;
@@ -308,7 +308,7 @@ fn logical_rows_v1(
 pub fn compile_zk_x509_main_io_declarations_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> Result<ZkX509MainIoDeclarationsV1, ZkX509MainIoPlanErrorV1> {
-    PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone())
+    PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement.clone())
         .validate(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| ZkX509MainIoPlanErrorV1::Statement)?;
     let disclosed_attributes = statement.disclosed_attributes.len();

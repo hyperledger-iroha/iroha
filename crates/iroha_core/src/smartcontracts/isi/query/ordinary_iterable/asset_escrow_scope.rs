@@ -55,7 +55,8 @@ pub(super) fn collect(
         )
         .into());
     }
-    let (_, maximum, work) = trigger_source_limits(params, mode, limits)?;
+    let (_, maximum, _) = trigger_source_limits(params, mode, limits)?;
+    let budget = Some(limits.execution_budget());
     let world = state.world();
     if world
         .axt_asset_incarnations()
@@ -70,7 +71,16 @@ pub(super) fn collect(
     let key = scope_key(&query.asset_definition_id, &query.expected_incarnation)
         .map_err(|message| Error::Conversion(message.into()))?;
     let mut execution_stats = QueryExecutionStats::default();
-    execution_stats.record_preflighted_item(work, Some(limits.execution_budget()))?;
+    // Reserve the complete original's final count/checksum/write traversals
+    // before owning its source. The borrowed scope below prepays decode/copy
+    // from its exact length. Individual
+    // records below charge their actual bounded frames, not this aggregate
+    // allowance once for every unrelated escrow in the world.
+    let original_work = limits
+        .max_source_item_bytes()
+        .checked_mul(3)
+        .ok_or(Error::CapacityLimit)?;
+    execution_stats.record_preflighted_item(original_work, budget)?;
     let bytes = world
         .smart_contract_state()
         .get(&key)
@@ -78,6 +88,11 @@ pub(super) fn collect(
     if bytes.len() > maximum {
         return Err(Error::CapacityLimit.into());
     }
+    let scope_work = u64::try_from(bytes.len())
+        .ok()
+        .and_then(|bytes| bytes.checked_mul(2))
+        .ok_or(Error::CapacityLimit)?;
+    execution_stats.record_precomputed_bytes(scope_work, budget)?;
     let (mut graph, output_slots) =
         RetainedDecodeBudget::new::<AssetEscrowScopeOriginalV1>(1, limits.max_source_item_bytes())?;
     let scope: AssetEscrowScopeV1 = decode(bytes, &mut graph)?;
@@ -102,17 +117,44 @@ pub(super) fn collect(
     for byte in bytes {
         scope_bytes.push(*byte)?;
     }
-    // Charge every visited canonical row before inspection, including other assets.
+    // Only fixed-width key/definition comparisons precede record admission.
+    // Charge every visited canonical row, including unrelated assets, before
+    // inspection; their complete record graphs never need to be traversed.
+    let identity_work = u64::try_from(2 * core::mem::size_of::<iroha_crypto::Hash>())
+        .map_err(|_| Error::CapacityLimit)?;
     // No finite prefix or scan failure can be returned as complete.
     for (id, record) in world.asset_escrows().iter() {
-        execution_stats.record_preflighted_item(work, Some(limits.execution_budget()))?;
+        execution_stats.record_preflighted_item(identity_work, budget)?;
         if &record.id != id {
             return Err(Error::Conversion("escrow source key differs from record".into()).into());
         }
         if record.asset_definition != query.asset_definition_id {
             continue;
         }
-        let frame = encode_bounded_frame(record, maximum)?;
+        // The finite counting pass is itself bounded before it visits the
+        // source. Its actual length prepays all five frame traversals: this
+        // preflight, the encoder's recount/checksum/write, and decode. The
+        // unchanged aggregate graph allowance still owns every decoded row.
+        const FRAME_TRAVERSALS: u64 = 5;
+        let remaining = limits.execution_budget().remaining_bytes(
+            execution_stats.processed_items(),
+            execution_stats.processed_bytes(),
+        )?;
+        let frame_limit =
+            usize::try_from((remaining / FRAME_TRAVERSALS).min(limits.max_source_item_bytes()))
+                .map_err(|_| Error::CapacityLimit)?;
+        let encoded_len = {
+            let _flags =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            norito::core::encoded_frame_len_bounded(record, frame_limit)
+                .map_err(|_| Error::CapacityLimit)?
+        };
+        let frame_work = u64::try_from(encoded_len)
+            .ok()
+            .and_then(|bytes| bytes.checked_mul(FRAME_TRAVERSALS))
+            .ok_or(Error::CapacityLimit)?;
+        execution_stats.record_precomputed_bytes(frame_work, budget)?;
+        let frame = encode_bounded_frame(record, encoded_len)?;
         let owned: AssetEscrowRecord = decode(&frame, &mut graph)?;
         records.push(owned)?;
     }

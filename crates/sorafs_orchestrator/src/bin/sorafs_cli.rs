@@ -578,6 +578,7 @@ struct ManifestRegisterSubmission {
     response_bytes: Vec<u8>,
     response_value: Value,
     submission_mode: &'static str,
+    transaction_hash: iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
 }
 struct ManifestSubmitRequest<'a> {
     client: &'a HttpClient,
@@ -758,8 +759,10 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     insert_value!(
         registration_summary["response_path"] = register_response_path.display().to_string()
     );
+    let mut registration_hash = None;
     let paid_pin_fee = match registration {
         Ok(response) => {
+            registration_hash = Some(response.transaction_hash);
             write_bytes(&register_response_path, &response.response_bytes)?;
             let registration_ok = response.status.is_success();
             insert_value!(registration_summary["status"] = response.status.as_u16() as u64);
@@ -820,19 +823,21 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         insert_value!(discovery_json["warning"] = err.clone());
     }
     insert_json!(receipt["peer_discovery"] = Value::Object(discovery_json));
-    let publication = if errors.is_empty() {
-        deploy_publication::qualify(
-            &client,
-            &torii_base_url,
-            &client_config,
-            &mut artifacts,
-            checkpoint,
-            &provider_urls,
-            &out_dir,
-        )
-    } else {
-        Err("registration submission failed".to_owned())
-    };
+    let publication =
+        if let Some(registration_hash) = registration_hash.filter(|_| errors.is_empty()) {
+            deploy_publication::qualify(
+                &client,
+                &torii_base_url,
+                &client_config,
+                &mut artifacts,
+                registration_hash,
+                checkpoint,
+                &provider_urls,
+                &out_dir,
+            )
+        } else {
+            Err("registration submission failed".to_owned())
+        };
     let publication_verified = match publication {
         Ok(summary) => {
             insert_json!(receipt["provider_ingest"] = summary);
@@ -1080,12 +1085,12 @@ fn build_deploy_artifacts(
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
-            retention_epoch: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_err(|_| "system clock precedes Unix epoch".to_owned())?
-                .as_secs()
-                .checked_add(86_400)
-                .ok_or_else(|| "retention deadline overflow".to_owned())?,
+            retention_epoch: deploy_publication::default_deploy_retention_epoch(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|_| "system clock precedes Unix epoch".to_owned())?
+                    .as_secs(),
+            )?,
         })
         .build()
         .map_err(format_manifest_error)?;
@@ -1192,6 +1197,9 @@ fn submit_pin_register(
         request.private_key,
         transaction.payload().clone(),
     )?;
+    // Bind later rejection observations to the exact fee-quoted signed input,
+    // never to a server-supplied hash or the unsigned manifest digest.
+    let transaction_hash = transaction.hash();
     let body_bytes = transaction.encode_versioned();
     let response = request
         .client
@@ -1211,6 +1219,7 @@ fn submit_pin_register(
             response_value: decode_response_value_or_text(&response_bytes),
             response_bytes,
             submission_mode: "pin_register_http",
+            transaction_hash,
         });
     }
     let body_text = String::from_utf8_lossy(&response_bytes);

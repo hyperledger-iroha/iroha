@@ -48,6 +48,7 @@ use crate::kagemusha_wallet_proofs_v1::randomness;
 
 mod incoming;
 mod incoming_inputs;
+pub(crate) use incoming_inputs::suffix_receive_burns;
 mod inputs;
 mod q;
 mod q_checkpoint;

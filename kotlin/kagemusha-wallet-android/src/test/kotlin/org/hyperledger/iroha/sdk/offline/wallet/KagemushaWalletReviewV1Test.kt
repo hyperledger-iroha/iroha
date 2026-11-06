@@ -70,12 +70,12 @@ class KagemushaWalletReviewV1Test {
     @Test fun unloadReviewPreservesFoldRequiredWithoutAReviewCapability() {
         val failure = KagemushaWalletReviewReplyV1(-8, -1, 0, 0, 0, 0, byteArrayOf())
         val error = assertThrows(KagemushaWalletExceptionV1::class.java) {
-            failure.review(Any(), KagemushaWalletReviewProjectionV1.Kind.UNLOAD)
+            failure.ready(Any(), KagemushaWalletReviewProjectionV1.Kind.UNLOAD)
         }
         assertEquals(KagemushaWalletExceptionV1.FOLD_REQUIRED, error.status)
         assertNull(failure.cleanupToken())
         val malformed = assertThrows(KagemushaWalletExceptionV1::class.java) {
-            reply(bytes = data(false), status = -8).review(Any(), KagemushaWalletReviewProjectionV1.Kind.UNLOAD)
+            reply(bytes = data(false), status = -8).ready(Any(), KagemushaWalletReviewProjectionV1.Kind.UNLOAD)
         }
         assertEquals(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT, malformed.status)
     }

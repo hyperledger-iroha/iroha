@@ -34,7 +34,7 @@ use crate::privacy_engines::transparent_stark::{
     GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, PolynomialAirFieldV1,
 };
 use iroha_data_model::privacy::{
-    IrohaZkX509StarkP256StatementV1, PrivacyStatementV1, ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1,
+    IrohaZkX509StarkP256StatementV1, PrivacyRuntimeStatementV1, ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1,
 };
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
@@ -795,7 +795,7 @@ fn compile_invocations_v1(
             });
         }
     }
-    let statement_digest = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone())
+    let statement_digest = PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement.clone())
         .digest()
         .map_err(|_| ZkX509ProjectionAirErrorV1::Encoding)?;
     let account = norito::to_bytes(&statement.wallet_account)

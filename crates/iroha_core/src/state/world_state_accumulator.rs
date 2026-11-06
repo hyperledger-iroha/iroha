@@ -385,20 +385,22 @@ pub fn selection_schema(selection: &RootSelectionV1) -> Result<Hash, String> {
 /// storage no canonical field of this release implements.
 fn installed_slots(index: &FieldIndex, selection: &RootSelectionV1) -> Result<Vec<bool>, String> {
     let catalog = crate::runtime::release_catalog().map_err(|error| error.to_string())?;
-    let installed = index
-        .ids
-        .iter()
-        .map(|id| {
-            catalog
-                .world_storage
-                .get(id)
-                .map(|storage| selection.installed_storage.binary_search(storage).is_ok())
-                .ok_or_else(|| format!("canonical World field {id} has no storage definition"))
-        })
-        .collect::<Result<Vec<bool>, String>>()?;
-    if installed.iter().filter(|installed| **installed).count() != selection.installed_storage.len()
-    {
-        return Err("the selection installs storage this release does not implement".into());
+    // Cold capture also refuses partial composition with no active bundle or Ironwood rows.
+    // The forward installation pass additionally verifies the published cutover certificate.
+    crate::runtime::ironwood::validate_compiled_storage_selection(selection)?;
+    let mut installed = vec![false; index.ids.len()];
+    for id in &selection.installed_storage {
+        let Some(iroha_data_model::runtime::definition::DefinitionDescriptorV1::Storage(storage)) =
+            catalog.definitions.get(id)
+        else {
+            return Err("the selection installs storage this release does not implement".into());
+        };
+        let Ok(slot) = index.ids.binary_search(&storage.namespace.as_str()) else {
+            return Err("the selection installs an unknown physical storage owner".into());
+        };
+        if std::mem::replace(&mut installed[slot], true) {
+            return Err("the selection installs duplicate physical storage owners".into());
+        }
     }
     Ok(installed)
 }
@@ -551,13 +553,22 @@ impl Builder<'_> {
 /// a block pass also compares it with the selection before the block.
 ///
 /// # Errors
-/// A selection installs storage this release does not implement, or the block retires storage,
-/// which only a migration cutover may do and this release does not implement.
+/// A selection installs unsupported storage, retires a physical owner, or attempts an incomplete
+/// or uncertified Ironwood identity cutover. The fixed successor preserves all twelve owners.
 fn installation(
     index: &FieldIndex,
     world: &WorldBlock<'_>,
     direction: Direction,
 ) -> Result<Vec<Installation>, String> {
+    if direction != Direction::Capture
+        && world.runtime_selection.get_before_block() != world.runtime_selection.get()
+    {
+        crate::runtime::ironwood::validate_cutover(
+            world.runtime_selection.get_before_block(),
+            world.runtime_selection.get(),
+            &crate::runtime::change_set::PublishedDefinitions(&world.runtime_definitions),
+        )?;
+    }
     let successor = installed_slots(index, world.runtime_selection.get())?;
     let parent = match direction {
         Direction::Capture => successor.clone(),

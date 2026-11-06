@@ -1,8 +1,8 @@
 //! Focused wrong-dataspace Torii ingress regression for transaction and query routing.
-use super::localnet_npos::npos_override_transactions;
+use super::localnet_npos::npos_override_instruction;
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
-use iroha::query::QueryError;
+use iroha::query::{AsyncQueryBuilderExt as _, QueryError};
 use iroha::{
     blocking::Client,
     crypto::Hash,
@@ -14,8 +14,9 @@ use iroha::{
         da::commitment::DaProofPolicyBundle,
         domain::Domain,
         isi::{
-            InstructionBox, Log, Mint, Register,
+            Grant, InstructionBox, Log, Mint, Register,
             consensus_keys::RegisterConsensusKey,
+            register::RegisterPeerWithPop,
             space_directory::PublishSpaceDirectoryManifest,
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
@@ -34,8 +35,17 @@ use iroha_core::{da::proof_policy_bundle, state::derive_committee_key_id};
 use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::{
     ValidationFail,
-    query::error::{FindError, QueryExecutionFail},
+    query::{
+        error::{FindError, QueryExecutionFail},
+        parameters::FetchSize,
+        peer::prelude::FindPeers,
+    },
+    sumeragi_lanes::{
+        SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy, SumeragiLaneRoute,
+        SumeragiLaneStatus,
+    },
 };
+use iroha_executor_data_model::permission::peer::CanManagePeers;
 use iroha_genesis::GenesisTopologyEntry;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -43,7 +53,7 @@ use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::NumericSpec;
 use iroha_test_network::{
-    NetworkBuilder, genesis_participant_committee_key_instructions,
+    Network, NetworkBuilder, ObserverP2pBootstrap, genesis_participant_committee_key_instructions,
     unexecuted_genesis_factory_with_post_topology,
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
@@ -55,7 +65,7 @@ use norito::{decode_from_bytes, json::Value as JsonValue};
 use reqwest::StatusCode as HttpStatusCode;
 use std::{
     collections::BTreeSet,
-    num::NonZeroU32,
+    num::{NonZeroU32, NonZeroU64},
     thread,
     time::{Duration, Instant},
 };
@@ -74,20 +84,52 @@ const DS1_LANE_INDEX: u32 = 1;
 const DS2_LANE_INDEX: u32 = 2;
 const VALIDATORS_PER_LANE: usize = 4;
 const LANE_VALIDATOR_COUNT: usize = VALIDATORS_PER_LANE * 3;
-// Keep the global permissioned committee at exact revision-4 geometry while
-// assigning only the first twelve peers to the three disjoint lane committees.
+// Keep the signed global committee at exact 3f+1 geometry while assigning only
+// the first twelve peers to the three disjoint lane committees. This routing
+// fixture runs within the initial 3,600-block epoch: lane-zero's four candidates
+// are not a replacement thirteen-validator global election pool.
 const TOTAL_PEERS: usize = 13;
 const VALIDATOR_STAKE: u64 = 2_000;
 const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
+const ASSET_PAGE_LIMIT: usize = 16;
 const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
-const ALICE_WRONG_INGRESS_INDEX: usize = VALIDATORS_PER_LANE * 2;
-const BOB_WRONG_INGRESS_INDEX: usize = VALIDATORS_PER_LANE;
+const DS1_VALIDATOR_INDEX: usize = VALIDATORS_PER_LANE;
+const DS2_VALIDATOR_INDEX: usize = VALIDATORS_PER_LANE * 2;
+const INGRESS_OBSERVER_COUNT: usize = 2;
+const DS1_INGRESS_OBSERVER_INDEX: usize = 0;
+const DS2_INGRESS_OBSERVER_INDEX: usize = 1;
+fn partitioned_asset_domain() -> DomainId {
+    DomainId::try_new("nexus", NEXUS_ALIAS).expect("public asset definition domain")
+}
+
+fn partitioned_asset_definition_id() -> AssetDefinitionId {
+    AssetDefinitionId::derive_from_components(
+        partitioned_asset_domain(),
+        "reserve".parse().expect("private asset name"),
+    )
+}
+
+fn restricted_asset_partition() -> AssetId {
+    AssetId::with_scope(
+        partitioned_asset_definition_id(),
+        ALICE_ID.clone(),
+        iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(DS1_ID_U64)),
+    )
+}
+
 fn stake_asset_definition_id() -> AssetDefinitionId {
     nexus_fee_asset_definition_id()
 }
 fn stake_asset_id_literal() -> String {
     stake_asset_definition_id().to_string()
+}
+fn genesis_staking_policy() -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
+    iroha_genesis::default_staking_policy(
+        stake_asset_definition_id(),
+        routing_probe_gas_account_id(),
+        routing_probe_gas_account_id(),
+    )
 }
 fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
@@ -105,6 +147,7 @@ struct ExpectedLaneValidatorBinding {
 }
 #[derive(Debug)]
 struct RoutedJsonResponse {
+    permission_semantics: Option<String>,
     status: HttpStatusCode,
     body: JsonValue,
     body_text: String,
@@ -138,29 +181,47 @@ fn expected_lane_binding_for_peer(index: usize, peer_id: &PeerId) -> ExpectedLan
         peer_id: peer_id.to_string(),
     }
 }
+// Runtime registration adds a proof-bound registry candidate, not a voter. The
+// observers remain outside the original global and fixed lane committees.
+fn ingress_observer_registration(peer: PeerId, pop: &[u8]) -> Result<RegisterPeerWithPop> {
+    iroha_crypto::bls_normal_pop_verify(peer.public_key(), pop)
+        .wrap_err("ingress observer must prove possession of its exact peer key")?;
+    Ok(RegisterPeerWithPop::new(peer, pop.to_vec()))
+}
+fn ingress_registry_matches(actual: &[PeerId], expected: &BTreeSet<PeerId>) -> bool {
+    actual.len() == expected.len() && actual.iter().cloned().collect::<BTreeSet<_>>() == *expected
+}
 fn localnet_builder() -> NetworkBuilder {
-    let gas_account_str = routing_probe_gas_account_id()
-        .canonical_i105()
-        .expect("canonical I105 gas account literal");
     NetworkBuilder::new()
         .with_peers(TOTAL_PEERS)
+        // Every global validator is authoritative for these globally executed
+        // routes. Non-voting ingress peers exercise actual proxy dispatch while
+        // retaining the exact global and native lane committees below.
+        .with_observer_p2p_bootstrap(
+            ObserverP2pBootstrap::new(INGRESS_OBSERVER_COUNT).expect("two ingress observers"),
+        )
+        .expect("thirteen validators and two ingress observers fit the P2P capacity")
+        .with_npos_consensus()
         .without_npos_genesis_bootstrap()
         .with_genesis_block(|topology, topology_entries| {
             let post_topology = npos_multilane_genesis_post_topology_transactions(
                 topology.as_ref(),
                 &topology_entries,
             );
-            let mut genesis = unexecuted_genesis_factory_with_post_topology(
-                npos_override_transactions(VALIDATORS_PER_LANE),
+            // The builder binds configured DA policies before re-signing the
+            // normalized carrier. Mutating this signed source invalidates it.
+            unexecuted_genesis_factory_with_post_topology(
+                Vec::new(),
                 post_topology,
                 topology,
                 topology_entries,
-            );
-            genesis
-                .0
-                .set_da_proof_policies(Some(multilane_da_proof_policy_bundle()));
-            genesis
+                genesis_staking_policy(),
+            )
         })
+        // Bind NPoS after selecting the custom source, which resets extra
+        // instructions. Its source factory starts with a permissioned carrier;
+        // normalization signs this exact thirteen-validator election policy.
+        .with_genesis_instruction(npos_override_instruction(TOTAL_PEERS))
         .with_config_layer(move |layer| {
             let mut lane_nexus = Table::new();
             lane_nexus.insert("index".into(), TomlValue::Integer(0));
@@ -290,22 +351,45 @@ fn localnet_builder() -> NetworkBuilder {
                     "stake_elected",
                 )
                 .write(
-                    ["nexus", "staking", "stake_asset_id"],
-                    stake_asset_id_literal(),
-                )
-                .write(
-                    ["nexus", "staking", "stake_escrow_account_id"],
-                    gas_account_str.clone(),
-                )
-                .write(
-                    ["nexus", "staking", "slash_sink_account_id"],
-                    gas_account_str.clone(),
-                )
-                .write(
                     ["nexus", "staking", "max_validators"],
                     i64::try_from(VALIDATORS_PER_LANE).expect("validator count fits TOML integer"),
                 );
         })
+}
+fn wrong_ingress_clients(network: &Network) -> Result<(Client, Client)> {
+    let observers = network.observers();
+    ensure!(
+        observers.len() == INGRESS_OBSERVER_COUNT,
+        "expected two non-voting ingress peers, got {}",
+        observers.len()
+    );
+    Ok((
+        observers[DS2_INGRESS_OBSERVER_INDEX]
+            .client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone()),
+        observers[DS1_INGRESS_OBSERVER_INDEX]
+            .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone()),
+    ))
+}
+fn ingress_status_retry_delay(error: &iroha::Error) -> Option<Duration> {
+    match error {
+        iroha::Error::StatusUnavailable {
+            reason: Some(iroha::StatusFailureReason::StateBusy),
+            retry_after,
+        } => Some(STATUS_POLL_INTERVAL.max(retry_after.unwrap_or_default())),
+        _ => None,
+    }
+}
+fn ingress_readiness_before_deadline(
+    latest: &[u64; INGRESS_OBSERVER_COUNT],
+    target: u64,
+    now: tokio::time::Instant,
+    deadline: tokio::time::Instant,
+) -> Result<bool> {
+    ensure!(
+        now < deadline,
+        "ingress applied readiness did not reach {target} before its deadline: {latest:?}"
+    );
+    Ok(latest.iter().all(|height| *height >= target))
 }
 fn multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
     let lane_count = NonZeroU32::new(3).expect("lane count");
@@ -336,6 +420,61 @@ fn multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
     let lane_config = ActualLaneConfig::from_catalog(&catalog);
     proof_policy_bundle(&lane_config)
 }
+fn restricted_lane_policy(
+    topology: &[PeerId],
+    topology_entries: &[GenesisTopologyEntry],
+) -> SumeragiLanePolicy {
+    assert_eq!(topology.len(), TOTAL_PEERS);
+    let policy = SumeragiLanePolicy {
+        da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
+        anchor_freshness: 64,
+        max_merge_blocks: 16,
+        stall_window: 10_000,
+        lane_params: iroha_data_model::parameter::system::SumeragiParameters::default(),
+        fixed: [(DS1_LANE_INDEX, DS1_ID_U64), (DS2_LANE_INDEX, DS2_ID_U64)]
+            .into_iter()
+            .enumerate()
+            .map(|(offset, (lane, dataspace))| {
+                let start = (offset + 1) * VALIDATORS_PER_LANE;
+                let mut committee = topology[start..start + VALIDATORS_PER_LANE]
+                    .iter()
+                    .map(|peer| {
+                        let entry = topology_entries
+                            .iter()
+                            .find(|entry| &entry.peer == peer)
+                            .expect("signed topology contains each lane member");
+                        SumeragiLaneMember {
+                            peer: peer.clone(),
+                            pop: entry
+                                .pop_bytes()
+                                .expect("well-formed PoP")
+                                .expect("lane PoP"),
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                // The signed policy pins the native record's canonical peer order,
+                // independently of each validator's position in the global topology.
+                committee.sort_by(|left, right| left.peer.cmp(&right.peer));
+                SumeragiFixedLane {
+                    lane: LaneId::new(lane),
+                    dataspace: DataSpaceId::new(dataspace),
+                    committee,
+                }
+            })
+            .collect(),
+        routes: [(DS1_LANE_INDEX, &*ALICE_ID), (DS2_LANE_INDEX, &*BOB_ID)]
+            .into_iter()
+            .map(|(lane, account)| SumeragiLaneRoute {
+                lane: LaneId::new(lane),
+                account: Some(account.to_string()),
+                instruction: None,
+            })
+            .collect(),
+        autoscale: None,
+    };
+    policy.validate().expect("native restricted lane policy");
+    policy
+}
 fn npos_multilane_genesis_post_topology_transactions(
     topology: &[PeerId],
     topology_entries: &[GenesisTopologyEntry],
@@ -363,7 +502,7 @@ fn npos_multilane_genesis_post_topology_transactions(
     );
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(nexus_domain.clone())).into(),
-        Register::domain(Domain::new(universal_domain)).into(),
+        Register::domain(Domain::new(universal_domain.clone())).into(),
         Register::domain(Domain::new(ds1_domain)).into(),
         Register::domain(Domain::new(ds2_domain)).into(),
         Register::asset_definition({
@@ -373,7 +512,7 @@ fn npos_multilane_genesis_post_topology_transactions(
                 "XOR".to_owned(),
                 NumericSpec::fractional(9),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(universal_domain.clone()),
             )
         })
         .into(),
@@ -383,7 +522,7 @@ fn npos_multilane_genesis_post_topology_transactions(
                 __asset_definition_id.clone(),
                 "ds1coin".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(nexus_domain.clone()),
             )
         })
         .into(),
@@ -393,7 +532,7 @@ fn npos_multilane_genesis_post_topology_transactions(
                 __asset_definition_id.clone(),
                 "ds2coin".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(nexus_domain.clone()),
             )
         })
         .into(),
@@ -461,7 +600,92 @@ fn npos_multilane_genesis_post_topology_transactions(
         );
         bootstrap_tx.push(ActivatePublicLaneValidator::new(lane_id, validator_id).into());
     }
-    vec![bootstrap_tx]
+    // The funded global-route authority registers the two observer ingress
+    // identities after genesis. P2P trust alone grants no delegated-read authority.
+    bootstrap_tx.push(
+        Grant::account_permission(CanManagePeers, validator_authority_account_for_peer(0)).into(),
+    );
+    // A node-local catalog cannot create native committees. Commit the exact
+    // two restricted committees and authority routes in the signed genesis.
+    bootstrap_tx.push(
+        iroha_data_model::isi::SetParameter::new(iroha_data_model::parameter::Parameter::Custom(
+            restricted_lane_policy(topology, topology_entries).into_custom_parameter(),
+        ))
+        .into(),
+    );
+    // Register the restricted-balance definition in the existing universal
+    // namespace, then mint into the explicit DS1 partition in its own transaction.
+    let public_definition_tx = vec![
+        Register::asset_definition(AssetDefinition::numeric(
+            partitioned_asset_definition_id(),
+            "reserve".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            Some(partitioned_asset_domain()),
+        ))
+        .into(),
+    ];
+    let restricted_balance_tx =
+        vec![Mint::asset_quantity(7_u32, restricted_asset_partition()).into()];
+    vec![bootstrap_tx, public_definition_tx, restricted_balance_tx]
+}
+fn restricted_lane_records_match(
+    statuses: &[SumeragiLaneStatus],
+    policy: &SumeragiLanePolicy,
+    network_id: &NetworkId,
+) -> bool {
+    statuses.len() == policy.fixed.len()
+        && policy.fixed.iter().enumerate().all(|(ordinal, fixed)| {
+            statuses
+                .iter()
+                .find(|status| status.record.lane == fixed.lane)
+                .is_some_and(|status| {
+                    let record = &status.record;
+                    record.dataspace == fixed.dataspace
+                        && record.incarnation
+                            == iroha_core::sumeragi::lanes::step::incarnation(
+                                network_id,
+                                fixed.lane,
+                                fixed.dataspace,
+                                1,
+                                ordinal as u64,
+                            )
+                        && record.committee == fixed.committee
+                        && record.params == policy.lane_params
+                        && record.da_layout == policy.da_layout
+                        && record.anchor_freshness == policy.anchor_freshness
+                        && record.created_at == 1
+                        && record.active_from == 3
+                        && record.closing.is_none()
+                })
+        })
+}
+fn wait_for_restricted_lane_instances(client: &Client, policy: &SumeragiLanePolicy) -> Result<()> {
+    let started = Instant::now();
+    let mut observed = String::new();
+    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
+        match client.client().get_sumeragi_lanes() {
+            Ok(statuses)
+                if restricted_lane_records_match(
+                    &statuses,
+                    policy,
+                    client.client().network_id(),
+                ) && statuses.iter().all(|status| {
+                    status
+                        .instance
+                        .as_ref()
+                        .is_some_and(|instance| instance.halted.is_none())
+                }) =>
+            {
+                return Ok(());
+            }
+            Ok(statuses) => observed = format!("{statuses:?}"),
+            Err(error) => observed = error.to_string(),
+        }
+        thread::sleep(STATUS_POLL_INTERVAL);
+    }
+    Err(eyre!(
+        "native restricted lane membership/readiness timed out: {observed}"
+    ))
 }
 fn lane_validator_snapshot(
     snapshot: &JsonValue,
@@ -700,6 +924,10 @@ async fn torii_json_get(
             .wrap_err_with(|| format!("decode JSON body ({response_context}): {body_text}"))?
     };
     Ok(RoutedJsonResponse {
+        permission_semantics: routed_header_string(
+            &headers,
+            "x-iroha-account-permission-semantics",
+        ),
         status,
         body: json_body,
         body_text,
@@ -774,6 +1002,10 @@ async fn torii_json_get_as_account(
             .wrap_err_with(|| format!("decode JSON body ({response_context}): {body_text}"))?
     };
     Ok(RoutedJsonResponse {
+        permission_semantics: routed_header_string(
+            &headers,
+            "x-iroha-account-permission-semantics",
+        ),
         status,
         body: json_body,
         body_text,
@@ -847,7 +1079,8 @@ async fn submit_transaction_raw(
     client: &Client,
     transaction: &SignedTransaction,
 ) -> Result<RoutedTransactionSubmitResponse> {
-    let request = routed_http_client()
+    let http = routed_http_client();
+    let request = http
         .post(
             client
                 .client()
@@ -857,15 +1090,14 @@ async fn submit_transaction_raw(
         )
         .header(reqwest::header::CONTENT_TYPE, "application/x-norito")
         .body(encode_versioned_signed_transaction(transaction));
-    let response = add_client_headers(client, request, false, true)
-        .send()
-        .await?;
+    let request = build_norito_receipt_request(add_client_headers(client, request, false, true))?;
+    let response = http.execute(request).await?;
     let status = response.status();
     let headers = response.headers().clone();
     let body = response.bytes().await?;
     let body_text = String::from_utf8_lossy(&body).into_owned();
     let receipt = if status == HttpStatusCode::ACCEPTED {
-        Some(decode_from_bytes::<TransactionSubmissionReceipt>(&body)?)
+        Some(decode_transaction_submission_receipt(&headers, &body)?)
     } else {
         None
     };
@@ -877,6 +1109,29 @@ async fn submit_transaction_raw(
         route_lane_id: routed_header_string(&headers, "x-iroha-route-lane-id"),
         route_dataspace_id: routed_header_string(&headers, "x-iroha-route-dataspace-id"),
     })
+}
+fn build_norito_receipt_request(request: reqwest::RequestBuilder) -> Result<reqwest::Request> {
+    let mut request = request.build()?;
+    // Content-Type describes the submitted transaction; Torii negotiates the
+    // receipt independently through Accept and otherwise defaults to JSON.
+    // Replace inherited Accept values so exactly one binary format is selected.
+    request.headers_mut().insert(
+        reqwest::header::ACCEPT,
+        reqwest::header::HeaderValue::from_static("application/x-norito"),
+    );
+    Ok(request)
+}
+fn decode_transaction_submission_receipt(
+    headers: &reqwest::header::HeaderMap,
+    body: &[u8],
+) -> Result<TransactionSubmissionReceipt> {
+    let mut content_types = headers.get_all(reqwest::header::CONTENT_TYPE).iter();
+    ensure!(
+        content_types.next().and_then(|value| value.to_str().ok()) == Some("application/x-norito")
+            && content_types.next().is_none(),
+        "transaction receipt must declare exactly one application/x-norito Content-Type"
+    );
+    decode_from_bytes(body).wrap_err("decode negotiated canonical Norito transaction receipt")
 }
 async fn submit_transaction_and_expect_route(
     submitter: &Client,
@@ -992,9 +1247,9 @@ fn manifest_response_contains_status(
     context: &str,
 ) -> Result<bool> {
     let manifests = body
-        .get("manifests")
+        .get("items")
         .and_then(JsonValue::as_array)
-        .ok_or_else(|| eyre!("{context}: manifest response missing manifests array"))?;
+        .ok_or_else(|| eyre!("{context}: manifest response missing items array"))?;
     Ok(manifests.iter().any(|record| {
         record.get("dataspace_id").and_then(JsonValue::as_u64) == Some(dataspace_id.as_u64())
             && record.get("status").and_then(JsonValue::as_str) == Some(expected_status)
@@ -1006,26 +1261,126 @@ fn manifest_response_contains_dataspace(
     context: &str,
 ) -> Result<bool> {
     let manifests = body
-        .get("manifests")
+        .get("items")
         .and_then(JsonValue::as_array)
-        .ok_or_else(|| eyre!("{context}: manifest response missing manifests array"))?;
+        .ok_or_else(|| eyre!("{context}: manifest response missing items array"))?;
     Ok(manifests.iter().any(|record| {
         record.get("dataspace_id").and_then(JsonValue::as_u64) == Some(dataspace_id.as_u64())
     }))
 }
-async fn wait_for_manifest_api_absence(
-    client: &Client,
-    uaid_literal: &str,
+fn complete_fixture_collection_page(
+    body: &JsonValue,
+    limit: usize,
+    context: &str,
+) -> Result<iroha_torii_shared::list_query::Page<JsonValue>> {
+    let page =
+        norito::json::from_value::<iroha_torii_shared::list_query::Page<JsonValue>>(body.clone())
+            .wrap_err_with(|| format!("{context}: invalid collection page"))?;
+    ensure!(
+        page.items.len() <= limit
+            && page.next_cursor.is_none()
+            && page.total == Some(u64::try_from(page.items.len())?),
+        "{context}: expected a complete bounded collection page, got {body:?}"
+    );
+    Ok(page)
+}
+
+fn require_no_manifest_publish_permission(
+    response: &RoutedJsonResponse,
     dataspace_id: DataSpaceId,
-    expected_lane_id: LaneId,
     context: &str,
 ) -> Result<()> {
-    let started = Instant::now();
-    let mut last_body = String::new();
-    let mut last_error: Option<String> = None;
-    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match torii_json_get(
-            client,
+    ensure!(
+        response.status == HttpStatusCode::OK,
+        "{context}: {}: {}",
+        response.status,
+        response.body_text
+    );
+    expect_proxy_route_headers(
+        response,
+        LaneId::new(NEXUS_LANE_INDEX),
+        DataSpaceId::new(NEXUS_ID_U64),
+        context,
+    )?;
+    ensure!(
+        response.permission_semantics.as_deref() == Some("effective-v1"),
+        "{context}: missing effective permission semantics: {:?}",
+        response.permission_semantics
+    );
+    let page = complete_fixture_collection_page(&response.body, 64, context)?;
+    for row in &page.items {
+        ensure!(
+            row.get("name").and_then(JsonValue::as_str) == Some("CanPublishSpaceDirectoryManifest")
+                && row
+                    .get("payload")
+                    .and_then(|payload| payload.get("dataspace"))
+                    .and_then(JsonValue::as_u64)
+                    .is_some(),
+            "{context}: invalid effective permission row for the requested filter: {row:?}"
+        );
+    }
+    ensure!(
+        !permission_response_contains(
+            &response.body,
+            "CanPublishSpaceDirectoryManifest",
+            |payload| {
+                payload.get("dataspace").and_then(JsonValue::as_u64) == Some(dataspace_id.as_u64())
+            },
+            context
+        )?,
+        "{context}: Bob has a manifest publish permission for data space {dataspace_id}"
+    );
+    Ok(())
+}
+
+fn require_empty_manifest_page(
+    response: &RoutedJsonResponse,
+    dataspace_id: DataSpaceId,
+    context: &str,
+) -> Result<()> {
+    ensure!(
+        response.status == HttpStatusCode::OK,
+        "{context}: {}: {}",
+        response.status,
+        response.body_text
+    );
+    // The visible collection executes once. Its selected route and the requested row's
+    // data space are separate fields.
+    expect_proxy_route_headers(
+        response,
+        LaneId::new(NEXUS_LANE_INDEX),
+        DataSpaceId::new(NEXUS_ID_U64),
+        context,
+    )?;
+    let page = complete_fixture_collection_page(&response.body, 1, context)?;
+    ensure!(
+        page.items.is_empty(),
+        "{context}: expected no manifests; target data space present={}, active={}, page={:?}",
+        manifest_response_contains_dataspace(&response.body, dataspace_id, context)?,
+        manifest_response_contains_status(&response.body, dataspace_id, "Active", context)?,
+        response.body
+    );
+    Ok(())
+}
+
+async fn require_manifest_api_absence(
+    alice: &Client,
+    uaid_literal: &str,
+    dataspace_id: DataSpaceId,
+    deadline: Instant,
+    context: &str,
+) -> Result<()> {
+    ensure!(
+        Instant::now() < deadline,
+        "{context}: manifest observation deadline exhausted"
+    );
+    // Alice's signed genesis grants visibility into restricted data spaces. A public
+    // or Bob-scoped empty collection alone would not establish absence.
+    let response = tokio::time::timeout_at(
+        tokio::time::Instant::from_std(deadline),
+        wait_for_torii_json_get_as_account(
+            alice,
+            &ALICE_ID,
             &[
                 "v1".to_owned(),
                 "space-directory".to_owned(),
@@ -1033,65 +1388,85 @@ async fn wait_for_manifest_api_absence(
                 uaid_literal.to_owned(),
                 "manifests".to_owned(),
             ],
-            &[("dataspace".to_owned(), dataspace_id.as_u64().to_string())],
+            &[
+                (
+                    "filter".to_owned(),
+                    format!("dataspace_id = {}", dataspace_id.as_u64()),
+                ),
+                ("limit".to_owned(), "1".to_owned()),
+                ("include_total".to_owned(), "true".to_owned()),
+            ],
+            context,
+        ),
+    )
+    .await
+    .wrap_err_with(|| format!("{context}: timed out reading manifest collection"))??;
+    require_empty_manifest_page(&response, dataspace_id, context)?;
+    ensure!(
+        Instant::now() < deadline,
+        "{context}: manifest observation returned late"
+    );
+    Ok(())
+}
+
+fn is_manifest_publish_permission_rejection(
+    reason: &iroha_data_model::transaction::error::TransactionRejectionReason,
+) -> bool {
+    use iroha_data_model::{
+        isi::error::InstructionExecutionError, transaction::error::TransactionRejectionReason,
+    };
+    matches!(reason, TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+        InstructionExecutionError::InvariantViolation(message)
+    )) if message.as_ref() == "not permitted: CanPublishSpaceDirectoryManifest")
+}
+
+fn require_manifest_publish_rejection(
+    client: &Client,
+    transaction: &SignedTransaction,
+    deadline: Instant,
+) -> Result<()> {
+    let timeout = deadline
+        .checked_duration_since(Instant::now())
+        .ok_or_else(|| eyre!("manifest rejection deadline exhausted"))?;
+    let observer = client.client().with_request_deadline(deadline);
+    let error = observer
+        .wait_for_transaction_applied(
+            transaction.hash(),
+            iroha::client::TransactionWaitOptions {
+                timeout,
+                poll_interval: STATUS_POLL_INTERVAL,
+            },
         )
-        .await
-        {
-            Ok(response) => {
-                last_body.clone_from(&response.body_text);
-                match response.status {
-                    HttpStatusCode::OK => {
-                        expect_proxy_route_headers(
-                            &response,
-                            expected_lane_id,
-                            dataspace_id,
-                            context,
-                        )?;
-                        if !manifest_response_contains_dataspace(
-                            &response.body,
-                            dataspace_id,
-                            context,
-                        )? {
-                            return Ok(());
-                        }
-                        last_error = None;
-                    }
-                    HttpStatusCode::NOT_FOUND => {
-                        if let Some(lane_id) = response.route_lane_id.as_deref() {
-                            ensure!(
-                                lane_id == expected_lane_id.as_u32().to_string(),
-                                "{context}: manifests absence reported unexpected lane {lane_id}"
-                            );
-                        }
-                        if let Some(observed_dataspace_id) = response.route_dataspace_id.as_deref()
-                        {
-                            ensure!(
-                                observed_dataspace_id == dataspace_id.as_u64().to_string(),
-                                "{context}: manifests absence reported unexpected dataspace {observed_dataspace_id}"
-                            );
-                        }
-                        return Ok(());
-                    }
-                    _ => {
-                        last_error = Some(format!(
-                            "unexpected status {} body `{}`",
-                            response.status, response.body_text
-                        ));
-                    }
-                }
-            }
-            Err(err) => {
-                last_error = Some(err.to_string());
-            }
-        }
-        tokio::time::sleep(STATUS_POLL_INTERVAL).await;
-    }
-    let suffix = last_error
-        .map(|err| format!("; last manifests API error: {err}"))
-        .unwrap_or_default();
-    Err(eyre!(
-        "{context}: timed out waiting for manifest absence on UAID {uaid_literal}; last body `{last_body}`{suffix}"
-    ))
+        .err()
+        .ok_or_else(|| eyre!("unauthorized manifest publication unexpectedly applied"))?;
+    let Some(failure) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<iroha::client::TransactionFinalityFailure>())
+    else {
+        return Err(
+            error.wrap_err("manifest publication did not reach authoritative terminal rejection")
+        );
+    };
+    failure.validate_for_hash(transaction.hash())?;
+    let status = &failure.response().status;
+    ensure!(
+        status.kind == "Rejected" && status.block_height.is_some_and(|height| height > 0),
+        "expected a committed manifest publication rejection, got {status:?}"
+    );
+    ensure!(
+        Instant::now() < deadline,
+        "manifest rejection details deadline exhausted"
+    );
+    let reason = observer.get_transaction_rejection_reason(transaction)?;
+    ensure!(
+        is_manifest_publish_permission_rejection(&reason),
+        "unexpected native manifest rejection: {reason:?}"
+    );
+    ensure!(
+        Instant::now() < deadline,
+        "manifest rejection details arrived late"
+    );
+    Ok(())
 }
 fn account_assets_response_contains(
     body: &JsonValue,
@@ -1107,10 +1482,371 @@ fn account_assets_response_contains(
         .iter()
         .any(|item| item.get("asset").and_then(JsonValue::as_str) == Some(expected.as_str())))
 }
+fn require_private_holder_visibility(
+    allowed: &RoutedJsonResponse,
+    denied: &RoutedJsonResponse,
+) -> Result<()> {
+    ensure!(
+        allowed.status == HttpStatusCode::OK,
+        "private holders read failed: {} {}",
+        allowed.status,
+        allowed.body_text
+    );
+    expect_proxy_route_headers(
+        allowed,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        "private holder route",
+    )?;
+    let page = complete_fixture_collection_page(&allowed.body, 1, "private holders")?;
+    let [row] = page.items.as_slice() else {
+        return Err(eyre!("expected one restricted holder"));
+    };
+    let partition = restricted_asset_partition();
+    ensure!(
+        row.get("id").and_then(JsonValue::as_str) == Some(partition.canonical_literal().as_str())
+            && row.get("account_id").and_then(JsonValue::as_str)
+                == Some(partition.account().to_string().as_str())
+            && row.get("asset").and_then(JsonValue::as_str)
+                == Some(partition.definition().to_string().as_str())
+            && row.get("scope").and_then(JsonValue::as_str)
+                == Some(format!("dataspace:{DS1_ID_U64}").as_str())
+            && row.get("quantity").and_then(JsonValue::as_str) == Some("7"),
+        "unexpected private balance partition: {row:?}"
+    );
+    ensure!(
+        denied.status == HttpStatusCode::OK,
+        "foreign partition query failed: {}: {}",
+        denied.status,
+        denied.body_text
+    );
+    expect_proxy_route_headers(
+        denied,
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        "foreign holder route",
+    )?;
+    let foreign = complete_fixture_collection_page(&denied.body, 1, "foreign holder page")?;
+    ensure!(
+        foreign.items.is_empty(),
+        "foreign reader observed DS1 holder partitions"
+    );
+    Ok(())
+}
+
+fn expect_account_assets_page(
+    response: &RoutedJsonResponse,
+    holder: &AccountId,
+    expected: &[(&AssetDefinitionId, &str)],
+    hidden: Option<&AssetDefinitionId>,
+    context: &str,
+) -> Result<()> {
+    ensure!(
+        response.status == HttpStatusCode::OK,
+        "{context}: expected a successful collection, observed {} body `{}`",
+        response.status,
+        response.body_text
+    );
+    // Every route here shares the global World. A non-authoritative observer
+    // selects its lowest eligible execution route once; visibility still applies.
+    expect_proxy_route_headers(response, LaneId::SINGLE, DataSpaceId::UNIVERSAL, context)?;
+    ensure!(
+        response.body.get("next_cursor") == Some(&JsonValue::Null),
+        "{context}: fixture holdings must fit one complete page"
+    );
+    let rows = response
+        .body
+        .get("items")
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| eyre!("{context}: missing collection items"))?;
+    ensure!(
+        rows.len() <= ASSET_PAGE_LIMIT,
+        "{context}: server exceeded requested limit"
+    );
+    let holder = holder.to_string();
+    let mut seen = BTreeSet::new();
+    for row in rows {
+        let asset = row
+            .get("asset")
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| eyre!("{context}: missing asset identity"))?;
+        let scope = row
+            .get("scope")
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| eyre!("{context}: missing balance scope"))?;
+        ensure!(
+            row.get("account_id").and_then(JsonValue::as_str) == Some(holder.as_str())
+                && seen.insert((asset, scope)),
+            "{context}: wrong holder or duplicate balance partition"
+        );
+    }
+    for (asset, quantity) in expected {
+        let asset = asset.to_string();
+        ensure!(
+            rows.iter()
+                .any(
+                    |row| row.get("asset").and_then(JsonValue::as_str) == Some(asset.as_str())
+                        && row.get("scope").and_then(JsonValue::as_str) == Some("global")
+                        && row.get("quantity").and_then(JsonValue::as_str) == Some(*quantity)
+                ),
+            "{context}: missing exact global balance {quantity} for {asset}"
+        );
+    }
+    if let Some(hidden) = hidden {
+        ensure!(
+            !account_assets_response_contains(&response.body, hidden, context)?,
+            "{context}: exposed restricted balance for {hidden}"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn tx_query_cross_dataspace_routing_genesis_preexecution_smoke() {
     let _guard = sandbox::serial_guard();
-    let _network = localnet_builder().build();
+    let network = localnet_builder().build();
+    let genesis = network.genesis();
+    let authority = AccountId::new(
+        iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR
+            .public_key()
+            .clone(),
+    );
+    iroha_core::block::check_genesis_block(&genesis.0, &authority)
+        .expect("configured routing genesis authenticates after executing its staking plans");
+    assert_eq!(
+        genesis.0.da_proof_policies(),
+        Some(&multilane_da_proof_policy_bundle()),
+        "the configured three-lane policy is part of the authenticated genesis"
+    );
+    let instructions = genesis
+        .0
+        .external_transactions()
+        .filter_map(|tx| match tx.instructions() {
+            iroha_data_model::transaction::Executable::Instructions(instructions) => {
+                Some(instructions.iter())
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    let private = partitioned_asset_definition_id();
+    let private_domain = partitioned_asset_domain();
+    let signed_home = instructions
+        .iter()
+        .filter_map(|instruction| {
+            match instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::RegisterBox>()
+            {
+                Some(iroha_data_model::isi::RegisterBox::AssetDefinition(register))
+                    if register.object().id() == &private =>
+                {
+                    Some(register.object().owning_domain.as_ref())
+                }
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(signed_home, [Some(&private_domain)]);
+    let read_all = iroha_data_model::permission::Permission::from(
+        iroha_executor_data_model::permission::query::CanReadAllLedgerData,
+    );
+    let readers = instructions
+        .iter()
+        .filter_map(|instruction| {
+            match instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::GrantBox>()
+            {
+                Some(iroha_data_model::isi::GrantBox::Permission(grant))
+                    if grant.object == read_all =>
+                {
+                    Some(grant.destination.clone())
+                }
+                _ => None,
+            }
+        })
+        .collect::<BTreeSet<_>>();
+    assert!(readers.contains(&*ALICE_ID));
+    assert!(!readers.contains(&*BOB_ID));
+    let policies = instructions
+        .iter()
+        .filter_map(|instruction| {
+            let set = instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::SetParameter>()?;
+            let iroha_data_model::parameter::Parameter::Custom(custom) = set.inner() else {
+                return None;
+            };
+            use iroha_data_model::block::consensus::PublicLaneStakingPolicy;
+            (custom.id() == &PublicLaneStakingPolicy::parameter_id()).then(|| {
+                PublicLaneStakingPolicy::from_custom_parameter(custom)
+                    .expect("canonical original signed staking policy")
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        policies,
+        vec![genesis_staking_policy()],
+        "one signed staking policy preserves the fixture's XOR and ALICE custody"
+    );
+    let (epoch, _) = iroha_data_model::sumeragi_finality::authenticated_genesis(&genesis.0)
+        .expect("signed global genesis authority")
+        .into_parts();
+    assert_eq!(
+        epoch.committee.len(),
+        TOTAL_PEERS,
+        "the global genesis roster retains thirteen validators"
+    );
+    let global_voters = epoch
+        .committee
+        .iter()
+        .map(|member| member.validator.clone())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        global_voters,
+        network.validators().iter().map(|peer| peer.id()).collect(),
+        "the original thirteen validators remain the entire authenticated global committee"
+    );
+    let permission = iroha_data_model::permission::Permission::from(CanManagePeers);
+    let grants = instructions
+        .iter()
+        .filter(|instruction| {
+            matches!(instruction.as_any().downcast_ref::<iroha_data_model::isi::GrantBox>(),
+            Some(iroha_data_model::isi::GrantBox::Permission(grant))
+            if grant.destination == validator_authority_account_for_peer(0)
+                && grant.object == permission)
+        })
+        .count();
+    assert_eq!(
+        grants, 1,
+        "one signed grant authorizes runtime observer registration"
+    );
+    let observers = network.observers();
+    assert_eq!(observers.len(), INGRESS_OBSERVER_COUNT);
+    for observer in observers {
+        assert!(!global_voters.contains(&observer.id()));
+        let registration = ingress_observer_registration(
+            observer.id(),
+            observer.bls_pop().expect("real observer PoP"),
+        )
+        .expect("runtime registry instruction proves the exact observer identity");
+        assert_eq!(registration.peer, observer.id());
+        assert!(registration.activation_at.is_none() && registration.expiry_at.is_none());
+        assert!(
+            !network
+                .topology_entries()
+                .iter()
+                .any(|entry| entry.peer == observer.id())
+        );
+        assert!(
+            network.config_layers().all(|layer| {
+                layer
+                    .get("trusted_peers_pop")
+                    .and_then(TomlValue::as_array)
+                    .is_none_or(|entries| {
+                        entries.iter().all(|entry| {
+                            entry.get("public_key").and_then(TomlValue::as_str)
+                                != Some(observer.id().public_key().to_string().as_str())
+                        })
+                    })
+            }),
+            "ingress observers must never enter the validator PoP roster"
+        );
+        assert_eq!(
+            network
+                .config_layers_for_peer(observer)
+                .last()
+                .and_then(|layer| layer
+                    .get("sumeragi")?
+                    .get("role")?
+                    .as_str()
+                    .map(str::to_owned)),
+            Some("observer".to_owned()),
+            "both ingress processes must retain the non-voting role"
+        );
+    }
+    let (alice_ingress, bob_ingress) = wrong_ingress_clients(&network).unwrap();
+    assert_eq!(
+        alice_ingress.client().endpoint(),
+        &reqwest::Url::parse(&observers[DS2_INGRESS_OBSERVER_INDEX].torii_url()).unwrap()
+    );
+    assert_eq!(
+        bob_ingress.client().endpoint(),
+        &reqwest::Url::parse(&observers[DS1_INGRESS_OBSERVER_INDEX].torii_url()).unwrap()
+    );
+    assert_ne!(
+        alice_ingress.client().endpoint(),
+        bob_ingress.client().endpoint()
+    );
+    assert_eq!(
+        alice_ingress.client().network_id(),
+        bob_ingress.client().network_id()
+    );
+    assert_eq!(
+        alice_ingress.client().key_pair().public_key(),
+        ALICE_KEYPAIR.public_key()
+    );
+    assert_eq!(
+        bob_ingress.client().key_pair().public_key(),
+        BOB_KEYPAIR.public_key()
+    );
+    let npos = instructions
+        .iter()
+        .filter_map(|instruction| {
+            let set = instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::SetParameter>()?;
+            let iroha_data_model::parameter::Parameter::Custom(custom) = set.inner() else {
+                return None;
+            };
+            iroha_data_model::parameter::system::SumeragiNposParameters::from_custom_parameter(
+                custom,
+            )
+            .expect("valid signed parameters")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(npos.len(), 1, "one original network XOR selection");
+    assert_eq!(
+        npos[0].max_validators(),
+        u32::try_from(TOTAL_PEERS).unwrap()
+    );
+    assert_eq!(npos[0].epoch_length_blocks().get(), 3_600);
+    assert_eq!(npos[0].xor_asset_definition_id, stake_asset_definition_id());
+    let policies = instructions
+        .iter()
+        .filter_map(|instruction| {
+            let set = instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::SetParameter>()?;
+            let iroha_data_model::parameter::Parameter::Custom(custom) = set.inner() else {
+                return None;
+            };
+            SumeragiLanePolicy::from_custom_parameter(custom)
+                .map(|policy| policy.expect("signed lane policy"))
+        })
+        .collect::<Vec<_>>();
+    let topology = network
+        .peers()
+        .iter()
+        .map(|peer| peer.id())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        policies,
+        vec![restricted_lane_policy(
+            &topology,
+            network.topology_entries()
+        )]
+    );
+    for fixed in &policies[0].fixed {
+        assert_eq!(fixed.committee.len(), VALIDATORS_PER_LANE);
+        assert!(fixed.committee.iter().all(|member| {
+            global_voters.contains(&member.peer)
+                && observers
+                    .iter()
+                    .all(|observer| observer.id() != member.peer)
+        }));
+    }
 }
 #[test]
 fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models() -> Result<()>
@@ -1138,38 +1874,68 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         .take(VALIDATORS_PER_LANE)
         .map(|(index, peer)| expected_lane_binding_for_peer(index, &peer.id()))
         .collect();
-    let expected_ds1_validators: BTreeSet<_> = peers
-        .iter()
-        .enumerate()
-        .skip(VALIDATORS_PER_LANE)
-        .take(VALIDATORS_PER_LANE)
-        .map(|(index, peer)| expected_lane_binding_for_peer(index, &peer.id()))
-        .collect();
-    let expected_ds2_validators: BTreeSet<_> = peers
-        .iter()
-        .enumerate()
-        .skip(VALIDATORS_PER_LANE * 2)
-        .take(VALIDATORS_PER_LANE)
-        .map(|(index, peer)| expected_lane_binding_for_peer(index, &peer.id()))
-        .collect();
     wait_for_active_lane_validators(
         &alice,
         LaneId::new(NEXUS_LANE_INDEX),
         &expected_nexus_validators,
         "nexus lane validator activation",
     )?;
-    wait_for_active_lane_validators(
-        &alice,
-        LaneId::new(DS1_LANE_INDEX),
-        &expected_ds1_validators,
-        "ds1 lane validator activation",
-    )?;
-    wait_for_active_lane_validators(
-        &alice,
-        LaneId::new(DS2_LANE_INDEX),
-        &expected_ds2_validators,
-        "ds2 lane validator activation",
-    )?;
+    // Native lanes created in genesis become active at height three. Use the
+    // same two paid global transactions to register the observer ingress peers.
+    // Original-genesis RegisterPeerWithPop would declare extra global voters;
+    // runtime registration only creates registry candidates. ALICE/BOB's
+    // committed routes remain reserved for their restricted lanes.
+    let activation_key = KeyPair::try_from_seed(validator_authority_seed(0), Algorithm::Ed25519)?;
+    let activation_client = peers[0].client_for(
+        &validator_authority_account_for_peer(0),
+        activation_key.private_key().clone(),
+    );
+    for observer in network.observers() {
+        // The SDK quotes this exact instruction, signs it, and waits for Applied.
+        activation_client.submit(
+            ingress_observer_registration(
+                observer.id(),
+                observer
+                    .bls_pop()
+                    .expect("ingress observer has its real PoP"),
+            )?,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
+    }
+    let expected_registry = network
+        .all_peers()
+        .map(|peer| peer.id())
+        .collect::<BTreeSet<_>>();
+    ensure!(expected_registry.len() == TOTAL_PEERS + INGRESS_OBSERVER_COUNT);
+    let topology = peers.iter().map(|peer| peer.id()).collect::<Vec<_>>();
+    let policy = restricted_lane_policy(&topology, network.topology_entries());
+    wait_for_restricted_lane_instances(&alice, &policy)?;
+    // Restricted membership is deliberately absent from the public API, even
+    // though the operator-authenticated endpoint verifies the exact committee.
+    for lane in [DS1_LANE_INDEX, DS2_LANE_INDEX] {
+        let hidden = rt.block_on(torii_json_get(
+            &alice,
+            &[
+                "v1".into(),
+                "nexus".into(),
+                "public-lanes".into(),
+                lane.to_string(),
+                "validators".into(),
+            ],
+            &[],
+        ))?;
+        ensure!(
+            hidden.status == HttpStatusCode::NOT_FOUND,
+            "restricted lane membership leaked: {} {}",
+            hidden.status,
+            hidden.body_text
+        );
+        ensure!(
+            hidden.body.get("code").and_then(JsonValue::as_str) == Some("query_validation_failed"),
+            "unexpected restricted lane refusal: {}",
+            hidden.body_text
+        );
+    }
     let lane_sync_height = alice
         .client()
         .get_sumeragi_status()
@@ -1181,23 +1947,154 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         "lane validator activation propagation on bob",
     )?;
     ensure!(
-        (VALIDATORS_PER_LANE * 2..LANE_VALIDATOR_COUNT).contains(&ALICE_WRONG_INGRESS_INDEX),
-        "alice wrong-dataspace ingress index must point into the ds2 lane"
+        (VALIDATORS_PER_LANE * 2..LANE_VALIDATOR_COUNT).contains(&DS2_VALIDATOR_INDEX),
+        "ds2 authoritative validator must retain its native lane seat"
     );
     ensure!(
-        (VALIDATORS_PER_LANE..VALIDATORS_PER_LANE * 2).contains(&BOB_WRONG_INGRESS_INDEX),
-        "bob wrong-dataspace ingress index must point into the ds1 lane"
+        (VALIDATORS_PER_LANE..VALIDATORS_PER_LANE * 2).contains(&DS1_VALIDATOR_INDEX),
+        "ds1 authoritative validator must retain its native lane seat"
     );
-    let alice_via_ds2 =
-        peers[ALICE_WRONG_INGRESS_INDEX].client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
+    let (alice_via_ds2, bob_via_ds1) = wrong_ingress_clients(&network)?;
     let alice_on_ds1 =
-        peers[BOB_WRONG_INGRESS_INDEX].client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
+        peers[DS1_VALIDATOR_INDEX].client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
     let alice_on_ds2 =
-        peers[ALICE_WRONG_INGRESS_INDEX].client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
-    let bob_via_ds1 =
-        peers[BOB_WRONG_INGRESS_INDEX].client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
+        peers[DS2_VALIDATOR_INDEX].client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
     let bob_on_ds2 =
-        peers[ALICE_WRONG_INGRESS_INDEX].client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
+        peers[DS2_VALIDATOR_INDEX].client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
+    // Torii's applied height proves both ingress States have installed the
+    // active routes; a downloaded Kura block or consensus tip is insufficient.
+    rt.block_on(async {
+        let deadline = tokio::time::Instant::now() + STATUS_WAIT_TIMEOUT;
+        let mut latest = [0_u64; INGRESS_OBSERVER_COUNT];
+        loop {
+            let mut delay = STATUS_POLL_INTERVAL;
+            let mut complete_snapshot = true;
+            for (index, client) in [&bob_via_ds1, &alice_via_ds2].into_iter().enumerate() {
+                ingress_readiness_before_deadline(
+                    &latest,
+                    lane_sync_height,
+                    tokio::time::Instant::now(),
+                    deadline,
+                )?;
+                let status = tokio::time::timeout_at(deadline, client.client().status().get())
+                    .await
+                    .wrap_err_with(|| format!("ingress applied readiness timed out: {latest:?}"))?;
+                ingress_readiness_before_deadline(
+                    &latest,
+                    lane_sync_height,
+                    tokio::time::Instant::now(),
+                    deadline,
+                )?;
+                match status {
+                    Ok(status) => latest[index] = status.blocks,
+                    Err(error) => match ingress_status_retry_delay(&error) {
+                        Some(retry_delay) => {
+                            complete_snapshot = false;
+                            delay = delay.max(retry_delay);
+                        }
+                        None => return Err(eyre!(error)),
+                    },
+                }
+            }
+            let ready = ingress_readiness_before_deadline(
+                &latest,
+                lane_sync_height,
+                tokio::time::Instant::now(),
+                deadline,
+            )?;
+            if complete_snapshot && ready {
+                // Every possible authoritative peer must have the exact registered
+                // ingress identities before any delegated read can be dispatched.
+                // Share the original readiness deadline, including all query I/O.
+                let mut registered_everywhere = true;
+                for peer in network.all_peers() {
+                    ingress_readiness_before_deadline(
+                        &latest,
+                        lane_sync_height,
+                        tokio::time::Instant::now(),
+                        deadline,
+                    )?;
+                    let client = peer.client();
+                    let account = client.account_client();
+                    let mut rows = tokio::time::timeout_at(
+                        deadline,
+                        account
+                            .query(FindPeers)
+                            .with_fetch_size(FetchSize {
+                                fetch_size: NonZeroU64::new(
+                                    u64::try_from(TOTAL_PEERS + INGRESS_OBSERVER_COUNT)
+                                        .expect("fixture peer count fits u64"),
+                                ),
+                            })
+                            .execute(),
+                    )
+                    .await
+                    .wrap_err("ingress registry readiness timed out")??;
+                    ensure!(
+                        !rows.has_more(),
+                        "ingress registry query must be one complete bounded page"
+                    );
+                    let mut registry = Vec::new();
+                    while let Some(row) = rows.next().await {
+                        registry.push(row?);
+                        ensure!(
+                            registry.len() <= TOTAL_PEERS + INGRESS_OBSERVER_COUNT,
+                            "ingress registry exceeded the fixture's exact bound"
+                        );
+                    }
+                    ingress_readiness_before_deadline(
+                        &latest,
+                        lane_sync_height,
+                        tokio::time::Instant::now(),
+                        deadline,
+                    )?;
+                    registered_everywhere &=
+                        ingress_registry_matches(&registry, &expected_registry);
+                    let operator = client.client().with_request_deadline(deadline.into_std());
+                    let status = tokio::time::timeout_at(
+                        deadline,
+                        integration_tests::sync::run_on_dedicated_thread(move || {
+                            operator.get_sumeragi_status()
+                        }),
+                    )
+                    .await
+                    .wrap_err("ingress consensus role observation timed out")???;
+                    ingress_readiness_before_deadline(
+                        &latest,
+                        lane_sync_height,
+                        tokio::time::Instant::now(),
+                        deadline,
+                    )?;
+                    let expected_signer = network
+                        .validators()
+                        .iter()
+                        .any(|voter| voter.id() == peer.id())
+                        .then(|| peer.id().public_key().clone());
+                    ensure!(
+                        status.halted.is_none() && status.signer == expected_signer,
+                        "peer registration changed the current signing role for {}",
+                        peer.id()
+                    );
+                }
+                if registered_everywhere {
+                    ingress_readiness_before_deadline(
+                        &latest,
+                        lane_sync_height,
+                        tokio::time::Instant::now(),
+                        deadline,
+                    )?;
+                    return Ok::<(), eyre::Report>(());
+                }
+            }
+            tokio::time::sleep_until(
+                tokio::time::Instant::now()
+                    .checked_add(delay)
+                    .unwrap_or(deadline)
+                    .min(deadline),
+            )
+            .await;
+        }
+    })?;
     wait_for_height(
         &alice_via_ds2,
         lane_sync_height,
@@ -1240,18 +2137,27 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
     rt.block_on(async {
         let alice_probe = {
             let account = alice_via_ds2.account_client();
-            account
-                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            let mut payload =
+                account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                     [InstructionBox::from(Log::new(
                         Level::INFO,
                         "wrong ingress route probe ds1".to_owned(),
                     ))],
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                     Metadata::default(),
-                ))
-                .and_then(|payload| account.sign_transaction(payload))
-        }
-        .expect("build integration-test transaction");
+                ))?;
+            let quote = account
+                .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+                .await?;
+            ensure!(
+                payload
+                    .fee_payment
+                    .has_same_payer_and_gas_bound(&quote.intent),
+                "route-probe quote changed payer or gas bound"
+            );
+            payload.fee_payment = quote.intent;
+            account.sign_transaction(payload)?
+        };
         submit_transaction_and_expect_route(
             &alice_via_ds2,
             &alice_on_ds1,
@@ -1263,18 +2169,27 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         .await?;
         let bob_probe = {
             let account = bob_via_ds1.account_client();
-            account
-                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            let mut payload =
+                account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                     [InstructionBox::from(Log::new(
                         Level::INFO,
                         "wrong ingress route probe ds2".to_owned(),
                     ))],
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                     Metadata::default(),
-                ))
-                .and_then(|payload| account.sign_transaction(payload))
-        }
-        .expect("build integration-test transaction");
+                ))?;
+            let quote = account
+                .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+                .await?;
+            ensure!(
+                payload
+                    .fee_payment
+                    .has_same_payer_and_gas_bound(&quote.intent),
+                "route-probe quote changed payer or gas bound"
+            );
+            payload.fee_payment = quote.intent;
+            account.sign_transaction(payload)?
+        };
         submit_transaction_and_expect_route(
             &bob_via_ds1,
             &bob_on_ds2,
@@ -1318,6 +2233,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
             == Some(ALICE_ID.to_string().as_str()),
         "alice account GET through ds2 ingress did not return alice's canonical account id"
     );
+    let asset_page = [("limit".to_owned(), ASSET_PAGE_LIMIT.to_string())];
     let alice_assets = rt.block_on(wait_for_torii_json_get_as_account(
         &alice_via_ds2,
         &ALICE_ID,
@@ -1327,24 +2243,17 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
             ALICE_ID.to_string(),
             "assets".to_owned(),
         ],
-        &[],
+        &asset_page,
         "alice assets query through ds2 ingress",
     ))?;
-    ensure!(
-        alice_assets.status == HttpStatusCode::OK,
-        "alice assets query through ds2 ingress failed with {} body `{}`",
-        alice_assets.status,
-        alice_assets.body_text
-    );
-    expect_proxy_fanout_headers(&alice_assets, "alice assets query through ds2 ingress")?;
-    ensure!(
-        account_assets_response_contains(
-            &alice_assets.body,
-            &ds1_asset_definition_id,
-            "alice assets query",
-        )?,
-        "alice assets query through ds2 ingress did not include ds1 asset definition"
-    );
+    let private_asset = partitioned_asset_definition_id();
+    expect_account_assets_page(
+        &alice_assets,
+        &ALICE_ID,
+        &[(&ds1_asset_definition_id, "100")],
+        None,
+        "alice assets query through ds2 ingress",
+    )?;
     let bob_assets = rt.block_on(wait_for_torii_json_get_as_account(
         &bob_via_ds1,
         &BOB_ID,
@@ -1354,25 +2263,17 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
             BOB_ID.to_string(),
             "assets".to_owned(),
         ],
-        &[],
+        &asset_page,
         "bob assets query through ds1 ingress",
     ))?;
-    ensure!(
-        bob_assets.status == HttpStatusCode::OK,
-        "bob assets query through ds1 ingress failed with {} body `{}`",
-        bob_assets.status,
-        bob_assets.body_text
-    );
-    expect_proxy_fanout_headers(&bob_assets, "bob assets query through ds1 ingress")?;
-    ensure!(
-        account_assets_response_contains(
-            &bob_assets.body,
-            &ds2_asset_definition_id,
-            "bob assets query",
-        )?,
-        "bob assets query through ds1 ingress did not include ds2 asset definition"
-    );
-    let alice_assets_hidden_from_bob = rt.block_on(wait_for_torii_json_get_as_account(
+    expect_account_assets_page(
+        &bob_assets,
+        &BOB_ID,
+        &[(&ds2_asset_definition_id, "200")],
+        None,
+        "bob assets query through ds1 ingress",
+    )?;
+    let alice_assets_as_bob = rt.block_on(wait_for_torii_json_get_as_account(
         &bob_via_ds1,
         &BOB_ID,
         &[
@@ -1381,19 +2282,49 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
             ALICE_ID.to_string(),
             "assets".to_owned(),
         ],
-        &[],
+        &asset_page,
         "alice assets query as bob through ds1 ingress",
     ))?;
-    ensure!(
-        alice_assets_hidden_from_bob.status == HttpStatusCode::OK,
-        "alice assets query as bob through ds1 ingress failed with {} body `{}`",
-        alice_assets_hidden_from_bob.status,
-        alice_assets_hidden_from_bob.body_text
-    );
-    expect_proxy_fanout_headers(
-        &alice_assets_hidden_from_bob,
+    // Both accounts are bound to the universal data space. Bob can read
+    // Alice's public holding through the same observer used for his own page.
+    expect_account_assets_page(
+        &alice_assets_as_bob,
+        &ALICE_ID,
+        &[(&ds1_asset_definition_id, "100")],
+        Some(&private_asset),
         "alice assets query as bob through ds1 ingress",
     )?;
+    // Unlike the account list's selector-bound balance routes, the holders
+    // collection uses the signer's current definition and partition visibility.
+    let holders_path = [
+        "v1".to_owned(),
+        "assets".to_owned(),
+        private_asset.to_string(),
+        "holders".to_owned(),
+    ];
+    let holders_query = [
+        ("limit".to_owned(), "1".to_owned()),
+        ("include_total".to_owned(), "true".to_owned()),
+    ];
+    let holder_observer = &network.observers()[DS2_INGRESS_OBSERVER_INDEX];
+    let bob_via_ds2 = holder_observer.client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
+    let allowed = rt.block_on(wait_for_torii_json_get_as_account(
+        &alice_via_ds2,
+        &ALICE_ID,
+        &holders_path,
+        &holders_query,
+        "private holders as Alice",
+    ))?;
+    let denied = rt.block_on(wait_for_torii_json_get_as_account(
+        &bob_via_ds2,
+        &BOB_ID,
+        &holders_path,
+        &holders_query,
+        "private holders as Bob",
+    ))?;
+    require_private_holder_visibility(&allowed, &denied)?;
+    let alice_via_ds1 = network.observers()[DS1_INGRESS_OBSERVER_INDEX]
+        .client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
     let manifest_uaid =
         UniversalAccountId::from_hash(Hash::new(b"wrong-ingress-ds2-manifest-routing"));
     let manifest_uaid_literal = manifest_uaid.to_string();
@@ -1419,43 +2350,14 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
             notes: Some("wrong ingress manifest routing regression".to_owned()),
         }],
     };
-    let manifests_before = rt.block_on(wait_for_torii_json_get(
-        &bob_via_ds1,
-        &[
-            "v1".to_owned(),
-            "space-directory".to_owned(),
-            "uaids".to_owned(),
-            manifest_uaid_literal.clone(),
-            "manifests".to_owned(),
-        ],
-        &[(
-            "dataspace".to_owned(),
-            ds2_dataspace_id.as_u64().to_string(),
-        )],
-        "initial manifests read through ds1 ingress",
-    ))?;
-    ensure!(
-        manifests_before.status == HttpStatusCode::OK,
-        "initial manifests read through ds1 ingress failed with {} body `{}`",
-        manifests_before.status,
-        manifests_before.body_text
-    );
-    expect_proxy_route_headers(
-        &manifests_before,
-        ds2_lane_id,
+    rt.block_on(require_manifest_api_absence(
+        &alice_via_ds1,
+        &manifest_uaid_literal,
         ds2_dataspace_id,
-        "initial ds2 manifest read through ds1 ingress",
-    )?;
-    ensure!(
-        !manifest_response_contains_status(
-            &manifests_before.body,
-            ds2_dataspace_id,
-            "Active",
-            "initial ds2 manifest read",
-        )?,
-        "manifest should not exist before publish"
-    );
-    let bob_manifest_permissions_api_before = rt.block_on(wait_for_torii_json_get_as_account(
+        Instant::now() + STATUS_WAIT_TIMEOUT,
+        "initial manifest read through ds1 ingress",
+    ))?;
+    let bob_manifest_permissions = rt.block_on(wait_for_torii_json_get_as_account(
         &bob_via_ds1,
         &BOB_ID,
         &[
@@ -1464,44 +2366,43 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
             BOB_ID.to_string(),
             "permissions".to_owned(),
         ],
-        &[],
-        "bob manifest permissions query through ds1 ingress",
+        &[
+            (
+                "filter".to_owned(),
+                r#"name = "CanPublishSpaceDirectoryManifest""#.to_owned(),
+            ),
+            ("limit".to_owned(), "64".to_owned()),
+            ("include_total".to_owned(), "true".to_owned()),
+        ],
+        "Bob's effective manifest permissions through ds1 ingress",
     ))?;
-    ensure!(
-        bob_manifest_permissions_api_before.status == HttpStatusCode::OK,
-        "bob manifest permissions query through ds1 ingress failed with {} body `{}`",
-        bob_manifest_permissions_api_before.status,
-        bob_manifest_permissions_api_before.body_text
-    );
-    expect_proxy_fanout_headers(
-        &bob_manifest_permissions_api_before,
-        "bob manifest permissions query before grant",
+    require_no_manifest_publish_permission(
+        &bob_manifest_permissions,
+        ds2_dataspace_id,
+        "Bob's effective manifest permissions",
     )?;
-    ensure!(
-        !permission_response_contains(
-            &bob_manifest_permissions_api_before.body,
-            "CanPublishSpaceDirectoryManifest",
-            |payload| {
-                payload.get("dataspace").and_then(JsonValue::as_u64)
-                    == Some(ds2_dataspace_id.as_u64())
-            },
-            "bob manifest permissions app api before grant",
-        )?,
-        "bob should not expose ds2 manifest publish permission before grant"
-    );
-    let unauthorized_publish_tx = {
+    let unauthorized_publish_tx = rt.block_on(async {
         let account = bob_via_ds1.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        let mut payload =
+            account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                 [InstructionBox::from(PublishSpaceDirectoryManifest {
                     manifest: ds2_manifest.clone(),
                 })],
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+            ))?;
+        let quote = account
+            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+            .await?;
+        ensure!(
+            payload
+                .fee_payment
+                .has_same_payer_and_gas_bound(&quote.intent),
+            "manifest quote changed payer or gas bound"
+        );
+        payload.fee_payment = quote.intent;
+        Ok::<_, eyre::Report>(account.sign_transaction(payload)?)
+    })?;
     rt.block_on(submit_transaction_and_expect_route(
         &bob_via_ds1,
         &bob_on_ds2,
@@ -1510,13 +2411,24 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         ds2_dataspace_id,
         "bob unauthorized manifest publish via ds1 ingress should reject on ds2",
     ))?;
-    rt.block_on(wait_for_manifest_api_absence(
-        &bob_via_ds1,
+    let rejection_deadline = Instant::now() + STATUS_WAIT_TIMEOUT;
+    require_manifest_publish_rejection(&bob_on_ds2, &unauthorized_publish_tx, rejection_deadline)?;
+    rt.block_on(require_manifest_api_absence(
+        &alice_via_ds1,
         &manifest_uaid_literal,
         ds2_dataspace_id,
-        ds2_lane_id,
-        "manifest must remain absent after unauthorized publish through wrong ingress",
+        rejection_deadline,
+        "manifest must remain absent after Bob's unauthorized publication",
     ))?;
+    ensure!(
+        alice
+            .client()
+            .get_sumeragi_status()
+            .map_err(|err| eyre!(err))?
+            .committed_height
+            < 3_600,
+        "routing coverage must remain within the initial signed global committee epoch"
+    );
     Ok(())
 }
 #[cfg(test)]
@@ -1556,6 +2468,7 @@ mod tests {
         body_text: &str,
     ) -> RoutedJsonResponse {
         RoutedJsonResponse {
+            permission_semantics: None,
             status,
             body,
             body_text: body_text.to_owned(),
@@ -1570,6 +2483,7 @@ mod tests {
         route_dataspace_id: Option<&str>,
     ) -> RoutedJsonResponse {
         RoutedJsonResponse {
+            permission_semantics: None,
             status: HttpStatusCode::OK,
             body: JsonValue::Null,
             body_text: String::new(),
@@ -1669,10 +2583,86 @@ mod tests {
     fn genesis_post_topology_builder_requires_full_wrong_ingress_roster() {
         let (topology, entries) = deterministic_genesis_topology(TOTAL_PEERS);
         let transactions = npos_multilane_genesis_post_topology_transactions(&topology, &entries);
-        assert_eq!(transactions.len(), 1);
+        assert_eq!(transactions.len(), 3);
+        let private_domain = super::partitioned_asset_domain();
+        let private_definition = super::partitioned_asset_definition_id();
+        let [definition] = transactions[1].as_slice() else {
+            panic!("only the public asset definition belongs to its registration transaction");
+        };
+        use iroha_data_model::isi::{MintBox, RegisterBox};
+        assert!(matches!(
+            definition.as_any().downcast_ref::<RegisterBox>(), Some(RegisterBox::AssetDefinition(registration))
+                if registration.object().id == private_definition
+                && registration.object().owning_domain.as_ref() == Some(&private_domain)
+                && registration.object().balance_scope_policy == iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted
+        ));
+        let [mint] = transactions[2].as_slice() else {
+            panic!("the restricted balance must follow its definition transaction");
+        };
+        assert!(
+            matches!(mint.as_any().downcast_ref::<MintBox>(), Some(MintBox::Asset(mint))
+                if mint.object == iroha_primitives::numeric::Quantity::from(7_u32)
+                && mint.destination == super::restricted_asset_partition()
+            )
+        );
         assert_eq!(
             transactions[0].len(),
-            11 + LANE_VALIDATOR_COUNT * 5 + (LANE_VALIDATOR_COUNT - VALIDATORS_PER_LANE + 2)
+            13 + LANE_VALIDATOR_COUNT * 5 + (LANE_VALIDATOR_COUNT - VALIDATORS_PER_LANE + 2)
+        );
+        let grants = transactions[0]
+            .iter()
+            .filter_map(|instruction| {
+                match instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::GrantBox>()
+                {
+                    Some(iroha_data_model::isi::GrantBox::Permission(grant)) => {
+                        Some((grant.destination.clone(), grant.object.clone()))
+                    }
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>();
+        let genesis_authority = AccountId::new(
+            iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR
+                .public_key()
+                .clone(),
+        );
+        let consensus_key_permission = iroha_data_model::permission::Permission::from(
+            iroha_executor_data_model::permission::governance::CanManageConsensusKeys,
+        );
+        // The shared Committee-key helper grants then revokes the genesis
+        // authority's temporary capability. The final grant belongs only to
+        // the funded global activation signer that registers the observers.
+        assert_eq!(
+            grants,
+            vec![
+                (genesis_authority.clone(), consensus_key_permission.clone()),
+                (
+                    validator_authority_account_for_peer(0),
+                    iroha_data_model::permission::Permission::from(super::CanManagePeers)
+                ),
+            ],
+            "the complete grant list must retain both exact authorities and capabilities"
+        );
+        let revocations = transactions[0]
+            .iter()
+            .filter_map(|instruction| {
+                match instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::RevokeBox>()
+                {
+                    Some(iroha_data_model::isi::RevokeBox::Permission(revoke)) => {
+                        Some((revoke.destination().clone(), revoke.object().clone()))
+                    }
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            revocations,
+            vec![(genesis_authority, consensus_key_permission)],
+            "genesis key management must be revoked; observer ingress management remains granted"
         );
         let committee_registrations = transactions[0]
             .iter()
@@ -1748,11 +2738,161 @@ mod tests {
         assert!(result.is_err());
     }
     #[test]
+    fn observer_registration_requires_the_exact_peer_proof_of_possession() {
+        let (peers, entries) = deterministic_genesis_topology(2);
+        let first_pop = entries[0].pop_bytes().unwrap().unwrap();
+        let registration = super::ingress_observer_registration(peers[0].clone(), &first_pop)
+            .expect("matching observer PoP");
+        assert_eq!(registration.peer, peers[0]);
+        assert_eq!(registration.pop, first_pop);
+        assert!(registration.activation_at.is_none());
+        assert!(registration.expiry_at.is_none());
+        assert!(super::ingress_observer_registration(peers[1].clone(), &first_pop).is_err());
+        assert!(super::ingress_observer_registration(peers[0].clone(), &[]).is_err());
+    }
+    #[test]
+    fn ingress_registry_requires_every_exact_identity_once() {
+        let (peers, _) = deterministic_genesis_topology(TOTAL_PEERS + 3);
+        let expected = peers[..TOTAL_PEERS + 2].iter().cloned().collect();
+        assert!(super::ingress_registry_matches(
+            &peers[..TOTAL_PEERS + 2],
+            &expected
+        ));
+        assert!(!super::ingress_registry_matches(
+            &peers[..TOTAL_PEERS + 1],
+            &expected
+        ));
+        assert!(!super::ingress_registry_matches(&peers, &expected));
+        let mut duplicate = peers[..TOTAL_PEERS + 2].to_vec();
+        duplicate[TOTAL_PEERS + 1] = peers[0].clone();
+        assert!(!super::ingress_registry_matches(&duplicate, &expected));
+        duplicate[TOTAL_PEERS + 1] = peers[TOTAL_PEERS + 2].clone();
+        assert!(!super::ingress_registry_matches(&duplicate, &expected));
+    }
+    #[test]
     fn genesis_post_topology_builder_is_stable_for_same_wrong_ingress_roster() {
         let (topology, entries) = deterministic_genesis_topology(TOTAL_PEERS);
         let first = npos_multilane_genesis_post_topology_transactions(&topology, &entries);
         let second = npos_multilane_genesis_post_topology_transactions(&topology, &entries);
         assert_eq!(format!("{first:?}"), format!("{second:?}"));
+    }
+    #[test]
+    fn restricted_lane_policy_and_records_bind_exact_native_membership() {
+        use iroha_data_model::sumeragi_lanes::{
+            SumeragiLaneFrontier, SumeragiLaneRecord, SumeragiLaneStatus,
+        };
+        let (topology, entries) = deterministic_genesis_topology(TOTAL_PEERS);
+        let policy = super::restricted_lane_policy(&topology, &entries);
+        assert_eq!(policy.fixed.len(), 2);
+        for (ordinal, fixed) in policy.fixed.iter().enumerate() {
+            let start = (ordinal + 1) * VALIDATORS_PER_LANE;
+            let mut expected_peers = topology[start..start + VALIDATORS_PER_LANE]
+                .iter()
+                .collect::<Vec<_>>();
+            expected_peers.sort();
+            assert_eq!(
+                fixed
+                    .committee
+                    .iter()
+                    .map(|member| &member.peer)
+                    .collect::<Vec<_>>(),
+                expected_peers
+            );
+            assert!(
+                fixed
+                    .committee
+                    .windows(2)
+                    .all(|pair| pair[0].peer < pair[1].peer)
+            );
+            for member in &fixed.committee {
+                assert_eq!(
+                    member.pop,
+                    entries
+                        .iter()
+                        .find(|entry| entry.peer == member.peer)
+                        .unwrap()
+                        .pop_bytes()
+                        .unwrap()
+                        .unwrap()
+                );
+            }
+        }
+        assert_eq!(
+            policy.routes[0].account.as_deref(),
+            Some(ALICE_ID.to_string().as_str())
+        );
+        assert_eq!(
+            policy.routes[1].account.as_deref(),
+            Some(super::BOB_ID.to_string().as_str())
+        );
+        let network_id = NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"native restricted lane record regression",
+            )),
+        );
+        let records = policy
+            .fixed
+            .iter()
+            .enumerate()
+            .map(|(ordinal, fixed)| SumeragiLaneStatus {
+                record: SumeragiLaneRecord {
+                    da_layout: policy.da_layout,
+                    lane: fixed.lane,
+                    dataspace: fixed.dataspace,
+                    incarnation: iroha_core::sumeragi::lanes::step::incarnation(
+                        &network_id,
+                        fixed.lane,
+                        fixed.dataspace,
+                        1,
+                        ordinal as u64,
+                    ),
+                    params: policy.lane_params.clone(),
+                    committee: fixed.committee.clone(),
+                    created_at: 1,
+                    active_from: 3,
+                    closing: None,
+                    anchor_freshness: policy.anchor_freshness,
+                    merged: SumeragiLaneFrontier::default(),
+                    merged_at: 3,
+                    rescued: 0,
+                },
+                instance: None,
+            })
+            .collect::<Vec<_>>();
+        assert!(super::restricted_lane_records_match(
+            &records,
+            &policy,
+            &network_id
+        ));
+        assert!(!super::restricted_lane_records_match(
+            &records[..1],
+            &policy,
+            &network_id
+        ));
+        for mutation in 0..11 {
+            let mut changed = records.clone();
+            match mutation {
+                0 => changed[0].record.committee = records[1].record.committee.clone(),
+                1 => changed[0].record.committee[0].pop[0] ^= 1,
+                2 => changed[0]
+                    .record
+                    .committee
+                    .push(records[0].record.committee[0].clone()),
+                3 => changed[0].record.dataspace = DataSpaceId::new(2),
+                4 => changed[0].record.incarnation[0] ^= 1,
+                5 => changed[0].record.created_at = 2,
+                6 => changed[0].record.active_from = 4,
+                7 => changed[0].record.closing = Some(10),
+                8 => changed[0].record.anchor_freshness += 1,
+                9 => changed[0].record.lane = LaneId::new(2),
+                10 => changed[0].record.committee.swap(0, 1),
+                _ => unreachable!(),
+            }
+            assert!(
+                !super::restricted_lane_records_match(&changed, &policy, &network_id),
+                "mutation {mutation}"
+            );
+        }
     }
     #[test]
     fn routing_probe_gas_account_uses_alice_subject() {
@@ -1761,6 +2901,65 @@ mod tests {
         assert_eq!(
             gas_account.canonical_i105().expect("gas account i105"),
             ALICE_ID.canonical_i105().expect("alice i105")
+        );
+    }
+    #[test]
+    fn ingress_status_retry_requires_exact_typed_state_busy() {
+        use iroha::{Error, StatusFailureReason};
+        use std::time::Duration;
+        assert_eq!(
+            super::ingress_status_retry_delay(&Error::StatusUnavailable {
+                reason: Some(StatusFailureReason::StateBusy),
+                retry_after: None,
+            }),
+            Some(super::STATUS_POLL_INTERVAL)
+        );
+        assert_eq!(
+            super::ingress_status_retry_delay(&Error::StatusUnavailable {
+                reason: Some(StatusFailureReason::StateBusy),
+                retry_after: Some(Duration::from_secs(1)),
+            }),
+            Some(Duration::from_secs(1))
+        );
+        for error in [
+            Error::StatusUnavailable {
+                reason: None,
+                retry_after: None,
+            },
+            Error::StatusUnavailable {
+                reason: Some(StatusFailureReason::StateUnavailable),
+                retry_after: None,
+            },
+            Error::StatusUnavailable {
+                reason: Some(StatusFailureReason::MailboxUnavailable),
+                retry_after: None,
+            },
+            Error::Http {
+                operation: "diagnostic.status",
+                status: 503,
+                retry_after: None,
+                body: b"status_state_busy".to_vec(),
+            },
+        ] {
+            assert!(super::ingress_status_retry_delay(&error).is_none());
+        }
+    }
+    #[test]
+    fn ingress_readiness_requires_both_applied_heights_before_the_original_deadline() {
+        let before = tokio::time::Instant::now();
+        let deadline = before + super::STATUS_WAIT_TIMEOUT;
+        assert!(super::ingress_readiness_before_deadline(&[3, 3], 3, before, deadline).unwrap());
+        assert!(!super::ingress_readiness_before_deadline(&[3, 2], 3, before, deadline).unwrap());
+        assert!(!super::ingress_readiness_before_deadline(&[2, 3], 3, before, deadline).unwrap());
+        assert!(super::ingress_readiness_before_deadline(&[3, 3], 3, deadline, deadline).is_err());
+        assert!(
+            super::ingress_readiness_before_deadline(
+                &[3, 3],
+                3,
+                deadline + super::STATUS_POLL_INTERVAL,
+                deadline
+            )
+            .is_err()
         );
     }
     #[test]
@@ -1789,6 +2988,80 @@ mod tests {
         assert_eq!(&encoded[1..], adaptive_payload.as_slice());
         assert_eq!(decoded_len, adaptive_payload.len());
         assert_eq!(decoded, transaction);
+    }
+    #[test]
+    fn transaction_receipt_request_selects_only_norito_without_changing_submission() {
+        use reqwest::header::{ACCEPT, CONTENT_TYPE};
+        let body = vec![1, 2, 3, 4];
+        let request = super::build_norito_receipt_request(
+            reqwest::Client::new()
+                .post("http://127.0.0.1:8080/v1/pipeline/transactions")
+                .header(ACCEPT, "application/json")
+                .header(ACCEPT, "*/*")
+                .header(CONTENT_TYPE, "application/x-norito")
+                .header("x-iroha-account", "fixture-authority")
+                .body(body.clone()),
+        )
+        .unwrap();
+        assert_eq!(request.method(), reqwest::Method::POST);
+        assert_eq!(request.url().path(), "/v1/pipeline/transactions");
+        assert_eq!(request.body().unwrap().as_bytes(), Some(body.as_slice()));
+        assert_eq!(request.headers()["x-iroha-account"], "fixture-authority");
+        assert_eq!(request.headers()[CONTENT_TYPE], "application/x-norito");
+        assert_eq!(request.headers().get_all(ACCEPT).iter().count(), 1);
+        assert_eq!(request.headers()[ACCEPT], "application/x-norito");
+    }
+    #[test]
+    fn transaction_receipt_decoder_requires_declared_canonical_norito() {
+        use iroha_data_model::transaction::{
+            TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
+        };
+        use reqwest::header::CONTENT_TYPE;
+        let receipt = TransactionSubmissionReceipt::try_sign(
+            TransactionSubmissionReceiptPayload {
+                entrypoint_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                    b"receipt entrypoint",
+                )),
+                signed_transaction_hash: Some(iroha_crypto::HashOf::from_untyped_unchecked(
+                    Hash::new(b"receipt signed transaction"),
+                )),
+                submitted_at_ms: 123,
+                submitted_at_height: 4,
+                signer: ALICE_KEYPAIR.public_key().clone(),
+            },
+            &ALICE_KEYPAIR,
+        )
+        .unwrap();
+        let body = norito::to_bytes(&receipt).unwrap();
+        let mut headers = HeaderMap::new();
+        assert!(super::decode_transaction_submission_receipt(&headers, &body).is_err());
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/x-norito"),
+        );
+        let decoded = super::decode_transaction_submission_receipt(&headers, &body).unwrap();
+        assert_eq!(decoded, receipt);
+        decoded.verify().unwrap();
+        assert!(super::decode_transaction_submission_receipt(&headers, &body[..8]).is_err());
+        let json = norito::json::to_vec(&receipt).unwrap();
+        assert!(super::decode_transaction_submission_receipt(&headers, &json).is_err());
+        for media in [
+            "application/json",
+            "text/plain",
+            "application/x-norito-legacy",
+        ] {
+            headers.insert(CONTENT_TYPE, HeaderValue::from_static(media));
+            assert!(super::decode_transaction_submission_receipt(&headers, &body).is_err());
+        }
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/x-norito"),
+        );
+        headers.append(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/x-norito"),
+        );
+        assert!(super::decode_transaction_submission_receipt(&headers, &body).is_err());
     }
     #[test]
     fn expected_lane_binding_for_peer_is_deterministic() {
@@ -2135,7 +3408,7 @@ mod tests {
                 .contains("permission response missing items array")
         );
         let manifest_err = manifest_response_contains_status(
-            &norito::json!({ "manifests": {} }),
+            &norito::json!({ "items": {} }),
             DataSpaceId::new(DS2_ID_U64),
             "Active",
             "manifest response",
@@ -2144,7 +3417,7 @@ mod tests {
         assert!(
             manifest_err
                 .to_string()
-                .contains("manifest response missing manifests array")
+                .contains("manifest response missing items array")
         );
         let assets_err = account_assets_response_contains(
             &norito::json!({ "items": {} }),
@@ -2159,9 +3432,73 @@ mod tests {
         );
     }
     #[test]
+    fn manifest_absence_requires_a_complete_empty_selected_page() {
+        let ds2 = DataSpaceId::new(DS2_ID_U64);
+        let mut response = routed_json_response_with_route(Some("proxy"), Some("0"), Some("0"));
+        response.body = norito::json!({"items": [], "next_cursor": null, "total": 0});
+        super::require_empty_manifest_page(&response, ds2, "empty").unwrap();
+        for body in [
+            norito::json!({"manifests": [], "next_cursor": null, "total": 0}),
+            norito::json!({"items": [], "next_cursor": "more", "total": 0}),
+            norito::json!({"items": [], "next_cursor": null}),
+            norito::json!({"items": [], "next_cursor": null, "total": 1}),
+            norito::json!({"items": [{"dataspace_id": 2, "status": "Pending"}], "next_cursor": null, "total": 1}),
+        ] {
+            response.body = body;
+            assert!(super::require_empty_manifest_page(&response, ds2, "must fail").is_err());
+        }
+    }
+
+    #[test]
+    fn manifest_permission_absence_requires_effective_scoped_rows() {
+        let ds2 = DataSpaceId::new(DS2_ID_U64);
+        let mut response = routed_json_response_with_route(Some("proxy"), Some("0"), Some("0"));
+        response.body = norito::json!({"items":[{"name":"CanPublishSpaceDirectoryManifest","payload":{"dataspace":1}}],"next_cursor":null,"total":1});
+        assert!(
+            super::require_no_manifest_publish_permission(&response, ds2, "missing semantics")
+                .is_err()
+        );
+        response.permission_semantics = Some("effective-v1".into());
+        super::require_no_manifest_publish_permission(&response, ds2, "other data space").unwrap();
+        for body in [
+            norito::json!({"items":[{"name":"CanPublishSpaceDirectoryManifest","payload":{"dataspace":2}}],"next_cursor":null,"total":1}),
+            norito::json!({"items":[{"name":"CanPublishSpaceDirectoryManifest","payload":{}}],"next_cursor":null,"total":1}),
+            norito::json!({"items":[],"next_cursor":"more","total":1}),
+        ] {
+            response.body = body;
+            assert!(
+                super::require_no_manifest_publish_permission(&response, ds2, "must fail").is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_publish_rejection_requires_exact_native_permission_failure() {
+        use iroha_data_model::{
+            ValidationFail, isi::error::InstructionExecutionError,
+            transaction::error::TransactionRejectionReason,
+        };
+        let native = |message: &str| {
+            TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+                InstructionExecutionError::InvariantViolation(message.into()),
+            ))
+        };
+        assert!(super::is_manifest_publish_permission_rejection(&native(
+            "not permitted: CanPublishSpaceDirectoryManifest"
+        )));
+        assert!(!super::is_manifest_publish_permission_rejection(&native(
+            "unknown dataspace"
+        )));
+        assert!(!super::is_manifest_publish_permission_rejection(
+            &TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                "not permitted: CanPublishSpaceDirectoryManifest".into()
+            ))
+        ));
+    }
+    #[test]
     fn manifest_response_helpers_match_dataspace_and_status() {
         let body = norito::json!({
-            "manifests": [
+            "items": [
                 { "dataspace_id": DS1_ID_U64, "status": "Pending" },
                 { "dataspace_id": DS2_ID_U64, "status": "Active" },
             ],
@@ -2200,13 +3537,13 @@ mod tests {
         .expect_err("missing manifest array should fail");
         assert!(
             err.to_string()
-                .contains("manifest response missing manifests array")
+                .contains("manifest response missing items array")
         );
     }
     #[test]
     fn manifest_response_contains_status_requires_manifest_array() {
         let err = manifest_response_contains_status(
-            &norito::json!({ "items": [] }),
+            &norito::json!({ "manifests": [] }),
             DataSpaceId::new(DS2_ID_U64),
             "Active",
             "manifest response",
@@ -2214,13 +3551,13 @@ mod tests {
         .expect_err("missing manifest array should fail");
         assert!(
             err.to_string()
-                .contains("manifest response missing manifests array")
+                .contains("manifest response missing items array")
         );
     }
     #[test]
     fn manifest_response_contains_dataspace_ignores_missing_or_non_numeric_ids() {
         let body = norito::json!({
-            "manifests": [
+            "items": [
                 { "dataspace_id": "2", "status": "Active" },
                 { "status": "Active" },
             ],
@@ -2237,7 +3574,7 @@ mod tests {
     #[test]
     fn manifest_response_contains_status_ignores_missing_or_non_string_statuses() {
         let body = norito::json!({
-            "manifests": [
+            "items": [
                 { "dataspace_id": DS2_ID_U64, "status": true },
                 { "dataspace_id": DS2_ID_U64 },
                 { "dataspace_id": DS1_ID_U64, "status": "Active" },
@@ -2253,6 +3590,97 @@ mod tests {
             .expect("manifest response should decode")
         );
     }
+    #[test]
+    fn account_asset_collection_binds_route_holder_quantity_visibility_and_completion() {
+        let public = ds2_asset_definition_id();
+        let private = super::partitioned_asset_definition_id();
+        let public_row = norito::json!({
+            "account_id": (ALICE_ID.to_string()), "asset": (public.to_string()),
+            "scope": "global", "quantity": "100"
+        });
+        let partition = super::restricted_asset_partition();
+        let private_row = norito::json!({
+            "id": (partition.canonical_literal()), "account_id": (ALICE_ID.to_string()),
+            "asset": (private.to_string()), "scope": (format!("dataspace:{DS1_ID_U64}")), "quantity": "7"
+        });
+        let mut authorized = routed_json_response_with_route(Some("proxy"), Some("0"), Some("0"));
+        authorized.body =
+            norito::json!({"items": [(private_row.clone())], "next_cursor": null, "total": 1});
+        let mut denied = routed_json_response_with_route(Some("proxy"), Some("0"), Some("0"));
+        denied.body = norito::json!({"items": [], "next_cursor": null, "total": 0});
+        super::require_private_holder_visibility(&authorized, &denied).unwrap();
+        denied.route_lane_id = Some("1".into());
+        assert!(super::require_private_holder_visibility(&authorized, &denied).is_err());
+        denied.route_lane_id = Some("0".into());
+        denied.body = authorized.body.clone();
+        assert!(super::require_private_holder_visibility(&authorized, &denied).is_err());
+        denied.body = norito::json!({"items": [], "next_cursor": "more", "total": 1});
+        assert!(super::require_private_holder_visibility(&authorized, &denied).is_err());
+        denied.body = norito::json!({"items": [], "next_cursor": null, "total": 0});
+        let mut wrong_scope = private_row.clone();
+        *wrong_scope
+            .as_object_mut()
+            .unwrap()
+            .get_mut("scope")
+            .unwrap() = JsonValue::from("global");
+        authorized.body = norito::json!({"items": [wrong_scope], "next_cursor": null, "total": 1});
+        assert!(super::require_private_holder_visibility(&authorized, &denied).is_err());
+        let mut response = routed_json_response_with_route(Some("proxy"), Some("0"), Some("0"));
+        response.body =
+            norito::json!({"items": [(public_row.clone()), private_row], "next_cursor": null});
+        assert!(
+            super::expect_account_assets_page(
+                &response,
+                &ALICE_ID,
+                &[(&public, "100")],
+                Some(&private),
+                "stranger"
+            )
+            .is_err()
+        );
+        response.body = norito::json!({"items": [(public_row.clone())], "next_cursor": null});
+        let visible = |response: &RoutedJsonResponse| {
+            super::expect_account_assets_page(
+                response,
+                &ALICE_ID,
+                &[(&public, "100")],
+                Some(&private),
+                "stranger",
+            )
+        };
+        visible(&response).unwrap();
+        assert!(
+            super::expect_account_assets_page(
+                &response,
+                &super::BOB_ID,
+                &[(&public, "100")],
+                None,
+                "other holder"
+            )
+            .is_err()
+        );
+        assert!(
+            super::expect_account_assets_page(
+                &response,
+                &ALICE_ID,
+                &[(&public, "101")],
+                None,
+                "wrong balance"
+            )
+            .is_err()
+        );
+        response.body = norito::json!({"items": [(public_row.clone()), (public_row.clone())], "next_cursor": null});
+        assert!(visible(&response).is_err());
+        response.body = norito::json!({"items": [(public_row.clone())], "next_cursor": "more"});
+        assert!(visible(&response).is_err());
+        response.body = norito::json!({"items": [public_row], "next_cursor": null});
+        response.route_lane_id = None;
+        assert!(visible(&response).is_err());
+        response.route_lane_id = Some("0".to_owned());
+        response.route_dataspace_id = Some("1".to_owned());
+        assert!(visible(&response).is_err());
+    }
+
     #[test]
     fn account_assets_response_contains_matches_asset_definition_literal() {
         let asset_definition_id = ds2_asset_definition_id();

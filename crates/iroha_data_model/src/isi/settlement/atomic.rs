@@ -248,8 +248,11 @@ macro_rules! bounded_list {
         }
         impl SerializePayload for $name {
             fn serialize(&self, writer: &mut ncore::Encoder<'_>) -> Result<(), ncore::Error> {
-                self.validate()
-                    .map_err(|message| ncore::Error::Message(message.into()))?;
+                self.validate().map_err(|message| {
+                    ncore::prepaid_validation_error("invalid settlement list", || {
+                        ncore::Error::Message(message.into())
+                    })
+                })?;
                 let len = self
                     .0
                     .encoded_len_exact()
@@ -294,14 +297,19 @@ macro_rules! bounded_list {
                 let field = bytes.get(prefix..end).ok_or(ncore::Error::LengthMismatch)?;
                 let (count, _) = ncore::inspect_seq_len_slice(field)?;
                 if !($min..=$max).contains(&count) {
-                    return Err(ncore::Error::Message($decode_count_error.into()));
+                    return Err(ncore::prepaid_validation_error($decode_count_error, || {
+                        ncore::Error::Message($decode_count_error.into())
+                    }));
                 }
                 let (values, used) = ncore::decode_field_canonical::<Vec<$item>>(field)?;
                 if used != field.len() {
                     return Err(ncore::Error::LengthMismatch);
                 }
-                let list = Self::try_from(values)
-                    .map_err(|message| ncore::Error::Message(message.into()))?;
+                let list = Self::try_from(values).map_err(|message| {
+                    ncore::prepaid_validation_error("invalid settlement list", || {
+                        ncore::Error::Message(message.into())
+                    })
+                })?;
                 ncore::note_payload_access(bytes, end);
                 Ok((list, end))
             }
@@ -547,9 +555,11 @@ impl<'a> DecodeFromSlice<'a> for SettleAtomic {
         if offset != bytes.len() {
             return Err(ncore::Error::LengthMismatch);
         }
-        value
-            .validate()
-            .map_err(|message| ncore::Error::Message(message.into()))?;
+        value.validate().map_err(|message| {
+            ncore::prepaid_validation_error("invalid settlement list", || {
+                ncore::Error::Message(message.into())
+            })
+        })?;
         ncore::note_payload_access(bytes, offset);
         Ok((value, offset))
     }

@@ -1,0 +1,22 @@
+{
+  "observed_utc": "2026-11-04T07:20:28.375744+00:00",
+  "root_archive_reconciliation": {
+    "manifest_entries": 23,
+    "original_byte_roundtrips": 17,
+    "hashes_match": true
+  },
+  "independent_agent_review": {
+    "reviewer": "state_runner_finish",
+    "scope": "Implementation, adversarial controls, capture input pinning and final archive; independently compared870portable+860accelerated functions and10roots with v4. Calls, frontiers with original addresses/depths, frame maxima, SCCs/reachability/regions and25facts perimage remained bound.",
+    "findings": []
+  },
+  "root_review": "Reconciled pinned summary/receipt/manifest, all archived byte pairs,244passing-test scope, preserved earlier evidence and explicit qualification refusals. No redundant suite rerun.",
+  "qualification": false,
+  "v5_archive_unmodified": true,
+  "input_sha256": {
+    "summary.json": "67f1b7a93251d31393dfd1e7bbcc97645f481705d507436e0bcdb5490313427e",
+    "receipt.json": "a2f2883e1d7576a8938ad0d87b8a39ba7e200d7ad6c8275cfc69915949ff1287",
+    "SHA256SUMS": "fccf9dba329c46ab30b45a04511816c2f41822eed6cd0ca9c5ebefb6e52ec4bd"
+  },
+  "scope": "Artifact-bound static analysis of retained November 4 workers; not latest working-tree or live candidate qualification."
+}

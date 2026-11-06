@@ -139,11 +139,16 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Numeric {
             <scale_::NumericScaleHelper as norito::core::DecodeFromSlice>::decode_from_slice(
                 bytes,
             )?;
-        let value = Self::try_new_raw(helper.mantissa, helper.scale)
-            .map_err(|error| norito::core::Error::Message(format!("invalid numeric: {error}")))?;
-        value
-            .validate_decimal()
-            .map_err(|error| norito::core::Error::Message(format!("invalid numeric: {error}")))?;
+        let value = Self::try_new_raw(helper.mantissa, helper.scale).map_err(|error| {
+            norito::core::prepaid_validation_error("invalid numeric value", || {
+                norito::core::Error::Message(format!("invalid numeric: {error}"))
+            })
+        })?;
+        value.validate_decimal().map_err(|error| {
+            norito::core::prepaid_validation_error("invalid numeric value", || {
+                norito::core::Error::Message(format!("invalid numeric: {error}"))
+            })
+        })?;
         Ok((value, used))
     }
 }
@@ -155,8 +160,11 @@ impl<'a> DeserializePayload<'a> for NumericSpec {
     fn try_deserialize(archived: &'a Archived<NumericSpec>) -> Result<Self, Error> {
         let scale_arch: &Archived<Option<u32>> = archived.cast();
         let scale = <Option<u32> as DeserializePayload>::try_deserialize(scale_arch)?;
-        Self::try_from_scale(scale)
-            .map_err(|error| Error::Message(format!("invalid numeric specification: {error}")))
+        Self::try_from_scale(scale).map_err(|error| {
+            norito::core::prepaid_validation_error("invalid numeric value", || {
+                Error::Message(format!("invalid numeric specification: {error}"))
+            })
+        })
     }
 }
 impl FastJsonWrite for NumericSpec {
@@ -2091,15 +2099,21 @@ impl<'a> DeserializePayload<'a> for Quantity {
     }
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, Error> {
         let numeric = Numeric::try_deserialize(archived.cast::<Numeric>())?;
-        Self::from_canonical_numeric(numeric)
-            .map_err(|error| Error::Message(format!("invalid quantity: {error}")))
+        Self::from_canonical_numeric(numeric).map_err(|error| {
+            norito::core::prepaid_validation_error("invalid numeric value", || {
+                Error::Message(format!("invalid quantity: {error}"))
+            })
+        })
     }
 }
 impl<'a> norito::core::DecodeFromSlice<'a> for Quantity {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (numeric, used) = <Numeric as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
-        let quantity = Self::from_canonical_numeric(numeric)
-            .map_err(|error| norito::core::Error::Message(error.to_string()))?;
+        let quantity = Self::from_canonical_numeric(numeric).map_err(|error| {
+            norito::core::prepaid_validation_error("invalid numeric value", || {
+                norito::core::Error::Message(error.to_string())
+            })
+        })?;
         Ok((quantity, used))
     }
 }
@@ -2403,16 +2417,22 @@ impl<'a> DeserializePayload<'a> for XorQuantity {
     }
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, Error> {
         let quantity = Quantity::try_deserialize(archived.cast::<Quantity>())?;
-        Self::try_from_quantity(quantity)
-            .map_err(|error| Error::Message(format!("invalid XOR quantity: {error}")))
+        Self::try_from_quantity(quantity).map_err(|error| {
+            norito::core::prepaid_validation_error("invalid numeric value", || {
+                Error::Message(format!("invalid XOR quantity: {error}"))
+            })
+        })
     }
 }
 impl<'a> norito::core::DecodeFromSlice<'a> for XorQuantity {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (quantity, used) =
             <Quantity as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
-        let value = Self::try_from_quantity(quantity)
-            .map_err(|error| norito::core::Error::Message(error.to_string()))?;
+        let value = Self::try_from_quantity(quantity).map_err(|error| {
+            norito::core::prepaid_validation_error("invalid numeric value", || {
+                norito::core::Error::Message(error.to_string())
+            })
+        })?;
         Ok((value, used))
     }
 }
@@ -3031,11 +3051,16 @@ impl<'a> DeserializePayload<'a> for Numeric {
         if aligned {
             let helper_arch: &Archived<scale_::NumericScaleHelper> = archived.cast();
             let helper = scale_::NumericScaleHelper::try_deserialize(helper_arch)?;
-            let value = Numeric::try_new_raw(helper.mantissa, helper.scale)
-                .map_err(|err| Error::Message(format!("invalid numeric: {err}")))?;
-            value
-                .validate_decimal()
-                .map_err(|err| Error::Message(format!("invalid numeric: {err}")))?;
+            let value = Numeric::try_new_raw(helper.mantissa, helper.scale).map_err(|err| {
+                norito::core::prepaid_validation_error("invalid numeric value", || {
+                    Error::Message(format!("invalid numeric: {err}"))
+                })
+            })?;
+            value.validate_decimal().map_err(|err| {
+                norito::core::prepaid_validation_error("invalid numeric value", || {
+                    Error::Message(format!("invalid numeric: {err}"))
+                })
+            })?;
             Ok(value)
         } else {
             let slice = norito::core::payload_slice_from_ptr(ptr)?;

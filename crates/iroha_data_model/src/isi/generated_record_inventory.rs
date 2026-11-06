@@ -46,11 +46,7 @@ macro_rules! record_inventory {
 
         #[test]
         fn compiled_record_inventory_covers_every_fixture_row() {
-            let rows: norito::json::Value = norito::json::from_str(include_str!(
-                "../../tests/fixtures/instruction_record_generated_identity_frames.json"
-            ))
-            .expect("instruction record fixture JSON");
-            let rows = rows.as_array().expect("instruction record rows");
+            let rows: Vec<_> = super::fixture_rows().collect();
             let expected: std::collections::BTreeSet<_> = rows
                 .iter()
                 .map(|row| {
@@ -630,6 +626,11 @@ record!(
     privacy_bootstrap_privacy_orchard_pool_v1,
     crate::isi::privacy::BootstrapPrivacyOrchardPoolV1,
     "iroha_data_model::isi::privacy::BootstrapPrivacyOrchardPoolV1"
+);
+record!(
+    privacy_bootstrap_privacy_ironwood_pool_v1,
+    crate::isi::privacy::BootstrapPrivacyIronwoodPoolV1,
+    "iroha_data_model::isi::privacy::BootstrapPrivacyIronwoodPoolV1"
 );
 record!(
     privacy_bootstrap_privacy_pgc_accounts_v1,

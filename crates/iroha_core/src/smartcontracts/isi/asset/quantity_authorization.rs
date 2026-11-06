@@ -447,7 +447,7 @@ mod tests {
 
     fn reserve_owners() -> [PrivacyPublicReserveOwnerV1; 2] {
         let namespace = |protocol| {
-            PrivacyNamespaceV1::new(
+            PrivacyRuntimeNamespaceV1::new(
                 protocol,
                 PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                     pool_id: PrivacyPoolIdV1::new([7; 32]),
@@ -456,11 +456,11 @@ mod tests {
         };
         [
             PrivacyPublicReserveOwnerV1::Orchard {
-                namespace: namespace(PrivacyProtocolIdV1::OrchardHalo2ActionsV1),
+                namespace: namespace(PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1),
                 bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1::new([9; 32]),
             },
             PrivacyPublicReserveOwnerV1::PrivateIvm {
-                namespace: namespace(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1),
+                namespace: namespace(PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1),
                 bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1::new([11; 32]),
             },
         ]

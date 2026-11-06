@@ -9,7 +9,7 @@ use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 
 /// One complete supplied byte slice and its inseparable original backing charge.
 ///
-/// There is no Clone, mutable access, Vec extraction or normalization.
+/// There is no Clone, safe mutable access, safe Vec extraction or normalization.
 /// Moving this owner keeps the same allocation and pool charge. Borrowing cannot
 /// outlive the owner. The underlying `ChargedBuffer` destroys its byte allocation
 /// before returning its credits; dropping an unpublished owner is its rollback.
@@ -37,6 +37,27 @@ impl RetainedActionFrameBytesV1 {
             bytes.push_reserved(byte);
         }
         Ok(Self { bytes })
+    }
+
+    /// Retain fixed-size untrusted compact lifecycle evidence in its original pool.
+    /// This establishes physical custody only, never semantic validity or authority.
+    pub fn try_copy_compact(
+        bytes: &[u8],
+        pool: &AllocationBudget,
+    ) -> Result<Self, ChargedBufferError> {
+        Self::try_copy(bytes, pool)
+    }
+
+    /// Move the original frame backing and charge into its enclosing output owner.
+    ///
+    /// # Safety
+    /// The caller must keep the unchanged Vec allocation and charge together,
+    /// destroy the Vec before refund, and prevent any mutable/extraction escape.
+    /// Every refusal and unwind must preserve that destruction order.
+    #[allow(unsafe_code)]
+    pub unsafe fn into_allocation_parts(self) -> (Vec<u8>, iroha_allocation::AllocationCharge) {
+        // SAFETY: the caller inherits the identical backing-custody contract.
+        unsafe { self.bytes.into_allocation_parts() }
     }
 
     /// Borrow every original byte, without implying successful validation.

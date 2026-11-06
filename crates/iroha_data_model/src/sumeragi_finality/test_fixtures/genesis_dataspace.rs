@@ -181,16 +181,18 @@ impl NexusAmxContextFixture {
 /// given committee.
 ///
 /// # Panics
-/// Panics if a committee key cannot produce its proof of possession.
+/// Panics if a committee key cannot produce its proof of possession or the
+/// committee does not contain a valid `3f + 1` number of distinct members.
 #[must_use]
 pub fn taira_fixture_lane_policy(committee: &[KeyPair]) -> SumeragiLanePolicy {
-    let members = committee
+    let mut members = committee
         .iter()
         .map(|key| SumeragiLaneMember {
             peer: PeerId::new(key.public_key().clone()),
             pop: bls_normal_pop_prove(key.private_key()).expect("fixture proof of possession"),
         })
         .collect::<Vec<_>>();
+    members.sort_by(|left, right| left.peer.cmp(&right.peer));
     let mut policy = SumeragiLanePolicy::for_chain(
         SumeragiParameters::default(),
         iroha_sumeragi::availability::recommended_data_availability_layout(),

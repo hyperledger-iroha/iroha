@@ -78,6 +78,9 @@ pub const PRIVACY_ROOT_PUBLICATION_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:roo
 /// Domain separator used to hash canonical [`PrivacyOrchardPoolBootstrapV1`] values.
 pub const PRIVACY_ORCHARD_POOL_BOOTSTRAP_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:orchard-pool-bootstrap:v1";
+/// Domain separator used to hash canonical [`PrivacyIronwoodPoolBootstrapV1`] values.
+pub const PRIVACY_IRONWOOD_POOL_BOOTSTRAP_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:ironwood-pool-bootstrap:v1";
 /// Domain separator for FCMP++, private-IVM, and PQ-MASP pool bootstraps.
 pub const PRIVACY_PROOF_MANAGED_POOL_BOOTSTRAP_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:proof-managed-pool-bootstrap:v1";
@@ -229,8 +232,8 @@ pub const TAIRA_PRIVACY_RETAINED_ROOT_COUNT_V1: u32 = 2_048;
 )]
 #[norito(tag = "protocol", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacyProtocolIdV1")]
-pub enum PrivacyProtocolIdV1 {
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1")]
+pub enum PrivacyRuntimeProtocolIdV1 {
     /// Native ZK-ACE post-quantum authorization protocol v1.
     #[norito(rename = "zk-ace-pq-authorization-v1")]
     ZkAcePqAuthorizationV1,
@@ -267,6 +270,9 @@ pub enum PrivacyProtocolIdV1 {
     /// Post-quantum MASP STARK protocol v1.
     #[norito(rename = "pq-masp-stark-v1")]
     PqMaspStarkV1,
+    /// Ironwood V3 Halo2 action protocol with cross-address transfers enabled.
+    #[norito(rename = "ironwood-halo2-actions-v1")]
+    IronwoodHalo2ActionsV1,
 }
 /// Overall security model claimed by a final first-release privacy protocol.
 ///
@@ -310,10 +316,13 @@ impl PrivacySecurityModelV1 {
         }
     }
 }
-impl PrivacyProtocolIdV1 {
-    /// Number of protocols in the closed first-release registry.
+impl PrivacyRuntimeProtocolIdV1 {
+    /// Number of protocols in the immutable deployed V1 catalog.
     pub const COUNT: usize = 12;
-    /// Every protocol in canonical Norito discriminant order.
+    /// Frozen V1 catalog roster in canonical Norito discriminant order.
+    ///
+    /// Use [`Self::SUPPORTED_PROTOCOLS`] to enumerate additive protocol support. Direct parsing
+    /// recognizes those extensions, but V1 catalog and discovery producers retain these twelve rows.
     pub const ALL: [Self; Self::COUNT] = [
         Self::ZkAcePqAuthorizationV1,
         Self::AnonymousPgcKOutOfNV1,
@@ -328,6 +337,28 @@ impl PrivacyProtocolIdV1 {
         Self::IrohaIvmPrivateNoteStarkV1,
         Self::PqMaspStarkV1,
     ];
+    /// Number of protocols understood by this binary, independent of activation.
+    pub const SUPPORTED_COUNT: usize = 13;
+    /// All understood protocols, including independently identified extensions.
+    pub const SUPPORTED_PROTOCOLS: [Self; Self::SUPPORTED_COUNT] = [
+        Self::ZkAcePqAuthorizationV1,
+        Self::AnonymousPgcKOutOfNV1,
+        Self::VeRangeTransparentRangeV1,
+        Self::IrohaZkAmsV1,
+        Self::VegaExistingCredentialZkV1,
+        Self::IrohaZkX509StarkP256V1,
+        Self::IrohaJindoPolynomialCommitmentV1,
+        Self::IrohaBootleLanternAnoncredV1,
+        Self::OrchardHalo2ActionsV1,
+        Self::MoneroFcmpPlusPlusV1,
+        Self::IrohaIvmPrivateNoteStarkV1,
+        Self::PqMaspStarkV1,
+        Self::IronwoodHalo2ActionsV1,
+    ];
+    /// Immutable number of protocols committed by the deployed Exact12 V1 catalog.
+    pub const EXACT12_COUNT: usize = Self::COUNT;
+    /// Explicit V1 catalog roster for version-bound validation and release evidence.
+    pub const EXACT12_PROTOCOLS: [Self; Self::EXACT12_COUNT] = Self::ALL;
     /// Exact external identifier used by SDK catalogs, governance tooling, and
     /// the BOI Privacy Lab.
     ///
@@ -345,6 +376,7 @@ impl PrivacyProtocolIdV1 {
             Self::IrohaJindoPolynomialCommitmentV1 => "iroha-jindo-polynomial-commitment-v1",
             Self::IrohaBootleLanternAnoncredV1 => "iroha-bootle-lantern-anoncred-v1",
             Self::OrchardHalo2ActionsV1 => "orchard-halo2-actions-v1",
+            Self::IronwoodHalo2ActionsV1 => "ironwood-halo2-actions-v1",
             Self::MoneroFcmpPlusPlusV1 => "monero-fcmp-plus-plus-v1",
             Self::IrohaIvmPrivateNoteStarkV1 => "iroha-ivm-private-note-stark-v1",
             Self::PqMaspStarkV1 => "pq-masp-stark-v1",
@@ -369,6 +401,7 @@ impl PrivacyProtocolIdV1 {
             Self::IrohaJindoPolynomialCommitmentV1 => "IrohaJindoPolynomialCommitmentV1",
             Self::IrohaBootleLanternAnoncredV1 => "IrohaBootleLanternAnoncredV1",
             Self::OrchardHalo2ActionsV1 => "OrchardHalo2ActionsV1",
+            Self::IronwoodHalo2ActionsV1 => "IronwoodHalo2ActionsV1",
             Self::MoneroFcmpPlusPlusV1 => "MoneroFcmpPlusPlusV1",
             Self::IrohaIvmPrivateNoteStarkV1 => "IrohaIvmPrivateNoteStarkV1",
             Self::PqMaspStarkV1 => "PqMaspStarkV1",
@@ -390,6 +423,7 @@ impl PrivacyProtocolIdV1 {
             b"iroha-jindo-polynomial-commitment-v1" => Some(Self::IrohaJindoPolynomialCommitmentV1),
             b"iroha-bootle-lantern-anoncred-v1" => Some(Self::IrohaBootleLanternAnoncredV1),
             b"orchard-halo2-actions-v1" => Some(Self::OrchardHalo2ActionsV1),
+            b"ironwood-halo2-actions-v1" => Some(Self::IronwoodHalo2ActionsV1),
             b"monero-fcmp-plus-plus-v1" => Some(Self::MoneroFcmpPlusPlusV1),
             b"iroha-ivm-private-note-stark-v1" => Some(Self::IrohaIvmPrivateNoteStarkV1),
             b"pq-masp-stark-v1" => Some(Self::PqMaspStarkV1),
@@ -411,6 +445,7 @@ impl PrivacyProtocolIdV1 {
             | Self::VegaExistingCredentialZkV1
             | Self::IrohaZkX509StarkP256V1
             | Self::OrchardHalo2ActionsV1
+            | Self::IronwoodHalo2ActionsV1
             | Self::MoneroFcmpPlusPlusV1 => PrivacySecurityModelV1::ClassicalRom,
         }
     }
@@ -436,7 +471,9 @@ impl PrivacyProtocolIdV1 {
             Self::IrohaJindoPolynomialCommitmentV1 => {
                 PrivacyProofSystemIdV1::JindoPolynomialCommitment
             }
-            Self::OrchardHalo2ActionsV1 => PrivacyProofSystemIdV1::Halo2IpaPasta,
+            Self::OrchardHalo2ActionsV1 | Self::IronwoodHalo2ActionsV1 => {
+                PrivacyProofSystemIdV1::Halo2IpaPasta
+            }
             Self::MoneroFcmpPlusPlusV1 => PrivacyProofSystemIdV1::FcmpPlusPlusCurveTreeBulletproofs,
         }
     }
@@ -456,7 +493,9 @@ impl PrivacyProtocolIdV1 {
             Self::VeRangeTransparentRangeV1 => PrivacyEngineIdV1::NativeVeRangeP256,
             Self::VegaExistingCredentialZkV1 => PrivacyEngineIdV1::NativeVega,
             Self::IrohaJindoPolynomialCommitmentV1 => PrivacyEngineIdV1::NativeJindo,
-            Self::OrchardHalo2ActionsV1 => PrivacyEngineIdV1::NativeHalo2Orchard,
+            Self::OrchardHalo2ActionsV1 | Self::IronwoodHalo2ActionsV1 => {
+                PrivacyEngineIdV1::NativeHalo2Orchard
+            }
             Self::MoneroFcmpPlusPlusV1 => PrivacyEngineIdV1::NativeFcmpPlusPlus,
         }
     }
@@ -477,7 +516,8 @@ pub use exact12_fixture::{
 /// matching, or recognition of pre-release identifiers.
 #[must_use]
 pub fn privacy_protocol_label_is_exact12_v1(label: &str) -> bool {
-    PrivacyProtocolIdV1::from_canonical_label(label).is_some()
+    PrivacyRuntimeProtocolIdV1::from_canonical_label(label)
+        .is_some_and(|protocol| PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS.contains(&protocol))
 }
 /// Exact proof-system profile selected by a privacy protocol.
 ///
@@ -1266,6 +1306,11 @@ define_privacy_digest!(
     "iroha_data_model::privacy::PrivacyOrchardPoolBootstrapDigestV1"
 );
 define_privacy_digest!(
+    /// Digest of one canonical governed Ironwood pool bootstrap.
+    PrivacyIronwoodPoolBootstrapDigestV1,
+    "iroha_data_model::privacy::PrivacyIronwoodPoolBootstrapDigestV1"
+);
+define_privacy_digest!(
     /// Digest of one canonical governed FCMP++, private-IVM, or PQ-MASP pool bootstrap.
     PrivacyProofManagedPoolBootstrapDigestV1,
     "iroha_data_model::privacy::PrivacyProofManagedPoolBootstrapDigestV1"
@@ -1562,9 +1607,13 @@ pub use zk_x509_interval::*;
 include!("privacy/credentials.rs");
 include!("privacy/statements.rs");
 include!("privacy/proofs.rs");
+include!("privacy/exact12_wire.rs");
+include!("privacy/ironwood_wire.rs");
 #[cfg(test)]
 pub(crate) mod tests {
     include!("privacy/tests/protocol_and_proofs.rs");
+    include!("privacy/tests/ironwood.rs");
+    include!("privacy/tests/wire_grammar.rs");
     include!("privacy/tests/capability_manifest.rs");
     include!("privacy/tests/release_manifest.rs");
     include!("privacy/tests/namespaces_and_governance.rs");

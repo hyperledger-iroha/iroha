@@ -40,7 +40,7 @@ pub(crate) use falcon512::{
     BOOTLE_LANTERN_FALCON512_PROFILE_DESCRIPTOR_V1,
 };
 use iroha_data_model::privacy::{
-    BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1, PrivacyStatementV1,
+    BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1, PrivacyRuntimeStatementV1,
 };
 pub(crate) use issuance_store::BOOTLE_LANTERN_ISSUANCE_STORE_PROFILE_DESCRIPTOR_V1;
 pub(crate) use issuer::BOOTLE_LANTERN_ISSUANCE_WIRE_DESCRIPTOR_V1;
@@ -104,9 +104,10 @@ fn compile_bound_presentation_v1(
         matrix_seed,
         canonical_genesis_hash,
     )?;
-    let statement_digest = PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement.clone())
-        .digest()
-        .map_err(|_| BoundPresentationErrorV1::StatementDigest)?;
+    let statement_digest =
+        PrivacyRuntimeStatementV1::IrohaBootleLanternAnoncredV1(statement.clone())
+            .digest()
+            .map_err(|_| BoundPresentationErrorV1::StatementDigest)?;
     let transcript = transcript::PresentationTranscriptV1::new(
         transcript::PresentationChallengeBindingV1 {
             parameter_digest: *statement.context.parameter_digest.as_bytes(),

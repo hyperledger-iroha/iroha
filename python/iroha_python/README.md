@@ -419,6 +419,110 @@ partition. Whitespace, case variants, leading zeroes, aliases, and unknown JSON
 fields fail before proving. Authenticated inspection returns
 `public_balance_scope` in that same canonical spelling.
 
+### Ironwood merchant actions
+
+Ironwood is a separate selected profile; the Exact12/Generic11 inventories and
+existing Orchard APIs retain their original identities. Both payer and merchant
+must use this worker build and independently bind the selected Ironwood profile.
+`derive_ironwood_address(owner_only_key_path)` exports an `IronwoodRecipientV1`
+(address and compiled profile digest). The merchant spending key stays in a native
+32-byte owner-only file; share only the exported recipient with the payer.
+
+`ironwood_deposit_public_action_v1(...)` creates an explicit recipient output and
+sets `public_debit_decimal` to exactly the payment amount. Its required
+`expected_profile_digest` comes from the payer's independently selected profile;
+a different digest in the merchant export refuses before import. Use protocol
+`ironwood-halo2-actions-v1`, schema `ironwood_note_action_v1`, and the existing
+`import_ironwood_deposit_seed(payer_seed_bytearray, binding, canonical_public_action,
+ttl_millis=..., chain_discriminant=selected_prefix)`
+then execute public-intent flow with `orchard_contract_calls.before` and `.after`
+for the ordered registry calls. The owner bundle's witness is
+`{"changes":[],"spends":[]}` for a public-funded deposit. Preparation randomizes
+V3 actions, binds the complete ordered batch, then authorizes once.
+The seed passes over the authenticated private stdin pipe without a durable plaintext
+file. The caller must erase its `bytearray` in `finally`; the transport frame and
+Rust receive/witness buffers are erased on every exit. Command 14 remains the
+owner-file import for callers who already own an appropriate credential file.
+The explicit address prefix is required and retained for this lease; using the
+worker default (753) would reject a payer selected under prefix 369. Advanced
+native bundles may provide V3 spends and separately derived payer change. The
+public action's `changes` array must approve each change's `recipient_hex`,
+`value_decimal`, and `memo_hex`; native witness derivation must match all three.
+Their net public debit must still equal the independently approved public value.
+The zero-spend helper sets public `changes` to empty; the caller supplies the empty
+witness shown above through native command 15; Python supplies no generic witness encoding. The owner supplies change amounts explicitly; this API does
+not perform coin selection.
+
+The signed result exposes `ironwood_direct_instruction_index` and
+`ironwood_output_action_indices`. The latter maps requested outputs to randomized
+bundle action indices in order: public payment outputs, then approved change
+outputs, excluding dummy outputs. For the single-output deposit helper, element
+zero is the merchant's action index. These values accompany the signed transaction
+hash when constructing the merchant's expected receipt; the merchant still verifies
+the committed proof independently. Old signed-result tag3 is unchanged; Ironwood
+uses appended tag7 to carry this mapping.
+
+`export_ironwood_viewing_key(spending_path, new_viewing_path, internal_scope=False)`
+creates a native owner-only incoming-viewing credential without returning its bytes
+to Python. Creation is exclusive: an existing path is never overwritten. Transfer
+this restricted credential through owner-controlled custody to a merchant verifier,
+which calls `scan_ironwood_receipts_with_viewing_key(viewing_path, canonical_request)`
+without possessing a spending key. The credential's scope must match `internal_scope`
+in the request. It can detect incoming notes but cannot authorize spending or derive
+spentness. The old spending-key scan remains available. IPC commands12/13 are
+appended; existing commands1–11 keep their encodings. Encoded key custody buffers are
+zeroized and borrowed by the scanner. Upstream Orchard parsed viewing-key and
+cryptographic temporaries lack a safe `Zeroize` API; this does not promise erasure of
+every compiler/library temporary.
+
+Fetch public `GET /v1/bridge/finality/{height}` or
+`GET /v1/bridge/finality/interval/{from}/{to}` **anonymously**, with
+`Accept: application/x-norito`. Use broad bounded height ranges rather than only the
+paying block. Signed Ironwood discovery aliases were removed: these same frames
+were public, and signing linked a merchant account to its scan heights.
+The single-height response is one canonical `SumeragiFinalityProof` frame: hex-encode
+its bytes directly into `proofs_hex`, in consecutive order beginning at the checkpoint
+height. This avoids splitting the interval's canonical `Vec<SumeragiFinalityProof>`
+frame in Python. Intervals contain at most 64 heights; the scanner's complete page
+must fit its 16 MiB proof bound and IPC frame bound. These endpoints return complete
+blocks, never notes filtered by a caller's recipient or key.
+
+Both receipt-scan modes authenticate the
+complete finality page before reading successful original direct submissions in
+signed Instructions/Batch transactions. It does not discover notes from indirect
+contract, trigger or nested-proposal execution. The merchant
+must independently select and persist the initial trusted checkpoint and the
+network, chain, profile, asset and pool pins. These authority inputs must never be
+supplied by the payer or accepted from the same untrusted server providing the
+proof frames. Expected recipient, amount and memo come from the merchant's own
+invoice. Finality verification authenticates progress from that owner-selected
+checkpoint; it cannot establish the trustworthiness of a caller-supplied checkpoint.
+Its closed canonical JSON request contains `network_id_hex`, `chain_id`, `checkpoint_hex`,
+`proofs_hex` (canonical Norito proof frames), `asset_definition_id`, `pool_id_hex`,
+`compiled_profile_digest_hex`, `internal_scope`, and `expected_receipt`. The latter
+is null for discovery, or an exact object with `transaction_hash_hex` (entrypoint
+hash), `direct_instruction_index`, `action_index`, `recipient_hex`,
+`amount_decimal`, and `memo_hex` (512 bytes). A receipt requires decryption and
+recomputed commitment equality at that exact original action in a successfully
+executed transaction. Rejected transactions never produce receipts. The result
+contains canonical JSON receipts plus the authenticated successor checkpoint.
+The first proof reauthenticates the supplied checkpoint and is excluded from scanning;
+only its strict extension produces receipts. To verify a note in that boundary block,
+start from an independently trusted earlier checkpoint.
+
+Every receipt exposes `receipt_identity` with `transaction_hash_hex` and `action_index`.
+Adjacent pages do not repeat their shared boundary; replaying an earlier page returns
+stable identities. Before crediting an invoice, the caller must atomically persist
+that identity with the credit and checkpoint in its independently pinned network,
+chain, pool and profile namespace, and refuse an already consumed identity. This
+stateless worker does not maintain a consumed-receipt database. Use a unique memo for
+each invoice, check all 512 memo bytes, and bind one receipt identity to at most one
+invoice. Discovery with `expected_receipt: null` alone is not payment acceptance.
+Persist the returned checkpoint only after requested receipt checks and durable
+application bookkeeping succeed. Note openings, spending keys and authentication
+paths never cross the Python boundary. Automatic note/witness storage is separate
+from this authenticated page API.
+
 ### Exact12 typed fixture bundles
 
 `PrivacyExact12FixtureCodecV1` is the native-independent strict codec for
@@ -2950,3 +3054,29 @@ other eleven protocols retain their existing projection. Old inline X509 Submit
 archives are rejected. These byte checks do not implement authenticated holder
 preparation, signing, transport or proof verification. Shared fixture bytes must be
 regenerated by the current Rust model after the schema changes are composed.
+
+
+`verify_ironwood_pool_cut_v1` verifies the native proof returned by
+`POST /v1/privacy/ironwood/pool-cut/{height}` against independently pinned finality,
+network/pool/profile/asset/payer and the supported native World schema family.
+Use a dedicated `CanReadAllLedgerData` proof reader for this private World-proof
+route. Retain the before proof at its current certified cut; no historical World
+snapshot is promised. Receipt scans remain anonymous and incoming-viewing-only.
+`inspect_signed_privacy_ironwood_note_action_v1(wire, NetworkId,
+chain_discriminant=...)` authenticates the original signature/intent, compiled
+profile and three-entry batch, exposing the canonical payload and public statement.
+It is an original-custody helper, not proof of finality, pool admission or recipient
+payment. Merchant acceptance requires the finality-certified decrypted note.
+
+`verify_ironwood_payment_effect_v1` joins that retained preparation cut C to exact
+successful payment H using consecutive certified frames C..H and the original
+signed transaction. It binds the profile, pool, Global asset, payer, anchor/epoch,
+expiry C+32 and directional value balance. Its debit/credit quantities describe the
+exact native transaction effect, not whole-block balance differences. No live-tip
+or historical H−1/H World cut is needed after payment; retain the originals for
+restart. Registry integrations must also inspect the exact ordered three-item
+batch and its committed events, and authenticate the merchant receipt.
+
+`ironwood_pool_bootstrap_instruction_json_v1` emits the typed instruction vector as
+Norito JSON for a selected new Global pool, asset, reserve and chain prefix. It does
+not sign, grant permission, submit, activate or provision anything.

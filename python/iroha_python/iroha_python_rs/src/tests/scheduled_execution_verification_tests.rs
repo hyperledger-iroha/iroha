@@ -661,3 +661,38 @@ fn time_disposition_uses_the_typed_root_and_complete_terminal_not_error_text() {
         );
     }
 }
+
+#[path = "scheduled_lifecycle_v2_tests.rs"]
+mod lifecycle_v2;
+
+#[test]
+fn explicit_lifecycle_policy_never_preserves_v1_and_requires_v2_at_boundary() {
+    let f = Fixture::new(false);
+    let verify = |height: Option<u64>| {
+        let network = f.chain.network_id();
+        let active = height.is_some();
+        let fingerprint = Hash::new(b"original rollout");
+        let policy = json::to_json(&norito::json!({
+            "network_id": network, "v2_activation_height": height,
+            "committed_height": 100_u64, "active": active,
+            "consensus_config_fingerprint": fingerprint,
+        }))
+        .unwrap();
+        authenticate_with_activation_policy(
+            &f.original.encode_versioned(),
+            "fixture",
+            &json::to_json(&f.proofs).unwrap(),
+            f.chain.network_id(),
+            f.checkpoint.chain_id(),
+            &f.checkpoint.encode_canonical().unwrap(),
+            None,
+            Some(&policy),
+        )
+    };
+    verify(None).unwrap();
+    verify(Some(100)).unwrap();
+    let error = verify(Some(2)).unwrap_err();
+    assert!(error.to_string().contains("version contradicts"));
+    let error = verify(Some(1)).unwrap_err();
+    assert!(error.to_string().contains("height must be at least 2"));
+}

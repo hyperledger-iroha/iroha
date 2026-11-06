@@ -122,8 +122,11 @@ pub(super) fn collect(
     world
         .account(&query.account_id)
         .map_err(|error| Error::Conversion(error.to_string()))?;
-    let (mut graph, slots) =
-        RetainedDecodeBudget::new::<AssetFiTransferReceiptV1>(1, limits.max_source_item_bytes())?;
+    // The stored receipt is the returned row. Its frame and decoded graph, the
+    // key text and the instruction scratch share one composite FI row envelope.
+    let row_bytes = composite_row_bytes(limits)?;
+    let row_maximum = usize::try_from(row_bytes).map_err(|_| Error::CapacityLimit)?;
+    let (mut graph, slots) = RetainedDecodeBudget::new::<AssetFiTransferReceiptV1>(1, row_bytes)?;
     let key_scope = norito::DecodeLimits::new(0, 0, 0, graph.next_limit()?, 64);
     let (account_json, key_usage) = norito::core::with_decode_limits_measured(key_scope, || {
         norito::core::classify_decode_attempt(|| {
@@ -158,7 +161,7 @@ pub(super) fn collect(
     let Some(bytes) = world.smart_contract_state().get(&key) else {
         return Ok((ExactOwnedRows::new(0, 0)?.finish()?, execution_stats));
     };
-    if bytes.len() > maximum {
+    if bytes.len() > row_maximum {
         return Err(Error::CapacityLimit.into());
     }
     let elements = bytes.len().checked_mul(8).ok_or(Error::CapacityLimit)?;

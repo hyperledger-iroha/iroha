@@ -19,7 +19,7 @@ use super::{
     profile::{ZK_X509_MAX_PROOF_BYTES_V1, ZK_X509_PROOF_VERSION_V1},
 };
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
-use iroha_data_model::privacy::{IrohaZkX509StarkP256StatementV1, PrivacyStatementV1};
+use iroha_data_model::privacy::{IrohaZkX509StarkP256StatementV1, PrivacyRuntimeStatementV1};
 use thiserror::Error;
 const CREDENTIAL_MAGIC_V1: [u8; 4] = *b"X5S1";
 const MAIN_AGGREGATE_MAGIC_V1: [u8; 4] = *b"X5M1";
@@ -87,7 +87,7 @@ impl ZkX509CredentialPublicBindingV1 {
         if genesis_hash == [0; 32] || statement.context.network_id.as_bytes() != &genesis_hash {
             return Err(ZkX509CredentialProofErrorV1::InvalidStatement);
         }
-        let statement_digest = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone())
+        let statement_digest = PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement.clone())
             .digest()
             .map_err(|_| ZkX509CredentialProofErrorV1::InvalidStatement)?
             .into_bytes();

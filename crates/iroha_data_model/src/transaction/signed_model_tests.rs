@@ -2,6 +2,7 @@ use super::*;
 use crate::{
     Domain, Level,
     account::{MultisigMember, MultisigPolicy},
+    isi::privacy::SubmitPrivacyProofV1,
     prelude::{Log, Register, TriggerId},
     privacy::{
         IROHA_JINDO_FIELD_ELEMENT_BYTES_V1, IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1,
@@ -554,23 +555,28 @@ fn draft_privacy_submission() -> SubmitPrivacyProofV1 {
                 .collect(),
         },
     );
-    SubmitPrivacyProofV1::new(PrivacyProofEnvelopeV1 {
-        wire_magic: crate::privacy::PrivacyProofWireMagicV1::default(),
-        catalog_commitment: crate::privacy::PrivacyExact12CatalogCommitmentV1::default(),
-        protocol_id,
-        proof_system_id: PrivacyProofSystemIdV1::JindoPolynomialCommitment,
-        engine_id: protocol_id.expected_engine(),
-        parameter_id,
-        parameter_digest,
-        verifier_digest,
-        statement_schema_digest,
-        engine_manifest_digest,
-        statement_digest: PrivacyStatementDigestV1::new([0; 32]),
-        statement,
-        proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(PrivacyProofBytesV1::new(vec![
-            0xA5, 0x5A, 1,
-        ])),
-    })
+    SubmitPrivacyProofV1::new(
+        (PrivacyProofEnvelopeV1 {
+            wire_magic: crate::privacy::PrivacyProofWireMagicV1::default(),
+            catalog_commitment: crate::privacy::PrivacyExact12CatalogCommitmentV1::default(),
+            protocol_id,
+            proof_system_id: PrivacyProofSystemIdV1::JindoPolynomialCommitment,
+            engine_id: crate::privacy::PrivacyRuntimeProtocolIdV1::from(protocol_id)
+                .expected_engine(),
+            parameter_id,
+            parameter_digest,
+            verifier_digest,
+            statement_schema_digest,
+            engine_manifest_digest,
+            statement_digest: PrivacyStatementDigestV1::new([0; 32]),
+            statement,
+            proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(PrivacyProofBytesV1::new(
+                vec![0xA5, 0x5A, 1],
+            )),
+        })
+        .try_into()
+        .expect("frozen Exact12 test input"),
+    )
 }
 fn privacy_payload_with_executable(executable: Executable) -> TransactionPayload {
     TransactionBuilder::new_with_time(
@@ -594,7 +600,7 @@ fn draft_zk_ace_privacy_payload() -> TransactionPayload {
         submission.envelope.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
         submission.envelope.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks;
         submission.envelope.engine_id =
-            PrivacyProtocolIdV1::ZkAcePqAuthorizationV1.expected_engine();
+            crate::privacy::PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1.expected_engine();
         submission.envelope.statement =
             PrivacyStatementV1::ZkAcePqAuthorizationV1(ZkAcePqAuthorizationStatementV1 {
                 context,
@@ -625,7 +631,8 @@ fn draft_vega_privacy_payload() -> TransactionPayload {
         submission.envelope.protocol_id = protocol_id;
         submission.envelope.proof_system_id =
             PrivacyProofSystemIdV1::VegaNeutronNovaSpartanHyraxT256;
-        submission.envelope.engine_id = protocol_id.expected_engine();
+        submission.envelope.engine_id =
+            crate::privacy::PrivacyRuntimeProtocolIdV1::from(protocol_id).expected_engine();
         submission.envelope.statement =
             PrivacyStatementV1::VegaExistingCredentialZkV1(VegaExistingCredentialStatementV1 {
                 context,
@@ -671,7 +678,8 @@ fn draft_ivm_private_note_privacy_payload() -> TransactionPayload {
         let protocol_id = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
         submission.envelope.protocol_id = protocol_id;
         submission.envelope.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks;
-        submission.envelope.engine_id = protocol_id.expected_engine();
+        submission.envelope.engine_id =
+            crate::privacy::PrivacyRuntimeProtocolIdV1::from(protocol_id).expected_engine();
         let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
             context,
             asset_definition_id: sample_fee_asset(),
@@ -1217,8 +1225,9 @@ fn privacy_mixed_batch_binds_exact_direct_member_and_contract_order() {
         .privacy_transaction_intent_binding_if_present_v1()
         .expect("mixed binding")
         .expect("direct submission");
+    let submission_envelope = submission.runtime_envelope();
     assert_eq!(bound, intent);
-    assert_eq!(submission.envelope.statement.context().action_index, 0);
+    assert_eq!(submission_envelope.statement.context().action_index, 0);
     let Executable::Batch(items) = &payload.instructions else {
         unreachable!()
     };
@@ -1660,7 +1669,7 @@ fn privacy_transaction_intent_binds_every_independent_payload_field() {
     );
     assert_submission_bound!("engine tag", |submission: &mut SubmitPrivacyProofV1| {
         submission.envelope.engine_id =
-            PrivacyProtocolIdV1::ZkAcePqAuthorizationV1.expected_engine();
+            crate::privacy::PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1.expected_engine();
     });
     assert_submission_bound!(
         "envelope parameter id",

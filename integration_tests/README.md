@@ -445,6 +445,16 @@ qualification; each corridor must run successfully with its exact test filter.
 
 ### Native SoraFS publication lifecycle
 
+The CLI service lifecycle fixtures use `tests/iroha_cli_storage.rs` to admit six
+signed storage providers (three Hot and three Warm), their native reserves,
+credit bonds and capacity before publishing service bundles. The capacity
+window covers the later pin's complete ingest deadline. Setup is one quoted
+native transaction; it does not inject storage state or bypass provider
+eligibility. `core_api iroha_cli::soracloud_mutations_use_live_torii_control_plane`
+checks deploy, upgrade, canary promotion and rollback with explicit authority
+fee payment. Its service fixture retains client-encrypted state; native FHE
+profile refusal remains covered by Core's dedicated security tests.
+
 `core_api::sorafs_publication::four_peer_publication_replication_retrieval_restart_and_native_repair`
 constructs four validators and three native software providers. Signed genesis
 establishes admission; ordinary transfers of the actual configured fee asset fund

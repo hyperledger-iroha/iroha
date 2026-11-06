@@ -1,7 +1,10 @@
 //! Data-trigger execution and rollback scenarios.
 use eyre::Result;
-use integration_tests::sandbox;
-use iroha::{blocking, data_model::prelude::*};
+use integration_tests::{sandbox, sync::run_on_dedicated_thread};
+use iroha::{
+    blocking,
+    data_model::{prelude::*, query::error::FindError},
+};
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
 };
@@ -12,12 +15,8 @@ use iroha_model_base::topology::DataSpaceId;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use std::time::{Duration, Instant};
-use tokio::task::spawn_blocking;
 const ASSET_VALUE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const ASSET_VALUE_TIMEOUT: Duration = Duration::from_secs(30);
-async fn start_network(context: &'static str) -> Result<Option<sandbox::SerializedNetwork>> {
-    Box::pin(start_custom_network(NetworkBuilder::new(), context)).await
-}
 async fn start_custom_network(
     builder: NetworkBuilder,
     context: &'static str,
@@ -41,11 +40,10 @@ where
     Ok(())
 }
 fn asset_value(client: &blocking::Client, asset_id: &AssetId) -> Result<Quantity> {
-    let assets = client.client().query(FindAssets::new()).execute_all()?;
-    let asset = assets
-        .into_iter()
-        .find(|asset| asset.id() == asset_id)
-        .ok_or_else(|| eyre::eyre!("asset {asset_id} not found"))?;
+    let asset = client
+        .client()
+        .query_single(FindAssetById::new(asset_id.clone()))?;
+    assert_eq!(asset.id(), asset_id);
     Ok(asset.value().clone())
 }
 fn wait_for_asset_value(
@@ -76,9 +74,18 @@ fn wait_for_asset_value(
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_non_intersecting_execution_paths() -> Result<()> {
-    let Some(network) = Box::pin(start_network(stringify!(
-        two_non_intersecting_execution_paths
-    )))
+    // The data space's genesis authority grants this scope; owning wonderland
+    // does not authorize Alice to grant herself data-space-wide alias control.
+    let builder = NetworkBuilder::new().with_genesis_instruction(Grant::account_permission(
+        Permission::from(CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+        }),
+        ALICE_ID.clone(),
+    ));
+    let Some(network) = Box::pin(start_custom_network(
+        builder,
+        stringify!(two_non_intersecting_execution_paths),
+    ))
     .await?
     else {
         return Ok(());
@@ -91,7 +98,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
             "rose".parse()?,
         );
         let asset_id = AssetId::new(asset_definition_id, account_id.clone());
-        let prev_value = spawn_blocking({
+        let prev_value = run_on_dedicated_thread({
             let client = test_client.clone();
             let asset_id = asset_id.clone();
             move || asset_value(&client, &asset_id)
@@ -101,19 +108,10 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         let alias_domain = DomainId::try_new("wonderland", "universal")?;
         let account_alias_literal = "mintrose@wonderland.universal";
         let alias_target_account = gen_account_in("wonderland").0;
-        spawn_blocking({
+        run_on_dedicated_thread({
             let client = test_client.clone();
             let alias_domain = alias_domain.clone();
             move || -> Result<()> {
-                client.submit(
-                    Grant::account_permission(
-                        Permission::from(CanManageAccountAlias {
-                            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
-                        }),
-                        ALICE_ID.clone(),
-                    ),
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                )?;
                 client.submit(
                     Grant::account_permission(
                         Permission::from(CanManageAccountAlias {
@@ -137,7 +135,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
             )
             .expect("trigger action fixture satisfies validation invariants"),
         ));
-        spawn_blocking({
+        run_on_dedicated_thread({
             let client = test_client.clone();
             move || {
                 client.submit(
@@ -157,7 +155,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
             )
             .expect("trigger action fixture satisfies validation invariants"),
         ));
-        spawn_blocking({
+        run_on_dedicated_thread({
             let client = test_client.clone();
             move || {
                 client.submit(
@@ -173,7 +171,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
             AccountProvisionV1::Create,
             AccountAliasRoleV1::Primary,
         )?;
-        spawn_blocking({
+        run_on_dedicated_thread({
             let client = test_client.clone();
             move || {
                 client.submit(
@@ -184,7 +182,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         })
         .await??;
         let expected_new_value = prev_value.checked_add(&Quantity::one()).unwrap();
-        let new_value = spawn_blocking({
+        let new_value = run_on_dedicated_thread({
             let client = test_client.clone();
             let asset_id = asset_id.clone();
             move || {
@@ -199,7 +197,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         .await??;
         let neverland: DomainId = DomainId::try_new("neverland", "universal")?;
         let setup_neverland = domain_setup_instruction(&neverland, test_client.client().account())?;
-        spawn_blocking({
+        run_on_dedicated_thread({
             let client = test_client.clone();
             move || {
                 client.submit(
@@ -211,7 +209,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         .await??;
         let expected_newer_value = new_value.checked_add(&Quantity::one()).unwrap();
         let expected_newer_value_for_wait = expected_newer_value.clone();
-        let newer_value = spawn_blocking({
+        let newer_value = run_on_dedicated_thread({
             let client = test_client.clone();
             let asset_id = asset_id.clone();
             move || {
@@ -270,7 +268,7 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
             )
             .expect("exact owned-asset data-trigger action is valid"),
         ));
-        spawn_blocking({
+        run_on_dedicated_thread({
             let client = client.clone();
             move || {
                 client.submit(
@@ -281,7 +279,7 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
         })
         .await??;
 
-        spawn_blocking({
+        run_on_dedicated_thread({
             let client = client.clone();
             let unrelated_marker = unrelated_marker.clone();
             move || {
@@ -296,7 +294,7 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
             }
         })
         .await??;
-        let account = spawn_blocking({
+        let account = run_on_dedicated_thread({
             let client = client.clone();
             move || client.client().query_single(FindAccountById::new(ALICE_ID.clone()))
         })
@@ -305,14 +303,14 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
             account.metadata().get(&scoped_marker).is_none(),
             "an unrelated account event must not fire an exact asset-scoped trigger"
         );
-        let active = spawn_blocking({
+        let active = run_on_dedicated_thread({
             let client = client.clone();
             move || client.client().query(FindActiveTriggerIds).execute_all()
         })
         .await??;
         assert!(active.contains(&scope_trigger_id));
 
-        spawn_blocking({
+        run_on_dedicated_thread({
             let client = client.clone();
             let rose = rose.clone();
             move || {
@@ -323,7 +321,7 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
             }
         })
         .await??;
-        let account = spawn_blocking({
+        let account = run_on_dedicated_thread({
             let client = client.clone();
             move || client.client().query_single(FindAccountById::new(ALICE_ID.clone()))
         })
@@ -333,7 +331,7 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
             Some(&Json::from(true)),
             "the exact owned-asset event must fire the scoped trigger"
         );
-        let active = spawn_blocking({
+        let active = run_on_dedicated_thread({
             let client = client.clone();
             move || client.client().query(FindActiveTriggerIds).execute_all()
         })
@@ -346,7 +344,9 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
         let ordering_witness: Name = "data_trigger_ordering_witness".parse()?;
         let create_witness_id: TriggerId = "10_create_ordering_witness".parse()?;
         let consume_then_fail_id: TriggerId = "20_consume_then_fail".parse()?;
-        let wonderland = DomainId::try_new("wonderland", "universal")?;
+        let missing_after_witness: Name = "data_trigger_missing_after_witness".parse()?;
+        assert!(account.metadata().get(&ordering_witness).is_none());
+        assert!(account.metadata().get(&missing_after_witness).is_none());
         let create_witness = Register::trigger(Trigger::new(
             create_witness_id.clone(),
             Action::new(
@@ -369,7 +369,12 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
                         ALICE_ID.clone(),
                         ordering_witness.clone(),
                     )),
-                    InstructionBox::from(Register::domain(Domain::new(wonderland.clone()))),
+                    // This permitted operation fails only after consuming the
+                    // different witness created by the first ordered trigger.
+                    InstructionBox::from(RemoveKeyValue::account(
+                        ALICE_ID.clone(),
+                        missing_after_witness.clone(),
+                    )),
                 ],
                 Repeats::Exactly(1),
                 ALICE_ID.clone(),
@@ -377,7 +382,7 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
             )
             .expect("failing data-trigger action is valid"),
         ));
-        spawn_blocking({
+        run_on_dedicated_thread({
             let client = client.clone();
             move || {
                 client.submit_all(
@@ -388,13 +393,13 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
         })
         .await??;
 
-        let rose_before = spawn_blocking({
+        let rose_before = run_on_dedicated_thread({
             let client = client.clone();
             let rose = rose.clone();
             move || asset_value(&client, &rose)
         })
         .await??;
-        let error = spawn_blocking({
+        let error = run_on_dedicated_thread({
             let client = client.clone();
             let rose = rose.clone();
             move || {
@@ -407,11 +412,11 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
         .await?
         .expect_err("the second canonically ordered data trigger must reject the transaction");
         assert!(
-            format!("{error:?}").contains(&wonderland.to_string()),
-            "the rejection must come from the duplicate-domain instruction after the first trigger created and the second consumed its witness: {error:?}"
+            is_missing_metadata_key_rejection(&error, &missing_after_witness),
+            "the rejection must identify the second missing key after the first trigger created and the second consumed its distinct witness: {error:?}"
         );
 
-        let rose_after = spawn_blocking({
+        let rose_after = run_on_dedicated_thread({
             let client = client.clone();
             let rose = rose.clone();
             move || asset_value(&client, &rose)
@@ -421,13 +426,13 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
             rose_after, rose_before,
             "a failed data-trigger cascade must roll back its originating mint"
         );
-        let account = spawn_blocking({
+        let account = run_on_dedicated_thread({
             let client = client.clone();
             move || client.client().query_single(FindAccountById::new(ALICE_ID.clone()))
         })
         .await??;
         assert!(account.metadata().get(&ordering_witness).is_none());
-        let active = spawn_blocking({
+        let active = run_on_dedicated_thread({
             let client = client.clone();
             move || client.client().query(FindActiveTriggerIds).execute_all()
         })
@@ -439,6 +444,40 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
         Ok(())
     })
     .await
+}
+
+fn is_missing_metadata_key_rejection(error: &eyre::Report, expected: &Name) -> bool {
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<FindError>(),
+            Some(FindError::MetadataKey(key)) if key == expected
+        )
+    })
+}
+
+#[test]
+fn trigger_rollback_rejection_requires_the_distinct_second_metadata_key() -> Result<()> {
+    let witness: Name = "ordering_witness".parse()?;
+    let missing: Name = "missing_after_witness".parse()?;
+    assert!(is_missing_metadata_key_rejection(
+        &eyre::Report::new(FindError::MetadataKey(missing.clone())).wrap_err("trigger failed"),
+        &missing,
+    ));
+    assert!(!is_missing_metadata_key_rejection(
+        &eyre::Report::new(FindError::MetadataKey(witness)),
+        &missing,
+    ));
+    assert!(!is_missing_metadata_key_rejection(
+        &eyre::eyre!("missing metadata key {missing}"),
+        &missing,
+    ));
+    assert!(!is_missing_metadata_key_rejection(
+        &eyre::Report::new(ValidationFail::NotPermitted(format!(
+            "unknown key {missing}"
+        ))),
+        &missing,
+    ));
+    Ok(())
 }
 
 /// # Scenario
@@ -468,7 +507,7 @@ async fn cat_depth_and_mouse_depth() -> Result<()> {
     };
     let test_client = network.client();
     run_or_skip(stringify!(cat_depth_and_mouse_depth), || async {
-        let mut parameters = spawn_blocking({
+        let mut parameters = run_on_dedicated_thread({
             let client = test_client.clone();
             move || client.client().query_single(FindParameters)
         })
@@ -478,7 +517,7 @@ async fn cat_depth_and_mouse_depth() -> Result<()> {
         let new_depth = base_depth
             .checked_add(110)
             .expect("execution depth increase should fit in u8");
-        spawn_blocking({
+        run_on_dedicated_thread({
             let client = test_client.clone();
             move || {
                 client.submit(
@@ -492,7 +531,7 @@ async fn cat_depth_and_mouse_depth() -> Result<()> {
             }
         })
         .await??;
-        parameters = spawn_blocking({
+        parameters = run_on_dedicated_thread({
             let client = test_client.clone();
             move || client.client().query_single(FindParameters)
         })

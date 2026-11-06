@@ -239,6 +239,10 @@ __all__ = [
     "inspect_signed_privacy_zk_ams_provision_account_action_v1",
     "inspect_signed_privacy_anonymous_pgc_payment_action_v1",
     "inspect_signed_privacy_orchard_note_action_v1",
+    "inspect_signed_privacy_ironwood_note_action_v1",
+    "verify_ironwood_pool_cut_v1",
+    "verify_ironwood_payment_effect_v1",
+    "ironwood_pool_bootstrap_instruction_json_v1",
     "inspect_signed_privacy_fcmp_membership_payment_action_v1",
     "inspect_signed_privacy_ivm_private_note_action_v1",
     "inspect_signed_privacy_pq_masp_note_action_v1",
@@ -3202,6 +3206,106 @@ def inspect_signed_privacy_anonymous_pgc_payment_action_v1(
         entrypoint="inspect_signed_privacy_anonymous_pgc_payment_action_v1",
         protocol_label="Anonymous-PGC",
     )
+
+
+def verify_ironwood_pool_cut_v1(
+    proof: bytes, *, checkpoint_hex: str, proof_frames_hex: list[str],
+    network_id_hex: str, chain_discriminant: int, pool_id_hex: str,
+    asset_definition_id: str, payer_account_id: str, expected_profile_digest_hex: str,
+) -> dict[str, Any]:
+    """Verify an exact native World pool cut against independently trusted finality."""
+    if type(proof) is not bytes or not proof:
+        raise TypeError("pool-cut proof must be nonempty exact bytes")
+    chain_discriminant = _require_chain_discriminant(chain_discriminant)
+    try:
+        raw = _crypto.verify_ironwood_pool_cut_v1(proof, checkpoint_hex,
+            proof_frames_hex, network_id_hex, chain_discriminant, pool_id_hex,
+            asset_definition_id, payer_account_id, expected_profile_digest_hex)
+    except AttributeError as exc:
+        raise RuntimeError("native Ironwood pool-cut verifier is missing; rebuild the extension") from exc
+    result = json.loads(raw)
+    if type(result) is not dict:
+        raise RuntimeError("native pool-cut verifier returned an invalid result")
+    return result
+
+
+def verify_ironwood_payment_effect_v1(
+    proof: bytes, *, checkpoint_hex: str, proof_frames_hex: list[str],
+    payment_proof_frames_hex: list[str], signed_transaction_versioned: bytes,
+    network_id_hex: str, chain_discriminant: int, pool_id_hex: str,
+    asset_definition_id: str, payer_account_id: str, expected_profile_digest_hex: str,
+    expected_amount_decimal: str,
+) -> dict[str, Any]:
+    """Verify the original payment's certified native debit/credit from its retained pool cut.
+
+    These are per-transaction effects, not historical whole-block account balances.
+    Public frames extend the authenticated preparation cut through the payment height.
+    """
+    if type(proof) is not bytes or not proof:
+        raise TypeError("pool-cut proof must be nonempty exact bytes")
+    if type(signed_transaction_versioned) is not bytes or not signed_transaction_versioned:
+        raise TypeError("signed_transaction_versioned must be nonempty exact bytes")
+    chain_discriminant = _require_chain_discriminant(chain_discriminant)
+    try:
+        native = _crypto.verify_ironwood_payment_effect_v1
+    except AttributeError as exc:
+        raise RuntimeError("native Ironwood payment-effect verifier is missing; rebuild the extension") from exc
+    result = json.loads(native(proof, checkpoint_hex, proof_frames_hex,
+        payment_proof_frames_hex, signed_transaction_versioned, network_id_hex,
+        chain_discriminant, pool_id_hex, asset_definition_id, payer_account_id,
+        expected_profile_digest_hex, expected_amount_decimal))
+    if type(result) is not dict:
+        raise RuntimeError("native payment-effect verifier returned an invalid result")
+    return result
+
+
+def ironwood_pool_bootstrap_instruction_json_v1(
+    pool_id_hex: str, asset_definition_id: str, reserve_account_id: str, *, chain_discriminant: int,
+) -> str:
+    """Export the native Global-pool bootstrap instruction array; never sign or submit it."""
+    chain_discriminant = _require_chain_discriminant(chain_discriminant)
+    try:
+        native = _crypto.ironwood_pool_bootstrap_instruction_json_v1
+    except AttributeError as exc:
+        raise RuntimeError("native Ironwood bootstrap exporter is missing; rebuild the extension") from exc
+    raw = native(pool_id_hex, asset_definition_id, reserve_account_id, chain_discriminant)
+    if type(raw) is not str:
+        raise RuntimeError("native Ironwood bootstrap exporter returned invalid JSON")
+    value = json.loads(raw)
+    if type(value) is not list or len(value) != 1 or type(value[0]) is not str or not value[0]:
+        raise RuntimeError("native Ironwood bootstrap exporter returned an invalid instruction array")
+    return raw
+
+
+def inspect_signed_privacy_ironwood_note_action_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+    network_id: NetworkId,
+    *,
+    chain_discriminant: int,
+) -> dict[str, Any]:
+    """Inspect one authenticated call/Ironwood/call original; no inclusion verdict.
+
+    Returns the canonical unsigned payload, public statement and profile identity.
+    Recipient acceptance still requires merchant viewing-key decryption of a
+    finality-certified successful execution, and exact native pool-cut proofs.
+    """
+    if not isinstance(signed_transaction_versioned, (bytes, bytearray, memoryview)):
+        raise TypeError("signed_transaction_versioned must be bytes-like")
+    network_id = _require_network_id(network_id)
+    chain_discriminant = _require_chain_discriminant(chain_discriminant)
+    try:
+        raw = _crypto.inspect_signed_privacy_ironwood_note_action_v1(
+            bytes(signed_transaction_versioned), network_id,
+            chain_discriminant=chain_discriminant,
+        )
+    except AttributeError as exc:
+        raise RuntimeError("native Ironwood original inspection is missing; rebuild the extension") from exc
+    except Exception:
+        raise ValueError("invalid canonical signed Ironwood registry action") from None
+    result = json.loads(raw)
+    if type(result) is not dict:
+        raise RuntimeError("native Ironwood inspection returned an invalid result")
+    return result
 
 
 def inspect_signed_privacy_orchard_note_action_v1(

@@ -80,7 +80,7 @@ pub fn validate_final_policy(
         scheduled_cap(world, next_height)?
     };
     let protocol_key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
-        iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
     );
     let private_policy = crate::private_settlement::policy::read(
         parameters,
@@ -142,7 +142,7 @@ pub fn validate_restored_policy(
         (scheduled_cap(world, next_height)?, after_cap)
     };
     let protocol_key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
-        iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
     );
     let private_policy = crate::private_settlement::policy::read(
         parameters,

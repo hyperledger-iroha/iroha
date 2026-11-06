@@ -11,7 +11,7 @@ use crate::{
         TriggerFailureRootV1, TriggerLifecycleActionCodecV1, TriggerLifecycleActionFrameV1,
         TriggerLifecycleChangeV1, TriggerLifecycleEffectV1, TriggerLifecycleEffectsV1,
         TriggerLifecycleOriginV1, TriggerLifecyclePolicyV1, TriggerLifecycleRetryStateV1,
-        TriggerLifecycleStateKindV1, TriggerLifecycleStateV1, TriggerUseV1,
+        TriggerLifecycleStateKindV1, TriggerLifecycleStateV1, TriggerUseV1, lifecycle_hash_frame,
     },
     events::{
         EventFilterBox,
@@ -455,6 +455,187 @@ fn generic_finish_cannot_erase_real_internal_lifecycle_rejection_policy() {
         assert!(owner.abandoned);
         assert_eq!(owner.committed_outputs, 0);
         assert_eq!(owner.committed_bytes, 0);
+        assert!(owner.finish().is_err());
+    }
+}
+
+#[test]
+fn lifecycle_reserved_policy_keeps_trace_when_shortening_with_full_policy_reservation() {
+    let actual = genuine_disposition_fixture(16_384);
+    let expected = expected_omitted(&actual);
+    let terminal = ExecutionOutputV1::time_lifecycle_output_limit_rejection(time_invocation());
+    let bytes = output_bytes(&expected).unwrap();
+    let mut owner = budget(ExecutionOutputPhase::Time, 1, bytes, bytes, bytes);
+    let row = owner
+        .begin(terminal)
+        .unwrap()
+        .finish_internal_rejection(actual)
+        .unwrap();
+    assert_eq!(row, expected);
+    assert_eq!(owner.finish().unwrap(), (1, bytes));
+}
+
+#[test]
+fn lifecycle_reserved_policy_refuses_underfunded_plan_without_dropping_effects() {
+    let actual = genuine_disposition_fixture(16_384);
+    let bytes = output_bytes(&expected_omitted(&actual)).unwrap();
+    let terminal = ExecutionOutputV1::time_lifecycle_output_limit_rejection(time_invocation());
+    let ceiling = output_bytes(&terminal).unwrap();
+    for aggregate in [false, true] {
+        let count = if aggregate { 2 } else { 1 };
+        let row_limit = if aggregate { bytes } else { bytes - 1 };
+        let total_limit = if aggregate {
+            bytes + ceiling - 1
+        } else {
+            bytes - 1
+        };
+        let mut owner = budget(
+            ExecutionOutputPhase::Time,
+            count,
+            ceiling,
+            row_limit,
+            total_limit,
+        );
+        assert!(
+            owner
+                .begin(terminal.clone())
+                .unwrap()
+                .finish_internal_rejection(actual.clone())
+                .is_err()
+        );
+        // A false caller-supplied policy bound cannot yield a healthy terminal
+        // or a sealed output plan that silently loses the policy effects.
+        assert!(owner.finish().is_err());
+    }
+}
+
+#[test]
+fn lifecycle_reserved_policy_rejects_foreign_source_and_success() {
+    for invalid in [healthy_success(), {
+        let mut row = genuine_disposition_fixture(16);
+        let ExecutionOutputV1::TimeWithLifecycle(ref mut value) = row else {
+            unreachable!()
+        };
+        value.execution.invocation.schedule_index += 1;
+        row
+    }] {
+        let terminal = ExecutionOutputV1::time_lifecycle_output_limit_rejection(time_invocation());
+        let ceiling = output_bytes(&terminal).unwrap();
+        let mut owner = budget(ExecutionOutputPhase::Time, 1, ceiling, 1_000_000, 1_000_000);
+        assert!(
+            owner
+                .begin(terminal)
+                .unwrap()
+                .finish_internal_rejection(invalid)
+                .is_err()
+        );
+        assert!(owner.finish().is_err());
+    }
+}
+
+#[test]
+fn lifecycle_reserved_compact_policy_survives_exact_row_and_aggregate_capacity() {
+    let phase = ExecutionOutputPhase::Time;
+    let ceiling = ExecutionOutputTerminalCeilings::derive_for_lifecycle(true)
+        .unwrap()
+        .for_phase(phase);
+    let mut owner = budget(phase, 2, ceiling, ceiling, ceiling * 2);
+    for _ in 0..2 {
+        let mut actual = genuine_disposition_fixture(65_536);
+        let ExecutionOutputV1::TimeWithLifecycle(row) = &mut actual else {
+            unreachable!()
+        };
+        let id: crate::trigger::TriggerId = "x"
+            .repeat(iroha_model_base::name::MAX_NAME_BYTES)
+            .parse()
+            .unwrap();
+        row.execution.invocation.trigger.trigger_id = id.clone();
+        row.execution.completions[0].trigger_id = id.clone();
+        let TriggerLifecycleEffectsV1::Complete { effects } = &mut row.trigger_lifecycle;
+        effects[0].trigger_id = id;
+        let TriggerLifecycleChangeV1::Update { before, after } = &mut effects[0].change else {
+            unreachable!()
+        };
+        for state in [before, after] {
+            state.action.codec = TriggerLifecycleActionCodecV1::NoritoCanonicalV1;
+            state.action.bytes = lifecycle_hash_frame(state.action_hash.unwrap())
+                .unwrap()
+                .to_vec();
+        }
+        let terminal = ExecutionOutputV1::time_lifecycle_output_limit_rejection(
+            row.execution.invocation.clone(),
+        );
+        let retained = owner
+            .begin(terminal)
+            .unwrap()
+            .finish_internal_rejection(actual)
+            .unwrap();
+        assert!(retained.is_internal_rejection_diagnostic_omitted());
+        assert!(!retained.is_output_limit_rejection());
+        assert_eq!(retained.trigger_lifecycle().unwrap().effects().len(), 1);
+        assert!(output_bytes(&retained).unwrap() <= ceiling);
+    }
+    let (count, bytes) = owner.finish().unwrap();
+    assert_eq!(count, 2);
+    assert!(bytes <= ceiling * 2);
+}
+
+#[test]
+fn output_limit_progress_debit_retains_exact_policy_and_refuses_unfunded_or_foreign_rows() {
+    let terminal = ExecutionOutputV1::time_lifecycle_output_limit_rejection(time_invocation());
+    let mut actual = terminal.clone();
+    let ExecutionOutputV1::TimeWithLifecycle(row) = &mut actual else {
+        unreachable!()
+    };
+    let mut before = time_state();
+    before.action.bytes = lifecycle_hash_frame(trigger().action_hash)
+        .unwrap()
+        .to_vec();
+    let mut after = before.clone();
+    let next_hash = Hash::new(b"the original native progress counter after one attempt");
+    after.action_hash = Some(next_hash);
+    after.action.bytes = lifecycle_hash_frame(next_hash).unwrap().to_vec();
+    row.trigger_lifecycle = TriggerLifecycleEffectsV1::Complete {
+        effects: vec![TriggerLifecycleEffectV1 {
+            ordinal: 0,
+            trigger_id: trigger().trigger_id,
+            origin: TriggerLifecycleOriginV1::InvocationPolicy {
+                callback_index: 0,
+                policy: TriggerLifecyclePolicyV1::ConsumeTimeProgress,
+            },
+            change: TriggerLifecycleChangeV1::Update { before, after },
+        }],
+    };
+    actual.validate_structure(8, &[]).unwrap();
+    assert!(actual.is_output_limit_rejection());
+    let bytes = output_bytes(&actual).unwrap();
+    let mut owner = budget(ExecutionOutputPhase::Time, 1, bytes, bytes, bytes);
+    let reservation = owner.begin(terminal.clone()).unwrap();
+    assert!(reservation.fits(&actual).unwrap());
+    assert_eq!(
+        reservation
+            .finish_output_limit_policy(actual.clone())
+            .unwrap(),
+        actual
+    );
+    assert_eq!(owner.finish().unwrap(), (1, bytes));
+    for foreign in [false, true] {
+        let mut owner = budget(ExecutionOutputPhase::Time, 1, bytes - 1, bytes, bytes);
+        let mut candidate = actual.clone();
+        if foreign {
+            let ExecutionOutputV1::TimeWithLifecycle(row) = &mut candidate else {
+                unreachable!()
+            };
+            row.execution.invocation.schedule_index += 1;
+        }
+        assert!(
+            owner
+                .begin(terminal.clone())
+                .unwrap()
+                .finish_output_limit_policy(candidate)
+                .is_err()
+        );
+        assert_eq!(owner.committed_outputs, 0);
         assert!(owner.finish().is_err());
     }
 }

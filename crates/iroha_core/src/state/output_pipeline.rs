@@ -46,8 +46,13 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                         continue;
                     }
                 };
-                let ExecutionOutputV1::Network(row) = &self.rows[index] else {
-                    return Err("Pipeline event lost its Network result".into());
+                let row = match &self.rows[index] {
+                    ExecutionOutputV1::Network(row)
+                    | ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+                        execution: row,
+                        ..
+                    }) => row,
+                    _ => return Err("Pipeline event lost its Network result".into()),
                 };
                 if usize::try_from(row.input_index).ok() != Some(index) {
                     return Err("Pipeline event changed its Network position".into());
@@ -146,16 +151,26 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                 self.skip_uninvoked(ExecutionOutputPhase::Pipeline, 1)?;
                 continue;
             };
+            let source = if self.lifecycle {
+                Some(lifecycle::internal_source(self.state, &id, height,
+                    iroha_data_model::block::execution_output::TriggerLifecycleStateKindV1::Pipeline)?)
+            } else {
+                None
+            };
             let invocation = PipelineInvocationV1 {
                 event: position,
                 candidate_index: u32::try_from(candidate_index)
                     .map_err(|_| "Pipeline index exceeds u32")?,
-                trigger: pipeline_trigger_use_v1(&self.state.world.triggers, &id, height)?,
+                trigger: match &source {
+                    Some(source) => source.identity().clone(),
+                    None => pipeline_trigger_use_v1(&self.state.world.triggers, &id, height)?,
+                },
             };
             self.try_apply_internal(
                 InternalInvocation::Pipeline(invocation),
                 EventBox::Pipeline(event.clone()),
                 &action,
+                source,
             )?;
         }
         Ok(())

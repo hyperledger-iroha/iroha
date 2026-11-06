@@ -101,6 +101,17 @@ fn invalid(control: &'static str, message: impl Into<String>) -> Error {
     .into()
 }
 
+/// Retain the public account-literal diagnostic; leave other failures typed so
+/// their normal HTTP status and internal-error redaction remain intact.
+fn account_filter_error(error: Error) -> Error {
+    match error {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+        )) => invalid("filter", message),
+        other => other,
+    }
+}
+
 fn limits() -> Limits {
     Limits::from_page_limits(
         u64::from(explorer::EXPLORER_CURSOR_DEFAULT_LIMIT),
@@ -564,7 +575,7 @@ async fn execute(
                 &app.telemetry_handle(),
                 "/v1/explorer?filter",
             )
-            .map_err(|error| invalid("filter", error.to_string()))?;
+            .map_err(account_filter_error)?;
         }
     }
     let mut query_limits = limits();
@@ -734,6 +745,62 @@ async fn execute(
 mod tests {
     use super::*;
     use iroha_torii_shared::list_query::{FieldPath, field};
+
+    #[tokio::test]
+    async fn account_filter_error_retains_canonical_literal_diagnostic() {
+        let mut dotted = iroha_test_samples::ALICE_ID.to_string();
+        dotted.insert(4, '.');
+        let reason = iroha_data_model::account::AccountId::parse_encoded(&dotted)
+            .expect_err("dotted account literal must fail")
+            .code_str();
+        let mut filter = FilterExpr::parse(&format!(r#"authority == "{dotted}""#))
+            .expect("valid textual filter grammar");
+        let error = routing::canonicalize_filter_account_literals(
+            &mut filter,
+            "authority",
+            None,
+            &routing::MaybeTelemetry::disabled(),
+            "/v1/explorer?filter",
+        )
+        .map_err(account_filter_error)
+        .expect_err("noncanonical authority must fail");
+        let response = utils::with_current_response_format(utils::ResponseFormat::Json, async {
+            error.into_response()
+        })
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 4_096)
+            .await
+            .expect("bounded diagnostic body");
+        let payload: Value = norito::json::from_slice(&body).expect("diagnostic JSON");
+        assert_eq!(payload["code"].as_str(), Some("invalid_filter"));
+        assert_eq!(payload["details"]["field"].as_str(), Some("filter"));
+        assert!(payload["message"].as_str().unwrap().contains(reason));
+    }
+
+    #[tokio::test]
+    async fn account_filter_error_preserves_internal_failure_and_redaction() {
+        let private_detail = "private backend path must remain server-side";
+        let error = account_filter_error(Error::Query(
+            iroha_data_model::ValidationFail::InternalError(private_detail.to_owned()),
+        ));
+        assert!(matches!(
+            &error,
+            Error::Query(iroha_data_model::ValidationFail::InternalError(detail))
+                if detail == private_detail
+        ));
+        let response = utils::with_current_response_format(utils::ResponseFormat::Json, async {
+            error.into_response()
+        })
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(response.into_body(), 4_096)
+            .await
+            .expect("bounded redacted body");
+        let payload: Value = norito::json::from_slice(&body).expect("redacted JSON");
+        assert_eq!(payload["code"].as_str(), Some("internal_server_error"));
+        assert!(!std::str::from_utf8(&body).unwrap().contains(private_detail));
+    }
 
     fn standalone_scan(
         spec: &'static CollectionSpec,

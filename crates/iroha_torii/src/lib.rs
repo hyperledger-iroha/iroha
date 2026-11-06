@@ -28,6 +28,8 @@ mod game_partitions;
 mod history_producer;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
+#[cfg(feature = "app_api")]
+mod ironwood_pool_cut;
 mod iso_profile;
 #[cfg(feature = "app_api")]
 mod kagemusha_enrollment;
@@ -4098,6 +4100,32 @@ impl AppState {
             }
         }
     }
+    /// Refuse an already banned or exhausted gateway client before expensive work.
+    ///
+    /// The check is not charged; admitted requests are charged once by the full policy.
+    #[cfg(feature = "app_api")]
+    #[allow(clippy::result_large_err)]
+    fn precheck_gateway_rate(
+        &self,
+        client: &sorafs::gateway::ClientFingerprint,
+    ) -> Result<(), sorafs::gateway::PolicyViolation> {
+        let Some(policy) = &self.sorafs_gateway_policy else {
+            return Ok(());
+        };
+        match policy.precheck_rate(client, std::time::Instant::now()) {
+            sorafs::gateway::PolicyDecision::Allow => Ok(()),
+            sorafs::gateway::PolicyDecision::Deny(violation) => {
+                #[cfg(feature = "telemetry")]
+                {
+                    let (reason, detail) = violation.telemetry_labels();
+                    self.telemetry.with_metrics(|metrics| {
+                        metrics.record_sorafs_gar_violation(reason, detail);
+                    });
+                }
+                Err(violation)
+            }
+        }
+    }
     #[cfg(feature = "app_api")]
     fn publish_gar_violation_event(
         &self,
@@ -7011,6 +7039,8 @@ async fn admit_ordinary_query_execution(
 ) -> Result<AdmittedOrdinaryQueryExecution, Error> {
     let plan = routing::ordinary_query_execution_plan(
         app.state.as_ref(),
+        &app.query_service,
+        &request.authority,
         &request.request,
         opts,
         app.ordinary_query_policy,
@@ -7019,8 +7049,12 @@ async fn admit_ordinary_query_execution(
     admit_signed_query_authority(app.as_ref(), &request.authority).await?;
     let physical_admission = acquire_signed_query_physical_admission(app.as_ref(), request).await?;
     // Fail-fast promotion cannot pin ingress/proxy body-reading slots.
-    let memory_lease =
-        try_acquire_ordinary_query_memory(app, stored_start, plan.requires_singular_execution())?;
+    let memory_lease = try_acquire_ordinary_query_memory(
+        app,
+        plan.ordinary_limits(),
+        stored_start,
+        plan.requires_singular_execution(),
+    )?;
     Ok(AdmittedOrdinaryQueryExecution {
         plan,
         physical_admission,
@@ -17177,6 +17211,69 @@ fn target_domain_iterable_query_for_app(
             })
         })
 }
+/// Asset definition named by a native FI context target.
+fn fi_context_target_asset_definition(
+    target: iroha_data_model::asset::fi_context::AssetFiContextTargetV1,
+) -> iroha_data_model::asset::AssetDefinitionId {
+    use iroha_data_model::asset::fi_context::AssetFiContextTargetV1;
+    match target {
+        AssetFiContextTargetV1::LinkApproval(approval) => approval.link.asset_definition_id,
+        AssetFiContextTargetV1::Transfer { instruction, .. } => instruction.asset_definition_id,
+    }
+}
+/// Exact asset definition of a native asset-keyed iterable query.
+///
+/// Each of these queries has its own item kind and returns state of that one
+/// definition only, so it routes like `FindAssetDefinitionById`. After routing,
+/// the native executor still admits only the definition owner (or the exact
+/// wallet, for FI link and receipt reads).
+fn asset_definition_iterable_query(
+    query: &iroha_data_model::query::QueryWithParams,
+) -> Option<iroha_data_model::asset::AssetDefinitionId> {
+    use iroha_data_model::query::{
+        QueryItemKind,
+        asset_escrow_scope::FindAssetEscrowsByAssetDefinitionV1,
+        asset_fi::{FindAssetFiLinkV1, FindAssetFiTransferReceiptV1},
+        asset_fi_context::FindAssetFiContextV1,
+        asset_uid::FindAssetUidPoliciesV1,
+        asset_uid_enrollment::FindAssetUidEnrollmentV1,
+    };
+    let payload = &query.query_payload;
+    match query.item {
+        QueryItemKind::AssetUidPolicyViewV1 => {
+            decode_query_payload::<FindAssetUidPoliciesV1>(payload)
+                .map(|query| query.asset_definition_id)
+        }
+        QueryItemKind::AssetUidEnrollmentViewV1 => {
+            decode_query_payload::<FindAssetUidEnrollmentV1>(payload)
+                .map(|query| query.asset_definition_id)
+        }
+        QueryItemKind::AssetFiRelationshipViewV1 => {
+            decode_query_payload::<FindAssetFiLinkV1>(payload)
+                .map(|query| query.asset_definition_id)
+        }
+        QueryItemKind::AssetFiTransferReceiptV1 => {
+            decode_query_payload::<FindAssetFiTransferReceiptV1>(payload)
+                .map(|query| query.asset_definition_id)
+        }
+        QueryItemKind::AssetFiContextSnapshotV1 => {
+            decode_query_payload::<FindAssetFiContextV1>(payload)
+                .map(|query| fi_context_target_asset_definition(query.target))
+        }
+        QueryItemKind::AssetEscrowScopeOriginalV1 => {
+            decode_query_payload::<FindAssetEscrowsByAssetDefinitionV1>(payload)
+                .map(|query| query.asset_definition_id)
+        }
+        _ => None,
+    }
+}
+fn asset_definition_iterable_query_scope_for_app(
+    app: &AppState,
+    query: &iroha_data_model::query::QueryWithParams,
+) -> Option<SignedQueryScope> {
+    asset_definition_iterable_query(query)
+        .and_then(|asset_definition_id| resolve_asset_definition_scope(app, &asset_definition_id))
+}
 fn is_authority_routed_iterable_query(query: &iroha_data_model::query::QueryWithParams) -> bool {
     use iroha_data_model::query::{QueryItemKind, transaction::prelude::FindTransactions};
     query.item == QueryItemKind::CommittedTransaction
@@ -17293,6 +17390,63 @@ fn target_domain_iterable_query_for_app_bounded(
         }),
     )
 }
+#[expect(
+    clippy::result_large_err,
+    reason = "HTTP rejections retain the complete Axum response at this transport boundary."
+)]
+fn asset_definition_iterable_query_bounded(
+    query: &iroha_data_model::query::QueryWithParams,
+    memory_limits: QueryScopeMemoryLimits,
+) -> Result<Option<iroha_data_model::asset::AssetDefinitionId>, Response> {
+    use iroha_data_model::query::{
+        QueryItemKind,
+        asset_escrow_scope::FindAssetEscrowsByAssetDefinitionV1,
+        asset_fi::{FindAssetFiLinkV1, FindAssetFiTransferReceiptV1},
+        asset_fi_context::FindAssetFiContextV1,
+        asset_uid::FindAssetUidPoliciesV1,
+        asset_uid_enrollment::FindAssetUidEnrollmentV1,
+    };
+    macro_rules! asset_definition {
+        ($query:ty, $payload:expr) => {
+            decode_query_payload_bounded::<$query>($payload, memory_limits)?
+                .map(|query| query.asset_definition_id)
+        };
+    }
+    let (item_kind, _, _, payload) = canonical_iterable_query_parts(query);
+    Ok(match item_kind {
+        QueryItemKind::AssetUidPolicyViewV1 => asset_definition!(FindAssetUidPoliciesV1, payload),
+        QueryItemKind::AssetUidEnrollmentViewV1 => {
+            asset_definition!(FindAssetUidEnrollmentV1, payload)
+        }
+        QueryItemKind::AssetFiRelationshipViewV1 => asset_definition!(FindAssetFiLinkV1, payload),
+        QueryItemKind::AssetFiTransferReceiptV1 => {
+            asset_definition!(FindAssetFiTransferReceiptV1, payload)
+        }
+        QueryItemKind::AssetFiContextSnapshotV1 => {
+            decode_query_payload_bounded::<FindAssetFiContextV1>(payload, memory_limits)?
+                .map(|query| fi_context_target_asset_definition(query.target))
+        }
+        QueryItemKind::AssetEscrowScopeOriginalV1 => {
+            asset_definition!(FindAssetEscrowsByAssetDefinitionV1, payload)
+        }
+        _ => None,
+    })
+}
+#[expect(
+    clippy::result_large_err,
+    reason = "HTTP rejections retain the complete Axum response at this transport boundary."
+)]
+fn asset_definition_iterable_query_scope_for_app_bounded(
+    app: &AppState,
+    query: &iroha_data_model::query::QueryWithParams,
+    memory_limits: QueryScopeMemoryLimits,
+) -> Result<Option<SignedQueryScope>, Response> {
+    Ok(
+        asset_definition_iterable_query_bounded(query, memory_limits)?.and_then(
+            |asset_definition_id| resolve_asset_definition_scope(app, &asset_definition_id),
+        ),
+    )
+}
 fn is_authority_routed_iterable_query_bounded(
     query: &iroha_data_model::query::QueryWithParams,
 ) -> bool {
@@ -17346,41 +17500,83 @@ fn signed_query_scope(request: &impl SignedQueryScopeInput) -> SignedQueryScope 
             }),
     }
 }
+/// Start retained on this peer for `authority`'s stored cursor.
+///
+/// The live-query store releases a cursor's Start only to the authority that
+/// opened it, without advancing the cursor or refreshing its idle timer. An
+/// absent, expired, foreign or oversized cursor has no retained Start here.
+fn retained_continuation_start(
+    app: &AppState,
+    authority: &AccountId,
+    cursor: &iroha_data_model::query::parameters::ForwardCursor,
+    max_archive_bytes: u64,
+    decode_limits: norito::DecodeLimits,
+) -> Option<iroha_data_model::query::QueryWithParams> {
+    match app.query_service.ordinary_revalidation_request_bounded(
+        cursor,
+        authority,
+        max_archive_bytes,
+        decode_limits,
+    ) {
+        Ok(iroha_data_model::query::QueryRequest::Start(start)) => Some(start),
+        _ => None,
+    }
+}
+/// Classify a signed query by the dataspaces it reads.
+///
+/// A stored continuation routes and authorizes exactly as its cursor's
+/// retained Start would now. A continuation without a retained Start on this
+/// peer stays authority-routed, which requires read access to every dataspace.
 fn signed_query_scope_for_app(
     app: &AppState,
     request: &impl SignedQueryScopeInput,
 ) -> SignedQueryScope {
-    match request.request_with_authority().request() {
-        iroha_data_model::query::QueryRequest::Continue(_) => SignedQueryScope::AuthorityRouted,
+    let request = request.request_with_authority();
+    match request.request() {
+        iroha_data_model::query::QueryRequest::Continue(cursor) => {
+            let limits = app.ordinary_query_policy.limits;
+            retained_continuation_start(
+                app,
+                &request.authority,
+                cursor,
+                limits.max_revalidation_archive_bytes(),
+                limits.revalidation_decode_limits(),
+            )
+            .map_or(SignedQueryScope::AuthorityRouted, |start| {
+                iterable_start_scope_for_app(app, &start)
+            })
+        }
         iroha_data_model::query::QueryRequest::Singular(query) => {
             target_scope_singular_query_for_app(app, query)
                 .unwrap_or(SignedQueryScope::CrossDataspaceFanout)
         }
-        iroha_data_model::query::QueryRequest::Start(query)
-            if is_public_control_plane_query(query) =>
-        {
-            SignedQueryScope::PublicControlPlane
-        }
-        iroha_data_model::query::QueryRequest::Start(query)
-            if is_trigger_inventory_query(query) =>
-        {
-            SignedQueryScope::LocalReplicated
-        }
         iroha_data_model::query::QueryRequest::Start(query) => {
-            target_domain_iterable_query_for_app(app, query)
-                .map(SignedQueryScope::TargetDomain)
-                .or_else(|| {
-                    target_account_iterable_query(query).map(SignedQueryScope::TargetAccount)
-                })
-                .unwrap_or_else(|| {
-                    if is_authority_routed_iterable_query(query) {
-                        SignedQueryScope::AuthorityRouted
-                    } else {
-                        SignedQueryScope::CrossDataspaceFanout
-                    }
-                })
+            iterable_start_scope_for_app(app, query)
         }
     }
+}
+fn iterable_start_scope_for_app(
+    app: &AppState,
+    query: &iroha_data_model::query::QueryWithParams,
+) -> SignedQueryScope {
+    if is_public_control_plane_query(query) {
+        return SignedQueryScope::PublicControlPlane;
+    }
+    if is_trigger_inventory_query(query) {
+        return SignedQueryScope::LocalReplicated;
+    }
+    asset_definition_iterable_query_scope_for_app(app, query)
+        .or_else(|| {
+            target_domain_iterable_query_for_app(app, query).map(SignedQueryScope::TargetDomain)
+        })
+        .or_else(|| target_account_iterable_query(query).map(SignedQueryScope::TargetAccount))
+        .unwrap_or_else(|| {
+            if is_authority_routed_iterable_query(query) {
+                SignedQueryScope::AuthorityRouted
+            } else {
+                SignedQueryScope::CrossDataspaceFanout
+            }
+        })
 }
 #[expect(
     clippy::result_large_err,
@@ -17391,33 +17587,62 @@ fn signed_query_scope_for_app_bounded(
     request: &impl SignedQueryScopeInput,
     memory_limits: QueryScopeMemoryLimits,
 ) -> Result<SignedQueryScope, Response> {
-    let scope = match request.request_with_authority().request() {
-        iroha_data_model::query::QueryRequest::Continue(_) => SignedQueryScope::AuthorityRouted,
+    let request = request.request_with_authority();
+    let scope = match request.request() {
+        iroha_data_model::query::QueryRequest::Continue(cursor) => {
+            // A Continue carries only its fixed-size cursor. Its retained Start
+            // decodes under the same per-decode limits as any nested routing
+            // payload in the caller's reservation.
+            let max_archive_bytes = memory_limits.canonical_encoded_bytes;
+            match retained_continuation_start(
+                app,
+                &request.authority,
+                cursor,
+                u64::try_from(max_archive_bytes).unwrap_or(u64::MAX),
+                memory_limits.decode_limits(max_archive_bytes)?,
+            ) {
+                Some(start) => iterable_start_scope_for_app_bounded(app, &start, memory_limits)?,
+                None => SignedQueryScope::AuthorityRouted,
+            }
+        }
         iroha_data_model::query::QueryRequest::Singular(query) => {
             target_scope_singular_query_for_app(app, query)
                 .unwrap_or(SignedQueryScope::CrossDataspaceFanout)
         }
         iroha_data_model::query::QueryRequest::Start(query) => {
-            if is_public_control_plane_query_bounded(query) {
-                SignedQueryScope::PublicControlPlane
-            } else if is_trigger_inventory_query_bounded(query) {
-                SignedQueryScope::LocalReplicated
-            } else if let Some(domain_id) =
-                target_domain_iterable_query_for_app_bounded(app, query, memory_limits)?
-            {
-                SignedQueryScope::TargetDomain(domain_id)
-            } else if let Some(account_id) =
-                target_account_iterable_query_bounded(query, memory_limits)?
-            {
-                SignedQueryScope::TargetAccount(account_id)
-            } else if is_authority_routed_iterable_query_bounded(query) {
-                SignedQueryScope::AuthorityRouted
-            } else {
-                SignedQueryScope::CrossDataspaceFanout
-            }
+            iterable_start_scope_for_app_bounded(app, query, memory_limits)?
         }
     };
     Ok(scope)
+}
+#[expect(
+    clippy::result_large_err,
+    reason = "HTTP rejections retain the complete Axum response at this transport boundary."
+)]
+fn iterable_start_scope_for_app_bounded(
+    app: &AppState,
+    query: &iroha_data_model::query::QueryWithParams,
+    memory_limits: QueryScopeMemoryLimits,
+) -> Result<SignedQueryScope, Response> {
+    Ok(if is_public_control_plane_query_bounded(query) {
+        SignedQueryScope::PublicControlPlane
+    } else if is_trigger_inventory_query_bounded(query) {
+        SignedQueryScope::LocalReplicated
+    } else if let Some(scope) =
+        asset_definition_iterable_query_scope_for_app_bounded(app, query, memory_limits)?
+    {
+        scope
+    } else if let Some(domain_id) =
+        target_domain_iterable_query_for_app_bounded(app, query, memory_limits)?
+    {
+        SignedQueryScope::TargetDomain(domain_id)
+    } else if let Some(account_id) = target_account_iterable_query_bounded(query, memory_limits)? {
+        SignedQueryScope::TargetAccount(account_id)
+    } else if is_authority_routed_iterable_query_bounded(query) {
+        SignedQueryScope::AuthorityRouted
+    } else {
+        SignedQueryScope::CrossDataspaceFanout
+    })
 }
 fn is_known_global_asset_balance_query(
     app: &AppState,
@@ -17881,6 +18106,8 @@ fn torii_read_fanout_request(
 #[cfg(feature = "app_api")]
 include!("torii_app_routed_read_execute.rs");
 include!("torii_collection_routes.rs");
+#[cfg(feature = "app_api")]
+mod role_collection_routes;
 #[cfg(test)]
 include!("tests/ordinary_query_memory.rs");
 include!("torii_proxy_signed_query_validation.rs");
@@ -19867,6 +20094,8 @@ fn torii_read_http_method(endpoint: ToriiReadEndpointV1) -> reqwest::Method {
         | ToriiReadEndpointV1::AccountTransactionsQuery
         | ToriiReadEndpointV1::AccountHistoryQuery
         | ToriiReadEndpointV1::AccountPermissionsQuery
+        | ToriiReadEndpointV1::RolesQuery
+        | ToriiReadEndpointV1::AccountRolesQuery
         | ToriiReadEndpointV1::UaidManifestsQuery
         | ToriiReadEndpointV1::TransactionsQuery
         | ToriiReadEndpointV1::AccountsQuery
@@ -19934,6 +20163,16 @@ fn torii_external_read_path(request: &ToriiReadProxyRequestV1) -> Result<String,
         ),
         ToriiReadEndpointV1::AccountAssetsQuery => format!(
             "/v1/accounts/{}/assets/query",
+            torii_read_path_arg_encoded(request, 0, "account_id")?
+        ),
+        ToriiReadEndpointV1::RolesList => "/v1/roles".to_owned(),
+        ToriiReadEndpointV1::RolesQuery => "/v1/roles/query".to_owned(),
+        ToriiReadEndpointV1::AccountRolesGet => format!(
+            "/v1/accounts/{}/roles",
+            torii_read_path_arg_encoded(request, 0, "account_id")?
+        ),
+        ToriiReadEndpointV1::AccountRolesQuery => format!(
+            "/v1/accounts/{}/roles/query",
             torii_read_path_arg_encoded(request, 0, "account_id")?
         ),
         ToriiReadEndpointV1::AccountPermissionsGet => format!(
@@ -20436,6 +20675,10 @@ async fn execute_torii_read_request_locally_admitted(
         | ToriiReadEndpointV1::AccountHistoryQuery
         | ToriiReadEndpointV1::AccountPermissionsGet
         | ToriiReadEndpointV1::AccountPermissionsQuery
+        | ToriiReadEndpointV1::RolesList
+        | ToriiReadEndpointV1::RolesQuery
+        | ToriiReadEndpointV1::AccountRolesGet
+        | ToriiReadEndpointV1::AccountRolesQuery
         | ToriiReadEndpointV1::SpaceDirectoryManifestsGet
         | ToriiReadEndpointV1::UaidManifestsQuery
         | ToriiReadEndpointV1::TransactionsQuery => {
@@ -20459,6 +20702,16 @@ async fn execute_torii_read_request_locally_admitted(
                 } else {
                     visibility.clone()
                 };
+            let visibility = match role_collection_routes::authorize_routed(
+                app,
+                &request,
+                routing_decision,
+                &target,
+                visibility,
+            ) {
+                Ok(visibility) => visibility,
+                Err(error) => return error.into_response(),
+            };
             execute_routed_collection_read(
                 app,
                 &request,
@@ -29728,6 +29981,7 @@ fn precheck_transaction_batch_ed25519(
     prechecks
 }
 include!("lib_pipeline_handlers.rs");
+include!("lib_lifecycle_witness.rs");
 include!("lib_iso_native_payment.rs");
 struct AdmittedSignedQuery {
     query: SignedQuery,
@@ -37714,6 +37968,8 @@ impl Torii {
             LEDGER_HEADERS => public_get(handler_ledger_headers);
             LEDGER_STATE_ROOT => public_get(handler_ledger_state_root);
             LEDGER_STATE_PROOF => public_get(handler_ledger_state_proof);
+            TRIGGER_LIFECYCLE_WITNESS => public_get(handler_trigger_lifecycle_witness);
+            TRIGGER_LIFECYCLE_ACTIVATION => public_get(handler_trigger_lifecycle_activation);
             LEDGER_EXECUTED_BLOCK_WIRE => canonical_signature_get(handler_ledger_executed_block_wire);
             LEDGER_BLOCK_PROOF => canonical_signature_get(handler_block_proof);
             RESOURCE_NAMES_STATE => canonical_signature_get(resource_names_state::handler);
@@ -38388,6 +38644,7 @@ impl Torii {
         );
         mount_account_assets_query(builder, app_state.clone(), transaction_max_content_len);
         mount_account_permissions_query(builder, app_state.clone(), transaction_max_content_len);
+        role_collection_routes::mount(builder, app_state.clone(), transaction_max_content_len);
         mount_uaid_manifests_query(builder, app_state.clone(), transaction_max_content_len);
         mount_catalog_route_rows!(
             builder, application_api;
@@ -38991,6 +39248,9 @@ impl Torii {
             RUNTIME_METRICS => canonical_account_get(handler_runtime_metrics, app_state, 0);
             NODE_CAPABILITIES => public_get(handler_node_capabilities);
             PRIVACY_CAPABILITIES => canonical_account_get(handler_privacy_capabilities, app_state, 0);
+            PRIVACY_IRONWOOD_POOL_CUT => limited_canonical_signature_post(ironwood_pool_cut::handler, 4096);
+            // Complete canonical finality frames preserve original signed work and execution
+            // results. Merchants scan locally; these routes never accept viewing/spending keys.
             PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE => limited_protocol_handshake_post(handler_post_bootle_lantern_issuance_authorize, 1);
             PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE => limited_protocol_handshake_post(handler_post_bootle_lantern_issuance_issue, privacy_issuance_api::BOOTLE_LANTERN_ISSUANCE_ISSUE_REQUEST_BYTES_V1);
             NODE_PROJECTION_CHECKPOINT => canonical_account_get(handler_node_query_projection_checkpoint, app_state, 0);

@@ -12,10 +12,9 @@ default = ["cuda-kernel"]
 cuda-kernel = []
 
 [dependencies]
-# Shared deterministic frame encoder/decoder and sequence layout. The Metal
-# crate's `c-abi` exports stay disabled so the two helpers never export the same
-# C symbols from one artifact.
-gpuzstd_metal = { path = "../gpuzstd_metal", default-features = false }
+# Shared frame coding has no device code or C exports. Building both backend
+# packages together therefore cannot import the Metal plugin into this artifact.
+gpuzstd_codec = { path = "../gpuzstd_codec" }
 zstd.workspace = true
 
 [build-dependencies]

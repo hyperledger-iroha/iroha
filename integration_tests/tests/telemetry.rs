@@ -1,6 +1,5 @@
 //! Telemetry and metrics surface integration tests.
 use eyre::ensure;
-use iroha_core::sumeragi::consensus::NPOS_TAG;
 use iroha_data_model::{Level, isi::Log};
 use iroha_model_base::peer::Peer;
 use iroha_test_network::NetworkBuilder;
@@ -12,17 +11,22 @@ const TELEMETRY_REQUIRED_KEYS: &[&str] = &[
     "accounts{domain=\"wonderland\"}",
     "block_height",
     "block_height_non_empty",
-    "commit_time_ms_bucket{le=\"+Inf\"}",
-    "commit_time_ms_bucket{le=\"100\"}",
-    "commit_time_ms_bucket{le=\"1600\"}",
-    "commit_time_ms_bucket{le=\"25600\"}",
-    "commit_time_ms_bucket{le=\"400\"}",
-    "commit_time_ms_bucket{le=\"6400\"}",
-    "commit_time_ms_count",
-    "commit_time_ms_sum",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"+Inf\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"100\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"1500\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"30000\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"500\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"5000\"}",
+    "sumeragi_commit_latency_ms_count{lane=\"global\"}",
+    "sumeragi_commit_latency_ms_sum{lane=\"global\"}",
+    "sumeragi_commits_total{lane=\"global\"}",
+    "sumeragi_committed_height{lane=\"global\"}",
+    "sumeragi_applied_height{lane=\"global\"}",
     "connected_peers",
     "domains",
-    "dropped_messages",
+    "sumeragi_dropped_total{lane=\"global\",queue=\"ingress\"}",
+    "sumeragi_dropped_total{lane=\"global\",queue=\"held\"}",
+    "sumeragi_dropped_total{lane=\"global\",queue=\"serve\"}",
     "last_commit_time_ms",
     "queue_size",
     "tx_amount_bucket{le=\"+Inf\"}",
@@ -121,18 +125,26 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
             "missing metric key {key}; available keys: {keys:?}"
         );
     }
-    assert_eq!(metrics.get("tx_amount_sum"), 7_000_057.0);
-    assert_eq!(metrics.get("tx_amount_count"), 16.0);
+    // The current signed bootstrap includes all four validators' funded stakes
+    // and the reserved system domains, in addition to the sample account assets.
+    assert_eq!(metrics.get("tx_amount_sum"), 15_000_057.0);
+    assert_eq!(metrics.get("tx_amount_count"), 24.0);
     assert_eq!(metrics.get("tx_amount_bucket{le=\"0\"}"), 0.0);
     assert_eq!(metrics.get("tx_amount_bucket{le=\"1000\"}"), 2.0);
-    assert_eq!(metrics.get("domains"), 3.0);
+    assert_eq!(metrics.get("domains"), 8.0);
     assert_eq!(metrics.get("accounts{domain=\"genesis\"}"), 0.0);
     assert_eq!(metrics.get("accounts{domain=\"wonderland\"}"), 0.0);
     assert_eq!(
         metrics.get("accounts{domain=\"garden_of_live_flowers\"}"),
         0.0
     );
-    // fetch_online_peers
+    // Genesis readiness does not imply that every P2P handshake has completed.
+    // Share the existing network sync budget across all four signed observations.
+    let peer_deadline = tokio::time::Instant::now() + network.sync_timeout();
+    let http_client = reqwest::Client::builder()
+        .timeout(integration_tests::http::request_timeout())
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
     for peer in network.peers() {
         let others: HashSet<_> = network
             .peers()
@@ -146,44 +158,80 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
             .operator_key_pair()
             .expect("test-network clients carry the peer operator key");
         let peers_uri: iroha_torii::Uri = "/v1/peers".parse().expect("static peers URI");
-        let operator_headers = iroha_torii::operator_signed_request_headers(
-            operator_key_pair,
-            peer_client.client().network_id(),
-            &iroha_torii::Method::GET,
-            &peers_uri,
-            &[],
-        )?;
-        let http_client = reqwest::Client::builder()
-            .timeout(integration_tests::http::request_timeout())
-            .redirect(reqwest::redirect::Policy::none())
-            .build()?;
-        let response = http_client
-            .get(peer_client.client().endpoint().join("/v1/peers").unwrap())
-            .headers(operator_headers)
-            .header("Accept", "application/json")
-            .send()
-            .await?;
-        ensure!(
-            response.status().is_success(),
-            "signed /v1/peers returned {}",
-            response.status()
-        );
-        let response_body = response.text().await?;
-        let response: HashSet<Peer> = norito::json::from_str(&response_body)
-            .map_err(|err| eyre::Report::msg(format!("decode peers response: {err}")))?;
-        assert_eq!(response, others);
+        loop {
+            ensure!(
+                tokio::time::Instant::now() < peer_deadline,
+                "peer discovery deadline elapsed"
+            );
+            // Every observation has a fresh signed nonce; do not replay auth headers.
+            let operator_headers = iroha_torii::operator_signed_request_headers(
+                operator_key_pair,
+                peer_client.client().network_id(),
+                &iroha_torii::Method::GET,
+                &peers_uri,
+                &[],
+            )?;
+            let response = tokio::time::timeout_at(peer_deadline, async {
+                let response = http_client
+                    .get(peer_client.client().endpoint().join("/v1/peers")?)
+                    .headers(operator_headers)
+                    .header("Accept", "application/json")
+                    .send()
+                    .await?;
+                ensure!(
+                    response.status().is_success(),
+                    "signed /v1/peers returned {}",
+                    response.status()
+                );
+                let response_body = response.text().await?;
+                norito::json::from_str::<Vec<Peer>>(&response_body)
+                    .map_err(|err| eyre::eyre!("decode peers response: {err}"))
+            })
+            .await??;
+            ensure!(
+                tokio::time::Instant::now() < peer_deadline,
+                "peer discovery deadline elapsed"
+            );
+            if online_peer_set_is_complete(&response, &others)? {
+                break;
+            }
+            tokio::time::sleep_until(
+                peer_deadline
+                    .min(tokio::time::Instant::now() + std::time::Duration::from_millis(100)),
+            )
+            .await;
+        }
     }
-    // commit_time
-    network.client().submit(
-        Log::new(Level::INFO, "mewo".to_owned()),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )?;
+    // Submit outside the Tokio runtime, retaining the SDK's fee quote and finality checks.
+    let client = network.client();
+    integration_tests::sync::run_on_dedicated_thread(move || {
+        client.submit(
+            Log::new(Level::INFO, "mewo".to_owned()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+    })
+    .await??;
     network.ensure_blocks_with(|x| x.non_empty >= 2).await?;
     for peer in network.peers() {
         let status = peer.status().await?;
         assert!(
             status.commit_time_ms > 0,
             "No peer can commit block immediately, even the leader one"
+        );
+        let snapshot = integration_tests::http::client()
+            .get(peer.client().client().endpoint().join("/metrics")?)
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+        let snapshot = MetricsReader::new(&snapshot);
+        assert!(snapshot.get("sumeragi_commits_total{lane=\"global\"}") >= 1.0);
+        assert!(snapshot.get("sumeragi_committed_height{lane=\"global\"}") >= 2.0);
+        assert!(snapshot.get("sumeragi_applied_height{lane=\"global\"}") >= 2.0);
+        assert_eq!(
+            snapshot.get("sumeragi_commit_latency_ms_count{lane=\"global\"}"),
+            snapshot.get("sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"+Inf\"}")
         );
     }
     Ok(())
@@ -204,9 +252,57 @@ fn status_reports_npos_mode_tag_on_start() -> eyre::Result<()> {
         .sumeragi
         .expect("sumeragi status must be present when telemetry is enabled");
     ensure!(
-        sumeragi.mode_tag == NPOS_TAG,
-        "expected /status mode_tag to be {NPOS_TAG}, got {}",
+        // /status projects the authenticated schedule's mode, not the P2P handshake tag.
+        sumeragi.mode_tag == "npos",
+        "expected /status mode_tag to be npos, got {}",
         sumeragi.mode_tag
     );
+    Ok(())
+}
+
+/// A partial known set may still be handshaking; duplicates and foreign endpoints
+/// are protocol failures, not reasons to retry until the timeout.
+fn online_peer_set_is_complete(observed: &[Peer], expected: &HashSet<Peer>) -> eyre::Result<bool> {
+    let mut identities = HashSet::new();
+    for peer in observed {
+        ensure!(
+            identities.insert(peer.id()),
+            "duplicate online peer {}",
+            peer.id()
+        );
+        let registered = expected
+            .get(peer)
+            .ok_or_else(|| eyre::eyre!("unexpected online peer {}", peer.id()))?;
+        ensure!(
+            peer.address() == registered.address(),
+            "online peer endpoint changed for {}",
+            peer.id()
+        );
+    }
+    Ok(identities.len() == expected.len())
+}
+
+#[test]
+fn online_peer_readiness_requires_all_unique_expected_identities_and_endpoints() -> eyre::Result<()>
+{
+    let peer = |seed: u8| {
+        let key =
+            iroha_crypto::KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519);
+        Peer::new("127.0.0.1:1337".parse().unwrap(), key.public_key().clone())
+    };
+    let a = peer(1);
+    let b = peer(2);
+    let foreign = peer(3);
+    let expected = HashSet::from([a.clone(), b.clone()]);
+    assert!(!online_peer_set_is_complete(&[], &expected)?);
+    assert!(!online_peer_set_is_complete(&[a.clone()], &expected)?);
+    assert!(online_peer_set_is_complete(
+        &[b.clone(), a.clone()],
+        &expected
+    )?);
+    assert!(online_peer_set_is_complete(&[a.clone(), a.clone()], &expected).is_err());
+    assert!(online_peer_set_is_complete(&[a.clone(), foreign], &expected).is_err());
+    let moved = Peer::new("127.0.0.1:1338".parse()?, b.id().clone());
+    assert!(online_peer_set_is_complete(&[a, moved], &expected).is_err());
     Ok(())
 }

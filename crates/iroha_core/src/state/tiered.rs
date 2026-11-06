@@ -39,6 +39,22 @@ const DA_CACHE_MISS: &str = "miss";
 const DA_CHURN_EVICTED: &str = "evicted";
 #[cfg(test)]
 const DA_CHURN_REHYDRATED: &str = "rehydrated";
+/// Snapshot subdirectory holding the manifest rows, one file per key-hash chunk.
+const MANIFEST_CHUNK_DIR: &str = "manifest";
+/// Format of the `manifest.json` index written next to the chunk directory.
+const MANIFEST_FORMAT: &str = "iroha.tiered_state.manifest.v2";
+/// Most leading key-hash hex digits used to select a manifest chunk.
+const MANIFEST_CHUNK_MAX_DIGITS: u8 = 3;
+/// Average rows per chunk above which a snapshot selects one more digit.
+const MANIFEST_CHUNK_GROW_ROWS: usize = 256;
+/// Average rows per chunk below which a snapshot selects one digit fewer.
+const MANIFEST_CHUNK_SHRINK_ROWS: usize = 8;
+/// Most threads that write and sync the manifest chunks of one snapshot. Concurrent
+/// fdatasync calls share ext4 journal commits, so a snapshot that writes every chunk
+/// (the first one after a restart) does not wait for thousands of serial commits.
+const MANIFEST_CHUNK_WRITERS: usize = 16;
+/// Stack of a manifest chunk writer thread, which only encodes and writes flat rows.
+const MANIFEST_CHUNK_WRITER_STACK_BYTES: usize = 1024 * 1024;
 /// Lightweight handle describing a hot/cold storage split.
 #[derive(Debug, Clone, Default)]
 pub struct TieredStateBackend {
@@ -70,6 +86,8 @@ pub struct TieredStateBackend {
     entry_keys: BTreeMap<TieredEntryId, EntryKey>,
     /// Cached manifest of the latest snapshot for diagnostics.
     last_manifest: Option<TieredSnapshotManifest>,
+    /// Manifest chunks of the latest published snapshot, reused while unchanged.
+    persisted_manifest: Option<PersistedManifestChunks>,
     /// Optional telemetry sink for DA-backed cold storage activity.
     telemetry: Option<StateTelemetry>,
 }
@@ -85,6 +103,8 @@ struct TieredSnapshotPlan {
     root: PathBuf,
     snapshot_dir: PathBuf,
     manifest: TieredSnapshotManifest,
+    /// Entry of each `manifest.hot_entries` row, in the same order.
+    hot_row_ids: Vec<TieredEntryId>,
     cold_entries: Vec<ColdEntryPlan>,
 }
 #[derive(Default)]
@@ -227,6 +247,7 @@ impl TieredStateBackend {
             entries: BTreeMap::new(),
             entry_keys: BTreeMap::new(),
             last_manifest: None,
+            persisted_manifest: None,
             telemetry: None,
         };
         if backend.enabled {
@@ -279,6 +300,7 @@ impl TieredStateBackend {
             // An initial or failed baseline has no reusable payload authority.
             self.entries.clear();
             self.entry_keys.clear();
+            self.persisted_manifest = None;
         }
         // Any error below requires another complete retained baseline. A later
         // incremental payload cannot silently continue from partial metadata.
@@ -551,6 +573,7 @@ impl TieredStateBackend {
                 root,
                 snapshot_dir,
                 manifest,
+                hot_row_ids: Vec::new(),
                 cold_entries: Vec::new(),
             };
         }
@@ -626,14 +649,15 @@ impl TieredStateBackend {
             }
         }
         let mut hot_manifest_entries = Vec::with_capacity(hot_list.len());
+        let mut hot_row_ids = Vec::with_capacity(hot_list.len());
         let mut cold_manifest_entries = Vec::with_capacity(scores.len());
         let mut cold_plans = Vec::with_capacity(scores.len());
         for entry in &scores {
             let meta = self.entries.get(&entry.id).expect("metadata populated");
             if hot_ids.contains(&entry.id) {
                 hot_manifest_entries.push(entry.manifest_entry(meta, None));
+                hot_row_ids.push(entry.id);
             } else {
-                let rel_path = entry.relative_payload_path(snapshot_idx);
                 let reuse_source = if meta.last_cold_snapshot > 0
                     && meta.last_cold_snapshot >= meta.last_mutated_snapshot
                 {
@@ -641,10 +665,16 @@ impl TieredStateBackend {
                         let candidate = root
                             .join(format!("{index:020}", index = meta.last_cold_snapshot))
                             .join(rel_path);
-                        candidate.exists().then_some(candidate)
+                        candidate.exists().then(|| (candidate, rel_path.clone()))
                     })
                 } else {
                     None
+                };
+                // A reused payload keeps the file name of the snapshot that wrote
+                // it, so its manifest row stays identical while the value does.
+                let (reuse_source, rel_path) = match reuse_source {
+                    Some((source, rel_path)) => (Some(source), rel_path),
+                    None => (None, entry.relative_payload_path(snapshot_idx)),
                 };
                 if let Some(payloads) = payloads
                     && reuse_source.is_none()
@@ -656,6 +686,7 @@ impl TieredStateBackend {
                         hot_list.push(entry.id);
                     }
                     hot_manifest_entries.push(entry.manifest_entry(meta, None));
+                    hot_row_ids.push(entry.id);
                     continue;
                 }
                 let manifest_index = cold_manifest_entries.len();
@@ -734,6 +765,7 @@ impl TieredStateBackend {
             root,
             snapshot_dir,
             manifest,
+            hot_row_ids,
             cold_entries: cold_plans,
         }
     }
@@ -928,7 +960,7 @@ impl TieredStateBackend {
                 )
             })?;
         }
-        Self::write_manifest(&staging_dir, &plan.manifest)?;
+        let persisted_manifest = self.persist_manifest(&plan, &staging_dir)?;
         Self::sync_dir(&staging_dir).wrap_err_with(|| {
             format!(
                 "failed to sync staging directory {path}",
@@ -984,6 +1016,8 @@ impl TieredStateBackend {
                 "tiered-state: failed to remove snapshot backup directory"
             );
         }
+        // Only a published snapshot may serve as the link source of later chunks.
+        self.persisted_manifest = Some(persisted_manifest);
         self.last_manifest = Some(plan.manifest);
         self.prune_old_snapshots(&plan.root)?;
         self.prune_to_cold_bytes(&plan.root)?;
@@ -1111,7 +1145,7 @@ impl TieredStateBackend {
                 )
             })?;
         }
-        Self::write_manifest(&staging_dir, &plan.manifest)?;
+        let persisted_manifest = self.persist_manifest(&plan, &staging_dir)?;
         Self::sync_dir(&staging_dir).wrap_err_with(|| {
             format!(
                 "failed to sync staging directory {path}",
@@ -1167,6 +1201,8 @@ impl TieredStateBackend {
                 "tiered-state: failed to remove snapshot backup directory"
             );
         }
+        // Only a published snapshot may serve as the link source of later chunks.
+        self.persisted_manifest = Some(persisted_manifest);
         self.last_manifest = Some(plan.manifest);
         self.prune_old_snapshots(&plan.root)?;
         self.prune_to_cold_bytes(&plan.root)?;
@@ -1486,6 +1522,7 @@ impl TieredStateBackend {
             self.snapshot_counter_seeded = false;
             self.snapshot_baseline_ready = false;
             self.last_manifest = None;
+            self.persisted_manifest = None;
         }
         cold_root_changed
     }
@@ -2021,11 +2058,248 @@ impl TieredStateBackend {
         });
         Ok(())
     }
-    fn write_manifest(snapshot_dir: &Path, manifest: &TieredSnapshotManifest) -> Result<()> {
+    /// Persist the manifest of `plan` in `staging_dir`: a small `manifest.json`
+    /// index plus one `manifest/<prefix>.json` file per key-hash chunk.
+    ///
+    /// Every snapshot directory still holds all hot and cold rows. A chunk whose
+    /// rows are unchanged since the latest published snapshot is hard-linked from
+    /// that snapshot instead of being written again, so a block that touches a
+    /// few entries writes a few small chunks rather than every row of the World.
+    fn persist_manifest(
+        &mut self,
+        plan: &TieredSnapshotPlan,
+        staging_dir: &Path,
+    ) -> Result<PersistedManifestChunks> {
+        // Until this snapshot is published nothing may link from either snapshot;
+        // after a failure the next snapshot therefore writes every chunk.
+        let previous = self.persisted_manifest.take();
+        let manifest = &plan.manifest;
+        eyre::ensure!(
+            plan.hot_row_ids.len() == manifest.hot_entries.len(),
+            "tiered-state: {} hot manifest rows but {} hot entry ids",
+            manifest.hot_entries.len(),
+            plan.hot_row_ids.len()
+        );
+        let digits = manifest_chunk_digits(
+            previous.as_ref().map(|chunks| chunks.digits),
+            manifest.hot_entries.len() + manifest.cold_entries.len(),
+        );
+        let previous = previous.filter(|chunks| chunks.digits == digits);
+        let hot_rows = plan
+            .hot_row_ids
+            .iter()
+            .zip(&manifest.hot_entries)
+            .map(|(id, row)| (*id, false, row));
+        let cold_rows = plan.cold_entries.iter().map(|cold| {
+            (
+                cold.entry.id,
+                true,
+                &manifest.cold_entries[cold.manifest_index],
+            )
+        });
+        let mut chunks: BTreeMap<u16, ManifestChunkPlan<'_>> = BTreeMap::new();
+        for (id, cold, row) in hot_rows.chain(cold_rows) {
+            let meta = self.entries.get_mut(&id).expect("metadata populated");
+            let value_hash = meta.last_value_hash;
+            let chunk = chunks
+                .entry(manifest_chunk(&id.key_hash, digits))
+                .or_default();
+            if !meta
+                .persisted_row
+                .as_ref()
+                .is_some_and(|persisted| persisted.matches(cold, value_hash, row))
+            {
+                meta.persisted_row = Some(PersistedManifestRow::new(cold, value_hash, row));
+                chunk.changed = true;
+            }
+            chunk.rows.push((id, cold, row));
+        }
+        let chunk_dir = staging_dir.join(MANIFEST_CHUNK_DIR);
+        fs::create_dir_all(&chunk_dir).wrap_err_with(|| {
+            format!(
+                "failed to create manifest chunk directory {path}",
+                path = chunk_dir.display()
+            )
+        })?;
+        let link_dir = previous.as_ref().map(|chunks| {
+            plan.root
+                .join(format!("{index:020}", index = chunks.snapshot_index))
+                .join(MANIFEST_CHUNK_DIR)
+        });
+        let mut index = TieredManifestIndex::new(manifest, digits);
+        let mut chunk_rows = BTreeMap::new();
+        let mut writes = Vec::new();
+        for (chunk, mut rows) in chunks {
+            let prefix = manifest_chunk_prefix(chunk, digits);
+            let file_name = format!("{prefix}.json");
+            let dest = chunk_dir.join(&file_name);
+            let unchanged = !rows.changed
+                && previous
+                    .as_ref()
+                    .and_then(|chunks| chunks.chunk_rows.get(&chunk))
+                    == Some(&rows.rows.len());
+            let linked = link_dir
+                .as_ref()
+                .filter(|_| unchanged)
+                .and_then(|dir| Self::try_link_manifest_chunk(&dir.join(&file_name), &dest));
+            chunk_rows.insert(chunk, rows.rows.len());
+            if let Some(bytes) = linked {
+                index.chunks_linked = index.chunks_linked.saturating_add(1);
+                index.chunk_bytes_linked = index.chunk_bytes_linked.saturating_add(bytes);
+            } else {
+                rows.rows.sort_unstable_by_key(|(id, _, _)| *id);
+                writes.push(ManifestChunkWrite {
+                    path: dest,
+                    prefix,
+                    rows: rows.rows,
+                });
+            }
+        }
+        index.chunks_written = writes.len();
+        index.chunk_bytes_written = Self::write_manifest_chunks(&writes)?;
+        index.chunk_count = chunk_rows.len();
+        Self::sync_dir(&chunk_dir).wrap_err_with(|| {
+            format!(
+                "failed to sync manifest chunk directory {path}",
+                path = chunk_dir.display()
+            )
+        })?;
+        Self::write_manifest(staging_dir, &index)?;
+        iroha_logger::debug!(
+            snapshot = manifest.snapshot_index,
+            chunks = index.chunk_count,
+            chunks_written = index.chunks_written,
+            chunk_bytes_written = index.chunk_bytes_written,
+            chunks_linked = index.chunks_linked,
+            "tiered-state: persisted snapshot manifest"
+        );
+        Ok(PersistedManifestChunks {
+            snapshot_index: manifest.snapshot_index,
+            digits,
+            chunk_rows,
+        })
+    }
+    /// Hard-link an unchanged manifest chunk from the previous snapshot.
+    ///
+    /// Returns `None` when it must be written instead. A destination is never
+    /// opened for writing after a link attempt, so a fallback write can never
+    /// truncate the inode it shares with the previous snapshot.
+    fn try_link_manifest_chunk(source: &Path, dest: &Path) -> Option<u64> {
+        let bytes = fs::metadata(source)
+            .ok()
+            .filter(fs::Metadata::is_file)?
+            .len();
+        match fs::hard_link(source, dest) {
+            Ok(()) => Some(bytes),
+            Err(err) => {
+                iroha_logger::debug!(
+                    ?err,
+                    source = %source.display(),
+                    dest = %dest.display(),
+                    "tiered-state: manifest chunk link failed; writing it instead"
+                );
+                None
+            }
+        }
+    }
+    /// Write and sync `writes` from up to [`MANIFEST_CHUNK_WRITERS`] threads and
+    /// return the bytes written. Every file is synced before this returns, so the
+    /// directory sync and the publication that follow still find durable chunks.
+    fn write_manifest_chunks(writes: &[ManifestChunkWrite<'_>]) -> Result<u64> {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let next = AtomicUsize::new(0);
+        let failed = AtomicBool::new(false);
+        // Each writer takes the next unwritten chunk until none is left or one fails.
+        let write_some = || -> Result<u64> {
+            let mut bytes = 0_u64;
+            while !failed.load(Ordering::Relaxed) {
+                let Some(chunk) = writes.get(next.fetch_add(1, Ordering::Relaxed)) else {
+                    break;
+                };
+                match Self::write_manifest_chunk(&chunk.path, &chunk.prefix, &chunk.rows) {
+                    Ok(written) => bytes = bytes.saturating_add(written),
+                    Err(err) => {
+                        failed.store(true, Ordering::Relaxed);
+                        return Err(err);
+                    }
+                }
+            }
+            Ok(bytes)
+        };
+        std::thread::scope(|scope| {
+            // The calling thread writes too, so a failed spawn only costs parallelism.
+            let helpers = (1..MANIFEST_CHUNK_WRITERS.min(writes.len()))
+                .map_while(|_| {
+                    std::thread::Builder::new()
+                        .name("tiered-manifest-chunk".to_owned())
+                        .stack_size(MANIFEST_CHUNK_WRITER_STACK_BYTES)
+                        .spawn_scoped(scope, &write_some)
+                        .ok()
+                })
+                .collect::<Vec<_>>();
+            let mut result = write_some();
+            for helper in helpers {
+                let helped = helper
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+                result = match (result, helped) {
+                    (Ok(total), Ok(bytes)) => Ok(total.saturating_add(bytes)),
+                    (Err(err), _) | (_, Err(err)) => Err(err),
+                };
+            }
+            result
+        })
+    }
+    fn write_manifest_chunk(
+        path: &Path,
+        prefix: &str,
+        rows: &[(TieredEntryId, bool, &TieredManifestEntry)],
+    ) -> Result<u64> {
+        let mut chunk = TieredManifestChunk {
+            prefix: prefix.to_owned(),
+            hot_entries: Vec::new(),
+            cold_entries: Vec::new(),
+        };
+        for (_, cold, row) in rows {
+            let row = TieredManifestRow::from(*row);
+            if *cold {
+                chunk.cold_entries.push(row);
+            } else {
+                chunk.hot_entries.push(row);
+            }
+        }
+        let bytes =
+            json::to_vec(&chunk).wrap_err("failed to serialize tiered state manifest chunk")?;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .wrap_err_with(|| {
+                format!(
+                    "failed to create manifest chunk {path}",
+                    path = path.display()
+                )
+            })?;
+        file.write_all(&bytes).wrap_err_with(|| {
+            format!(
+                "failed to write manifest chunk {path}",
+                path = path.display()
+            )
+        })?;
+        file.sync_data().wrap_err_with(|| {
+            format!(
+                "failed to sync manifest chunk {path}",
+                path = path.display()
+            )
+        })?;
+        Ok(bytes.len() as u64)
+    }
+    fn write_manifest(snapshot_dir: &Path, index: &TieredManifestIndex) -> Result<()> {
         // This is machine-read storage metadata. Pretty-printing encoded key byte
-        // arrays multiplies every full manifest write without adding information.
+        // arrays multiplies every manifest write without adding information.
         let manifest_bytes =
-            norito::json::to_vec(manifest).wrap_err("failed to serialize tiered state manifest")?;
+            norito::json::to_vec(index).wrap_err("failed to serialize tiered state manifest")?;
         let manifest_path = snapshot_dir.join("manifest.json");
         let temp_path = snapshot_dir.join("manifest.json.tmp");
         let mut file = fs::OpenOptions::new()
@@ -2449,6 +2723,30 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
     let mut out = [0_u8; 32];
     out.copy_from_slice(&Sha256::digest(bytes));
     out
+}
+/// Key-hash hex digits selecting the manifest chunks of `rows` rows. The count
+/// moves from `previous` only when the average chunk leaves the configured
+/// band, so a world near a boundary does not rewrite every chunk each snapshot.
+fn manifest_chunk_digits(previous: Option<u8>, rows: usize) -> u8 {
+    let chunks = |digits: u8| 1_usize << (4 * u32::from(digits));
+    let mut digits = previous.unwrap_or(1).clamp(1, MANIFEST_CHUNK_MAX_DIGITS);
+    while digits < MANIFEST_CHUNK_MAX_DIGITS && rows > MANIFEST_CHUNK_GROW_ROWS * chunks(digits) {
+        digits += 1;
+    }
+    while digits > 1 && rows < MANIFEST_CHUNK_SHRINK_ROWS * chunks(digits) {
+        digits -= 1;
+    }
+    digits
+}
+/// Manifest chunk of a key hash: its first `digits` hex digits.
+fn manifest_chunk(key_hash: &[u8; 32], digits: u8) -> u16 {
+    let leading = u32::from_be_bytes([0, key_hash[0], key_hash[1], key_hash[2]]);
+    u16::try_from(leading >> (24 - 4 * u32::from(digits)))
+        .expect("at most three hex digits select a manifest chunk")
+}
+/// Lowercase hex prefix naming a manifest chunk, as in `key_hash_hex`.
+fn manifest_chunk_prefix(chunk: u16, digits: u8) -> String {
+    format!("{chunk:0width$x}", width = usize::from(digits))
 }
 #[cfg(test)]
 fn compute_json_hash(value: &impl json::JsonSerialize) -> Result<([u8; 32], usize)> {
@@ -4274,6 +4572,8 @@ struct EntryMetadata {
     last_cold_rel_path: Option<PathBuf>,
     last_value_hash: [u8; 32],
     value_size_bytes: usize,
+    /// Row of this entry in the latest persisted manifest chunk.
+    persisted_row: Option<PersistedManifestRow>,
 }
 impl EntryMetadata {
     fn new(snapshot_idx: u64, value_hash: [u8; 32], value_size_bytes: usize) -> Self {
@@ -4286,8 +4586,66 @@ impl EntryMetadata {
             last_cold_rel_path: None,
             last_value_hash: value_hash,
             value_size_bytes,
+            persisted_row: None,
         }
     }
+}
+/// The fields of a persisted manifest row that can change for one entry, and its tier.
+///
+/// Segment and key fields are fixed by the entry id, and `last_present_snapshot`
+/// is not persisted, so an entry whose fingerprint matches has a byte-identical row
+/// in the same list of its chunk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PersistedManifestRow {
+    cold: bool,
+    value_size_bytes: usize,
+    last_mutated_snapshot: u64,
+    value_hash: [u8; 32],
+    spill: Option<(PathBuf, u64)>,
+}
+impl PersistedManifestRow {
+    fn new(cold: bool, value_hash: [u8; 32], row: &TieredManifestEntry) -> Self {
+        Self {
+            cold,
+            value_size_bytes: row.value_size_bytes,
+            last_mutated_snapshot: row.last_mutated_snapshot,
+            value_hash,
+            spill: row.spill_path.clone().zip(row.spill_bytes),
+        }
+    }
+    fn matches(&self, cold: bool, value_hash: [u8; 32], row: &TieredManifestEntry) -> bool {
+        self.cold == cold
+            && self.value_size_bytes == row.value_size_bytes
+            && self.last_mutated_snapshot == row.last_mutated_snapshot
+            && self.value_hash == value_hash
+            && match (&self.spill, &row.spill_path, row.spill_bytes) {
+                (None, None, None) => true,
+                (Some((path, bytes)), Some(row_path), Some(row_bytes)) => {
+                    path == row_path && *bytes == row_bytes
+                }
+                _ => false,
+            }
+    }
+}
+/// Rows of one manifest chunk being persisted, and whether any of them changed.
+#[derive(Default)]
+struct ManifestChunkPlan<'a> {
+    rows: Vec<(TieredEntryId, bool, &'a TieredManifestEntry)>,
+    changed: bool,
+}
+/// A manifest chunk that a snapshot writes instead of linking, with its sorted rows.
+struct ManifestChunkWrite<'a> {
+    path: PathBuf,
+    prefix: String,
+    rows: Vec<(TieredEntryId, bool, &'a TieredManifestEntry)>,
+}
+/// Chunk layout of the latest published snapshot, the link source of later ones.
+#[derive(Debug, Clone)]
+struct PersistedManifestChunks {
+    snapshot_index: u64,
+    digits: u8,
+    /// Row count of every chunk file.
+    chunk_rows: BTreeMap<u16, usize>,
 }
 impl PartialEq for EntryMetadata {
     fn eq(&self, other: &Self) -> bool {
@@ -4810,10 +5168,236 @@ pub struct TieredManifestEntry {
     spill_path: Option<PathBuf>,
     spill_bytes: Option<u64>,
 }
+/// Persisted index of one snapshot (`manifest.json`, format [`MANIFEST_FORMAT`]).
+///
+/// The rows of the [`TieredSnapshotManifest`] live in `manifest/<prefix>.json`
+/// chunk files, where `<prefix>` is the first `chunk_digits` hex digits of the
+/// key hash. A chunk whose rows did not change since the previous snapshot is a
+/// hard link to that snapshot's file, so the directory still holds every row.
+#[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
+struct TieredManifestIndex {
+    format: String,
+    snapshot_index: u64,
+    total_entries: usize,
+    hot_entry_count: usize,
+    cold_entry_count: usize,
+    cold_bytes_total: u64,
+    cold_reused_entries: usize,
+    cold_reused_bytes: u64,
+    hot_promotions: usize,
+    hot_demotions: usize,
+    hot_budget_overflow_keys: usize,
+    hot_budget_overflow_bytes: u64,
+    chunk_digits: usize,
+    chunk_count: usize,
+    /// Chunks serialized and written by this snapshot.
+    chunks_written: usize,
+    chunk_bytes_written: u64,
+    /// Unchanged chunks hard-linked from the previous snapshot.
+    chunks_linked: usize,
+    chunk_bytes_linked: u64,
+}
+impl TieredManifestIndex {
+    fn new(manifest: &TieredSnapshotManifest, digits: u8) -> Self {
+        Self {
+            format: MANIFEST_FORMAT.to_owned(),
+            snapshot_index: manifest.snapshot_index,
+            total_entries: manifest.total_entries,
+            hot_entry_count: manifest.hot_entries.len(),
+            cold_entry_count: manifest.cold_entries.len(),
+            cold_bytes_total: manifest.cold_bytes_total,
+            cold_reused_entries: manifest.cold_reused_entries,
+            cold_reused_bytes: manifest.cold_reused_bytes,
+            hot_promotions: manifest.hot_promotions,
+            hot_demotions: manifest.hot_demotions,
+            hot_budget_overflow_keys: manifest.hot_budget_overflow_keys,
+            hot_budget_overflow_bytes: manifest.hot_budget_overflow_bytes,
+            chunk_digits: usize::from(digits),
+            chunk_count: 0,
+            chunks_written: 0,
+            chunk_bytes_written: 0,
+            chunks_linked: 0,
+            chunk_bytes_linked: 0,
+        }
+    }
+}
+/// One manifest chunk file. It holds nothing snapshot-specific, so an
+/// unchanged chunk has identical bytes in every snapshot that links it.
+#[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
+struct TieredManifestChunk {
+    prefix: String,
+    hot_entries: Vec<TieredManifestRow>,
+    cold_entries: Vec<TieredManifestRow>,
+}
+/// A persisted [`TieredManifestEntry`] without `last_present_snapshot`, which
+/// equals the snapshot index for every entry a manifest lists.
+#[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
+struct TieredManifestRow {
+    segment: TieredSegment,
+    key_hash_hex: String,
+    key_payload: Vec<u8>,
+    value_size_bytes: usize,
+    last_mutated_snapshot: u64,
+    value_hash_hex: String,
+    spill_path: Option<PathBuf>,
+    spill_bytes: Option<u64>,
+}
+impl From<&TieredManifestEntry> for TieredManifestRow {
+    fn from(entry: &TieredManifestEntry) -> Self {
+        Self {
+            segment: entry.segment,
+            key_hash_hex: entry.key_hash_hex.clone(),
+            key_payload: entry.key_payload.clone(),
+            value_size_bytes: entry.value_size_bytes,
+            last_mutated_snapshot: entry.last_mutated_snapshot,
+            value_hash_hex: entry.value_hash_hex.clone(),
+            spill_path: entry.spill_path.clone(),
+            spill_bytes: entry.spill_bytes,
+        }
+    }
+}
+#[cfg(test)]
+impl TieredManifestRow {
+    fn into_entry(self, snapshot_index: u64) -> TieredManifestEntry {
+        TieredManifestEntry {
+            segment: self.segment,
+            key_hash_hex: self.key_hash_hex,
+            key_payload: self.key_payload,
+            value_size_bytes: self.value_size_bytes,
+            last_present_snapshot: snapshot_index,
+            last_mutated_snapshot: self.last_mutated_snapshot,
+            value_hash_hex: self.value_hash_hex,
+            spill_path: self.spill_path,
+            spill_bytes: self.spill_bytes,
+        }
+    }
+}
+#[cfg(test)]
+impl TieredStateBackend {
+    /// Reassemble the complete manifest persisted in `snapshot_dir`, checking
+    /// the index counts and that every row sits in the chunk of its key hash.
+    /// Rows are returned in chunk order, not in the in-memory score order.
+    pub(crate) fn read_persisted_manifest(snapshot_dir: &Path) -> Result<TieredSnapshotManifest> {
+        let index: TieredManifestIndex =
+            json::from_slice(&fs::read(snapshot_dir.join("manifest.json"))?)
+                .wrap_err("failed to decode tiered state manifest index")?;
+        eyre::ensure!(
+            index.format == MANIFEST_FORMAT,
+            "unexpected tiered state manifest format {}",
+            index.format
+        );
+        let chunk_dir = snapshot_dir.join(MANIFEST_CHUNK_DIR);
+        let mut names = fs::read_dir(&chunk_dir)?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        names.sort();
+        let mut hot_entries = Vec::new();
+        let mut cold_entries = Vec::new();
+        for name in &names {
+            let chunk: TieredManifestChunk = json::from_slice(&fs::read(chunk_dir.join(name))?)
+                .wrap_err("failed to decode tiered state manifest chunk")?;
+            eyre::ensure!(
+                name.to_str() == Some(format!("{}.json", chunk.prefix).as_str())
+                    && chunk.prefix.len() == index.chunk_digits,
+                "manifest chunk {name:?} does not match its prefix {}",
+                chunk.prefix
+            );
+            for (rows, cold) in [(chunk.hot_entries, false), (chunk.cold_entries, true)] {
+                for row in rows {
+                    eyre::ensure!(
+                        row.key_hash_hex.starts_with(&chunk.prefix)
+                            && row.spill_path.is_some() == cold,
+                        "manifest row {} is misplaced in chunk {}",
+                        row.key_hash_hex,
+                        chunk.prefix
+                    );
+                    let entry = row.into_entry(index.snapshot_index);
+                    if cold {
+                        cold_entries.push(entry);
+                    } else {
+                        hot_entries.push(entry);
+                    }
+                }
+            }
+        }
+        eyre::ensure!(
+            names.len() == index.chunk_count
+                && hot_entries.len() == index.hot_entry_count
+                && cold_entries.len() == index.cold_entry_count
+                && index.total_entries == hot_entries.len() + cold_entries.len(),
+            "tiered state manifest chunks do not match their index"
+        );
+        Ok(TieredSnapshotManifest {
+            snapshot_index: index.snapshot_index,
+            total_entries: index.total_entries,
+            hot_entries,
+            cold_entries,
+            cold_bytes_total: index.cold_bytes_total,
+            cold_reused_entries: index.cold_reused_entries,
+            cold_reused_bytes: index.cold_reused_bytes,
+            hot_promotions: index.hot_promotions,
+            hot_demotions: index.hot_demotions,
+            hot_budget_overflow_keys: index.hot_budget_overflow_keys,
+            hot_budget_overflow_bytes: index.hot_budget_overflow_bytes,
+        })
+    }
+    /// Bytes of the persisted index and every chunk file in `snapshot_dir`.
+    pub(crate) fn persisted_manifest_bytes(snapshot_dir: &Path) -> Result<Vec<u8>> {
+        let mut bytes = fs::read(snapshot_dir.join("manifest.json"))?;
+        let chunk_dir = snapshot_dir.join(MANIFEST_CHUNK_DIR);
+        let mut names = fs::read_dir(&chunk_dir)?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        names.sort();
+        for name in names {
+            bytes.extend(fs::read(chunk_dir.join(name))?);
+        }
+        Ok(bytes)
+    }
+}
 include!("tiered_hot_byte_accounting.rs");
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Order-independent form of a manifest: its summary and sorted row bytes.
+    fn canonical_manifest(
+        manifest: &TieredSnapshotManifest,
+    ) -> (Vec<u8>, Vec<Vec<u8>>, Vec<Vec<u8>>) {
+        let rows = |entries: &[TieredManifestEntry]| {
+            let mut rows = entries
+                .iter()
+                .map(|entry| json::to_vec(entry).expect("encode manifest row"))
+                .collect::<Vec<_>>();
+            rows.sort();
+            rows
+        };
+        let mut summary = manifest.clone();
+        let hot = rows(&summary.hot_entries);
+        let cold = rows(&summary.cold_entries);
+        summary.hot_entries.clear();
+        summary.cold_entries.clear();
+        (
+            json::to_vec(&summary).expect("encode manifest summary"),
+            hot,
+            cold,
+        )
+    }
+
+    /// Assert that the chunks persisted under `root` hold exactly `expected`.
+    fn assert_persisted_manifest_matches(root: &Path, expected: &TieredSnapshotManifest) {
+        let snapshot_dir = root.join(format!("{:020}", expected.snapshot_index));
+        let persisted = TieredStateBackend::read_persisted_manifest(&snapshot_dir)
+            .expect("read persisted manifest");
+        assert_eq!(canonical_manifest(&persisted), canonical_manifest(expected));
+    }
+
+    fn manifest_index(root: &Path, snapshot_index: u64) -> TieredManifestIndex {
+        let path = root
+            .join(format!("{snapshot_index:020}"))
+            .join("manifest.json");
+        json::from_slice(&fs::read(path).expect("read manifest index")).expect("decode index")
+    }
 
     #[test]
     fn persisted_manifest_is_compact_and_preserves_all_hot_and_cold_metadata() {
@@ -4834,8 +5418,10 @@ mod tests {
         assert_eq!(expected.hot_entries.len(), 1);
         assert_eq!(expected.cold_entries.len(), 1);
         let snapshot_dir = temp.path().join(format!("{:020}", expected.snapshot_index));
-        let bytes = fs::read(snapshot_dir.join("manifest.json")).expect("persisted manifest");
-        let decoded: TieredSnapshotManifest = json::from_slice(&bytes).expect("read manifest");
+        let bytes = TieredStateBackend::persisted_manifest_bytes(&snapshot_dir)
+            .expect("persisted manifest");
+        let decoded =
+            TieredStateBackend::read_persisted_manifest(&snapshot_dir).expect("read manifest");
         assert_eq!(
             json::to_value(&decoded).unwrap(),
             json::to_value(expected).unwrap()
@@ -4858,8 +5444,8 @@ mod tests {
         use iroha_data_model::{
             asset::AssetId,
             privacy::{
-                PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1,
-                PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProtocolIdV1,
+                PrivacyNamespaceScopeV1, PrivacyOrchardPoolBootstrapDigestV1, PrivacyPoolIdV1,
+                PrivacyPoolNamespaceV1, PrivacyRuntimeNamespaceV1, PrivacyRuntimeProtocolIdV1,
             },
         };
         use iroha_primitives::numeric::Quantity;
@@ -4871,8 +5457,8 @@ mod tests {
         .expect("valid asset UUID");
         let id = AssetId::new(definition, iroha_test_samples::ALICE_ID.clone());
         let owner = PrivacyPublicReserveOwnerV1::Orchard {
-            namespace: PrivacyNamespaceV1::new(
-                PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            namespace: PrivacyRuntimeNamespaceV1::new(
+                PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
                 PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                     pool_id: PrivacyPoolIdV1::new([0xD1; 32]),
                 }),
@@ -4960,15 +5546,15 @@ mod tests {
             PrivacyRootKeyV1, PrivacyRootProvenanceV1, PrivacyStateItemRecordV1,
         };
         use iroha_data_model::privacy::{
-            PrivacyIssuerIdV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyProtocolIdV1,
-            PrivacyRootPublicationV1, PrivacyRootRoleV1, PrivacyRootV1,
+            PrivacyIssuerIdV1, PrivacyNamespaceScopeV1, PrivacyRootRoleV1, PrivacyRootV1,
+            PrivacyRuntimeNamespaceV1, PrivacyRuntimeProtocolIdV1, PrivacyRuntimeRootPublicationV1,
             PrivacyTrustAnchorNamespaceV1, PrivacyX509TrustStoreDigestV1,
             PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordV1,
         };
         let mut world = World::default();
         let issuer = PrivacyIssuerIdV1::new([41; 32]);
-        let namespace = PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+        let namespace = PrivacyRuntimeNamespaceV1::new(
+            PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
             PrivacyNamespaceScopeV1::TrustAnchor(PrivacyTrustAnchorNamespaceV1 {
                 trust_anchor_id: issuer,
             }),
@@ -4987,7 +5573,7 @@ mod tests {
             )
             .expect("self-digested lineage");
             previous = Some(anchor.record_digest);
-            let publication = PrivacyRootPublicationV1 {
+            let publication = PrivacyRuntimeRootPublicationV1 {
                 namespace,
                 role: PrivacyRootRoleV1::CertificateAuthorityMembership,
                 epoch,
@@ -5135,12 +5721,8 @@ mod tests {
             .expect("cold snapshot");
         let snapshot_index = backend.last_manifest().expect("manifest").snapshot_index;
         drop(backend);
-        let manifest: TieredSnapshotManifest = json::from_slice(
-            &fs::read(
-                root.join(format!("{snapshot_index:020}"))
-                    .join("manifest.json"),
-            )
-            .expect("persisted manifest"),
+        let manifest = TieredStateBackend::read_persisted_manifest(
+            &root.join(format!("{snapshot_index:020}")),
         )
         .expect("manifest decode");
         let reader = TieredStateBackend::new(true, 0, 1, 0, Some(root), None, 0, 0);
@@ -5406,12 +5988,8 @@ mod tests {
             .expect("cold snapshot");
         let snapshot_index = backend.last_manifest().expect("manifest").snapshot_index;
         drop(backend);
-        let manifest: TieredSnapshotManifest = json::from_slice(
-            &fs::read(
-                root.join(format!("{snapshot_index:020}"))
-                    .join("manifest.json"),
-            )
-            .expect("persisted manifest"),
+        let manifest = TieredStateBackend::read_persisted_manifest(
+            &root.join(format!("{snapshot_index:020}")),
         )
         .expect("manifest decode");
         let reader = TieredStateBackend::new(true, 0, 1, 0, Some(root), None, 0, 0);
@@ -6072,7 +6650,8 @@ mod tests {
             );
         };
         assert_canaries_absent(
-            &fs::read(snapshot_dir.join("manifest.json")).expect("read tiered manifest"),
+            &TieredStateBackend::persisted_manifest_bytes(&snapshot_dir)
+                .expect("read tiered manifest"),
             "manifest",
         );
         let expected = [
@@ -6191,10 +6770,8 @@ mod tests {
             .snapshot_index;
         drop(backend);
         let snapshot_dir = root.join(format!("{snapshot_index:020}"));
-        let manifest_bytes =
-            fs::read(snapshot_dir.join("manifest.json")).expect("read persisted tiered manifest");
-        let manifest: TieredSnapshotManifest =
-            json::from_slice(&manifest_bytes).expect("decode persisted tiered manifest");
+        let manifest = TieredStateBackend::read_persisted_manifest(&snapshot_dir)
+            .expect("decode persisted tiered manifest");
         let descriptor_entry = manifest
             .cold_entries
             .iter()
@@ -6260,12 +6837,8 @@ mod tests {
         backend.record_world_snapshot(&world).unwrap();
         let snapshot_index = backend.last_manifest().unwrap().snapshot_index;
         drop(backend);
-        let manifest: TieredSnapshotManifest = json::from_slice(
-            &fs::read(
-                root.join(format!("{snapshot_index:020}"))
-                    .join("manifest.json"),
-            )
-            .unwrap(),
+        let manifest = TieredStateBackend::read_persisted_manifest(
+            &root.join(format!("{snapshot_index:020}")),
         )
         .unwrap();
         let entry = manifest
@@ -6340,10 +6913,8 @@ mod tests {
             .snapshot_index;
         drop(backend);
         let snapshot_dir = root.join(format!("{snapshot_index:020}"));
-        let manifest_bytes =
-            fs::read(snapshot_dir.join("manifest.json")).expect("read persisted manifest");
-        let manifest: TieredSnapshotManifest =
-            json::from_slice(&manifest_bytes).expect("decode persisted manifest");
+        let manifest = TieredStateBackend::read_persisted_manifest(&snapshot_dir)
+            .expect("decode persisted manifest");
         let asset_entry = manifest
             .cold_entries
             .iter()
@@ -6377,6 +6948,415 @@ mod tests {
         let restored_contract: crate::state::ContractAliasBindingRecord =
             json::from_slice(&restored_contract_bytes).expect("decode contract alias binding");
         assert_eq!(restored_contract, contract_binding);
+    }
+    fn chunk_test_key(index: usize) -> StatePath {
+        // About the length of the contract state paths behind Taira's manifest rows.
+        format!("manifest_chunk_{index:07}_{}", "k".repeat(80))
+            .parse()
+            .expect("valid manifest chunk fixture path")
+    }
+    fn chunk_test_payload(
+        complete: bool,
+        rows: impl IntoIterator<Item = (usize, Option<Vec<u8>>)>,
+    ) -> TieredSnapshotPayload {
+        let mut payload = TieredSnapshotPayload::with_scope(complete);
+        for (index, value) in rows {
+            payload.push_value(
+                TieredKeyHandle::SmartContractState(chunk_test_key(index)),
+                value,
+            );
+        }
+        payload
+    }
+    #[cfg(unix)]
+    fn manifest_chunk_inodes(
+        root: &Path,
+        snapshot_index: u64,
+    ) -> BTreeMap<std::ffi::OsString, u64> {
+        fs::read_dir(
+            root.join(format!("{snapshot_index:020}"))
+                .join(MANIFEST_CHUNK_DIR),
+        )
+        .expect("read manifest chunks")
+        .map(|entry| {
+            let entry = entry.expect("manifest chunk entry");
+            (
+                entry.file_name(),
+                entry.metadata().expect("manifest chunk metadata").ino(),
+            )
+        })
+        .collect()
+    }
+    /// Rows of every manifest chunk as persisted: prefix → (tier, encoded row).
+    fn manifest_chunk_rows(
+        manifest: &TieredSnapshotManifest,
+        digits: usize,
+    ) -> BTreeMap<String, BTreeSet<(bool, Vec<u8>)>> {
+        let mut chunks: BTreeMap<String, BTreeSet<(bool, Vec<u8>)>> = BTreeMap::new();
+        for (entries, cold) in [
+            (&manifest.hot_entries, false),
+            (&manifest.cold_entries, true),
+        ] {
+            for entry in entries {
+                let row = json::to_vec(&TieredManifestRow::from(entry)).expect("encode row");
+                chunks
+                    .entry(entry.key_hash_hex[..digits].to_owned())
+                    .or_default()
+                    .insert((cold, row));
+            }
+        }
+        chunks
+    }
+    /// Assert that the snapshot of `current` wrote exactly the chunks whose rows
+    /// differ from `previous`, plus the `lost` ones whose link source was removed,
+    /// and hard-linked every other chunk from the previous snapshot directory.
+    /// Returns its index and the prefixes of the chunks it wrote.
+    fn assert_only_changed_chunks_written(
+        root: &Path,
+        previous: &TieredSnapshotManifest,
+        current: &TieredSnapshotManifest,
+        lost: &[&str],
+    ) -> (TieredManifestIndex, BTreeSet<String>) {
+        let index = manifest_index(root, current.snapshot_index);
+        let before = manifest_chunk_rows(previous, index.chunk_digits);
+        let mut written = manifest_chunk_rows(current, index.chunk_digits)
+            .into_iter()
+            .filter(|(prefix, rows)| before.get(prefix) != Some(rows))
+            .map(|(prefix, _)| prefix)
+            .collect::<BTreeSet<_>>();
+        written.extend(lost.iter().map(|prefix| (*prefix).to_owned()));
+        assert_eq!(index.chunks_written, written.len(), "{index:?}");
+        assert_eq!(
+            index.chunks_linked + written.len(),
+            index.chunk_count,
+            "{index:?}"
+        );
+        #[cfg(unix)]
+        {
+            let before = manifest_chunk_inodes(root, previous.snapshot_index);
+            for (name, inode) in manifest_chunk_inodes(root, current.snapshot_index) {
+                let prefix = name
+                    .to_str()
+                    .and_then(|name| name.strip_suffix(".json"))
+                    .expect("manifest chunk name");
+                assert_eq!(
+                    before.get(&name) == Some(&inode),
+                    !written.contains(prefix),
+                    "manifest chunk {prefix}"
+                );
+            }
+        }
+        assert_persisted_manifest_matches(root, current);
+        (index, written)
+    }
+    #[test]
+    fn manifest_snapshot_writes_only_changed_chunks_and_links_the_rest() {
+        let temp = tempdir().expect("tmpdir");
+        let root = temp.path().to_path_buf();
+        let mut backend = TieredStateBackend::new(true, 0, 0, 0, Some(root.clone()), None, 2, 0);
+        let rows = 10_000;
+        backend
+            .record_world_snapshot_with_payload(&chunk_test_payload(
+                true,
+                (0..rows).map(|index| (index, Some(vec![1; 32]))),
+            ))
+            .expect("complete snapshot");
+        let first = backend.last_manifest().expect("first manifest").clone();
+        let first_index = manifest_index(&root, first.snapshot_index);
+        assert_eq!(first_index.chunk_digits, 2);
+        assert_eq!(first_index.chunk_count, 256);
+        assert_eq!(first_index.chunks_written, first_index.chunk_count);
+        assert_eq!(first_index.chunks_linked, 0);
+        assert_persisted_manifest_matches(&root, &first);
+        // A mutation, an insertion and a deletion change at most three chunks.
+        backend
+            .record_world_snapshot_with_payload(&chunk_test_payload(
+                false,
+                [
+                    (7, Some(vec![2; 32])),
+                    (rows, Some(vec![3; 32])),
+                    (11, None),
+                ],
+            ))
+            .expect("incremental snapshot");
+        let second = backend.last_manifest().expect("second manifest").clone();
+        assert_eq!(second.total_entries, rows);
+        let (second_index, written) =
+            assert_only_changed_chunks_written(&root, &first, &second, &[]);
+        assert!((1..=3).contains(&written.len()), "{written:?}");
+        // The previous format rewrote the whole manifest for every snapshot.
+        let full_manifest_bytes = json::to_vec(&second).expect("encode full manifest").len() as u64;
+        assert!(
+            second_index.chunk_bytes_written * 50 < full_manifest_bytes,
+            "wrote {} of {full_manifest_bytes} manifest bytes",
+            second_index.chunk_bytes_written
+        );
+        // Without changes every chunk is linked and only the index is written.
+        backend
+            .record_world_snapshot_with_payload(&TieredSnapshotPayload::with_scope(false))
+            .expect("unchanged snapshot");
+        let third = backend.last_manifest().expect("third manifest").clone();
+        let (third_index, written) =
+            assert_only_changed_chunks_written(&root, &second, &third, &[]);
+        assert!(written.is_empty(), "{written:?}");
+        assert_eq!(third_index.chunks_linked, third_index.chunk_count);
+    }
+    #[test]
+    fn manifest_chunks_stay_exact_across_tier_changes_restarts_and_lost_links() {
+        let temp = tempdir().expect("tmpdir");
+        let root = temp.path().to_path_buf();
+        let rows = 600;
+        let mut backend = TieredStateBackend::new(true, 50, 0, 0, Some(root.clone()), None, 2, 0);
+        backend
+            .record_world_snapshot_with_payload(&chunk_test_payload(
+                true,
+                (0..rows).map(|index| (index, Some(vec![1; 16]))),
+            ))
+            .expect("complete snapshot");
+        let first = backend.last_manifest().expect("first manifest").clone();
+        assert_eq!(first.hot_entries.len(), 50);
+        assert_persisted_manifest_matches(&root, &first);
+        // The fifty hot keys have the smallest key hashes, in the first chunks.
+        // Mutate every entry of the last chunks, more than fifty: they take the
+        // whole hot budget and the rest get new cold payloads. The previous hot
+        // entries were never spilled and are not in the payload, so they stay
+        // hot over the budget; their rows and the untouched cold rows stay identical.
+        let digits = manifest_index(&root, first.snapshot_index).chunk_digits;
+        let key =
+            |index: usize| TieredKeyHandle::SmartContractState(chunk_test_key(index)).encode_key();
+        let prefixes = first
+            .hot_entries
+            .iter()
+            .chain(&first.cold_entries)
+            .map(|entry| {
+                (
+                    entry.key_payload.clone(),
+                    entry.key_hash_hex[..digits].to_owned(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let chunk_prefixes = prefixes.values().cloned().collect::<BTreeSet<_>>();
+        let mut targets = BTreeSet::new();
+        let mut mutated = Vec::new();
+        for prefix in chunk_prefixes.into_iter().rev() {
+            if mutated.len() > 50 {
+                break;
+            }
+            mutated.extend((0..rows).filter(|index| prefixes[&key(*index)] == prefix));
+            targets.insert(prefix);
+        }
+        backend
+            .record_world_snapshot_with_payload(&chunk_test_payload(
+                false,
+                mutated.iter().map(|index| (*index, Some(vec![2; 16]))),
+            ))
+            .expect("tier change snapshot");
+        let second = backend.last_manifest().expect("second manifest").clone();
+        assert_eq!((second.hot_promotions, second.hot_demotions), (50, 0));
+        assert_eq!(second.hot_entries.len(), 100);
+        assert!(second.cold_reused_entries < second.cold_entries.len());
+        let (second_index, written) =
+            assert_only_changed_chunks_written(&root, &first, &second, &[]);
+        assert_eq!(written, targets);
+        assert!(second_index.chunks_linked > 0, "{second_index:?}");
+        // An untouched cold entry keeps its spill file name and shares its payload.
+        let touched = mutated
+            .iter()
+            .map(|index| key(*index))
+            .collect::<BTreeSet<_>>();
+        let untouched = first
+            .cold_entries
+            .iter()
+            .find(|entry| !touched.contains(&entry.key_payload))
+            .expect("an untouched cold entry");
+        let kept = second
+            .cold_entries
+            .iter()
+            .find(|entry| entry.key_payload == untouched.key_payload)
+            .expect("untouched entry stays cold");
+        assert_eq!(kept.spill_path, untouched.spill_path);
+        #[cfg(unix)]
+        {
+            let payload_inode = |manifest: &TieredSnapshotManifest| {
+                fs::metadata(
+                    root.join(format!("{:020}", manifest.snapshot_index))
+                        .join(untouched.spill_path.as_ref().expect("cold spill path")),
+                )
+                .expect("cold payload")
+                .ino()
+            };
+            assert_eq!(payload_inode(&first), payload_inode(&second));
+        }
+        // A lost link source is rewritten instead of failing the snapshot.
+        let lost = fs::read_dir(
+            root.join(format!("{:020}", second.snapshot_index))
+                .join(MANIFEST_CHUNK_DIR),
+        )
+        .expect("read manifest chunks")
+        .next()
+        .expect("a manifest chunk")
+        .expect("manifest chunk entry")
+        .path();
+        fs::remove_file(&lost).expect("remove link source");
+        let lost_prefix = lost
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .expect("manifest chunk prefix")
+            .to_owned();
+        backend
+            .record_world_snapshot_with_payload(&TieredSnapshotPayload::with_scope(false))
+            .expect("snapshot after a lost chunk");
+        let third = backend.last_manifest().expect("third manifest").clone();
+        let (_, written) =
+            assert_only_changed_chunks_written(&root, &second, &third, &[&lost_prefix]);
+        assert_eq!(written, BTreeSet::from([lost_prefix]));
+        // A restarted node has no link source, so its first snapshot writes
+        // every chunk under the next index; reuse resumes after it.
+        drop(backend);
+        let mut restarted = TieredStateBackend::new(true, 50, 0, 0, Some(root.clone()), None, 2, 0);
+        restarted
+            .record_world_snapshot_with_payload(&chunk_test_payload(
+                true,
+                (0..rows).map(|index| (index, Some(vec![4; 16]))),
+            ))
+            .expect("snapshot after restart");
+        let fourth = restarted.last_manifest().expect("restart manifest").clone();
+        assert_eq!(fourth.snapshot_index, third.snapshot_index + 1);
+        assert_eq!(
+            manifest_index(&root, fourth.snapshot_index).chunks_linked,
+            0
+        );
+        assert_persisted_manifest_matches(&root, &fourth);
+        restarted
+            .record_world_snapshot_with_payload(&TieredSnapshotPayload::with_scope(false))
+            .expect("incremental snapshot after restart");
+        let fifth = restarted.last_manifest().expect("fifth manifest").clone();
+        let (fifth_index, written) =
+            assert_only_changed_chunks_written(&root, &fourth, &fifth, &[]);
+        assert!(written.is_empty(), "{written:?}");
+        assert_eq!(fifth_index.chunks_linked, fifth_index.chunk_count);
+    }
+    #[test]
+    fn manifest_chunk_digits_follow_row_count_with_hysteresis() {
+        assert_eq!(manifest_chunk_digits(None, 0), 1);
+        assert_eq!(manifest_chunk_digits(None, 4_096), 1);
+        assert_eq!(manifest_chunk_digits(None, 4_097), 2);
+        assert_eq!(manifest_chunk_digits(None, 65_537), 3);
+        assert_eq!(manifest_chunk_digits(None, 266_000), 3);
+        assert_eq!(manifest_chunk_digits(None, usize::MAX / 2), 3);
+        // Leaving a digit count takes half the rows that entering it took.
+        assert_eq!(manifest_chunk_digits(Some(3), 40_000), 3);
+        assert_eq!(manifest_chunk_digits(Some(3), 32_767), 2);
+        assert_eq!(manifest_chunk_digits(Some(2), 2_048), 2);
+        assert_eq!(manifest_chunk_digits(Some(2), 2_047), 1);
+        assert_eq!(manifest_chunk(&[0xab; 32], 1), 0xa);
+        assert_eq!(manifest_chunk(&[0xab; 32], 3), 0xaba);
+        assert_eq!(manifest_chunk_prefix(0xa, 3), "00a");
+    }
+    #[test]
+    fn manifest_chunk_writers_write_every_chunk_or_fail_without_truncating() {
+        let temp = tempdir().expect("tmpdir");
+        let writes = |dir: &Path| {
+            fs::create_dir_all(dir).expect("chunk directory");
+            (0..64_u16)
+                .map(|chunk| {
+                    let prefix = manifest_chunk_prefix(chunk, 2);
+                    ManifestChunkWrite {
+                        path: dir.join(format!("{prefix}.json")),
+                        prefix,
+                        rows: Vec::new(),
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        // More chunks than writer threads: every one is written exactly once.
+        let fresh = writes(&temp.path().join("fresh"));
+        let bytes = TieredStateBackend::write_manifest_chunks(&fresh).expect("write every chunk");
+        let mut on_disk = 0;
+        for chunk in &fresh {
+            let encoded = fs::read(&chunk.path).expect("written chunk");
+            let written: TieredManifestChunk = json::from_slice(&encoded).expect("decode chunk");
+            assert_eq!(written.prefix, chunk.prefix);
+            on_disk += encoded.len() as u64;
+        }
+        assert_eq!(bytes, on_disk);
+        // An existing chunk file, such as a link shared with an older snapshot,
+        // fails the write instead of being truncated.
+        let shared = writes(&temp.path().join("shared"));
+        fs::write(&shared[40].path, b"shared").expect("existing chunk");
+        assert!(TieredStateBackend::write_manifest_chunks(&shared).is_err());
+        assert_eq!(
+            fs::read(&shared[40].path).expect("existing chunk"),
+            b"shared"
+        );
+    }
+    /// Manifest bytes per snapshot at Taira's scale, where the previous format
+    /// wrote one 173 MB file per block. Run it explicitly, in release:
+    /// `cargo test --release -p iroha_core --lib manifest_bytes_at_taira_scale -- --ignored --nocapture`.
+    /// `snapshot` is the whole snapshot with this format; `v1 persist` encodes,
+    /// writes and syncs the previous single-file manifest on the same disk, which
+    /// the previous format did in addition to the shared planning work.
+    #[test]
+    #[ignore = "measurement with 266k rows; run explicitly"]
+    fn manifest_bytes_at_taira_scale() {
+        let temp = tempdir().expect("tmpdir");
+        let root = temp.path().to_path_buf();
+        let rows = 266_000;
+        let mut backend = TieredStateBackend::new(true, 0, 0, 0, Some(root.clone()), None, 2, 0);
+        let value = |seed: usize| (seed as u64).to_le_bytes().repeat(16);
+        let v1_path = temp.path().join("v1-manifest.json");
+        let report = |label: &str, backend: &TieredStateBackend, elapsed: std::time::Duration| {
+            let manifest = backend.last_manifest().expect("manifest");
+            let snapshot_dir = root.join(format!("{:020}", manifest.snapshot_index));
+            let index = manifest_index(&root, manifest.snapshot_index);
+            let index_bytes = fs::metadata(snapshot_dir.join("manifest.json"))
+                .expect("manifest index")
+                .len();
+            let v1_started = std::time::Instant::now();
+            let v1 = json::to_vec(manifest).expect("encode v1 manifest");
+            let mut file = fs::File::create(&v1_path).expect("create v1 manifest");
+            file.write_all(&v1).expect("write v1 manifest");
+            file.sync_data().expect("sync v1 manifest");
+            drop(file);
+            let v1_bytes = v1.len();
+            println!(
+                "{label}: rows={} v1_manifest_bytes={v1_bytes} (v1 persist {:?}) \
+                 v2_bytes_written={} chunks={} written={} linked={} snapshot={elapsed:?}",
+                manifest.total_entries,
+                v1_started.elapsed(),
+                index_bytes + index.chunk_bytes_written,
+                index.chunk_count,
+                index.chunks_written,
+                index.chunks_linked,
+            );
+        };
+        let started = std::time::Instant::now();
+        backend
+            .record_world_snapshot_with_payload(&chunk_test_payload(
+                true,
+                (0..rows).map(|index| (index, Some(value(index)))),
+            ))
+            .expect("baseline snapshot");
+        report("baseline", &backend, started.elapsed());
+        let mut next = rows;
+        for block in 1..=20 {
+            // Thirty updates and three new rows, about one BOI payment block.
+            let mut touched = (0..30)
+                .map(|step| {
+                    let index = (block * 7_919 + step * 104_729) % rows;
+                    (index, Some(value(index + block)))
+                })
+                .collect::<Vec<_>>();
+            for _ in 0..3 {
+                touched.push((next, Some(value(next))));
+                next += 1;
+            }
+            let started = std::time::Instant::now();
+            backend
+                .record_world_snapshot_with_payload(&chunk_test_payload(false, touched))
+                .expect("block snapshot");
+            report(&format!("block {block}"), &backend, started.elapsed());
+        }
     }
     #[test]
     fn persists_cold_entries_and_prunes_old_snapshots() {

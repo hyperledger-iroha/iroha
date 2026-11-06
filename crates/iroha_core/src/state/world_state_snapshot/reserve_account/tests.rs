@@ -794,3 +794,77 @@ fn reserve_account_credit_frame_reservation_is_exact_cumulative_and_refundable()
 
 #[path = "capacity_pricing_tests.rs"]
 mod capacity_pricing_tests;
+
+#[test]
+fn ironwood_reserve_account_proofs_interpret_the_schema_of_each_certified_height() {
+    use iroha_data_model::sumeragi_finality::WorldStateSchemaPolicyV1 as _;
+    let mut f = Fixture::new();
+    f.publish_policy();
+    f.register();
+    let activation = crate::runtime::ironwood::test_activation::schedule(&f.chain, 5_000);
+    f.chain.commit_at(5_000, Vec::new());
+    assert_eq!(f.chain.height(), activation - 1);
+    let budget = AllocationBudget::new(64 * 1024 * 1024);
+    let before = f.proof(&budget);
+    let before_block = f.verified_tip();
+    let catalog = crate::runtime::release_catalog().unwrap();
+    let baseline = State::native_world_schema_hash_v1().unwrap();
+    let schemas = State::native_world_schemas_for_anchor_v1(baseline).unwrap();
+    assert_eq!(schemas.len(), 2);
+    let foreign = iroha_crypto::Hash::new(b"independently-qualified-foreign-schema");
+    assert_eq!(
+        State::native_world_schemas_for_anchor_v1(foreign).unwrap(),
+        vec![foreign]
+    );
+    assert!(State::select_native_world_schema_v1(foreign).is_err());
+    assert_eq!(before.world.schema_hash, baseline);
+    let before_world = before.world.authenticate(&before_block).unwrap();
+    crate::runtime::ironwood::check_activation_predecessor_at(&before_world, &catalog.baseline)
+        .unwrap();
+    assert!(
+        crate::runtime::ironwood::check_activation_predecessor_at(
+            &before_world,
+            &catalog.ironwood.as_ref().unwrap().selection,
+        )
+        .is_err()
+    );
+    f.chain.commit_at(6_000, Vec::new());
+    assert_eq!(f.chain.height(), activation);
+    assert!(crate::runtime::ironwood::enabled(
+        f.chain.state().view().world.runtime_selection.get()
+    ));
+    let after = f.proof(&budget);
+    let after_block = f.verified_tip();
+    assert_ne!(after.world.schema_hash, baseline);
+    // A former singleton pin fails even on otherwise authentic unchanged reserve data.
+    assert!(after.verify(&f.expected(), &after_block).is_err());
+    for (proof, block) in [(&before, &before_block), (&after, &after_block)] {
+        let mut expected = f.expected();
+        expected.schema = schemas
+            .as_slice()
+            .select_schema(proof.world.schema_hash)
+            .unwrap();
+        assert_eq!(
+            proof
+                .verify(&expected, block)
+                .unwrap()
+                .current()
+                .unwrap()
+                .revision,
+            1
+        );
+    }
+    let after_world = after.world.authenticate(&after_block).unwrap();
+    let error = crate::runtime::ironwood::check_activation_predecessor_at(
+        &after_world,
+        &catalog.ironwood.as_ref().unwrap().selection,
+    )
+    .unwrap_err();
+    assert!(error.contains("predecessor mismatch"));
+    assert!(before.world.authenticate(&after_block).is_err());
+    assert!(after.world.authenticate(&before_block).is_err());
+    let mut forged = after;
+    forged.world.schema_hash = baseline;
+    assert!(forged.verify(&f.expected(), &after_block).is_err());
+    assert_eq!(budget.reserved_bytes(), 0);
+}

@@ -510,7 +510,11 @@ impl BlockProofs {
             || self.output_commitment != anchor.output_commitment
             || self.output_proof.proof().leaf_index() != anchor.output_index
             || self.output_proof.leaf() != anchor.output_hash
-            || !matches!(self.output_proof.output(), ExecutionOutputV1::Network(row) if row.input_index == anchor.entry_index)
+            || !self
+                .output_proof
+                .output()
+                .network()
+                .is_some_and(|row| row.input_index == anchor.entry_index)
             || !self.output_proof.verify(&anchor.output_commitment)
             || self.fastpq_transcripts != anchor.fastpq_transcripts
         {

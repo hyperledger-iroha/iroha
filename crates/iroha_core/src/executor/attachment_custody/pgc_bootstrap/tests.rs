@@ -21,9 +21,9 @@ use iroha_data_model::{
     block::BlockHeader,
     isi::{InstructionBox, Log, instruction_wire_id},
     privacy::{
-        PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
-        PrivacyPgcAccountV1, PrivacyPgcBootstrapProofBytesV1, PrivacyPoolIdV1,
-        PrivacyPoolNamespaceV1, PrivacyRootV1, PrivacyVerifierDigestV1,
+        PrivacyNamespaceScopeV1, PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyPgcAccountV1,
+        PrivacyPgcBootstrapProofBytesV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyRootV1,
+        PrivacyRuntimeNamespaceV1, PrivacyVerifierDigestV1,
     },
     transaction::{
         Executable, FeePaymentIntent, SignedTransaction, TransactionBuilder,
@@ -76,7 +76,7 @@ fn secret(value: u64) -> SecretScalarV1 {
 fn operation() -> ActionOperationV1 {
     ActionOperationV1::NativeInstruction(BootstrapPrivacyPgcAccountsV1::WIRE_ID.to_owned())
 }
-fn planned(bootstrap: &PrivacyPgcAccountBootstrapV1, proof: Vec<u8>) -> PlannedActionV1 {
+fn planned(bootstrap: &PrivacyRuntimePgcAccountBootstrapV1, proof: Vec<u8>) -> PlannedActionV1 {
     PlannedActionV1 {
         operation: operation(),
         role: ActionRoleV1::Administrative,
@@ -136,7 +136,7 @@ fn open<'owner, 'tx>(
     )
 }
 struct Fixture {
-    bootstrap: PrivacyPgcAccountBootstrapV1,
+    bootstrap: PrivacyRuntimePgcAccountBootstrapV1,
     public_keys: Vec<TwistedElGamalPublicKeyV1>,
     balances: Vec<TwistedElGamalCiphertextV1>,
     plaintexts: Vec<u32>,
@@ -196,8 +196,8 @@ fn fixture() -> &'static Fixture {
         let network = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::new(b"i3-native-pgc"),
         ));
-        let namespace = PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+        let namespace = PrivacyRuntimeNamespaceV1::new(
+            PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
             PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                 pool_id: PrivacyPoolIdV1::new([0x43; 32]),
             }),
@@ -228,7 +228,7 @@ fn fixture() -> &'static Fixture {
                 },
             })
             .collect::<Vec<_>>();
-        let bootstrap = PrivacyPgcAccountBootstrapV1 {
+        let bootstrap = PrivacyRuntimePgcAccountBootstrapV1 {
             namespace,
             initial_root: derive_privacy_pgc_account_state_root_v1(namespace, 1, 1600, &accounts)
                 .unwrap(),
@@ -236,9 +236,10 @@ fn fixture() -> &'static Fixture {
             total_supply: 1600,
             accounts,
         };
-        let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
-            .unwrap()
-            .into();
+        let profile =
+            compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1)
+                .unwrap()
+                .into();
         // A temporary attachment-free signed owner is only an initialization
         // value; the final fixture below is a real, fully signed N=16 proof.
         let temporary =
@@ -267,7 +268,7 @@ fn fixture() -> &'static Fixture {
 }
 fn consume(
     tx: &SignedTransaction,
-    bootstrap: &PrivacyPgcAccountBootstrapV1,
+    bootstrap: &PrivacyRuntimePgcAccountBootstrapV1,
     context: BootstrapContext<'_>,
 ) -> Result<(), BootstrapError> {
     let mut custody = AttachmentCustody::new(tx)?;
@@ -537,7 +538,7 @@ fn trusted_network_genesis_and_profile_cannot_be_replaced() {
         ))
     ));
     let mut profile = f.profile;
-    profile.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
+    profile.protocol_id = PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1;
     assert!(matches!(
         consume(
             &f.tx,
@@ -735,7 +736,9 @@ fn missing_or_unconsumed_real_declaration_cannot_finish() {
 fn direct_reference_rejects_a_proof_bound_to_the_old_bootstrap_only_context() {
     let f = fixture();
     let instruction = BootstrapPrivacyPgcAccountsV1::new(
-        f.bootstrap.clone(),
+        (f.bootstrap.clone())
+            .try_into()
+            .expect("frozen Exact12 test input"),
         iroha_data_model::transaction::signed_attachments::ActionAttachmentRefV1 {
             action_index: 0,
             slot_index: 0,
@@ -836,7 +839,9 @@ fn real_direct_pgc_consumes_signed_global_ordinal_after_another_action() {
         attachments: vec![],
     };
     let request = BootstrapPrivacyPgcAccountsV1::new(
-        f.bootstrap.clone(),
+        (f.bootstrap.clone())
+            .try_into()
+            .expect("frozen Exact12 test input"),
         ActionAttachmentRefV1 {
             action_index: 1,
             slot_index: 0,
@@ -871,7 +876,7 @@ fn real_direct_pgc_consumes_signed_global_ordinal_after_another_action() {
         );
         frame.consume_pgc_bootstrap(
             request.proof_ref.action_index,
-            &request.bootstrap,
+            &request.bootstrap.clone().into(),
             handle,
             f.context(),
         )
@@ -891,7 +896,9 @@ fn wrong_direct_request_slot_poison_cannot_be_swallowed() {
     let f = fixture();
     let mut custody = AttachmentCustody::new(&f.tx).unwrap();
     let request = BootstrapPrivacyPgcAccountsV1::new(
-        f.bootstrap.clone(),
+        (f.bootstrap.clone())
+            .try_into()
+            .expect("frozen Exact12 test input"),
         ActionAttachmentRefV1 {
             action_index: 0,
             slot_index: 1,

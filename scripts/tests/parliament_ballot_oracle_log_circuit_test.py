@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import itertools
 from pathlib import Path
 import subprocess
@@ -233,6 +234,16 @@ class CircuitTests(unittest.TestCase):
 
 
 class AccountingTests(unittest.TestCase):
+    def test_current_source_binding_preserves_historical_circuit_counts(self):
+        old = json.loads((ROOT / "docs/validation/parliament_ballot_oracle_log_circuit/report.json").read_text())
+        current = MODEL.report(ROOT, old["request_cap"], old["external_query_cap"], old["length_bits"])
+        self.assertEqual(current["circuit"], old["circuit"])
+        self.assertEqual(current["lifetime"], old["lifetime"])
+        self.assertNotEqual(current["source_sha256_before"], old["source_sha256_before"])
+        self.assertIn("diagnostics", current["row_build_scope"]["comparator"])
+        self.assertFalse(current["profile_qualified"])
+        self.assertFalse(current["concrete_backend_gate_bound"])
+
     def test_real_source_provenance_and_lifetime_arithmetic(self):
         r = MODEL.report(ROOT, 3, 5, 64)
         self.assertEqual(r["programmed_key_max_bytes"], 215150)

@@ -17,11 +17,15 @@ use ff::PrimeField;
 use iroha_data_model::kagemusha::kagemusha_wallet_v1::*;
 use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve, msm::MemoryBudget};
 use iroha_plonk::{
-    DescriptorBinding, Protocol, VerifyingKey,
+    AccumulatorError, BatchItem, DescriptorBinding, PendingAccumulator, Protocol, VerifyingKey,
+    batch_decide, batch_verify,
     cs::{CurveV1, InstanceModeV1, InstanceType, ProofSuffixV1, TranscriptV2},
-    pcs::ipa::PinnedParams,
+    pcs::ipa::{
+        PinnedParams,
+        accumulator::{CURVE_BYTE_PALLAS, CURVE_BYTE_VESTA},
+    },
     transcript::generator_coordinates,
-    verifier::verify_full_cancellable,
+    verifier::{accumulate_succinct_cancellable, verify_full_cancellable},
 };
 use iroha_plonk_recursion::{ACCUMULATOR_BYTES, AccumulatorT, K};
 
@@ -703,6 +707,256 @@ impl ArtifactSet {
         vesta
             .decide_cancellable(&self.vesta, budget, cancellation)
             .map_err(recursion_error)?;
+        Ok(())
+    }
+}
+
+// One deferred σ verification: its installed selector, statement instance and exact proof.
+#[derive(Debug, Clone)]
+struct DeferredSigmaV1 {
+    selector: (u8, u32),
+    instances: [Vec<Fp>; 1],
+    proof: Vec<u8>,
+}
+
+/// Deferred final proof work of objects that passed every other check under one verifier set.
+///
+/// Each σ entry passed its statement, selector and exact-length checks; its complete PIPA-R
+/// verification runs in [`ArtifactSet::decide_deferred`]. Each Omega passed every check of
+/// [`ArtifactSet::verify_lineage`] except its three generator decisions (its own opening and
+/// both transported accumulators), which are kept here as pending claims. Private fields: a
+/// caller cannot add a claim of its own, and nothing here is acceptance until
+/// `decide_deferred` consumes it successfully. Batched decisions use the deterministic
+/// BLAKE2b weights over every item (a zero weight decides each item individually).
+#[derive(Debug)]
+pub struct KagemushaWalletDeferredProofsV1 {
+    manifest_digest: [u8; 32],
+    sigmas: Vec<DeferredSigmaV1>,
+    pallas: Vec<PendingAccumulator<Ep>>,
+    vesta: Vec<PendingAccumulator<Eq>>,
+}
+
+impl KagemushaWalletDeferredProofsV1 {
+    /// Whether nothing is deferred.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.sigmas.is_empty() && self.pallas.is_empty() && self.vesta.is_empty()
+    }
+
+    /// Deferred σ proofs and generator claims.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.sigmas.len() + self.pallas.len() + self.vesta.len()
+    }
+
+    /// Move every entry of `other`, deferred under the same installation, into `self`.
+    ///
+    /// # Errors
+    /// [`Error::RuntimeBinding`] for another installation; neither set changes.
+    pub fn append(&mut self, mut other: Self) -> Result<(), Error> {
+        if other.manifest_digest != self.manifest_digest {
+            return Err(Error::RuntimeBinding);
+        }
+        self.sigmas.append(&mut other.sigmas);
+        self.pallas.append(&mut other.pallas);
+        self.vesta.append(&mut other.vesta);
+        Ok(())
+    }
+}
+
+// The transported accumulator `G || u[0..16]` as the identical pending IPA claim
+// `G = <s(u), g>` that `PinnedParams::decide_folded_generator` decides for both owners.
+fn pending_claim<C: PastaCurve>(
+    claim: &AccumulatorT<C>,
+    curve: u8,
+) -> Result<PendingAccumulator<C>, Error> {
+    let mut bytes = Vec::with_capacity(34 + ACCUMULATOR_BYTES);
+    bytes.extend_from_slice(&[0; 32]);
+    bytes.push(curve);
+    bytes.push(u8::try_from(K).map_err(|_| Error::Profile)?);
+    bytes.extend_from_slice(&claim.to_bytes());
+    PendingAccumulator::from_bytes(&bytes).map_err(|_| Error::Proof)
+}
+
+fn accumulator_error(error: AccumulatorError) -> Error {
+    match error {
+        AccumulatorError::ParamsTooSmall { .. } | AccumulatorError::UnsupportedK { .. } => {
+            Error::Profile
+        }
+        _ => Error::Proof,
+    }
+}
+
+impl ArtifactSet {
+    /// An empty deferred set bound to this installation.
+    #[must_use]
+    pub const fn deferred_proofs(&self) -> KagemushaWalletDeferredProofsV1 {
+        KagemushaWalletDeferredProofsV1 {
+            manifest_digest: self.manifest_digest,
+            sigmas: Vec::new(),
+            pallas: Vec::new(),
+            vesta: Vec::new(),
+        }
+    }
+
+    /// [`Self::verify_package_proofs_cancellable`] with the σ verification and the carried
+    /// Omega's three generator decisions deferred into `deferred`. On error `deferred` is
+    /// unchanged.
+    ///
+    /// # Errors
+    /// What the ordinary path rejects before its deferred work, or cancellation.
+    pub fn defer_package_proofs_cancellable(
+        &self,
+        package: &KagemushaWalletPackageV1,
+        deferred: &mut KagemushaWalletDeferredProofsV1,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<(), Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        authority(package.statement.validate_for_scheme(&self.scheme))?;
+        authority(self.allowlist.check_package(package))?;
+        let (kind, mask) = package.verifying_key_selector();
+        let mut staged = self.deferred_proofs();
+        self.defer_step_proof(
+            &package.statement,
+            &package.step_proof,
+            kind,
+            mask,
+            &mut staged,
+        )?;
+        if let Some(lineage) = package.lineage.lineage() {
+            self.defer_lineage_cancellable(lineage, &mut staged, budget, cancellation)?;
+        }
+        deferred.append(staged)
+    }
+
+    /// The pre-checks of the ordinary σ verification, with the complete PIPA-R verification
+    /// deferred into `deferred`. On error `deferred` is unchanged.
+    ///
+    /// # Errors
+    /// Another scheme, selector or exact proof length.
+    pub fn defer_step_proof(
+        &self,
+        statement: &KagemushaWalletStatementV1,
+        proof: &KagemushaWalletStepProofV1,
+        kind: KagemushaWalletOperationKindV1,
+        mask: u32,
+        deferred: &mut KagemushaWalletDeferredProofsV1,
+    ) -> Result<(), Error> {
+        if deferred.manifest_digest != self.manifest_digest {
+            return Err(Error::RuntimeBinding);
+        }
+        authority(statement.validate_for_scheme(&self.scheme))?;
+        authority(self.allowlist.check_step_proof(kind, mask, proof))?;
+        let key = self.steps.get(&(kind.tag(), mask)).ok_or(Error::Profile)?;
+        let digest = authority(statement.statement_digest())?;
+        let instance = Option::<Fp>::from(Fp::from_repr(digest)).ok_or(Error::Authority)?;
+        if proof.bytes.len() != key.proof_bytes {
+            return Err(Error::Proof);
+        }
+        deferred.sigmas.push(DeferredSigmaV1 {
+            selector: (kind.tag(), mask),
+            instances: [vec![instance]],
+            proof: proof.bytes.clone(),
+        });
+        Ok(())
+    }
+
+    /// Every check of [`Self::verify_lineage_cancellable`] except its three generator
+    /// decisions, which are deferred into `deferred`. On error `deferred` is unchanged.
+    ///
+    /// # Errors
+    /// What the ordinary path rejects before its decisions, or cancellation.
+    pub fn defer_lineage_cancellable(
+        &self,
+        lineage: &KagemushaWalletLineageV1,
+        deferred: &mut KagemushaWalletDeferredProofsV1,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<(), Error> {
+        verification_counts::record_lineage();
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        if deferred.manifest_digest != self.manifest_digest {
+            return Err(Error::RuntimeBinding);
+        }
+        authority(self.allowlist.check_lineage(lineage))?;
+        if lineage.public.scheme_id != self.scheme.scheme_id()
+            || lineage.public.relation_id != self.scheme.relation_id
+        {
+            return Err(Error::Authority);
+        }
+        let (proof, pallas, vesta) = decode_transport(&lineage.proof, self.lineage.proof_bytes)?;
+        let digest = lineage_digest(
+            &lineage.public,
+            self.allowlist.lineage_verifying_key_digest,
+            &pallas,
+        )?;
+        let (x, y) = generator_coordinates::<Eq>(vesta.g());
+        let mut challenges = Vec::with_capacity(K);
+        for value in vesta.challenges() {
+            challenges
+                .push(Option::<Fq>::from(Fq::from_repr(value.to_repr())).ok_or(Error::Proof)?);
+        }
+        let instances = [
+            vec![Option::<Fq>::from(Fq::from_repr(digest)).ok_or(Error::Proof)?],
+            vec![x, y],
+            challenges,
+        ];
+        let opening = accumulate_succinct_cancellable(
+            &self.lineage.params,
+            &self.lineage.binding,
+            &self.lineage.vk,
+            &instances,
+            proof,
+            budget,
+            cancellation,
+        )
+        .map_err(verification_error)?;
+        let pallas = pending_claim(&pallas, CURVE_BYTE_PALLAS)?;
+        let vesta = pending_claim(&vesta, CURVE_BYTE_VESTA)?;
+        deferred.pallas.extend([opening, pallas]);
+        deferred.vesta.push(vesta);
+        Ok(())
+    }
+
+    /// Decide every deferred entry: one batched verification of every σ, one Pallas and one
+    /// Vesta batch decision. Consumes the set; nothing is accepted unless all hold.
+    ///
+    /// # Errors
+    /// Another installation, any failed σ or decision, cancellation or local unavailability.
+    pub fn decide_deferred(
+        &self,
+        deferred: KagemushaWalletDeferredProofsV1,
+        budget: MemoryBudget,
+        cancellation: Option<&iroha_pasta::CancellationToken>,
+    ) -> Result<(), Error> {
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        if deferred.manifest_digest != self.manifest_digest {
+            return Err(Error::RuntimeBinding);
+        }
+        let KagemushaWalletDeferredProofsV1 {
+            sigmas,
+            pallas,
+            vesta,
+            ..
+        } = deferred;
+        let mut items = Vec::with_capacity(sigmas.len());
+        for sigma in &sigmas {
+            let key = self.steps.get(&sigma.selector).ok_or(Error::Profile)?;
+            items.push(BatchItem {
+                params: key.params.as_ref(),
+                binding: &key.binding,
+                vk: &key.vk,
+                instances: &sigma.instances,
+                proof: &sigma.proof,
+            });
+        }
+        batch_verify(&items, budget).map_err(verification_error)?;
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        batch_decide(pallas, self.lineage.params.as_ref(), budget).map_err(accumulator_error)?;
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
+        batch_decide(vesta, self.vesta.as_ref(), budget).map_err(accumulator_error)?;
+        iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         Ok(())
     }
 }

@@ -34,6 +34,21 @@ use tempfile::TempDir;
 const KEY_FD: i32 = 198;
 const PUBLIC_FD: i32 = 201;
 const FINALITY_FD: i32 = 202;
+// A process has one descriptor table. Concurrent disposable networks may share the
+// same placeholder slots; every command still retains and maps only its own inputs.
+static CEREMONY_DESCRIPTOR_SLOTS: iroha_fs::SharedProcessDescriptorReservations =
+    iroha_fs::SharedProcessDescriptorReservations::new(&[KEY_FD, 200, PUBLIC_FD, FINALITY_FD]);
+
+/// Reserve the native key, retained-credential and phase-input slots before opening a network.
+/// Hold this owner through all seat launches; the last owner releases the parent slots.
+///
+/// # Errors
+/// Refuses a slot already owned by another descriptor or an exhausted descriptor table.
+pub fn reserve_disposable_ceremony_descriptors()
+-> std::io::Result<Arc<iroha_fs::ReservedProcessDescriptors>> {
+    CEREMONY_DESCRIPTOR_SLOTS.acquire()
+}
+
 const MAX_PUBLIC_FRAME_BYTES: usize = 32 * 1024 * 1024;
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(600);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -652,7 +667,15 @@ fn inherit_native_descriptors<const N: usize>(
     command: &mut ResolvedCommand,
     descriptors: [(BorrowedFd<'_>, i32); N],
 ) -> std::io::Result<()> {
-    command.inherit_descriptors(&descriptors).map(|_| ())
+    if let Some(reserved) = CEREMONY_DESCRIPTOR_SLOTS.active()? {
+        let mut result = Ok(());
+        command.configure(|options| {
+            result = options.inherit_reserved_descriptors(&reserved, &descriptors);
+        });
+        result
+    } else {
+        command.inherit_descriptors(&descriptors).map(|_| ())
+    }
 }
 
 fn inherit_rotation_descriptors(
@@ -665,6 +688,17 @@ fn inherit_rotation_descriptors(
         command,
         [(key, KEY_FD), (public, PUBLIC_FD), (finality, FINALITY_FD)],
     )
+}
+
+// The command retains independent originals above every fixed destination before
+// these owned inputs drop. A source may itself occupy a fixed child slot.
+fn inherit_owned_rotation_descriptors(
+    command: &mut ResolvedCommand,
+    key: fs::File,
+    public: fs::File,
+    finality: fs::File,
+) -> std::io::Result<()> {
+    inherit_rotation_descriptors(command, key.as_fd(), public.as_fd(), finality.as_fd())
 }
 
 // Open the child input as read-only without waiting for a writer. Retain the
@@ -754,16 +788,8 @@ fn spawn_seat(
         .stdout(Stdio::from(private_log("stdout.log")?))
         .stderr(Stdio::from(private_log("stderr.log")?))
         .kill_on_drop(true);
-    inherit_rotation_descriptors(
-        &mut command,
-        key.as_fd(),
-        public_fifo.as_fd(),
-        finality_fifo.as_fd(),
-    )?;
+    inherit_owned_rotation_descriptors(&mut command, key, public_fifo, finality_fifo)?;
     let child = command.spawn_async()?;
-    drop(key);
-    drop(public_fifo);
-    drop(finality_fifo);
     Ok(SeatProcess {
         validator: seat.id(),
         signer_index,
@@ -959,18 +985,10 @@ fn spawn_genesis_seat(
         .stdout(Stdio::from(private_log("stdout.log")?))
         .stderr(Stdio::from(private_log("stderr.log")?))
         .kill_on_drop(true);
-    inherit_rotation_descriptors(
-        &mut command,
-        provision_key.as_fd(),
-        public_fifo.as_fd(),
-        finality_fifo.as_fd(),
-    )?;
+    inherit_owned_rotation_descriptors(&mut command, provision_key, public_fifo, finality_fifo)?;
     let child = command.spawn_async().inspect_err(|_| {
         let _ = retire_one_shot_genesis_descriptor(&owner_root.path().join("provision.fd198"));
     })?;
-    drop(provision_key);
-    drop(public_fifo);
-    drop(finality_fifo);
     Ok(SeatProcess {
         validator: seat.id(),
         signer_index,
@@ -1273,18 +1291,10 @@ fn spawn_genesis_config_seat(
         .stdout(Stdio::from(private_log("stdout.log")?))
         .stderr(Stdio::from(private_log("stderr.log")?))
         .kill_on_drop(true);
-    inherit_rotation_descriptors(
-        &mut command,
-        provision_key.as_fd(),
-        public_fifo.as_fd(),
-        finality_fifo.as_fd(),
-    )?;
+    inherit_owned_rotation_descriptors(&mut command, provision_key, public_fifo, finality_fifo)?;
     let child = command.spawn_async().inspect_err(|_| {
         let _ = retire_one_shot_genesis_descriptor(&owner_root.path().join("provision.fd198"));
     })?;
-    drop(provision_key);
-    drop(public_fifo);
-    drop(finality_fifo);
     Ok(SeatProcess {
         validator: seat.validator.clone(),
         signer_index,
@@ -2597,6 +2607,7 @@ mod tests {
         source_targets: [i32; 3],
         close_on_exec: bool,
         destinations: usize,
+        owned_mode: u8,
     ) -> std::process::Output {
         let module = module_path!().split_once("::").unwrap().1;
         let mut command = iroha_fs::ProcessCommand::new(std::env::current_exe().unwrap()).unwrap();
@@ -2610,12 +2621,13 @@ mod tests {
             .env(
                 "IROHA_ROTATION_DESCRIPTOR_FIXTURE",
                 format!(
-                    "{},{},{},{},{}",
+                    "{},{},{},{},{},{}",
                     source_targets[0],
                     source_targets[1],
                     source_targets[2],
                     u8::from(close_on_exec),
-                    destinations
+                    destinations,
+                    owned_mode
                 ),
             );
         let output = crate::ResolvedCommand::from_development_command(command)
@@ -2632,7 +2644,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    #[ignore = "isolated descriptor fixture explicitly executed by the four native handoff controls"]
+    #[ignore = "isolated descriptor fixture explicitly executed by the native handoff controls"]
     #[allow(
         unsafe_code,
         reason = "test owns exact fcntl-created descriptors in its isolated process; production receives borrowed owned inputs"
@@ -2644,13 +2656,40 @@ mod tests {
             .split(',')
             .map(|value| value.parse::<i32>().unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(parameters.len(), 5);
+        assert_eq!(parameters.len(), 6);
         let source_targets = [parameters[0], parameters[1], parameters[2]];
         let close_on_exec = parameters[3] == 1;
         assert!((0..=1).contains(&parameters[3]));
         let destinations = parameters[4];
         assert!((1..=3).contains(&destinations));
+        let owned_mode = parameters[5];
+        assert!((0..=4).contains(&owned_mode));
+        assert!(owned_mode == 0 || destinations == 3);
+        let mut reservations = (owned_mode >= 3).then(|| {
+            let original = reserve_disposable_ceremony_descriptors().unwrap();
+            let second = reserve_disposable_ceremony_descriptors().unwrap();
+            assert!(Arc::ptr_eq(&original, &second));
+            original
+        });
         let root = tempfile::tempdir().unwrap();
+        // Only this isolated child owns the occupied refusal-control destination.
+        // Duplication must never overwrite this unrelated original, even CLOEXEC.
+        let mut occupied = if owned_mode == 2 {
+            let path = root.path().join("unrelated");
+            fs::write(&path, b"unrelated-original").unwrap();
+            let file = fs::File::open(path).unwrap();
+            let raw =
+                unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_DUPFD_CLOEXEC, KEY_FD) };
+            assert!(raw >= 0);
+            let original = unsafe { OwnedFd::from_raw_fd(raw) };
+            assert_eq!(raw, KEY_FD, "isolated unrelated slot was occupied");
+            Some(fs::File::from(original))
+        } else {
+            None
+        };
+        let occupied_flags = occupied
+            .as_ref()
+            .map(|file| unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_GETFD) });
         let mut owned = Vec::new();
         for (index, bytes) in [b"key-record".as_slice(), b"public-frame", b"finality-frame"]
             .into_iter()
@@ -2698,25 +2737,50 @@ mod tests {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        match destinations {
-            1 => inherit_native_descriptors(&mut command, [(owned[0].as_fd(), KEY_FD)]),
-            2 => inherit_native_descriptors(
+        if owned_mode == 0 {
+            match destinations {
+                1 => inherit_native_descriptors(&mut command, [(owned[0].as_fd(), KEY_FD)]),
+                2 => inherit_native_descriptors(
+                    &mut command,
+                    [(owned[0].as_fd(), KEY_FD), (owned[1].as_fd(), 200)],
+                ),
+                3 => inherit_rotation_descriptors(
+                    &mut command,
+                    owned[0].as_fd(),
+                    owned[1].as_fd(),
+                    owned[2].as_fd(),
+                ),
+                _ => unreachable!("validated destination count"),
+            }
+            .unwrap();
+            // The canonical command already owns duplicates above every destination.
+            // Closing these overlapping originals tests that custody, and leaves all
+            // fixed child slots absent as the new explicit launch contract requires.
+            drop(owned);
+        } else {
+            let [key, public, finality]: [OwnedFd; 3] = owned.try_into().unwrap();
+            inherit_owned_rotation_descriptors(
                 &mut command,
-                [(owned[0].as_fd(), KEY_FD), (owned[1].as_fd(), 200)],
-            ),
-            3 => inherit_rotation_descriptors(
-                &mut command,
-                owned[0].as_fd(),
-                owned[1].as_fd(),
-                owned[2].as_fd(),
-            ),
-            _ => unreachable!("validated destination count"),
+                fs::File::from(key),
+                fs::File::from(public),
+                fs::File::from(finality),
+            )
+            .unwrap();
         }
-        .unwrap();
-        // The canonical command already owns duplicates above every destination.
-        // Closing these overlapping originals tests that custody, and leaves all
-        // fixed child slots absent as the new explicit launch contract requires.
-        drop(owned);
+        // The configured command independently retains the slot reservation through exec.
+        if owned_mode == 4 {
+            drop(reservations.take());
+        }
+        if let Some(original) = occupied.as_mut() {
+            let error = command.output_async().await.unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(nix::libc::EBUSY));
+            let flags = unsafe { nix::libc::fcntl(original.as_raw_fd(), nix::libc::F_GETFD) };
+            assert_eq!(Some(flags), occupied_flags);
+            let mut retained = Vec::new();
+            original.read_to_end(&mut retained).unwrap();
+            assert_eq!(retained, b"unrelated-original");
+            return;
+        }
         let output = command.output_async().await.unwrap();
         assert!(
             output.status.success(),
@@ -2728,7 +2792,8 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn native_rotation_descriptor_handoff_preserves_overlapping_sources() {
         let output =
-            observe_rotation_descriptor_handoff([PUBLIC_FD, KEY_FD, FINALITY_FD], false, 3).await;
+            observe_rotation_descriptor_handoff([PUBLIC_FD, KEY_FD, FINALITY_FD], false, 3, 0)
+                .await;
         assert!(
             output.status.success(),
             "overlapping source descriptors must retain all three original inputs: {}",
@@ -2739,7 +2804,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn native_rotation_descriptor_handoff_clears_close_on_exec_for_fixed_sources() {
         let output =
-            observe_rotation_descriptor_handoff([KEY_FD, PUBLIC_FD, FINALITY_FD], true, 3).await;
+            observe_rotation_descriptor_handoff([KEY_FD, PUBLIC_FD, FINALITY_FD], true, 3, 0).await;
         assert!(
             output.status.success(),
             "fixed source descriptors must survive exec with their original inputs: {}",
@@ -2749,7 +2814,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn native_pending_descriptor_handoff_preserves_overlapping_sources() {
         let output =
-            observe_rotation_descriptor_handoff([200, KEY_FD, FINALITY_FD], false, 2).await;
+            observe_rotation_descriptor_handoff([200, KEY_FD, FINALITY_FD], false, 2, 0).await;
         assert!(
             output.status.success(),
             "pending and retained custody inputs must survive overlap: {}",
@@ -2760,12 +2825,37 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn native_single_descriptor_handoff_clears_close_on_exec() {
         let output =
-            observe_rotation_descriptor_handoff([KEY_FD, PUBLIC_FD, FINALITY_FD], true, 1).await;
+            observe_rotation_descriptor_handoff([KEY_FD, PUBLIC_FD, FINALITY_FD], true, 1, 0).await;
         assert!(
             output.status.success(),
             "the fixed signer descriptor must survive exec: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn native_owned_rotation_handoff_drops_overlapping_inputs_before_spawn() {
+        for (sources, close_on_exec) in [
+            ([KEY_FD, PUBLIC_FD, FINALITY_FD], true),
+            ([PUBLIC_FD, KEY_FD, FINALITY_FD], false),
+        ] {
+            let output = observe_rotation_descriptor_handoff(sources, close_on_exec, 3, 1).await;
+            assert!(output.status.success());
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn native_owned_rotation_handoff_preserves_unrelated_occupied_destination() {
+        let output = observe_rotation_descriptor_handoff([203, 204, 205], true, 3, 2).await;
+        assert!(output.status.success());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn native_reserved_ceremony_slots_retain_the_command_and_exact_inputs() {
+        for mode in [3, 4] {
+            let output = observe_rotation_descriptor_handoff([210, 211, 212], true, 3, mode).await;
+            assert!(output.status.success());
+        }
     }
 
     /// Inspect the actual peer spawn paths without claiming a completed DKG.

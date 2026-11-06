@@ -530,7 +530,7 @@ fn original_zero_action_bad_code_keeps_phase_prefix_and_zero_counter_backing() {
     block.contracts.insert(
         key,
         IvmBytecodeEntry {
-            original_contract: bytes,
+            original_contract: bytes.into(),
             code_hash: Hash::new(b"wrong"),
             count: NonZeroU64::MIN,
         },

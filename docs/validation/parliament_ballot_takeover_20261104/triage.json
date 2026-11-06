@@ -1,0 +1,887 @@
+{
+  "historical_count": 160,
+  "current_failures_and_errors": 160,
+  "historical_only": [],
+  "current_only": [],
+  "failures": [
+    {
+      "nodeid": "scripts/tests/check_parliament_ballot_resource_accounting_test.py::test_all_four_proof_lengths_and_actual_independent_fixtures",
+      "when": "call",
+      "reason": "ValueError: standalone resource model source changed; review formulas before updating the pin"
+    },
+    {
+      "nodeid": "scripts/tests/check_parliament_ballot_resource_accounting_test.py::test_completeness_request_fails_closed",
+      "when": "call",
+      "reason": "ValueError: standalone resource model source changed; review formulas before updating the pin"
+    },
+    {
+      "nodeid": "scripts/tests/check_parliament_ballot_resource_accounting_test.py::test_all_eight_shapes_lifetimes_and_fail_closed_source_binding",
+      "when": "call",
+      "reason": "ValueError: standalone resource model source changed; review formulas before updating the pin"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_adapter_bound_test.py::test_exact_frozen_inputs_and_drift_failure",
+      "when": "call",
+      "reason": "ValueError: inherited source/tool input changed: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_adapter_bound_test.py::test_cli_success_creates_bound_report",
+      "when": "call",
+      "reason": "assert 1 == 0\n +  where 1 = <function main at 0x10b454360>()\n +    where <function main at 0x10b454360> = MODULE.main"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_admissibility_circuit_test.py::AdmissibilityTest::test_all_selected_source_pins_and_mid_report_drift_refuse",
+      "when": "call",
+      "reason": "ValueError: reviewed predicate inputs changed; do not repin automatically"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_admissibility_circuit_test.py::AdmissibilityTest::test_cli_refuses_qualification_malformed_numbers_and_overwrite",
+      "when": "call",
+      "reason": "SystemExit: 2"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_admissibility_circuit_test.py::AdmissibilityTest::test_report_bounded_primary_auxiliary_zero_requests_and_qualification_flags",
+      "when": "call",
+      "reason": "ValueError: reviewed predicate inputs changed; do not repin automatically"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_allocator_activation_test.py::test_exact_frozen_modes_and_retained_unknowns",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_allocator_activation_test.py::test_mutated_true_store_cannot_publish_conditional_pass[stlrb\\twzr, [x9]]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_allocator_activation_test.py::test_mutated_true_store_cannot_publish_conditional_pass[nop]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_allocator_activation_test.py::test_mutated_true_store_cannot_publish_conditional_pass[strb\\tw8, [x9]]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_allocator_activation_test.py::test_wrong_branch_polarity_and_reachable_writer_are_refused",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_arena_backend_test.py::test_source_pin_checks_current_reviewed_code_and_refuses_missing_scope",
+      "when": "call",
+      "reason": "ValueError: backend arena trace source drift; review before updating its pin"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_arena_frontend_test.py::test_source_guard_detects_changed_input",
+      "when": "call",
+      "reason": "ValueError: frontend allocation source changed; review before repinning"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_arena_oracle_test.py::test_run_records_exact_inputs_and_checks_binary",
+      "when": "call",
+      "reason": "ValueError: frontend allocation source changed; review before repinning"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_arena_sufficiency_test.py::test_source_guard_rejects_drift",
+      "when": "call",
+      "reason": "ValueError: frontend allocation source changed; review before repinning"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_all_live_current_guards_and_source_inventory",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_current_images_and_exact_body_ranges[portable]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_image_mutations_refuse[portable-instruction]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_image_mutations_refuse[portable-constant]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_image_mutations_refuse[portable-branch]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_image_mutations_refuse[portable-symbol_target]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_image_mutations_refuse[portable-native_import]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_image_mutations_refuse[portable-load_library]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_image_mutations_refuse[portable-dyld_bind]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_only_declared_nonsemantic_metadata_exclusions[portable]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_macho_unexpected_shapes_refuse[portable-cpu]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_macho_unexpected_shapes_refuse[portable-command_extent]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_macho_unexpected_shapes_refuse[portable-signature_container]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_macho_unexpected_shapes_refuse[portable-symbol_string_extent]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_macho_unexpected_shapes_refuse[portable-section_owner]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_macho_unexpected_shapes_refuse[portable-metadata_overlap]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_macho_unexpected_shapes_refuse[portable-indirect_symbol]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_current_images_and_exact_body_ranges[accel]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_image_mutations_refuse[accel-instruction]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_image_mutations_refuse[accel-constant]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_image_mutations_refuse[accel-branch]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_image_mutations_refuse[accel-symbol_target]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_image_mutations_refuse[accel-native_import]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_image_mutations_refuse[accel-load_library]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_image_mutations_refuse[accel-dyld_bind]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_only_declared_nonsemantic_metadata_exclusions[accel]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_macho_unexpected_shapes_refuse[accel-cpu]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_macho_unexpected_shapes_refuse[accel-command_extent]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_macho_unexpected_shapes_refuse[accel-signature_container]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_macho_unexpected_shapes_refuse[accel-symbol_string_extent]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_macho_unexpected_shapes_refuse[accel-section_owner]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_macho_unexpected_shapes_refuse[accel-metadata_overlap]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_macho_unexpected_shapes_refuse[accel-indirect_symbol]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_text_and_target_mutations_refuse[opcode]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_text_and_target_mutations_refuse[branch_target]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_text_and_target_mutations_refuse[constant_address]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_text_and_target_mutations_refuse[annotation]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_text_and_target_mutations_refuse[missing_annotation]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_text_and_target_mutations_refuse[range]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_source_premise_mutations_refuse[changed_premise]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_source_premise_mutations_refuse[missing_source]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_source_premise_mutations_refuse[added_source]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_source_premise_mutations_refuse[unapproved_diff_removed]",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_all_four_analyses_recomputed_without_changing_historical_pins",
+      "when": "setup",
+      "reason": "ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_actual_source_drift_yields_retained_unknown",
+      "when": "call",
+      "reason": "AssertionError: assert '/Users/takemiyamakoto/dev/iroha/crates/iroha_parliament_ballot_proof/src/test_codec.rs' in 'ValueError: input identity differs: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump'\n +  where '/Users/takemiyamakoto/dev/iroha/crates/iroha_parliament_ballot_proof/src/test_codec.rs' = str(PosixPath('/Users/takemiyamakoto/dev/iroha/crates/iroha_parliament_ballot_proof/src/test_codec.rs'))"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_after_validation_drift_yields_unknown",
+      "when": "call",
+      "reason": "AssertionError: assert '/Users/takemiyamakoto/dev/iroha/crates/iroha_parliament_ballot_proof/src/test_codec.rs' in {}\n +  where '/Users/takemiyamakoto/dev/iroha/crates/iroha_parliament_ballot_proof/src/test_codec.rs' = str(PosixPath('/Users/takemiyamakoto/dev/iroha/crates/iroha_parliament_ballot_proof/src/test_codec.rs'))"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_current_correspondence_test.py::test_successful_run_and_fresh_output_refusal",
+      "when": "call",
+      "reason": "AssertionError: assert 'UNKNOWN' == 'PASS_UNDER_STATED_PREMISES'\n  \n  - PASS_UNDER_STATED_PREMISES\n  + UNKNOWN"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_all_twenty_sites_and_conditional_limits",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_changed_routing_shapes_never_publish_pass[ccmp\\tx10, x11, #0x2, hs-ccmp\\tx10, x11, #0x0, hs]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_changed_routing_shapes_never_publish_pass[ccmp\\tx10, x11, #0x2, hs-ccmp\\tx10, x11, #0x2, lo]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_changed_routing_shapes_never_publish_pass[subs\\tx10, x8, x10-subs\\tx10, x9, x10]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_changed_routing_shapes_never_publish_pass[subs\\tx10, x8, x10-sub\\tx10, x8, x10]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_changed_routing_shapes_never_publish_pass[stlurb\\twzr, [x0, #0x50]-cmp\\tx8, #0x0]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_changed_routing_shapes_never_publish_pass[ldr\\tx11, [x0, #0x10]-ldr\\tx11, [x0, #0x8]]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_changed_routing_shapes_never_publish_pass[ldapr\\tx0, [x10]-ldr\\tx0, [x10]]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_changed_routing_shapes_never_publish_pass[cbz\\tx0, 0x100001b34-cbnz\\tx0, 0x100001b34]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_changed_routing_shapes_never_publish_pass[b.lo\\t0x100001b44-b.hs\\t0x100001b44]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_changed_routing_shapes_never_publish_pass[mov\\tx0, x8-mov\\tx0, x9]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_changed_routing_shapes_never_publish_pass[casab\\tw11, w10, [x12]-casab\\tw8, w10, [x12]]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_changed_routing_shapes_never_publish_pass[add\\tx10, x10, #0xd48-add\\tx10, x10, #0xd50]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_changed_routing_shapes_never_publish_pass[b\\t0x10005b19c-b\\t0x10005b1e4]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_capacity_guard_and_abi_origin_mutations_fail[cbz\\tx9, 0x100001b60-cbnz\\tx9, 0x100001b60]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_capacity_guard_and_abi_origin_mutations_fail[cbnz\\tx9, 0x100001bf0-cbz\\tx9, 0x100001bf0]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_capacity_guard_and_abi_origin_mutations_fail[ldr\\tx9, [x19, #0x18]-ldr\\tx9, [x19, #0x20]]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_capacity_guard_and_abi_origin_mutations_fail[ldr\\tx8, [x0, #0x8]-ldr\\tx8, [x0, #0x10]]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_capacity_guard_and_abi_origin_mutations_fail[mov\\tx21, x0-mov\\tx21, x1]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_capacity_guard_and_abi_origin_mutations_fail[mov\\tx19, x0-mov\\tx19, x1]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_capacity_guard_and_abi_origin_mutations_fail[mov\\tx22, x3-mov\\tx0, x3]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_capacity_guard_and_abi_origin_mutations_fail[100002300:     \\tadd\\tx29, sp, #0x20-100002300:     \\tmov\\tx0, x1]",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_unlisted_or_missing_free_site_is_unknown",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_explicit_cfg_bypass_and_arena_arm_cannot_reach_free",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_preservation_checks_diamond_paths_and_missing_path",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_run_guards_artifacts_and_refuses_existing_output",
+      "when": "call",
+      "reason": "AssertionError: assert 'UNKNOWN' == 'PASS_UNDER_PREMISES'\n  \n  - PASS_UNDER_PREMISES\n  + UNKNOWN"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_free_predicates_test.py::test_capture_binary_and_listing_identity_must_agree",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/parliament-resource-contract/resource-portable'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_frontend_accounting_test.py::test_source_drift_and_missing_inputs_fail_closed",
+      "when": "call",
+      "reason": "ValueError: front-end sources changed; review charges before updating the pin"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_frontend_accounting_test.py::test_receipt_keeps_incomplete_status_and_explicit_rejection_scope",
+      "when": "call",
+      "reason": "ValueError: front-end sources changed; review charges before updating the pin"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_frontend_bound_test.py::test_historical_resolution_keeps_live_drift_distinct",
+      "when": "call",
+      "reason": "ValueError: historical source/tool changed: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_frontend_bound_test.py::test_cli_creates_new_conditional_historical_evidence",
+      "when": "call",
+      "reason": "assert 1 == 0\n +  where 1 = <function main at 0x10bdc2b60>()\n +    where <function main at 0x10bdc2b60> = MODULE.main"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_gf_circuit_test.py::test_report_authenticates_exact_four_sources_and_keeps_all_exclusions",
+      "when": "call",
+      "reason": "ValueError: selected source/evidence changed"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_gf_circuit_test.py::test_late_source_drift_is_refused_instead_of_repinning",
+      "when": "call",
+      "reason": "assert 1 == 2"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_gf_circuit_test.py::test_cli_normal_and_qualification_refusal_write_same_scoped_result[False-0]",
+      "when": "call",
+      "reason": "AssertionError: assert 1 == 0\n +  where 1 = <function main at 0x10bf25b20>(['--root', '/Users/takemiyamakoto/dev/iroha', '--out', '/private/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/pytest-of-takemiyamakoto/pytest-225/test_cli_normal_and_qualificat0/result.json'])\n +    where <function main at 0x10bf25b20> = M.main"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_gf_circuit_test.py::test_cli_normal_and_qualification_refusal_write_same_scoped_result[True-2]",
+      "when": "call",
+      "reason": "AssertionError: assert 1 == 2\n +  where 1 = <function main at 0x10bf25b20>(['--root', '/Users/takemiyamakoto/dev/iroha', '--out', '/private/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/pytest-of-takemiyamakoto/pytest-225/test_cli_normal_and_qualificat1/result.json', '--require-qualified'])\n +    where <function main at 0x10bf25b20> = M.main"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_ideal_sampler_accounting_test.py::VectorTests::test_all_opening_envelope_dominates_nonzero_patterns",
+      "when": "setup",
+      "reason": "ValueError: reviewed source inventory changed; do not automatically repin"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_ideal_sampler_accounting_test.py::VectorTests::test_auxiliary_work_adds_randomness_and_search_not_writes",
+      "when": "setup",
+      "reason": "ValueError: reviewed source inventory changed; do not automatically repin"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_ideal_sampler_accounting_test.py::VectorTests::test_bad_role_seats_and_payload_counts_refuse",
+      "when": "setup",
+      "reason": "ValueError: reviewed source inventory changed; do not automatically repin"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_ideal_sampler_accounting_test.py::VectorTests::test_empty_lifetime_has_no_simulator_work",
+      "when": "setup",
+      "reason": "ValueError: reviewed source inventory changed; do not automatically repin"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_ideal_sampler_accounting_test.py::VectorTests::test_fold_merge_count_matches_binary_stack_walk",
+      "when": "setup",
+      "reason": "ValueError: reviewed source inventory changed; do not automatically repin"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_ideal_sampler_accounting_test.py::VectorTests::test_four_exact_aes_counts_independent_block_walk",
+      "when": "setup",
+      "reason": "ValueError: reviewed source inventory changed; do not automatically repin"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_ideal_sampler_accounting_test.py::VectorTests::test_lifetime_counts_q_and_requests_independently",
+      "when": "setup",
+      "reason": "ValueError: reviewed source inventory changed; do not automatically repin"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_ideal_sampler_accounting_test.py::VectorTests::test_nonzero_fallback_and_tampered_facts_refuse",
+      "when": "setup",
+      "reason": "ValueError: reviewed source inventory changed; do not automatically repin"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_ideal_sampler_accounting_test.py::VectorTests::test_program_record_lengths_and_overwrite_storage",
+      "when": "setup",
+      "reason": "ValueError: reviewed source inventory changed; do not automatically repin"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_ideal_sampler_accounting_test.py::VectorTests::test_programmed_transcript_is_not_hashed",
+      "when": "setup",
+      "reason": "ValueError: reviewed source inventory changed; do not automatically repin"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_ideal_sampler_accounting_test.py::VectorTests::test_random_draws_from_independent_serialized_field_list",
+      "when": "setup",
+      "reason": "ValueError: reviewed source inventory changed; do not automatically repin"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_ideal_sampler_accounting_test.py::VectorTests::test_success_output_overlaps_fields_exhaustion_has_none",
+      "when": "setup",
+      "reason": "ValueError: reviewed source inventory changed; do not automatically repin"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_ideal_sampler_accounting_test.py::VectorTests::test_two_selected_admission_passes_and_one_padding_check",
+      "when": "setup",
+      "reason": "ValueError: reviewed source inventory changed; do not automatically repin"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_ideal_sampler_accounting_test.py::RefusalTests::test_midrun_source_change_refuses",
+      "when": "call",
+      "reason": "ValueError: reviewed source inventory changed; do not automatically repin"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_noreturn_frontiers_test.py::test_run_hash_guard_fresh_output_and_false_qualification",
+      "when": "call",
+      "reason": "AssertionError: assert ('UNKNOWN' == 'PASS_UNDER_PREMISES'\n  \n  - PASS_UNDER_PREMISES\n  + UNKNOWN)"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_opaque_field_bound_test.py::test_retained_image_source_and_correspondence_hash_bridge_stays_historical",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_current_candidate/build/Cargo.lock.build.template'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_opaque_field_bound_test.py::test_retained_source_and_artifact_drift_refuses[docs/validation/parliament_ballot_current_correspondence/SHA256SUMS]",
+      "when": "call",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_current_candidate/build/Cargo.lock.build.template'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_opaque_field_bound_test.py::test_retained_source_and_artifact_drift_refuses[docs/validation/parliament_ballot_current_correspondence/analysis/report.json]",
+      "when": "call",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_current_candidate/build/Cargo.lock.build.template'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_opaque_field_bound_test.py::test_retained_source_and_artifact_drift_refuses[docs/validation/parliament_ballot_frontend_bound/analysis/source/src/framing.rs.template]",
+      "when": "call",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_current_candidate/build/Cargo.lock.build.template'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_opaque_field_bound_test.py::test_retained_source_and_artifact_drift_refuses[relative4]",
+      "when": "call",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_current_candidate/build/Cargo.lock.build.template'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_opaque_field_bound_test.py::test_retained_source_and_artifact_drift_refuses[docs/validation/parliament_ballot_current_candidate/stack/portable/disassembly.txt]",
+      "when": "call",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_current_candidate/build/Cargo.lock.build.template'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_opaque_field_bound_test.py::test_retained_source_and_artifact_drift_refuses[docs/validation/parliament_ballot_current_candidate/stack/accel/disassembly.txt]",
+      "when": "call",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_current_candidate/build/Cargo.lock.build.template'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_opaque_field_bound_test.py::test_retained_source_and_artifact_drift_refuses[docs/validation/parliament_ballot_current_candidate/stack/portable/stubs.txt]",
+      "when": "call",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_current_candidate/build/Cargo.lock.build.template'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_opaque_field_bound_test.py::test_retained_source_and_artifact_drift_refuses[docs/validation/parliament_ballot_current_candidate/stack/accel/stubs.txt]",
+      "when": "call",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_current_candidate/build/Cargo.lock.build.template'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_opaque_field_bound_test.py::test_mid_analysis_evidence_change_refuses",
+      "when": "call",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_current_candidate/build/Cargo.lock.build.template'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_opaque_field_bound_test.py::test_original_binary_identity_change_refuses[portable]",
+      "when": "call",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_current_candidate/build/Cargo.lock.build.template'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_opaque_field_bound_test.py::test_original_binary_identity_change_refuses[accel]",
+      "when": "call",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_current_candidate/build/Cargo.lock.build.template'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_opaque_field_bound_test.py::test_live_lock_observation_cannot_replace_original_build_identity",
+      "when": "call",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_current_candidate/build/Cargo.lock.build.template'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_opaque_field_bound_test.py::test_cli_qualification_refusal_unknown_and_exclusive_output",
+      "when": "setup",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_current_candidate/build/Cargo.lock.build.template'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_oracle_log_circuit_test.py::AccountingTests::test_cli_qualification_and_existing_output_refuse",
+      "when": "call",
+      "reason": "AssertionError: '\"profile_qualified\": false' not found in ''"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_oracle_log_circuit_test.py::AccountingTests::test_real_source_provenance_and_lifetime_arithmetic",
+      "when": "call",
+      "reason": "ValueError: reviewed sampler source changed"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_oracle_log_circuit_test.py::AccountingTests::test_sources_rechecked_after_accounting",
+      "when": "call",
+      "reason": "AssertionError: \"source drift\" does not match \"reviewed sampler source changed\""
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_oracle_log_circuit_test.py::AccountingTests::test_zero_requests_still_charges_enabled_base_query_dispatch",
+      "when": "call",
+      "reason": "ValueError: reviewed sampler source changed"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_profile_bound_test.py::test_complete_historical_guards_and_distinct_live_drift",
+      "when": "setup",
+      "reason": "ValueError: historical frontend input changed: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_profile_bound_test.py::test_both_actual_images_bound_role_loop_and_keep_callees_opaque[portable]",
+      "when": "setup",
+      "reason": "ValueError: historical frontend input changed: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_profile_bound_test.py::test_both_actual_images_bound_role_loop_and_keep_callees_opaque[accel]",
+      "when": "setup",
+      "reason": "ValueError: historical frontend input changed: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_profile_bound_test.py::test_loop_frame_or_call_mutation_refuses[10000f790:-w8, #0x0-w8, #0x1]",
+      "when": "setup",
+      "reason": "ValueError: historical frontend input changed: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_profile_bound_test.py::test_loop_frame_or_call_mutation_refuses[10000f80c:-x20, x8-x20, x9]",
+      "when": "setup",
+      "reason": "ValueError: historical frontend input changed: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_profile_bound_test.py::test_loop_frame_or_call_mutation_refuses[10000fc08:-w8, #0x1-w8, #0x0]",
+      "when": "setup",
+      "reason": "ValueError: historical frontend input changed: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_profile_bound_test.py::test_loop_frame_or_call_mutation_refuses[10000fc14:-tbz-tbnz]",
+      "when": "setup",
+      "reason": "ValueError: historical frontend input changed: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_profile_bound_test.py::test_loop_frame_or_call_mutation_refuses[10000f408:-#-0x60-#-0x70]",
+      "when": "setup",
+      "reason": "ValueError: historical frontend input changed: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_profile_bound_test.py::test_loop_frame_or_call_mutation_refuses[10000f440:-bl-b]",
+      "when": "setup",
+      "reason": "ValueError: historical frontend input changed: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_profile_bound_test.py::test_mismatched_frame_report_and_mode_refuse",
+      "when": "setup",
+      "reason": "ValueError: historical frontend input changed: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_profile_bound_test.py::test_unknown_callee_refuses",
+      "when": "setup",
+      "reason": "ValueError: historical frontend input changed: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_profile_bound_test.py::test_guard_mutation_after_analysis_preserves_unknown",
+      "when": "call",
+      "reason": "AssertionError: assert set() == {'/Users/take...c/profile.rs'}\n  \n  Extra items in the right set:\n  '/Users/takemiyamakoto/dev/iroha/crates/iroha_parliament_ballot_proof/src/profile.rs'\n  Use -v to get more diff"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_profile_bound_test.py::test_cli_retains_new_historical_result",
+      "when": "call",
+      "reason": "assert 1 == 0\n +  where 1 = <function main at 0x10c1114e0>()\n +    where <function main at 0x10c1114e0> = MODULE.main"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_prover_accounting_test.py::EvidenceTests::test_report_checks_all_shapes_and_does_not_qualify",
+      "when": "call",
+      "reason": "AssertionError: False is not true : reviewed prover sources changed; review before repinning"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_request_accounting_test.py::RequestAccountingTests::test_all_admitted_sizes_and_registration_are_checked",
+      "when": "call",
+      "reason": "AssertionError: False is not true"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_request_accounting_test.py::RequestAccountingTests::test_candidate_maximum_stages_and_exact_margins",
+      "when": "call",
+      "reason": "KeyError: 'candidate_cases'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_request_accounting_test.py::RequestAccountingTests::test_pointwise_and_cross_row_inferences_are_rejected",
+      "when": "call",
+      "reason": "KeyError: 'pointwise_4096_preparation_bound_valid'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_request_accounting_test.py::RequestAccountingTests::test_qualification_stays_false_and_cli_is_discoverable",
+      "when": "call",
+      "reason": "AssertionError: 1 != 2"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_request_accounting_test.py::RequestAccountingTests::test_source_inventory_and_imported_count_code_match_review",
+      "when": "call",
+      "reason": "AssertionError: 'edcc22c1ea122a27cc60b27ed390090a4a36bfbaf46ecfeca4ba9adaf468de5e' != '24d191a973854c05337f9fe8ccfa571cc8cebda1d3de984630c12594f0f8d9a3'\n- edcc22c1ea122a27cc60b27ed390090a4a36bfbaf46ecfeca4ba9adaf468de5e\n+ 24d191a973854c05337f9fe8ccfa571cc8cebda1d3de984630c12594f0f8d9a3"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_resource_contract_test.py::test_source_inventory_covers_native_worker_and_protocol_dependencies",
+      "when": "call",
+      "reason": "FileNotFoundError: [Errno 2] No such file or directory: '/Users/takemiyamakoto/dev/iroha/crates/iroha_parliament_ballot_proof/examples/qualify.rs'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_typed_decoder_bound_test.py::test_historical_inputs_are_complete_and_current_scope_distinct",
+      "when": "call",
+      "reason": "ValueError: frontend guarded input changed: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_typed_decoder_bound_test.py::test_cli_preserves_historical_scope",
+      "when": "call",
+      "reason": "assert 1 == 0\n +  where 1 = <function main at 0x10bd2a020>()\n +    where <function main at 0x10bd2a020> = MODULE.main"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_write_framing_test.py::FramingTest::test_cli_refuses_qualification_and_overwrite",
+      "when": "call",
+      "reason": "SystemExit: 2"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_write_framing_test.py::FramingTest::test_report_exact_upper_units_zero_and_false_flags",
+      "when": "call",
+      "reason": "ValueError: reviewed framing source changed"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_zero_challenge_test.py::test_certificate_binds_both_roles_exact_counts_references_and_work",
+      "when": "call",
+      "reason": "ValueError: reviewed source changed: crates/iroha_parliament_ballot_proof/src/profile.rs, crates/iroha_zkp_vole/src/bavc.rs, crates/iroha_zkp_vole/src/vole.rs"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_zero_challenge_test.py::test_source_semantic_drift_is_refused_without_repinning",
+      "when": "call",
+      "reason": "ValueError: reviewed source changed: crates/iroha_parliament_ballot_proof/src/profile.rs, crates/iroha_zkp_vole/src/bavc.rs, crates/iroha_zkp_vole/src/vole.rs"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_zero_challenge_test.py::test_boundary_disagreement_cannot_emit_certificate",
+      "when": "call",
+      "reason": "AssertionError: Regex pattern did not match.\n  Expected regex: 'cross-check failed'\n  Actual message: 'reviewed source changed: crates/iroha_parliament_ballot_proof/src/profile.rs, crates/iroha_zkp_vole/src/bavc.rs, crates/iroha_zkp_vole/src/vole.rs'"
+    },
+    {
+      "nodeid": "scripts/tests/parliament_ballot_zero_challenge_test.py::test_cli_help_new_output_and_refusal_do_not_overwrite",
+      "when": "call",
+      "reason": "assert 1 == 0\n +  where 1 = <function main at 0x10b52efc0>()\n +    where <function main at 0x10b52efc0> = check.main"
+    }
+  ],
+  "baseline_result": {
+    "failed": 59,
+    "errors": 101,
+    "passed": 540,
+    "subtests_passed": 251,
+    "seconds": 856.47
+  },
+  "qualification": false,
+  "scope": "Baseline tests were collected before the separately verified repairs below. This inventory is not a full current-candidate or release qualification.",
+  "verified_repairs": {
+    "resource_contract_source_inventory": {
+      "historical_failures": 1,
+      "focused_tests_passed": 36
+    },
+    "zero_challenge_source_correspondence": {
+      "historical_failures": 4,
+      "focused_tests_passed": 14
+    },
+    "admissibility_circuit_source_correspondence": {
+      "historical_failures": 3,
+      "focused_tests_passed": 3,
+      "unchanged_emitter_tests": "passed in baseline"
+    },
+    "memory_entry_producer_manifest": {
+      "historical_failures": 0,
+      "focused_tests_passed": 17,
+      "current_producer": "Six exact build/test/strict-Clippy commands pass; 17 worker tests per mode; all source/tool bytes stable"
+    },
+    "gf_circuit_field_correspondence": {
+      "historical_failures": 4,
+      "focused_tests_passed": 103,
+      "source_delta": "One exact Clippy expectation; stripping only that reviewed attribute must restore historical SHA-256. Arithmetic, decoder and emitter/formulas unchanged.",
+      "artifact": "docs/validation/parliament_ballot_gf_circuit_20261104"
+    },
+    "ideal_sampler_logical_source_correspondence": {
+      "historical_failures": 14,
+      "focused_tests_passed": 31,
+      "subtests_passed": 20,
+      "source_delta": "17 reviewed file diffs; unchanged formulas and all numeric cases/lifetime envelope. Comparator and unpriced provider costs explicitly scoped.",
+      "artifact": "docs/validation/parliament_ballot_ideal_sampler_accounting_20261104"
+    },
+    "oracle_log_current_logical_receipt": {
+      "historical_failures": 4,
+      "focused_tests_passed": 22,
+      "source_delta": "Rebinds freshly captured current ideal-sampler receipt; emitter and circuit/lifetime values unchanged.",
+      "artifact": "docs/validation/parliament_ballot_oracle_log_circuit_20261104"
+    },
+    "write_framing_current_logical_receipt": {
+      "historical_failures": 2,
+      "focused_tests_passed": 12,
+      "source_delta": "Rebinds current ideal and overlay receipts; emitter and all frame/schedule/lifetime values unchanged.",
+      "artifact": "docs/validation/parliament_ballot_write_framing_20261104"
+    },
+    "request_logical_source_correspondence": {
+      "historical_failures": 5,
+      "focused_tests_passed": 9,
+      "subtests_passed": 95,
+      "source_delta": "17 logical-source changes reuse exact reviewed hashes; unchanged request/model/budget formulas and all reported historical numeric results. Full current87-file source custody remains guarded. AES0.9.3 review is limited to supplied-block and one-dispatch API boundary; provider internals/layout and allocator costs remain unqualified.",
+      "artifact": "docs/validation/parliament_ballot_request_accounting_20261104"
+    }
+  },
+  "remaining_historical_failures_without_verified_repair": 123,
+  "historical_inputs_not_replaced": [
+    "original llvm-objdump bytes",
+    "resource-contract temporary binaries",
+    "fatal/current worker temporary binaries",
+    "current_candidate/build/Cargo.lock.build.template"
+  ],
+  "live_producer_root": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104",
+  "current_capture_artifact": "docs/validation/parliament_ballot_current_candidate_20261104",
+  "current_diagnostics": {
+    "memory_observations": 122,
+    "mode_pairs": 61,
+    "fatal_output_observations": 4,
+    "stack_analyzer_tests_passed": 62,
+    "complete_stack_certificate": false,
+    "profile_qualified": false,
+    "release_qualified": false
+  }
+}

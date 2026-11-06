@@ -1225,10 +1225,15 @@ fn refresh_block_count_after_snapshot_load(
     block_count.0 = durable_height;
     Ok(())
 }
+#[derive(Debug, thiserror::Error)]
+enum StateRuntimeConfigurationError {
+    #[error(transparent)]
+    Pipeline(#[from] iroha_core::pipeline_validity_policy::PipelineValidityPolicyError),
+}
 fn apply_state_runtime_config_before_snapshot_auth(
     state: &mut State,
     config: &Config,
-) -> Result<(), iroha_core::pipeline_validity_policy::PipelineValidityPolicyError> {
+) -> Result<(), StateRuntimeConfigurationError> {
     // These fields are process-local execution policy and do not touch Kura-owned geometry.
     // Settlement must be installed before replay because historical
     // transitions resolve their deterministic execution state through

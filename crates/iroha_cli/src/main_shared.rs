@@ -6,6 +6,7 @@ use iroha_core::release_identity::CompiledBuildMetadata;
 use iroha_model_base::domain::DomainId;
 
 use iroha_model_base::chain::ChainId;
+mod account_role_list;
 mod address;
 mod audit;
 #[cfg(feature = "bridge")]
@@ -1593,7 +1594,14 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
     let language = detect_language(args.language.as_deref());
     let i18n = Localizer::new(Bundle::Cli, language);
     if let Command::Tools(tools::Command::MarkdownHelp(_md)) = &args.command {
-        clap_markdown::print_help_markdown::<Args>();
+        let mut writer = io::BufWriter::new(io::stdout().lock());
+        iroha_cli_docs::write_markdown(Args::command(), &mut writer)
+            .and_then(|()| writer.flush())
+            .map_err(|error| {
+                Report::new(MainError::Command(format!(
+                    "Failed to write Markdown help: {error}"
+                )))
+            })?;
         return Ok(std::process::ExitCode::SUCCESS);
     }
     error_stack::Report::set_color_mode(color_mode());
@@ -2715,19 +2723,13 @@ mod account {
                     let account_id = resolve_account_id(context, &args.id)
                         .wrap_err("failed to resolve --id account")?;
                     let client = context.client_from_config()?;
-                    let mut builder = client.query(FindRolesByAccountId::new(account_id));
-                    if args.limit.is_some() || args.offset > 0 {
-                        let pagination = iroha::data_model::query::parameters::Pagination::new(
-                            args.limit.and_then(NonZeroU64::new),
-                            args.offset,
-                        );
-                        builder = builder.with_pagination(pagination);
-                    }
-                    if let Some(n) = args.fetch_size.and_then(NonZeroU64::new) {
-                        let fs = iroha::data_model::query::parameters::FetchSize::new(Some(n));
-                        builder = builder.with_fetch_size(fs);
-                    }
-                    let roles = builder.execute_all()?;
+                    let roles = crate::account_role_list::list(
+                        client,
+                        account_id,
+                        args.limit,
+                        args.offset,
+                        args.fetch_size,
+                    )?;
                     context.print_data(&roles)
                 }
                 Grant(args) => {
@@ -2840,13 +2842,13 @@ mod account {
         /// Account identifier (canonical I105 literal)
         #[arg(short, long)]
         id: String,
-        /// Maximum number of items to return (server-side limit)
+        /// Maximum number of ordered role IDs to return across cursor pages
         #[arg(long, value_parser = crate::positive_u64)]
         limit: Option<u64>,
-        /// Offset into the result set (server-side offset)
+        /// Number of ordered role IDs to skip while following cursor pages
         #[arg(long, default_value_t = 0)]
         offset: u64,
-        /// Batch fetch size for iterable queries
+        /// Rows per account-role collection page (subject to the node's maximum)
         #[arg(long, value_parser = crate::positive_u64)]
         fetch_size: Option<u64>,
     }

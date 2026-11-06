@@ -147,9 +147,13 @@ mod app_routed_read_http_admission_tests {
         AccountPermissionsQuery,
         UaidManifestsQuery,
         AccountHistoryQuery,
+        RolesList,
+        RolesQuery,
+        AccountRolesGet,
+        AccountRolesQuery,
     );
     #[test]
-    fn all_49_endpoint_and_stable_route_id_mappings_are_exact_and_unique() {
+    fn all_53_endpoint_and_stable_route_id_mappings_are_exact_and_unique() {
         let expected = ENDPOINT_INVENTORY;
         assert_eq!(APP_ROUTED_READ_HTTP_ENDPOINTS_V1.len(), expected.len());
         for &endpoint in expected {

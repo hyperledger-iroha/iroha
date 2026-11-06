@@ -30,11 +30,25 @@ use mv::storage::StorageReadOnly;
 use std::num::{NonZeroU32, NonZeroU64};
 
 fn state(row_bytes: u64) -> State {
+    state_with_pool(row_bytes, None)
+}
+
+fn state_with_pool(row_bytes: u64, isolated: Option<iroha_allocation::AllocationBudget>) -> State {
     // Execution still derives authority from committed genesis metadata.
+    let scope = iroha_data_model::block::consensus::SumeragiRootScope::Global;
+    let world = if let Some(pool) = isolated {
+        let mut world = World::try_with_execution_budget([], [], [], &pool).unwrap();
+        world
+            .set_parameter_for_testing(crate::sumeragi::lanes::routing::test_support::metadata(
+                scope,
+            ))
+            .unwrap();
+        world
+    } else {
+        crate::sumeragi::lanes::routing::test_support::world(scope)
+    };
     let mut state = State::new_for_testing(
-        crate::sumeragi::lanes::routing::test_support::world(
-            iroha_data_model::block::consensus::SumeragiRootScope::Global,
-        ),
+        world,
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );

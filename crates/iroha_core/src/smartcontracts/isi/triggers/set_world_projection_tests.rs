@@ -338,13 +338,13 @@ fn borrowed_contract_commits_only_bytecode_and_rejects_stale_derived_hash() {
     let blob = halt_blob();
     let entry = IvmBytecodeEntry {
         code_hash: ivm::contract_code_hash(blob.as_ref()),
-        original_contract: blob,
+        original_contract: blob.into(),
         count: NonZeroU64::MIN,
     };
     assert_eq!(
         BorrowedWorldContract::from(&entry).encode(),
         OriginalContractOnly {
-            original_contract: entry.original_contract.clone(),
+            original_contract: entry.original_contract.bytecode().clone(),
         }
         .encode()
     );
@@ -366,7 +366,7 @@ fn borrowed_contract_commits_only_bytecode_and_rejects_stale_derived_hash() {
     let different_blob = IvmBytecode::from_compiled(vec![1, 2, 3]);
     let different_bytecode = IvmBytecodeEntry {
         code_hash: ivm::contract_code_hash(different_blob.as_ref()),
-        original_contract: different_blob,
+        original_contract: different_blob.into(),
         ..entry
     };
     assert_ne!(hash_world_contract(&different_bytecode).unwrap(), original);

@@ -22,7 +22,9 @@ use super::{
     },
 };
 #[cfg(test)]
-use iroha_data_model::privacy::{PrivacyProtocolIdV1, TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1};
+use iroha_data_model::privacy::{
+    PrivacyRuntimeProtocolIdV1, TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,
+};
 
 use rand::TryRng;
 use rayon::prelude::*;
@@ -2975,7 +2977,7 @@ mod tests {
     const MOCK_DOMAINS_V1: aggregate::AggregateStarkDomainsV1 =
         aggregate::AggregateStarkDomainsV1 {
             digest_context: super::super::transparent_stark::TransparentStarkDigestContextV1::new(
-                PrivacyProtocolIdV1::PqMaspStarkV1,
+                PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
                 b"proof-managed-note-mock-profile-v1",
             ),
             base_leaf: b"proof-managed-note-mock-base-leaf-v1",

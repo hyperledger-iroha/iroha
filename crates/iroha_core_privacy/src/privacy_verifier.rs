@@ -37,7 +37,7 @@ use crate::{
         jindo::{JindoErrorV1, jindo_crs_digest_v1, verify_batched_evaluation_v1},
         orchard::{
             OrchardActionPublicV1, OrchardBundlePublicV1, OrchardNativeErrorV1,
-            verify_orchard_bundle_v1,
+            verify_ironwood_bundle_v1, verify_orchard_bundle_v1,
         },
         p256::{CompressedPointV1, TranscriptBindingV1},
         pq_masp::{
@@ -83,15 +83,15 @@ use iroha_data_model::{
         IrohaZkAmsStatementV1, MoneroFcmpPlusPlusStatementV1, OrchardHalo2ActionsStatementV1,
         PqMaspStarkStatementV1, PrivacyActionRoleV1, PrivacyCommitmentV1,
         PrivacyCompiledProfileSnapshotV1, PrivacyConsensusLimitsV1, PrivacyFcmpKeyImageV1,
-        PrivacyFcmpOutputTupleV1, PrivacyNamespaceV1, PrivacyNativeConsensusBindingV1,
+        PrivacyFcmpOutputTupleV1, PrivacyNativeConsensusBindingV1,
         PrivacyNativeConsensusBindingValidationErrorV1, PrivacyNullifierV1,
         PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1,
         PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyDigestV1,
-        PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
-        PrivacyProofEnvelopeValidationError, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
-        PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1, PrivacyStatementV1,
-        PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1, PrivacyVeRangeBitLengthV1,
-        PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1,
+        PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeValidationError,
+        PrivacyRootRoleV1, PrivacyRootV1, PrivacyRuntimeNamespaceV1, PrivacyRuntimeProofEnvelopeV1,
+        PrivacyRuntimeProtocolIdV1, PrivacyRuntimeProtocolLimitsV1, PrivacyRuntimeStatementV1,
+        PrivacyStatementDigestV1, PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
+        PrivacyVeRangeBitLengthV1, PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1,
         PrivacyZkAceIdentityCommitmentV1, PrivacyZkAceReplayNullifierV1, PrivacyZkAmsActionV1,
         VegaExistingCredentialStatementV1,
     },
@@ -106,7 +106,7 @@ use thiserror::Error;
 #[doc(hidden)]
 pub struct PrivacyPgcVerificationStateV1<'a> {
     /// Exact protocol/pool namespace selected by the statement.
-    pub namespace: PrivacyNamespaceV1,
+    pub namespace: PrivacyRuntimeNamespaceV1,
     /// Immutable public supply established by bootstrap.
     pub total_supply: u32,
     /// Digest of the canonical bootstrap public input.
@@ -141,7 +141,7 @@ pub struct PrivacyVerificationContextV1<'a> {
     /// Canonical semantic profile selected from the actual native implementation.
     pub profile: &'a PrivacyCompiledProfileSnapshotV1,
     /// Effective ordinary protocol limits from committed policy or canonical defaults.
-    pub protocol_limits: &'a PrivacyProtocolLimitsV1,
+    pub protocol_limits: &'a PrivacyRuntimeProtocolLimitsV1,
     /// Singleton chain-wide limits effective for this incoming block.
     pub consensus_limits: &'a PrivacyConsensusLimitsV1,
     /// Exact genesis-header-derived network identity.
@@ -174,7 +174,7 @@ pub struct PrivacyVerificationContextV1<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct VerifiedAnonymousPgcLedgerEffectV1 {
-    namespace: PrivacyNamespaceV1,
+    namespace: PrivacyRuntimeNamespaceV1,
     total_supply: u32,
     current_root: PrivacyRootV1,
     current_epoch: u64,
@@ -186,7 +186,7 @@ impl VerifiedAnonymousPgcLedgerEffectV1 {
     /// Exact pool namespace whose complete table must change.
     #[must_use]
     #[inline]
-    pub const fn namespace(&self) -> PrivacyNamespaceV1 {
+    pub const fn namespace(&self) -> PrivacyRuntimeNamespaceV1 {
         self.namespace
     }
     /// Immutable verified total supply.
@@ -247,7 +247,7 @@ pub struct VerifiedZkAceAuthorizationV1 {
 #[non_exhaustive]
 pub struct VerifiedZkX509CertificateEffectV1 {
     /// Exact trust-anchor/policy namespace selected by trusted state.
-    pub namespace: PrivacyNamespaceV1,
+    pub namespace: PrivacyRuntimeNamespaceV1,
     /// Certificate-and-policy-derived nonzero replay nullifier.
     pub certificate_nullifier: PrivacyNullifierV1,
     /// Exact authoritative trust-anchor revision used by verification.
@@ -269,7 +269,7 @@ pub struct VerifiedZkX509CertificateEffectV1 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct VerifiedOrchardLedgerEffectV1 {
-    namespace: PrivacyNamespaceV1,
+    namespace: PrivacyRuntimeNamespaceV1,
     bootstrap_digest: iroha_data_model::privacy::PrivacyOrchardPoolBootstrapDigestV1,
     asset_definition_id: AssetDefinitionId,
     public_balance_scope: AssetBalanceScope,
@@ -286,7 +286,7 @@ pub struct VerifiedOrchardLedgerEffectV1 {
 impl VerifiedOrchardLedgerEffectV1 {
     #[must_use]
     #[inline]
-    pub const fn namespace(&self) -> PrivacyNamespaceV1 {
+    pub const fn namespace(&self) -> PrivacyRuntimeNamespaceV1 {
         self.namespace
     }
     #[must_use]
@@ -383,7 +383,7 @@ pub enum VerifiedProofManagedPoolTransitionV1 {
 #[doc(hidden)]
 #[non_exhaustive]
 pub struct VerifiedProofManagedPoolLedgerEffectV1 {
-    namespace: PrivacyNamespaceV1,
+    namespace: PrivacyRuntimeNamespaceV1,
     bootstrap_digest: iroha_data_model::privacy::PrivacyProofManagedPoolBootstrapDigestV1,
     asset_definition_id: AssetDefinitionId,
     current_root: PrivacyRootV1,
@@ -397,7 +397,7 @@ pub struct VerifiedProofManagedPoolLedgerEffectV1 {
 #[cfg(any(test, feature = "test-utils"))]
 #[doc(hidden)]
 pub struct VerifiedProofManagedPoolLedgerEffectTestPartsV1 {
-    pub namespace: PrivacyNamespaceV1,
+    pub namespace: PrivacyRuntimeNamespaceV1,
     pub bootstrap_digest: iroha_data_model::privacy::PrivacyProofManagedPoolBootstrapDigestV1,
     pub asset_definition_id: AssetDefinitionId,
     pub current_root: PrivacyRootV1,
@@ -438,7 +438,7 @@ impl VerifiedProofManagedPoolLedgerEffectV1 {
     }
     #[must_use]
     #[inline]
-    pub const fn namespace(&self) -> PrivacyNamespaceV1 {
+    pub const fn namespace(&self) -> PrivacyRuntimeNamespaceV1 {
         self.namespace
     }
     #[must_use]
@@ -516,7 +516,7 @@ pub enum VerifiedPrivacyLedgerEffectsV1 {
 #[non_exhaustive]
 pub struct VerifiedPrivacyEffectsV1 {
     role: PrivacyActionRoleV1,
-    protocol_id: PrivacyProtocolIdV1,
+    protocol_id: PrivacyRuntimeProtocolIdV1,
     statement_digest: PrivacyStatementDigestV1,
     action_index: u32,
     encoded_action_bytes: u64,
@@ -558,7 +558,7 @@ impl VerifiedPrivacyEffectsV1 {
     /// Return the cryptographically verified protocol.
     #[must_use]
     #[inline]
-    pub const fn protocol_id(&self) -> PrivacyProtocolIdV1 {
+    pub const fn protocol_id(&self) -> PrivacyRuntimeProtocolIdV1 {
         self.protocol_id
     }
     /// Return the digest of the exact verified typed statement.
@@ -609,7 +609,7 @@ impl VerifiedPrivacyEffectsV1 {
 /// fourth, the typed dispatch registry fifth, and the selected native verifier last.
 #[doc(hidden)]
 pub fn verify_privacy_envelope_v1(
-    envelope: &PrivacyProofEnvelopeV1,
+    envelope: &PrivacyRuntimeProofEnvelopeV1,
     context: &PrivacyVerificationContextV1<'_>,
 ) -> Result<VerifiedPrivacyEffectsV1, PrivacyVerificationErrorV1> {
     validate_compiled_privacy_profile_v1(context.profile).map_err(|source| {
@@ -620,7 +620,7 @@ pub fn verify_privacy_envelope_v1(
     verify_privacy_envelope_after_compiled_profile_v1(envelope, context)
 }
 fn verify_privacy_envelope_after_compiled_profile_v1(
-    envelope: &PrivacyProofEnvelopeV1,
+    envelope: &PrivacyRuntimeProofEnvelopeV1,
     context: &PrivacyVerificationContextV1<'_>,
 ) -> Result<VerifiedPrivacyEffectsV1, PrivacyVerificationErrorV1> {
     envelope
@@ -635,7 +635,8 @@ fn verify_privacy_envelope_after_compiled_profile_v1(
     validate_privacy_execution_context_v1(envelope.statement.context(), context)?;
     // Canonical encoding is repeated here deliberately: the validated exact
     // bytes become the rollback-safe budget charge returned with the effects.
-    let encoded_action_bytes = norito::canonical_frame_len(envelope)
+    let encoded_action_bytes = envelope
+        .canonical_wire_frame_len_v1()
         .ok()
         .and_then(|length| u64::try_from(length).ok())
         .ok_or_else(|| {
@@ -657,7 +658,7 @@ fn verify_privacy_envelope_after_compiled_profile_v1(
     let proof = envelope.proof.bytes();
     let ledger = match &envelope.statement {
         #[cfg(feature = "zk-stark")]
-        PrivacyStatementV1::ZkAcePqAuthorizationV1(statement) => {
+        PrivacyRuntimeStatementV1::ZkAcePqAuthorizationV1(statement) => {
             let public_inputs =
                 ZkAcePrivacyPublicInputsV1::new(statement.clone(), context.genesis_hash);
             verify_zk_ace_privacy_v1(
@@ -684,7 +685,7 @@ fn verify_privacy_envelope_after_compiled_profile_v1(
             })
         }
         #[cfg(not(feature = "zk-stark"))]
-        PrivacyStatementV1::ZkAcePqAuthorizationV1(_) => {
+        PrivacyRuntimeStatementV1::ZkAcePqAuthorizationV1(_) => {
             return Err(PrivacyVerificationErrorV1::UnsupportedOperation(Box::new(
                 PrivacyUnsupportedOperationV1::new(
                     role,
@@ -692,10 +693,10 @@ fn verify_privacy_envelope_after_compiled_profile_v1(
                 ),
             )));
         }
-        PrivacyStatementV1::AnonymousPgcKOutOfNV1(statement) => {
+        PrivacyRuntimeStatementV1::AnonymousPgcKOutOfNV1(statement) => {
             verify_anonymous_pgc_payment_v1(statement, proof, envelope, context)?
         }
-        PrivacyStatementV1::VeRangeTransparentRangeV1(statement) => {
+        PrivacyRuntimeStatementV1::VeRangeTransparentRangeV1(statement) => {
             let profile = match statement.bit_length {
                 PrivacyVeRangeBitLengthV1::Bits32 => VeRangeBitLengthV1::Bits32,
                 PrivacyVeRangeBitLengthV1::Bits64 => VeRangeBitLengthV1::Bits64,
@@ -744,31 +745,32 @@ fn verify_privacy_envelope_after_compiled_profile_v1(
             })?;
             VerifiedPrivacyLedgerEffectsV1::None
         }
-        PrivacyStatementV1::IrohaZkAmsV1(statement) => {
+        PrivacyRuntimeStatementV1::IrohaZkAmsV1(statement) => {
             verify_zk_ams_v1(statement, proof, envelope, context)?
         }
-        PrivacyStatementV1::VegaExistingCredentialZkV1(statement) => {
+        PrivacyRuntimeStatementV1::VegaExistingCredentialZkV1(statement) => {
             verify_vega_existing_credential_v1(statement, proof, context)?
         }
-        PrivacyStatementV1::IrohaZkX509StarkP256V1(statement) => {
+        PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement) => {
             verify_zk_x509_certificate_v1(statement, proof.as_bytes(), context)?
         }
-        PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement) => {
+        PrivacyRuntimeStatementV1::IrohaJindoPolynomialCommitmentV1(statement) => {
             verify_jindo_batched_evaluation_v1(statement, proof, envelope, context)?
         }
-        PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement) => {
+        PrivacyRuntimeStatementV1::IrohaBootleLanternAnoncredV1(statement) => {
             verify_bootle_lantern_presentation_v1(statement, proof, context)?
         }
-        PrivacyStatementV1::OrchardHalo2ActionsV1(statement) => {
+        PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement)
+        | PrivacyRuntimeStatementV1::IronwoodHalo2ActionsV1(statement) => {
             verify_orchard_actions_v1(statement, proof, envelope, context)?
         }
-        PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) => {
+        PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1(statement) => {
             verify_fcmp_plus_plus_action_v1(statement, proof, envelope, context)?
         }
-        PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) => {
+        PrivacyRuntimeStatementV1::IrohaIvmPrivateNoteStarkV1(statement) => {
             verify_ivm_private_note_action_v1(statement, proof, envelope, context)?
         }
-        PrivacyStatementV1::PqMaspStarkV1(statement) => {
+        PrivacyRuntimeStatementV1::PqMaspStarkV1(statement) => {
             verify_pq_masp_action_v1(statement, proof, envelope, context)?
         }
     };
@@ -973,7 +975,7 @@ fn native_pq_masp_error(source: PrivacyPqMaspNativeFailureSourceV1) -> PrivacyVe
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PreparedIvmPrivateNoteTransitionV1 {
-    namespace: PrivacyNamespaceV1,
+    namespace: PrivacyRuntimeNamespaceV1,
     bootstrap_digest: iroha_data_model::privacy::PrivacyProofManagedPoolBootstrapDigestV1,
     asset_definition_id: AssetDefinitionId,
     current_root: PrivacyRootV1,
@@ -982,7 +984,7 @@ struct PreparedIvmPrivateNoteTransitionV1 {
 }
 fn prepare_ivm_private_note_transition_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
-    expected_namespace: PrivacyNamespaceV1,
+    expected_namespace: PrivacyRuntimeNamespaceV1,
     snapshot: Option<&PrivacyProofManagedPoolSnapshotV1>,
 ) -> Result<PreparedIvmPrivateNoteTransitionV1, PrivacyVerificationErrorV1> {
     let snapshot = snapshot.ok_or_else(|| {
@@ -993,7 +995,7 @@ fn prepare_ivm_private_note_transition_v1(
             PrivacyIvmPrivateNoteStateFailureCodeV1::NamespaceMismatch,
         ));
     }
-    if snapshot.bootstrap().protocol_id() != PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
+    if snapshot.bootstrap().protocol_id() != PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1
         || snapshot.root_role() != PrivacyRootRoleV1::ProgramState
     {
         return Err(ivm_private_note_state_error(
@@ -1087,12 +1089,12 @@ fn prepare_ivm_private_note_transition_v1(
 fn verify_ivm_private_note_action_v1(
     statement: &IrohaIvmPrivateNoteStarkStatementV1,
     proof: &PrivacyProofBytesV1,
-    envelope: &PrivacyProofEnvelopeV1,
+    envelope: &PrivacyRuntimeProofEnvelopeV1,
     context: &PrivacyVerificationContextV1<'_>,
 ) -> Result<VerifiedPrivacyLedgerEffectsV1, PrivacyVerificationErrorV1> {
     let prepared = prepare_ivm_private_note_transition_v1(
         statement,
-        PrivacyNamespaceV1::from_statement(&envelope.statement),
+        PrivacyRuntimeNamespaceV1::from_statement(&envelope.statement),
         context.proof_managed_state,
     )?;
     let consensus_binding = PrivacyNativeConsensusBindingV1::new(
@@ -1131,7 +1133,7 @@ fn verify_ivm_private_note_action_v1(
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PreparedPqMaspTransitionV1 {
-    namespace: PrivacyNamespaceV1,
+    namespace: PrivacyRuntimeNamespaceV1,
     bootstrap_digest: iroha_data_model::privacy::PrivacyProofManagedPoolBootstrapDigestV1,
     asset_definition_id: AssetDefinitionId,
     current_root: PrivacyRootV1,
@@ -1140,7 +1142,7 @@ struct PreparedPqMaspTransitionV1 {
 }
 fn prepare_pq_masp_transition_v1(
     statement: &PqMaspStarkStatementV1,
-    expected_namespace: PrivacyNamespaceV1,
+    expected_namespace: PrivacyRuntimeNamespaceV1,
     snapshot: Option<&PrivacyProofManagedPoolSnapshotV1>,
 ) -> Result<PreparedPqMaspTransitionV1, PrivacyVerificationErrorV1> {
     let snapshot = snapshot
@@ -1150,7 +1152,7 @@ fn prepare_pq_masp_transition_v1(
             PrivacyPqMaspStateFailureCodeV1::NamespaceMismatch,
         ));
     }
-    if snapshot.bootstrap().protocol_id() != PrivacyProtocolIdV1::PqMaspStarkV1
+    if snapshot.bootstrap().protocol_id() != PrivacyRuntimeProtocolIdV1::PqMaspStarkV1
         || snapshot.root_role() != PrivacyRootRoleV1::NoteCommitmentAnchor
     {
         return Err(pq_masp_state_error(
@@ -1225,12 +1227,12 @@ fn prepare_pq_masp_transition_v1(
 fn verify_pq_masp_action_v1(
     statement: &PqMaspStarkStatementV1,
     proof: &PrivacyProofBytesV1,
-    envelope: &PrivacyProofEnvelopeV1,
+    envelope: &PrivacyRuntimeProofEnvelopeV1,
     context: &PrivacyVerificationContextV1<'_>,
 ) -> Result<VerifiedPrivacyLedgerEffectsV1, PrivacyVerificationErrorV1> {
     let prepared = prepare_pq_masp_transition_v1(
         statement,
-        PrivacyNamespaceV1::from_statement(&envelope.statement),
+        PrivacyRuntimeNamespaceV1::from_statement(&envelope.statement),
         context.proof_managed_state,
     )?;
     let consensus_binding = PrivacyNativeConsensusBindingV1::new(
@@ -1280,7 +1282,7 @@ fn verify_pq_masp_action_v1(
     ))
 }
 fn fcmp_runtime_context_hash_v1(
-    envelope: &PrivacyProofEnvelopeV1,
+    envelope: &PrivacyRuntimeProofEnvelopeV1,
     context: &PrivacyVerificationContextV1<'_>,
 ) -> [u8; 32] {
     derive_fcmp_runtime_context_hash_v1(&FcmpRuntimeContextBindingV1 {
@@ -1297,19 +1299,19 @@ fn fcmp_runtime_context_hash_v1(
 fn verify_fcmp_plus_plus_action_v1(
     statement: &MoneroFcmpPlusPlusStatementV1,
     proof: &PrivacyProofBytesV1,
-    envelope: &PrivacyProofEnvelopeV1,
+    envelope: &PrivacyRuntimeProofEnvelopeV1,
     context: &PrivacyVerificationContextV1<'_>,
 ) -> Result<VerifiedPrivacyLedgerEffectsV1, PrivacyVerificationErrorV1> {
     let snapshot = context
         .proof_managed_state
         .ok_or_else(|| fcmp_state_error(PrivacyFcmpStateFailureCodeV1::MissingTrustedState))?;
-    let expected_namespace = PrivacyNamespaceV1::from_statement(&envelope.statement);
+    let expected_namespace = PrivacyRuntimeNamespaceV1::from_statement(&envelope.statement);
     if snapshot.namespace() != expected_namespace {
         return Err(fcmp_state_error(
             PrivacyFcmpStateFailureCodeV1::NamespaceMismatch,
         ));
     }
-    if snapshot.bootstrap().protocol_id() != PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1
+    if snapshot.bootstrap().protocol_id() != PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1
         || snapshot.root_role() != PrivacyRootRoleV1::OutputSet
     {
         return Err(fcmp_state_error(
@@ -1440,13 +1442,13 @@ fn verify_fcmp_plus_plus_action_v1(
 fn verify_orchard_actions_v1(
     statement: &OrchardHalo2ActionsStatementV1,
     proof: &PrivacyProofBytesV1,
-    envelope: &PrivacyProofEnvelopeV1,
+    envelope: &PrivacyRuntimeProofEnvelopeV1,
     context: &PrivacyVerificationContextV1<'_>,
 ) -> Result<VerifiedPrivacyLedgerEffectsV1, PrivacyVerificationErrorV1> {
     let snapshot = context.orchard_state.ok_or_else(|| {
         orchard_state_error(PrivacyOrchardStateFailureCodeV1::MissingTrustedState)
     })?;
-    let expected_namespace = PrivacyNamespaceV1::from_statement(&envelope.statement);
+    let expected_namespace = PrivacyRuntimeNamespaceV1::from_statement(&envelope.statement);
     if snapshot.namespace() != expected_namespace {
         return Err(orchard_state_error(
             PrivacyOrchardStateFailureCodeV1::NamespaceMismatch,
@@ -1526,13 +1528,20 @@ fn verify_orchard_actions_v1(
         value_balance,
         actions: public_actions,
     };
-    verify_orchard_bundle_v1(&native_public, proof.as_bytes(), context.consensus_limits).map_err(
-        |source| {
-            PrivacyVerificationErrorV1::NativeOrchard(Box::new(
-                PrivacyOrchardVerificationFailureV1 { source },
-            ))
-        },
-    )?;
+    let verify = match envelope.protocol_id {
+        PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1 => verify_orchard_bundle_v1,
+        PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1 => verify_ironwood_bundle_v1,
+        _ => {
+            return Err(orchard_state_error(
+                PrivacyOrchardStateFailureCodeV1::NamespaceMismatch,
+            ));
+        }
+    };
+    verify(&native_public, proof.as_bytes(), context.consensus_limits).map_err(|source| {
+        PrivacyVerificationErrorV1::NativeOrchard(Box::new(PrivacyOrchardVerificationFailureV1 {
+            source,
+        }))
+    })?;
     Ok(VerifiedPrivacyLedgerEffectsV1::OrchardActions(
         VerifiedOrchardLedgerEffectV1 {
             namespace: snapshot.namespace(),
@@ -1554,7 +1563,7 @@ fn verify_orchard_actions_v1(
 fn verify_zk_ams_v1(
     statement: &IrohaZkAmsStatementV1,
     proof: &PrivacyProofBytesV1,
-    envelope: &PrivacyProofEnvelopeV1,
+    envelope: &PrivacyRuntimeProofEnvelopeV1,
     context: &PrivacyVerificationContextV1<'_>,
 ) -> Result<VerifiedPrivacyLedgerEffectsV1, PrivacyVerificationErrorV1> {
     let binding = TranscriptBindingV1 {
@@ -1661,7 +1670,7 @@ fn vega_state_error(code: PrivacyVegaStateFailureCodeV1) -> PrivacyVerificationE
 fn verify_jindo_batched_evaluation_v1(
     statement: &IrohaJindoPolynomialCommitmentStatementV1,
     proof: &PrivacyProofBytesV1,
-    envelope: &PrivacyProofEnvelopeV1,
+    envelope: &PrivacyRuntimeProofEnvelopeV1,
     context: &PrivacyVerificationContextV1<'_>,
 ) -> Result<VerifiedPrivacyLedgerEffectsV1, PrivacyVerificationErrorV1> {
     let transcript = TranscriptBindingV1 {
@@ -1692,13 +1701,13 @@ fn verify_jindo_batched_evaluation_v1(
 fn verify_anonymous_pgc_payment_v1(
     statement: &AnonymousPgcKOutOfNStatementV1,
     proof: &PrivacyProofBytesV1,
-    envelope: &PrivacyProofEnvelopeV1,
+    envelope: &PrivacyRuntimeProofEnvelopeV1,
     context: &PrivacyVerificationContextV1<'_>,
 ) -> Result<VerifiedPrivacyLedgerEffectsV1, PrivacyVerificationErrorV1> {
     let state = context.pgc_state.ok_or_else(|| {
         pgc_state_error(PrivacyAnonymousPgcStateFailureCodeV1::MissingTrustedState)
     })?;
-    let expected_namespace = PrivacyNamespaceV1::from_statement(&envelope.statement);
+    let expected_namespace = PrivacyRuntimeNamespaceV1::from_statement(&envelope.statement);
     if state.namespace != expected_namespace {
         return Err(pgc_state_error(
             PrivacyAnonymousPgcStateFailureCodeV1::NamespaceMismatch,
@@ -1848,7 +1857,7 @@ fn verify_anonymous_pgc_payment_v1(
     ))
 }
 fn native_pgc_error(source: impl Into<AnonymousPgcReadError>) -> PrivacyVerificationErrorV1 {
-    PrivacyVerificationErrorV1::NativeAnonymousPgc(Box::new(source.into()))
+    PrivacyVerificationErrorV1::NativeAnonymousPgc(source.into())
 }
 fn pgc_state_error(code: PrivacyAnonymousPgcStateFailureCodeV1) -> PrivacyVerificationErrorV1 {
     PrivacyVerificationErrorV1::AnonymousPgcState(Box::new(PrivacyAnonymousPgcStateFailureV1 {
@@ -1862,10 +1871,6 @@ fn pgc_state_error(code: PrivacyAnonymousPgcStateFailureCodeV1) -> PrivacyVerifi
 /// allocation.
 #[derive(Debug, Error)]
 #[doc(hidden)]
-#[expect(
-    variant_size_differences,
-    reason = "retain original root/codec refusal without allocating on failure"
-)]
 pub enum PrivacyVerificationErrorV1 {
     /// The execution context differs from the statement or is incomplete.
     #[error(transparent)]
@@ -1951,7 +1956,7 @@ pub enum PrivacyVerificationErrorV1 {
     },
     /// Native Anonymous-PGC decoding or verification failed.
     #[error("native Anonymous-PGC verification failed: {0}")]
-    NativeAnonymousPgc(#[source] Box<AnonymousPgcReadError>),
+    NativeAnonymousPgc(#[source] AnonymousPgcReadError),
     /// Trusted Bootle/Lantern issuer policy was absent, invalid, or revoked.
     #[error(transparent)]
     BootleLanternState(Box<PrivacyBootleLanternStateFailureV1>),
@@ -2415,7 +2420,7 @@ mod tests {
             PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcBootstrapProofDigestV1,
             PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
             PrivacyPqMaspPoolBootstrapV1, PrivacyProofManagedPoolBootstrapV1,
-            PrivacyProofSystemIdV1, PrivacyProofV1, PrivacyRecipientIdV1,
+            PrivacyProofSystemIdV1, PrivacyRecipientIdV1, PrivacyRuntimeProofV1,
             PrivacyStatementContextV1, PrivacyStatementValidationError,
             PrivacyTransactionIntentDigestV1, PrivacyValueBalanceDirectionV1,
             PrivacyValueBalanceV1, VeRangeTransparentRangeStatementV1,
@@ -2434,13 +2439,14 @@ mod tests {
     }
     fn compiled_profile_and_snapshot()
     -> (CompiledPrivacyProfileV1, PrivacyCompiledProfileSnapshotV1) {
-        let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
-            .expect("compiled VeRange");
+        let profile =
+            compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1)
+                .expect("compiled VeRange");
         let snapshot = profile.snapshot();
         (profile, snapshot)
     }
     fn valid_envelope() -> (
-        PrivacyProofEnvelopeV1,
+        PrivacyRuntimeProofEnvelopeV1,
         PrivacyCompiledProfileSnapshotV1,
         NetworkId,
     ) {
@@ -2470,8 +2476,8 @@ mod tests {
             statement_schema_digest: compiled.statement_schema_digest,
             engine_manifest_digest: compiled.engine_manifest_digest,
         };
-        let statement =
-            PrivacyStatementV1::VeRangeTransparentRangeV1(VeRangeTransparentRangeStatementV1 {
+        let statement = PrivacyRuntimeStatementV1::VeRangeTransparentRangeV1(
+            VeRangeTransparentRangeStatementV1 {
                 context,
                 asset_definition_id: AssetDefinitionId::derive_from_components(
                     DomainId::try_new("privacy", "universal").expect("domain"),
@@ -2481,7 +2487,8 @@ mod tests {
                 value_commitments,
                 bit_length: PrivacyVeRangeBitLengthV1::Bits32,
                 aggregation_count: 2,
-            });
+            },
+        );
         let statement_digest = statement.digest().expect("statement digest");
         let parameters =
             VeRangeParametersV1::for_profile(native_profile).expect("VeRange parameters");
@@ -2509,7 +2516,7 @@ mod tests {
         .expect("proof")
         .encode();
         (
-            PrivacyProofEnvelopeV1 {
+            PrivacyRuntimeProofEnvelopeV1 {
                 wire_magic: iroha_data_model::privacy::PrivacyProofWireMagicV1::default(),
                 catalog_commitment:
                     iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::default(),
@@ -2523,7 +2530,9 @@ mod tests {
                 engine_manifest_digest: compiled.engine_manifest_digest,
                 statement_digest,
                 statement,
-                proof: PrivacyProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(proof)),
+                proof: PrivacyRuntimeProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(
+                    proof,
+                )),
             },
             profile,
             network_id,
@@ -2535,15 +2544,16 @@ mod tests {
         PrivacyJindoFieldElementV1::new(encoding)
     }
     struct JindoFixture {
-        envelope: PrivacyProofEnvelopeV1,
+        envelope: PrivacyRuntimeProofEnvelopeV1,
         profile: PrivacyCompiledProfileSnapshotV1,
         network_id: NetworkId,
     }
     impl JindoFixture {
         fn new() -> Self {
-            let compiled =
-                compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
-                    .expect("compiled Jindo");
+            let compiled = compiled_privacy_profile_v1(
+                PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+            )
+            .expect("compiled Jindo");
             let profile = compiled.snapshot();
             let network_id = network_id(0xA7);
             let polynomials = vec![
@@ -2588,7 +2598,7 @@ mod tests {
                 claimed_evaluations,
             };
             let typed_statement =
-                PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement.clone());
+                PrivacyRuntimeStatementV1::IrohaJindoPolynomialCommitmentV1(statement.clone());
             let statement_digest = typed_statement.digest().expect("Jindo statement digest");
             let transcript = TranscriptBindingV1 {
                 network_id: network_id.as_bytes(),
@@ -2607,7 +2617,7 @@ mod tests {
                     .expect("Jindo proof");
             assert_eq!(proof.len(), JINDO_NATIVE_PROOF_BYTES_V1);
             Self {
-                envelope: PrivacyProofEnvelopeV1 {
+                envelope: PrivacyRuntimeProofEnvelopeV1 {
                     wire_magic: iroha_data_model::privacy::PrivacyProofWireMagicV1::default(),
                     catalog_commitment:
                         iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::default(),
@@ -2621,7 +2631,7 @@ mod tests {
                     engine_manifest_digest: compiled.engine_manifest_digest,
                     statement_digest,
                     statement: typed_statement,
-                    proof: PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(
+                    proof: PrivacyRuntimeProofV1::IrohaJindoPolynomialCommitmentV1(
                         PrivacyProofBytesV1::new(proof),
                     ),
                 },
@@ -2656,16 +2666,17 @@ mod tests {
         FIXTURE.get_or_init(JindoFixture::new)
     }
     struct BootleLanternFixture {
-        envelope: PrivacyProofEnvelopeV1,
+        envelope: PrivacyRuntimeProofEnvelopeV1,
         profile: PrivacyCompiledProfileSnapshotV1,
         network_id: NetworkId,
         policy: BootleLanternIssuerPolicyV1,
     }
     impl BootleLanternFixture {
         fn new() -> Self {
-            let compiled =
-                compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1)
-                    .expect("compiled Bootle/Lantern");
+            let compiled = compiled_privacy_profile_v1(
+                PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1,
+            )
+            .expect("compiled Bootle/Lantern");
             let profile = compiled.snapshot();
             let network_id = network_id(0xA7);
             let genesis_hash = [0xA7; 32];
@@ -2767,7 +2778,7 @@ mod tests {
                 }],
             };
             let typed_statement =
-                PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement.clone());
+                PrivacyRuntimeStatementV1::IrohaBootleLanternAnoncredV1(statement.clone());
             let statement_digest = typed_statement
                 .digest()
                 .expect("Bootle/Lantern statement digest");
@@ -2785,7 +2796,7 @@ mod tests {
             .encode();
             assert_eq!(proof.len(), BOOTLE_LANTERN_PROOF_BYTES_V1);
             Self {
-                envelope: PrivacyProofEnvelopeV1 {
+                envelope: PrivacyRuntimeProofEnvelopeV1 {
                     wire_magic: iroha_data_model::privacy::PrivacyProofWireMagicV1::default(),
                     catalog_commitment:
                         iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::default(),
@@ -2799,9 +2810,9 @@ mod tests {
                     engine_manifest_digest: compiled.engine_manifest_digest,
                     statement_digest,
                     statement: typed_statement,
-                    proof: PrivacyProofV1::IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1::new(
-                        proof,
-                    )),
+                    proof: PrivacyRuntimeProofV1::IrohaBootleLanternAnoncredV1(
+                        PrivacyProofBytesV1::new(proof),
+                    ),
                 },
                 profile,
                 network_id,
@@ -2835,9 +2846,10 @@ mod tests {
         FIXTURE.get_or_init(BootleLanternFixture::new)
     }
     fn bootle_lantern_statement_mut(
-        envelope: &mut PrivacyProofEnvelopeV1,
+        envelope: &mut PrivacyRuntimeProofEnvelopeV1,
     ) -> &mut IrohaBootleLanternAnoncredStatementV1 {
-        let PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement) = &mut envelope.statement
+        let PrivacyRuntimeStatementV1::IrohaBootleLanternAnoncredV1(statement) =
+            &mut envelope.statement
         else {
             unreachable!("Bootle/Lantern fixture")
         };
@@ -2851,21 +2863,22 @@ mod tests {
         policy.record_digest = policy.computed_record_digest().expect("policy digest");
     }
     struct OrchardFixture {
-        envelope: PrivacyProofEnvelopeV1,
+        envelope: PrivacyRuntimeProofEnvelopeV1,
         profile: PrivacyCompiledProfileSnapshotV1,
         network_id: NetworkId,
-        namespace: PrivacyNamespaceV1,
+        namespace: PrivacyRuntimeNamespaceV1,
         snapshot: PrivacyOrchardPoolSnapshotV1,
     }
     impl OrchardFixture {
         fn new() -> Self {
-            let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::OrchardHalo2ActionsV1)
-                .expect("compiled Orchard");
+            let compiled =
+                compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1)
+                    .expect("compiled Orchard");
             let profile = compiled.snapshot();
             let network_id = network_id(0xA7);
             let pool_id = PrivacyPoolIdV1::new([0xB6; 32]);
-            let namespace = PrivacyNamespaceV1::new(
-                PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            let namespace = PrivacyRuntimeNamespaceV1::new(
+                PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
                 PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 { pool_id }),
             );
             let asset_definition_id = AssetDefinitionId::derive_from_components(
@@ -2914,7 +2927,7 @@ mod tests {
                 },
             };
             let statement =
-                PrivacyStatementV1::OrchardHalo2ActionsV1(OrchardHalo2ActionsStatementV1 {
+                PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(OrchardHalo2ActionsStatementV1 {
                     context: statement_context,
                     asset_definition_id,
                     public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
@@ -2938,7 +2951,7 @@ mod tests {
                     expiry_height: 100,
                 });
             let statement_digest = statement.digest().expect("Orchard statement digest");
-            let envelope = PrivacyProofEnvelopeV1 {
+            let envelope = PrivacyRuntimeProofEnvelopeV1 {
                 wire_magic: iroha_data_model::privacy::PrivacyProofWireMagicV1::default(),
                 catalog_commitment:
                     iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::default(),
@@ -2952,7 +2965,7 @@ mod tests {
                 engine_manifest_digest: compiled.engine_manifest_digest,
                 statement_digest,
                 statement,
-                proof: PrivacyProofV1::OrchardHalo2ActionsV1(PrivacyProofBytesV1::new(
+                proof: PrivacyRuntimeProofV1::OrchardHalo2ActionsV1(PrivacyProofBytesV1::new(
                     authorization.clone(),
                 )),
             };
@@ -2988,9 +3001,158 @@ mod tests {
         FIXTURE.get_or_init(OrchardFixture::new)
     }
     fn orchard_statement_mut(
-        envelope: &mut PrivacyProofEnvelopeV1,
+        envelope: &mut PrivacyRuntimeProofEnvelopeV1,
     ) -> &mut OrchardHalo2ActionsStatementV1 {
-        let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut envelope.statement else {
+        let PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement) = &mut envelope.statement
+        else {
+            unreachable!("Orchard fixture")
+        };
+        statement
+    }
+    struct IronwoodFixture {
+        envelope: PrivacyRuntimeProofEnvelopeV1,
+        profile: PrivacyCompiledProfileSnapshotV1,
+        network_id: NetworkId,
+        namespace: PrivacyRuntimeNamespaceV1,
+        snapshot: PrivacyOrchardPoolSnapshotV1,
+    }
+    impl IronwoodFixture {
+        fn new() -> Self {
+            let compiled =
+                compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1)
+                    .expect("compiled Orchard");
+            let profile = compiled.snapshot();
+            let network_id = network_id(0xA7);
+            let pool_id = PrivacyPoolIdV1::new([0xB6; 32]);
+            let namespace = PrivacyRuntimeNamespaceV1::new(
+                PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1,
+                PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 { pool_id }),
+            );
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
+                DomainId::try_new("privacy", "universal").expect("domain"),
+                Name::from_str("orchard_asset").expect("name"),
+            );
+            let reserve_key = KeyPair::try_from_seed(vec![0xB7; 32], Algorithm::Ed25519)
+                .expect("reserve keypair");
+            let snapshot = PrivacyOrchardPoolSnapshotV1::canonical_bootstrap_for_test(
+                namespace,
+                asset_definition_id.clone(),
+                AssetBalanceScope::Global,
+                AccountId::new(reserve_key.public_key().clone()),
+            );
+            let statement_context = PrivacyStatementContextV1 {
+                network_id,
+                action_index: 0,
+                transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x44; 32]),
+                parameter_id: compiled.parameter_id,
+                parameter_digest: compiled.parameter_digest,
+                verifier_digest: compiled.verifier_digest,
+                statement_schema_digest: compiled.statement_schema_digest,
+                engine_manifest_digest: compiled.engine_manifest_digest,
+            };
+            let consensus_binding = PrivacyNativeConsensusBindingV1::new(
+                &statement_context,
+                [0xA7; 32],
+                &TEST_CONSENSUS_LIMITS,
+            )
+            .expect("canonical Orchard runtime consensus binding");
+            let (public, authorization) =
+                crate::privacy_engines::orchard::tests::build_ironwood_fixture(&consensus_binding);
+            assert_eq!(
+                public.anchor,
+                snapshot.current_root().into_bytes(),
+                "native fixture uses the canonical empty Orchard anchor"
+            );
+            let value_balance = match public.value_balance.cmp(&0) {
+                core::cmp::Ordering::Equal => PrivacyValueBalanceV1::balanced(),
+                core::cmp::Ordering::Less => PrivacyValueBalanceV1 {
+                    direction: PrivacyValueBalanceDirectionV1::IntoPool,
+                    amount: u128::from(public.value_balance.unsigned_abs()),
+                },
+                core::cmp::Ordering::Greater => PrivacyValueBalanceV1 {
+                    direction: PrivacyValueBalanceDirectionV1::OutOfPool,
+                    amount: u128::from(public.value_balance.unsigned_abs()),
+                },
+            };
+            let statement =
+                PrivacyRuntimeStatementV1::IronwoodHalo2ActionsV1(OrchardHalo2ActionsStatementV1 {
+                    context: statement_context,
+                    asset_definition_id,
+                    public_balance_scope: iroha_data_model::asset::AssetBalanceScope::Global,
+                    pool_id,
+                    anchor: snapshot.current_root(),
+                    anchor_epoch: snapshot.current_epoch(),
+                    actions: public
+                        .actions
+                        .iter()
+                        .map(|action| PrivacyOrchardActionV1 {
+                            nullifier: action.nullifier,
+                            randomized_key: action.randomized_key,
+                            note_commitment: action.note_commitment,
+                            ephemeral_key: action.ephemeral_key,
+                            encrypted_note: action.encrypted_note.to_vec(),
+                            outgoing_ciphertext: action.outgoing_ciphertext.to_vec(),
+                            value_commitment: action.value_commitment,
+                        })
+                        .collect(),
+                    value_balance,
+                    expiry_height: 100,
+                });
+            let statement_digest = statement.digest().expect("Orchard statement digest");
+            let envelope = PrivacyRuntimeProofEnvelopeV1 {
+                wire_magic: iroha_data_model::privacy::PrivacyProofWireMagicV1::default(),
+                catalog_commitment:
+                    iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::default(),
+                protocol_id: compiled.protocol_id,
+                proof_system_id: compiled.proof_system_id,
+                engine_id: compiled.engine_id,
+                parameter_id: compiled.parameter_id,
+                parameter_digest: compiled.parameter_digest,
+                verifier_digest: compiled.verifier_digest,
+                statement_schema_digest: compiled.statement_schema_digest,
+                engine_manifest_digest: compiled.engine_manifest_digest,
+                statement_digest,
+                statement,
+                proof: PrivacyRuntimeProofV1::IronwoodHalo2ActionsV1(PrivacyProofBytesV1::new(
+                    authorization.clone(),
+                )),
+            };
+            Self {
+                envelope,
+                profile,
+                network_id,
+                namespace,
+                snapshot,
+            }
+        }
+        fn verification_context(&self) -> PrivacyVerificationContextV1<'_> {
+            PrivacyVerificationContextV1 {
+                profile: &self.profile,
+                protocol_limits: &self.profile.protocol_limits,
+                consensus_limits: &TEST_CONSENSUS_LIMITS,
+                network_id: &self.network_id,
+                genesis_hash: [0xA7; 32],
+                current_height: 10,
+                expected_action_index: 0,
+                block_timestamp_ms: 1_800_000_000_000,
+                pgc_state: None,
+                orchard_state: Some(&self.snapshot),
+                proof_managed_state: None,
+                zk_x509_state: None,
+                bootle_lantern_policy: None,
+                vega_issuer_record: None,
+            }
+        }
+    }
+    fn ironwood_fixture() -> &'static IronwoodFixture {
+        static FIXTURE: OnceLock<IronwoodFixture> = OnceLock::new();
+        FIXTURE.get_or_init(IronwoodFixture::new)
+    }
+    fn ironwood_statement_mut(
+        envelope: &mut PrivacyRuntimeProofEnvelopeV1,
+    ) -> &mut OrchardHalo2ActionsStatementV1 {
+        let PrivacyRuntimeStatementV1::IronwoodHalo2ActionsV1(statement) = &mut envelope.statement
+        else {
             unreachable!("Orchard fixture")
         };
         statement
@@ -3036,10 +3198,10 @@ mod tests {
                 reserve_account,
             }
         }
-        fn expected_namespace(&self) -> PrivacyNamespaceV1 {
-            PrivacyNamespaceV1::from_statement(&PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(
-                self.statement.clone(),
-            ))
+        fn expected_namespace(&self) -> PrivacyRuntimeNamespaceV1 {
+            PrivacyRuntimeNamespaceV1::from_statement(
+                &PrivacyRuntimeStatementV1::IrohaIvmPrivateNoteStarkV1(self.statement.clone()),
+            )
         }
     }
     struct PqMaspPreflightFixture {
@@ -3068,19 +3230,22 @@ mod tests {
                 input_commitment,
             }
         }
-        fn expected_namespace(&self) -> PrivacyNamespaceV1 {
-            PrivacyNamespaceV1::from_statement(&PrivacyStatementV1::PqMaspStarkV1(
+        fn expected_namespace(&self) -> PrivacyRuntimeNamespaceV1 {
+            PrivacyRuntimeNamespaceV1::from_statement(&PrivacyRuntimeStatementV1::PqMaspStarkV1(
                 self.statement.clone(),
             ))
         }
-        fn envelope(statement: &PqMaspStarkStatementV1, proof: Vec<u8>) -> PrivacyProofEnvelopeV1 {
-            let typed_statement = PrivacyStatementV1::PqMaspStarkV1(statement.clone());
+        fn envelope(
+            statement: &PqMaspStarkStatementV1,
+            proof: Vec<u8>,
+        ) -> PrivacyRuntimeProofEnvelopeV1 {
+            let typed_statement = PrivacyRuntimeStatementV1::PqMaspStarkV1(statement.clone());
             let statement_digest = typed_statement.digest().expect("PQ-MASP statement digest");
-            PrivacyProofEnvelopeV1 {
+            PrivacyRuntimeProofEnvelopeV1 {
                 wire_magic: iroha_data_model::privacy::PrivacyProofWireMagicV1::default(),
                 catalog_commitment:
                     iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::default(),
-                protocol_id: PrivacyProtocolIdV1::PqMaspStarkV1,
+                protocol_id: PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
                 proof_system_id: PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks,
                 engine_id: PrivacyEngineIdV1::NativeGoldilocksSha3_384StarkFri,
                 parameter_id: statement.context.parameter_id,
@@ -3090,23 +3255,24 @@ mod tests {
                 engine_manifest_digest: statement.context.engine_manifest_digest,
                 statement_digest,
                 statement: typed_statement,
-                proof: PrivacyProofV1::PqMaspStarkV1(PrivacyProofBytesV1::new(proof)),
+                proof: PrivacyRuntimeProofV1::PqMaspStarkV1(PrivacyProofBytesV1::new(proof)),
             }
         }
     }
     fn fcmp_statement_mut(
-        envelope: &mut PrivacyProofEnvelopeV1,
+        envelope: &mut PrivacyRuntimeProofEnvelopeV1,
     ) -> &mut MoneroFcmpPlusPlusStatementV1 {
-        let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut envelope.statement else {
+        let PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut envelope.statement
+        else {
             unreachable!("FCMP++ fixture")
         };
         statement
     }
     struct PgcFixture {
-        envelope: PrivacyProofEnvelopeV1,
+        envelope: PrivacyRuntimeProofEnvelopeV1,
         profile: PrivacyCompiledProfileSnapshotV1,
         network_id: NetworkId,
-        namespace: PrivacyNamespaceV1,
+        namespace: PrivacyRuntimeNamespaceV1,
         total_supply: u32,
         bootstrap_digest: PrivacyPgcAccountBootstrapDigestV1,
         bootstrap_proof_digest: PrivacyPgcBootstrapProofDigestV1,
@@ -3122,13 +3288,14 @@ mod tests {
             next_root_override: Option<PrivacyRootV1>,
             next_epoch_override: Option<u64>,
         ) -> Self {
-            let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
-                .expect("compiled Anonymous PGC");
+            let compiled =
+                compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1)
+                    .expect("compiled Anonymous PGC");
             let profile = compiled.snapshot();
             let network_id = network_id(0xA7);
             let pool_id = PrivacyPoolIdV1::new([0xb1; 32]);
-            let namespace = PrivacyNamespaceV1::new(
-                PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            let namespace = PrivacyRuntimeNamespaceV1::new(
+                PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
                 PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 { pool_id }),
             );
             let total_supply = 1_600;
@@ -3233,7 +3400,7 @@ mod tests {
                 engine_manifest_digest: compiled.engine_manifest_digest,
             };
             let statement =
-                PrivacyStatementV1::AnonymousPgcKOutOfNV1(AnonymousPgcKOutOfNStatementV1 {
+                PrivacyRuntimeStatementV1::AnonymousPgcKOutOfNV1(AnonymousPgcKOutOfNStatementV1 {
                     context: statement_context,
                     asset_definition_id: AssetDefinitionId::derive_from_components(
                         DomainId::try_new("privacy", "universal").expect("domain"),
@@ -3290,7 +3457,7 @@ mod tests {
             let proof = prove_payment(&native_statement, &witness, &mut KatRng::new([0xb4; 32]))
                 .expect("PGC payment proof")
                 .encode();
-            let envelope = PrivacyProofEnvelopeV1 {
+            let envelope = PrivacyRuntimeProofEnvelopeV1 {
                 wire_magic: iroha_data_model::privacy::PrivacyProofWireMagicV1::default(),
                 catalog_commitment:
                     iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::default(),
@@ -3304,7 +3471,9 @@ mod tests {
                 engine_manifest_digest: compiled.engine_manifest_digest,
                 statement_digest,
                 statement,
-                proof: PrivacyProofV1::AnonymousPgcKOutOfNV1(PrivacyProofBytesV1::new(proof)),
+                proof: PrivacyRuntimeProofV1::AnonymousPgcKOutOfNV1(PrivacyProofBytesV1::new(
+                    proof,
+                )),
             };
             Self {
                 envelope,
@@ -3381,24 +3550,25 @@ mod tests {
         }
     }
     fn verange_statement_mut(
-        envelope: &mut PrivacyProofEnvelopeV1,
+        envelope: &mut PrivacyRuntimeProofEnvelopeV1,
     ) -> &mut VeRangeTransparentRangeStatementV1 {
-        let PrivacyStatementV1::VeRangeTransparentRangeV1(statement) = &mut envelope.statement
+        let PrivacyRuntimeStatementV1::VeRangeTransparentRangeV1(statement) =
+            &mut envelope.statement
         else {
             unreachable!("VeRange fixture")
         };
         statement
     }
-    fn refresh_statement_digest(envelope: &mut PrivacyProofEnvelopeV1) {
+    fn refresh_statement_digest(envelope: &mut PrivacyRuntimeProofEnvelopeV1) {
         envelope.statement_digest = envelope
             .statement
             .digest()
             .expect("mutated statement remains canonically encodable");
     }
     fn jindo_statement_mut(
-        envelope: &mut PrivacyProofEnvelopeV1,
+        envelope: &mut PrivacyRuntimeProofEnvelopeV1,
     ) -> &mut IrohaJindoPolynomialCommitmentStatementV1 {
-        let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement) =
+        let PrivacyRuntimeStatementV1::IrohaJindoPolynomialCommitmentV1(statement) =
             &mut envelope.statement
         else {
             unreachable!("Jindo fixture")
@@ -3406,7 +3576,7 @@ mod tests {
         statement
     }
     fn assert_rejected(
-        envelope: &PrivacyProofEnvelopeV1,
+        envelope: &PrivacyRuntimeProofEnvelopeV1,
         profile: &PrivacyCompiledProfileSnapshotV1,
         network_id: &NetworkId,
         label: &str,
@@ -3418,7 +3588,7 @@ mod tests {
         );
     }
     fn assert_native_jindo_rejected(
-        envelope: &PrivacyProofEnvelopeV1,
+        envelope: &PrivacyRuntimeProofEnvelopeV1,
         context: &PrivacyVerificationContextV1<'_>,
         label: &str,
     ) {
@@ -3433,7 +3603,7 @@ mod tests {
     #[cfg(feature = "zk-stark")]
     #[test]
     fn zk_ace_production_dispatch_has_no_activatable_profile() {
-        let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
+        let protocol_id = PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1;
         assert_eq!(
             compiled_privacy_profile_v1(protocol_id),
             Err(
@@ -3465,7 +3635,8 @@ mod tests {
         };
         let batch_effects = verify_privacy_envelope_v1(&fixture.batch_envelope, &context(0))
             .expect("native ZK-AMS batch dispatch");
-        let PrivacyStatementV1::IrohaZkAmsV1(batch_statement) = &fixture.batch_envelope.statement
+        let PrivacyRuntimeStatementV1::IrohaZkAmsV1(batch_statement) =
+            &fixture.batch_envelope.statement
         else {
             unreachable!("ZK-AMS batch fixture")
         };
@@ -3488,7 +3659,7 @@ mod tests {
         let provision_effects =
             verify_privacy_envelope_v1(&fixture.provision_envelope, &context(0))
                 .expect("native ZK-AMS provision dispatch");
-        let PrivacyStatementV1::IrohaZkAmsV1(provision_statement) =
+        let PrivacyRuntimeStatementV1::IrohaZkAmsV1(provision_statement) =
             &fixture.provision_envelope.statement
         else {
             unreachable!("ZK-AMS provision fixture")
@@ -3511,7 +3682,7 @@ mod tests {
             provision_statement.registry_record_digest
         );
         let mut corrupt_batch = fixture.batch_envelope.clone();
-        let PrivacyProofV1::IrohaZkAmsV1(proof) = &mut corrupt_batch.proof else {
+        let PrivacyRuntimeProofV1::IrohaZkAmsV1(proof) = &mut corrupt_batch.proof else {
             unreachable!("ZK-AMS batch proof")
         };
         let proof = proof.bytes_mut();
@@ -3522,7 +3693,7 @@ mod tests {
             Err(PrivacyVerificationErrorV1::NativeZkAms(_))
         ));
         let mut rebound = fixture.provision_envelope.clone();
-        let PrivacyStatementV1::IrohaZkAmsV1(statement) = &mut rebound.statement else {
+        let PrivacyRuntimeStatementV1::IrohaZkAmsV1(statement) = &mut rebound.statement else {
             unreachable!("ZK-AMS provision fixture")
         };
         let PrivacyZkAmsActionV1::ProvisionAccount(provision) = &mut statement.action else {
@@ -3550,7 +3721,8 @@ mod tests {
     fn verified_verange_effects_are_exact_and_non_mutating() {
         let (envelope, profile, network_id) = valid_envelope();
         let canonical_bytes = u64::try_from(
-            norito::encode_canonical(&envelope)
+            envelope
+                .canonical_wire_bytes_v1()
                 .expect("canonical envelope")
                 .len(),
         )
@@ -3560,9 +3732,12 @@ mod tests {
         let _layout = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         assert_ne!(
             u64::try_from(
-                norito::to_bytes(&envelope)
-                    .expect("alternate envelope")
-                    .len()
+                norito::to_bytes(
+                    &iroha_data_model::privacy::PrivacyProofEnvelopeV1::try_from(envelope.clone())
+                        .expect("frozen VeRange envelope")
+                )
+                .expect("alternate envelope")
+                .len()
             )
             .expect("length"),
             canonical_bytes
@@ -3572,7 +3747,7 @@ mod tests {
                 .expect("valid proof");
         assert_eq!(
             effects.protocol_id(),
-            PrivacyProtocolIdV1::VeRangeTransparentRangeV1
+            PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1
         );
         assert_eq!(effects.statement_digest(), envelope.statement_digest);
         assert_eq!(effects.action_index(), 0);
@@ -3582,11 +3757,12 @@ mod tests {
     #[test]
     fn pgc_payment_native_decoder_retains_original_refusal_through_verifier() {
         let fixture = PgcFixture::new();
-        let PrivacyStatementV1::AnonymousPgcKOutOfNV1(statement) = &fixture.envelope.statement
+        let PrivacyRuntimeStatementV1::AnonymousPgcKOutOfNV1(statement) =
+            &fixture.envelope.statement
         else {
             panic!("PGC statement")
         };
-        let PrivacyProofV1::AnonymousPgcKOutOfNV1(proof) = &fixture.envelope.proof else {
+        let PrivacyRuntimeProofV1::AnonymousPgcKOutOfNV1(proof) = &fixture.envelope.proof else {
             panic!("PGC proof")
         };
         let context = fixture.verification_context();
@@ -3621,7 +3797,7 @@ mod tests {
         let PrivacyVerificationErrorV1::NativeAnonymousPgc(read) = refusal else {
             panic!("quota permits current root but refuses the actual native payment decoder");
         };
-        let AnonymousPgcReadError::Codec(original) = *read else {
+        let AnonymousPgcReadError::Codec(original) = read else {
             panic!("original decoder")
         };
         let owner = original
@@ -3640,11 +3816,12 @@ mod tests {
     #[test]
     fn pgc_payment_current_and_successor_root_refusals_keep_original_owner() {
         let fixture = PgcFixture::new();
-        let PrivacyStatementV1::AnonymousPgcKOutOfNV1(statement) = &fixture.envelope.statement
+        let PrivacyRuntimeStatementV1::AnonymousPgcKOutOfNV1(statement) =
+            &fixture.envelope.statement
         else {
             panic!("PGC statement");
         };
-        let PrivacyProofV1::AnonymousPgcKOutOfNV1(proof) = &fixture.envelope.proof else {
+        let PrivacyRuntimeProofV1::AnonymousPgcKOutOfNV1(proof) = &fixture.envelope.proof else {
             panic!("PGC proof");
         };
         let context = fixture.verification_context();
@@ -3702,7 +3879,7 @@ mod tests {
                 .expect("valid PGC payment");
         assert_eq!(
             effects.protocol_id(),
-            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
+            PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1
         );
         assert_eq!(
             effects.statement_digest(),
@@ -3844,19 +4021,20 @@ mod tests {
             Err(PrivacyVerificationErrorV1::NativeAnonymousPgc(_))
         ));
         let mut altered_proof = fixture.envelope.clone();
-        let PrivacyProofV1::AnonymousPgcKOutOfNV1(proof) = &altered_proof.proof else {
+        let PrivacyRuntimeProofV1::AnonymousPgcKOutOfNV1(proof) = &altered_proof.proof else {
             unreachable!("PGC proof")
         };
         let mut proof_bytes = proof.as_bytes().to_vec();
         let proof_middle = proof_bytes.len() / 2;
         proof_bytes[proof_middle] ^= 1;
         altered_proof.proof =
-            PrivacyProofV1::AnonymousPgcKOutOfNV1(PrivacyProofBytesV1::new(proof_bytes));
+            PrivacyRuntimeProofV1::AnonymousPgcKOutOfNV1(PrivacyProofBytesV1::new(proof_bytes));
         assert!(matches!(
             verify_privacy_envelope_v1(&altered_proof, &fixture.verification_context()),
             Err(PrivacyVerificationErrorV1::NativeAnonymousPgc(_))
         ));
-        let PrivacyProofV1::AnonymousPgcKOutOfNV1(valid_proof) = &fixture.envelope.proof else {
+        let PrivacyRuntimeProofV1::AnonymousPgcKOutOfNV1(valid_proof) = &fixture.envelope.proof
+        else {
             unreachable!("PGC proof")
         };
         for invalid_bytes in [
@@ -3868,30 +4046,35 @@ mod tests {
             },
         ] {
             let mut invalid = fixture.envelope.clone();
-            invalid.proof =
-                PrivacyProofV1::AnonymousPgcKOutOfNV1(PrivacyProofBytesV1::new(invalid_bytes));
+            invalid.proof = PrivacyRuntimeProofV1::AnonymousPgcKOutOfNV1(PrivacyProofBytesV1::new(
+                invalid_bytes,
+            ));
             assert!(matches!(
                 verify_privacy_envelope_v1(&invalid, &fixture.verification_context()),
                 Err(PrivacyVerificationErrorV1::NativeAnonymousPgc(_))
             ));
         }
         let mut empty = fixture.envelope.clone();
-        empty.proof = PrivacyProofV1::AnonymousPgcKOutOfNV1(PrivacyProofBytesV1::new(Vec::new()));
+        empty.proof =
+            PrivacyRuntimeProofV1::AnonymousPgcKOutOfNV1(PrivacyProofBytesV1::new(Vec::new()));
         assert!(matches!(
             verify_privacy_envelope_v1(&empty, &fixture.verification_context()),
             Err(PrivacyVerificationErrorV1::Envelope(_))
         ));
         let mut all_zero = fixture.envelope.clone();
-        all_zero.proof = PrivacyProofV1::AnonymousPgcKOutOfNV1(PrivacyProofBytesV1::new(vec![
-            0;
-            valid_proof.as_bytes().len()
-        ]));
+        all_zero.proof =
+            PrivacyRuntimeProofV1::AnonymousPgcKOutOfNV1(PrivacyProofBytesV1::new(vec![
+                0;
+                valid_proof
+                    .as_bytes()
+                    .len()
+            ]));
         assert!(matches!(
             verify_privacy_envelope_v1(&all_zero, &fixture.verification_context()),
             Err(PrivacyVerificationErrorV1::Envelope(_))
         ));
         let mut duplicate_statement = fixture.envelope.clone();
-        let PrivacyStatementV1::AnonymousPgcKOutOfNV1(statement) =
+        let PrivacyRuntimeStatementV1::AnonymousPgcKOutOfNV1(statement) =
             &mut duplicate_statement.statement
         else {
             unreachable!("PGC statement")
@@ -3931,7 +4114,7 @@ mod tests {
                 .expect("valid Orchard action");
         assert_eq!(
             effects.protocol_id(),
-            PrivacyProtocolIdV1::OrchardHalo2ActionsV1
+            PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1
         );
         assert_eq!(
             effects.statement_digest(),
@@ -3948,7 +4131,7 @@ mod tests {
             .expect("bounded envelope length")
         );
         let statement = match &fixture.envelope.statement {
-            PrivacyStatementV1::OrchardHalo2ActionsV1(statement) => statement,
+            PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement) => statement,
             _ => unreachable!("Orchard fixture"),
         };
         let effect = match effects.ledger() {
@@ -4034,8 +4217,8 @@ mod tests {
             Err(PrivacyVerificationErrorV1::OrchardState(detail))
                 if detail.code == PrivacyOrchardStateFailureCodeV1::MissingTrustedState
         ));
-        let other_namespace = PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+        let other_namespace = PrivacyRuntimeNamespaceV1::new(
+            PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
             PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                 pool_id: PrivacyPoolIdV1::new([0xC1; 32]),
             }),
@@ -4150,7 +4333,8 @@ mod tests {
             verify_privacy_envelope_v1(&changed_balance, &fixture.verification_context()),
             Err(PrivacyVerificationErrorV1::NativeOrchard(_))
         ));
-        let PrivacyProofV1::OrchardHalo2ActionsV1(valid_proof) = &fixture.envelope.proof else {
+        let PrivacyRuntimeProofV1::OrchardHalo2ActionsV1(valid_proof) = &fixture.envelope.proof
+        else {
             unreachable!("Orchard proof")
         };
         for invalid_bytes in [
@@ -4179,8 +4363,212 @@ mod tests {
             },
         ] {
             let mut changed = fixture.envelope.clone();
-            changed.proof =
-                PrivacyProofV1::OrchardHalo2ActionsV1(PrivacyProofBytesV1::new(invalid_bytes));
+            changed.proof = PrivacyRuntimeProofV1::OrchardHalo2ActionsV1(PrivacyProofBytesV1::new(
+                invalid_bytes,
+            ));
+            assert!(matches!(
+                verify_privacy_envelope_v1(&changed, &fixture.verification_context()),
+                Err(PrivacyVerificationErrorV1::NativeOrchard(_))
+            ));
+        }
+    }
+    #[test]
+    fn ironwood_envelope_is_pool_and_profile_pinned() {
+        let new = ironwood_fixture();
+        let old = orchard_fixture();
+        let effects = verify_privacy_envelope_v1(&new.envelope, &new.verification_context())
+            .unwrap()
+            .into_ledger();
+        assert!(
+            effects.discharges_role_v1(
+                iroha_data_model::privacy::PrivacyActionRoleV1::IronwoodActions
+            )
+        );
+        assert!(
+            !effects
+                .discharges_role_v1(iroha_data_model::privacy::PrivacyActionRoleV1::OrchardActions)
+        );
+        for (envelope, mut context, other_profile, other_snapshot) in [
+            (
+                &new.envelope,
+                new.verification_context(),
+                &old.profile,
+                &old.snapshot,
+            ),
+            (
+                &old.envelope,
+                old.verification_context(),
+                &new.profile,
+                &new.snapshot,
+            ),
+        ] {
+            context.orchard_state = Some(other_snapshot);
+            assert!(
+                matches!(verify_privacy_envelope_v1(envelope, &context), Err(PrivacyVerificationErrorV1::OrchardState(detail)) if detail.code == PrivacyOrchardStateFailureCodeV1::NamespaceMismatch)
+            );
+            context.profile = other_profile;
+            assert!(verify_privacy_envelope_v1(envelope, &context).is_err());
+        }
+    }
+    #[test]
+    fn ironwood_trusted_state_statement_and_authorization_tampering_fail_closed() {
+        let fixture = ironwood_fixture();
+        let mut context = fixture.verification_context();
+        context.orchard_state = None;
+        assert!(matches!(
+            verify_privacy_envelope_v1(&fixture.envelope, &context),
+            Err(PrivacyVerificationErrorV1::OrchardState(detail))
+                if detail.code == PrivacyOrchardStateFailureCodeV1::MissingTrustedState
+        ));
+        let other_namespace = PrivacyRuntimeNamespaceV1::new(
+            PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1,
+            PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                pool_id: PrivacyPoolIdV1::new([0xC1; 32]),
+            }),
+        );
+        let other_pool = PrivacyOrchardPoolSnapshotV1::canonical_bootstrap_for_test(
+            other_namespace,
+            fixture.snapshot.state().asset_definition_id().clone(),
+            fixture.snapshot.state().public_balance_scope(),
+            fixture.snapshot.state().reserve_account().clone(),
+        );
+        let mut context = fixture.verification_context();
+        context.orchard_state = Some(&other_pool);
+        assert!(matches!(
+            verify_privacy_envelope_v1(&fixture.envelope, &context),
+            Err(PrivacyVerificationErrorV1::OrchardState(detail))
+                if detail.code == PrivacyOrchardStateFailureCodeV1::NamespaceMismatch
+        ));
+        let wrong_asset = PrivacyOrchardPoolSnapshotV1::canonical_bootstrap_for_test(
+            fixture.namespace,
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("privacy", "universal").expect("domain"),
+                Name::from_str("wrong_orchard_asset").expect("name"),
+            ),
+            fixture.snapshot.state().public_balance_scope(),
+            fixture.snapshot.state().reserve_account().clone(),
+        );
+        let mut context = fixture.verification_context();
+        context.orchard_state = Some(&wrong_asset);
+        assert!(matches!(
+            verify_privacy_envelope_v1(&fixture.envelope, &context),
+            Err(PrivacyVerificationErrorV1::OrchardState(detail))
+                if detail.code == PrivacyOrchardStateFailureCodeV1::AssetMismatch
+        ));
+        let wrong_scope = PrivacyOrchardPoolSnapshotV1::canonical_bootstrap_for_test(
+            fixture.namespace,
+            fixture.snapshot.state().asset_definition_id().clone(),
+            AssetBalanceScope::Dataspace(iroha_model_base::topology::DataSpaceId::new(7)),
+            fixture.snapshot.state().reserve_account().clone(),
+        );
+        let mut context = fixture.verification_context();
+        context.orchard_state = Some(&wrong_scope);
+        assert!(matches!(
+            verify_privacy_envelope_v1(&fixture.envelope, &context),
+            Err(PrivacyVerificationErrorV1::OrchardState(detail))
+                if detail.code == PrivacyOrchardStateFailureCodeV1::PublicBalanceScopeMismatch
+        ));
+        let mut stale_anchor = fixture.envelope.clone();
+        let statement = ironwood_statement_mut(&mut stale_anchor);
+        statement.anchor = PrivacyRootV1::new([0xC4; 32]);
+        statement.anchor_epoch += 1;
+        refresh_statement_digest(&mut stale_anchor);
+        assert!(matches!(
+            verify_privacy_envelope_v1(&stale_anchor, &fixture.verification_context()),
+            Err(PrivacyVerificationErrorV1::OrchardState(detail))
+                if detail.code == PrivacyOrchardStateFailureCodeV1::AnchorNotRetained
+        ));
+        let mut context = fixture.verification_context();
+        context.current_height = 101;
+        assert!(matches!(
+            verify_privacy_envelope_v1(&fixture.envelope, &context),
+            Err(PrivacyVerificationErrorV1::OrchardState(detail))
+                if detail.code == PrivacyOrchardStateFailureCodeV1::Expired
+        ));
+        let mut invalid_commitment = fixture.envelope.clone();
+        ironwood_statement_mut(&mut invalid_commitment).actions[0].note_commitment = [u8::MAX; 32];
+        refresh_statement_digest(&mut invalid_commitment);
+        assert!(matches!(
+            verify_privacy_envelope_v1(
+                &invalid_commitment,
+                &fixture.verification_context()
+            ),
+            Err(PrivacyVerificationErrorV1::OrchardState(detail))
+                if detail.code == PrivacyOrchardStateFailureCodeV1::SuccessorDerivation
+        ));
+        let mut wrong_width = fixture.envelope.clone();
+        ironwood_statement_mut(&mut wrong_width).actions[0]
+            .encrypted_note
+            .pop();
+        refresh_statement_digest(&mut wrong_width);
+        assert!(matches!(
+            verify_privacy_envelope_v1(&wrong_width, &fixture.verification_context()),
+            Err(PrivacyVerificationErrorV1::Envelope(_))
+        ));
+        let public_mutations: [fn(&mut OrchardHalo2ActionsStatementV1); 7] = [
+            |statement| statement.context.transaction_intent_digest.0[0] ^= 1,
+            |statement| statement.actions[0].nullifier[0] ^= 1,
+            |statement| statement.actions[0].randomized_key[0] ^= 1,
+            |statement| statement.actions[0].ephemeral_key[0] ^= 1,
+            |statement| statement.actions[0].encrypted_note[0] ^= 1,
+            |statement| statement.actions[0].outgoing_ciphertext[0] ^= 1,
+            |statement| statement.actions[0].value_commitment[0] ^= 1,
+        ];
+        for mutate in public_mutations {
+            let mut changed = fixture.envelope.clone();
+            mutate(ironwood_statement_mut(&mut changed));
+            refresh_statement_digest(&mut changed);
+            assert!(
+                matches!(
+                    verify_privacy_envelope_v1(&changed, &fixture.verification_context()),
+                    Err(PrivacyVerificationErrorV1::NativeOrchard(_))
+                ),
+                "every native public field must be proof/signature bound"
+            );
+        }
+        let mut changed_balance = fixture.envelope.clone();
+        ironwood_statement_mut(&mut changed_balance).value_balance = PrivacyValueBalanceV1 {
+            direction: PrivacyValueBalanceDirectionV1::OutOfPool,
+            amount: 1,
+        };
+        refresh_statement_digest(&mut changed_balance);
+        assert!(matches!(
+            verify_privacy_envelope_v1(&changed_balance, &fixture.verification_context()),
+            Err(PrivacyVerificationErrorV1::NativeOrchard(_))
+        ));
+        let PrivacyRuntimeProofV1::IronwoodHalo2ActionsV1(valid_proof) = &fixture.envelope.proof
+        else {
+            unreachable!("Orchard proof")
+        };
+        for invalid_bytes in [
+            valid_proof.as_bytes()[..valid_proof.as_bytes().len() - 1].to_vec(),
+            {
+                let mut trailing = valid_proof.as_bytes().to_vec();
+                trailing.push(0);
+                trailing
+            },
+            {
+                let mut corrupt = valid_proof.as_bytes().to_vec();
+                corrupt[0] ^= 1;
+                corrupt
+            },
+            {
+                let mut corrupt = valid_proof.as_bytes().to_vec();
+                let middle = corrupt.len() / 2;
+                corrupt[middle] ^= 1;
+                corrupt
+            },
+            {
+                let mut corrupt = valid_proof.as_bytes().to_vec();
+                let last = corrupt.len() - 1;
+                corrupt[last] ^= 1;
+                corrupt
+            },
+        ] {
+            let mut changed = fixture.envelope.clone();
+            changed.proof = PrivacyRuntimeProofV1::IronwoodHalo2ActionsV1(
+                PrivacyProofBytesV1::new(invalid_bytes),
+            );
             assert!(matches!(
                 verify_privacy_envelope_v1(&changed, &fixture.verification_context()),
                 Err(PrivacyVerificationErrorV1::NativeOrchard(_))
@@ -4196,7 +4584,7 @@ mod tests {
         )
         .expect("valid FCMP++ transaction");
         let statement = match &fixture.envelope.statement {
-            PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) => statement,
+            PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1(statement) => statement,
             _ => unreachable!("FCMP++ fixture"),
         };
         let effect = match effects.ledger() {
@@ -4673,8 +5061,8 @@ mod tests {
             panic!("adversarial statement must have exactly two encrypted outputs");
         };
         core::mem::swap(&mut first.recipient, &mut second.recipient);
-        let ordered_namespace = PrivacyNamespaceV1::from_statement(
-            &PrivacyStatementV1::PqMaspStarkV1(reordered_keys.clone()),
+        let ordered_namespace = PrivacyRuntimeNamespaceV1::from_statement(
+            &PrivacyRuntimeStatementV1::PqMaspStarkV1(reordered_keys.clone()),
         );
         assert!(matches!(
             prepare_pq_masp_transition_v1(
@@ -4924,7 +5312,7 @@ mod tests {
                 if detail.code == PrivacyFcmpStateFailureCodeV1::MissingTrustedState
         ));
         let statement = match &fixture.envelope.statement {
-            PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) => statement,
+            PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1(statement) => statement,
             _ => unreachable!("FCMP++ fixture"),
         };
         let other_namespace = PrivacyProofManagedPoolSnapshotV1::canonical_fcmp_bootstrap_for_test(
@@ -5023,7 +5411,7 @@ mod tests {
         let fixture = fcmp_fixture();
         let pristine = fixture.snapshot.clone();
         let mut corrupt_proof = fixture.envelope.clone();
-        let PrivacyProofV1::MoneroFcmpPlusPlusV1(proof) = &mut corrupt_proof.proof else {
+        let PrivacyRuntimeProofV1::MoneroFcmpPlusPlusV1(proof) = &mut corrupt_proof.proof else {
             unreachable!("FCMP++ proof")
         };
         let middle = proof.bytes.len() / 2;
@@ -5036,7 +5424,8 @@ mod tests {
             Err(PrivacyVerificationErrorV1::NativeFcmp(_))
         ));
         let mut corrupt_range_proof = fixture.envelope.clone();
-        let PrivacyProofV1::MoneroFcmpPlusPlusV1(proof) = &mut corrupt_range_proof.proof else {
+        let PrivacyRuntimeProofV1::MoneroFcmpPlusPlusV1(proof) = &mut corrupt_range_proof.proof
+        else {
             unreachable!("FCMP++ proof")
         };
         let last = proof.bytes.len() - 1;
@@ -5049,7 +5438,8 @@ mod tests {
             Err(PrivacyVerificationErrorV1::NativeFcmp(_))
         ));
         let mut mismatching_output_count = fixture.envelope.clone();
-        let PrivacyProofV1::MoneroFcmpPlusPlusV1(proof) = &mut mismatching_output_count.proof
+        let PrivacyRuntimeProofV1::MoneroFcmpPlusPlusV1(proof) =
+            &mut mismatching_output_count.proof
         else {
             unreachable!("FCMP++ proof")
         };
@@ -5279,7 +5669,8 @@ mod tests {
         replay_context.expected_action_index = 1;
         let replay_runtime_context =
             fcmp_runtime_context_hash_v1(&fixture.envelope, &replay_context);
-        let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &fixture.envelope.statement
+        let PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1(statement) =
+            &fixture.envelope.statement
         else {
             unreachable!("FCMP++ fixture")
         };
@@ -5314,7 +5705,7 @@ mod tests {
             })
             .collect::<Result<Vec<_>, _>>()
             .expect("fixture outputs");
-        let PrivacyProofV1::MoneroFcmpPlusPlusV1(proof) = &fixture.envelope.proof else {
+        let PrivacyRuntimeProofV1::MoneroFcmpPlusPlusV1(proof) = &fixture.envelope.proof else {
             unreachable!("FCMP++ fixture proof")
         };
         let native_error = verify_fcmp_transaction_v1(
@@ -5378,7 +5769,7 @@ mod tests {
         let wrong_network = network_id(0xA8);
         let mut malformed_envelope = envelope.clone();
         malformed_envelope.proof =
-            PrivacyProofV1::ZkAcePqAuthorizationV1(envelope.proof.bytes().clone());
+            PrivacyRuntimeProofV1::ZkAcePqAuthorizationV1(envelope.proof.bytes().clone());
         let mut altered_profile = profile;
         altered_profile.verifier_digest.0[0] ^= 1;
         let mut all_invalid_context = verification_context(&altered_profile, &wrong_network);
@@ -5417,7 +5808,7 @@ mod tests {
             Err(PrivacyVerificationErrorV1::CompiledProfile(_))
         ));
         let mut altered_statement = envelope.clone();
-        let PrivacyStatementV1::VeRangeTransparentRangeV1(statement) =
+        let PrivacyRuntimeStatementV1::VeRangeTransparentRangeV1(statement) =
             &mut altered_statement.statement
         else {
             unreachable!("fixture")
@@ -5435,7 +5826,8 @@ mod tests {
             Err(PrivacyVerificationErrorV1::NativeVeRange(_))
         ));
         let mut altered_proof = envelope.clone();
-        let PrivacyProofV1::VeRangeTransparentRangeV1(proof) = &mut altered_proof.proof else {
+        let PrivacyRuntimeProofV1::VeRangeTransparentRangeV1(proof) = &mut altered_proof.proof
+        else {
             unreachable!("fixture")
         };
         let last = proof.bytes.last_mut().expect("proof is non-empty");
@@ -5458,14 +5850,15 @@ mod tests {
     #[test]
     fn proof_wire_rejects_truncation_extensions_and_single_byte_malleation() {
         let (envelope, profile, network_id) = valid_envelope();
-        let PrivacyProofV1::VeRangeTransparentRangeV1(proof) = &envelope.proof else {
+        let PrivacyRuntimeProofV1::VeRangeTransparentRangeV1(proof) = &envelope.proof else {
             unreachable!("VeRange fixture")
         };
         let proof_len = proof.bytes.len();
         assert!(proof_len > 8, "fixture must exercise a structured proof");
         for length in [0, 1, proof_len / 3, proof_len / 2, proof_len - 1] {
             let mut candidate = envelope.clone();
-            let PrivacyProofV1::VeRangeTransparentRangeV1(bytes) = &mut candidate.proof else {
+            let PrivacyRuntimeProofV1::VeRangeTransparentRangeV1(bytes) = &mut candidate.proof
+            else {
                 unreachable!("VeRange fixture")
             };
             bytes.bytes.truncate(length);
@@ -5478,7 +5871,8 @@ mod tests {
         }
         for suffix in [&[0_u8][..], &[0xFF][..], &[0x00, 0xFF][..]] {
             let mut candidate = envelope.clone();
-            let PrivacyProofV1::VeRangeTransparentRangeV1(bytes) = &mut candidate.proof else {
+            let PrivacyRuntimeProofV1::VeRangeTransparentRangeV1(bytes) = &mut candidate.proof
+            else {
                 unreachable!("VeRange fixture")
             };
             bytes.bytes.extend_from_slice(suffix);
@@ -5491,7 +5885,8 @@ mod tests {
         }
         for offset in [0, 1, proof_len / 3, proof_len / 2, proof_len - 1] {
             let mut candidate = envelope.clone();
-            let PrivacyProofV1::VeRangeTransparentRangeV1(bytes) = &mut candidate.proof else {
+            let PrivacyRuntimeProofV1::VeRangeTransparentRangeV1(bytes) = &mut candidate.proof
+            else {
                 unreachable!("VeRange fixture")
             };
             bytes.bytes[offset] ^= 0x80;
@@ -5503,7 +5898,7 @@ mod tests {
             );
         }
         let mut all_zero = envelope.clone();
-        let PrivacyProofV1::VeRangeTransparentRangeV1(bytes) = &mut all_zero.proof else {
+        let PrivacyRuntimeProofV1::VeRangeTransparentRangeV1(bytes) = &mut all_zero.proof else {
             unreachable!("VeRange fixture")
         };
         bytes.bytes.fill(0);
@@ -5565,7 +5960,7 @@ mod tests {
         let (envelope, profile, network_id) = valid_envelope();
         verify_privacy_envelope_v1(&envelope, &verification_context(&profile, &network_id))
             .expect("canonical native proof needs no profile state");
-        let wrong_limits = PrivacyProtocolLimitsV1::IrohaZkX509StarkP256V1;
+        let wrong_limits = PrivacyRuntimeProtocolLimitsV1::IrohaZkX509StarkP256V1;
         let mut wrong_policy_context = verification_context(&profile, &network_id);
         wrong_policy_context.protocol_limits = &wrong_limits;
         assert!(
@@ -5598,7 +5993,8 @@ mod tests {
     #[test]
     fn jindo_runtime_verification_is_non_mutating_and_honors_the_authoritative_proof_cap() {
         let fixture = jindo_fixture();
-        let PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(proof) = &fixture.envelope.proof
+        let PrivacyRuntimeProofV1::IrohaJindoPolynomialCommitmentV1(proof) =
+            &fixture.envelope.proof
         else {
             unreachable!("Jindo fixture")
         };
@@ -5610,7 +6006,7 @@ mod tests {
         .expect("valid native Jindo proof");
         assert_eq!(
             effects.protocol_id(),
-            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
+            PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1
         );
         assert_eq!(
             effects.statement_digest(),
@@ -5638,7 +6034,7 @@ mod tests {
     }
     #[test]
     fn vega_unavailable_engine_has_no_verifier_bypass() {
-        let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV1;
+        let protocol_id = PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1;
         assert_eq!(
             compiled_privacy_profile_v1(protocol_id),
             Err(
@@ -5651,14 +6047,16 @@ mod tests {
     #[test]
     fn jindo_wire_rejects_truncation_extension_cross_suite_and_relation_malleation() {
         let fixture = jindo_fixture();
-        let PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(valid_proof) = &fixture.envelope.proof
+        let PrivacyRuntimeProofV1::IrohaJindoPolynomialCommitmentV1(valid_proof) =
+            &fixture.envelope.proof
         else {
             unreachable!("Jindo fixture")
         };
         let proof_len = valid_proof.as_bytes().len();
         for length in [1, proof_len / 2, proof_len - 1] {
             let mut candidate = fixture.envelope.clone();
-            let PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(bytes) = &mut candidate.proof
+            let PrivacyRuntimeProofV1::IrohaJindoPolynomialCommitmentV1(bytes) =
+                &mut candidate.proof
             else {
                 unreachable!("Jindo fixture")
             };
@@ -5671,7 +6069,8 @@ mod tests {
         }
         for suffix in [&[0_u8][..], &[0xff][..], &[0, 0xff][..]] {
             let mut candidate = fixture.envelope.clone();
-            let PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(bytes) = &mut candidate.proof
+            let PrivacyRuntimeProofV1::IrohaJindoPolynomialCommitmentV1(bytes) =
+                &mut candidate.proof
             else {
                 unreachable!("Jindo fixture")
             };
@@ -5684,7 +6083,8 @@ mod tests {
         }
         for offset in [0, proof_len / 3, proof_len / 2, proof_len - 1] {
             let mut candidate = fixture.envelope.clone();
-            let PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(bytes) = &mut candidate.proof
+            let PrivacyRuntimeProofV1::IrohaJindoPolynomialCommitmentV1(bytes) =
+                &mut candidate.proof
             else {
                 unreachable!("Jindo fixture")
             };
@@ -5696,8 +6096,9 @@ mod tests {
             );
         }
         let mut empty = fixture.envelope.clone();
-        empty.proof =
-            PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(PrivacyProofBytesV1::new(Vec::new()));
+        empty.proof = PrivacyRuntimeProofV1::IrohaJindoPolynomialCommitmentV1(
+            PrivacyProofBytesV1::new(Vec::new()),
+        );
         assert!(matches!(
             verify_privacy_envelope_v1(
                 &empty,
@@ -5706,7 +6107,7 @@ mod tests {
             Err(PrivacyVerificationErrorV1::Envelope(_))
         ));
         let mut all_zero = fixture.envelope.clone();
-        all_zero.proof = PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(
+        all_zero.proof = PrivacyRuntimeProofV1::IrohaJindoPolynomialCommitmentV1(
             PrivacyProofBytesV1::new(vec![0; proof_len]),
         );
         assert!(matches!(
@@ -5717,9 +6118,9 @@ mod tests {
             Err(PrivacyVerificationErrorV1::Envelope(_))
         ));
         let mut cross_suite = fixture.envelope.clone();
-        cross_suite.proof = PrivacyProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(
-            valid_proof.as_bytes().to_vec(),
-        ));
+        cross_suite.proof = PrivacyRuntimeProofV1::VeRangeTransparentRangeV1(
+            PrivacyProofBytesV1::new(valid_proof.as_bytes().to_vec()),
+        );
         assert!(matches!(
             verify_privacy_envelope_v1(
                 &cross_suite,
@@ -5815,7 +6216,7 @@ mod tests {
             Err(PrivacyVerificationErrorV1::Envelope(_)
                 | PrivacyVerificationErrorV1::NativeJindo(_))
         ));
-        let governed_mutations: [fn(&mut PrivacyProofEnvelopeV1); 5] = [
+        let governed_mutations: [fn(&mut PrivacyRuntimeProofEnvelopeV1); 5] = [
             |value| value.parameter_id.0[0] ^= 1,
             |value| value.parameter_digest.0[0] ^= 1,
             |value| value.verifier_digest.0[0] ^= 1,
@@ -5845,7 +6246,8 @@ mod tests {
     #[test]
     fn bootle_lantern_runtime_verifies_without_effects_and_enforces_the_exact_proof_cap() {
         let fixture = bootle_lantern_fixture();
-        let PrivacyProofV1::IrohaBootleLanternAnoncredV1(proof) = &fixture.envelope.proof else {
+        let PrivacyRuntimeProofV1::IrohaBootleLanternAnoncredV1(proof) = &fixture.envelope.proof
+        else {
             unreachable!("Bootle/Lantern fixture")
         };
         assert_eq!(proof.as_bytes().len(), BOOTLE_LANTERN_PROOF_BYTES_V1);
@@ -5856,7 +6258,7 @@ mod tests {
         .expect("valid Bootle/Lantern presentation");
         assert_eq!(
             effects.protocol_id(),
-            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
+            PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1
         );
         assert_eq!(
             effects.statement_digest(),
@@ -5887,14 +6289,16 @@ mod tests {
     #[test]
     fn bootle_lantern_wire_rejects_truncation_extension_malleation_and_cross_suite_replay() {
         let fixture = bootle_lantern_fixture();
-        let PrivacyProofV1::IrohaBootleLanternAnoncredV1(valid_proof) = &fixture.envelope.proof
+        let PrivacyRuntimeProofV1::IrohaBootleLanternAnoncredV1(valid_proof) =
+            &fixture.envelope.proof
         else {
             unreachable!("Bootle/Lantern fixture")
         };
         let proof_len = valid_proof.as_bytes().len();
         for length in [1, proof_len / 3, proof_len / 2, proof_len - 1] {
             let mut candidate = fixture.envelope.clone();
-            let PrivacyProofV1::IrohaBootleLanternAnoncredV1(bytes) = &mut candidate.proof else {
+            let PrivacyRuntimeProofV1::IrohaBootleLanternAnoncredV1(bytes) = &mut candidate.proof
+            else {
                 unreachable!("Bootle/Lantern fixture")
             };
             bytes.bytes.truncate(length);
@@ -5911,7 +6315,8 @@ mod tests {
         }
         for suffix in [&[0_u8][..], &[0xff][..], &[0, 0xff][..]] {
             let mut candidate = fixture.envelope.clone();
-            let PrivacyProofV1::IrohaBootleLanternAnoncredV1(bytes) = &mut candidate.proof else {
+            let PrivacyRuntimeProofV1::IrohaBootleLanternAnoncredV1(bytes) = &mut candidate.proof
+            else {
                 unreachable!("Bootle/Lantern fixture")
             };
             bytes.bytes.extend_from_slice(suffix);
@@ -5925,7 +6330,8 @@ mod tests {
         }
         for offset in [0, 1, proof_len / 3, proof_len / 2, proof_len - 1] {
             let mut candidate = fixture.envelope.clone();
-            let PrivacyProofV1::IrohaBootleLanternAnoncredV1(bytes) = &mut candidate.proof else {
+            let PrivacyRuntimeProofV1::IrohaBootleLanternAnoncredV1(bytes) = &mut candidate.proof
+            else {
                 unreachable!("Bootle/Lantern fixture")
             };
             bytes.bytes[offset] ^= 0x80;
@@ -5938,7 +6344,8 @@ mod tests {
             ));
         }
         let mut noncanonical_residue = fixture.envelope.clone();
-        let PrivacyProofV1::IrohaBootleLanternAnoncredV1(bytes) = &mut noncanonical_residue.proof
+        let PrivacyRuntimeProofV1::IrohaBootleLanternAnoncredV1(bytes) =
+            &mut noncanonical_residue.proof
         else {
             unreachable!("Bootle/Lantern fixture")
         };
@@ -5951,7 +6358,7 @@ mod tests {
             Err(PrivacyVerificationErrorV1::NativeBootleLantern(_))
         ));
         let mut cross_suite = fixture.envelope.clone();
-        cross_suite.proof = PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(
+        cross_suite.proof = PrivacyRuntimeProofV1::IrohaJindoPolynomialCommitmentV1(
             PrivacyProofBytesV1::new(valid_proof.as_bytes().to_vec()),
         );
         assert!(matches!(
@@ -6123,7 +6530,7 @@ pub mod test_fixtures {
         }
     }
     pub(super) struct FcmpFixture {
-        pub(super) envelope: PrivacyProofEnvelopeV1,
+        pub(super) envelope: PrivacyRuntimeProofEnvelopeV1,
         pub(super) profile: PrivacyCompiledProfileSnapshotV1,
         pub(super) network_id: NetworkId,
         pub(super) snapshot: PrivacyProofManagedPoolSnapshotV1,
@@ -6131,8 +6538,9 @@ pub mod test_fixtures {
     }
     impl FcmpFixture {
         pub(super) fn new() -> Self {
-            let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1)
-                .expect("compiled FCMP++");
+            let compiled =
+                compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1)
+                    .expect("compiled FCMP++");
             let profile = compiled.snapshot();
             let network_id = network_id(0xA7);
             let pool_id = PrivacyPoolIdV1::new([0xC1; 32]);
@@ -6228,7 +6636,7 @@ pub mod test_fixtures {
             .expect("FCMP++ prover input");
             let native_public = prover_input.public_input().expect("FCMP++ public input");
             let statement =
-                PrivacyStatementV1::MoneroFcmpPlusPlusV1(MoneroFcmpPlusPlusStatementV1 {
+                PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1(MoneroFcmpPlusPlusStatementV1 {
                     context: PrivacyStatementContextV1 {
                         network_id,
                         action_index: 0,
@@ -6259,7 +6667,7 @@ pub mod test_fixtures {
                     encrypted_outputs,
                 });
             let statement_digest = statement.digest().expect("FCMP++ statement digest");
-            let mut envelope = PrivacyProofEnvelopeV1 {
+            let mut envelope = PrivacyRuntimeProofEnvelopeV1 {
                 wire_magic: iroha_data_model::privacy::PrivacyProofWireMagicV1::default(),
                 catalog_commitment:
                     iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::default(),
@@ -6273,7 +6681,9 @@ pub mod test_fixtures {
                 engine_manifest_digest: compiled.engine_manifest_digest,
                 statement_digest,
                 statement,
-                proof: PrivacyProofV1::MoneroFcmpPlusPlusV1(PrivacyProofBytesV1::new(Vec::new())),
+                proof: PrivacyRuntimeProofV1::MoneroFcmpPlusPlusV1(PrivacyProofBytesV1::new(
+                    Vec::new(),
+                )),
             };
             let verification_context = PrivacyVerificationContextV1 {
                 profile: &profile,
@@ -6306,7 +6716,7 @@ pub mod test_fixtures {
             )
             .expect("FCMP++ proof");
             assert_eq!(proof.public_inputs(), &[native_public]);
-            envelope.proof = PrivacyProofV1::MoneroFcmpPlusPlusV1(PrivacyProofBytesV1::new(
+            envelope.proof = PrivacyRuntimeProofV1::MoneroFcmpPlusPlusV1(PrivacyProofBytesV1::new(
                 proof.proof_wire().to_vec(),
             ));
             Self {
@@ -6346,7 +6756,7 @@ pub mod test_fixtures {
     }
     #[doc(hidden)]
     pub struct FcmpRuntimeFixtureForTest {
-        pub envelope: PrivacyProofEnvelopeV1,
+        pub envelope: PrivacyRuntimeProofEnvelopeV1,
         pub profile: PrivacyCompiledProfileSnapshotV1,
         pub network_id: NetworkId,
         pub snapshot: PrivacyProofManagedPoolSnapshotV1,
@@ -6371,8 +6781,8 @@ pub mod test_fixtures {
     }
     #[doc(hidden)]
     pub struct ZkAmsRuntimeFixtureForTest {
-        pub batch_envelope: PrivacyProofEnvelopeV1,
-        pub provision_envelope: PrivacyProofEnvelopeV1,
+        pub batch_envelope: PrivacyRuntimeProofEnvelopeV1,
+        pub provision_envelope: PrivacyRuntimeProofEnvelopeV1,
         pub profile: PrivacyCompiledProfileSnapshotV1,
         pub network_id: NetworkId,
         pub genesis_hash: [u8; 32],
@@ -6388,7 +6798,7 @@ pub mod test_fixtures {
     pub fn zk_ams_runtime_fixture_for_test() -> ZkAmsRuntimeFixtureForTest {
         static FIXTURE: OnceLock<ZkAmsRuntimeFixtureForTest> = OnceLock::new();
         let fixture = FIXTURE.get_or_init(|| {
-            let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1)
+            let compiled = compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1)
                 .expect("compiled ZK-AMS profile");
             let profile = compiled.snapshot();
             let network_id = network_id(0xA7);
@@ -6529,7 +6939,8 @@ pub mod test_fixtures {
                     anchors: batch_anchors.clone(),
                 }),
             };
-            let batch_typed_statement = PrivacyStatementV1::IrohaZkAmsV1(batch_statement.clone());
+            let batch_typed_statement =
+                PrivacyRuntimeStatementV1::IrohaZkAmsV1(batch_statement.clone());
             let batch_statement_digest = batch_typed_statement
                 .digest()
                 .expect("ZK-AMS batch statement digest");
@@ -6571,7 +6982,7 @@ pub mod test_fixtures {
                 &mut KatRng::new([0xB6; 32]),
             )
             .expect("native ZK-AMS batch proof");
-            let batch_envelope = PrivacyProofEnvelopeV1 {
+            let batch_envelope = PrivacyRuntimeProofEnvelopeV1 {
                 wire_magic: iroha_data_model::privacy::PrivacyProofWireMagicV1::default(),
                 catalog_commitment:
                     iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::default(),
@@ -6585,7 +6996,7 @@ pub mod test_fixtures {
                 engine_manifest_digest: compiled.engine_manifest_digest,
                 statement_digest: batch_statement_digest,
                 statement: batch_typed_statement,
-                proof: PrivacyProofV1::IrohaZkAmsV1(
+                proof: PrivacyRuntimeProofV1::IrohaZkAmsV1(
                     IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(
                         PrivacyProofBytesV1::new(batch_proof),
                     ),
@@ -6625,7 +7036,7 @@ pub mod test_fixtures {
                 }),
             };
             let provision_typed_statement =
-                PrivacyStatementV1::IrohaZkAmsV1(provision_statement.clone());
+                PrivacyRuntimeStatementV1::IrohaZkAmsV1(provision_statement.clone());
             let provision_statement_digest = provision_typed_statement
                 .digest()
                 .expect("ZK-AMS provision statement digest");
@@ -6649,7 +7060,7 @@ pub mod test_fixtures {
                 &mut KatRng::new([0xC6; 32]),
             )
             .expect("native ZK-AMS provisioning proof");
-            let provision_envelope = PrivacyProofEnvelopeV1 {
+            let provision_envelope = PrivacyRuntimeProofEnvelopeV1 {
                 wire_magic: iroha_data_model::privacy::PrivacyProofWireMagicV1::default(),
                 catalog_commitment:
                     iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1::default(),
@@ -6663,7 +7074,7 @@ pub mod test_fixtures {
                 engine_manifest_digest: compiled.engine_manifest_digest,
                 statement_digest: provision_statement_digest,
                 statement: provision_typed_statement,
-                proof: PrivacyProofV1::IrohaZkAmsV1(
+                proof: PrivacyRuntimeProofV1::IrohaZkAmsV1(
                     IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(PrivacyProofBytesV1::new(
                         provision_proof,
                     )),

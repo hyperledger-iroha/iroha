@@ -1,0 +1,525 @@
+diff --git a/crates/iroha_parliament_ballot_proof/src/credential.rs b/crates/iroha_parliament_ballot_proof/src/credential.rs
+index eb193e25d4..cc52449190 100644
+--- a/crates/iroha_parliament_ballot_proof/src/credential.rs
++++ b/crates/iroha_parliament_ballot_proof/src/credential.rs
+@@ -317,7 +317,7 @@ mod tests {
+     use super::*;
+ 
+     fn shake256(parts: &[&[u8]], len: usize) -> Vec<u8> {
+-        let mut sponge = sha3::Shake256::default();
++        let mut sponge = shake::Shake256::default();
+         for part in parts {
+             sponge.update(part);
+         }
+diff --git a/crates/iroha_parliament_ballot_proof/src/keccak_relation.rs b/crates/iroha_parliament_ballot_proof/src/keccak_relation.rs
+index 67139fee17..584602cc07 100644
+--- a/crates/iroha_parliament_ballot_proof/src/keccak_relation.rs
++++ b/crates/iroha_parliament_ballot_proof/src/keccak_relation.rs
+@@ -432,7 +432,7 @@ mod tests {
+ 
+     fn sample(seed: u8, len: usize) -> Vec<u8> {
+         use sha3::digest::{ExtendableOutput, Update, XofReader};
+-        let mut sponge = sha3::Shake128::default();
++        let mut sponge = shake::Shake128::default();
+         sponge.update(&[seed]);
+         let mut out = vec![0u8; len];
+         sponge.finalize_xof().read(&mut out);
+@@ -477,7 +477,7 @@ mod tests {
+             message.extend_from_slice(&input);
+             assert_eq!(message.len(), MESSAGE_BYTES);
+             let mut expected = [0u8; 136];
+-            let mut sponge = sha3::Shake256::default();
++            let mut sponge = shake::Shake256::default();
+             sponge.update(&message);
+             sponge.finalize_xof().read(&mut expected);
+             let evaluation = evaluate(&public_block(tag, &input), &secret);
+diff --git a/crates/iroha_parliament_ballot_proof/src/lib.rs b/crates/iroha_parliament_ballot_proof/src/lib.rs
+index 9e0e799e05..ca2884b5ac 100644
+--- a/crates/iroha_parliament_ballot_proof/src/lib.rs
++++ b/crates/iroha_parliament_ballot_proof/src/lib.rs
+@@ -5,16 +5,33 @@
+ //!
+ //! # Status
+ //!
+-//! **No proof profile is selected or qualified.** The construction is frozen so
+-//! that it can be implemented, measured and reviewed; it is not the normative
+-//! profile, its `profile_id` is not allocated, and its security arguments
+-//! (`specs/parliament_ballot_proof_arguments.md`) await independent review.
+-//! Binding governance does not use this crate: it is not a dependency of Core or
+-//! of any node crate, it validates no on-chain ballot, and nothing it accepts or
+-//! rejects has governance effect. The parameter rows are the fast row
++//! **No proof profile is qualified.** The construction is frozen so that it can
++//! be implemented, measured and reviewed, and its security arguments
++//! (`specs/parliament_ballot_proof_arguments.md`) await independent review. The
++//! candidate row's descriptor digest `D` is the public profile identifier
++//! (`ProofProfileIdV1::V1` in the data model); integrating that row is not
++//! qualifying it. Its typed caller is the protocol crate
++//! `iroha_parliament_ballot`, which supplies the canonical `Enc` inputs, obtains
++//! `B`, `R`, `scope`, `policy_hash`, `D_reg` and `D_v` from this crate and
++//! compiles only the candidate row; no node crate depends on this crate
++//! directly. Binding governance stays disabled while the data-model launch gate
++//! `PARLIAMENT_BALLOT_QUALIFICATION_V1` is `None`: nothing accepted or rejected
++//! here has governance effect. The parameter rows are the fast row
+ //! ([`profile::Row::Candidate`], the sole integration candidate) and the small
+-//! row ([`profile::Row::Comparator`], a measurement comparator); neither is
+-//! selected.
++//! row (`profile::Row::Comparator`, a measurement comparator for tests and
++//! diagnostics); neither is qualified. The comparator row is compiled only for
++//! this crate's unit tests and with the non-default `diagnostics` feature, which
++//! only the measurement and diagnostic tooling enables; production builds,
++//! including every node, wallet and native-bridge dependency, contain the
++//! candidate row only.
++//!
++//! # Features
++//!
++//! * `accel` forwards hardware acceleration to the backend; outputs are unchanged.
++//! * `diagnostics` compiles the comparator row for the measurement examples, the
++//!   comparator integration tests and the fuzz crate. Run the complete suite with
++//!   `cargo test --release -p iroha_parliament_ballot_proof --features diagnostics`;
++//!   without the feature the same command runs the candidate-row suite.
+ //!
+ //! Proofs produced here are *FAEST-derived*: they reuse the FAEST v3.0 proof
+ //! machinery with custom relations, a literal role prefix on every hash call and
+@@ -23,7 +40,7 @@
+ //!
+ //! # What is here
+ //!
+-//! * [`profile`]: the two rows, the descriptor `DESC`, its digest `D`, the CRT
++//! * [`profile`]: the rows, the descriptor `DESC`, its digest `D`, the CRT
+ //!   table digest `T_crt`, the role namespaces and 77-byte prefixes, the proof
+ //!   lengths.
+ //! * [`framing`]: `Frame` and the bounded opaque public inputs.
+diff --git a/crates/iroha_parliament_ballot_proof/src/profile.rs b/crates/iroha_parliament_ballot_proof/src/profile.rs
+index 23982a1626..edf1e1dae5 100644
+--- a/crates/iroha_parliament_ballot_proof/src/profile.rs
++++ b/crates/iroha_parliament_ballot_proof/src/profile.rs
+@@ -3,11 +3,19 @@
+ //!
+ //! **Neither row is selected or qualified.** [`Row::Candidate`] is the fast row
+ //! `(lambda, tau, w_grind, T_open, d_zk) = (256, 33, 8, 229, 7)` with 704 CRT
+-//! gates, the sole integration candidate; [`Row::Comparator`] is the small row
++//! gates, the sole integration candidate; `Row::Comparator` is the small row
+ //! `(256, 22, 6, 225, 7)` with 696 gates, a measurement comparator only. A row is
+ //! always chosen by the caller: nothing in this crate detects a row from proof
+ //! bytes.
+ //!
++//! The comparator row is test and diagnostic support (integration decision 6): it
++//! exists only in this crate's own unit tests and in builds with the non-default
++//! `diagnostics` feature, which only the measurement and diagnostic tooling enables
++//! (the comparator examples, the comparator integration tests, the fuzz crate and
++//! the separately built diagnostic drivers). Node, wallet and native-bridge
++//! dependencies never enable it, so production builds compile the candidate row
++//! only and [`Row::ALL`] is `[Row::Candidate]` there.
++//!
+ //! A [`Profile`] is the compiled descriptor of one row: the CRT table digest
+ //! `T_crt`, the descriptor `DESC`, its digest `D`, the role namespaces `NS_REG`
+ //! and `NS_VOTE` and the 77-byte prefixes `PREFIX_R` that every backend hash call
+@@ -15,10 +23,12 @@
+ //! tables whenever it is built (there is no global or lazily initialised state)
+ //! and pinned by tests to the digest values printed in the record.
+ 
++#[cfg(any(test, feature = "diagnostics"))]
++use iroha_zkp_vole::params::FAEST_256S;
+ use iroha_zkp_vole::{
+     crt::{CrtError, codec::encode_words},
+     hash::{HashError, Namespace, Xof},
+-    params::{D_ZK, FAEST_256F, FAEST_256S, SecurityLevel, VoleParams},
++    params::{D_ZK, FAEST_256F, SecurityLevel, VoleParams},
+     proof::{ProofContext, ProofError},
+ };
+ use thiserror::Error;
+@@ -31,7 +41,8 @@ use crate::{
+ };
+ 
+ /// The 16-byte construction domain `P16`: ASCII `PARL-SHAKE-V1` and three zero
+-/// bytes. An identifier, not a security parameter; no `profile_id` is allocated.
++/// bytes. An identifier, not a security parameter. It is not the public profile
++/// identifier, which is the candidate descriptor digest `D`.
+ pub const P16: [u8; 16] = *b"PARL-SHAKE-V1\0\0\0";
+ 
+ /// `SUITE`: the 129-byte name of the frozen relation, constraint order, encodings,
+@@ -79,11 +90,16 @@ pub enum ProfileError {
+ }
+ 
+ /// One of the two experimental parameter rows. Neither is selected or qualified.
++///
++/// The comparator variant is compiled only for this crate's unit tests and with the
++/// `diagnostics` feature; see the module documentation.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+ pub enum Row {
+     /// The fast row `(256, 33, 8, 229, 7)`, 704 gates: the integration candidate.
+     Candidate,
+-    /// The small row `(256, 22, 6, 225, 7)`, 696 gates: a measurement comparator.
++    /// The small row `(256, 22, 6, 225, 7)`, 696 gates: a measurement comparator for
++    /// tests and diagnostics, never compiled into production builds.
++    #[cfg(any(test, feature = "diagnostics"))]
+     Comparator,
+ }
+ 
+@@ -171,14 +187,21 @@ pub struct ProofSegment {
+ }
+ 
+ impl Row {
+-    /// Both rows.
++    /// Every compiled row: the candidate and, in test and diagnostic builds, the
++    /// comparator.
++    #[cfg(any(test, feature = "diagnostics"))]
+     pub const ALL: [Self; 2] = [Self::Candidate, Self::Comparator];
+ 
++    /// Every compiled row: the candidate only, in production builds.
++    #[cfg(not(any(test, feature = "diagnostics")))]
++    pub const ALL: [Self; 1] = [Self::Candidate];
++
+     /// The backend row: the VOLE geometry of FAEST-256f (candidate) or FAEST-256s
+     /// (comparator), with the official CRT tables.
+     pub const fn vole(self) -> VoleParams {
+         match self {
+             Self::Candidate => *FAEST_256F.vole(),
++            #[cfg(any(test, feature = "diagnostics"))]
+             Self::Comparator => *FAEST_256S.vole(),
+         }
+     }
+@@ -188,7 +211,9 @@ impl Row {
+         match (self, role) {
+             (Self::Candidate, Role::Registration) => 160_148,
+             (Self::Candidate, Role::Vote) => 233_012,
++            #[cfg(any(test, feature = "diagnostics"))]
+             (Self::Comparator, Role::Registration) => 109_498,
++            #[cfg(any(test, feature = "diagnostics"))]
+             (Self::Comparator, Role::Vote) => 158_074,
+         }
+     }
+@@ -445,6 +470,13 @@ mod tests {
+         assert_eq!((Role::Registration.index(), Role::Vote.index()), (0, 1));
+     }
+ 
++    #[test]
++    fn unit_tests_compile_both_rows() {
++        // Unit tests always see the comparator; production builds see only
++        // `[Row::Candidate]`, which the dependent crates' tests exercise.
++        assert_eq!(Row::ALL, [Row::Candidate, Row::Comparator]);
++    }
++
+     #[test]
+     fn the_rows_are_the_two_of_the_record() {
+         let fast = Row::Candidate.vole();
+diff --git a/crates/iroha_parliament_ballot_proof/src/proving.rs b/crates/iroha_parliament_ballot_proof/src/proving.rs
+index c204ea175a..4b11bf6af4 100644
+--- a/crates/iroha_parliament_ballot_proof/src/proving.rs
++++ b/crates/iroha_parliament_ballot_proof/src/proving.rs
+@@ -323,7 +323,12 @@ pub(crate) fn build_witness<const N: usize>(
+         let states = witness
+             .get_mut(offset / 8..offset / 8 + GROUPS * STATE_BYTES)
+             .unwrap_or(&mut []);
+-        for (index, state) in states.chunks_exact_mut(STATE_BYTES).enumerate() {
++        for (index, state) in states
++            .as_chunks_mut::<STATE_BYTES>()
++            .0
++            .iter_mut()
++            .enumerate()
++        {
+             evaluation.write_state(index + 1, state);
+         }
+     }
+@@ -369,7 +374,7 @@ mod tests {
+         let profile = Profile::new(Row::Candidate).expect("tables");
+         for role in Role::ALL {
+             let frame = b"some frame bytes";
+-            let mut sponge = sha3::Shake256::default();
++            let mut sponge = shake::Shake256::default();
+             sponge.update(profile.prefix(role));
+             sponge.update(frame);
+             sponge.update(&[0x08]);
+diff --git a/crates/iroha_parliament_ballot_proof/src/sealed_list.rs b/crates/iroha_parliament_ballot_proof/src/sealed_list.rs
+index 8d92c0ecf8..9b9141d918 100644
+--- a/crates/iroha_parliament_ballot_proof/src/sealed_list.rs
++++ b/crates/iroha_parliament_ballot_proof/src/sealed_list.rs
+@@ -87,7 +87,9 @@ pub fn split(bytes: &[u8]) -> Result<Vec<Commitment>, ListError> {
+         });
+     }
+     Ok(bytes
+-        .chunks_exact(COMMITMENT_BYTES)
++        .as_chunks::<COMMITMENT_BYTES>()
++        .0
++        .iter()
+         .map(|chunk| {
+             let mut entry = [0u8; COMMITMENT_BYTES];
+             entry.copy_from_slice(chunk);
+diff --git a/crates/iroha_parliament_ballot_proof/src/selector.rs b/crates/iroha_parliament_ballot_proof/src/selector.rs
+index 001fcc9f2e..b60ee16061 100644
+--- a/crates/iroha_parliament_ballot_proof/src/selector.rs
++++ b/crates/iroha_parliament_ballot_proof/src/selector.rs
+@@ -88,7 +88,7 @@ pub fn multiplex<C: ConstraintSystem>(
+     products: &[C::Value],
+ ) -> C::Value {
+     let mut sum = cs.zero();
+-    for (entry, product) in list.chunks_exact(COMMITMENT_BYTES).zip(products) {
++    for (entry, product) in list.as_chunks::<COMMITMENT_BYTES>().0.iter().zip(products) {
+         if bit_of(entry, t) {
+             sum = cs.add(sum, *product);
+         }
+@@ -160,7 +160,12 @@ mod tests {
+     /// A list whose entry `i` starts with the two bytes of `i + 1`.
+     fn list(size: usize) -> Vec<u8> {
+         let mut out = vec![0u8; size * COMMITMENT_BYTES];
+-        for (i, entry) in out.chunks_exact_mut(COMMITMENT_BYTES).enumerate() {
++        for (i, entry) in out
++            .as_chunks_mut::<COMMITMENT_BYTES>()
++            .0
++            .iter_mut()
++            .enumerate()
++        {
+             entry[..2].copy_from_slice(&u16::try_from(i + 1).expect("small").to_le_bytes());
+         }
+         out
+diff --git a/crates/iroha_zkp_vole/src/bavc.rs b/crates/iroha_zkp_vole/src/bavc.rs
+index 7005333a02..0270ac28bd 100644
+--- a/crates/iroha_zkp_vole/src/bavc.rs
++++ b/crates/iroha_zkp_vole/src/bavc.rs
+@@ -1619,13 +1619,13 @@ mod tests {
+         use sha3::digest::{ExtendableOutput, Update, XofReader};
+         let mut out = vec![0u8; len];
+         if level == SecurityLevel::L128 {
+-            let mut sponge = sha3::Shake128::default();
++            let mut sponge = shake::Shake128::default();
+             for part in parts {
+                 sponge.update(part);
+             }
+             sponge.finalize_xof().read(&mut out);
+         } else {
+-            let mut sponge = sha3::Shake256::default();
++            let mut sponge = shake::Shake256::default();
+             for part in parts {
+                 sponge.update(part);
+             }
+diff --git a/crates/iroha_zkp_vole/src/faest/cipher.rs b/crates/iroha_zkp_vole/src/faest/cipher.rs
+index f8b9055192..cf8c1c2ab9 100644
+--- a/crates/iroha_zkp_vole/src/faest/cipher.rs
++++ b/crates/iroha_zkp_vole/src/faest/cipher.rs
+@@ -101,7 +101,7 @@ fn sub_bytes_shift_rows(state: &mut [u8; MAX_BLOCK_BYTES], n_st: usize) {
+ 
+ /// `MixColumns` on the first `4 * n_st` bytes of `state`.
+ fn mix_columns(state: &mut [u8; MAX_BLOCK_BYTES], n_st: usize) {
+-    for column in state.chunks_exact_mut(4).take(n_st) {
++    for column in state.as_chunks_mut::<4>().0.iter_mut().take(n_st) {
+         let mut a = [column[0], column[1], column[2], column[3]].map(Gf8::new);
+         let mut double = a.map(BinaryField::mul_x);
+         for row in 0..4 {
+@@ -237,7 +237,7 @@ pub(super) fn extend_witness(owf: OwfParams, key: &[u8], input: &[u8]) -> Zeroiz
+ 
+ #[cfg(test)]
+ mod tests {
+-    use aes::cipher::{BlockEncrypt, KeyInit, generic_array::GenericArray};
++    use aes::cipher::{Array, BlockCipherEncrypt, KeyInit};
+ 
+     use super::*;
+     use crate::params::{FAEST_PARAMETER_SETS, SecurityLevel};
+@@ -344,7 +344,7 @@ mod tests {
+                     .map(|i| i.wrapping_mul(29) ^ salt.wrapping_mul(101))
+                     .collect();
+                 let input: Vec<u8> = (0..16u8).map(|i| i.wrapping_mul(57) ^ salt).collect();
+-                let mut block = GenericArray::clone_from_slice(&input);
++                let mut block = Array::try_from(input.as_slice()).expect("one AES block");
+                 match bytes {
+                     16 => aes::soft::Aes128::new_from_slice(&key)
+                         .expect("key")
+diff --git a/crates/iroha_zkp_vole/src/field.rs b/crates/iroha_zkp_vole/src/field.rs
+index cdf2f20eff..ce2775f58e 100644
+--- a/crates/iroha_zkp_vole/src/field.rs
++++ b/crates/iroha_zkp_vole/src/field.rs
+@@ -217,6 +217,10 @@ pub trait BinaryField:
+     /// # Errors
+     /// Returns [`FieldError::InvalidLength`] unless the length of `bytes` is a
+     /// multiple of [`Self::BYTES`]; `expected` is then the next multiple.
++    #[expect(
++        clippy::chunks_exact_to_as_chunks,
++        reason = "a trait's associated const cannot parameterize `as_chunks` in a default method"
++    )]
+     fn vec_from_bytes(bytes: &[u8]) -> Result<Vec<Self>, FieldError> {
+         if !bytes.len().is_multiple_of(Self::BYTES) {
+             return Err(FieldError::InvalidLength {
+diff --git a/crates/iroha_zkp_vole/src/field/poly.rs b/crates/iroha_zkp_vole/src/field/poly.rs
+index 0ad0f65664..065a1c2fc6 100644
+--- a/crates/iroha_zkp_vole/src/field/poly.rs
++++ b/crates/iroha_zkp_vole/src/field/poly.rs
+@@ -154,7 +154,7 @@ pub fn poly_reduce(
+ /// Degree of a non-zero polynomial given as an integer (bit `i` is the coefficient
+ /// of `x^i`).
+ fn degree_of(poly: u32) -> u32 {
+-    31 - poly.leading_zeros()
++    poly.ilog2()
+ }
+ 
+ /// Remainder of `value` modulo the non-zero `modulus`, both as integers.
+@@ -228,9 +228,9 @@ mod tests {
+     }
+ 
+     fn rem_u128(mut value: u128, modulus: u128) -> u128 {
+-        let degree = 127 - modulus.leading_zeros();
+-        while value != 0 && 127 - value.leading_zeros() >= degree {
+-            value ^= modulus << (127 - value.leading_zeros() - degree);
++        let degree = modulus.ilog2();
++        while value != 0 && value.ilog2() >= degree {
++            value ^= modulus << (value.ilog2() - degree);
+         }
+         value
+     }
+diff --git a/crates/iroha_zkp_vole/src/hash.rs b/crates/iroha_zkp_vole/src/hash.rs
+index d3b2c42eca..75bbfd2f75 100644
+--- a/crates/iroha_zkp_vole/src/hash.rs
++++ b/crates/iroha_zkp_vole/src/hash.rs
+@@ -298,7 +298,7 @@ impl Xof {
+             xor_into(&mut self.state, self.pos, head);
+             self.pos += take;
+             if self.pos == self.rate {
+-                keccak::f1600(&mut self.state);
++                keccak::Keccak::new().with_f1600(|permute| permute(&mut self.state));
+                 self.pos = 0;
+             }
+             data = tail;
+@@ -314,7 +314,7 @@ impl Xof {
+     pub fn finalize(mut self) -> XofOutput {
+         xor_into(&mut self.state, self.pos, &[SHAKE_PADDING]);
+         xor_into(&mut self.state, self.rate - 1, &[0x80]);
+-        keccak::f1600(&mut self.state);
++        keccak::Keccak::new().with_f1600(|permute| permute(&mut self.state));
+         XofOutput {
+             state: self.state,
+             rate: self.rate,
+@@ -359,7 +359,7 @@ impl XofOutput {
+     pub fn squeeze(&mut self, mut out: &mut [u8]) {
+         while !out.is_empty() {
+             if self.pos == self.rate {
+-                keccak::f1600(&mut self.state);
++                keccak::Keccak::new().with_f1600(|permute| permute(&mut self.state));
+                 self.pos = 0;
+             }
+             let take = (self.rate - self.pos).min(out.len());
+@@ -435,7 +435,7 @@ impl Sha3_512 {
+             xor_into(&mut self.state, self.pos, head);
+             self.pos += take;
+             if self.pos == SHA3_512_RATE {
+-                keccak::f1600(&mut self.state);
++                keccak::Keccak::new().with_f1600(|permute| permute(&mut self.state));
+                 self.pos = 0;
+             }
+             data = tail;
+@@ -446,7 +446,7 @@ impl Sha3_512 {
+     pub fn finalize(mut self) -> [u8; SHA3_512_BYTES] {
+         xor_into(&mut self.state, self.pos, &[SHA3_PADDING]);
+         xor_into(&mut self.state, SHA3_512_RATE - 1, &[0x80]);
+-        keccak::f1600(&mut self.state);
++        keccak::Keccak::new().with_f1600(|permute| permute(&mut self.state));
+         let mut digest = [0u8; SHA3_512_BYTES];
+         read_from(&self.state, 0, &mut digest);
+         digest
+@@ -725,12 +725,12 @@ mod tests {
+         let mut out = vec![0u8; len];
+         match level {
+             SecurityLevel::L128 => {
+-                let mut sponge = sha3::Shake128::default();
++                let mut sponge = shake::Shake128::default();
+                 sponge.update(message);
+                 sponge.finalize_xof().read(&mut out);
+             }
+             SecurityLevel::L192 | SecurityLevel::L256 => {
+-                let mut sponge = sha3::Shake256::default();
++                let mut sponge = shake::Shake256::default();
+                 sponge.update(message);
+                 sponge.finalize_xof().read(&mut out);
+             }
+diff --git a/crates/iroha_zkp_vole/src/lib.rs b/crates/iroha_zkp_vole/src/lib.rs
+index c0f062c23d..2cf9ace377 100644
+--- a/crates/iroha_zkp_vole/src/lib.rs
++++ b/crates/iroha_zkp_vole/src/lib.rs
+@@ -44,7 +44,9 @@
+ //! # Determinism and acceleration
+ //!
+ //! Every output is a function of the inputs and the caller-supplied randomness only,
+-//! and is byte-identical across hardware. The default build uses portable code. The
++//! and is byte-identical across hardware. AES uses portable code by default. Keccak selects its deterministic backend using
++//! upstream runtime CPU detection; `--cfg keccak_backend="soft"` forces its software
++//! implementation for parity qualification. The
+ //! `accel` feature enables hardware AES through the patched `aes` crate's `hardware`
+ //! feature; it changes speed, never bytes.
+ //!
+diff --git a/crates/iroha_zkp_vole/src/prg.rs b/crates/iroha_zkp_vole/src/prg.rs
+index 608bb38b71..6b5a266355 100644
+--- a/crates/iroha_zkp_vole/src/prg.rs
++++ b/crates/iroha_zkp_vole/src/prg.rs
+@@ -18,7 +18,7 @@ use core::fmt;
+ 
+ use aes::{
+     Block,
+-    cipher::{BlockEncrypt, KeyInit},
++    cipher::{BlockCipherEncrypt, KeyInit},
+ };
+ use thiserror::Error;
+ use zeroize::Zeroize;
+@@ -78,11 +78,11 @@ impl_encryptor!(aes::soft::Aes128, aes::soft::Aes192, aes::soft::Aes256);
+ 
+ /// The hardware-autodetecting AES of the `aes` crate, compiled only with `accel`.
+ ///
+-/// On targets without a hardware backend `aes::Aes128` is the portable type itself,
++/// Force-software configurations alias `aes::Aes128` to the portable type itself,
+ /// so the autodetecting types are wrapped to keep the trait implementations apart.
+ #[cfg(feature = "accel")]
+ mod accelerated {
+-    use super::{Block, BlockEncrypt, Encryptor};
++    use super::{Block, BlockCipherEncrypt, Encryptor};
+ 
+     macro_rules! wrap {
+         ($($name:ident),+) => {
+diff --git a/crates/iroha_zkp_vole/src/randomness.rs b/crates/iroha_zkp_vole/src/randomness.rs
+index c5703352f2..d4b9edba87 100644
+--- a/crates/iroha_zkp_vole/src/randomness.rs
++++ b/crates/iroha_zkp_vole/src/randomness.rs
+@@ -243,13 +243,13 @@ mod tests {
+         use sha3::digest::{ExtendableOutput, Update, XofReader};
+         let mut out = vec![0u8; len];
+         if level == SecurityLevel::L128 {
+-            let mut sponge = sha3::Shake128::default();
++            let mut sponge = shake::Shake128::default();
+             for part in parts {
+                 sponge.update(part);
+             }
+             sponge.finalize_xof().read(&mut out);
+         } else {
+-            let mut sponge = sha3::Shake256::default();
++            let mut sponge = shake::Shake256::default();
+             for part in parts {
+                 sponge.update(part);
+             }
+diff --git a/crates/iroha_zkp_vole/src/transcript.rs b/crates/iroha_zkp_vole/src/transcript.rs
+index c3955af413..7c034bb4ac 100644
+--- a/crates/iroha_zkp_vole/src/transcript.rs
++++ b/crates/iroha_zkp_vole/src/transcript.rs
+@@ -331,13 +331,13 @@ mod tests {
+         use sha3::digest::{ExtendableOutput, Update, XofReader};
+         let mut out = vec![0u8; len];
+         if level == SecurityLevel::L128 {
+-            let mut sponge = sha3::Shake128::default();
++            let mut sponge = shake::Shake128::default();
+             for part in parts {
+                 sponge.update(part);
+             }
+             sponge.finalize_xof().read(&mut out);
+         } else {
+-            let mut sponge = sha3::Shake256::default();
++            let mut sponge = shake::Shake256::default();
+             for part in parts {
+                 sponge.update(part);
+             }
+diff --git a/crates/iroha_zkp_vole/src/vole.rs b/crates/iroha_zkp_vole/src/vole.rs
+index c34964719b..243008357a 100644
+--- a/crates/iroha_zkp_vole/src/vole.rs
++++ b/crates/iroha_zkp_vole/src/vole.rs
+@@ -1387,7 +1387,7 @@ mod tests {
+     #[test]
+     fn reduction_is_the_polynomial_remainder() {
+         fn remainder(mut value: u32, modulus: u32) -> u32 {
+-            let degree = 31 - modulus.leading_zeros();
++            let degree = modulus.ilog2();
+             for position in (degree..32).rev() {
+                 if (value >> position) & 1 == 1 {
+                     value ^= modulus << (position - degree);

@@ -309,21 +309,44 @@ pub(super) fn executed_successor_authority<'a>(
     current: &CommittedBlock,
     budget: &iroha_allocation::AllocationBudget,
 ) -> Result<FundedExecutionAuthority<'a>, VerificationReadError> {
-    let height = current.height();
+    executed_projected_successor_authority_with_probe(
+        CheckedFrameRef::from_original(parent),
+        CheckedFrameRef::from_original(current),
+        budget,
+        || {
+            #[cfg(test)]
+            parent_service_admission_probe(parent, current);
+        },
+    )
+}
+
+pub(super) fn executed_projected_successor_authority<'a>(
+    parent: CheckedFrameRef<'a>,
+    current: CheckedFrameRef<'_>,
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<FundedExecutionAuthority<'a>, VerificationReadError> {
+    executed_projected_successor_authority_with_probe(parent, current, budget, || {})
+}
+
+fn executed_projected_successor_authority_with_probe<'a>(
+    parent: CheckedFrameRef<'a>,
+    current: CheckedFrameRef<'_>,
+    budget: &iroha_allocation::AllocationBudget,
+    before_admission: impl FnOnce(),
+) -> Result<FundedExecutionAuthority<'a>, VerificationReadError> {
+    let height = current.parent.height;
     let malformed = |reason: String| ChainReadError::Committee { height, reason };
-    if !current.extends(parent) {
+    if !current.extends(&parent.parent) {
         return Err(ChainReadError::Discontinuous { height }.into());
     }
     parent
-        .commitment()
         .schedule
-        .validate_successor(&current.commitment().schedule)
+        .validate_successor(current.schedule)
         .map_err(|error| malformed(error.to_string()))?;
-    let schedule::ScheduledSlot::Ready(scheduled) = &parent.commitment().schedule.next else {
+    let schedule::ScheduledSlot::Ready(scheduled) = &parent.schedule.next else {
         return Err(malformed("parent has no authorized successor".into()).into());
     };
-    #[cfg(test)]
-    parent_service_admission_probe(parent, current);
+    before_admission();
     FundedExecutionAuthority::admit(scheduled, height, budget)
 }
 

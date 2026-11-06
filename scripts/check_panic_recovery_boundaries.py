@@ -240,6 +240,10 @@ CORE_RECOVERY_SUPPORT_PATHS = tuple(
         "executor/root_scope/tests/contract_permissions.rs",
         "executor/root_scope/tests/role_removal.rs",
         "executor/root_scope/tests/decode_refusal.rs",
+        # Executor dispatch calls this State-owned unwind/restoration scope.
+        # Method calls do not create a textual module edge from executor.rs.
+        "state/trigger_lifecycle.rs",
+        "state/trigger_lifecycle_tests.rs",
     )
 )
 AUDITED_SOURCE_PATHS = (

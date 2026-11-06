@@ -4,115 +4,178 @@ use super::*;
 use iroha_data_model::events::time::{TimeEvent, TimeInterval};
 use std::time::Duration;
 
-mod support {
-    //! Real-State fixtures for the Time failure-policy seam.
-    //! Typed insertion supplies component data; it grants no genesis or registration authority.
+use super::super::time_test_support as support;
 
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        smartcontracts::isi::triggers::{
-            set::SetReadOnly,
-            specialized::{SpecializedAction, SpecializedTrigger, TimeTriggerRetryState},
-        },
-        state::{State, StateBlock, World},
+#[test]
+fn lifecycle_failure_policy_captures_only_retained_retry_or_exhaustion() {
+    use crate::smartcontracts::isi::triggers::set::lifecycle_journal::{
+        LifecycleChange, LifecycleJournalLimits,
     };
-    use iroha_data_model::{
-        block::BlockHeader,
-        events::time::{ExecutionTime, Schedule},
-        prelude::*,
+    use iroha_data_model::block::execution_output::{
+        TriggerLifecycleOriginV1, TriggerLifecyclePolicyV1,
     };
-    use iroha_primitives::json::Json;
-    use iroha_test_samples::ALICE_ID;
-    use mv::storage::StorageReadOnly;
-    use std::{
-        num::{NonZeroU32, NonZeroU64},
-        time::Duration,
-    };
-
-    pub(super) fn state_fixture(retries: Option<(u32, u64)>, policy: bool) -> (State, TriggerId) {
-        let mut world = World::default();
-        world
-            .set_parameter_for_testing(
-                crate::sumeragi::test_chain::crypto_fixture_policy()
-                    .into_parameter()
-                    .unwrap(),
-            )
+    for (previous, expected_policy) in [
+        (None, TriggerLifecyclePolicyV1::AdvanceTimeRetry),
+        (Some((3, 20)), TriggerLifecyclePolicyV1::ExhaustTimeRetry),
+    ] {
+        let (state, id) = support::state_fixture(previous, true);
+        let mut block = state.block(support::header());
+        let invocation = invocation(&block, &id);
+        let pool = iroha_allocation::AllocationBudget::new(2_000_000);
+        let policy = invocation
+            .prepare_failure_policy_with(&mut block, 2, 42, |tx| {
+                tx.world
+                    .triggers
+                    .enable_lifecycle_journal(
+                        pool.clone(),
+                        LifecycleJournalLimits {
+                            effects: 8,
+                            total_frame_bytes: 131_072,
+                            scratch_bytes: 262_144,
+                            encode: support::limits(),
+                        },
+                    )
+                    .unwrap();
+            })
+            .unwrap()
             .unwrap();
-        let id: TriggerId = "time_policy_retry".parse().unwrap();
-        {
-            let mut block = world.triggers.block();
-            let mut tx = block.transaction();
-            let mut action = SpecializedAction::new(
-                Executable::Instructions(Vec::<InstructionBox>::new().into()),
-                Repeats::Exactly(2),
-                ALICE_ID.clone(),
-                TimeEventFilter(ExecutionTime::Schedule(Schedule::starting_at(
-                    Duration::from_millis(10),
-                ))),
-            )
-            .unwrap();
-            action.metadata.insert(
-                "__registered_block_height".parse().unwrap(),
-                Json::from(1_u64),
-            );
-            action
-                .metadata
-                .insert("__registered_at_ms".parse().unwrap(), Json::from(10_u64));
-            action.retry_policy = policy.then_some(TimeTriggerRetryPolicy {
-                max_retries: NonZeroU32::new(3).unwrap(),
-                retry_after_ms: NonZeroU64::new(5).unwrap(),
-            });
-            assert!(
-                tx.add_time_trigger(SpecializedTrigger::new(id.clone(), action))
-                    .unwrap()
-            );
-            if let Some((retries_used, next_retry_at_ms)) = retries {
-                assert!(tx.set_time_trigger_retry_state(
-                    &id,
-                    Some(TimeTriggerRetryState {
-                        retries_used,
-                        next_retry_at_ms,
-                    })
-                ));
+        let effects = policy
+            .transaction
+            .as_ref()
+            .unwrap()
+            .world
+            .triggers
+            .lifecycle_effects();
+        assert_eq!(effects.len(), 1);
+        assert_eq!(effects[0].trigger_id.id, id);
+        assert_eq!(
+            effects[0].origin,
+            TriggerLifecycleOriginV1::InvocationPolicy {
+                callback_index: 0,
+                policy: expected_policy
             }
-            tx.apply();
-            block.commit();
-        }
-        (
-            State::new(
-                world,
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
+        );
+        assert!(match (&effects[0].change, expected_policy) {
+            (LifecycleChange::Update(_, after), TriggerLifecyclePolicyV1::AdvanceTimeRetry) =>
+                after.retry_state.unwrap().attempt == 1,
+            (LifecycleChange::Remove(_), TriggerLifecyclePolicyV1::ExhaustTimeRetry) => true,
+            _ => false,
+        });
+        drop(policy);
+        assert_eq!(pool.reserved_bytes(), 0);
+        assert_eq!(support::retry(&block, &id), previous);
+    }
+}
+
+#[test]
+fn lifecycle_pipeline_quarantine_is_a_separate_disposable_policy_effect() {
+    use crate::smartcontracts::isi::triggers::{
+        set::lifecycle_journal::{LifecycleChange, LifecycleJournalLimits},
+        specialized::{SpecializedAction, SpecializedTrigger},
+    };
+    use iroha_data_model::block::execution_output::{
+        PipelineEventPositionV1, TriggerLifecycleOriginV1, TriggerLifecyclePolicyV1,
+    };
+    use iroha_data_model::prelude::*;
+    let (state, _) = support::state_fixture(None, false);
+    let mut block = state.block(support::header());
+    let id: TriggerId = "quarantine_journal".parse().unwrap();
+    {
+        let mut tx = block.transaction();
+        let mut action = SpecializedAction::new(
+            Executable::Instructions(Vec::<InstructionBox>::new().into()),
+            Repeats::Exactly(1),
+            iroha_test_samples::ALICE_ID.clone(),
+            PipelineEventFilterBox::Transaction(
+                iroha_data_model::events::pipeline::TransactionEventFilter::new(),
             ),
-            id,
         )
+        .unwrap();
+        action.metadata.insert(
+            "__registered_block_height".parse().unwrap(),
+            Json::from(1_u64),
+        );
+        tx.world
+            .triggers
+            .add_pipeline_trigger(SpecializedTrigger::new(id.clone(), action))
+            .unwrap();
+        tx.apply();
     }
-
-    pub(super) fn header() -> BlockHeader {
-        BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 42, 0)
-    }
-
-    pub(super) fn retry(block: &StateBlock<'_>, id: &TriggerId) -> Option<(u32, u64)> {
+    let invocation = InternalInvocation::Pipeline(PipelineInvocationV1 {
+        event: PipelineEventPositionV1::BlockApproved,
+        candidate_index: 0,
+        trigger: pipeline_trigger_use_v1(&block.world.triggers, &id, 2).unwrap(),
+    });
+    let pool = iroha_allocation::AllocationBudget::new(2_000_000);
+    let policy = invocation
+        .prepare_failure_policy_with(&mut block, 2, 42, |tx| {
+            tx.world
+                .triggers
+                .enable_lifecycle_journal(
+                    pool.clone(),
+                    LifecycleJournalLimits {
+                        effects: 8,
+                        total_frame_bytes: 131_072,
+                        scratch_bytes: 262_144,
+                        encode: support::limits(),
+                    },
+                )
+                .unwrap();
+        })
+        .unwrap()
+        .unwrap();
+    let effects = policy
+        .transaction
+        .as_ref()
+        .unwrap()
+        .world
+        .triggers
+        .lifecycle_effects();
+    assert_eq!(effects.len(), 1);
+    assert_eq!(
+        effects[0].origin,
+        TriggerLifecycleOriginV1::InvocationPolicy {
+            callback_index: 0,
+            policy: TriggerLifecyclePolicyV1::QuarantinePipeline
+        }
+    );
+    let LifecycleChange::Update(before, after) = &effects[0].change else {
+        panic!("quarantine update");
+    };
+    assert_ne!(before.action_hash, after.action_hash);
+    assert_eq!(
+        after.action.as_bytes(),
+        iroha_data_model::block::execution_output::lifecycle_hash_frame(after.action_hash.unwrap())
+            .unwrap()
+            .as_slice()
+    );
+    assert_eq!(
+        policy
+            .transaction
+            .as_ref()
+            .unwrap()
+            .world
+            .triggers
+            .pipeline_triggers()
+            .get(&id)
+            .unwrap()
+            .metadata
+            .get("__enabled"),
+        Some(&Json::from(false))
+    );
+    drop(policy);
+    assert_eq!(pool.reserved_bytes(), 0);
+    assert!(
         block
             .world
             .triggers
-            .time_triggers()
-            .get(id)
+            .pipeline_triggers()
+            .get(&id)
             .unwrap()
-            .retry_state
-            .map(|state| (state.retries_used, state.next_retry_at_ms))
-    }
-
-    pub(super) fn original_action(block: &StateBlock<'_>, id: &TriggerId) -> Vec<u8> {
-        let trigger = block
-            .world
-            .triggers
-            .triggers_iter()
-            .find(|row| row.id() == id)
-            .unwrap();
-        norito::encode_canonical(trigger.action()).unwrap()
-    }
+            .metadata
+            .get("__enabled")
+            .is_none()
+    );
 }
 
 fn invocation(

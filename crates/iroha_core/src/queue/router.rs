@@ -618,7 +618,7 @@ pub fn evaluate_policy_plan_with_catalog(
     tx: &dyn TransactionRoutingView,
 ) -> Result<RoutingPlan, RoutingResolveError> {
     let matched_rule = first_matching_rule(&policy.rules, |rule| rule_matches(rule, tx, None))?;
-    if transaction_contains_fx_corridor_settlement(tx)?
+    if transaction_contains_fx_corridor_settlement(tx, routing_selection(None))?
         && let Some(decision) =
             settlement_routing_decision(tx, lane_catalog, dataspace_catalog, None)?
     {
@@ -1213,7 +1213,7 @@ fn native_amx_fx_routing_plan_with_world<W: WorldReadOnly>(
     world: &W,
     ledger_time_ms: Option<u64>,
 ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
-    if !transaction_contains_fx_corridor_settlement(tx)? {
+    if !transaction_contains_fx_corridor_settlement(tx, world.runtime_selection())? {
         return Ok(None);
     }
     let coordinator_route =
@@ -2020,7 +2020,9 @@ fn instruction_settlement_dataspace_target_with_stack(
         return settlement_atomic::target(atomic);
     }
 
-    if let Some(multisig) = multisig_instruction(instruction)? {
+    if let Some(multisig) =
+        multisig_instruction_selected(instruction, routing_selection(state_view))?
+    {
         return match multisig {
             MultisigInstructionBox::Propose(propose) => {
                 instruction_list_settlement_dataspace_target_with_stack(
@@ -2233,7 +2235,7 @@ fn instruction_settlement_dataspace_target_with_world_and_stack<W: WorldReadOnly
         return settlement_atomic::target(atomic);
     }
 
-    if let Some(multisig) = multisig_instruction(instruction)? {
+    if let Some(multisig) = multisig_instruction_selected(instruction, world.runtime_selection())? {
         return match multisig {
             MultisigInstructionBox::Propose(propose) => {
                 instruction_list_settlement_dataspace_target_with_world_and_stack(
@@ -2404,25 +2406,33 @@ fn instruction_settlement_dataspace_target_with_world_and_stack<W: WorldReadOnly
     }
     Ok(None)
 }
-fn executable_contains_fx_corridor_settlement(
+fn executable_contains_fx_corridor_settlement<'a>(
     executable: &Executable,
+    selection: impl Into<Option<&'a iroha_data_model::runtime::definition::RootSelectionV1>>,
 ) -> Result<bool, RoutingResolveError> {
+    let selection = selection.into();
     match executable {
         Executable::Instructions(instructions) => {
             instructions.iter().try_fold(false, |found, instruction| {
-                Ok(found || instruction_contains_fx_corridor_settlement(&**instruction)?)
+                Ok(
+                    found
+                        || instruction_contains_fx_corridor_settlement(&**instruction, selection)?,
+                )
             })
         }
         Executable::IvmProved(proved) => {
             proved.overlay.iter().try_fold(false, |found, instruction| {
-                Ok(found || instruction_contains_fx_corridor_settlement(&**instruction)?)
+                Ok(
+                    found
+                        || instruction_contains_fx_corridor_settlement(&**instruction, selection)?,
+                )
             })
         }
         Executable::Batch(items) => items.iter().try_fold(false, |found, item| {
             Ok(found
                 || match item {
                     ExecutableBatchItem::Instruction(instruction) => {
-                        instruction_contains_fx_corridor_settlement(&**instruction)?
+                        instruction_contains_fx_corridor_settlement(&**instruction, selection)?
                     }
                     ExecutableBatchItem::ContractCall(_) => false,
                 })
@@ -2430,9 +2440,11 @@ fn executable_contains_fx_corridor_settlement(
         Executable::ContractCall(_) | Executable::Ivm(_) => Ok(false),
     }
 }
-fn instruction_contains_fx_corridor_settlement(
+fn instruction_contains_fx_corridor_settlement<'a>(
     instruction: &dyn Instruction,
+    selection: impl Into<Option<&'a iroha_data_model::runtime::definition::RootSelectionV1>>,
 ) -> Result<bool, RoutingResolveError> {
+    let selection = selection.into();
     let any = instruction.as_any();
     if any.downcast_ref::<SettleFxCorridor>().is_some()
         || matches!(
@@ -2442,14 +2454,17 @@ fn instruction_contains_fx_corridor_settlement(
     {
         return Ok(true);
     }
-    if let Some(multisig) = multisig_instruction(instruction)? {
+    if let Some(multisig) = multisig_instruction_selected(instruction, selection)? {
         return match multisig {
-            MultisigInstructionBox::Propose(propose) => propose
-                .instructions
-                .iter()
-                .try_fold(false, |found, nested| {
-                    Ok(found || instruction_contains_fx_corridor_settlement(&**nested)?)
-                }),
+            MultisigInstructionBox::Propose(propose) => {
+                propose
+                    .instructions
+                    .iter()
+                    .try_fold(false, |found, nested| {
+                        Ok(found
+                            || instruction_contains_fx_corridor_settlement(&**nested, selection)?)
+                    })
+            }
             MultisigInstructionBox::Approve(_)
             | MultisigInstructionBox::Register(_)
             | MultisigInstructionBox::Cancel(_)
@@ -2457,14 +2472,21 @@ fn instruction_contains_fx_corridor_settlement(
         };
     }
     if let Some(RegisterBox::Trigger(register)) = any.downcast_ref::<RegisterBox>() {
-        return executable_contains_fx_corridor_settlement(register.object.action().executable());
+        return executable_contains_fx_corridor_settlement(
+            register.object.action().executable(),
+            selection,
+        );
     }
     Ok(false)
 }
-fn transaction_contains_fx_corridor_settlement(
+fn transaction_contains_fx_corridor_settlement<'a>(
     tx: &dyn TransactionRoutingView,
+    selection: impl Into<Option<&'a iroha_data_model::runtime::definition::RootSelectionV1>>,
 ) -> Result<bool, RoutingResolveError> {
-    transaction_executable(tx).map_or(Ok(false), executable_contains_fx_corridor_settlement)
+    let selection = selection.into();
+    transaction_executable(tx).map_or(Ok(false), |value| {
+        executable_contains_fx_corridor_settlement(value, selection)
+    })
 }
 fn transaction_executable(tx: &dyn TransactionRoutingView) -> Option<&Executable> {
     tx.executable()
@@ -3497,7 +3519,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
         }
         return Ok(());
     }
-    if let Some(multisig) = multisig_instruction(instruction)? {
+    if let Some(multisig) = multisig_instruction_selected(instruction, world.runtime_selection())? {
         let collect_payload = |instructions: &[InstructionBox],
                                account: &AccountId,
                                stack: &mut MultisigProposalRoutingStack|
@@ -4116,7 +4138,9 @@ fn instruction_transaction_dataspace_target(
             )?,
         );
     }
-    if let Some(multisig) = multisig_instruction(instruction)? {
+    if let Some(multisig) =
+        multisig_instruction_selected(instruction, routing_selection(state_view))?
+    {
         return match &multisig {
             MultisigInstructionBox::Propose(propose) => {
                 multisig_propose_transaction_dataspace_target(
@@ -4541,7 +4565,7 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
             )?,
         );
     }
-    if let Some(multisig) = multisig_instruction(instruction)? {
+    if let Some(multisig) = multisig_instruction_selected(instruction, world.runtime_selection())? {
         return match &multisig {
             MultisigInstructionBox::Propose(propose) => {
                 multisig_propose_transaction_dataspace_target_with_world_and_fx_overlay(
@@ -4920,10 +4944,38 @@ fn proposal_instructions_hash(
         }
     })
 }
+#[cfg(test)]
 fn multisig_instruction(
     instruction: &dyn Instruction,
 ) -> Result<Option<MultisigInstructionBox>, RoutingResolveError> {
-    multisig_instruction_with_original_decode(instruction).map_err(RoutingResolveError::Deferred)
+    multisig_instruction_selected(instruction, routing_selection(None))
+}
+
+fn routing_selection<'a>(
+    state_view: Option<&'a StateView<'_>>,
+) -> Option<&'a iroha_data_model::runtime::definition::RootSelectionV1> {
+    state_view.map(|view| view.world().runtime_selection())
+}
+
+fn multisig_instruction_selected<'a>(
+    instruction: &dyn Instruction,
+    selection: impl Into<Option<&'a iroha_data_model::runtime::definition::RootSelectionV1>>,
+) -> Result<Option<MultisigInstructionBox>, RoutingResolveError> {
+    let parsed = multisig_instruction_with_original_decode(instruction)
+        .map_err(RoutingResolveError::Deferred)?;
+    let Some(selection) = selection.into() else {
+        if matches!(&parsed, Some(MultisigInstructionBox::Propose(proposal))
+            if proposal.instructions.iter().any(crate::runtime::ironwood::admission::instruction_requires_ironwood))
+        {
+            return Err(RoutingResolveError::OrdinaryRouteUnavailable {
+                reason: "Ironwood proposal routing requires the committed runtime selection".into(),
+            });
+        }
+        return Ok(parsed);
+    };
+    Ok(parsed.and_then(|value| {
+        crate::runtime::ironwood::admission::multisig_for_selection(value, selection).ok()
+    }))
 }
 
 fn multisig_instruction_with_original_decode(
@@ -5263,7 +5315,9 @@ fn deferred_instruction_concrete_dataspace_targets_with_stack(
             compare_and_set_primary_account_alias_dataspace_targets(primary),
         ));
     }
-    if let Some(multisig) = multisig_instruction(instruction)? {
+    if let Some(multisig) =
+        multisig_instruction_selected(instruction, routing_selection(state_view))?
+    {
         let collect = |instructions: &[InstructionBox],
                        stack: &mut MultisigProposalRoutingStack|
          -> Result<BTreeSet<DataSpaceId>, RoutingResolveError> {
@@ -5544,7 +5598,7 @@ fn deferred_instruction_concrete_dataspace_targets_with_world_and_stack<W: World
             compare_and_set_primary_account_alias_dataspace_targets(primary),
         ));
     }
-    if let Some(multisig) = multisig_instruction(instruction)? {
+    if let Some(multisig) = multisig_instruction_selected(instruction, world.runtime_selection())? {
         let collect = |instructions: &[InstructionBox],
                        stack: &mut MultisigProposalRoutingStack|
          -> Result<BTreeSet<DataSpaceId>, RoutingResolveError> {
@@ -5697,7 +5751,7 @@ fn extend_instruction_concrete_dataspace_targets_with_world_and_fx_overlay_and_s
         targets.extend(fx_targets);
         return Ok(());
     }
-    if let Some(multisig) = multisig_instruction(instruction)? {
+    if let Some(multisig) = multisig_instruction_selected(instruction, world.runtime_selection())? {
         let mut collect = |instructions: &[InstructionBox],
                            stack: &mut MultisigProposalRoutingStack|
          -> Result<(), RoutingResolveError> {
@@ -5861,7 +5915,8 @@ fn deferred_instruction_concrete_dataspace_targets_with_world_and_fx_overlay<W: 
     ledger_time_ms: Option<u64>,
     fx_overlay: &FxCorridorRoutingOverlay,
 ) -> Result<Option<BTreeSet<DataSpaceId>>, RoutingResolveError> {
-    let is_nested_scope = multisig_instruction(instruction)?.is_some()
+    let is_nested_scope = multisig_instruction_selected(instruction, world.runtime_selection())?
+        .is_some()
         || matches!(
             instruction.as_any().downcast_ref::<RegisterBox>(),
             Some(RegisterBox::Trigger(_))
@@ -5893,7 +5948,8 @@ fn same_transaction_multisig_proposal_targets(
 ) -> Result<Vec<SameTransactionMultisigProposalTarget>, RoutingResolveError> {
     let mut proposals = Vec::new();
     for (top_level_instruction_index, instruction) in instructions.iter().copied().enumerate() {
-        let Some(MultisigInstructionBox::Propose(propose)) = multisig_instruction(&**instruction)?
+        let Some(MultisigInstructionBox::Propose(propose)) =
+            multisig_instruction_selected(&**instruction, routing_selection(state_view))?
         else {
             continue;
         };
@@ -5940,7 +5996,7 @@ fn same_transaction_multisig_proposal_targets_with_world<W: WorldReadOnly>(
     let mut outer_fx_overlay = fx_overlay.clone();
     for (top_level_instruction_index, instruction) in instructions.iter().copied().enumerate() {
         if let Some(MultisigInstructionBox::Propose(propose)) =
-            multisig_instruction(&**instruction)?
+            multisig_instruction_selected(&**instruction, world.runtime_selection())?
         {
             let mut target_fx_overlay = outer_fx_overlay.clone();
             let instruction_target = merge_instruction_dataspace_targets_with_world_and_fx_overlay(
@@ -6010,7 +6066,9 @@ fn same_transaction_multisig_route_target<'a>(
     instruction: &dyn Instruction,
     top_level_instruction_index: usize,
 ) -> Result<Option<&'a SameTransactionMultisigProposalTarget>, RoutingResolveError> {
-    let Some(multisig) = multisig_instruction(instruction)? else {
+    let Some(multisig) = multisig_instruction_with_original_decode(instruction)
+        .map_err(RoutingResolveError::Deferred)?
+    else {
         return Ok(None);
     };
     let (account, proposal_id, proposal_nonce, instructions_hash, must_precede) = match multisig {
@@ -6069,7 +6127,8 @@ fn observe_authenticated_instruction_fx_effects<W: WorldReadOnly>(
     stack: &mut MultisigProposalRoutingStack,
 ) -> Result<(), RoutingResolveError> {
     fx_overlay.observe(instruction);
-    let Some(multisig) = multisig_instruction(instruction)? else {
+    let Some(multisig) = multisig_instruction_selected(instruction, world.runtime_selection())?
+    else {
         return Ok(());
     };
     let approve = match multisig {
@@ -6466,7 +6525,9 @@ fn instruction_transaction_target_requires_universal_coordinator(
     {
         return Ok(true);
     }
-    if let Some(multisig) = multisig_instruction(instruction)? {
+    if let Some(multisig) =
+        multisig_instruction_selected(instruction, routing_selection(state_view))?
+    {
         // Concrete-target collection below is cycle-guarded and completes before the recursive
         // coordinator scan, preventing a cyclic payload from reaching that scan.
         let instructions = match multisig {
@@ -6634,7 +6695,7 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
     {
         return Ok(true);
     }
-    if let Some(multisig) = multisig_instruction(instruction)? {
+    if let Some(multisig) = multisig_instruction_selected(instruction, world.runtime_selection())? {
         // Concrete-target collection below is cycle-guarded and completes before the recursive
         // coordinator scan, preventing a cyclic payload from reaching that scan.
         let instructions = match multisig {
@@ -6899,7 +6960,7 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world_and_
     if instruction_routes_to_universal_dataspace(instruction) {
         return Ok(true);
     }
-    if let Some(multisig) = multisig_instruction(instruction)? {
+    if let Some(multisig) = multisig_instruction_selected(instruction, world.runtime_selection())? {
         // Concrete-target collection below is cycle-guarded and completes before the recursive
         // coordinator scan, preventing a cyclic payload from reaching that scan.
         let instructions = match multisig {
@@ -7355,7 +7416,7 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
         // custom decode into a claim that no authoritative state is required.
         return true;
     }
-    if let Ok(Some(multisig)) = multisig_instruction(instruction) {
+    if let Ok(Some(multisig)) = multisig_instruction_with_original_decode(instruction) {
         return match multisig {
             MultisigInstructionBox::Propose(_) | MultisigInstructionBox::Approve(_) => true,
             MultisigInstructionBox::Register(_)
@@ -9907,7 +9968,7 @@ impl LaneRouter for ConfigLaneRouter {
     ) -> Result<RoutingPlan, RoutingResolveError> {
         let matched_rule =
             first_matching_rule(&self.policy.rules, |rule| rule_matches(rule, tx, None))?;
-        if transaction_contains_fx_corridor_settlement(tx)?
+        if transaction_contains_fx_corridor_settlement(tx, routing_selection(None))?
             && let Some(decision) = settlement_routing_decision(
                 tx,
                 self.lane_catalog.as_ref(),
@@ -10012,13 +10073,16 @@ impl LaneRouter for ConfigLaneRouter {
         &self,
         tx: &dyn TransactionRoutingView,
     ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
-        // Participant dataspaces come from the governed corridor registry.
-        if transaction_contains_fx_corridor_settlement(tx)? {
-            return Ok(None);
-        }
+        // Probe the need for State before interpreting opaque proposals. In particular an
+        // Ironwood proposal must reach the committed-selection parser, including before H
+        // where that parser preserves the predecessor's opaque nonmatch.
         if dataspace_scoped_permission_routing_requires_state(tx)
             || transaction_target_routing_requires_state(tx)
         {
+            return Ok(None);
+        }
+        // Participant data spaces come from the governed corridor registry.
+        if transaction_contains_fx_corridor_settlement(tx, routing_selection(None))? {
             return Ok(None);
         }
         let matched_rule =
@@ -10198,6 +10262,83 @@ mod sccp_routing_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ironwood_opaque_proposal_routing_uses_committed_grammar_and_requests_state() {
+        use iroha_executor_data_model::isi::multisig::{MultisigProposalNonce, MultisigPropose};
+        let catalog = crate::runtime::release_catalog().unwrap();
+        let (old, new, _) = crate::runtime::catalog::tests::privacy_resolution_instructions();
+        for (instruction, baseline_accepts) in [(old, true), (new, false)] {
+            let proposal: iroha_data_model::isi::InstructionBox = MultisigPropose::new(
+                iroha_test_samples::ALICE_ID.clone(),
+                MultisigProposalNonce::new([0x94; 32]).unwrap(),
+                vec![instruction],
+                None,
+            )
+            .into();
+            assert_eq!(
+                super::multisig_instruction_selected(&*proposal, &catalog.baseline)
+                    .unwrap()
+                    .is_some(),
+                baseline_accepts
+            );
+            assert!(
+                super::multisig_instruction_selected(
+                    &*proposal,
+                    &catalog.ironwood.as_ref().unwrap().selection
+                )
+                .unwrap()
+                .is_some()
+            );
+            let stateless = super::multisig_instruction_selected(&*proposal, None);
+            if baseline_accepts {
+                assert!(stateless.unwrap().is_some());
+            } else {
+                assert!(
+                    matches!(stateless, Err(super::RoutingResolveError::OrdinaryRouteUnavailable { reason }) if reason.contains("committed runtime selection"))
+                );
+                assert!(
+                    super::instruction_contains_fx_corridor_settlement(&*proposal, None).is_err()
+                );
+                let account = iroha_test_samples::ALICE_ID.clone();
+                let (_, settlement) = fx_corridor_fixture(
+                    DataSpaceId::new(10),
+                    DataSpaceId::new(12),
+                    account.clone(),
+                    account.clone(),
+                    account.clone(),
+                    account.clone(),
+                    "ironwood_fx",
+                );
+                let (_, ironwood, _) =
+                    crate::runtime::catalog::tests::privacy_resolution_instructions();
+                let mixed: InstructionBox = MultisigPropose::new(
+                    account,
+                    MultisigProposalNonce::new([0x95; 32]).unwrap(),
+                    vec![ironwood, settlement],
+                    None,
+                )
+                .into();
+                assert!(
+                    super::instruction_contains_fx_corridor_settlement(
+                        &*mixed,
+                        &catalog.ironwood.as_ref().unwrap().selection,
+                    )
+                    .unwrap()
+                );
+                assert!(
+                    !super::instruction_contains_fx_corridor_settlement(&*mixed, &catalog.baseline)
+                        .unwrap()
+                );
+                assert!(matches!(
+                    super::instruction_contains_fx_corridor_settlement(&*mixed, None),
+                    Err(super::RoutingResolveError::OrdinaryRouteUnavailable { .. })
+                ));
+            }
+            assert!(super::instruction_transaction_dataspace_target_needs_state(
+                &*proposal
+            ));
+        }
+    }
     mod contract_permission_routing {
         include!("router/contract_permission_routing_tests.rs");
     }

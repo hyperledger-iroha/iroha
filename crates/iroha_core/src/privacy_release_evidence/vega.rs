@@ -78,7 +78,7 @@ pub(super) fn vega_release_transaction_context_v1()
 pub(super) fn run_vega_stage_v1(
     case_kind: PrivacyReleaseCaseKindV1,
 ) -> Result<StageMaterialV1, PrivacyReleaseEvidenceErrorClassV1> {
-    let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1;
     compiled_privacy_profile_v1(protocol_id).map_err(|error| match error {
         crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
             protocol_id: unavailable,
@@ -105,7 +105,7 @@ pub(super) fn run_vega_stage_v1(
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let proof_seed = stage_purpose_seed_v1(
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
+        PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1,
         case_kind,
         b"figure9-proof-randomness",
     )?;
@@ -131,17 +131,19 @@ pub(super) fn run_vega_stage_v1(
             .privacy_transaction_intent_binding_if_present_v1()
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?
             .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+        let submission_envelope = submission.runtime_envelope();
         if intent.as_bytes() != &prepared.transaction_intent_digest()
-            || submission.envelope.statement_digest.as_bytes() != &prepared.statement_digest()
+            || submission_envelope.statement_digest.as_bytes() != &prepared.statement_digest()
         {
             return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
         }
-        let PrivacyStatementV1::VegaExistingCredentialZkV1(statement) =
-            &submission.envelope.statement
+        let PrivacyRuntimeStatementV1::VegaExistingCredentialZkV1(statement) =
+            &submission_envelope.statement
         else {
             return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
         };
-        let PrivacyProofV1::VegaExistingCredentialZkV1(proof) = &submission.envelope.proof else {
+        let PrivacyRuntimeProofV1::VegaExistingCredentialZkV1(proof) = &submission_envelope.proof
+        else {
             return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
         };
         if proof.as_bytes().len()
@@ -194,7 +196,7 @@ pub(super) fn run_vega_stage_v1(
     ];
     for (purpose, noncanonical_witness) in noncanonical_witnesses {
         let mut noncanonical_rng = EvidenceRng06::new(stage_purpose_seed_v1(
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
+            PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1,
             case_kind,
             purpose,
         )?);
@@ -296,7 +298,7 @@ pub(super) fn run_vega_stage_v1(
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
     let original_material = norito::encode_canonical(
-        &PrivacyStatementV1::VegaExistingCredentialZkV1(statement.clone()),
+        &PrivacyRuntimeStatementV1::VegaExistingCredentialZkV1(statement.clone()),
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     let (public_statement_material, failure_class) = match case_kind {
@@ -447,7 +449,7 @@ pub(super) fn run_vega_stage_v1(
                 }
             }
             (
-                norito::encode_canonical(&PrivacyStatementV1::VegaExistingCredentialZkV1(
+                norito::encode_canonical(&PrivacyRuntimeStatementV1::VegaExistingCredentialZkV1(
                     stale_epoch,
                 ))
                 .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?,
@@ -578,7 +580,7 @@ pub(super) fn verify_vega_release_production_envelope_v1(
     authoritative_action_index: u32,
     block_timestamp_ms: u64,
 ) -> Result<(), PrivacyReleaseEvidenceErrorClassV1> {
-    let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1;
     let profile = compiled_privacy_profile_v1(protocol_id).map_err(|error| match error {
         crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
             protocol_id: unavailable,
@@ -586,13 +588,13 @@ pub(super) fn verify_vega_release_production_envelope_v1(
         _ => PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed,
     })?;
     let bindings: PrivacyCompiledProfileSnapshotV1 = profile.into();
-    let typed_statement = PrivacyStatementV1::VegaExistingCredentialZkV1(statement.clone());
+    let typed_statement = PrivacyRuntimeStatementV1::VegaExistingCredentialZkV1(statement.clone());
     let statement_digest = typed_statement
         .digest()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
-    let envelope = PrivacyProofEnvelopeV1::bind_v1(
+    let envelope = PrivacyRuntimeProofEnvelopeV1::bind_v1(
         typed_statement,
-        PrivacyProofV1::VegaExistingCredentialZkV1(PrivacyProofBytesV1::new(proof.to_vec())),
+        PrivacyRuntimeProofV1::VegaExistingCredentialZkV1(PrivacyProofBytesV1::new(proof.to_vec())),
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::ProductionEnvelopeRejected)?;
     let limits = PrivacyConsensusLimitsV1::taira_default();
@@ -621,7 +623,7 @@ pub(super) fn verify_vega_release_production_envelope_v1(
         }
         _ => PrivacyReleaseEvidenceErrorClassV1::ProductionEnvelopeRejected,
     })?;
-    if effects.protocol_id() != PrivacyProtocolIdV1::VegaExistingCredentialZkV1
+    if effects.protocol_id() != PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1
         || effects.statement_digest() != statement_digest
         || effects.action_index() != authoritative_action_index
         || effects.encoded_action_bytes() == 0

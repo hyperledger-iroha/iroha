@@ -40,7 +40,7 @@ use crate::privacy_engines::p256::TranscriptBindingV1;
 use iroha_data_model::privacy::{
     IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1, IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
     IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1, IrohaJindoPolynomialCommitmentStatementV1,
-    PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1, PrivacyStatementV1,
+    PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1, PrivacyRuntimeStatementV1,
 };
 use rand_core::{TryCryptoRng, TryRng};
 use thiserror::Error;
@@ -801,7 +801,7 @@ fn validate_statement_and_binding(
             field: JindoBindingFieldV1::CrsDigest,
         });
     }
-    let digest = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement.clone())
+    let digest = PrivacyRuntimeStatementV1::IrohaJindoPolynomialCommitmentV1(statement.clone())
         .digest()
         .map_err(|_| JindoErrorV1::StatementEncoding)?;
     if binding.statement_digest != *digest.as_bytes() {

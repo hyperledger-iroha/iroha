@@ -17376,11 +17376,11 @@
             "path": "crates/iroha_data_model/src/sorafs/publication.rs",
             "symbols": [
               "PUBLICATION_PROOF_MAX_BYTES_V1",
-              "PUBLICATION_PROOF_MAX_BLOCKS_V1"
+              "PUBLICATION_PROOF_MAX_EPOCH_BOUNDARIES_V1"
             ],
             "exprs": {
               "PUBLICATION_PROOF_MAX_BYTES_V1": "32 * 1024 * 1024",
-              "PUBLICATION_PROOF_MAX_BLOCKS_V1": "1024"
+              "PUBLICATION_PROOF_MAX_EPOCH_BOUNDARIES_V1": "256"
             }
           },
           {
@@ -17948,7 +17948,7 @@
         ]
       },
       {
-        "reason": "The SoraFS services of Torii: request, response, page, scan, cache, queue, timing and file ceilings of its gateway, registry, moderation, orderbook, proof-of-possession, proof-of-retrievability, reserve, discovery, delegated-routing, evidence-viewer and billing endpoints and of their background workers. They are local serving limits of one HTTP service: a refused request can be sent again or to another node, and none decides validity. Two buffer sizes are found by use: the chunk in which a stream-token response body is handed to the HTTP stack (64 KiB) and the read buffer of the compliance feed transport (8 KiB, also its first allocation when a response states no length). Neither refuses anything.",
+        "reason": "The SoraFS services of Torii: request, response, page, scan, cache, queue, timing and file ceilings of its gateway, registry, moderation, orderbook, proof-of-possession, proof-of-retrievability, reserve, publication-proof, discovery, delegated-routing, evidence-viewer and billing endpoints and of their background workers. They are local serving limits of one HTTP service: a refused request can be sent again or to another node, and none decides validity. Two buffer sizes are found by use: the chunk in which a stream-token response body is handed to the HTTP stack (64 KiB) and the read buffer of the compliance feed transport (8 KiB, also its first allocation when a response states no length). Neither refuses anything.",
         "files": [
           {
             "path": "crates/iroha_torii/src/routing.rs",
@@ -18322,6 +18322,15 @@
               "MAX_LOCAL_MANIFEST_RESPONSE_BYTES": "16 * 1024 * 1024",
               "DEFAULT_FILE_LIST_LIMIT": "50",
               "MAX_FILE_LIST_LIMIT": "500"
+            }
+          },
+          {
+            "path": "crates/iroha_torii/src/sorafs/publisher.rs",
+            "symbols": [
+              "PUBLICATION_PROOF_BUDGET_BYTES"
+            ],
+            "exprs": {
+              "PUBLICATION_PROOF_BUDGET_BYTES": "2 * iroha_data_model::sorafs::publication::PUBLICATION_PROOF_MAX_BYTES_V1"
             }
           },
           {
@@ -26362,12 +26371,6 @@
               }
             },
             {
-              "path": "crates/iroha_data_model/src/sorafs/publication.rs",
-              "sites": {
-                "proof.lineage.len() < 2": 1
-              }
-            },
-            {
               "path": "crates/iroha_data_model/src/validation_fee_rewards.rs",
               "sites": {
                 "v.len() >= 3": 1
@@ -26444,12 +26447,6 @@
               "sites": {
                 "config.endpoints.len() < 3": 1,
                 "config.max_endpoints < 3": 1
-              }
-            },
-            {
-              "path": "crates/iroha_torii/src/sorafs/publisher.rs",
-              "sites": {
-                "count < 2": 1
               }
             },
             {
@@ -27581,6 +27578,12 @@
               "path": "crates/iroha_core/src/validation_fee_rewards/history.rs",
               "sites": {
                 ".take(3)": 1
+              }
+            },
+            {
+              "path": "crates/iroha_torii/src/sorafs/publisher.rs",
+              "sites": {
+                "request.floor_height.max(2)": 1
               }
             }
           ]

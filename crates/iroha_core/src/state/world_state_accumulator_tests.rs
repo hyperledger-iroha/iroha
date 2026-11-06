@@ -21,6 +21,86 @@ fn sample(index: u8) -> [u8; LANE_BYTES] {
     )
 }
 
+#[test]
+fn ironwood_partial_storage_composition_is_refused_by_cold_capture() {
+    use iroha_data_model::runtime::definition::DefinitionDescriptorV1;
+    let catalog = crate::runtime::release_catalog().unwrap();
+    let successor = catalog.ironwood.as_ref().unwrap();
+    for (field, replacement) in &successor.world_storage {
+        let mut partial = catalog.baseline.clone();
+        partial.bindings.clear();
+        partial.active.retain(|id| {
+            !matches!(
+                catalog.definitions[id],
+                DefinitionDescriptorV1::Implementation(_) | DefinitionDescriptorV1::Interface(_)
+            )
+        });
+        partial
+            .installed_storage
+            .retain(|id| *id != catalog.world_storage[field]);
+        partial.installed_storage.push(*replacement);
+        partial.installed_storage.sort_unstable();
+        partial.check_closure(&catalog.definitions).unwrap();
+        let mut world = World::default();
+        world.runtime_selection = mv::cell::Cell::new(partial);
+        let error = WorldStateAccumulator::capture(&world.block()).unwrap_err();
+        assert!(
+            error.to_string().contains("complete successor"),
+            "{field}: {error}"
+        );
+    }
+}
+
+#[test]
+fn ironwood_cutover_preserves_nonempty_predecessor_bytes_and_both_root_rules() {
+    use iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1;
+    use iroha_data_model::privacy::{PrivacyProtocolPolicyV1, PrivacyRuntimeProtocolIdV1};
+    let mut world = World::default();
+    let protocol = PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1;
+    let key = PrivacyProtocolPolicyKeyV1::new(protocol);
+    let policy = PrivacyProtocolPolicyV1::canonical_default_v1(protocol);
+    world.privacy_protocol_policies.insert(key, policy.clone());
+    let catalog = crate::runtime::release_catalog().unwrap();
+    let successor = catalog.ironwood.as_ref().unwrap();
+    let mut block = world.block();
+    let before = WorldStateAccumulator::capture(&block).unwrap();
+    let old_root = before.root(&catalog.baseline).unwrap();
+    for id in &successor.definitions {
+        block
+            .runtime_definitions
+            .insert(*id, catalog.definitions[id].clone());
+    }
+    *block.runtime_selection.get_mut() = successor.selection.clone();
+    assert_eq!(
+        norito::encode_canonical(block.privacy_protocol_policies.get(&key).unwrap()).unwrap(),
+        norito::encode_canonical(&policy).unwrap()
+    );
+    let after = before.apply_block(&block).unwrap();
+    assert_eq!(after, WorldStateAccumulator::capture(&block).unwrap());
+    assert_eq!(
+        old_root,
+        WorldStateAccumulator::capture_predecessor(&block)
+            .unwrap()
+            .root(&catalog.baseline)
+            .unwrap()
+    );
+    assert_ne!(old_root, after.root(&successor.selection).unwrap());
+    assert!(
+        crate::runtime::ironwood::validate_cutover(
+            &successor.selection,
+            &catalog.baseline,
+            &catalog.definitions
+        )
+        .is_err()
+    );
+    let mut duplicate = successor.selection.clone();
+    duplicate
+        .installed_storage
+        .push(catalog.world_storage["world.privacy_protocol_policies"]);
+    duplicate.installed_storage.sort_unstable();
+    assert!(installed_slots(field_index().as_ref().unwrap(), &duplicate).is_err());
+}
+
 /// Independent restatement of the documented element formula and lane arithmetic.
 fn documented_sum(entries: &[(Hash, Option<Hash>, Hash)]) -> [u16; LANES] {
     let mut lanes = [0_u16; LANES];
@@ -1001,4 +1081,28 @@ fn selection_schema_folds_its_profile_and_installed_storage() {
             .to_le_bytes(),
     ]);
     assert_eq!(selection_schema(&selection).unwrap(), reference);
+}
+
+#[test]
+fn ironwood_accumulator_uses_process_wide_storage_validation_cache() {
+    let catalog = crate::runtime::release_catalog().unwrap();
+    let mut selection = catalog.ironwood.as_ref().unwrap().selection.clone();
+    // A distinct, closure-valid identity avoids relying on other tests' cache entries.
+    selection.completion_closures =
+        vec![iroha_data_model::runtime::definition::CompletionClosureV1 {
+            obligation: Hash::new(b"ironwood-accumulator-global-cache-selection").into(),
+            definitions: vec![selection.services_profile],
+        }];
+    selection.check_closure(&catalog.definitions).unwrap();
+    let before = crate::runtime::ironwood::STORAGE_VALIDATION_MISSES.with(|v| v.get());
+    let index = field_index().as_ref().unwrap();
+    for _ in 0..3 {
+        installed_slots(index, &selection).unwrap();
+    }
+    let after = crate::runtime::ironwood::STORAGE_VALIDATION_MISSES.with(|v| v.get());
+    assert_eq!(
+        after - before,
+        1,
+        "all accumulator passes use the real global cache"
+    );
 }

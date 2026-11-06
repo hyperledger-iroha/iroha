@@ -2423,7 +2423,7 @@ pub mod torii {
     pub const QUERY_FANOUT_MAX_RETAINED_BYTES: Bytes = Bytes(512_000_000);
     /// Maximum complete working set owned by one query, independent of aggregate concurrency.
     pub const QUERY_FANOUT_MAX_WORKING_SET_BYTES: Bytes = Bytes(48_000_000);
-    /// Complete initial full-native-finality working-set ceiling, sharing the existing fanout pool.
+    /// Initial native-finality and completed-anchor working-set ceiling, sharing the fanout pool.
     pub const FINALITY_MAX_WORKING_SET_BYTES: Bytes = Bytes(384_000_000);
     /// Persistent SCCP history-node backing, independent of transient query leases.
     pub const SCCP_HISTORY_CACHE_MAX_BYTES: Bytes = Bytes(8_000_000);

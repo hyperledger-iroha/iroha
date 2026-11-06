@@ -140,7 +140,7 @@ fn retained_x509_policy_world(current_cap: u32, next_cap: u32) -> (World, Privac
                 .expect("typed record"),
         );
         let publication =
-            PrivacyRootPublicationV1::new(namespace, role, epoch, record.ca_membership_root)
+            PrivacyRuntimeRootPublicationV1::new(namespace, role, epoch, record.ca_membership_root)
                 .expect("publication");
         let provenance = PrivacyRootProvenanceV1::zk_x509_ca_governance(
             publication.digest().expect("digest"),

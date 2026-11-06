@@ -667,6 +667,12 @@ fn default_limits_admit_and_select_the_largest_includable_transaction() {
 struct DeferredInclusionAccess(Option<crate::execution_attempt::ExecutionDeferred>);
 
 impl QueueAdmissionStateAccess for DeferredInclusionAccess {
+    fn runtime_selection(&self) -> &iroha_data_model::runtime::definition::RootSelectionV1 {
+        &crate::runtime::release_catalog().unwrap().baseline
+    }
+    fn check_runtime_payload(&mut self, _: &AcceptedTransaction<'_>) -> Result<(), Error> {
+        Ok(())
+    }
     fn execution_budget(&self) -> iroha_allocation::AllocationBudget {
         panic!("admission continued after a deferred includable assessment")
     }

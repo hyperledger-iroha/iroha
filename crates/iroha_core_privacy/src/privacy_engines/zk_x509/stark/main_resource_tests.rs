@@ -1126,6 +1126,10 @@ impl ZkX509MainRegistrationShapeV1 {
 
 #[test]
 fn row_hash_diagnostic_geometry_matches_original_batches_and_funding() {
+    use crate::privacy_engines::privacy_outer_hash::{
+        PrivacyOuterLastFieldPairV1, PrivacyOuterLastFieldStreamV1,
+    };
+
     let (groups, rows, streams, replay, runtime) =
         ZkX509MainRegistrationShapeV1::row_hash_diagnostic_geometry_v1().unwrap();
     assert_eq!(
@@ -1149,12 +1153,20 @@ fn row_hash_diagnostic_geometry_matches_original_batches_and_funding() {
         329
     );
     assert_eq!(rows, 1 << 22);
+    // One pair includes the actual owner header and shared constructor workspace.
+    // Every additional pair contributes only its backing storage.
+    let single_pair = aggregate::streaming_row_state_payload_v1(2).unwrap();
     assert_eq!(
         streams,
-        rows * core::mem::size_of::<
-            crate::privacy_engines::privacy_outer_hash::PrivacyOuterLastFieldStreamV1,
-        >()
+        single_pair + (rows / 2 - 1) * size_of::<PrivacyOuterLastFieldPairV1>()
     );
-    assert!(replay >= 8 * rows * core::mem::size_of::<F>());
+    assert!(streams < rows * size_of::<PrivacyOuterLastFieldStreamV1>());
+    // Eight common-domain outputs and eight masked coefficient columns overlap
+    // with two native columns at the largest registered trace size.
+    let max_native = 1 << 19;
+    assert_eq!(
+        replay,
+        (8 * rows + 8 * (max_native + 1_816) + 2 * max_native) * size_of::<F>()
+    );
     assert_eq!(runtime, 1 << 30);
 }

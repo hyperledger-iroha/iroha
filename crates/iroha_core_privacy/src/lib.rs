@@ -35,3 +35,6 @@ pub(crate) mod json_macros {
 #[cfg(test)]
 #[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod test_support;
+
+/// Certified pool-anchor and public-balance proof boundary for Ironwood clients.
+pub mod ironwood_pool_cut;

@@ -406,12 +406,33 @@ def test_report_authenticates_exact_four_sources_and_keeps_all_exclusions():
     assert result["schema"] == "parliament-gf-circuit-v1"
     assert result["verdict"] == "PASS_UNDER_STATED_PREMISES"
     assert result["checked_component_construction"] is True
+    correspondence = result["field_source_correspondence"]
+    assert correspondence["current_sha256"] == independent[M.FIELD]
+    previous = json.loads((ROOT / M.ACCOUNTING).read_text())
+    assert correspondence["historical_sha256"] == previous["source_sha256_before"][M.FIELD]
+    assert correspondence["historical_accounting_requalified"] is False
     assert set(result["kernels"]) == set(ROWS)
     assert_false_flags(result)
     assert len(result["exclusions"]) == 6
     exclusions = " ".join(result["exclusions"])
     for phrase in ("not a complete compiler/dependency", "aliased registers are not", "entanglement", "whole-program history/cleanup", "No source operation-count multiplication", "qualification remain open"):
         assert phrase in exclusions
+
+
+@pytest.mark.parametrize("change", ("removed", "duplicate", "body", "unreviewed_comment"))
+def test_field_correspondence_allows_only_exact_reviewed_lint_attribute(change):
+    source = (ROOT / M.FIELD).read_text()
+    assert M.field_source_correspondence(source)["current_sha256"] == M.PINS[M.FIELD]
+    if change == "removed":
+        source = source.replace(M.REVIEWED_LINT_ATTRIBUTE, "", 1)
+    elif change == "duplicate":
+        source += M.REVIEWED_LINT_ATTRIBUTE
+    elif change == "body":
+        source = source.replace("taps = [10, 5, 2, 0]", "taps = [10, 5, 1, 0]", 1)
+    else:
+        source += "\n// unreviewed change\n"
+    with pytest.raises(ValueError, match="(reviewed field lint attribute differs|field source differs beyond)"):
+        M.field_source_correspondence(source)
 
 
 @pytest.mark.parametrize("relative", tuple(M.PINS))

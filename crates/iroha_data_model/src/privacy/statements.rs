@@ -1453,10 +1453,10 @@ pub struct PqMaspStarkStatementV1 {
 #[norito(tag = "protocol", content = "statement", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
-    name = "iroha_data_model::privacy::PrivacyStatementV1",
-    frame = "iroha.privacy.statement.v1"
+    name = "iroha_data_model::privacy::PrivacyRuntimeStatementV1",
+    frame = "iroha.privacy.runtime-statement.v1"
 )]
-pub enum PrivacyStatementV1 {
+pub enum PrivacyRuntimeStatementV1 {
     /// ZK-ACE post-quantum authorization statement.
     ZkAcePqAuthorizationV1(ZkAcePqAuthorizationStatementV1),
     /// Anonymous PGC k-out-of-n payment statement.
@@ -1481,28 +1481,37 @@ pub enum PrivacyStatementV1 {
     IrohaIvmPrivateNoteStarkV1(IrohaIvmPrivateNoteStarkStatementV1),
     /// Post-quantum MASP STARK statement.
     PqMaspStarkV1(PqMaspStarkStatementV1),
+    /// Ironwood V3 cross-address action statement, sharing the Orchard public input shape.
+    IronwoodHalo2ActionsV1(OrchardHalo2ActionsStatementV1),
 }
-impl PrivacyStatementV1 {
+impl PrivacyRuntimeStatementV1 {
     /// Exact protocol carried by this statement variant.
     #[must_use]
-    pub const fn protocol_id(&self) -> PrivacyProtocolIdV1 {
+    pub const fn protocol_id(&self) -> PrivacyRuntimeProtocolIdV1 {
         match self {
-            Self::ZkAcePqAuthorizationV1(_) => PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
-            Self::AnonymousPgcKOutOfNV1(_) => PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
-            Self::VeRangeTransparentRangeV1(_) => PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
-            Self::IrohaZkAmsV1(_) => PrivacyProtocolIdV1::IrohaZkAmsV1,
-            Self::VegaExistingCredentialZkV1(_) => PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
-            Self::IrohaZkX509StarkP256V1(_) => PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            Self::ZkAcePqAuthorizationV1(_) => PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1,
+            Self::AnonymousPgcKOutOfNV1(_) => PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
+            Self::VeRangeTransparentRangeV1(_) => {
+                PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1
+            }
+            Self::IrohaZkAmsV1(_) => PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1,
+            Self::VegaExistingCredentialZkV1(_) => {
+                PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1
+            }
+            Self::IrohaZkX509StarkP256V1(_) => PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
             Self::IrohaJindoPolynomialCommitmentV1(_) => {
-                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
+                PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1
             }
             Self::IrohaBootleLanternAnoncredV1(_) => {
-                PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
+                PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1
             }
-            Self::OrchardHalo2ActionsV1(_) => PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
-            Self::MoneroFcmpPlusPlusV1(_) => PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
-            Self::IrohaIvmPrivateNoteStarkV1(_) => PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-            Self::PqMaspStarkV1(_) => PrivacyProtocolIdV1::PqMaspStarkV1,
+            Self::OrchardHalo2ActionsV1(_) => PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
+            Self::IronwoodHalo2ActionsV1(_) => PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1,
+            Self::MoneroFcmpPlusPlusV1(_) => PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1,
+            Self::IrohaIvmPrivateNoteStarkV1(_) => {
+                PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1
+            }
+            Self::PqMaspStarkV1(_) => PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
         }
     }
     /// Borrow the explicit shared context inside this protocol statement.
@@ -1517,7 +1526,9 @@ impl PrivacyStatementV1 {
             Self::IrohaZkX509StarkP256V1(statement) => &statement.context,
             Self::IrohaJindoPolynomialCommitmentV1(statement) => &statement.context,
             Self::IrohaBootleLanternAnoncredV1(statement) => &statement.context,
-            Self::OrchardHalo2ActionsV1(statement) => &statement.context,
+            Self::OrchardHalo2ActionsV1(statement) | Self::IronwoodHalo2ActionsV1(statement) => {
+                &statement.context
+            }
             Self::MoneroFcmpPlusPlusV1(statement) => &statement.context,
             Self::IrohaIvmPrivateNoteStarkV1(statement) => &statement.context,
             Self::PqMaspStarkV1(statement) => &statement.context,
@@ -1538,7 +1549,9 @@ impl PrivacyStatementV1 {
             Self::IrohaZkX509StarkP256V1(statement) => &mut statement.context,
             Self::IrohaJindoPolynomialCommitmentV1(statement) => &mut statement.context,
             Self::IrohaBootleLanternAnoncredV1(statement) => &mut statement.context,
-            Self::OrchardHalo2ActionsV1(statement) => &mut statement.context,
+            Self::OrchardHalo2ActionsV1(statement) | Self::IronwoodHalo2ActionsV1(statement) => {
+                &mut statement.context
+            }
             Self::MoneroFcmpPlusPlusV1(statement) => &mut statement.context,
             Self::IrohaIvmPrivateNoteStarkV1(statement) => &mut statement.context,
             Self::PqMaspStarkV1(statement) => &mut statement.context,
@@ -1550,17 +1563,9 @@ impl PrivacyStatementV1 {
     ///
     /// Returns a Norito encoding error if canonical statement encoding fails.
     pub fn digest(&self) -> Result<PrivacyStatementDigestV1, norito::Error> {
-        let encoded = norito::encode_canonical(self)?;
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(PRIVACY_STATEMENT_DIGEST_DOMAIN_V1);
-        hasher.update(
-            &u64::try_from(encoded.len())
-                .expect("Norito output length always fits u64 on supported targets")
-                .to_le_bytes(),
-        );
-        hasher.update(&encoded);
-        Ok(PrivacyStatementDigestV1::new(*hasher.finalize().as_bytes()))
+        privacy_wire_statement_digest(&self.canonical_wire_bytes_v1()?)
     }
+
     /// Validate the exact protocol statement and consensus resource bounds.
     ///
     /// # Errors
@@ -1584,7 +1589,9 @@ impl PrivacyStatementV1 {
             Self::IrohaZkX509StarkP256V1(statement) => validate_zk_x509(statement)?,
             Self::IrohaJindoPolynomialCommitmentV1(statement) => validate_jindo(statement, limits)?,
             Self::IrohaBootleLanternAnoncredV1(statement) => validate_bootle_lantern(statement)?,
-            Self::OrchardHalo2ActionsV1(statement) => validate_orchard(statement, limits)?,
+            Self::OrchardHalo2ActionsV1(statement) | Self::IronwoodHalo2ActionsV1(statement) => {
+                validate_orchard(statement, limits)?
+            }
             Self::MoneroFcmpPlusPlusV1(statement) => validate_fcmp(statement, limits)?,
             Self::IrohaIvmPrivateNoteStarkV1(statement) => {
                 validate_ivm_private_note(statement, limits)?
@@ -1606,13 +1613,13 @@ impl IrohaZkX509StarkP256StatementV1 {
         self.context.validate_proof_free_v1(limits)?;
         validate_zk_x509(self)?;
         validate_privacy_statement_size_v1(
-            &PrivacyStatementV1::IrohaZkX509StarkP256V1(self.clone()),
+            &PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(self.clone()),
             limits,
         )
     }
 }
 fn validate_privacy_statement_size_v1(
-    statement: &PrivacyStatementV1,
+    statement: &PrivacyRuntimeStatementV1,
     limits: &PrivacyConsensusLimitsV1,
 ) -> Result<(), PrivacyStatementValidationError> {
     let encoded_len = norito::canonical_frame_len(statement)
@@ -2724,7 +2731,7 @@ fn first_duplicate_index<T: PartialEq>(values: &[T]) -> Option<usize> {
     }
     None
 }
-impl PrivacyProtocolLimitsV1 {
+impl PrivacyRuntimeProtocolLimitsV1 {
     /// Validate a statement against activation-specific governed count limits.
     ///
     /// # Errors
@@ -2733,7 +2740,7 @@ impl PrivacyProtocolLimitsV1 {
     /// another protocol or exceeds an activation-specific bound.
     pub fn validate_statement(
         &self,
-        statement: &PrivacyStatementV1,
+        statement: &PrivacyRuntimeStatementV1,
     ) -> Result<(), PrivacyProfileStatementLimitsError> {
         if self.protocol_id() != statement.protocol_id() {
             return Err(PrivacyProfileStatementLimitsError::ProtocolMismatch {
@@ -2744,22 +2751,22 @@ impl PrivacyProtocolLimitsV1 {
         match (self, statement) {
             (
                 Self::AnonymousPgcKOutOfNV1(limits),
-                PrivacyStatementV1::AnonymousPgcKOutOfNV1(statement),
+                PrivacyRuntimeStatementV1::AnonymousPgcKOutOfNV1(statement),
             ) => validate_anonymous_pgc_activation_statement(*limits, statement),
             (
                 Self::VeRangeTransparentRangeV1(limits),
-                PrivacyStatementV1::VeRangeTransparentRangeV1(statement),
+                PrivacyRuntimeStatementV1::VeRangeTransparentRangeV1(statement),
             ) => validate_activation_statement_count(
                 PrivacyProtocolLimitFieldV1::VeRangeAggregationCount,
                 statement.aggregation_count,
                 limits.max_aggregation_count,
             ),
-            (Self::IrohaZkAmsV1(limits), PrivacyStatementV1::IrohaZkAmsV1(statement)) => {
+            (Self::IrohaZkAmsV1(limits), PrivacyRuntimeStatementV1::IrohaZkAmsV1(statement)) => {
                 validate_zk_ams_activation_statement(*limits, statement)
             }
             (
                 Self::IrohaJindoPolynomialCommitmentV1(limits),
-                PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement),
+                PrivacyRuntimeStatementV1::IrohaJindoPolynomialCommitmentV1(statement),
             ) => validate_activation_statement_count(
                 PrivacyProtocolLimitFieldV1::JindoPolynomialCount,
                 u32::try_from(statement.polynomial_commitments.len()).unwrap_or(u32::MAX),
@@ -2767,17 +2774,21 @@ impl PrivacyProtocolLimitsV1 {
             ),
             (
                 Self::OrchardHalo2ActionsV1(limits),
-                PrivacyStatementV1::OrchardHalo2ActionsV1(statement),
+                PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement),
+            )
+            | (
+                Self::IronwoodHalo2ActionsV1(limits),
+                PrivacyRuntimeStatementV1::IronwoodHalo2ActionsV1(statement),
             ) => validate_orchard_activation_statement(*limits, statement),
             (
                 Self::MoneroFcmpPlusPlusV1(limits),
-                PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement),
+                PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1(statement),
             ) => validate_fcmp_activation_statement(*limits, statement),
             (
                 Self::IrohaIvmPrivateNoteStarkV1(limits),
-                PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement),
+                PrivacyRuntimeStatementV1::IrohaIvmPrivateNoteStarkV1(statement),
             ) => validate_ivm_private_note_activation_statement(*limits, statement),
-            (Self::PqMaspStarkV1(limits), PrivacyStatementV1::PqMaspStarkV1(statement)) => {
+            (Self::PqMaspStarkV1(limits), PrivacyRuntimeStatementV1::PqMaspStarkV1(statement)) => {
                 validate_pq_masp_activation_statement(*limits, statement)
             }
             _ => Ok(()),

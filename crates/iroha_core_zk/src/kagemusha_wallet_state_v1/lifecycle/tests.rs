@@ -8,6 +8,9 @@ mod intake;
 #[path = "receive_retry_tests.rs"]
 mod receive_retry;
 
+#[path = "reviewed_preparing_tests.rs"]
+mod reviewed_preparing;
+
 use crate::kagemusha_wallet_advance_v1::kagemusha_wallet_archive_object_digest_v1 as object_digest;
 
 /// Which mock derivation a proof consumed.
@@ -1638,6 +1641,15 @@ fn source_rotation_does_not_rebase_a_durable_plan_or_repeat_proving() {
     assert_eq!(
         wallet.execute(request()).unwrap(),
         Completion::NotPerformed(NotPerformed::StaleHead)
+    );
+    let (_, binding) = wallet
+        .retained_preparation_review_binding(&request())
+        .unwrap();
+    assert_eq!(
+        wallet
+            .execute_reviewed_preparing(request(), &binding)
+            .unwrap(),
+        ReviewedExecutionV1::Executed(Completion::NotPerformed(NotPerformed::StaleHead))
     );
     assert_eq!(wallet.proofs.preparations.load(Ordering::SeqCst), count);
     assert_eq!(wallet.proofs.preparation_proofs.load(Ordering::SeqCst), 1);

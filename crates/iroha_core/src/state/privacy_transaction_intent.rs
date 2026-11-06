@@ -1,11 +1,16 @@
 //! Bind privacy authorization to one original signed native instruction occurrence.
 
 use iroha_crypto::{Hash, HashOf};
+#[cfg(test)]
+use iroha_data_model::isi::privacy::SubmitPrivacyProofV1;
 use iroha_data_model::{
     ValidationFail,
     account::AccountId,
-    isi::{InstructionBox, privacy::SubmitPrivacyProofV1},
-    transaction::{Executable, ExecutableBatchItem, SignedTransaction, TransactionEntrypoint},
+    isi::InstructionBox,
+    transaction::{
+        Executable, ExecutableBatchItem, PrivacySubmissionRefV1, SignedTransaction,
+        TransactionEntrypoint,
+    },
 };
 
 use super::{StateReadOnly, StateTransaction};
@@ -24,7 +29,7 @@ pub(super) struct PrivacyDirectSourceV1 {
 fn direct_submission_at(
     transaction: &SignedTransaction,
     index: usize,
-) -> Option<&SubmitPrivacyProofV1> {
+) -> Option<PrivacySubmissionRefV1<'_>> {
     let instruction = match transaction.instructions() {
         Executable::Instructions(instructions) => instructions.get(index),
         Executable::Batch(items) => items.get(index).and_then(|item| match item {
@@ -33,7 +38,7 @@ fn direct_submission_at(
         }),
         Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => None,
     }?;
-    instruction.as_any().downcast_ref::<SubmitPrivacyProofV1>()
+    PrivacySubmissionRefV1::from_instruction(instruction)
 }
 
 impl StateTransaction<'_, '_> {
@@ -81,15 +86,10 @@ impl StateTransaction<'_, '_> {
         if occurrences.next().is_some() {
             return Err(fail());
         }
-        let submission_hash =
-            crate::privacy::privacy_signed_submission_hash_v1(submission).map_err(|_| fail())?;
+        let submission_hash = crate::privacy::privacy_signed_submission_ref_hash_v1(submission)
+            .map_err(|_| fail())?;
         if let Some(binding) = self.privacy_transaction_intent_binding.as_mut() {
-            if binding.digest
-                != submission
-                    .envelope
-                    .statement
-                    .context()
-                    .transaction_intent_digest
+            if binding.digest != submission.context().transaction_intent_digest
                 || binding.submission_hash != submission_hash
             {
                 return Err(fail());
@@ -125,7 +125,7 @@ impl StateTransaction<'_, '_> {
         let Some(source) = binding.source.as_ref() else {
             return;
         };
-        let actual = instruction.as_any().downcast_ref::<SubmitPrivacyProofV1>();
+        let actual = PrivacySubmissionRefV1::from_instruction(instruction);
         if !binding.consumed
             && source.instruction_index == index
             && source.transaction_hash == transaction.hash()
@@ -173,7 +173,8 @@ mod tests {
     use iroha_data_model::{
         block::BlockHeader,
         privacy::{
-            PrivacyProtocolIdV1, PrivacyTransactionIntentDigestV1, privacy_action_role_samples_v1,
+            PrivacyRuntimeProtocolIdV1, PrivacyTransactionIntentDigestV1,
+            privacy_action_role_samples_v1,
         },
         smart_contract::ContractAddress,
         transaction::{FeePaymentIntent, TransactionBuilder, executable::ContractInvocation},
@@ -196,11 +197,13 @@ mod tests {
             .unwrap()
             .into_iter()
             .find(|sample| {
-                sample.envelope.protocol_id == PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
+                sample.envelope.protocol_id
+                    == PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1
             })
             .unwrap()
             .envelope;
-        let mut submission = SubmitPrivacyProofV1::new(envelope);
+        let mut submission =
+            SubmitPrivacyProofV1::new((envelope).try_into().expect("frozen Exact12 test input"));
         submission.envelope.statement.context_mut().network_id = *state.network_id_ref();
         submission.envelope.statement.context_mut().action_index = 0;
         let build = |submission: SubmitPrivacyProofV1| {

@@ -1,0 +1,66 @@
+{
+  "baseline_historical_failures": 160,
+  "verified_repaired": 47,
+  "remaining_at_inventory": 113,
+  "simple_path_rebinding_alone_sufficient": false,
+  "current_producer_artifact": "docs/validation/parliament_ballot_current_candidate_20261104",
+  "entries": [
+    {
+      "suite": "parliament_ballot_adapter_bound_test.py",
+      "historical_failures_remaining": 2,
+      "repair_class": "current compiled-image proof or genuinely retained historical artifact required",
+      "next_action": "Use current_candidate_20261104 build receipts and stack-v2 disassembly as fresh inputs. Derive current symbol extents, control flow, call targets and custody assertions; preserve unresolved frontiers. Fixed historical addresses/tool identities cannot be relabeled."
+    },
+    {
+      "suite": "parliament_ballot_allocator_activation_test.py",
+      "historical_failures_remaining": 5,
+      "repair_class": "current compiled-image proof or genuinely retained historical artifact required",
+      "next_action": "Use current_candidate_20261104 build receipts and stack-v2 disassembly as fresh inputs. Derive current symbol extents, control flow, call targets and custody assertions; preserve unresolved frontiers. Fixed historical addresses/tool identities cannot be relabeled."
+    },
+    {
+      "suite": "parliament_ballot_current_correspondence_test.py",
+      "historical_failures_remaining": 47,
+      "repair_class": "current compiled-image proof or genuinely retained historical artifact required",
+      "next_action": "Use current_candidate_20261104 build receipts and stack-v2 disassembly as fresh inputs. Derive current symbol extents, control flow, call targets and custody assertions; preserve unresolved frontiers. Fixed historical addresses/tool identities cannot be relabeled."
+    },
+    {
+      "suite": "parliament_ballot_free_predicates_test.py",
+      "historical_failures_remaining": 27,
+      "repair_class": "current compiled-image proof or genuinely retained historical artifact required",
+      "next_action": "Use current_candidate_20261104 build receipts and stack-v2 disassembly as fresh inputs. Derive current symbol extents, control flow, call targets and custody assertions; preserve unresolved frontiers. Fixed historical addresses/tool identities cannot be relabeled."
+    },
+    {
+      "suite": "parliament_ballot_frontend_bound_test.py",
+      "historical_failures_remaining": 2,
+      "repair_class": "current compiled-image proof or genuinely retained historical artifact required",
+      "next_action": "Use current_candidate_20261104 build receipts and stack-v2 disassembly as fresh inputs. Derive current symbol extents, control flow, call targets and custody assertions; preserve unresolved frontiers. Fixed historical addresses/tool identities cannot be relabeled."
+    },
+    {
+      "suite": "parliament_ballot_noreturn_frontiers_test.py",
+      "historical_failures_remaining": 1,
+      "repair_class": "current compiled-image proof or genuinely retained historical artifact required",
+      "next_action": "Use current_candidate_20261104 build receipts and stack-v2 disassembly as fresh inputs. Derive current symbol extents, control flow, call targets and custody assertions; preserve unresolved frontiers. Fixed historical addresses/tool identities cannot be relabeled."
+    },
+    {
+      "suite": "parliament_ballot_opaque_field_bound_test.py",
+      "historical_failures_remaining": 14,
+      "repair_class": "current compiled-image proof or genuinely retained historical artifact required",
+      "next_action": "Use current_candidate_20261104 build receipts and stack-v2 disassembly as fresh inputs. Derive current symbol extents, control flow, call targets and custody assertions; preserve unresolved frontiers. Fixed historical addresses/tool identities cannot be relabeled."
+    },
+    {
+      "suite": "parliament_ballot_profile_bound_test.py",
+      "historical_failures_remaining": 13,
+      "repair_class": "current compiled-image proof or genuinely retained historical artifact required",
+      "next_action": "Use current_candidate_20261104 build receipts and stack-v2 disassembly as fresh inputs. Derive current symbol extents, control flow, call targets and custody assertions; preserve unresolved frontiers. Fixed historical addresses/tool identities cannot be relabeled."
+    },
+    {
+      "suite": "parliament_ballot_typed_decoder_bound_test.py",
+      "historical_failures_remaining": 2,
+      "repair_class": "current compiled-image proof or genuinely retained historical artifact required",
+      "next_action": "Use current_candidate_20261104 build receipts and stack-v2 disassembly as fresh inputs. Derive current symbol extents, control flow, call targets and custody assertions; preserve unresolved frontiers. Fixed historical addresses/tool identities cannot be relabeled."
+    }
+  ],
+  "scope": "Exact160 historical failing-node rerun on current source:47pass113fail. This is not the full script suite or release qualification. Earlier inventory retained separately.",
+  "latest_rerun": "historical-nodes-current-rerun.json",
+  "latest_rerun_sha256": "a9b31799f0df2ef1ac898bb480a717d10ea7a2584cf5ad1b8bd3805d15759bb5"
+}

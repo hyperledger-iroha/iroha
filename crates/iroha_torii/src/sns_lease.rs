@@ -2,7 +2,7 @@
 
 use super::*;
 use iroha_allocation::AllocationBudget;
-use iroha_core::{state::StateReadOnly, sumeragi::certified_chain::CommittedBlock};
+use iroha_core::{state::StateReadOnly, sumeragi::certified_chain::CurrentCertifiedCut};
 use iroha_data_model::{
     sns::{
         DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1,
@@ -58,7 +58,7 @@ fn capacity() -> Error {
 }
 
 fn lease_source_limits(bytes: usize) -> NativeFinalityLimits {
-    // The three canonical frames share one cumulative decoder allowance. Five
+    // The three canonical frames share one physical decode workspace. Five
     // eighths leave the default 384 MB grant with 76,891,136 bytes after its
     // capped 64 MiB journal: two maximum lease projections and request controls.
     // Smaller configured grants remain finite and can refuse the original read.
@@ -77,12 +77,49 @@ fn current_lease_tip(
     view: &impl StateReadOnly,
     height: u64,
     limits: NativeFinalityLimits,
-) -> Result<CommittedBlock, Error> {
+    budget: &AllocationBudget,
+) -> Result<CurrentCertifiedCut, Error> {
+    let source_bytes = limits
+        .journal_bytes
+        .checked_add(limits.allocated_bytes)
+        .ok_or_else(capacity)?;
+    let _source = budget
+        .try_reserve_bytes(source_bytes)
+        .map_err(|_| capacity())?;
     let decode_limits = limits.decode_limits().map_err(|_| capacity())?;
-    norito::core::with_decode_limits_scope(decode_limits, || {
-        crate::native_projection_response::current_global_tip(view, height, limits, unavailable)
+    // This short original root read retires completely before the body workspace.
+    // An inherited logical owner still sees its unchanged JSON decoder charges.
+    let root = norito::core::with_decode_limits_scope(decode_limits, || {
+        iroha_core::sumeragi::lanes::routing::read_routing_root_scope(view.world())
     })
-    .map_err(Error::from)
+    .map_err(|error| {
+        Error::from(crate::native_projection_response::NativeProjectionError::RootScope(error))
+    })?;
+    if root != Some(iroha_data_model::block::consensus::SumeragiRootScope::Global)
+        || height < 2
+        || u64::try_from(view.height()).ok() != Some(height)
+    {
+        return Err(unavailable());
+    }
+    let frames = AllocationBudget::new(limits.journal_bytes);
+    let graphs = AllocationBudget::new(limits.allocated_bytes);
+    let source = iroha_core::sumeragi::certified_chain::CurrentCutSourceLimits::new(
+        limits.block_bytes,
+        limits.journal_bytes,
+        limits.block_count,
+    )
+    .map_err(|_| capacity())?;
+    iroha_core::sumeragi::certified_chain::read_current_certified_cut(
+        view,
+        height,
+        iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        source,
+        &frames,
+        &graphs,
+    )
+    .map_err(|error| {
+        Error::from(crate::native_projection_response::NativeProjectionError::History(error))
+    })
 }
 
 pub async fn handler(
@@ -116,14 +153,11 @@ pub async fn handler(
     let response =
         routing::run_admitted_blocking(admission, "SNS lease worker failed", move || {
             let limits = lease_source_limits(bytes);
-            let _source = budget
-                .try_reserve_bytes(limits.journal_bytes + limits.allocated_bytes)
-                .map_err(|_| capacity())?;
             let view = state.view();
-            let tip = current_lease_tip(&view, height, limits)?;
+            let tip = current_lease_tip(&view, height, limits, &budget)?;
             drop(view);
             let mut body = state
-                .with_native_sns_lease_snapshot_v1(&tip, &selector, &budget, |world, record| {
+                .with_native_sns_lease_cut_v1(&tip, &selector, &budget, |world, record| {
                     crate::native_projection_response::encode(
                         &SnsLeaseProofRefV1::new(world, record),
                         format,

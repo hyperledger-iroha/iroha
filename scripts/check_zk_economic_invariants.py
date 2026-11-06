@@ -528,6 +528,19 @@ class Checker:
                 self.error(f"protocol {protocol.get('id')}: ledger_effects {protocol.get('ledger_effects')} differ from the "
                            f"operation inventory {entry.get('ledger_effect')}")
 
+        extensions = operations.get("exact12", {}).get("runtime_extensions", [])
+        runtime = lists.get("runtime_protocols", {})
+        self.compare("closed_lists.runtime_protocols", exact12.get("variants", []) + [entry.get("variant") for entry in extensions], self.enum(runtime, "closed_lists.runtime_protocols"))
+        extension_protocols = {item.get("runtime_variant"): item for item in protocols.values() if item.get("runtime_variant")}
+        self.compare("protocols with `runtime_variant`", list(extension_protocols), [entry.get("variant") for entry in extensions])
+        for entry in extensions:
+            variant = entry.get("variant")
+            protocol = extension_protocols.get(variant, {})
+            if protocol.get("id") != entry.get("product") or sorted(protocol.get("ledger_effects", [])) != sorted(entry.get("ledger_effect", [])):
+                self.error(f"runtime protocol {variant}: product and effects must match its independent operation row")
+            listed[variant] = entry
+        by_variant.update(extension_protocols)
+
         ledger = lists.get("ledger_effects", {})
         variants = self.enum(ledger, "closed_lists.ledger_effects")
         classes = {item.get("variant"): item for item in ledger.get("classes", [])}
@@ -583,10 +596,10 @@ class Checker:
             self.error(f"closed_lists.reserve_owners: const {constant.get('name')} is not in {constant.get('path')}")
         else:
             end = readers.balanced(text, match.end() - 1, "[", "]")
-            members = re.findall(r"PrivacyProtocolIdV1::(\w+)", readers.strip_comments(text[match.end() : end or match.end()]))
+            members = re.findall(r"PrivacyRuntimeProtocolIdV1::(\w+)", readers.strip_comments(text[match.end() : end or match.end()]))
             self.compare("closed_lists.reserve_owners.protocol_list", constant.get("members", []), members)
-        reserve_protocols = sorted(item.get("exact12_variant") for item in protocols.values()
-                                   if item.get("pool", {}).get("boundary") == "public_reserve" and item.get("exact12_variant"))
+        reserve_protocols = sorted(item.get("exact12_variant", item.get("runtime_variant")) for item in protocols.values()
+                                   if item.get("pool", {}).get("boundary") == "public_reserve" and (item.get("exact12_variant") or item.get("runtime_variant")))
         if members is not None and reserve_protocols != sorted(members):
             self.error(f"protocols with boundary public_reserve are {reserve_protocols}; the source lets {sorted(members)} own a reserve")
         for variant, item in recorded.items():
@@ -606,8 +619,8 @@ class Checker:
                                    f"recorded {recorded.get(variant, {}).get('management')}")
             users: dict[str, list[str]] = {variant: [] for variant in recorded}
             compatible = readers.fn_body(text, roles.get("compatibility_function", "is_compatible_with")) or ""
-            for names, role in re.findall(r"\(\s*((?:PrivacyProtocolIdV1::\w+\s*\|?\s*)+),\s*Self::(\w+)\s*\)", compatible):
-                for variant in re.findall(r"PrivacyProtocolIdV1::(\w+)", names):
+            for names, role in re.findall(r"\(\s*((?:PrivacyRuntimeProtocolIdV1::\w+\s*\|?\s*)+),\s*Self::(\w+)\s*\)", compatible):
+                for variant in re.findall(r"PrivacyRuntimeProtocolIdV1::(\w+)", names):
                     users.setdefault(role, []).append(listed.get(variant, {}).get("product", variant))
             for variant, item in recorded.items():
                 if sorted(item.get("protocols", [])) != sorted(users.get(variant, [])):

@@ -256,6 +256,23 @@ fn capture_then_reject(
     )?;
     Err(response)
 }
+/// Answer a request whose token was never authenticated, without native capture.
+///
+/// A missing, malformed, wrongly signed or wrong-key-version token identifies no token holder,
+/// and its `Excluded` outcome owns no reputation append. Capturing it would let anonymous
+/// traffic make the gateway sign, pay for and wait on consensus transactions while holding a
+/// heavy worker, so these outcomes are rejected locally and only logged.
+#[allow(clippy::result_large_err)]
+fn reject_unauthenticated(
+    kind: StreamTokenExcludedKindV1,
+    response: Response,
+) -> Result<(RangeFetchConcurrencyGuard, StreamTokenBodyV1), Response> {
+    debug!(
+        ?kind,
+        "rejected unauthenticated stream-token request without native capture"
+    );
+    Err(response)
+}
 fn retry_response(
     status: StreamTokenValidationStatusV1,
     retry_after_secs: Option<u32>,
@@ -337,7 +354,7 @@ fn context_error_response(error: StreamTokenRequestContextErrorV1) -> Response {
 pub(super) async fn enforce_stream_token_for_request(
     state: &SharedAppState,
     headers: &HeaderMap,
-    manifest: &StoredManifest,
+    manifest: &Arc<StoredManifest>,
     request_nonce: &str,
     route: StreamTokenRequestRouteV1,
 ) -> Result<(RangeFetchConcurrencyGuard, StreamTokenBodyV1), Response> {
@@ -349,7 +366,7 @@ pub(super) async fn enforce_stream_token_for_request(
         .map_err(external_admission_unavailable)?;
     let worker_state = Arc::clone(state);
     let headers = headers.clone();
-    let manifest = manifest.clone();
+    let manifest = Arc::clone(manifest);
     let request_nonce = request_nonce.to_owned();
     sorafs_heavy_blocking_task(state, "SoraFS stream-token admission", move || {
         enforce_stream_token_in_worker(
@@ -447,80 +464,42 @@ fn enforce_stream_token_in_worker(
     )
     .map_err(context_error_response)?;
     let Some(token_header) = token_header else {
-        return capture_then_reject(
-            state,
-            deadline,
-            serving_attempt_id,
-            &context,
-            validated_at_unix_ms,
-            (
-                StreamTokenValidationStatusV1::Excluded(StreamTokenExcludedKindV1::MissingToken),
-                json_error(
-                    StatusCode::UNAUTHORIZED,
-                    "missing X-SoraFS-Stream-Token header",
-                ),
+        return reject_unauthenticated(
+            StreamTokenExcludedKindV1::MissingToken,
+            json_error(
+                StatusCode::UNAUTHORIZED,
+                "missing X-SoraFS-Stream-Token header",
             ),
-            None,
         );
     };
     let token_str = match token_header.to_str() {
         Ok(token) => token,
         Err(_) => {
-            return capture_then_reject(
-                state,
-                deadline,
-                serving_attempt_id,
-                &context,
-                validated_at_unix_ms,
-                (
-                    StreamTokenValidationStatusV1::Excluded(
-                        StreamTokenExcludedKindV1::MalformedEncoding,
-                    ),
-                    json_error(
-                        StatusCode::BAD_REQUEST,
-                        "X-SoraFS-Stream-Token header must contain valid ASCII",
-                    ),
+            return reject_unauthenticated(
+                StreamTokenExcludedKindV1::MalformedEncoding,
+                json_error(
+                    StatusCode::BAD_REQUEST,
+                    "X-SoraFS-Stream-Token header must contain valid ASCII",
                 ),
-                None,
             );
         }
     };
     if token_str.is_empty() {
-        return capture_then_reject(
-            state,
-            deadline,
-            serving_attempt_id,
-            &context,
-            validated_at_unix_ms,
-            (
-                StreamTokenValidationStatusV1::Excluded(
-                    StreamTokenExcludedKindV1::MalformedEncoding,
-                ),
-                json_error(
-                    StatusCode::BAD_REQUEST,
-                    "X-SoraFS-Stream-Token header must not be empty",
-                ),
+        return reject_unauthenticated(
+            StreamTokenExcludedKindV1::MalformedEncoding,
+            json_error(
+                StatusCode::BAD_REQUEST,
+                "X-SoraFS-Stream-Token header must not be empty",
             ),
-            None,
         );
     }
     if token_str.len() > MAX_STREAM_TOKEN_BASE64_BYTES {
-        return capture_then_reject(
-            state,
-            deadline,
-            serving_attempt_id,
-            &context,
-            validated_at_unix_ms,
-            (
-                StreamTokenValidationStatusV1::Excluded(
-                    StreamTokenExcludedKindV1::MalformedEncoding,
-                ),
-                json_error(
-                    StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
-                    "X-SoraFS-Stream-Token header exceeds the protocol limit",
-                ),
+        return reject_unauthenticated(
+            StreamTokenExcludedKindV1::MalformedEncoding,
+            json_error(
+                StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
+                "X-SoraFS-Stream-Token header exceeds the protocol limit",
             ),
-            None,
         );
     }
     let token = match decode_token_base64(token_str) {
@@ -551,20 +530,7 @@ fn enforce_stream_token_in_worker(
                     json_error(StatusCode::BAD_REQUEST, "invalid stream token policy")
                 }
             };
-            return capture_then_reject(
-                state,
-                deadline,
-                serving_attempt_id,
-                &context,
-                validated_at_unix_ms,
-                (
-                    StreamTokenValidationStatusV1::Excluded(
-                        StreamTokenExcludedKindV1::MalformedEncoding,
-                    ),
-                    response,
-                ),
-                None,
-            );
+            return reject_unauthenticated(StreamTokenExcludedKindV1::MalformedEncoding, response);
         }
     };
     let body_digest = *token
@@ -582,39 +548,19 @@ fn enforce_stream_token_in_worker(
         body_digest,
     });
     if let Err(error) = token.verify(issuer.verifying_key()) {
-        error!(?error, "stream token signature verification failed");
-        return capture_then_reject(
-            state,
-            deadline,
-            serving_attempt_id,
-            &context,
-            validated_at_unix_ms,
-            (
-                StreamTokenValidationStatusV1::Excluded(
-                    StreamTokenExcludedKindV1::InvalidSignature,
-                ),
-                json_error(StatusCode::UNAUTHORIZED, "stream token signature invalid"),
-            ),
-            material,
+        debug!(?error, "stream token signature verification failed");
+        return reject_unauthenticated(
+            StreamTokenExcludedKindV1::InvalidSignature,
+            json_error(StatusCode::UNAUTHORIZED, "stream token signature invalid"),
         );
     }
     if token.body.token_pk_version != issuer.key_version() {
-        return capture_then_reject(
-            state,
-            deadline,
-            serving_attempt_id,
-            &context,
-            validated_at_unix_ms,
-            (
-                StreamTokenValidationStatusV1::Excluded(
-                    StreamTokenExcludedKindV1::UnsupportedKeyVersion,
-                ),
-                json_error(
-                    StatusCode::UNAUTHORIZED,
-                    "stream token signed with unexpected key version",
-                ),
+        return reject_unauthenticated(
+            StreamTokenExcludedKindV1::UnsupportedKeyVersion,
+            json_error(
+                StatusCode::UNAUTHORIZED,
+                "stream token signed with unexpected key version",
             ),
-            material,
         );
     }
     let now = validated_at_unix_ms / 1_000;

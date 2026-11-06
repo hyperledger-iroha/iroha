@@ -2039,7 +2039,7 @@ fn depleted_data_trigger_is_pruned_before_event_scan_without_mutating_state() {
     let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 0, 0);
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
-    stx.decrease_trigger_repeats_and_cleanup(&trigger_id);
+    stx.decrease_trigger_repeats_and_cleanup(&trigger_id, None);
     assert!(
         stx.world.triggers.ids().get(&trigger_id).is_none(),
         "repeat depletion must remove the trigger before bounded event scanning"

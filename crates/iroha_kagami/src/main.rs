@@ -233,8 +233,7 @@ impl<T: Write> RunArgs<T> for Command {
 struct MarkdownHelp;
 impl<T: Write> RunArgs<T> for MarkdownHelp {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
-        let command_info = clap_markdown::help_markdown::<Cli>();
-        writer.write_all(command_info.as_bytes())?;
+        iroha_cli_docs::write_markdown(Cli::command(), writer)?;
         Ok(())
     }
 }
@@ -507,7 +506,7 @@ mod tests {
     }
     #[test]
     fn checked_in_markdown_help_matches_generated_help() {
-        let generated = clap_markdown::help_markdown::<Cli>();
+        let generated = iroha_cli_docs::render_markdown(Cli::command());
         let checked_in = include_str!("../CommandLineHelp.md");
         assert_eq!(generated, checked_in);
     }

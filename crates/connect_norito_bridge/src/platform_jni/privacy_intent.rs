@@ -18,8 +18,10 @@ fn project_instruction(archive: &[u8]) -> Option<Vec<u8>> {
     );
     let instruction =
         norito::decode_canonical_with_limits::<SubmitPrivacyProofV1>(archive, limits).ok()?;
-    if instruction.envelope.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
-        || instruction.envelope.proof.protocol_id() == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
+    if instruction.envelope.protocol_id
+        == iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
+        || instruction.envelope.proof.protocol_id()
+            == iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
         || matches!(
             &instruction.envelope.statement,
             iroha_data_model::privacy::PrivacyStatementV1::IrohaZkX509StarkP256V1(_)
@@ -70,7 +72,7 @@ mod tests {
             iroha_data_model::privacy::privacy_exact12_fixture_bundle_v1().expect("fixtures");
         for row in fixtures.rows {
             let input = row.submit_proof_instruction_norito;
-            let x509 = row.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+            let x509 = row.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1;
             let project = |archive: &[u8]| {
                 if x509 {
                     privacy_x509_request::inspect_request(archive).map(|fields| fields[0].clone())
@@ -87,8 +89,10 @@ mod tests {
                 );
                 assert!(project_instruction(&input).is_none());
                 let envelope = norito::decode_canonical(&row.envelope_norito).unwrap();
-                let retired =
-                    norito::encode_canonical(&SubmitPrivacyProofV1::new(envelope)).unwrap();
+                let retired = norito::encode_canonical(&SubmitPrivacyProofV1::new(
+                    (envelope).try_into().expect("frozen Exact12 test input"),
+                ))
+                .unwrap();
                 assert!(project_instruction(&retired).is_none());
             } else {
                 let typed = norito::decode_canonical::<SubmitPrivacyProofV1>(&input)
@@ -129,9 +133,9 @@ mod tests {
         let x509 = fixtures
             .rows
             .iter()
-            .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)
+            .find(|row| row.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1)
             .unwrap();
-        let x509: iroha_data_model::privacy::PrivacyProofEnvelopeV1 =
+        let x509: iroha_data_model::privacy::PrivacyRuntimeProofEnvelopeV1 =
             norito::decode_canonical(&x509.envelope_norito).unwrap();
         let generic: SubmitPrivacyProofV1 =
             norito::decode_canonical(&fixtures.rows[0].submit_proof_instruction_norito).unwrap();
@@ -166,7 +170,11 @@ mod tests {
             norito::canonical_frame_len(&envelope).unwrap(),
             envelope_limit
         );
-        let instruction = SubmitPrivacyProofV1::new(envelope.clone());
+        let instruction = SubmitPrivacyProofV1::new(
+            (envelope.clone())
+                .try_into()
+                .expect("frozen Exact12 test input"),
+        );
         let exact = norito::encode_canonical(&instruction).expect("ceiling instruction");
         assert_eq!(
             exact.len(),
@@ -174,8 +182,10 @@ mod tests {
         );
         assert!(project_instruction(&exact).is_some());
         envelope.proof.bytes_mut().bytes.push(0x5a);
-        let one_over = norito::encode_canonical(&SubmitPrivacyProofV1::new(envelope))
-            .expect("one-over instruction");
+        let one_over = norito::encode_canonical(&SubmitPrivacyProofV1::new(
+            (envelope).try_into().expect("frozen Exact12 test input"),
+        ))
+        .expect("one-over instruction");
         assert_eq!(one_over.len(), exact.len() + 1);
         assert!(project_instruction(&one_over).is_none());
     }

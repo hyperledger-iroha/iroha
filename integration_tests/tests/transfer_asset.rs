@@ -34,7 +34,7 @@ fn simulate_transfer_quantity() {
                 id,
                 name,
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(DomainId::try_new("wonderland", "universal").expect("fixture domain")),
             )
         },
         Mint::asset_quantity,
@@ -51,21 +51,17 @@ fn wait_for_asset_value(
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
     const TIMEOUT: Duration = Duration::from_secs(30);
     let deadline = Instant::now() + TIMEOUT;
-    let mut last_observed = "assets were not queried".to_owned();
+    let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
+    let mut last_observed = "asset was not queried".to_owned();
     while Instant::now() < deadline {
-        match client.client().query(FindAssets::new()).execute_all() {
-            Ok(assets) => {
-                let mut matching_values = Vec::new();
-                for asset in assets {
-                    if asset.id().definition() == asset_definition_id
-                        && asset.id().account() == account_id
-                    {
-                        matching_values.push(asset.value().clone());
-                    }
-                }
-                let present = matching_values.iter().any(|value| value == expected_value);
-                last_observed = format!("matching_values={matching_values:?}");
-                if present {
+        match client
+            .client()
+            .query_single(FindAssetById::new(asset_id.clone()))
+        {
+            Ok(asset) => {
+                assert_eq!(asset.id(), &asset_id);
+                last_observed = format!("value={:?}", asset.value());
+                if asset.value() == expected_value {
                     return;
                 }
             }
@@ -186,7 +182,7 @@ fn should_fail_if_asset_not_found() {
         asset_definition_id.clone(),
         asset_definition_name,
         iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
+        Some(DomainId::try_new("wonderland", "universal").expect("fixture domain")),
     ));
     let asset_id = AssetId::new(asset_definition_id.clone(), alice_id);
     let transfer_asset = Transfer::asset_quantity(asset_id.clone(), 20_u32, mouse_id.clone());

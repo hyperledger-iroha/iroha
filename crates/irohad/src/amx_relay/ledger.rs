@@ -85,7 +85,14 @@ impl Source for OnlineSource {
     ) -> WorkflowFuture<'a, Result<VerifiedAmxDebitApprovalV1>> {
         Box::pin(async move {
             self.client
-                .get_amx_debit_approval_state_async(approval, relay, schema, block)
+                .get_amx_debit_approval_state_async(
+                    approval,
+                    relay,
+                    iroha_core::state::State::native_world_schemas_for_anchor_v1(schema)
+                        .map_err(eyre::Report::msg)?
+                        .as_slice(),
+                    block,
+                )
                 .await
         })
     }

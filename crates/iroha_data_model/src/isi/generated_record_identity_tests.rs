@@ -113,7 +113,7 @@ fn missing_record_values() -> Vec<Value> {
     records
 }
 
-fn captured(nominal: &str) -> &'static Value {
+fn baseline_fixture_rows() -> &'static [Value] {
     static CAPTURE: OnceLock<Value> = OnceLock::new();
     let rows = CAPTURE
         .get_or_init(|| {
@@ -154,6 +154,60 @@ fn captured(nominal: &str) -> &'static Value {
         .as_array()
         .expect("captured type rows");
     assert_eq!(rows.len(), 353, "complete instantiated record inventory");
+    rows
+}
+
+const IRONWOOD_RECORD_NOMINAL: &str =
+    "iroha_data_model::isi::privacy::BootstrapPrivacyIronwoodPoolV1";
+const IRONWOOD_RECORD_SOURCE: &str =
+    include_str!("../../tests/fixtures/instruction_record_ironwood_identity_frames.json");
+
+fn ironwood_fixture_rows() -> &'static [Value] {
+    static CAPTURE: OnceLock<Value> = OnceLock::new();
+    CAPTURE
+        .get_or_init(|| {
+            use sha2::{Digest as _, Sha256};
+            assert_eq!(
+                hex(&Sha256::digest(IRONWOOD_RECORD_SOURCE.as_bytes())),
+                "9768332d0739a2db40fa40f70d419b5d70b0902b0db0c46bfd33c4cf7e5e0650",
+                "Ironwood instruction record capture digest drift"
+            );
+            let capture: Value = json::from_str(IRONWOOD_RECORD_SOURCE)
+                .expect("immutable Ironwood instruction record capture");
+            let rows = capture.as_array().expect("Ironwood captured type rows");
+            assert_eq!(rows.len(), 1, "one additive Ironwood instruction record");
+            assert_eq!(
+                rows[0].get("nominal").and_then(Value::as_str),
+                Some(IRONWOOD_RECORD_NOMINAL)
+            );
+            assert_eq!(
+                rows[0]
+                    .get("cases")
+                    .and_then(Value::as_array)
+                    .unwrap()
+                    .len(),
+                1,
+                "one complete populated Ironwood record case"
+            );
+            capture
+        })
+        .as_array()
+        .expect("Ironwood captured type rows")
+}
+
+fn fixture_rows() -> impl Iterator<Item = &'static Value> {
+    baseline_fixture_rows()
+        .iter()
+        .chain(ironwood_fixture_rows())
+}
+
+fn captured(nominal: &str) -> &'static Value {
+    // This explicit fixture dispatch is test-only: production decoding has one nominal layout.
+    let rows = if nominal == IRONWOOD_RECORD_NOMINAL {
+        ironwood_fixture_rows()
+    } else {
+        baseline_fixture_rows()
+    };
     let mut matches = rows
         .iter()
         .filter(|row| row.get("nominal").and_then(Value::as_str) == Some(nominal));
@@ -219,6 +273,68 @@ where
         let actual = frame_fields(&capture(value));
         fixture_json::assert_json_matches(expected, &actual, nominal);
     }
+}
+
+fn ironwood_reference_request() -> super::privacy::BootstrapPrivacyIronwoodPoolV1 {
+    use crate::{
+        account::AccountId,
+        asset::{AssetBalanceScope, AssetDefinitionId},
+        privacy::{PrivacyIronwoodPoolBootstrapV1, PrivacyPoolIdV1},
+    };
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::{domain::DomainId, name::Name};
+    let account = AccountId::new(
+        KeyPair::try_from_seed(vec![24; 32], Algorithm::Ed25519)
+            .expect("deterministic Ironwood fixture key")
+            .public_key()
+            .clone(),
+    );
+    let bootstrap = PrivacyIronwoodPoolBootstrapV1::new(
+        PrivacyPoolIdV1::new([23; 32]),
+        AssetDefinitionId::derive_from_components(
+            DomainId::try_new("privacy", "universal").expect("fixture domain"),
+            "ironwood".parse::<Name>().expect("fixture asset name"),
+        ),
+        AssetBalanceScope::Global,
+        account,
+    )
+    .expect("canonical populated Ironwood bootstrap");
+    super::privacy::BootstrapPrivacyIronwoodPoolV1::new(bootstrap)
+}
+
+fn ironwood_capture_row() -> Value {
+    let value = capture(ironwood_reference_request());
+    json::object([
+        ("nominal", value.get("nominal").unwrap().clone()),
+        (
+            "serialize_hash",
+            value.get("serialize_hash").unwrap().clone(),
+        ),
+        (
+            "deserialize_hash",
+            value.get("deserialize_hash").unwrap().clone(),
+        ),
+        ("cases", Value::Array(vec![frame_fields(&value)])),
+    ])
+    .expect("Ironwood instruction capture row")
+}
+
+#[test]
+fn populated_ironwood_record_preserves_its_additive_capture() {
+    fixture_json::assert_json_matches(
+        captured(IRONWOOD_RECORD_NOMINAL),
+        &ironwood_capture_row(),
+        IRONWOOD_RECORD_NOMINAL,
+    );
+}
+
+#[test]
+#[ignore = "explicit maintenance command captures the additive Ironwood instruction"]
+fn print_ironwood_record_fixture_rows() {
+    println!(
+        "IRONWOOD_RECORD_FRAMES_V1\t{}",
+        json::to_json(&Value::Array(vec![ironwood_capture_row()])).unwrap()
+    );
 }
 
 #[test]

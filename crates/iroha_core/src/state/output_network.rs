@@ -359,8 +359,9 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             .budget
             .as_mut()
             .ok_or("output budget already consumed")?
-            .begin(ExecutionOutputV1::network_output_limit_rejection(
-                input_index,
+            .begin(lifecycle::empty(
+                ExecutionOutputV1::network_output_limit_rejection(input_index),
+                self.lifecycle,
             ))?;
         let (captured_native, policy_route) = self
             .state
@@ -371,7 +372,9 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
         if captured_native != routing {
             return Err("Network source changed its captured native route".into());
         }
-        let row = execute_network_attempt_with_amx(
+        let mut custody;
+        let row;
+        (row, custody) = execute_network_attempt_with_amx(
             self.state,
             &self.source,
             input,
@@ -387,6 +390,16 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
             cache,
             self.amx_legs.as_deref_mut(),
         )?;
+        if custody.is_some() {
+            let destination = self
+                .lifecycle_custody
+                .as_mut()
+                .ok_or("lifecycle output lost its custody owner")?;
+            if destination.as_slice().len() == destination.capacity() {
+                return Err("lifecycle custody row capacity exhausted".into());
+            }
+            destination.push_reserved(custody.take().expect("checked custody presence"));
+        }
         self.rows[index] = row;
         self.network_resolved[index] = true;
         Ok(())
@@ -419,7 +432,7 @@ pub(super) fn execute_network_attempt_with_amx<'attempt>(
     reservation: iroha_data_model::block::output_budget::ExecutionOutputReservation<'_>,
     cache: &mut IvmCache,
     amx_legs: Option<&'attempt mut crate::sumeragi::amx::NativeAmxLegPreparations>,
-) -> Result<ExecutionOutputV1, ExecutionAttemptError<String>> {
+) -> Result<(ExecutionOutputV1, Option<lifecycle::Ledger>), ExecutionAttemptError<String>> {
     if !inputs
         .input_at(input_index as usize)
         .is_some_and(|known| same_entrypoint(known, input))
@@ -447,11 +460,14 @@ pub(super) fn execute_network_attempt_with_amx<'attempt>(
     state.retain_fastpq_source_invocation(Hash::from(input.execution_call_hash()))?;
     let gas_before = state.gas_used_in_block;
     let gas_limit = state.gas_limit_per_block;
+    let lifecycle_enabled = state.lifecycle_output_enabled()?;
+    let maximum = state.callback_output_byte_limit();
     let mut attempt = OutputTransaction::new(state)?;
     let transaction = attempt
         .transaction
         .as_mut()
         .ok_or("Network attempt is absent")?;
+    lifecycle::arm(transaction, lifecycle_enabled, maximum)?;
     bind_source(transaction, input, execution_index, routing)?;
     transaction.native_amx_leg_execution = amx_legs.map(|bank| {
         crate::sumeragi::amx::NativeAmxLegExecution::new(bank, input, input_index as usize)
@@ -508,25 +524,12 @@ pub(super) fn execute_network_attempt_with_amx<'attempt>(
             )),
         ));
     }
-    if (requires_forgery_success || requires_keepalive_success)
-        && let Err(reason) = &result
-    {
-        // Every local refusal above has already returned Deferred, and storage admission
-        // has been checked. This is a completed deterministic failure: drop the original
-        // transaction overlay without recording a rejection fee, output or partial evidence.
-        // The outer rejection's Display omits its nested instruction reason. Keep
-        // the terminal cause so a duplicate cannot masquerade as another R-EX.
-        let mut cause: &dyn std::error::Error = reason;
-        while let Some(source) = cause.source() {
-            cause = source;
-        }
-        let kind = if requires_keepalive_success {
-            "Keepalive failed at execution (K2)"
-        } else {
-            "SCCP forgery evidence failed at execution (R-EX)"
-        };
-        return Err(format!("{kind}: {cause}").into());
-    }
+    let lifecycle_overflow = completed_network_result_gate(
+        transaction,
+        &result,
+        requires_forgery_success,
+        requires_keepalive_success,
+    )?;
     if let Err(reason) = result {
         transaction
             .callback_journal
@@ -557,7 +560,8 @@ pub(super) fn execute_network_attempt_with_amx<'attempt>(
                     basis.settle(transaction, signed)
                 }
             }),
-        );
+        )
+        .map(|row| (row, None));
     }
     // The legacy returned DFS vector is not the capture owner. The actual
     // journal also retains nested by-call steps omitted from that vector.
@@ -609,9 +613,24 @@ pub(super) fn execute_network_attempt_with_amx<'attempt>(
             true,
         ),
     };
+    let overflow = journal_overflow || lifecycle_overflow;
+    let unwrapped = actual;
+    let mut custody;
+    let actual;
+    (actual, custody) = if overflow {
+        (
+            lifecycle::empty(
+                ExecutionOutputV1::network_output_limit_rejection(input_index),
+                lifecycle_enabled,
+            ),
+            None,
+        )
+    } else {
+        lifecycle::take(transaction, unwrapped)?
+    };
     actual.validate_structure(height, inputs)?;
     let (row, apply) = match reservation.finish(actual)? {
-        ReservedExecutionOutput::Accepted(row) => (row, !journal_overflow),
+        ReservedExecutionOutput::Accepted(row) => (row, !overflow),
         ReservedExecutionOutput::OutputLimit(row) => (row, false),
     };
     if (requires_forgery_success || requires_keepalive_success) && !apply {
@@ -653,9 +672,39 @@ pub(super) fn execute_network_attempt_with_amx<'attempt>(
         attempt.apply()?;
     } else {
         drop(attempt);
+        custody = None;
     }
     work.account(state);
-    Ok(row)
+    Ok((row, custody))
+}
+
+/// A local capture refusal wins even when a special Network source also failed.
+/// SCCP forgery events can invoke ordinary data callbacks for registered submitters.
+pub(super) fn completed_network_result_gate(
+    transaction: &StateTransaction<'_, '_>,
+    result: &iroha_data_model::transaction::TransactionResultInner,
+    requires_forgery_success: bool,
+    requires_keepalive_success: bool,
+) -> Result<bool, ExecutionAttemptError<String>> {
+    let lifecycle_overflow = lifecycle::output_limit(transaction)?;
+    if (requires_forgery_success || requires_keepalive_success)
+        && let Err(reason) = result
+    {
+        // Local refusal has already returned Deferred. A completed deterministic
+        // failure drops the overlay without rejection fee, output or partial evidence.
+        // Preserve the original terminal cause and special-source diagnostic.
+        let mut cause: &dyn std::error::Error = reason;
+        while let Some(source) = cause.source() {
+            cause = source;
+        }
+        let kind = if requires_keepalive_success {
+            "Keepalive failed at execution (K2)"
+        } else {
+            "SCCP forgery evidence failed at execution (R-EX)"
+        };
+        return Err(format!("{kind}: {cause}").into());
+    }
+    Ok(lifecycle_overflow)
 }
 
 // These owners are created only after the original business overlay has been dropped.
@@ -688,6 +737,8 @@ fn complete_network_rejection<
         ) -> Result<bool, crate::executor::ExecutionFeeSettlementError>,
     >,
 ) -> Result<ExecutionOutputV1, ExecutionAttemptError<String>> {
+    let lifecycle_enabled = state.lifecycle_output_enabled()?;
+    let maximum = state.callback_output_byte_limit();
     let RejectedNetworkAttempt {
         inputs,
         input,
@@ -732,6 +783,7 @@ fn complete_network_rejection<
         {
             let mut fee = OutputTransaction::new(state)?;
             let transaction = fee.transaction.as_mut().ok_or("fee attempt is absent")?;
+            lifecycle::arm(transaction, lifecycle_enabled, maximum)?;
             bind_source(transaction, input, execution_index, routing)?;
             // The test scope constrains the actual fee decoder after business rollback.
             #[cfg(test)]
@@ -774,6 +826,7 @@ fn complete_network_rejection<
             match charged {
                 Ok(true) => {
                     require_rejection_fragment(transaction, input, execution_index, routing)?;
+                    lifecycle::require_empty_native_policy(transaction)?;
                     fee_receipt = transaction.pending_nexus_fee_receipt.take();
                     funded_fee = Some(fee);
                 }
@@ -793,6 +846,7 @@ fn complete_network_rejection<
         completions: Vec::new(),
     });
     actual.validate_structure(height, inputs)?;
+    let actual = lifecycle::empty(actual, lifecycle_enabled);
     let row = reservation.finish_network_rejection(actual)?;
     // No charge becomes real before its exact receipt-bearing terminal fits.
     if let Some(fee) = funded_fee {
@@ -818,11 +872,14 @@ fn settle_rejection_penalties(
             ),
         )));
     }
+    let lifecycle_enabled = state.lifecycle_output_enabled()?;
+    let maximum = state.callback_output_byte_limit();
     let mut penalty = OutputTransaction::new(state)?;
     let transaction = penalty
         .transaction
         .as_mut()
         .ok_or("penalty attempt is absent")?;
+    lifecycle::arm(transaction, lifecycle_enabled, maximum)?;
     bind_source(transaction, input, execution_index, routing)?;
     #[cfg(test)]
     let applied = penalty_decode_test_scope::run(|| {
@@ -855,6 +912,7 @@ fn settle_rejection_penalties(
     match applied {
         Ok(()) => {
             require_rejection_fragment(transaction, input, execution_index, routing)?;
+            lifecycle::require_empty_native_policy(transaction)?;
             penalty.apply()?;
             Ok(None)
         }

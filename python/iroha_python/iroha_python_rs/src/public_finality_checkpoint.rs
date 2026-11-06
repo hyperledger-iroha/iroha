@@ -283,14 +283,13 @@ fn authenticate_public_finality_checkpoint_v1(
         .try_reserve_exact(owners.len())
         .map_err(|e| fail(Failure::Allocation(e)))?;
     wires.extend(owners.iter().map(|wire| wire.as_bytes()));
-    let output = authenticate(
-        genesis.as_bytes(),
-        &wires,
-        *expected_network_id.as_inner(),
-        expected_chain,
-        expected_genesis_sha256.as_bytes(),
-    )
-    .map_err(fail)?;
+    // Pure Rust over immutable bytes that `owners` and the arguments keep alive:
+    // release the GIL so other Python threads run while the proofs verify.
+    let (genesis, sha) = (genesis.as_bytes(), expected_genesis_sha256.as_bytes());
+    let network = *expected_network_id.as_inner();
+    let output = py
+        .detach(|| authenticate(genesis, &wires, network, expected_chain, sha))
+        .map_err(fail)?;
     Ok((
         output.metadata_json,
         PyBytes::new(py, &output.checkpoint).unbind(),
@@ -457,13 +456,12 @@ fn advance_public_finality_checkpoint_v1(
         .try_reserve_exact(owners.len())
         .map_err(|e| fail(Failure::Allocation(e)))?;
     wires.extend(owners.iter().map(|wire| wire.as_bytes()));
-    let output = advance(
-        trusted_checkpoint.as_bytes(),
-        &wires,
-        *expected_network_id.as_inner(),
-        expected_chain,
-    )
-    .map_err(fail)?;
+    // As in authentication: verification touches no Python object, so the GIL is released.
+    let checkpoint = trusted_checkpoint.as_bytes();
+    let network = *expected_network_id.as_inner();
+    let output = py
+        .detach(|| advance(checkpoint, &wires, network, expected_chain))
+        .map_err(fail)?;
     Ok((
         output.metadata_json,
         PyBytes::new(py, &output.checkpoint).unbind(),

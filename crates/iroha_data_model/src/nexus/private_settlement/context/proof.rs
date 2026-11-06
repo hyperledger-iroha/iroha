@@ -121,14 +121,14 @@ impl PrivateSettlementPoolCutProofV1 {
     pub fn verify<'a>(
         &'a self,
         network: NetworkId,
-        schema: Hash,
+        schema: impl crate::sumeragi_finality::WorldStateSchemaPolicyV1,
         key: PrivateSettlementPoolKeyV1,
         block: &VerifiedSumeragiBlock,
     ) -> Result<VerifiedPrivateSettlementPoolCutV1<'a>, FinalityError> {
         if block.height() < 2
             || block.root_scope() != SumeragiRootScope::Global
             || block.commitment().schedule.current.network_id != network
-            || self.world.schema_hash != schema
+            || !schema.accepts_schema(self.world.schema_hash)
             || key.pool_id.is_zero()
             || key.route.lane_incarnation == Hash::prehashed([0; Hash::LENGTH])
             || key.route.dataspace_id == iroha_model_base::topology::DataSpaceId::UNIVERSAL

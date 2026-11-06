@@ -2470,6 +2470,8 @@ fn check_genesis_execution_results(block: &SignedBlock) -> Result<(), InvalidGen
         .map_err(|_| InvalidGenesisError::ProposalCommitmentMismatch)?;
     let input_count = block.network_entrypoint_count();
     let outputs = block.execution_outputs();
+    // Genesis founds the immutable baseline. Successor lifecycle selection is a
+    // later governed change; accepting V2 here would change predecessor validation.
     let network_count = outputs
         .iter()
         .filter(|output| matches!(output, ExecutionOutputV1::Network(_)))
@@ -6683,6 +6685,22 @@ pub(crate) mod valid {
                 &crate::sumeragi::certified_chain::ParentServicePreparation,
             >,
         ) -> Result<(), BlockValidationError> {
+            // The block-start selection already includes fully attested due transitions. Refuse
+            // bytes outside its grammar before any transaction can acquire even a rejected row.
+            for transaction in Self::collect_external_signed_transactions(block) {
+                crate::runtime::ironwood::admission::transaction(
+                    transaction,
+                    state_block.world.runtime_selection.get(),
+                )
+                .map_err(|error| match error {
+                    crate::execution_attempt::ExecutionAttemptError::Rejected(reason) => {
+                        Self::execution_context_error(reason)
+                    }
+                    crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                        BlockValidationError::ExecutionDeferred(original)
+                    }
+                })?;
+            }
             let start = Instant::now();
             // Full input/control authority is checked by the caller. The State
             // owner rechecks proposal/source bindings and owns every actual phase.

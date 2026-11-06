@@ -4,19 +4,19 @@ fn public_balance_scope_never_accepts_universal_as_a_partition() {
     let universal =
         AssetBalanceScope::Dataspace(iroha_model_base::topology::DataSpaceId::UNIVERSAL);
     for protocol in [
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
-        PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1,
+        PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
+        PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
     ] {
         let mut statement = statement_for(protocol);
         match &mut statement {
-            PrivacyStatementV1::ZkAcePqAuthorizationV1(statement) => {
+            PrivacyRuntimeStatementV1::ZkAcePqAuthorizationV1(statement) => {
                 statement.public_balance_scope = universal;
             }
-            PrivacyStatementV1::OrchardHalo2ActionsV1(statement) => {
+            PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement) => {
                 statement.public_balance_scope = universal;
             }
-            PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) => {
+            PrivacyRuntimeStatementV1::IrohaIvmPrivateNoteStarkV1(statement) => {
                 statement.public_balance_scope = universal;
             }
             _ => unreachable!("test protocol list is closed"),
@@ -37,10 +37,10 @@ fn zk_x509_policy_caps_ordering_and_transition_adversaries_fail_closed() {
 #[test]
 fn bootle_lantern_disclosures_are_fixed_direct_and_canonically_ordered() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
-    let base = statement_for(PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1);
+    let base = statement_for(PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1);
     let mutate = |f: fn(&mut IrohaBootleLanternAnoncredStatementV1)| {
         let mut value = base.clone();
-        let PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement) = &mut value else {
+        let PrivacyRuntimeStatementV1::IrohaBootleLanternAnoncredV1(statement) = &mut value else {
             unreachable!()
         };
         f(statement);
@@ -85,7 +85,7 @@ fn bootle_lantern_disclosures_are_fixed_direct_and_canonically_ordered() {
         Err(PrivacyStatementValidationError::TooManyBootleLanternDisclosures { count: 9, max: 8 })
     ));
     let mut all_boundaries = base;
-    let PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement) = &mut all_boundaries else {
+    let PrivacyRuntimeStatementV1::IrohaBootleLanternAnoncredV1(statement) = &mut all_boundaries else {
         unreachable!()
     };
     statement.disclosures = (0_u8..8)
@@ -929,8 +929,8 @@ fn bootle_lantern_issuer_policy_is_canonical_bounded_and_rotates_monotonically()
     assert_bootle_lantern_policy_rotation_boundaries(&record);
 }
 fn assert_orchard_count_and_ciphertext_boundaries(limits: &PrivacyConsensusLimitsV1) {
-    let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
-    let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
+    let mut orchard = statement_for(PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1);
+    let PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
         unreachable!()
     };
     statement.actions.clear();
@@ -938,8 +938,8 @@ fn assert_orchard_count_and_ciphertext_boundaries(limits: &PrivacyConsensusLimit
         orchard.validate(limits),
         Err(PrivacyStatementValidationError::InvalidOrchardActionCount { count: 0, max: 2 })
     ));
-    let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
-    let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
+    let mut orchard = statement_for(PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1);
+    let PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
         unreachable!()
     };
     statement.actions = vec![
@@ -955,8 +955,8 @@ fn assert_orchard_count_and_ciphertext_boundaries(limits: &PrivacyConsensusLimit
         ORCHARD_ENCRYPTED_NOTE_BYTES_V1 - 1,
         ORCHARD_ENCRYPTED_NOTE_BYTES_V1 + 1,
     ] {
-        let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
-        let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
+        let mut orchard = statement_for(PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1);
+        let PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
             unreachable!()
         };
         statement.actions[0]
@@ -971,8 +971,8 @@ fn assert_orchard_count_and_ciphertext_boundaries(limits: &PrivacyConsensusLimit
         ORCHARD_OUTGOING_CIPHERTEXT_BYTES_V1 - 1,
         ORCHARD_OUTGOING_CIPHERTEXT_BYTES_V1 + 1,
     ] {
-        let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
-        let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
+        let mut orchard = statement_for(PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1);
+        let PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
             unreachable!()
         };
         statement.actions[0]
@@ -990,8 +990,8 @@ fn assert_orchard_count_and_ciphertext_boundaries(limits: &PrivacyConsensusLimit
     }
 }
 fn assert_orchard_uniqueness_and_balance_boundaries(limits: &PrivacyConsensusLimitsV1) {
-    let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
-    let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
+    let mut orchard = statement_for(PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1);
+    let PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
         unreachable!()
     };
     statement.actions.push(orchard_action(120));
@@ -1000,8 +1000,8 @@ fn assert_orchard_uniqueness_and_balance_boundaries(limits: &PrivacyConsensusLim
         orchard.validate(limits),
         Err(PrivacyStatementValidationError::DuplicateOrchardNullifier { index: 1 })
     );
-    let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
-    let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
+    let mut orchard = statement_for(PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1);
+    let PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
         unreachable!()
     };
     statement.actions.push(orchard_action(120));
@@ -1010,8 +1010,8 @@ fn assert_orchard_uniqueness_and_balance_boundaries(limits: &PrivacyConsensusLim
         orchard.validate(limits),
         Err(PrivacyStatementValidationError::DuplicateOrchardNoteCommitment { index: 1 })
     );
-    let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
-    let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
+    let mut orchard = statement_for(PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1);
+    let PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
         unreachable!()
     };
     statement.value_balance = PrivacyValueBalanceV1 {
@@ -1027,8 +1027,8 @@ fn assert_orchard_uniqueness_and_balance_boundaries(limits: &PrivacyConsensusLim
             }
         )
     );
-    let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
-    let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
+    let mut orchard = statement_for(PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1);
+    let PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
         unreachable!()
     };
     statement.actions.push(orchard_action(120));
@@ -1039,8 +1039,8 @@ fn assert_orchard_uniqueness_and_balance_boundaries(limits: &PrivacyConsensusLim
         .expect("zero is a canonical Pallas field encoding, not a schema sentinel");
 }
 fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimitsV1) {
-    let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
-    let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
+    let mut fcmp = statement_for(PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1);
+    let PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
         unreachable!()
     };
     statement.inputs = vec![fcmp_input(121), fcmp_input(122), fcmp_input(123)];
@@ -1051,8 +1051,8 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             max: FCMP_MAX_INPUTS_V1
         })
     ));
-    let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
-    let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
+    let mut fcmp = statement_for(PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1);
+    let PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
         unreachable!()
     };
     statement.output_set_root.layers = 0;
@@ -1062,8 +1062,8 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             PrivacyFcmpTreeRootValidationErrorV1::InvalidLayerCount { layers: 0, .. }
         ))
     ));
-    let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
-    let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
+    let mut fcmp = statement_for(PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1);
+    let PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
         unreachable!()
     };
     statement.inputs[0].rerandomization_commitment = [0; 32];
@@ -1077,8 +1077,8 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
         })
     );
     for duplicate_key_image in [true, false] {
-        let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
-        let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
+        let mut fcmp = statement_for(PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1);
+        let PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
             unreachable!()
         };
         statement.inputs.push(fcmp_input(141));
@@ -1096,8 +1096,8 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             );
         }
     }
-    let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
-    let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
+    let mut fcmp = statement_for(PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1);
+    let PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
         unreachable!()
     };
     statement.outputs[0].amount_commitment = [0; 32];
@@ -1110,8 +1110,8 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             },
         })
     );
-    let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
-    let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
+    let mut fcmp = statement_for(PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1);
+    let PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
         unreachable!()
     };
     statement.outputs.push(statement.outputs[0]);
@@ -1122,8 +1122,8 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
         fcmp.validate(limits),
         Err(PrivacyStatementValidationError::DuplicateFcmpOutputId { index: 1 })
     );
-    let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
-    let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
+    let mut fcmp = statement_for(PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1);
+    let PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
         unreachable!()
     };
     statement.encrypted_outputs[0].output_id = fcmp_output(222).output_id();
@@ -1131,8 +1131,8 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
         fcmp.validate(limits),
         Err(PrivacyStatementValidationError::FcmpEncryptedOutputIdMismatch { index: 0 })
     );
-    let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
-    let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
+    let mut fcmp = statement_for(PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1);
+    let PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {
         unreachable!()
     };
     statement.encrypted_outputs.clear();
@@ -1140,8 +1140,8 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
         fcmp.validate(limits),
         Err(PrivacyStatementValidationError::MissingEncryptedOutput)
     );
-    let mut ivm = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
-    let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
+    let mut ivm = statement_for(PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
+    let PrivacyRuntimeStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
         unreachable!()
     };
     statement.action_digest = PrivacyActionDigestV1::new([0; 32]);
@@ -1151,8 +1151,8 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             field: PrivacyTypedFieldV1::ActionDigest,
         })
     );
-    let mut ivm = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
-    let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
+    let mut ivm = statement_for(PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
+    let PrivacyRuntimeStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
         unreachable!()
     };
     statement.action_digest.0[0] ^= 1;
@@ -1160,8 +1160,8 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
         ivm.validate(limits),
         Err(PrivacyStatementValidationError::ActionDigestMismatch)
     );
-    let mut ivm = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
-    let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
+    let mut ivm = statement_for(PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
+    let PrivacyRuntimeStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
         unreachable!()
     };
     statement.execution_epoch += 1;
@@ -1176,8 +1176,8 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             bound_epoch: 16,
         })
     );
-    let mut ivm = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
-    let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
+    let mut ivm = statement_for(PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
+    let PrivacyRuntimeStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
         unreachable!()
     };
     statement.nullifiers = vec![nullifier(127), nullifier(128), nullifier(129)];
@@ -1191,8 +1191,8 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             max: IVM_PRIVATE_NOTE_MAX_INPUTS_V1
         })
     ));
-    let mut pq = statement_for(PrivacyProtocolIdV1::PqMaspStarkV1);
-    let PrivacyStatementV1::PqMaspStarkV1(statement) = &mut pq else {
+    let mut pq = statement_for(PrivacyRuntimeProtocolIdV1::PqMaspStarkV1);
+    let PrivacyRuntimeStatementV1::PqMaspStarkV1(statement) = &mut pq else {
         unreachable!()
     };
     statement.output_commitments = vec![commitment(130), commitment(131), commitment(132)];
@@ -1203,8 +1203,8 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             max: PQ_MASP_MAX_OUTPUTS_V1
         })
     ));
-    let mut pq = statement_for(PrivacyProtocolIdV1::PqMaspStarkV1);
-    let PrivacyStatementV1::PqMaspStarkV1(statement) = &mut pq else {
+    let mut pq = statement_for(PrivacyRuntimeProtocolIdV1::PqMaspStarkV1);
+    let PrivacyRuntimeStatementV1::PqMaspStarkV1(statement) = &mut pq else {
         unreachable!()
     };
     statement.authorization_epoch += 1;
@@ -1216,8 +1216,8 @@ fn assert_other_private_transfer_shape_boundaries(limits: &PrivacyConsensusLimit
             bound_epoch: 18,
         })
     );
-    let mut malformed = statement_for(PrivacyProtocolIdV1::PqMaspStarkV1);
-    let PrivacyStatementV1::PqMaspStarkV1(statement) = &mut malformed else {
+    let mut malformed = statement_for(PrivacyRuntimeProtocolIdV1::PqMaspStarkV1);
+    let PrivacyRuntimeStatementV1::PqMaspStarkV1(statement) = &mut malformed else {
         unreachable!()
     };
     statement.encrypted_outputs[0].recipient = PrivacyRecipientIdV1::new([0; 32]);
@@ -1237,8 +1237,8 @@ fn private_transfer_shapes_enforce_hard_caps_and_ordered_ciphertexts() {
 fn private_ivm_encrypted_output_codec_is_exact_and_fail_closed() {
     assert_eq!(PRIVACY_IVM_PRIVATE_NOTE_PLAINTEXT_BYTES_V1, 180);
     assert_eq!(PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, 224);
-    let canonical = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
-    let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &canonical else {
+    let canonical = statement_for(PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
+    let PrivacyRuntimeStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &canonical else {
         unreachable!()
     };
     let ciphertext = statement.encrypted_outputs[0].ciphertext.clone();
@@ -1267,8 +1267,8 @@ fn private_ivm_encrypted_output_codec_is_exact_and_fail_closed() {
     zero_payload[4 + PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_NONCE_BYTES_V1..].fill(0);
     malformed.push(zero_payload);
     for ciphertext in malformed {
-        let mut ivm = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
-        let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
+        let mut ivm = statement_for(PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
+        let PrivacyRuntimeStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
             unreachable!()
         };
         statement.encrypted_outputs[0].ciphertext = ciphertext;
@@ -1285,14 +1285,14 @@ fn private_ivm_encrypted_output_codec_is_exact_and_fail_closed() {
 }
 #[test]
 fn ordinary_protocol_updates_preserve_bounds_and_cannot_change_protocol_identity() {
-    let current = PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+    let current = PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
         max_polynomial_count: 2,
     });
     for count in [1, 3, 4] {
         PrivacyProtocolLimitsUpdateV1 {
             scheduled_at_height: 7,
             effective_at_height: 8,
-            next_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+            next_limits: PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
                 max_polynomial_count: count,
             }),
         }
@@ -1304,7 +1304,7 @@ fn ordinary_protocol_updates_preserve_bounds_and_cannot_change_protocol_identity
             PrivacyProtocolLimitsUpdateV1 {
                 scheduled_at_height: 7,
                 effective_at_height: 8,
-                next_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
+                next_limits: PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
                     JindoLimitsV1 {
                         max_polynomial_count: count
                     }
@@ -1319,7 +1319,7 @@ fn ordinary_protocol_updates_preserve_bounds_and_cannot_change_protocol_identity
         PrivacyProtocolLimitsUpdateV1 {
             scheduled_at_height: 7,
             effective_at_height: 8,
-            next_limits: PrivacyProtocolLimitsV1::ZkAcePqAuthorizationV1
+            next_limits: PrivacyRuntimeProtocolLimitsV1::ZkAcePqAuthorizationV1
         }
         .validate_against(&current)
         .is_err()
@@ -1329,7 +1329,7 @@ fn ordinary_protocol_updates_preserve_bounds_and_cannot_change_protocol_identity
             PrivacyProtocolLimitsUpdateV1 {
                 scheduled_at_height: scheduled,
                 effective_at_height: effective,
-                next_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
+                next_limits: PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
                     JindoLimitsV1 {
                         max_polynomial_count: 3
                     }
@@ -1344,7 +1344,7 @@ fn ordinary_protocol_updates_preserve_bounds_and_cannot_change_protocol_identity
 fn actual_compiled_profile_admission_has_no_activation_height_prerequisite() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
     let envelope = envelope(statement_for(
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+        PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
     ));
     let compiled = profile(&envelope);
     envelope
@@ -1367,11 +1367,11 @@ fn actual_compiled_profile_admission_has_no_activation_height_prerequisite() {
 #[test]
 fn envelopes_fail_closed_on_every_binding_and_resource_mutation() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
-    let statement = statement_for(PrivacyProtocolIdV1::VeRangeTransparentRangeV1);
+    let statement = statement_for(PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1);
     let base = envelope(statement);
     base.validate_with_limits(&limits).expect("valid envelope");
     let mut invalid = base.clone();
-    invalid.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
+    invalid.protocol_id = PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1;
     assert!(invalid.validate_with_limits(&limits).is_err());
     invalid = base.clone();
     invalid.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha3_384Goldilocks;
@@ -1398,13 +1398,13 @@ fn envelopes_fail_closed_on_every_binding_and_resource_mutation() {
     invalid.statement_digest = PrivacyStatementDigestV1::new(raw(221));
     assert!(invalid.validate_with_limits(&limits).is_err());
     invalid = base.clone();
-    invalid.proof = PrivacyProofV1::ZkAcePqAuthorizationV1(PrivacyProofBytesV1::new(vec![1]));
+    invalid.proof = PrivacyRuntimeProofV1::ZkAcePqAuthorizationV1(PrivacyProofBytesV1::new(vec![1]));
     assert!(invalid.validate_with_limits(&limits).is_err());
     invalid = base.clone();
-    invalid.proof = PrivacyProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(Vec::new()));
+    invalid.proof = PrivacyRuntimeProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(Vec::new()));
     assert!(invalid.validate_with_limits(&limits).is_err());
     invalid = base.clone();
-    invalid.proof = PrivacyProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(vec![0; 3]));
+    invalid.proof = PrivacyRuntimeProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(vec![0; 3]));
     assert!(invalid.validate_with_limits(&limits).is_err());
     let mut proof_limited = limits;
     proof_limited.max_proof_bytes_per_action = 2;
@@ -1425,7 +1425,7 @@ fn envelopes_fail_closed_on_every_binding_and_resource_mutation() {
         Err(PrivacyProofEnvelopeValidationError::InvalidProfile(_))
     ));
     compiled = profile(&base);
-    let tighter = PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
+    let tighter = PrivacyRuntimeProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
         max_aggregation_count: 1,
     });
     assert!(matches!(
@@ -1437,7 +1437,7 @@ fn envelopes_fail_closed_on_every_binding_and_resource_mutation() {
     assert!(matches!(
         base.validate_against_profile_v1(
             &compiled,
-            &PrivacyProtocolLimitsV1::ZkAcePqAuthorizationV1,
+            &PrivacyRuntimeProtocolLimitsV1::ZkAcePqAuthorizationV1,
             &limits
         ),
         Err(PrivacyProofEnvelopeValidationError::ProfileProtocolLimits(
@@ -1447,14 +1447,14 @@ fn envelopes_fail_closed_on_every_binding_and_resource_mutation() {
     let framed = norito::to_bytes(&base).expect("frame envelope");
     let mut truncated = framed.clone();
     truncated.pop();
-    assert!(norito::decode_from_bytes::<PrivacyProofEnvelopeV1>(&truncated).is_err());
+    assert!(norito::decode_from_bytes::<PrivacyRuntimeProofEnvelopeV1>(&truncated).is_err());
     let mut trailing = framed;
     trailing.push(0);
-    assert!(norito::decode_from_bytes::<PrivacyProofEnvelopeV1>(&trailing).is_err());
+    assert!(norito::decode_from_bytes::<PrivacyRuntimeProofEnvelopeV1>(&trailing).is_err());
     for unknown in [99_u32, u32::MAX] {
         assert!(PrivacyProofSystemIdV1::decode(&mut unknown.to_le_bytes().as_slice()).is_err());
         assert!(PrivacyEngineIdV1::decode(&mut unknown.to_le_bytes().as_slice()).is_err());
-        assert!(PrivacyStatementV1::decode(&mut unknown.to_le_bytes().as_slice()).is_err());
+        assert!(PrivacyRuntimeStatementV1::decode(&mut unknown.to_le_bytes().as_slice()).is_err());
     }
 }
 
@@ -1481,26 +1481,26 @@ fn default_limits_remain_available_without_protocol_registration() {
 #[test]
 fn optional_policy_persists_without_making_an_unavailable_engine_available() {
     let mut row = PrivacyCapabilityRowV1 {
-        protocol_id: PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+        protocol_id: PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
         compiled_profile: PrivacyCompiledProfileResultV1::Unavailable(
             PrivacyCompiledProfileUnavailableReasonV1::JointSecurityReductionIncomplete,
         ),
         policy: Some(PrivacyProtocolPolicyV1 {
-            protocol_id: PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
-            current_limits: PrivacyProtocolLimitsV1::IrohaZkX509StarkP256V1,
+            protocol_id: PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
+            current_limits: PrivacyRuntimeProtocolLimitsV1::IrohaZkX509StarkP256V1,
             pending_update: None,
         }),
     };
     row.validate_at_committed_height(7)
         .expect("ordinary policy is independent of engine availability");
     assert_eq!(row.effective_protocol_limits_v1(), None);
-    row.policy.as_mut().unwrap().protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
+    row.policy.as_mut().unwrap().protocol_id = PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1;
     assert!(matches!(
         row.validate_at_committed_height(7),
         Err(PrivacyCapabilityRowValidationErrorV1::PolicyProtocolMismatch { .. })
     ));
     row.policy.as_mut().unwrap().protocol_id = row.protocol_id;
-    row.policy.as_mut().unwrap().current_limits = PrivacyProtocolLimitsV1::ZkAcePqAuthorizationV1;
+    row.policy.as_mut().unwrap().current_limits = PrivacyRuntimeProtocolLimitsV1::ZkAcePqAuthorizationV1;
     assert!(matches!(
         row.validate_at_committed_height(7),
         Err(PrivacyCapabilityRowValidationErrorV1::Policy(_))
@@ -1510,14 +1510,14 @@ fn optional_policy_persists_without_making_an_unavailable_engine_available() {
 #[test]
 fn pending_ordinary_policy_preserves_exact_committed_height_guards() {
     let compiled = profile(&envelope(statement_for(
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+        PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
     )));
     let mut row = PrivacyCapabilityRowV1 {
         protocol_id: compiled.protocol_id,
         compiled_profile: PrivacyCompiledProfileResultV1::Available(compiled),
         policy: Some(PrivacyProtocolPolicyV1 {
             protocol_id: compiled.protocol_id,
-            current_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
+            current_limits: PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
                 JindoLimitsV1 {
                     max_polynomial_count: 2,
                 },
@@ -1525,7 +1525,7 @@ fn pending_ordinary_policy_preserves_exact_committed_height_guards() {
             pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
                 scheduled_at_height: 7,
                 effective_at_height: 8,
-                next_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
+                next_limits: PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
                     JindoLimitsV1 {
                         max_polynomial_count: 3,
                     },

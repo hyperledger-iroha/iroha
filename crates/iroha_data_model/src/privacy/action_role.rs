@@ -1,8 +1,8 @@
-//! Closed Exact12 action roles and the one canonical proof-envelope binding.
+//! Closed privacy action roles and the one canonical proof-envelope binding.
 //!
 //! A role is the unit of native dispatch: one typed statement shape, one typed
-//! proof shape, one native verifier and one ledger-effect executor. The twelve
-//! registered protocols give thirteen roles because ZK-AMS carries two actions.
+//! proof shape, one native verifier and one ledger-effect executor. The immutable Exact12
+//! roster has thirteen roles because ZK-AMS carries two actions; Ironwood adds one separate role.
 //! Naming a role says only that its types exist. Whether a verifier is
 //! implemented, whether an effect is applied and whether the operation is
 //! delivered are separate facts owned by the Core dispatch registry
@@ -18,14 +18,14 @@
 use core::fmt;
 
 use super::{
-    IrohaZkAmsProofV1, PrivacyExact12CatalogCommitmentV1, PrivacyProofEnvelopeV1,
-    PrivacyProofEnvelopeValidationError, PrivacyProofV1, PrivacyProofWireMagicV1,
-    PrivacyProtocolIdV1, PrivacyStatementV1, PrivacyZkAmsActionV1,
+    IrohaZkAmsProofV1, PrivacyExact12CatalogCommitmentV1, PrivacyProofEnvelopeValidationError,
+    PrivacyProofWireMagicV1, PrivacyRuntimeProofEnvelopeV1, PrivacyRuntimeProofV1,
+    PrivacyRuntimeProtocolIdV1, PrivacyRuntimeStatementV1, PrivacyZkAmsActionV1,
 };
 
-/// Closed action role selected by one Exact12 proof envelope.
+/// Closed action role selected by one privacy proof envelope.
 ///
-/// The order is the canonical protocol order of [`PrivacyProtocolIdV1::ALL`],
+/// The order is the canonical protocol order of [`PrivacyProtocolIdV1::SUPPORTED_PROTOCOLS`],
 /// with the two ZK-AMS actions in their statement-variant order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PrivacyActionRoleV1 {
@@ -55,13 +55,35 @@ pub enum PrivacyActionRoleV1 {
     IvmPrivateNoteTransition,
     /// PQ-MASP transition.
     PqMaspTransition,
+    /// Ironwood cross-address action bundle.
+    IronwoodActions,
 }
 
 impl PrivacyActionRoleV1 {
-    /// Number of roles in the closed first-release registry.
-    pub const COUNT: usize = 13;
+    /// Number of roles understood by this binary.
+    pub const COUNT: usize = 14;
     /// Every role in canonical order.
     pub const ALL: [Self; Self::COUNT] = [
+        Self::ZkAceAuthorization,
+        Self::AnonymousPgcPayment,
+        Self::VeRangeRange,
+        Self::ZkAmsBatchAdmission,
+        Self::ZkAmsProvisionAccount,
+        Self::VegaCredentialPresentation,
+        Self::ZkX509CertificatePresentation,
+        Self::JindoBatchedEvaluation,
+        Self::BootleLanternPresentation,
+        Self::OrchardActions,
+        Self::FcmpTransfer,
+        Self::IvmPrivateNoteTransition,
+        Self::PqMaspTransition,
+        Self::IronwoodActions,
+    ];
+
+    /// Immutable number of roles in the deployed Exact12 V1 catalog.
+    pub const EXACT12_COUNT: usize = 13;
+    /// Frozen roles carried by V1 Exact12 fixtures and release evidence.
+    pub const EXACT12_ROLES: [Self; Self::EXACT12_COUNT] = [
         Self::ZkAceAuthorization,
         Self::AnonymousPgcPayment,
         Self::VeRangeRange,
@@ -79,22 +101,33 @@ impl PrivacyActionRoleV1 {
 
     /// The one registered protocol this role belongs to.
     #[must_use]
-    pub const fn protocol_id(self) -> PrivacyProtocolIdV1 {
+    pub const fn protocol_id(self) -> PrivacyRuntimeProtocolIdV1 {
         match self {
-            Self::ZkAceAuthorization => PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
-            Self::AnonymousPgcPayment => PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
-            Self::VeRangeRange => PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+            Self::ZkAceAuthorization => PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1,
+            Self::AnonymousPgcPayment => PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
+            Self::VeRangeRange => PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1,
             Self::ZkAmsBatchAdmission | Self::ZkAmsProvisionAccount => {
-                PrivacyProtocolIdV1::IrohaZkAmsV1
+                PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1
             }
-            Self::VegaCredentialPresentation => PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
-            Self::ZkX509CertificatePresentation => PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
-            Self::JindoBatchedEvaluation => PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
-            Self::BootleLanternPresentation => PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
-            Self::OrchardActions => PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
-            Self::FcmpTransfer => PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
-            Self::IvmPrivateNoteTransition => PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-            Self::PqMaspTransition => PrivacyProtocolIdV1::PqMaspStarkV1,
+            Self::VegaCredentialPresentation => {
+                PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1
+            }
+            Self::ZkX509CertificatePresentation => {
+                PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1
+            }
+            Self::JindoBatchedEvaluation => {
+                PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1
+            }
+            Self::BootleLanternPresentation => {
+                PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1
+            }
+            Self::OrchardActions => PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
+            Self::IronwoodActions => PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1,
+            Self::FcmpTransfer => PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1,
+            Self::IvmPrivateNoteTransition => {
+                PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1
+            }
+            Self::PqMaspTransition => PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
         }
     }
 
@@ -112,6 +145,7 @@ impl PrivacyActionRoleV1 {
             Self::JindoBatchedEvaluation => "jindo-batched-evaluation",
             Self::BootleLanternPresentation => "bootle-lantern-presentation",
             Self::OrchardActions => "orchard-actions",
+            Self::IronwoodActions => "ironwood-actions",
             Self::FcmpTransfer => "fcmp-transfer",
             Self::IvmPrivateNoteTransition => "ivm-private-note-transition",
             Self::PqMaspTransition => "pq-masp-transition",
@@ -125,7 +159,7 @@ impl fmt::Display for PrivacyActionRoleV1 {
     }
 }
 
-impl PrivacyProtocolIdV1 {
+impl PrivacyRuntimeProtocolIdV1 {
     /// Every role this protocol carries, in canonical order.
     #[must_use]
     pub const fn action_roles_v1(self) -> &'static [PrivacyActionRoleV1] {
@@ -144,6 +178,7 @@ impl PrivacyProtocolIdV1 {
             }
             Self::IrohaBootleLanternAnoncredV1 => &[PrivacyActionRoleV1::BootleLanternPresentation],
             Self::OrchardHalo2ActionsV1 => &[PrivacyActionRoleV1::OrchardActions],
+            Self::IronwoodHalo2ActionsV1 => &[PrivacyActionRoleV1::IronwoodActions],
             Self::MoneroFcmpPlusPlusV1 => &[PrivacyActionRoleV1::FcmpTransfer],
             Self::IrohaIvmPrivateNoteStarkV1 => &[PrivacyActionRoleV1::IvmPrivateNoteTransition],
             Self::PqMaspStarkV1 => &[PrivacyActionRoleV1::PqMaspTransition],
@@ -151,7 +186,7 @@ impl PrivacyProtocolIdV1 {
     }
 }
 
-impl PrivacyStatementV1 {
+impl PrivacyRuntimeStatementV1 {
     /// The one role this typed statement selects.
     #[must_use]
     pub const fn action_role_v1(&self) -> PrivacyActionRoleV1 {
@@ -172,6 +207,7 @@ impl PrivacyStatementV1 {
             }
             Self::IrohaBootleLanternAnoncredV1(_) => PrivacyActionRoleV1::BootleLanternPresentation,
             Self::OrchardHalo2ActionsV1(_) => PrivacyActionRoleV1::OrchardActions,
+            Self::IronwoodHalo2ActionsV1(_) => PrivacyActionRoleV1::IronwoodActions,
             Self::MoneroFcmpPlusPlusV1(_) => PrivacyActionRoleV1::FcmpTransfer,
             Self::IrohaIvmPrivateNoteStarkV1(_) => PrivacyActionRoleV1::IvmPrivateNoteTransition,
             Self::PqMaspStarkV1(_) => PrivacyActionRoleV1::PqMaspTransition,
@@ -179,7 +215,7 @@ impl PrivacyStatementV1 {
     }
 }
 
-impl PrivacyProofV1 {
+impl PrivacyRuntimeProofV1 {
     /// The one role this typed proof payload can discharge.
     #[must_use]
     pub const fn action_role_v1(&self) -> PrivacyActionRoleV1 {
@@ -200,6 +236,7 @@ impl PrivacyProofV1 {
             }
             Self::IrohaBootleLanternAnoncredV1(_) => PrivacyActionRoleV1::BootleLanternPresentation,
             Self::OrchardHalo2ActionsV1(_) => PrivacyActionRoleV1::OrchardActions,
+            Self::IronwoodHalo2ActionsV1(_) => PrivacyActionRoleV1::IronwoodActions,
             Self::MoneroFcmpPlusPlusV1(_) => PrivacyActionRoleV1::FcmpTransfer,
             Self::IrohaIvmPrivateNoteStarkV1(_) => PrivacyActionRoleV1::IvmPrivateNoteTransition,
             Self::PqMaspStarkV1(_) => PrivacyActionRoleV1::PqMaspTransition,
@@ -207,7 +244,7 @@ impl PrivacyProofV1 {
     }
 }
 
-impl PrivacyProofEnvelopeV1 {
+impl PrivacyRuntimeProofEnvelopeV1 {
     /// Assemble the one canonical envelope for a typed statement and its proof.
     ///
     /// The protocol, proof system and engine come from the statement variant,
@@ -224,8 +261,8 @@ impl PrivacyProofEnvelopeV1 {
     /// [`Self::action_role_v1`] when the proof belongs to another protocol or
     /// to the other ZK-AMS action.
     pub fn bind_v1(
-        statement: PrivacyStatementV1,
-        proof: PrivacyProofV1,
+        statement: PrivacyRuntimeStatementV1,
+        proof: PrivacyRuntimeProofV1,
     ) -> Result<Self, PrivacyProofEnvelopeValidationError> {
         let protocol_id = statement.protocol_id();
         let context = *statement.context();
@@ -304,7 +341,11 @@ mod tests {
     };
 
     /// One structurally valid statement and proof for each of the thirteen roles.
-    fn role_samples() -> Vec<(PrivacyActionRoleV1, PrivacyStatementV1, PrivacyProofV1)> {
+    fn role_samples() -> Vec<(
+        PrivacyActionRoleV1,
+        PrivacyRuntimeStatementV1,
+        PrivacyRuntimeProofV1,
+    )> {
         privacy_action_role_samples_v1()
             .expect("role samples")
             .into_iter()
@@ -324,7 +365,7 @@ mod tests {
         let samples = privacy_action_role_samples_v1().expect("role samples");
         assert_eq!(
             samples.iter().map(|sample| sample.role).collect::<Vec<_>>(),
-            PrivacyActionRoleV1::ALL
+            PrivacyActionRoleV1::EXACT12_ROLES
         );
         for sample in samples {
             assert_eq!(sample.envelope.action_role_v1(), Ok(sample.role));
@@ -359,7 +400,7 @@ mod tests {
             assert_eq!(role.to_string(), role.canonical_label());
         }
         let mut from_protocols = Vec::new();
-        for protocol in PrivacyProtocolIdV1::ALL {
+        for protocol in PrivacyRuntimeProtocolIdV1::SUPPORTED_PROTOCOLS {
             let roles = protocol.action_roles_v1();
             assert!(!roles.is_empty(), "{protocol:?} carries at least one role");
             for role in roles {
@@ -369,7 +410,7 @@ mod tests {
         }
         assert_eq!(from_protocols, PrivacyActionRoleV1::ALL);
         assert_eq!(
-            PrivacyProtocolIdV1::IrohaZkAmsV1.action_roles_v1(),
+            PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1.action_roles_v1(),
             [
                 PrivacyActionRoleV1::ZkAmsBatchAdmission,
                 PrivacyActionRoleV1::ZkAmsProvisionAccount
@@ -382,14 +423,14 @@ mod tests {
         let samples = role_samples();
         assert_eq!(
             samples.iter().map(|(role, _, _)| *role).collect::<Vec<_>>(),
-            PrivacyActionRoleV1::ALL
+            PrivacyActionRoleV1::EXACT12_ROLES
         );
         for (role, statement, proof) in samples {
             assert_eq!(statement.action_role_v1(), role);
             assert_eq!(proof.action_role_v1(), role);
             assert_eq!(role.protocol_id(), statement.protocol_id());
             assert_eq!(role.protocol_id(), proof.protocol_id());
-            let envelope = PrivacyProofEnvelopeV1::bind_v1(statement, proof).expect("bind");
+            let envelope = PrivacyRuntimeProofEnvelopeV1::bind_v1(statement, proof).expect("bind");
             assert_eq!(envelope.action_role_v1(), Ok(role));
         }
     }
@@ -398,7 +439,7 @@ mod tests {
     fn bind_v1_derives_every_redundant_field_from_the_statement() {
         let limits = PrivacyConsensusLimitsV1::taira_default();
         for (role, statement, proof) in role_samples() {
-            let envelope = PrivacyProofEnvelopeV1::bind_v1(statement.clone(), proof.clone())
+            let envelope = PrivacyRuntimeProofEnvelopeV1::bind_v1(statement.clone(), proof.clone())
                 .expect("canonical envelope");
             let protocol = role.protocol_id();
             let context = statement.context();
@@ -440,8 +481,8 @@ mod tests {
         let limits = PrivacyConsensusLimitsV1::taira_default();
         for (role, statement, mut proof) in role_samples() {
             proof.bytes_mut().bytes.clear();
-            let envelope =
-                PrivacyProofEnvelopeV1::bind_v1(statement, proof).expect("projection envelope");
+            let envelope = PrivacyRuntimeProofEnvelopeV1::bind_v1(statement, proof)
+                .expect("projection envelope");
             assert_eq!(envelope.action_role_v1(), Ok(role));
             assert!(envelope.proof.bytes().as_bytes().is_empty());
             assert_eq!(
@@ -461,8 +502,9 @@ mod tests {
                 if other_role == role {
                     continue;
                 }
-                let error = PrivacyProofEnvelopeV1::bind_v1(statement.clone(), other_proof.clone())
-                    .expect_err("a proof of another role cannot be bound");
+                let error =
+                    PrivacyRuntimeProofEnvelopeV1::bind_v1(statement.clone(), other_proof.clone())
+                        .expect_err("a proof of another role cannot be bound");
                 if other_role.protocol_id() == role.protocol_id() {
                     assert_eq!(
                         error,
@@ -490,7 +532,7 @@ mod tests {
             .map(|(role, statement, proof)| {
                 (
                     *role,
-                    PrivacyProofEnvelopeV1::bind_v1(statement.clone(), proof.clone())
+                    PrivacyRuntimeProofEnvelopeV1::bind_v1(statement.clone(), proof.clone())
                         .expect("canonical envelope"),
                 )
             })

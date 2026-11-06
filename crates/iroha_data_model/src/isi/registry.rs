@@ -495,9 +495,9 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        // The 410 baseline instructions and the seven this release adds after them.
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 417;
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 417;
+        // The 410 baseline instructions and the eight this release adds after them.
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 418;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 418;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -641,6 +641,9 @@ mod tests {
                 "iroha.game_partition.register_peer.v1",
                 "iroha.game_partition.seed.v1",
                 "iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal",
+                privacy::BootstrapPrivacyIronwoodPoolV1::WIRE_ID,
+                privacy::SchedulePrivacyIronwoodLimitsUpdateV1::WIRE_ID,
+                privacy::SubmitPrivacyIronwoodProofV1::WIRE_ID,
             ],
             "instructions added after the frozen baseline changed"
         );
@@ -1805,3 +1808,60 @@ mod topology_authority_tests;
 #[cfg(test)]
 #[path = "registry/final_promotion_account_custody_tests.rs"]
 mod final_promotion_account_custody_tests;
+
+/// Validate a full built-in instruction under the caller's prepaid transient scope.
+pub(crate) fn validate_lifecycle_frame(
+    wire_id: &str,
+    frame: &[u8],
+    limits: norito::core::EncodeWorkLimits,
+) -> Result<(), norito::Error> {
+    wire_ids::validate_lifecycle_frame(wire_id, frame, limits)
+}
+
+pub(super) fn decode_lifecycle_frame(
+    wire_id: &str,
+    frame: &[u8],
+) -> Result<InstructionBox, norito::Error> {
+    wire_ids::decode_lifecycle_frame(wire_id, frame)
+}
+
+#[cfg(test)]
+mod lifecycle_dispatch_tests {
+    use super::*;
+
+    #[test]
+    fn lifecycle_dispatch_covers_the_complete_builtin_inventory_and_refuses_unknown_ids() {
+        for entry in wire_ids::ALL {
+            assert!(
+                (entry.static_frame_identity)().is_some(),
+                "{} requires funded generic frame-name construction",
+                entry.wire_id
+            );
+        }
+        let limits = norito::core::EncodeWorkLimits {
+            max_frame_bytes: 1024,
+            max_byte_visits: 1024,
+            max_operations: 1024,
+            max_depth: 32,
+        };
+        for schema in built_in_instruction_schemas() {
+            let failure = validate_lifecycle_frame(schema.wire_id, &[], limits).unwrap_err();
+            assert!(
+                !matches!(
+                    failure,
+                    norito::Error::InvalidValue {
+                        context: "instruction wire identifier"
+                    }
+                ),
+                "missing dispatch for {}",
+                schema.wire_id
+            );
+        }
+        assert!(matches!(
+            validate_lifecycle_frame("unregistered", &[], limits),
+            Err(norito::Error::InvalidValue {
+                context: "instruction wire identifier"
+            })
+        ));
+    }
+}

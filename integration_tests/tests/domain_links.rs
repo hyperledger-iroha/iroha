@@ -47,8 +47,8 @@ fn receive_paths_materialize_unregistered_accounts_for_assets_and_nfts() -> Resu
     let domain: DomainId = DomainId::try_new("receive-without-preregister", "universal")?;
     ensure_registered_domain(&client, &domain)?;
     let source_account = client.client().account().clone();
-    let destination_asset = gen_account_in(&domain).0;
-    let destination_nft = gen_account_in(&domain).0;
+    let destination_asset = gen_account_in(domain.name()).0;
+    let destination_nft = gen_account_in(domain.name()).0;
     let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         domain.clone(),
         "coin".parse()?,
@@ -58,7 +58,7 @@ fn receive_paths_materialize_unregistered_accounts_for_assets_and_nfts() -> Resu
             asset_definition_id.clone(),
             "coin".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(domain.clone()),
         )),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
@@ -87,17 +87,14 @@ fn receive_paths_materialize_unregistered_accounts_for_assets_and_nfts() -> Resu
     )?;
     let nft = client
         .client()
-        .query(FindNfts::new())
-        .execute_all()?
-        .into_iter()
-        .find(|nft| nft.id() == &nft_id)
-        .expect("nft should exist after transfer");
+        .query_single(FindNftById::new(nft_id.clone()))?;
+    assert_eq!(nft.id(), &nft_id);
     assert_eq!(nft.owned_by(), &destination_nft);
-    let accounts = client.client().query(FindAccounts::new()).execute_all()?;
-    assert!(
-        accounts
-            .iter()
-            .any(|account| account.id() == &destination_asset)
-    );
+    for destination in [destination_asset, destination_nft] {
+        let account = client
+            .client()
+            .query_single(FindAccountById::new(destination.clone()))?;
+        assert_eq!(account.id(), &destination);
+    }
     Ok(())
 }

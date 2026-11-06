@@ -50,6 +50,54 @@ class RequestAccountingTests(unittest.TestCase):
         self.assertEqual([Fraction(**s["margin"]) for s in stages],
                          [Fraction(1688), Fraction(65432, 185), Fraction(12753483, 185)])
 
+    def test_reviewed_current_schedule_equals_historical_logical_results(self):
+        historical = json.loads((MODULE.ROOT /
+            "docs/validation/parliament_ballot_b6/request_primitive_accounting.json").read_text())
+        for key in ("candidate_cases", "candidate_vote_sizes_checked",
+                    "candidate_vote_preparation_monotone", "comparator_scope_countercheck",
+                    "request_intercept", "per_backend_query_slope"):
+            with self.subTest(field=key):
+                self.assertEqual(self.result[key], historical[key])
+        self.assertIn("diagnostics", self.result["row_build_scope"]["comparator"])
+        scope = self.result["primitive_accounting_scope"]
+        self.assertFalse(scope["provider_or_compiler_qualified"])
+        self.assertFalse(scope["allocation_or_layout_bound"])
+
+    def test_every_current_source_and_membership_change_refuses(self):
+        inventory = MODULE.source_inventory(MODULE.ROOT)
+        for path in inventory:
+            with self.subTest(path=path):
+                changed = dict(inventory)
+                changed[path] = "0" * 64
+                with patch.object(MODULE, "source_inventory", return_value=changed), \
+                     patch.object(MODULE, "load_model", side_effect=AssertionError("must not run")):
+                    self.assertFalse(MODULE.report()["source_matched"])
+        for change in ("add", "remove"):
+            changed = dict(inventory)
+            if change == "add":
+                changed["vendor/aes/src/new_backend.rs"] = "0" * 64
+            else:
+                del changed[next(iter(changed))]
+            with self.subTest(membership=change), \
+                 patch.object(MODULE, "source_inventory", return_value=changed), \
+                 patch.object(MODULE, "load_model", side_effect=AssertionError("must not run")):
+                self.assertFalse(MODULE.report()["source_matched"])
+
+    def test_excess_logical_requests_fail_the_component(self):
+        original = MODULE.request_case
+
+        def exceeds(model, row, role, seats, tables):
+            result = original(model, row, role, seats, tables)
+            if row == "candidate" and role == "vote" and seats == 499:
+                result["stages"][0] = MODULE.stage("input_or_statement_rejection", 4097, 0)
+            return result
+
+        with patch.object(MODULE, "request_case", side_effect=exceeds):
+            result = MODULE.report()
+        self.assertFalse(result["candidate_request_component_checked"])
+        self.assertEqual(result["failure"], "candidate stage inequality failed")
+        self.assertFalse(result["profile_qualified"])
+
     def test_all_admitted_sizes_and_registration_are_checked(self):
         self.assertTrue(self.result["candidate_request_component_checked"])
         self.assertEqual(self.result["candidate_vote_sizes_checked"], 998)

@@ -93,13 +93,23 @@ public final class KagemushaWalletReviewV1: @unchecked Sendable {
   }
 }
 
-/// Comparison DATA only. Native independently authenticates current source and exact absence.
+/// Review intent DATA only. Native independently authenticates current source and request custody.
 public enum KagemushaWalletReviewExpectationV1: Sendable {
   case fresh
   case originalUnstarted(Data)
+  /// Review only this exact already-bound preparation for fresh hardware confirmation.
+  /// Missing custody refuses; this never falls back to a new request or adopts a different binding.
+  case retainedPreparing
+  var wireValue: UInt32 {
+    switch self {
+    case .fresh: return 0
+    case .originalUnstarted: return 1
+    case .retainedPreparing: return 2
+    }
+  }
   func original(kind: KagemushaWalletReviewProjectionV1.Kind) throws -> Data {
     switch self {
-    case .fresh: return Data()
+    case .fresh, .retainedPreparing: return Data()
     case .originalUnstarted(let bytes):
       guard let projection = try? KagemushaWalletReviewProjectionV1(bytes), projection.kind == kind
       else { throw KagemushaWalletErrorV1.invalidInput }
@@ -202,6 +212,7 @@ struct KagemushaWalletReviewReplyV1 {
 struct KagemushaWalletReviewInputV1 {
   let selector: UInt32
   let requestID: Data
+  let expectation: UInt32
   let expectedProjection: Data
   let amount: KagemushaWalletUInt128V1
   let first: Data
@@ -224,6 +235,7 @@ struct KagemushaWalletReviewInputV1 {
     default: throw KagemushaWalletErrorV1.invalidInput
     }
     self.requestID = Data(requestID)
+    self.expectation = expectation.wireValue
     expectedProjection = try expectation.original(kind: selector == 1 ? .send : .unload)
     self.selector = selector; self.amount = amount; self.first = first; self.second = second
   }
@@ -232,7 +244,7 @@ struct KagemushaWalletReviewInputV1 {
     try first.withUnsafeBytes { a in try second.withUnsafeBytes { b in
       var request = connect_norito_kagemusha_wallet_review_request_v1()
       request.request_id32 = id.bindMemory(to: UInt8.self).baseAddress
-      request.expectation = expectedProjection.isEmpty ? 0 : 1
+      request.expectation = expectation
       request.expected_projection = expected.bindMemory(to: UInt8.self).baseAddress
       request.expected_projection_length = expected.count
       request.selector = selector; request.amount = .init(low: amount.low, high: amount.high)

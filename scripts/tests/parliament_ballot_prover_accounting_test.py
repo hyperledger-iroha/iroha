@@ -227,6 +227,9 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(result["source_real_prover_component_checked"], result.get("failure"))
         self.assertTrue(result["source_stable"])
         self.assertEqual(len(result["selected_cases"]), 8)
+        retained = json.loads((M.ROOT / "docs/validation/parliament_ballot_prover_accounting/report.json").read_text())
+        for field in ("selected_cases", "maxima", "counter_cap", "preimage_scope_counterexample"):
+            self.assertEqual(result[field], retained[field], field)
         for value in result["maxima"].values():
             self.assertEqual(value["vote_sizes_checked"], 998)
             self.assertTrue(value["vote_cost_monotone"])

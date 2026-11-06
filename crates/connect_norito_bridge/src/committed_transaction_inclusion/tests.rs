@@ -30,10 +30,16 @@ struct Fixture {
 }
 impl Fixture {
     fn new(rejected: bool) -> Self {
+        Self::with_lifecycle(rejected, false)
+    }
+    fn with_lifecycle(rejected: bool, lifecycle: bool) -> Self {
         let key = KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519).unwrap();
         let authority = AccountId::new(key.public_key().clone());
         let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
         let mut chain = CertifiedTestChain::start(TestChainConfig::new(world, 1_000)).unwrap();
+        if lifecycle {
+            chain.select_lifecycle_for_testing(1_001);
+        }
         chain.commit(Vec::new());
         let checkpoint = build_checkpoint(&chain.state().view(), 2).unwrap();
         let mut transaction = TransactionBuilder::new(
@@ -60,8 +66,8 @@ impl Fixture {
             .sign(key.private_key());
         assert_eq!(chain.commit(vec![transaction]), vec![!rejected]);
         let block = chain.committed(3).block().clone();
-        let output = block.network_output_at(0).unwrap().1.clone();
-        let output = ExecutionOutputV1::Network(output);
+        let output_index = block.network_output_at(0).unwrap().0;
+        let output = block.execution_outputs()[output_index as usize].clone();
         let selected = CommittedTransaction {
             block_hash: block.hash(),
             entrypoint_hash: block.network_entrypoint_at(0).unwrap().hash(),
@@ -762,4 +768,27 @@ fn exact_successful_rejects_certified_private_root_while_general_inclusion_remai
     .err()
     .expect("FI exact-success requires Global");
     assert!(error.contains("authenticated Global root"), "{error}");
+}
+
+#[test]
+fn lifecycle_inclusion_accepts_applied_and_rejected_rows_and_binds_the_wrapper() {
+    for rejected in [false, true] {
+        let fixture = Fixture::with_lifecycle(rejected, true);
+        assert!(matches!(
+            fixture.selected.output,
+            ExecutionOutputV1::NetworkWithLifecycle(_)
+        ));
+        assert!(fixture.selected.verify_inclusion_in_block(&fixture.block));
+        let verified = fixture
+            .verify(&response(vec![fixture.selected.clone()]))
+            .unwrap();
+        assert_eq!(verified.result_ok, !rejected);
+        assert_eq!(verified.output_hash, *fixture.selected.output_hash.as_ref());
+        let mut substituted = fixture.selected.clone();
+        substituted.output =
+            ExecutionOutputV1::Network(substituted.output.network().unwrap().clone());
+        substituted.output_hash = HashOf::new(&substituted.output);
+        assert!(!substituted.verify_inclusion_in_block(&fixture.block));
+        assert!(fixture.verify(&response(vec![substituted])).is_err());
+    }
 }

@@ -4,11 +4,13 @@
 //! use signed transactions through the Initial executor. Rent coverage rejects premature charging;
 //! elapsed monthly rent settlement and hardware service qualification are separate scenarios.
 
+use iroha::query::QueryError;
+use iroha_data_model::query::error::{FindError, QueryExecutionFail};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use std::time::Duration;
 
-use super::sorafs_network::{prepare_transaction, submit_instruction};
+use super::sorafs_network::{prepare_transaction, submit_instruction, submit_transaction};
 use eyre::{Result, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -171,16 +173,11 @@ async fn competing_decisions(network: &Network, instruction: InstructionBox) -> 
         tokio::join!(
             async {
                 barrier.wait().await;
-                left.account_client()
-                    .submit_transaction_and_wait(&left_transaction)
-                    .await
+                submit_transaction(&left, &left_transaction).await
             },
             async {
                 barrier.wait().await;
-                right
-                    .account_client()
-                    .submit_transaction_and_wait(&right_transaction)
-                    .await
+                submit_transaction(&right, &right_transaction).await
             },
         )
     })
@@ -239,17 +236,23 @@ fn observe(reader: &Client, policy: &ReserveAuthorityPolicyV1) -> Result<Observa
     let ids = [&*BOB_ID, &policy.custody_account, &*ALICE_ID]
         .map(|account| AssetId::of(policy.asset_definition.clone(), account.clone()));
     let mut balances = std::array::from_fn(|_| Quantity::zero());
-    let mut found = [false; 3];
-    // A completed authenticated asset query establishes zero for an absent asset;
-    // an arbitrary missing/failed singular query never becomes a zero balance.
-    for asset in reader.client().query(FindAssets::new()).execute_all()? {
-        if let Some(index) = ids.iter().position(|id| id == asset.id()) {
-            ensure!(
-                !found[index],
-                "asset query repeated a reserve custody partition"
-            );
-            found[index] = true;
-            balances[index] = asset.value().clone();
+    // Only an authenticated not-found result for this exact partition means zero.
+    for (index, asset_id) in ids.iter().enumerate() {
+        match reader
+            .client()
+            .query_single(FindAssetById::new(asset_id.clone()))
+        {
+            Ok(asset) => {
+                ensure!(
+                    asset.id() == asset_id,
+                    "reserve asset query changed identity"
+                );
+                balances[index] = asset.value().clone();
+            }
+            Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+                FindError::Asset(missing),
+            )))) if missing.as_ref() == asset_id => {}
+            Err(error) => return Err(error.into()),
         }
     }
     let after = reader
@@ -380,7 +383,7 @@ async fn four_peer_reserve_decisions_conserve_custody_and_survive_restart_impl()
         .with_npos_consensus()
         .with_config_layer(move |layer| {
             layer.write(
-                ["governance", "sorafs_provider_owners"],
+                ["gov", "sorafs_provider_owners"],
                 toml::Value::Table(owners.clone()),
             );
         })

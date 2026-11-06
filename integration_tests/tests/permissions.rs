@@ -1,8 +1,9 @@
 //! Integration tests ensuring executor-enforced permission policies.
 use eyre::Result;
-use integration_tests::{metrics::MetricsReader, sandbox, sync::sync_after_submission};
+use integration_tests::{sandbox, sync::sync_after_submission};
 use iroha::{
     blocking::Client,
+    collections::{Collection, ListQuery, Page, field},
     crypto::KeyPair,
     data_model::{
         permission::Permission, prelude::*, role::RoleId,
@@ -17,16 +18,9 @@ use iroha_executor_data_model::permission::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_test_network::*;
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, gen_account_in};
-use std::{
-    io::ErrorKind,
-    path::PathBuf,
-    time::{Duration, Instant},
-};
-use tokio::{
-    runtime::Runtime,
-    time::{sleep, timeout},
-};
+use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR, gen_account_in};
+use std::time::{Duration, Instant};
+use tokio::runtime::Runtime;
 fn start_network(context: &'static str) -> Option<(sandbox::SerializedNetwork, Runtime)> {
     sandbox::start_network_blocking_or_skip(NetworkBuilder::new(), context).unwrap()
 }
@@ -36,27 +30,89 @@ fn start_network_with_builder(
 ) -> Option<(sandbox::SerializedNetwork, Runtime)> {
     sandbox::start_network_blocking_or_skip(builder, context).unwrap()
 }
-fn poll_detached_metrics(rt: &Runtime, metrics_url: &reqwest::Url) -> Result<(f64, f64, f64)> {
-    let http = integration_tests::http::client();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut prepared_seen: f64 = 0.0;
-    let mut merged_seen: f64 = 0.0;
-    let mut fallback_seen: f64 = 0.0;
-    while Instant::now() < deadline {
-        let snapshot = rt.block_on(async {
-            let response = http.get(metrics_url.clone()).send().await?;
-            response.error_for_status()?.text().await
-        })?;
-        let metrics = MetricsReader::new(&snapshot);
-        prepared_seen = prepared_seen.max(metrics.get("pipeline_detached_prepared"));
-        merged_seen = merged_seen.max(metrics.get("pipeline_detached_merged"));
-        fallback_seen = fallback_seen.max(metrics.get("pipeline_detached_fallback"));
-        if merged_seen > 0.0 || fallback_seen > 0.0 {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
+#[path = "support/canonical_permission_execution.rs"]
+pub(super) mod canonical_permission_execution;
+
+/// Decode one complete bounded fixture snapshot; truncated or oversized reads fail closed.
+fn complete_permission_rows<T: norito::json::JsonDeserialize>(
+    page: Page<norito::json::Value>,
+) -> Result<Vec<T>> {
+    eyre::ensure!(
+        page.next_cursor.is_none(),
+        "fixture permission snapshot exceeds one bounded page"
+    );
+    eyre::ensure!(
+        page.items.len() <= 64 && page.total.is_none(),
+        "invalid fixture permission page envelope"
+    );
+    page.items
+        .into_iter()
+        .map(|row| norito::json::from_value(row).map_err(Into::into))
+        .collect()
+}
+/// Read exact stored role permissions through the authenticated bounded collection.
+pub(super) fn stored_role(client: &Client, role_id: &RoleId) -> Result<Option<Role>> {
+    let page = client.list_page(
+        &Collection::Roles,
+        &ListQuery::new()
+            .filter(field("id").eq(role_id.to_string()))
+            .limit(2),
+    )?;
+    let mut rows: Vec<Role> = complete_permission_rows(page)?;
+    eyre::ensure!(
+        rows.len() <= 1 && rows.iter().all(|role| role.id() == role_id),
+        "role lookup returned a different or duplicated identity"
+    );
+    Ok(rows.pop())
+}
+/// Read exact account assignments, retaining role identity independently of effective grants.
+pub(super) fn account_role_ids(client: &Client, account: &AccountId) -> Result<Vec<RoleId>> {
+    #[derive(norito::derive::JsonDeserialize)]
+    struct Assignment {
+        id: RoleId,
     }
-    Ok((prepared_seen, merged_seen, fallback_seen))
+    let rows: Vec<Assignment> = complete_permission_rows(client.list_page(
+        &Collection::AccountRoles(account.clone()),
+        &ListQuery::new().limit(64),
+    )?)?;
+    Ok(rows.into_iter().map(|row| row.id).collect())
+}
+/// Read effective grants from the native account-permissions collection.
+pub(super) fn account_permissions(client: &Client, account: &AccountId) -> Result<Vec<Permission>> {
+    complete_permission_rows(client.list_page(
+        &Collection::AccountPermissions(account.clone()),
+        &ListQuery::new().limit(64),
+    )?)
+}
+#[test]
+fn permission_snapshot_decoder_rejects_incomplete_or_malformed_pages() -> Result<()> {
+    let permission: Permission = CanModifyAccountMetadata {
+        account: ALICE_ID.clone(),
+    }
+    .into();
+    let row = norito::json::to_value(&permission)?;
+    let page = |items, next_cursor| Page {
+        items,
+        next_cursor,
+        total: None,
+    };
+    assert_eq!(
+        complete_permission_rows::<Permission>(page(vec![row.clone()], None))?,
+        vec![permission]
+    );
+    assert!(
+        complete_permission_rows::<Permission>(page(vec![row.clone()], Some("more".into())))
+            .is_err()
+    );
+    assert!(complete_permission_rows::<Permission>(page(vec![row; 65], None)).is_err());
+    assert!(
+        complete_permission_rows::<Permission>(page(
+            vec![norito::json!({"name": "CanManageRoles"})],
+            None
+        ))
+        .is_err()
+    );
+    Ok(())
 }
 fn wait_for_role_permission_state(
     client: &Client,
@@ -70,9 +126,9 @@ fn wait_for_role_permission_state(
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "role was not queried".to_owned();
     while Instant::now() < deadline {
-        match client.client().query(FindRoles::new()).execute_all() {
-            Ok(roles) => {
-                if let Some(role) = roles.into_iter().find(|role| role.id() == role_id) {
+        match stored_role(client, role_id) {
+            Ok(role) => {
+                if let Some(role) = role {
                     let present = role
                         .permissions()
                         .any(|role_permission| role_permission == permission);
@@ -106,11 +162,7 @@ fn wait_for_account_permission_state(
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "account permissions were not queried".to_owned();
     while Instant::now() < deadline {
-        match client
-            .client()
-            .query(FindPermissionsByAccountId::new(account_id.clone()))
-            .execute_all()
-        {
+        match account_permissions(client, account_id) {
             Ok(permissions) => {
                 let present = permissions
                     .into_iter()
@@ -129,32 +181,6 @@ fn wait_for_account_permission_state(
     panic!(
         "timed out waiting for account permission state after {context}; expected_present={expected_present}; last_observed={last_observed}"
     );
-}
-async fn read_peer_log_with_retry(
-    peer: &NetworkPeer,
-    getter: impl Fn(&NetworkPeer) -> Option<PathBuf>,
-) -> String {
-    const MAX_ATTEMPTS: usize = 20;
-    const DELAY: Duration = Duration::from_millis(50);
-    let mut last = String::new();
-    for attempt in 0..MAX_ATTEMPTS {
-        if let Some(path) = getter(peer) {
-            match tokio::fs::read_to_string(&path).await {
-                Ok(content) => {
-                    if !content.is_empty() {
-                        return content;
-                    }
-                    last = content;
-                }
-                Err(err) if err.kind() == ErrorKind::NotFound => {}
-                Err(err) => panic!("failed to read log {}: {err}", path.display()),
-            }
-        }
-        if attempt + 1 < MAX_ATTEMPTS {
-            sleep(DELAY).await;
-        }
-    }
-    last
 }
 #[test]
 #[ignore = "debug helper for inspecting genesis transactions"]
@@ -215,56 +241,38 @@ fn debug_print_genesis_transactions() {
     }
     panic!("debug output above");
 }
+#[path = "support/invalid_genesis.rs"]
+mod invalid_genesis;
+
 #[tokio::test]
-async fn genesis_transactions_are_validated_by_executor() {
-    // Registering the same domain twice must be rejected during genesis execution.
-    let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal").expect("Valid");
-    let register_domain = Register::domain(Domain::new(kingdom_id.clone()));
-    let duplicate_domain = Register::domain(Domain::new(kingdom_id.clone()));
+async fn genesis_transactions_are_validated_by_executor() -> Result<()> {
+    let kingdom_id = DomainId::try_new("kingdom", "universal")?;
+    let register_domain = Register::domain(Domain::new(kingdom_id));
+    let placeholder: InstructionBox = Log::new(
+        iroha_data_model::Level::INFO,
+        "duplicate-domain genesis placeholder".to_owned(),
+    )
+    .into();
     let Some(network) = sandbox::build_network_or_skip(
         NetworkBuilder::new()
+            .with_peers(4)
             .with_config_layer(|layer| {
                 layer.write(["confidential", "enabled"], true);
             })
-            .with_genesis_instruction(register_domain)
-            .with_genesis_instruction(duplicate_domain),
+            .with_genesis_instruction(register_domain.clone())
+            .with_genesis_instruction(placeholder.clone()),
         stringify!(genesis_transactions_are_validated_by_executor),
     ) else {
-        return;
+        return Ok(());
     };
-    // Build `iroha3d` ahead of the timeout so the initial binary compilation does not consume the limit.
-    iroha_test_network::Program::Irohad
-        .resolve()
-        .expect("iroha3d binary should be buildable");
-    let genesis = network.genesis();
-    let peer = network.peer();
-    let startup_result = timeout(
+    invalid_genesis::assert_rejected_by_all_peers(
+        &network,
+        &placeholder,
+        register_domain.into(),
+        "Repetition(RepetitionError { instruction: Register, id: DomainId(DomainId { name: Name(\"kingdom\"), dataspace: Name(\"universal\") }) })",
         Duration::from_secs(30),
-        peer.start_checked(network.config_layers(), Some(&genesis)),
     )
     .await
-    .expect("peer startup should complete within timeout");
-    let err = startup_result.expect_err("invalid genesis should prevent peer startup");
-    if let Some(reason) = integration_tests::sandbox::sandbox_reason(&err) {
-        panic!(
-            "sandboxed network restriction detected while starting genesis_transactions_are_validated_by_executor: {reason}"
-        );
-    }
-    let err_text = format!("{err:?}");
-    let stderr_log = read_peer_log_with_retry(peer, NetworkPeer::latest_stderr_log_path).await;
-    let stdout_log = read_peer_log_with_retry(peer, NetworkPeer::latest_stdout_log_path).await;
-    let mentions_invalid_genesis = err_text.contains("Invalid genesis block")
-        || err_text.contains("Genesis block execution failed during validation")
-        || stderr_log.contains("Invalid genesis block")
-        || stdout_log.contains("Invalid genesis block")
-        || stderr_log.contains("Genesis block execution failed during validation")
-        || stdout_log.contains("Genesis block execution failed during validation")
-        || stderr_log.contains("genesis consensus metadata validation failed")
-        || stdout_log.contains("genesis consensus metadata validation failed");
-    assert!(
-        mentions_invalid_genesis,
-        "startup failure should mention genesis validation; error was:\n{err_text}\nstdout was:\n{stdout_log}\nstderr was:\n{stderr_log}"
-    );
 }
 fn get_assets(iroha: &Client, id: &AccountId) -> Vec<Asset> {
     iroha
@@ -351,7 +359,7 @@ fn permissions_disallow_asset_transfer() {
     assert_eq!(alice_assets, alice_start_assets);
 }
 #[test]
-fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
+fn account_permission_revoke_then_grant_last_wins_canonical_output() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_default_block_cadence()
@@ -363,18 +371,28 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
         });
     let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
         builder,
-        stringify!(account_permission_revoke_then_grant_last_wins_detached),
+        stringify!(account_permission_revoke_then_grant_last_wins_canonical_output),
     )?
     else {
         return Ok(());
     };
     let client = network.client();
-    let metrics_url = client.client().endpoint().join("/metrics")?;
     let mut status = client.status().get()?;
     let mut last_non_empty_height = status.blocks_non_empty;
-    let (mouse_id, _mouse_keypair) = gen_account_in("wonderland");
-    client.submit(
-        Register::account(Account::new(mouse_id.clone())),
+    let (mouse_id, mouse_keypair) = gen_account_in("wonderland");
+    let fund_mouse = Transfer::asset_quantity(
+        AssetId::new(
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?,
+            ALICE_ID.clone(),
+        ),
+        100_u32,
+        mouse_id.clone(),
+    );
+    client.submit_all::<InstructionBox>(
+        [
+            Register::account(Account::new(mouse_id.clone())).into(),
+            fund_mouse.into(),
+        ],
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     status = sync_after_submission(
@@ -382,14 +400,16 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
         &rt,
         &client,
         last_non_empty_height,
-        "register detached permission target account",
+        "register canonical permission target account",
     )?;
     last_non_empty_height = status.blocks_non_empty;
     let perm: Permission = CanModifyAccountMetadata {
         account: mouse_id.clone(),
     }
     .into();
-    client.submit(
+    let mouse_client =
+        network.peers()[0].client_for(&mouse_id, mouse_keypair.private_key().clone());
+    mouse_client.submit(
         Grant::account_permission(perm.clone(), ALICE_ID.clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
@@ -398,39 +418,37 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
         &rt,
         &client,
         last_non_empty_height,
-        "seed detached account permission",
+        "seed canonical account permission",
     )?;
-    let revoke = Revoke::account_permission(perm.clone(), ALICE_ID.clone());
-    let grant = Grant::account_permission(perm.clone(), ALICE_ID.clone());
-    let tx = TransactionBuilder::new(
-        network.network_id(),
-        ALICE_ID.clone(),
+    let expected_permissions = account_permissions(&client, &ALICE_ID)?
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(expected_permissions.contains(&perm));
+    canonical_permission_execution::assert_no_detached_activity(&network, &rt)?;
+    let instructions: Vec<InstructionBox> = vec![
+        Revoke::account_permission(perm.clone(), ALICE_ID.clone()).into(),
+        Grant::account_permission(perm.clone(), ALICE_ID.clone()).into(),
+    ];
+    let submitted = mouse_client.submit_all(
+        instructions.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([InstructionBox::from(revoke), InstructionBox::from(grant)])
-    .sign(ALICE_KEYPAIR.private_key());
-    client.submit_transaction_and_wait(&tx)?;
-    let (prepared_seen, merged_seen, fallback_seen) = poll_detached_metrics(&rt, &metrics_url)?;
-    let permissions = client
-        .client()
-        .query(FindPermissionsByAccountId::new(ALICE_ID.clone()))
-        .execute_all()?;
-    assert!(
-        permissions.iter().any(|permission| permission == &perm),
-        "last grant should keep permission on account"
-    );
-    assert!(
-        prepared_seen > 0.0,
-        "expected detached pipeline to prepare overlays"
-    );
-    assert!(
-        merged_seen > 0.0,
-        "expected detached merge to register in metrics"
-    );
-    assert_eq!(
-        fallback_seen, 0.0,
-        "detached fallback should not register for permission ops"
-    );
+    )?;
+    canonical_permission_execution::assert_canonical_output(
+        &network,
+        submitted,
+        &mouse_id,
+        &instructions,
+    )?;
+    for peer in network.validators() {
+        assert_eq!(
+            account_permissions(&peer.client(), &ALICE_ID)?
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            expected_permissions,
+            "last grant must retain the exact account permissions on every voter"
+        );
+    }
+    canonical_permission_execution::assert_no_detached_activity(&network, &rt)?;
     Ok(())
 }
 #[test]
@@ -551,7 +569,6 @@ fn permissions_differ_not_only_by_names() {
     ) else {
         return;
     };
-    let network_id = network.network_id();
     let client = network.client();
     submit_ensure_domain_for_network(&network, &client, Domain::new(outfit_domain.clone()))
         .expect("Failed to register outfit domain");
@@ -559,14 +576,12 @@ fn permissions_differ_not_only_by_names() {
                                  authority: &AccountId,
                                  authority_keypair: &KeyPair|
      -> Result<HashOf<SignedTransaction>> {
-        let tx = TransactionBuilder::new(
-            network_id,
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([isi])
-        .sign(authority_keypair.private_key());
-        client.submit_transaction_and_wait(&tx)
+        network.peers()[0]
+            .client_for(authority, authority_keypair.private_key().clone())
+            .submit(
+                isi,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
     };
     let alice_id = ALICE_ID.clone();
     let bob_id = BOB_ID.clone();
@@ -574,9 +589,19 @@ fn permissions_differ_not_only_by_names() {
     let (mouse_id, mouse_keypair) = gen_account_in("outfit");
     // Registering mouse
     let register_mouse_account = Register::account(Account::new(mouse_id.clone()));
+    let fund_mouse = Transfer::asset_quantity(
+        AssetId::new(
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("fixture fee asset definition"),
+            alice_id.clone(),
+        ),
+        100_u32,
+        mouse_id.clone(),
+    );
     client
         .submit_all::<InstructionBox>(
-            [register_mouse_account.into()],
+            [register_mouse_account.into(), fund_mouse.into()],
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .expect("Failed to register mouse");
@@ -628,8 +653,17 @@ fn permissions_differ_not_only_by_names() {
         "color".parse().expect("Valid"),
         Json::from("yellow"),
     );
-    let _err = submit_with_authority(set_shoes_color.clone().into(), &bob_id, &bob_keypair)
+    let err = submit_with_authority(set_shoes_color.clone().into(), &bob_id, &bob_keypair)
         .expect_err("Expected Bob to fail to modify Mouse's shoes");
+    assert!(
+        matches!(
+            err.downcast_ref::<TransactionRejectionReason>(),
+            Some(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(_)
+            ))
+        ),
+        "expected scoped metadata authorization rejection, got {err:?}"
+    );
     let mouse_shoes_permission = CanModifyNftMetadata { nft: shoes_nft_id };
     let allow_bob_to_set_key_value_in_shoes =
         Grant::account_permission(mouse_shoes_permission, bob_id.clone());
@@ -649,7 +683,6 @@ fn stored_vs_granted_permission_payload() {
     else {
         return;
     };
-    let network_id = network.network_id();
     let iroha = network.client();
     // Given
     let alice_id = ALICE_ID.clone();
@@ -664,14 +697,28 @@ fn stored_vs_granted_permission_payload() {
             __asset_definition_id.clone(),
             "xor".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(DomainId::try_new("wonderland", "universal").expect("fixture owning domain")),
         )
     });
     let (mouse_id, mouse_keypair) = gen_account_in("wonderland");
     let register_mouse_account = Register::account(Account::new(mouse_id.clone()));
+    let fund_mouse = Transfer::asset_quantity(
+        AssetId::new(
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("fixture fee asset definition"),
+            alice_id.clone(),
+        ),
+        100_u32,
+        mouse_id.clone(),
+    );
     iroha
         .submit_all::<InstructionBox>(
-            [register_mouse_account.into(), create_asset.into()],
+            [
+                register_mouse_account.into(),
+                create_asset.into(),
+                fund_mouse.into(),
+            ],
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .expect("Failed to register mouse");
@@ -686,18 +733,21 @@ fn stored_vs_granted_permission_payload() {
         Permission::new("CanMintAssetToAccount".parse().unwrap(), value_json.clone()),
         alice_id.clone(),
     );
-    let attempted_holder_grant = TransactionBuilder::new(
-        network_id,
-        mouse_id,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([allow_alice_to_mint_mouse_asset.clone()])
-    .sign(mouse_keypair.private_key());
+    let holder = network.peers()[0].client_for(&mouse_id, mouse_keypair.private_key().clone());
+    let error = holder
+        .submit(
+            allow_alice_to_mint_mouse_asset.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err("an asset holder must not manufacture mint authority for another definition");
     assert!(
-        iroha
-            .submit_transaction_and_wait(&attempted_holder_grant)
-            .is_err(),
-        "an asset holder must not manufacture mint authority for another definition"
+        matches!(
+            error.downcast_ref::<TransactionRejectionReason>(),
+            Some(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(_)
+            ))
+        ),
+        "expected mint-authority rejection, got {error:?}"
     );
     iroha
         .submit(
@@ -756,7 +806,17 @@ fn associated_permissions_removed_on_unregister() {
     let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal").expect("Valid");
     let Some((network, rt)) = start_network_with_builder(
         NetworkBuilder::new()
-            .with_genesis_instruction(Register::domain(Domain::new(kingdom_id.clone()))),
+            .with_genesis_keypair(iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone())
+            .with_genesis_instruction(Register::domain(Domain::new(kingdom_id.clone())))
+            .with_genesis_instruction(Transfer::domain(
+                AccountId::new(
+                    iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR
+                        .public_key()
+                        .clone(),
+                ),
+                kingdom_id.clone(),
+                ALICE_ID.clone(),
+            )),
         stringify!(associated_permissions_removed_on_unregister),
     ) else {
         return;
@@ -823,7 +883,17 @@ fn associated_permissions_removed_from_role_on_unregister() {
     let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal").expect("Valid");
     let Some((network, rt)) = start_network_with_builder(
         NetworkBuilder::new()
-            .with_genesis_instruction(Register::domain(Domain::new(kingdom_id.clone()))),
+            .with_genesis_keypair(iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone())
+            .with_genesis_instruction(Register::domain(Domain::new(kingdom_id.clone())))
+            .with_genesis_instruction(Transfer::domain(
+                AccountId::new(
+                    iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR
+                        .public_key()
+                        .clone(),
+                ),
+                kingdom_id.clone(),
+                ALICE_ID.clone(),
+            )),
         stringify!(associated_permissions_removed_from_role_on_unregister),
     ) else {
         return;

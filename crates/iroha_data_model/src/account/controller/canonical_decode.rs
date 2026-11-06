@@ -31,13 +31,21 @@ impl MemberFields {
 }
 
 pub(super) fn validate_policy(value: MultisigPolicy) -> Result<MultisigPolicy, norito::Error> {
-    MultisigPolicy::from_serialized(value.version, value.threshold, value.members)
-        .map_err(|error| norito::Error::Message(error.to_string()))
+    MultisigPolicy::from_serialized(value.version, value.threshold, value.members).map_err(
+        |error| {
+            norito::core::prepaid_validation_error("invalid account controller", || {
+                norito::Error::Message(error.to_string())
+            })
+        },
+    )
 }
 
 pub(super) fn validate_member(value: MultisigMember) -> Result<MultisigMember, norito::Error> {
-    MultisigMember::new(value.public_key, value.weight)
-        .map_err(|error| norito::Error::Message(error.to_string()))
+    MultisigMember::new(value.public_key, value.weight).map_err(|error| {
+        norito::core::prepaid_validation_error("invalid account controller", || {
+            norito::Error::Message(error.to_string())
+        })
+    })
 }
 
 macro_rules! validated_decode {

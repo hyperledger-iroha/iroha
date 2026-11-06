@@ -191,3 +191,13 @@ queuing serialization; host shutdown refuses new exports and waits through actua
 native result and thread-local cleanup, including canceled export waiters.
 C/JNI delivery and installed/genuine-network qualification remain separate
 open checks; workspace source and component tests alone do not establish them.
+
+Known native World schema anchors select the compiled native family by default.
+An integrator resuming a preparation created by the exact-schema SDK must call
+`request.with_world_schemas(vec![original_schema])` before sharing the request.
+That exact pin preserves the original request digest and journal/preparation ID.
+Changing to an expanded family is a different authorization policy and produces a
+family-bound digest; do not change policy while resuming an existing preparation.
+The digest depends on the original request and sorted final policy, never the order
+or history of policy setters. Each proof still authenticates its schema at its own
+certified height; a family member is not a substitute for finality.

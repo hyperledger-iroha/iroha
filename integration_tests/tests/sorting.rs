@@ -3,6 +3,7 @@ use eyre::{Result, WrapErr as _};
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
+    collections::{Collection, ListQuery, SortKey, field},
     crypto::{KeyPair, PublicKey},
     data_model::{account::Account, prelude::*, query::parameters::SortOrder},
 };
@@ -143,23 +144,71 @@ where
     }
     Ok(())
 }
+/// Fields whose exact values and server ordering these collection tests assert.
+#[derive(norito::derive::JsonDeserialize)]
+struct SortedEntity<Id> {
+    id: Id,
+    metadata: Metadata,
+}
+impl<Id> SortedEntity<Id> {
+    fn id(&self) -> &Id {
+        &self.id
+    }
+    fn metadata(&self) -> &Metadata {
+        &self.metadata
+    }
+}
+/// Fetch the entire bounded fixture set, leaving sorting and filtering to the native source.
+fn sorted_entity_rows<Id: norito::json::JsonDeserialize>(
+    client: &Client,
+    collection: &Collection,
+    sorting: &Sorting,
+    included_ids: impl Iterator<Item = String>,
+) -> Result<Vec<SortedEntity<Id>>> {
+    let key = format!(
+        "metadata.{}",
+        sorting
+            .sort_by_metadata_key()
+            .expect("fixture metadata sort key")
+    );
+    let order = if sorting.order() == Some(SortOrder::Desc) {
+        SortKey::desc(key)
+    } else {
+        SortKey::asc(key)
+    };
+    let page = client.list_page(
+        collection,
+        &ListQuery::new()
+            .filter(field("id").is_in(included_ids))
+            .sort_by(order)
+            .limit(64),
+    )?;
+    eyre::ensure!(
+        page.items.len() <= 64 && page.next_cursor.is_none() && page.total.is_none(),
+        "sorting fixture exceeded its complete bounded page"
+    );
+    page.items
+        .into_iter()
+        .map(|row| norito::json::from_value(row).map_err(Into::into))
+        .collect()
+}
 fn wait_for_sorted_asset_definitions(
     client: &Client,
     sorting: &Sorting,
     included_asset_definitions: &HashSet<AssetDefinitionId>,
     expected_asset_definitions: &[AssetDefinitionId],
-) -> Result<Vec<AssetDefinition>> {
+) -> Result<Vec<SortedEntity<AssetDefinitionId>>> {
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
     const TIMEOUT: Duration = Duration::from_secs(30);
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "asset definitions were not queried".to_owned();
     while Instant::now() < deadline {
-        match client
-            .client()
-            .query(FindAssetDefinitions::new())
-            .with_sorting(sorting.clone())
-            .execute_all()
-        {
+        match sorted_entity_rows::<AssetDefinitionId>(
+            client,
+            &Collection::AssetDefinitions,
+            sorting,
+            included_asset_definitions.iter().map(ToString::to_string),
+        ) {
             Ok(asset_definitions) => {
                 let observed = asset_definitions
                     .into_iter()
@@ -195,18 +244,18 @@ fn wait_for_sorted_accounts(
     sorting: &Sorting,
     included_accounts: &HashSet<AccountId>,
     expected_accounts: &[AccountId],
-) -> Result<Vec<Account>> {
+) -> Result<Vec<SortedEntity<AccountId>>> {
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
     const TIMEOUT: Duration = Duration::from_secs(30);
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "accounts were not queried".to_owned();
     while Instant::now() < deadline {
-        match client
-            .client()
-            .query(FindAccounts::new())
-            .with_sorting(sorting.clone())
-            .execute_all()
-        {
+        match sorted_entity_rows::<AccountId>(
+            client,
+            &Collection::Accounts,
+            sorting,
+            included_accounts.iter().map(ToString::to_string),
+        ) {
             Ok(accounts) => {
                 let observed = accounts
                     .into_iter()
@@ -218,7 +267,7 @@ fn wait_for_sorted_accounts(
                     .collect::<Vec<_>>();
                 last_observed = observed
                     .iter()
-                    .map(Identifiable::id)
+                    .map(SortedEntity::id)
                     .map(ToString::to_string)
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -241,18 +290,18 @@ fn wait_for_sorted_domains(
     sorting: &Sorting,
     included_domains: &HashSet<DomainId>,
     expected_domains: &[DomainId],
-) -> Result<Vec<Domain>> {
+) -> Result<Vec<SortedEntity<DomainId>>> {
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
     const TIMEOUT: Duration = Duration::from_secs(30);
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "domains were not queried".to_owned();
     while Instant::now() < deadline {
-        match client
-            .client()
-            .query(FindDomains::new())
-            .with_sorting(sorting.clone())
-            .execute_all()
-        {
+        match sorted_entity_rows::<DomainId>(
+            client,
+            &Collection::Domains,
+            sorting,
+            included_domains.iter().map(ToString::to_string),
+        ) {
             Ok(domains) => {
                 let observed = domains
                     .into_iter()
@@ -310,7 +359,7 @@ fn correct_sorting_of_entities() -> Result<()> {
             asset_definition_id.clone(),
             asset_name,
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(DomainId::try_new("wonderland", "universal").expect("Valid")),
         )
         .with_metadata(asset_metadata.clone());
         metadata_of_assets.push(asset_metadata);
@@ -329,12 +378,12 @@ fn correct_sorting_of_entities() -> Result<()> {
     )?;
     assert!(
         res.iter()
-            .map(Identifiable::id)
+            .map(SortedEntity::id)
             .eq(asset_definitions.iter().rev())
     );
     assert!(
         res.iter()
-            .map(AssetDefinition::metadata)
+            .map(SortedEntity::metadata)
             .eq(metadata_of_assets.iter().rev())
     );
     // Test sorting accounts
@@ -365,10 +414,10 @@ fn correct_sorting_of_entities() -> Result<()> {
         &included_accounts,
         &expected_accounts,
     )?;
-    assert!(res.iter().map(Identifiable::id).eq(accounts.iter().rev()));
+    assert!(res.iter().map(SortedEntity::id).eq(accounts.iter().rev()));
     assert!(
         res.iter()
-            .map(Account::metadata)
+            .map(SortedEntity::metadata)
             .eq(metadata_of_accounts.iter().rev())
     );
     // Test sorting domains
@@ -401,10 +450,10 @@ fn correct_sorting_of_entities() -> Result<()> {
         &included_domains,
         &expected_domains,
     )?;
-    assert!(res.iter().map(Identifiable::id).eq(domains.iter().rev()));
+    assert!(res.iter().map(SortedEntity::id).eq(domains.iter().rev()));
     assert!(
         res.iter()
-            .map(Domain::metadata)
+            .map(SortedEntity::metadata)
             .eq(metadata_of_domains.iter().rev())
     );
     // Naive test sorting of domains
@@ -470,7 +519,7 @@ fn metadata_sorting_descending() {
             asset_definition_id.clone(),
             asset_name,
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(DomainId::try_new("wonderland", "universal").expect("Valid")),
         )
         .with_metadata(asset_metadata.clone());
         metadata_of_assets.push(asset_metadata);
@@ -479,26 +528,21 @@ fn metadata_sorting_descending() {
         instructions.push(create_asset_definition);
     }
     submit_chunked(&test_client, &instructions).expect("Valid");
-    let res = test_client
-        .client()
-        .query(FindAssetDefinitions::new())
-        .with_sorting(Sorting::new(
-            Some(sort_by_metadata_key),
-            Some(SortOrder::Desc),
-        ))
-        .execute_all()
-        .expect("Valid")
-        .into_iter()
-        .filter(|asset_definition| asset_definitions.contains(asset_definition.id()))
-        .collect::<Vec<_>>();
+    let res = sorted_entity_rows::<AssetDefinitionId>(
+        &test_client,
+        &Collection::AssetDefinitions,
+        &Sorting::new(Some(sort_by_metadata_key), Some(SortOrder::Desc)),
+        asset_definitions.iter().map(ToString::to_string),
+    )
+    .expect("bounded descending asset definition collection");
     assert!(
         res.iter()
-            .map(Identifiable::id)
+            .map(SortedEntity::id)
             .eq(asset_definitions.iter())
     );
     assert!(
         res.iter()
-            .map(AssetDefinition::metadata)
+            .map(SortedEntity::metadata)
             .eq(metadata_of_assets.iter())
     );
 }
@@ -550,10 +594,12 @@ fn sort_only_elements_which_have_sorting_key() -> Result<()> {
         .chain(accounts_b.iter())
         .cloned()
         .collect::<HashSet<_>>();
-    let accounts = accounts_a
+    // Native collections order missing metadata as null before numbers, then
+    // break ties by canonical account identity. Every missing-key row remains visible.
+    accounts_b.sort_by_key(ToString::to_string);
+    let accounts = accounts_b
         .iter()
-        .rev()
-        .chain(accounts_b.iter())
+        .chain(accounts_a.iter().rev())
         .cloned()
         .collect::<Vec<_>>();
     let _ = wait_for_sorted_accounts(

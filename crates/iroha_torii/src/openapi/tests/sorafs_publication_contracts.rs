@@ -54,13 +54,15 @@ fn sorafs_publication_contracts_bind_canonical_account_auth_and_evidence_bounds(
     let proof = &document["paths"]["/v1/sorafs/publish/proof"]["post"];
     let description = proof["description"].as_str().unwrap();
     for requirement in [
-        "CanReadAllLedgerData",
         "independent checkpoint",
-        "only lineage",
-        "SumeragiFinalityProof",
+        "SumeragiCommitCertificateV1",
+        "CertifiedTransactionInclusionV1",
+        "never a block body",
+        "no ledger-wide read permission",
+        "only the assertion's signer",
         "SumeragiFinalityCheckpoint",
         "configured network and chain label",
-        "embedded current commit certificate",
+        "incumbent quorum",
         "cannot select its own trust root",
         "successful execution",
         "monotonic deadline",

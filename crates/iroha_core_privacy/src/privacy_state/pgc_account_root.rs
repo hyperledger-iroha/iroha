@@ -1,7 +1,7 @@
 //! Canonical Anonymous-PGC encrypted account-state root derivation.
 use iroha_data_model::privacy::{
     ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1, PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1,
-    PrivacyNamespaceV1, PrivacyPgcAccountV1, PrivacyProtocolIdV1, PrivacyRootV1,
+    PrivacyPgcAccountV1, PrivacyRootV1, PrivacyRuntimeNamespaceV1, PrivacyRuntimeProtocolIdV1,
 };
 use thiserror::Error;
 /// Failure deriving one canonical Anonymous-PGC encrypted account-state root.
@@ -53,7 +53,7 @@ pub enum PrivacyPgcAccountStateRootErrorV1 {
 /// and the reserved all-zero derived root. Canonical namespace encoding failures retain
 /// their original scoped allocation origin.
 pub fn derive_privacy_pgc_account_state_root_v1(
-    namespace: PrivacyNamespaceV1,
+    namespace: PrivacyRuntimeNamespaceV1,
     epoch: u64,
     total_supply: u32,
     accounts: &[PrivacyPgcAccountV1],
@@ -61,7 +61,7 @@ pub fn derive_privacy_pgc_account_state_root_v1(
     namespace
         .validate()
         .map_err(|_| PrivacyPgcAccountStateRootErrorV1::InvalidNamespace)?;
-    if namespace.protocol_id() != PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 {
+    if namespace.protocol_id() != PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1 {
         return Err(PrivacyPgcAccountStateRootErrorV1::WrongProtocol);
     }
     if epoch == 0 {
@@ -94,12 +94,16 @@ pub fn derive_privacy_pgc_account_state_root_v1(
                 .map_err(|_| PrivacyPgcAccountStateRootErrorV1::InvalidPoint)?;
         }
     }
+    let original_namespace: iroha_data_model::privacy::PrivacyNamespaceV1 = namespace
+        .try_into()
+        .map_err(|_| PrivacyPgcAccountStateRootErrorV1::WrongProtocol)?;
     let namespace_bytes = norito::core::classify_decode_attempt(|| {
         let _canonical =
             norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         // The closed namespace has fixed-size fields. Count and reserve its exact frame through
         // the original allocation owner; do not use the infallible-growth ByteSink destination.
-        norito::core::to_bytes_bounded(&namespace, usize::MAX).map_err(|error| match error {
+        norito::core::to_bytes_bounded(&original_namespace, usize::MAX).map_err(|error| match error
+        {
             norito::core::BoundedEncodeError::Serialization(original) => original,
             norito::core::BoundedEncodeError::AllocationFailed { bytes } => {
                 norito::Error::AllocationFailed {

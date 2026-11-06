@@ -42,7 +42,7 @@ impl Drop for Census {
 }
 fn context() -> TransparentStarkDigestContextV1 {
     TransparentStarkDigestContextV1::new(
-        iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+        iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
         b"bounded-commitment-reference",
     )
 }

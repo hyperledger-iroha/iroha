@@ -273,9 +273,44 @@ def test_source_inventory_covers_native_worker_and_protocol_dependencies():
     for name in ["Cargo.lock", "crates/iroha_parliament_ballot_proof/Cargo.toml",
                  "crates/norito/src/lib.rs", "scripts/check_parliament_ballot_resource_contract.py",
                  "crates/iroha_parliament_ballot_proof/examples/resource_contract/budget.rs",
+                 "crates/iroha_parliament_ballot_proof/examples/parliament_ballot_qualify.rs",
+                 "crates/iroha_parliament_ballot_proof/tests/common/mod.rs",
+                 "crates/iroha_parliament_ballot_proof/examples/QUALIFICATION.md",
+                 "crates/iroha_zkp_vole/src/crt/generated/LICENSE.faest-ref",
+                 "crates/norito/src/schema/README.md",
+                 "vendor/aes/src/backends/aarch64_aes/encdec.rs",
                  "specs/parliament_ballot_resource_contract.md"]:
         assert name in inventory
         assert len(inventory[name]) == 64
+
+
+def test_inventory_tracks_current_split_modules_and_refuses_missing_package_sources(tmp_path):
+    for name in MODULE.source_inventory(MODULE.ROOT):
+        destination = tmp_path / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"synthetic reviewed source")
+    moved = tmp_path / "crates/iroha_allocation/src/added/split.rs"
+    moved.parent.mkdir(parents=True)
+    moved.write_bytes(b"new source outside the old inventory")
+    inventory = MODULE.source_inventory(tmp_path)
+    key = moved.relative_to(tmp_path).as_posix()
+    assert inventory[key] == MODULE.digest(moved.read_bytes())
+    # A new build receipt must include that file; historical path lists cannot
+    # silently authorize a source set after a module has split or moved.
+    compiled = {name: value for name, value in inventory.items()
+                if name not in {"scripts/check_parliament_ballot_resource_contract.py",
+                                "scripts/tests/parliament_ballot_resource_contract_test.py",
+                                "specs/parliament_ballot_resource_contract.md"}
+                and not name.startswith(MODULE.FIXTURES.as_posix() + "/")}
+    compiled.pop(key)
+    receipt = {"build_passed": True, "failure": None, "source_changes": {},
+               "started_source_sha256": compiled}
+    with pytest.raises(ValueError, match="complete reviewed source scope"):
+        MODULE.validate_build_provenance(receipt, inventory, {})
+    source = tmp_path / "crates/iroha_audio/src"
+    source.rename(source.with_name("retired-src"))
+    with pytest.raises(ValueError, match="reviewed source directory missing"):
+        MODULE.source_inventory(tmp_path)
 
 
 def test_cli_requires_explicit_binaries_and_output():

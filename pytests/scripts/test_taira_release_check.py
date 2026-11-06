@@ -1970,6 +1970,27 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                     gate.focused_regression_stages(scope, ("cli=taira::tests::" + stale,))
         self.assertEqual(gate.HARNESS_TARGETS["wallet"][3], ["-p", "iroha_wallet", "--lib"])
 
+    def test_runtime_read_contract_leaves_are_required_in_both_scopes(self):
+        expected = {
+            "cli": "taira::tests::doctor_runtime_routes_require_exact_operator_challenges_in_both_scopes",
+            "client": "client::operator_auth_tests::runtime_reads_require_exact_network_and_path_bound_operator_signatures",
+            "torii-unit": "tests_runtime_handlers::runtime_governance_http_routes_require_operator_signatures",
+        }
+        for scope in gate.QUALIFICATION_SCOPES:
+            stages = gate.qualification_stages(scope)
+            for harness, name in expected.items():
+                with self.subTest(scope=scope, harness=harness):
+                    selected = [test for _, names in stages[harness] for test in names]
+                    self.assertEqual(selected.count(name), 1)
+                    focused = gate.focused_regression_stages(scope, (harness + "=" + name,))
+                    self.assertEqual(tuple(focused), (harness,))
+                    self.assertEqual(
+                        [test for _, names in focused[harness] for test in names], [name]
+                    )
+                    listing = "\n".join(test + ": test" for test in selected if test != name)
+                    with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                        gate.require_tests(listing, stages[harness])
+
     def test_faucet_policy_seven_leaves_are_selected_in_both_scopes(self):
         expected = {'torii': ('accounts_faucet::accounts_faucet_policy_exposes_exact_public_configuration', 'accounts_faucet::accounts_faucet_policy_resolves_configured_asset_alias', 'accounts_faucet::accounts_faucet_discovery_reports_disabled_service'), 'torii-unit': ('mcp::tests::faucet_policy_tool_is_read_only_and_runtime_gated', 'mcp::tests::faucet_policy_tool_dispatches_only_get_without_body', 'openapi::tests::faucet_policy_schema_is_exact_public_discovery'), 'torii-shared': ('route_catalog::tests::account_faucet_policy_is_public_read_only_discovery',)}
         for scope in gate.QUALIFICATION_SCOPES:

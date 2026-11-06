@@ -8,12 +8,12 @@ use futures_util::{
 };
 use integration_tests::sandbox;
 use iroha::{
-    crypto::{Algorithm, HashOf, KeyPair},
+    crypto::{Algorithm, KeyPair},
     data_model::{
         Level,
         account::{Account, AccountId, OpaqueAccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
-        block::{Header, consensus::SumeragiDiagnosticsStatus},
+        block::consensus::SumeragiDiagnosticsStatus,
         domain::Domain,
         events::time::{ExecutionTime, TimeEventFilter},
         identifier::{
@@ -24,7 +24,6 @@ use iroha::{
         nexus::UniversalAccountId,
         parameter::{BlockParameter, Parameter, system::SumeragiNposParameters},
         prelude::{Action, FindAssetById, Quantity, Repeats},
-        query::block::prelude::FindBlocks,
         ram_lfe::{
             RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
             RamLfeProgramId, RamLfeReceiptAttestation,
@@ -36,7 +35,7 @@ use iroha_crypto::{
     Hash, RamLfeBackend, RamLfeVerificationMode, Signature, SignatureOf,
     identifier_hashes_from_output_hash, ram_lfe_output_hash,
 };
-use iroha_data_model::{HasMetadata, prelude::QueryBuilderExt};
+use iroha_data_model::HasMetadata;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
@@ -68,6 +67,8 @@ use toml::{Table, Value as TomlValue};
 mod idle_chain;
 #[path = "../../crates/iroha_test_network/tests/support/multiroute.rs"]
 mod multiroute;
+#[path = "sumeragi_localnet_smoke/status_retry.rs"]
+mod status_retry;
 use multiroute::{ROUTE_VALIDATOR_FEE_SEED_AMOUNT, route_fee_asset_definition_id};
 static LOCALNET_SMOKE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 const SMOKE_PIPELINE_TIME: Duration = Duration::from_secs(2);
@@ -2225,7 +2226,7 @@ async fn run_realistic_30tps_localnet(
     let client_ttl = Duration::from_secs(duration_secs.saturating_add(120));
     set_env_var(
         "IROHA_TEST_CLIENT_TTL_MS",
-        client_ttl.as_millis().to_string(),
+        format!("{}ms", client_ttl.as_millis()),
     );
     let builder = NetworkBuilder::new()
         .with_peers(REALISTIC_30TPS_PEERS)
@@ -3046,7 +3047,7 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
     let previous_ttl = std::env::var_os("IROHA_TEST_CLIENT_TTL_MS");
     set_env_var(
         "IROHA_TEST_CLIENT_TTL_MS",
-        SOAK_CLIENT_TTL.as_millis().to_string(),
+        format!("{}ms", SOAK_CLIENT_TTL.as_millis()),
     );
     let builder = NetworkBuilder::new()
         .with_peers(4)
@@ -3079,6 +3080,10 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
         else {
             return Ok(());
         };
+        ensure!(
+            network.client().client().transaction_ttl() == Some(SOAK_CLIENT_TTL),
+            "permissioned probe must retain its authored two-hour transaction TTL"
+        );
         wait_for_status_responses(&network, Duration::from_secs(30)).await?;
         let baseline_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
         let baseline_height = baseline_statuses
@@ -3089,8 +3094,14 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
         let warmup_height = baseline_height.saturating_add(1);
         for peer in network.peers() {
             let message = format!("localnet warmup block {}", peer.mnemonic());
-            peer.client()
-                .submit::<InstructionBox>(Log::new(Level::INFO, message).into(), iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
+            let client = peer.client();
+            read_on_dedicated_thread(move || {
+                client.submit::<InstructionBox>(
+                    Log::new(Level::INFO, message).into(),
+                    iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+            })
+                .await
                 .wrap_err_with(|| {
                     format!("failed to submit warmup log instruction to {}", peer.mnemonic())
                 })?;
@@ -3125,12 +3136,15 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
             let message = format!("localnet block {idx} via {}", peer.mnemonic());
             let mut metadata = Metadata::default();
             metadata.insert(sequence_key.clone(), idx.saturating_add(1));
-            peer.client()
-                .submit_with_metadata::<InstructionBox>(
+            let client = peer.client();
+            read_on_dedicated_thread(move || {
+                client.submit_with_metadata::<InstructionBox>(
                     Log::new(Level::INFO, message).into(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                     metadata,
                 )
+            })
+                .await
                 .wrap_err_with(|| {
                     format!(
                         "failed to submit log instruction {idx} to {}",
@@ -3278,7 +3292,7 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
     // Extend TTL so early transactions do not expire during the soak run.
     set_env_var(
         "IROHA_TEST_CLIENT_TTL_MS",
-        SOAK_CLIENT_TTL.as_millis().to_string(),
+        format!("{}ms", SOAK_CLIENT_TTL.as_millis()),
     );
     let builder = NetworkBuilder::new()
         .with_peers(4)
@@ -3435,7 +3449,7 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
     let previous_ttl = std::env::var_os("IROHA_TEST_CLIENT_TTL_MS");
     set_env_var(
         "IROHA_TEST_CLIENT_TTL_MS",
-        THROUGHPUT_CLIENT_TTL.as_millis().to_string(),
+        format!("{}ms", THROUGHPUT_CLIENT_TTL.as_millis()),
     );
     let builder = NetworkBuilder::new()
         .with_peers(7)
@@ -3974,7 +3988,7 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
     let previous_ttl = std::env::var_os("IROHA_TEST_CLIENT_TTL_MS");
     set_env_var(
         "IROHA_TEST_CLIENT_TTL_MS",
-        THROUGHPUT_CLIENT_TTL.as_millis().to_string(),
+        format!("{}ms", THROUGHPUT_CLIENT_TTL.as_millis()),
     );
     let npos_params = SumeragiNposParameters::default();
     let builder = NetworkBuilder::new()
@@ -4498,7 +4512,7 @@ async fn collect_statuses(
     status_timeout: Duration,
 ) -> Result<Vec<iroha_torii_shared::status::Status>> {
     try_join_all(network.peers().iter().map(|peer| async move {
-        tokio::time::timeout(status_timeout, peer.status())
+        tokio::time::timeout(status_timeout, status_retry::read(|| peer.status()))
             .await
             .map_or_else(
                 |_| {

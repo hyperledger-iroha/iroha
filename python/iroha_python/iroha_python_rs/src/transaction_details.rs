@@ -138,15 +138,24 @@ pub(super) fn verify_transaction_details_inclusion(
         ));
     }
     let expected = exact_entrypoint_hash(transaction_hash)?;
-    let (committed, page) = committed_transaction_verification::authenticate_selected_response(
-        expected,
+    // Inclusion and finality verification read only immutable bytes and strings that
+    // the arguments keep alive; projection below needs the GIL again.
+    let (details, checkpoint) = (
         details_response_bytes.as_bytes(),
-        native_finality_proof_chain_json,
-        *expected_network_id.as_inner(),
-        expected_chain,
         trusted_checkpoint.as_bytes(),
-        |wire| decode_bound_details(expected, wire),
-    )?;
+    );
+    let network = *expected_network_id.as_inner();
+    let (committed, page) = py.detach(|| {
+        committed_transaction_verification::authenticate_selected_response(
+            expected,
+            details,
+            native_finality_proof_chain_json,
+            network,
+            expected_chain,
+            checkpoint,
+            |wire| decode_bound_details(expected, wire),
+        )
+    })?;
     project_authenticated_committed_transaction(
         py,
         committed,

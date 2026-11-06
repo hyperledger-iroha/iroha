@@ -16,7 +16,7 @@ impl Client {
         &self,
         expected_manager: &iroha_data_model::account::AccountId,
         expected_policy: &iroha_data_model::sorafs::reserve::ReserveAuthorityPolicyV1,
-        native_schema: iroha_crypto::Hash,
+        native_schema: impl iroha_data_model::sumeragi_finality::WorldStateSchemaPolicyV1,
         block: &iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
     ) -> Result<iroha_data_model::sorafs::reserve::proof::VerifiedReservePolicyStateV1> {
         use iroha_data_model::sorafs::reserve::proof::{
@@ -52,7 +52,7 @@ impl Client {
             self.network_id,
             expected_manager,
             expected_policy,
-            native_schema,
+            native_schema.select_schema(proof.world.schema_hash)?,
             block,
         )?;
         self.ensure_activation_evidence_deadline()?;

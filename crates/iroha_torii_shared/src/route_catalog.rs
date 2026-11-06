@@ -1578,6 +1578,30 @@ pub mod core {
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
+    /// Read this validator's consensus-relevant lifecycle activation policy.
+    pub const TRIGGER_LIFECYCLE_ACTIVATION: RouteDescriptor = RouteDescriptor::new(
+        "trigger.lifecycle_activation",
+        HttpMethod::Get,
+        "/v1/triggers/lifecycle-activation",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
+    /// Read compact certified runtime-selection branches for a scheduled proof window.
+    pub const TRIGGER_LIFECYCLE_WITNESS: RouteDescriptor = RouteDescriptor::new(
+        "trigger.lifecycle_witness",
+        HttpMethod::Get,
+        "/v1/triggers/lifecycle-witness",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
     /// Read the exact canonical executed block wire at one finalized height.
     pub const LEDGER_EXECUTED_BLOCK_WIRE: RouteDescriptor = RouteDescriptor::new(
         "ledger.executed_block_wire",
@@ -1840,6 +1864,8 @@ pub mod core {
         LEDGER_HEADERS,
         LEDGER_STATE_ROOT,
         LEDGER_STATE_PROOF,
+        TRIGGER_LIFECYCLE_WITNESS,
+        TRIGGER_LIFECYCLE_ACTIVATION,
         LEDGER_EXECUTED_BLOCK_WIRE,
         LEDGER_BLOCK_PROOF,
         RESOURCE_NAMES_STATE,
@@ -2893,6 +2919,12 @@ pub mod runtime_governance {
     /// Read the authoritative committed privacy capability snapshot.
     pub const PRIVACY_CAPABILITIES: RouteDescriptor =
         signed_get("privacy.capabilities", "/v1/privacy/capabilities");
+    /// Certified pool anchor and balances; complete World disclosure requires all-ledger read authority.
+    pub const PRIVACY_IRONWOOD_POOL_CUT: RouteDescriptor = app_signed_post(
+        "privacy.ironwood.pool_cut",
+        "/v1/privacy/ironwood/pool-cut/{height}",
+    )
+    .with_private_no_store();
     /// Mint one canonical Bootle/Lantern blind-issuance authorization.
     pub const PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE: RouteDescriptor = public_post(
         "privacy.bootle_lantern.issuance.authorize",
@@ -3143,6 +3175,7 @@ pub mod runtime_governance {
         RUNTIME_METRICS,
         NODE_CAPABILITIES,
         PRIVACY_CAPABILITIES,
+        PRIVACY_IRONWOOD_POOL_CUT,
         PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE,
         PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE,
         NODE_PROJECTION_CHECKPOINT,
@@ -3612,7 +3645,7 @@ pub mod sorafs {
             .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
             .with_effect(RouteEffect::ExpensiveCompute)
             .with_admission(AdmissionPolicy::AuthenticatedAccount);
-    /// Return native publication execution evidence to an authorized full-ledger reader.
+    /// Return compact native publication execution evidence to the assertion's own signer.
     pub const PUBLISH_PROOF: RouteDescriptor =
         documented_post("sorafs.publication.proof", "/v1/sorafs/publish/proof")
             .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
@@ -4078,6 +4111,10 @@ pub mod application_api {
         CONTRACTS_ROLLUPS_TRADER_ACCOUNT_GET => dataspace_get("application.contracts_rollups_trader_account_get", "/v1/contracts/rollups/trader/account");
         ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET => dataspace_get("application.accounts_by_account_id_assets_get", "/v1/accounts/{account_id}/assets");
         ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST => dataspace_post("application.accounts_by_account_id_assets_query_post", "/v1/accounts/{account_id}/assets/query");
+        ROLES_GET => dataspace_get("application.roles_get", "/v1/roles");
+        ROLES_QUERY_POST => dataspace_post("application.roles_query_post", "/v1/roles/query");
+        ACCOUNTS_BY_ACCOUNT_ID_ROLES_GET => dataspace_get("application.accounts_by_account_id_roles_get", "/v1/accounts/{account_id}/roles");
+        ACCOUNTS_BY_ACCOUNT_ID_ROLES_QUERY_POST => dataspace_post("application.accounts_by_account_id_roles_query_post", "/v1/accounts/{account_id}/roles/query");
         ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET => dataspace_get("application.accounts_by_account_id_permissions_get", "/v1/accounts/{account_id}/permissions");
         ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_QUERY_POST => dataspace_post("application.accounts_by_account_id_permissions_query_post", "/v1/accounts/{account_id}/permissions/query");
         ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_GET => dataspace_get("application.accounts_by_account_id_transactions_get", "/v1/accounts/{account_id}/transactions");

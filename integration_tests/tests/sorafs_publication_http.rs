@@ -211,58 +211,99 @@ pub async fn genesis_checkpoint(
         "independently constructed genesis differs from network identity"
     );
     let deadline = Instant::now() + DEADLINE;
-    timeout_at(deadline, async {
-        loop {
-            let path = iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY
-                .path()
-                .replace("{height}", "1");
-            let response = match http
-                .get(format!(
-                    "{}{}",
-                    network.peers()[0].torii_url().trim_end_matches('/'),
-                    path
-                ))
-                .header("Accept", "application/x-norito")
-                .send()
-                .await
-            {
-                Ok(response) => response,
-                // Startup may observe committed Kura state before Torii binds.
-                // Keep readiness retries inside this original checkpoint deadline.
-                Err(error) if error.is_connect() => {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    continue;
-                }
-                Err(error) => return Err(error.into()),
-            };
-            if response.status() == reqwest::StatusCode::NOT_FOUND
-                || response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE
-            {
+    let proof = timeout_at(deadline, finality_proof(http, network, 1)).await??;
+    let authenticated = verifier.verify(&proof)?;
+    ensure!(
+        authenticated.height() == 1 && authenticated.block().hash() == genesis.expected_hash(),
+        "queried checkpoint changed independent signed-genesis identity"
+    );
+    let checkpoint = verifier.export_checkpoint(&proof)?;
+    ensure!(
+        Instant::now() < deadline,
+        "genesis checkpoint verification exceeded its deadline"
+    );
+    Ok(checkpoint)
+}
+
+/// Advance an independently trusted checkpoint to `height` through public full finality.
+///
+/// Every successor is authenticated from `from`; no response can select the trust root.
+/// Compact publication evidence authenticates execution only, so callers that need a later
+/// committed floor advance their own checkpoint this way.
+pub async fn advance_checkpoint(
+    http: &reqwest::Client,
+    network: &Network,
+    from: &SumeragiFinalityCheckpoint,
+    height: u64,
+) -> Result<SumeragiFinalityCheckpoint> {
+    ensure!(height > from.height(), "a checkpoint only advances");
+    let mut verifier = SumeragiFinalityVerifier::from_trusted_checkpoint(
+        from,
+        &network.network_id(),
+        network.chain_id().as_ref(),
+    )?;
+    let deadline = Instant::now() + DEADLINE;
+    let mut tip = None;
+    for next in from.height() + 1..=height {
+        let proof = timeout_at(deadline, finality_proof(http, network, next)).await??;
+        ensure!(
+            verifier.verify(&proof)?.height() == next,
+            "finality walk substituted a height"
+        );
+        tip = Some(proof);
+    }
+    let tip = tip.ok_or_else(|| eyre::eyre!("checkpoint advance verified no successor"))?;
+    Ok(verifier.export_checkpoint(&tip)?)
+}
+
+/// Read one untrusted public full finality proof, waiting until the height is served.
+async fn finality_proof(
+    http: &reqwest::Client,
+    network: &Network,
+    height: u64,
+) -> Result<SumeragiFinalityProof> {
+    let url = format!(
+        "{}{}",
+        network.peers()[0].torii_url().trim_end_matches('/'),
+        iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY
+            .path()
+            .replace("{height}", &height.to_string())
+    );
+    loop {
+        let response = match http
+            .get(&url)
+            .header("Accept", "application/x-norito")
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            // Startup may observe committed Kura state before Torii binds.
+            // Callers bound these readiness retries with their own deadline.
+            Err(error) if error.is_connect() => {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 continue;
             }
-            ensure!(
-                response.status().is_success(),
-                "genesis finality endpoint rejected: {}",
-                response.status()
-            );
-            let maximum = MAX_FINALITY_BLOCK_BYTES + 4 * 1024 * 1024;
-            let proof: SumeragiFinalityProof = decode(&bytes(response, maximum).await?, maximum)?;
-            let authenticated = verifier.verify(&proof)?;
-            ensure!(
-                authenticated.height() == 1
-                    && authenticated.block().hash() == genesis.expected_hash(),
-                "queried checkpoint changed independent signed-genesis identity"
-            );
-            let checkpoint = verifier.export_checkpoint(&proof)?;
-            ensure!(
-                Instant::now() < deadline,
-                "genesis checkpoint verification exceeded its deadline"
-            );
-            return Ok(checkpoint);
+            Err(error) => return Err(error.into()),
+        };
+        if response.status() == reqwest::StatusCode::NOT_FOUND
+            || response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE
+        {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
         }
-    })
-    .await?
+        ensure!(
+            response.status().is_success(),
+            "finality endpoint rejected height {height}: {}",
+            response.status()
+        );
+        let maximum = MAX_FINALITY_BLOCK_BYTES + 4 * 1024 * 1024;
+        let proof: SumeragiFinalityProof = decode(&bytes(response, maximum).await?, maximum)?;
+        ensure!(
+            proof.height() == height,
+            "finality endpoint substituted height {height}"
+        );
+        return Ok(proof);
+    }
 }
 
 pub async fn preparation(
@@ -321,7 +362,7 @@ pub async fn prove(
     row: &SorafsPublicationPreparationV1,
     floor: &SumeragiFinalityCheckpoint,
     completed: bool,
-) -> Result<SumeragiFinalityCheckpoint> {
+) -> Result<u64> {
     let deadline = Instant::now() + DEADLINE;
     let network = *client.account_client().network_id();
     let challenge = *blake3::hash(&norito::to_bytes(&(
@@ -383,22 +424,26 @@ pub async fn prove(
                 authenticated.completed() == completed,
                 "publication phase substituted"
             );
+            ensure!(
+                authenticated.height() > floor.height(),
+                "publication executed at or below its own floor"
+            );
             let mut malformed = proof.clone();
-            malformed
-                .lineage
+            let byte = malformed
+                .certificate
+                .commit_qc
                 .last_mut()
-                .ok_or_else(|| eyre::eyre!("publication lineage missing"))?
-                .block_wire
-                .clear();
+                .ok_or_else(|| eyre::eyre!("publication certificate missing"))?;
+            *byte ^= 1;
             ensure!(
                 verify_sorafs_publication_v1(&network, floor, &signed, &malformed).is_err(),
-                "unexecuted claim accepted"
+                "forged commit certificate accepted"
             );
             ensure!(
                 Instant::now() < deadline,
                 "publication verification exceeded its deadline"
             );
-            return Ok(authenticated.finality().clone());
+            return Ok(authenticated.height());
         }
     })
     .await?

@@ -22,6 +22,16 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = Path("crates/iroha_parliament_ballot_proof/tests/fixtures")
 MAX_INPUT_BYTES = 262_144 + 163_840
 WORKSPACE_LIMIT = 64 * 1024 * 1024
+# Local dependency packages reviewed against the current worker's resolved Cargo
+# metadata. Scan their complete current source trees: an old path list misses
+# split modules and retains files removed by dependency upgrades. This remains a
+# conservative reviewed scope, not independent discovery of every compiler input.
+SOURCE_PACKAGES = (
+    "crates/iroha_allocation", "crates/iroha_audio", "crates/iroha_derive",
+    "crates/iroha_derive_primitives", "crates/iroha_parliament_ballot_proof",
+    "crates/iroha_schema", "crates/iroha_schema_derive", "crates/iroha_zkp_vole",
+    "crates/norito", "crates/norito_derive", "vendor/aes",
+)
 
 
 def digest(data):
@@ -127,16 +137,29 @@ def cases(root):
 
 
 def source_inventory(root):
-    """Conservatively pin the earlier full dependency scope plus current additions."""
-    old = root / "docs/validation/parliament_ballot_b6/malformed-source.sha256"
-    paths = {line.split("  ", 1)[1] for line in old.read_text().splitlines()}
-    for directory in ["crates/iroha_parliament_ballot_proof/src",
-                      "crates/iroha_parliament_ballot_proof/examples/resource_contract",
-                      "crates/iroha_zkp_vole/src", "crates/norito/src", "vendor/aes/src"]:
-        paths.update(p.relative_to(root).as_posix() for p in (root / directory).rglob("*.rs"))
+    """Pin the complete current trees of the reviewed local dependency packages."""
+    paths = {".cargo/config.toml", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml",
+             "scripts/cargo_fast.sh",
+             "crates/iroha_parliament_ballot_proof/examples/QUALIFICATION.md",
+             "crates/iroha_zkp_vole/src/crt/generated/LICENSE.faest-ref",
+             "crates/norito/src/schema/README.md"}
+    for package in SOURCE_PACKAGES:
+        paths.add(f"{package}/Cargo.toml")
+        source = root / package / "src"
+        if not source.is_dir():
+            raise ValueError(f"reviewed source directory missing: {package}/src")
+        paths.update(p.relative_to(root).as_posix() for p in source.rglob("*.rs"))
+        build = root / package / "build.rs"
+        if build.is_file():
+            paths.add(build.relative_to(root).as_posix())
+    examples = root / "crates/iroha_parliament_ballot_proof/examples"
+    paths.update(p.relative_to(root).as_posix() for p in examples.rglob("*.rs"))
+    common = root / "crates/iroha_parliament_ballot_proof/tests/common"
+    paths.update(p.relative_to(root).as_posix() for p in common.rglob("*.rs"))
     paths.update(p.relative_to(root).as_posix() for p in (root / FIXTURES).glob("*.proof"))
     paths.update(p.relative_to(root).as_posix() for p in (root / FIXTURES).glob("*.txt"))
     paths.update(["crates/iroha_parliament_ballot_proof/examples/resource_contract.rs",
+                  "crates/iroha_parliament_ballot_proof/examples/parliament_ballot_qualify.rs",
                   "scripts/check_parliament_ballot_resource_contract.py",
                   "scripts/tests/parliament_ballot_resource_contract_test.py",
                   "specs/parliament_ballot_resource_contract.md"])

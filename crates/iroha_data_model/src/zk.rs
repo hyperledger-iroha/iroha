@@ -3,7 +3,7 @@ use crate::{
     AssetDefinitionId, NetworkId,
     account::AccountId,
     privacy::{
-        GoldilocksDigest384V1, PRIVACY_EXACT12_CATALOG_ID_V1, PrivacyProtocolIdV1,
+        GoldilocksDigest384V1, PRIVACY_EXACT12_CATALOG_ID_V1, PrivacyRuntimeProtocolIdV1,
         PrivacyZkAceIdentityCommitmentV1, PrivacyZkAceReplayNullifierV1,
         ZkAcePqAuthorizationStatementV1, privacy_protocol_label_is_exact12_v1,
     },
@@ -486,27 +486,29 @@ fn privacy_protocol_namespace_component_is_reserved_v1(component: &str) -> bool 
     if privacy_protocol_label_is_exact12_v1(component) {
         return true;
     }
-    PrivacyProtocolIdV1::ALL.into_iter().any(|protocol_id| {
-        let canonical = protocol_id.canonical_label();
-        let stem = canonical
-            .strip_suffix("-v1")
-            .expect("every Exact12 label has the final -v1 suffix");
-        let hyphen_version = component
-            .strip_prefix(stem)
-            .and_then(|suffix| suffix.strip_prefix("-v"));
-        if hyphen_version.is_some_and(|version| {
-            !version.is_empty() && version.bytes().all(|byte| byte.is_ascii_digit())
-        }) {
-            return true;
-        }
-        let snake_stem = stem.replace('-', "_");
-        component
-            .strip_prefix(&snake_stem)
-            .and_then(|suffix| suffix.strip_prefix("_v"))
-            .is_some_and(|version| {
+    PrivacyRuntimeProtocolIdV1::ALL
+        .into_iter()
+        .any(|protocol_id| {
+            let canonical = protocol_id.canonical_label();
+            let stem = canonical
+                .strip_suffix("-v1")
+                .expect("every Exact12 label has the final -v1 suffix");
+            let hyphen_version = component
+                .strip_prefix(stem)
+                .and_then(|suffix| suffix.strip_prefix("-v"));
+            if hyphen_version.is_some_and(|version| {
                 !version.is_empty() && version.bytes().all(|byte| byte.is_ascii_digit())
-            })
-    })
+            }) {
+                return true;
+            }
+            let snake_stem = stem.replace('-', "_");
+            component
+                .strip_prefix(&snake_stem)
+                .and_then(|suffix| suffix.strip_prefix("_v"))
+                .is_some_and(|version| {
+                    !version.is_empty() && version.bytes().all(|byte| byte.is_ascii_digit())
+                })
+        })
 }
 
 /// Return whether an `OpenVerify` circuit identifier enters a privacy protocol namespace.
@@ -1188,8 +1190,32 @@ mod tests {
         }
     }
     #[test]
+    fn ironwood_does_not_redefine_the_baseline_generic_proof_namespace() {
+        // New native profile names cannot retroactively reserve generic identifiers under
+        // the immutable baseline implementation. Change this only with a governed definition.
+        for label in [
+            "ironwood-halo2-actions-v1",
+            "ironwood-halo2-actions-v0",
+            "ironwood_halo2_actions_v1",
+        ] {
+            for circuit_id in [
+                label.to_owned(),
+                format!("halo2/ipa::{label}"),
+                format!("stark/fri:{label}"),
+                format!("generic/namespace/{label}"),
+            ] {
+                assert!(
+                    !open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
+                        &circuit_id
+                    )
+                );
+            }
+        }
+    }
+
+    #[test]
     fn open_verify_admission_reserves_every_exact12_privacy_namespace_and_retired_version() {
-        use crate::privacy::PrivacyProtocolIdV1;
+        use crate::privacy::PrivacyRuntimeProtocolIdV1;
         fn assert_reserved(label: &str) {
             let stem = label
                 .strip_suffix("-v1")
@@ -1246,7 +1272,7 @@ mod tests {
                     .unwrap_or_else(|error| panic!("near miss {near_miss:?}: {error}"));
             }
         }
-        for protocol in PrivacyProtocolIdV1::ALL {
+        for protocol in PrivacyRuntimeProtocolIdV1::ALL {
             assert_reserved(protocol.canonical_label());
         }
     }

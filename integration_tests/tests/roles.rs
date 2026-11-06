@@ -1,43 +1,23 @@
 //! Integration tests for role registration and assignment flows.
+use crate::permissions::{account_permissions, account_role_ids, stored_role};
 use executor_custom_data_model::permissions::CanControlDomainLives;
 use eyre::Result;
-use futures_util::future::join_all;
-use integration_tests::{metrics::MetricsReader, sandbox};
+use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
     data_model::{prelude::*, transaction::error::TransactionRejectionReason},
 };
-use iroha_executor_data_model::permission::account::CanModifyAccountMetadata;
+use iroha_executor_data_model::permission::{
+    account::CanModifyAccountMetadata, role::CanManageRoles,
+};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_test_network::*;
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, gen_account_in};
+use iroha_test_samples::{ALICE_ID, gen_account_in};
 use std::time::{Duration, Instant};
-use tokio::{fs, runtime::Runtime, time::timeout};
+use tokio::runtime::Runtime;
 fn start_network(context: &'static str) -> Option<(sandbox::SerializedNetwork, Runtime)> {
     sandbox::start_network_blocking_or_skip(NetworkBuilder::new(), context).unwrap()
-}
-fn poll_detached_metrics(rt: &Runtime, metrics_url: &reqwest::Url) -> Result<(f64, f64, f64)> {
-    let http = integration_tests::http::client();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut prepared_seen: f64 = 0.0;
-    let mut merged_seen: f64 = 0.0;
-    let mut fallback_seen: f64 = 0.0;
-    while Instant::now() < deadline {
-        let snapshot = rt.block_on(async {
-            let response = http.get(metrics_url.clone()).send().await?;
-            response.error_for_status()?.text().await
-        })?;
-        let metrics = MetricsReader::new(&snapshot);
-        prepared_seen = prepared_seen.max(metrics.get("pipeline_detached_prepared"));
-        merged_seen = merged_seen.max(metrics.get("pipeline_detached_merged"));
-        fallback_seen = fallback_seen.max(metrics.get("pipeline_detached_fallback"));
-        if merged_seen > 0.0 || fallback_seen > 0.0 {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    Ok((prepared_seen, merged_seen, fallback_seen))
 }
 fn err_chain_contains(err: &eyre::Report, needle: &str) -> bool {
     err.chain().any(|cause| cause.to_string().contains(needle))
@@ -48,10 +28,10 @@ fn wait_for_role(client: &Client, role_id: &RoleId, context: &str) -> Role {
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "roles were not queried".to_owned();
     while Instant::now() < deadline {
-        match client.client().query(FindRoles::new()).execute_all() {
-            Ok(roles) => {
-                last_observed = format!("role_count={}", roles.len());
-                if let Some(role) = roles.into_iter().find(|role| role.id() == role_id) {
+        match stored_role(client, role_id) {
+            Ok(role) => {
+                last_observed = format!("role_present={}", role.is_some());
+                if let Some(role) = role {
                     return role;
                 }
             }
@@ -88,20 +68,36 @@ fn register_empty_role() -> Result<()> {
 /// @s8sato added: This test represents #2081 case.
 #[test]
 fn register_and_grant_role_for_metadata_access() -> Result<()> {
-    let Some((network, _rt)) =
-        start_network(stringify!(register_and_grant_role_for_metadata_access))
+    let (mouse_id, mouse_keypair) = gen_account_in("wonderland");
+    // Role management is a genesis-only capability. Author Mouse's account and
+    // that capability in the signed fixture; Mouse still delegates only its own
+    // account-metadata permission when it registers the nonempty role below.
+    let builder = NetworkBuilder::new()
+        .with_genesis_instruction(Register::account(Account::new(mouse_id.clone())))
+        .with_genesis_instruction(Grant::account_permission(CanManageRoles, mouse_id.clone()));
+    let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
+        builder,
+        stringify!(register_and_grant_role_for_metadata_access),
+    )?
     else {
         return Ok(());
     };
     let test_client = network.client();
     let alice_id = ALICE_ID.clone();
-    let (mouse_id, mouse_keypair) = gen_account_in("wonderland");
-    // Registering Mouse
-    let register_mouse = Register::account(Account::new(mouse_id.clone()));
+    let fund_mouse = Transfer::asset_quantity(
+        AssetId::new(
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?,
+            alice_id.clone(),
+        ),
+        100_u32,
+        mouse_id.clone(),
+    );
     test_client.submit(
-        register_mouse,
+        fund_mouse,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
+    let mouse_client =
+        network.peers()[0].client_for(&mouse_id, mouse_keypair.private_key().clone());
     // Registering role
     let role_id = "ACCESS_TO_MOUSE_METADATA".parse::<RoleId>()?;
     let role =
@@ -109,11 +105,13 @@ fn register_and_grant_role_for_metadata_access() -> Result<()> {
             account: mouse_id.clone(),
         });
     let register_role = Register::role(role);
-    test_client.submit(
+    // Only Mouse may delegate its account-metadata permission into the role.
+    mouse_client.submit(
         register_role,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    // Transfer domain ownership to Mouse so Alice no longer has implicit owner privileges.
+    // Preserve the fixture's domain transfer; account-metadata rights remain
+    // bound to Mouse's universal account rather than the domain owner.
     let wonderland: DomainId = DomainId::try_new("wonderland", "universal")?;
     let transfer_domain = Transfer::domain(alice_id.clone(), wonderland, mouse_id.clone());
     test_client.submit(
@@ -134,21 +132,19 @@ fn register_and_grant_role_for_metadata_access() -> Result<()> {
         )
         .expect_err("metadata update without permission should be rejected");
     assert!(
-        err_chain_contains(&err, "Not permitted")
-            || err_chain_contains(&err, "NotPermitted")
-            || err_chain_contains(&err, "Can't set value to the metadata of another account"),
-        "expected a Not permitted validation error, got: {err:?}"
+        matches!(
+            err.downcast_ref::<TransactionRejectionReason>(),
+            Some(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)))
+                if reason == "authority cannot modify this metadata"
+        ),
+        "expected the account-metadata authorization rejection, got: {err:?}"
     );
     // Mouse grants role to Alice
     let grant_role = Grant::account_role(role_id.clone(), alice_id.clone());
-    let grant_role_tx = TransactionBuilder::new(
-        network.network_id(),
-        mouse_id.clone(),
+    mouse_client.submit(
+        grant_role,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([grant_role])
-    .sign(mouse_keypair.private_key());
-    test_client.submit_transaction_and_wait(&grant_role_tx)?;
+    )?;
     // Alice modifies Mouse's metadata
     let set_key_value = SetKeyValue::account(mouse_id, metadata_key, metadata_value);
     test_client.submit(
@@ -156,10 +152,7 @@ fn register_and_grant_role_for_metadata_access() -> Result<()> {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     // Making request to find Alice's roles
-    let found_role_ids = test_client
-        .client()
-        .query(FindRolesByAccountId::new(alice_id))
-        .execute_all()?;
+    let found_role_ids = account_role_ids(&test_client, &alice_id)?;
     assert!(found_role_ids.contains(&role_id));
     Ok(())
 }
@@ -195,10 +188,7 @@ fn unregistered_role_removed_from_account() -> Result<()> {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     // Check that Mouse has root role
-    let found_mouse_roles = test_client
-        .client()
-        .query(FindRolesByAccountId::new(mouse_id.clone()))
-        .execute_all()?;
+    let found_mouse_roles = account_role_ids(&test_client, &mouse_id)?;
     assert!(found_mouse_roles.contains(&role_id));
     // Unregister root role
     let unregister_role = Unregister::role(role_id.clone());
@@ -207,10 +197,7 @@ fn unregistered_role_removed_from_account() -> Result<()> {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     // Check that Mouse doesn't have the root role
-    let found_mouse_roles = test_client
-        .client()
-        .query(FindRolesByAccountId::new(mouse_id.clone()))
-        .execute_all()?;
+    let found_mouse_roles = account_role_ids(&test_client, &mouse_id)?;
     assert!(!found_mouse_roles.contains(&role_id));
     Ok(())
 }
@@ -304,10 +291,20 @@ fn grant_revoke_role_permissions() -> Result<()> {
     let (mouse_id, mouse_keypair) = gen_account_in("wonderland");
     // Registering Mouse
     let register_mouse = Register::account(Account::new(mouse_id.clone()));
-    test_client.submit(
-        register_mouse,
+    let fund_mouse = Transfer::asset_quantity(
+        AssetId::new(
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?,
+            alice_id.clone(),
+        ),
+        100_u32,
+        mouse_id.clone(),
+    );
+    test_client.submit_all::<InstructionBox>(
+        [register_mouse.into(), fund_mouse.into()],
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
+    let mouse_client =
+        network.peers()[0].client_for(&mouse_id, mouse_keypair.private_key().clone());
     // Registering role
     let role_id = "ACCESS_TO_MOUSE_METADATA".parse::<RoleId>()?;
     let role = Role::new(role_id.clone(), mouse_id.clone());
@@ -325,14 +322,10 @@ fn grant_revoke_role_permissions() -> Result<()> {
     )?;
     // Mouse grants role to Alice
     let grant_role = Grant::account_role(role_id.clone(), alice_id.clone());
-    let grant_role_tx = TransactionBuilder::new(
-        network.network_id(),
-        mouse_id.clone(),
+    mouse_client.submit(
+        grant_role,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([grant_role])
-    .sign(mouse_keypair.private_key());
-    test_client.submit_transaction_and_wait(&grant_role_tx)?;
+    )?;
     let set_key_value = SetKeyValue::account(mouse_id.clone(), "key".parse()?, Json::from("value"));
     let can_set_key_value_in_mouse = CanModifyAccountMetadata {
         account: mouse_id.clone(),
@@ -343,10 +336,7 @@ fn grant_revoke_role_permissions() -> Result<()> {
         Revoke::role_permission(can_set_key_value_in_mouse.clone(), role_id.clone());
     // Alice can't modify Mouse's metadata without proper permission
     assert!(
-        !test_client
-            .client()
-            .query(FindPermissionsByAccountId::new(alice_id.clone()))
-            .execute_all()?
+        !account_permissions(&test_client, &alice_id)?
             .iter()
             .any(|permission| {
                 CanModifyAccountMetadata::try_from(permission)
@@ -360,39 +350,22 @@ fn grant_revoke_role_permissions() -> Result<()> {
         )
         .expect_err("shouldn't be able to modify metadata");
     // Alice can modify Mouse's metadata after permission is granted to role
-    let grant_role_permission_tx = TransactionBuilder::new(
-        network.network_id(),
-        mouse_id.clone(),
+    mouse_client.submit(
+        grant_role_permission,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([grant_role_permission])
-    .sign(mouse_keypair.private_key());
-    test_client.submit_transaction_and_wait(&grant_role_permission_tx)?;
-    assert!(
-        test_client
-            .client()
-            .query(FindRolesByAccountId::new(alice_id.clone()))
-            .execute_all()?
-            .contains(&role_id)
-    );
+    )?;
+    assert!(account_role_ids(&test_client, &alice_id)?.contains(&role_id));
     test_client.submit(
         set_key_value.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     // Alice can't modify Mouse's metadata after permission is removed from role
-    let revoke_role_permission_tx = TransactionBuilder::new(
-        network.network_id(),
-        mouse_id,
+    mouse_client.submit(
+        revoke_role_permission,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([revoke_role_permission])
-    .sign(mouse_keypair.private_key());
-    test_client.submit_transaction_and_wait(&revoke_role_permission_tx)?;
+    )?;
     assert!(
-        !test_client
-            .client()
-            .query(FindPermissionsByAccountId::new(alice_id.clone()))
-            .execute_all()?
+        !account_permissions(&test_client, &alice_id)?
             .iter()
             .any(|permission| {
                 CanModifyAccountMetadata::try_from(permission)
@@ -408,7 +381,7 @@ fn grant_revoke_role_permissions() -> Result<()> {
     Ok(())
 }
 #[test]
-fn role_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
+fn role_permission_revoke_then_grant_last_wins_canonical_output() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_default_block_cadence()
@@ -420,13 +393,12 @@ fn role_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
         });
     let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
         builder,
-        stringify!(role_permission_revoke_then_grant_last_wins_detached),
+        stringify!(role_permission_revoke_then_grant_last_wins_canonical_output),
     )?
     else {
         return Ok(());
     };
     let test_client = network.client();
-    let metrics_url = test_client.client().endpoint().join("/metrics")?;
     let alice_id = ALICE_ID.clone();
     let role_id: RoleId = "PERM_LAST_WINS".parse()?;
     test_client.submit(
@@ -441,111 +413,186 @@ fn role_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
         Grant::role_permission(perm.clone(), role_id.clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    let revoke_role_permission = Revoke::role_permission(perm.clone(), role_id.clone());
-    let grant_role_permission = Grant::role_permission(perm.clone(), role_id.clone());
-    let tx = TransactionBuilder::new(
-        network.network_id(),
-        alice_id.clone(),
+    let expected_permissions = stored_role(&test_client, &role_id)?
+        .expect("seeded role must exist")
+        .permissions()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(expected_permissions.contains(&perm));
+    crate::permissions::canonical_permission_execution::assert_no_detached_activity(&network, &rt)?;
+    let instructions: Vec<InstructionBox> = vec![
+        Revoke::role_permission(perm.clone(), role_id.clone()).into(),
+        Grant::role_permission(perm.clone(), role_id.clone()).into(),
+    ];
+    let submitted = test_client.submit_all(
+        instructions.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([
-        InstructionBox::from(revoke_role_permission),
-        InstructionBox::from(grant_role_permission),
-    ])
-    .sign(ALICE_KEYPAIR.private_key());
-    test_client.submit_transaction_and_wait(&tx)?;
-    let (prepared_seen, merged_seen, fallback_seen) = poll_detached_metrics(&rt, &metrics_url)?;
-    let role = test_client
-        .client()
-        .query(FindRoles::new())
-        .execute_all()?
-        .into_iter()
-        .find(|role| role.id() == &role_id)
-        .expect("role should exist");
-    assert!(
-        role.permissions().any(|permission| permission == &perm),
-        "last grant should keep permission on role"
-    );
-    assert!(
-        prepared_seen > 0.0,
-        "expected detached pipeline to prepare overlays"
-    );
-    assert!(
-        merged_seen > 0.0,
-        "expected detached merge to register in metrics"
-    );
-    assert_eq!(
-        fallback_seen, 0.0,
-        "detached fallback should not register for permission ops"
-    );
+    )?;
+    crate::permissions::canonical_permission_execution::assert_canonical_output(
+        &network,
+        submitted,
+        &alice_id,
+        &instructions,
+    )?;
+    for peer in network.validators() {
+        let role = stored_role(&peer.client(), &role_id)?.expect("role should exist");
+        assert_eq!(
+            role.permissions()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            expected_permissions,
+            "last grant must retain the exact role permissions on every voter"
+        );
+    }
+    crate::permissions::canonical_permission_execution::assert_no_detached_activity(&network, &rt)?;
     Ok(())
 }
+#[path = "support/invalid_genesis.rs"]
+mod invalid_genesis;
+
 #[tokio::test]
-async fn grant_unexisting_role_in_genesis_fail() {
-    // Grant Alice UNEXISTING role
-    let alice_id = ALICE_ID.clone();
-    let role_id = "UNEXISTING".parse::<RoleId>().unwrap();
-    let grant_genesis_role = Grant::account_role(role_id, alice_id);
+async fn grant_unexisting_role_in_genesis_fail() -> Result<()> {
+    let placeholder: InstructionBox = Log::new(
+        iroha_data_model::Level::INFO,
+        "unknown-role genesis placeholder".to_owned(),
+    )
+    .into();
     let Some(network) = sandbox::build_network_or_skip(
         NetworkBuilder::new()
-            .with_min_peers(4)
-            .with_genesis_instruction(grant_genesis_role),
+            .with_peers(4)
+            .with_genesis_instruction(placeholder.clone()),
         stringify!(grant_unexisting_role_in_genesis_fail),
     ) else {
-        return;
+        return Ok(());
     };
-    let peer = network.peer();
-    // Sanity-check stderr to ensure CI surfaces the expected genesis failure diagnostics (see #5423).
-    let terminated_futs = network
-        .peers()
-        .iter()
-        .map(|peer| {
-            let mut events = peer.events();
-            async move {
-                loop {
-                    match events.recv().await {
-                        Ok(PeerLifecycleEvent::Terminated { .. } | PeerLifecycleEvent::Killed) => {
-                            break;
-                        }
-                        Ok(_) => {}
-                        Err(_) => break,
-                    }
-                }
-            }
-        })
-        .collect::<Vec<_>>();
-    for peer in network.peers() {
-        if let Err(err) = peer
-            .start(network.config_layers(), Some(&network.genesis()))
-            .await
-        {
-            if let Some(reason) = integration_tests::sandbox::sandbox_reason(&err) {
-                panic!(
-                    "sandboxed network restriction detected while starting grant_unexisting_role_in_genesis_fail: {reason}"
-                );
-            }
-            panic!("failed to start peer: {err:?}");
-        }
+    let grant = Grant::account_role("UNEXISTING".parse::<RoleId>()?, ALICE_ID.clone());
+    invalid_genesis::assert_rejected_by_all_peers(
+        &network,
+        &placeholder,
+        grant.into(),
+        "cannot delegate an unknown role",
+        Duration::from_secs(10),
+    )
+    .await
+}
+
+#[test]
+fn bounded_role_collections_preserve_assignments_and_authorization() -> Result<()> {
+    use iroha::collections::{Collection, FilterExpr, ListQuery, field};
+    use std::collections::BTreeSet;
+
+    let Some((network, _rt)) = start_network(stringify!(
+        bounded_role_collections_preserve_assignments_and_authorization
+    )) else {
+        return Ok(());
+    };
+    let client = network.client();
+    let (mouse, keys) = gen_account_in("wonderland");
+    let ids: Vec<RoleId> = (0..7)
+        .map(|i| format!("bounded_role_{i}").parse())
+        .collect::<Result<_, _>>()?;
+    let permission: Permission = CanModifyAccountMetadata {
+        account: ALICE_ID.clone(),
     }
-    timeout(Duration::from_secs(10), join_all(terminated_futs))
-        .await
-        .expect("must terminate immediately");
-    let stderr_path = peer
-        .latest_stderr_log_path()
-        .expect("stderr log should be captured for failed genesis run");
-    let stderr = fs::read_to_string(&stderr_path)
-        .await
-        .unwrap_or_else(|err| panic!("failed to read {stderr_path:?}: {err}"));
-    let markers = [
-        "confidential.enabled = true",
-        "Failed IO operation",
-        "Block confidential feature digest mismatch.",
-        "Genesis transactions must not contain errors",
-        "Genesis block execution failed",
-        "Block contained no committed overlays",
-    ];
-    assert!(
-        markers.iter().any(|needle| stderr.contains(needle)),
-        "stderr should surface the genesis startup failure cause:\n{stderr}"
+    .into();
+    let mut setup: Vec<InstructionBox> =
+        vec![Register::account(Account::new(mouse.clone())).into()];
+    setup.extend(ids.iter().map(|id| {
+        Register::role(Role::new(id.clone(), ALICE_ID.clone()).add_permission(permission.clone()))
+            .into()
+    }));
+    setup.push(Grant::account_role(ids[3].clone(), mouse.clone()).into());
+    client.submit_all(
+        setup,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    let filter = FilterExpr::Or(
+        ids.iter()
+            .map(|id| field("id").eq(id.to_string()))
+            .collect(),
     );
+    for collection in [
+        Collection::Roles,
+        Collection::AccountRoles(ALICE_ID.clone()),
+    ] {
+        let mut query = ListQuery::new().filter(filter.clone()).limit(2);
+        let mut found = Vec::new();
+        let mut cursors = BTreeSet::new();
+        for _ in 0..8 {
+            let page = client.list_page(&collection, &query)?;
+            assert!(page.items.len() <= 2);
+            assert!(page.total.is_none());
+            for row in page.items {
+                let id: RoleId = row
+                    .get("id")
+                    .and_then(norito::json::Value::as_str)
+                    .expect("role identity")
+                    .parse()?;
+                if matches!(collection, Collection::Roles) {
+                    let role: Role = norito::json::from_value(row)?;
+                    assert_eq!(role.permissions().collect::<Vec<_>>(), vec![&permission]);
+                }
+                found.push(id);
+            }
+            let Some(cursor) = page.next_cursor else {
+                break;
+            };
+            assert!(
+                cursors.insert(cursor.clone()),
+                "role page repeated its cursor"
+            );
+            query = query.cursor(cursor);
+        }
+        assert_eq!(
+            found, ids,
+            "native pages must preserve every ordered assignment"
+        );
+        assert_eq!(
+            cursors.len(),
+            3,
+            "seven rows at limit two require four pages"
+        );
+    }
+    let mouse_client = network.peers()[0].client_for(&mouse, keys.private_key().clone());
+    assert_eq!(
+        account_role_ids(&mouse_client, &mouse)?,
+        vec![ids[3].clone()]
+    );
+    let denied = mouse_client
+        .list_page(
+            &Collection::AccountRoles(ALICE_ID.clone()),
+            &ListQuery::new(),
+        )
+        .expect_err("self authority must not read another account's roles");
+    assert_eq!(denied.http_status(), Some(403));
+    assert_eq!(denied.code(), Some("role_read_denied"));
+    let denied = mouse_client
+        .list_page(&Collection::Roles, &ListQuery::new())
+        .expect_err("role membership must not grant whole-ledger role reads");
+    assert_eq!(denied.http_status(), Some(403));
+    let grant = iroha_executor_data_model::permission::query::CanReadAccountData {
+        account: ALICE_ID.clone(),
+    };
+    client.submit(
+        Grant::account_permission(grant.clone(), mouse.clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    let permitted = mouse_client.list_page(
+        &Collection::AccountRoles(ALICE_ID.clone()),
+        &ListQuery::new().filter(filter).limit(64),
+    )?;
+    assert_eq!(permitted.items.len(), ids.len());
+    client.submit(
+        Revoke::account_permission(grant, mouse),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    let denied = mouse_client
+        .list_page(
+            &Collection::AccountRoles(ALICE_ID.clone()),
+            &ListQuery::new(),
+        )
+        .expect_err("revoked account-read grant must stop subsequent pages");
+    assert_eq!(denied.http_status(), Some(403));
+    assert_eq!(denied.code(), Some("role_read_denied"));
+    Ok(())
 }

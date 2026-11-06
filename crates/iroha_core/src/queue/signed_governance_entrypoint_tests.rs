@@ -118,7 +118,12 @@ fn governance_manifest_checks_share_signed_body_for_external_and_sealed_reveal()
             assert!(Queue::tx_contains_runtime_upgrade_instruction(tx));
             assert!(Queue::tx_touches_manifest_protected_namespace_surface(tx));
             assert!(Queue::tx_requires_manifest_validator_gating(&rules, tx));
-            let quorum = Queue::enforce_manifest_quorum("entrypoint", &rules, tx);
+            let quorum = Queue::enforce_manifest_quorum(
+                "entrypoint",
+                &rules,
+                tx,
+                &crate::runtime::release_catalog().unwrap().baseline,
+            );
             let protected = Queue::enforce_manifest_protected_namespaces("entrypoint", &rules, tx);
             let runtime = Queue::enforce_runtime_upgrade_hook("entrypoint", &rules, tx);
             if complete_metadata {
@@ -155,7 +160,12 @@ fn governance_manifest_checks_share_signed_body_for_external_and_sealed_reveal()
         );
         assert!(!Queue::enforce_runtime_upgrade_hook("entrypoint", &rules, &committed).unwrap());
         assert_rejection(
-            Queue::enforce_manifest_quorum("entrypoint", &rules, &committed),
+            Queue::enforce_manifest_quorum(
+                "entrypoint",
+                &rules,
+                &committed,
+                &crate::runtime::release_catalog().unwrap().baseline,
+            ),
             "lane manifest quorum requires 2 validator approvals but 1 were provided",
         );
     }

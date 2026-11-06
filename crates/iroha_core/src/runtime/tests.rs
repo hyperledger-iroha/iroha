@@ -214,3 +214,212 @@ fn a_node_drafts_the_activation_of_its_release_additions() {
         );
     });
 }
+
+#[test]
+fn ironwood_world_storage_guard_checks_current_and_retained_policy_keys() {
+    use iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1;
+    use iroha_data_model::privacy::{PrivacyProtocolPolicyV1, PrivacyRuntimeProtocolIdV1};
+    use mv::storage::StorageReadOnly as _;
+    let mut world = crate::state::World::default();
+    validate_privacy_world_storage_v1(&mut world).unwrap();
+    let protocol = PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1;
+    let key = PrivacyProtocolPolicyKeyV1::new(protocol);
+    world
+        .privacy_protocol_policies
+        .insert(key, PrivacyProtocolPolicyV1::canonical_default_v1(protocol));
+    let before = norito::json::to_json(&world.privacy_protocol_policies).unwrap();
+    assert!(
+        validate_privacy_world_storage_v1(&mut world)
+            .unwrap_err()
+            .contains("privacy_protocol_policies")
+    );
+    assert_eq!(
+        norito::json::to_json(&world.privacy_protocol_policies).unwrap(),
+        before,
+        "the guard must not mutate current or undo bytes"
+    );
+    {
+        let mut block = world.privacy_protocol_policies.block();
+        block.remove(key);
+        block.commit();
+    }
+    assert!(
+        world
+            .privacy_protocol_policies
+            .view()
+            .iter()
+            .next()
+            .is_none()
+    );
+    assert!(
+        validate_privacy_world_storage_v1(&mut world).is_err(),
+        "a deleted Ironwood row still lives in retained predecessor storage"
+    );
+}
+
+#[test]
+fn ironwood_world_storage_guard_inspects_raw_undo_keys_and_values() {
+    use crate::privacy_state::{
+        PrivacyCommitmentKeyV1, PrivacyNullifierKeyV1, PrivacyRootKeyV1, PrivacyRootProvenanceV1,
+    };
+    use iroha_data_model::privacy::*;
+    use std::collections::BTreeMap;
+
+    let old_protocol = PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1;
+    let ironwood = PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1;
+    let namespace = PrivacyRuntimeNamespaceV1::new(
+        ironwood,
+        PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+            pool_id: PrivacyPoolIdV1::new([7; 32]),
+        }),
+    );
+    let old_key = PrivacyProtocolPolicyKeyV1::new(old_protocol);
+    let old_policy = PrivacyProtocolPolicyV1::canonical_default_v1(old_protocol);
+    let ironwood_policy = PrivacyProtocolPolicyV1::canonical_default_v1(ironwood);
+    let mut wrong_limits = old_policy.clone();
+    wrong_limits.current_limits = ironwood_policy.current_limits;
+    let mut wrong_pending = old_policy;
+    wrong_pending.pending_update = Some(PrivacyProtocolLimitsUpdateV1 {
+        scheduled_at_height: 1,
+        effective_at_height: 2,
+        next_limits: ironwood_policy.current_limits,
+    });
+    for undo_value in [ironwood_policy, wrong_limits, wrong_pending] {
+        let mut world = crate::state::World::default();
+        world.privacy_protocol_policies = Storage::from_snapshot_parts(
+            BTreeMap::new(),
+            BTreeMap::from([(old_key, Some(undo_value))]),
+        );
+        assert!(validate_privacy_world_storage_v1(&mut world).is_err());
+    }
+
+    // These accessors identify their fixed role, not the protocol in an unvalidated raw key.
+    let hidden_nullifier = PrivacyNullifierKeyV1::ZkX509CertificateNullifier {
+        namespace,
+        nullifier: PrivacyNullifierV1::new([8; 32]),
+    };
+    assert_eq!(
+        hidden_nullifier.protocol_id(),
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1
+    );
+    let mut world = crate::state::World::default();
+    world.privacy_nullifiers =
+        Storage::from_snapshot_parts(BTreeMap::new(), BTreeMap::from([(hidden_nullifier, None)]));
+    assert!(validate_privacy_world_storage_v1(&mut world).is_err());
+
+    let hidden_commitment = PrivacyCommitmentKeyV1::ZkAmsPhc {
+        namespace,
+        phc_hash: PrivacyZkAmsPhcHashV1::new([9; 32]),
+    };
+    assert_eq!(
+        hidden_commitment.protocol_id(),
+        PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1
+    );
+    let mut world = crate::state::World::default();
+    world.privacy_commitments =
+        Storage::from_snapshot_parts(BTreeMap::new(), BTreeMap::from([(hidden_commitment, None)]));
+    assert!(validate_privacy_world_storage_v1(&mut world).is_err());
+
+    let old_namespace = PrivacyRuntimeNamespaceV1::new(old_protocol, namespace.scope());
+    let old_root_key = PrivacyRootKeyV1::new(
+        old_namespace,
+        PrivacyRootRoleV1::NoteCommitmentAnchor,
+        1,
+        PrivacyRootV1::new([10; 32]),
+    )
+    .unwrap();
+    let hidden_root_value = PrivacyRootProvenanceV1::ProofManagedPoolBootstrap {
+        bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1::new([11; 32]),
+        protocol_id: ironwood,
+        admitted_at_height: 1,
+    };
+    let mut world = crate::state::World::default();
+    world.privacy_roots = Storage::from_snapshot_parts(
+        BTreeMap::new(),
+        BTreeMap::from([(old_root_key, Some(hidden_root_value))]),
+    );
+    let before = norito::json::to_json(&world.privacy_roots).unwrap();
+    assert!(validate_privacy_world_storage_v1(&mut world).is_err());
+    assert_eq!(norito::json::to_json(&world.privacy_roots).unwrap(), before);
+}
+
+#[test]
+fn ironwood_coherent_candidate_pool_cannot_enter_the_baseline_world() {
+    use crate::privacy_state::*;
+    use iroha_data_model::{asset::AssetId, privacy::*};
+    let mut world = crate::state::World::default();
+    let sample = privacy_action_role_samples_v1()
+        .unwrap()
+        .into_iter()
+        .find(|sample| sample.role == PrivacyActionRoleV1::OrchardActions)
+        .unwrap();
+    let PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement) = sample.envelope.statement
+    else {
+        unreachable!()
+    };
+    let bootstrap = PrivacyIronwoodPoolBootstrapV1::new(
+        statement.pool_id,
+        statement.asset_definition_id,
+        statement.public_balance_scope,
+        iroha_test_samples::ALICE_ID.clone(),
+    )
+    .unwrap();
+    let namespace = bootstrap.namespace();
+    let reserve_asset = AssetId::with_scope(
+        bootstrap.asset_definition_id.clone(),
+        bootstrap.reserve_account.clone(),
+        bootstrap.public_balance_scope,
+    );
+    let state = PrivacyOrchardPoolStateV1::bootstrap_ironwood(bootstrap).unwrap();
+    let provenance =
+        PrivacyRootProvenanceV1::orchard_pool_bootstrap(state.bootstrap_digest(), 1).unwrap();
+    world.privacy_roots.insert(
+        PrivacyRootKeyV1::new(
+            namespace,
+            PrivacyRootRoleV1::NoteCommitmentAnchor,
+            state.epoch(),
+            state.root(),
+        )
+        .unwrap(),
+        provenance.clone(),
+    );
+    world.privacy_root_heads.insert(
+        PrivacyRootHeadKeyV1::new(namespace, PrivacyRootRoleV1::NoteCommitmentAnchor).unwrap(),
+        PrivacyRootHeadRecordV1::new(state.epoch(), state.root(), provenance, None, 1).unwrap(),
+    );
+    world.privacy_commitments.insert(
+        PrivacyCommitmentKeyV1::public_reserve_custody(namespace.protocol_id(), &reserve_asset)
+            .unwrap(),
+        PrivacyStateItemRecordV1::public_reserve_custody(
+            reserve_asset,
+            PrivacyPublicReserveOwnerV1::Orchard {
+                namespace,
+                bootstrap_digest: state.bootstrap_digest(),
+            },
+        )
+        .unwrap(),
+    );
+    world.privacy_commitments.insert(
+        PrivacyCommitmentKeyV1::orchard_pool_state(namespace).unwrap(),
+        PrivacyStateItemRecordV1::orchard_pool_state(state).unwrap(),
+    );
+    validate_privacy_persisted_state_v1(
+        world.privacy_consensus_policy.view().get(),
+        &world.privacy_protocol_policies.view(),
+        PrivacyPgcStateReadV1 {
+            accounts: &world.privacy_pgc_accounts.view(),
+            pool_invariants: &world.privacy_pgc_pool_invariants.view(),
+        },
+        &world.privacy_nullifiers.view(),
+        &world.privacy_commitments.view(),
+        &world.privacy_roots.view(),
+        &world.privacy_root_heads.view(),
+    )
+    .unwrap();
+    assert!(
+        validate_privacy_world_storage_v1(&mut world)
+            .unwrap_err()
+            .contains("privacy_commitments"),
+        "valid candidate cryptographic state does not authorize the frozen storage grammar"
+    );
+}

@@ -92,10 +92,10 @@ pub use fold_custody::FoldCustodyV1;
 pub use fold_metrics::{
     FOLD_METRICS_MAX_BYTES_V1, FOLD_METRICS_RECORDS_V1, FOLD_METRICS_SCHEMA_V1, FoldCallClassV1,
     FoldCancelCauseV1, FoldCountsV1, FoldMetricsV1, FoldObserverV1, FoldOutcomeV1, FoldPhaseV1,
-    FoldStageV1, FoldSubProofV1, NATIVE_ADMISSION_RECORDS_V1, NativeAdmissionPhaseV1,
-    NativeAdmissionResultV1, NativeAdmissionV1, NativeAdmissionsV1, NativeBridgeMetricsV1,
-    NativeBridgePhaseV1, NativeBridgeTimerV1, NativeWorkKindV1, NativeWorkRecordV1,
-    NativeWorkTurnV1,
+    FoldRunningV1, FoldStageV1, FoldSubProofV1, NATIVE_ADMISSION_RECORDS_V1,
+    NativeAdmissionPhaseV1, NativeAdmissionResultV1, NativeAdmissionV1, NativeAdmissionsV1,
+    NativeBridgeMetricsV1, NativeBridgePhaseV1, NativeBridgeTimerV1, NativeWorkKindV1,
+    NativeWorkRecordV1, NativeWorkTurnV1,
 };
 pub use folding::{FoldJobV1, FoldStatus, FoldTurnStatusV1, LineageCache, ProvedFoldV1};
 pub use index::{IndexRoot, ObjectStore, ObjectWorkspace};
@@ -108,9 +108,9 @@ pub use lifecycle::{
 };
 pub use maintenance::MaintenanceViewV1;
 pub use map_custody::{PreparationMapV1, PreparationMapsV1};
-pub(crate) use native_worker::NativeFoldWorkerV1;
 #[cfg(test)]
 pub(crate) use native_worker::{FoldRetentionCountsV1, perturb_retained_key_for_test};
+pub(crate) use native_worker::{NativeFoldWorkerV1, suffix_receive_burns};
 pub use preparation_custody::{PreparationCustodyV1, PreparationOriginalV1};
 #[cfg(any(test, feature = "test-utils"))]
 pub use scheduling::PublicationForTest;

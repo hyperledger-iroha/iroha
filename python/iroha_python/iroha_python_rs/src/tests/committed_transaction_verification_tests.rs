@@ -30,10 +30,16 @@ struct Fixture {
 }
 impl Fixture {
     fn new(rejected: bool) -> Self {
+        Self::with_lifecycle(rejected, false)
+    }
+    fn with_lifecycle(rejected: bool, lifecycle: bool) -> Self {
         let key = KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519).unwrap();
         let authority = AccountId::new(key.public_key().clone());
         let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
         let mut chain = CertifiedTestChain::start(TestChainConfig::new(world, 1_000)).unwrap();
+        if lifecycle {
+            chain.select_lifecycle_for_testing(1_001);
+        }
         chain.commit(Vec::new());
         let checkpoint = build_checkpoint(&chain.state().view(), 2).unwrap();
         let mut transaction = TransactionBuilder::new(
@@ -75,8 +81,8 @@ impl Fixture {
             vec![true, !rejected]
         );
         let block = chain.committed(3).block().clone();
-        let output = block.network_output_at(1).unwrap().1.clone();
-        let output = ExecutionOutputV1::Network(output);
+        let output_index = block.network_output_at(1).unwrap().0;
+        let output = block.execution_outputs()[output_index as usize].clone();
         let selected = CommittedTransaction {
             block_hash: block.hash(),
             entrypoint_hash: block.network_entrypoint_at(1).unwrap().hash(),
@@ -162,9 +168,7 @@ fn response(rows: Vec<CommittedTransaction>) -> Vec<u8> {
 }
 
 fn assert_original_route_projection(projected: &json::Value, f: &Fixture) {
-    let ExecutionOutputV1::Network(output) = &f.selected.output else {
-        unreachable!()
-    };
+    let output = f.selected.output.network().expect("fixture Network row");
     let bundle = f.block.execution_context().unwrap();
     let context = &projected["execution_context"];
     assert_eq!(context.as_object().unwrap().len(), 3);
@@ -1233,4 +1237,38 @@ fn selected_route_projection_preserves_every_leg_and_original_digest() {
             .is_err(),
         "a changed original route cannot reuse the original finality certificate"
     );
+}
+
+#[test]
+fn lifecycle_v2_selected_receipts_authenticate_applied_and_rejected_complete_rows() {
+    pyo3::Python::initialize();
+    for rejected in [false, true] {
+        let fixture = Fixture::with_lifecycle(rejected, true);
+        assert!(matches!(
+            fixture.selected.output,
+            ExecutionOutputV1::NetworkWithLifecycle(_)
+        ));
+        let (projection, _) = fixture
+            .verify(
+                &fixture.selected,
+                &fixture.proofs,
+                &fixture.checkpoint_bytes(),
+            )
+            .unwrap();
+        let projected: json::Value = json::from_json(&projection).unwrap();
+        assert_eq!(projected["result_ok"].as_bool(), Some(!rejected));
+        assert_eq!(
+            projected["committed_transaction"]["output"]["kind"].as_str(),
+            Some("network_with_lifecycle")
+        );
+        assert_original_route_projection(&projected, &fixture);
+        let mut stripped = fixture.selected.clone();
+        stripped.output = ExecutionOutputV1::Network(stripped.output.network().unwrap().clone());
+        stripped.output_hash = HashOf::new(&stripped.output);
+        assert!(
+            fixture
+                .verify(&stripped, &fixture.proofs, &fixture.checkpoint_bytes())
+                .is_err()
+        );
+    }
 }

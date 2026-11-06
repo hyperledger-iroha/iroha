@@ -292,7 +292,7 @@ impl PrivacyProtocolLimitsUpdateV1 {
     /// Rejects invalid schedule heights, a protocol mismatch, invalid limits or a no-op.
     pub fn validate_against(
         &self,
-        current_limits: &PrivacyProtocolLimitsV1,
+        current_limits: &PrivacyRuntimeProtocolLimitsV1,
     ) -> Result<(), PrivacyProtocolLimitsUpdateValidationErrorV1> {
         validate_privacy_policy_schedule_heights_v1(
             self.scheduled_at_height,
@@ -324,10 +324,10 @@ impl PrivacyProtocolPolicyV1 {
     /// Build an ordinary policy at canonical limits with no scheduled update.
     /// Persisting this value is optional and does not make an implementation available.
     #[must_use]
-    pub const fn canonical_default_v1(protocol_id: PrivacyProtocolIdV1) -> Self {
+    pub const fn canonical_default_v1(protocol_id: PrivacyRuntimeProtocolIdV1) -> Self {
         Self {
             protocol_id,
-            current_limits: PrivacyProtocolLimitsV1::canonical_default_v1(protocol_id),
+            current_limits: PrivacyRuntimeProtocolLimitsV1::canonical_default_v1(protocol_id),
             pending_update: None,
         }
     }

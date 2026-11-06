@@ -1,0 +1,117 @@
+{
+  "historical_commit": "e954df4850",
+  "reviewed_differences": [
+    {
+      "path": "crates/iroha_parliament_ballot_proof/src/credential.rs",
+      "historical_sha256": "9cef899f6864c4b8517cab01b66ec66e38e0d5350d7a1ce02cfb889bdca02b34",
+      "current_sha256": "13c92a26711915fa1d23424ba881cbaf26e055a050f7e444341ada916aedee5b",
+      "review": "Test SHAKE provider import only."
+    },
+    {
+      "path": "crates/iroha_parliament_ballot_proof/src/keccak_relation.rs",
+      "historical_sha256": "f757f491b81c52563b34e425a9ded20547419200c848c4ad5231ef1fd32374f5",
+      "current_sha256": "18b335a82ca5d52f55404234e70a9dd4db865cd773387d3a69dd4dfa998adef2",
+      "review": "Test SHAKE provider imports only; relation body unchanged."
+    },
+    {
+      "path": "crates/iroha_parliament_ballot_proof/src/lib.rs",
+      "historical_sha256": "503a358e552e53284d8a1c8b15b2df24b2111b766dfaa004f5f4c7091b07604e",
+      "current_sha256": "00c18aca581bd5d528de22fa0413c409c58f74c89727a68168aa0b7d18901b5f",
+      "review": "Rustdoc only: current candidate/diagnostic integration and deterministic runtime Keccak backend selection; no executable body change."
+    },
+    {
+      "path": "crates/iroha_parliament_ballot_proof/src/profile.rs",
+      "historical_sha256": "9cc79a448f4199b748923b8b3e6a552fb9f0aa7980a1cb6d1d89746e8b79323d",
+      "current_sha256": "1e1d5e5b40208c06934199b79a2b1b0551c362bab864f0d17ea0c4f9ab385678",
+      "review": "Comparator gated to tests/diagnostics; candidate and comparator row constants and logical geometry unchanged. Report explicitly restricts comparator build scope."
+    },
+    {
+      "path": "crates/iroha_parliament_ballot_proof/src/proving.rs",
+      "historical_sha256": "717c538c088101b1759e4eb947101172c9fe71f530e10d3428aa58195c997051",
+      "current_sha256": "321e2bb2a4954a96c31357fee7e96c490b2b820d573b1f53a8eed889314a3fca",
+      "review": "Fixed-sized full chunks visited once in same order through as_chunks_mut; incomplete remainder handling unchanged. Test SHAKE import changed."
+    },
+    {
+      "path": "crates/iroha_parliament_ballot_proof/src/sealed_list.rs",
+      "historical_sha256": "769eb3de9f35211bd80067f1c0669645995d603cce3aa2f0e2818699be834de0",
+      "current_sha256": "3814cf1e4cb6392b0735262960a9bbef6ab13cd5a2f39ce4102640634c415a2d",
+      "review": "Fixed-sized full chunks visited once in same order; existing multiple-of-size validation retained."
+    },
+    {
+      "path": "crates/iroha_parliament_ballot_proof/src/selector.rs",
+      "historical_sha256": "1d96fee19e79b781434580a00e355048585994c15e9210fdc62c3665ddd37d75",
+      "current_sha256": "4f56377340f5c6a218c7a8c927b63322c1b2b1371ec39eb398bc1411acab6628",
+      "review": "Fixed-sized complete chunk sequence and zip semantics unchanged; test construction updated likewise."
+    },
+    {
+      "path": "crates/iroha_zkp_vole/src/bavc.rs",
+      "historical_sha256": "481b4c7027b46520e848a67d94a6dc7cdda312838e1769a93b9079260b8d4269",
+      "current_sha256": "b6cae7b82973325d3342434201188192896ad5686029f005bedbf06fc4e0f0fd",
+      "review": "Test SHAKE provider imports only."
+    },
+    {
+      "path": "crates/iroha_zkp_vole/src/faest/cipher.rs",
+      "historical_sha256": "744af4a7bd343e6ec9cc052585505e12b764fe4fab84599f9a39572cd8fc3d2b",
+      "current_sha256": "68b2d99c0ae6ef80b0ad8b272b709017fa8c180987e1cb03450b4628496abaa0",
+      "review": "MixColumns iterates same complete four-byte columns and take(n_st); test AES trait and Array API changed only."
+    },
+    {
+      "path": "crates/iroha_zkp_vole/src/field.rs",
+      "historical_sha256": "df65fd59ae7970752ec71c18212e3aee09fc8f498068dff29e3ac23da9d5e3a8",
+      "current_sha256": "6bd8298d50a513d29979928f964dcfd3f7de3d12f1950203673d694ad8ca2b1a",
+      "review": "Exact Clippy expectation only; separate GF correspondence regression proves all other bytes identical."
+    },
+    {
+      "path": "crates/iroha_zkp_vole/src/field/poly.rs",
+      "historical_sha256": "b11fd7a04a20614d4780d18a05421c443130a7d554a86579766434b424a880e9",
+      "current_sha256": "d426cf1373416a8c1e7d7a2efcb671a2a9706fb7a38ee24154cd91a313be1366",
+      "review": "Nonzero polynomial degree uses ilog2, equal to 31-leading_zeros for the guarded nonzero arguments. is_irreducible rejects poly<2; rem_small divisors begin at2 and short-circuits zero value."
+    },
+    {
+      "path": "crates/iroha_zkp_vole/src/hash.rs",
+      "historical_sha256": "c5a06a24722c686f0f96f875c2a0bbfc9a8021a3fedd03da4b4222ca9fd3df70",
+      "current_sha256": "62569b2c31a4d44ffd23930040af26274250fcab62460c27dd1aba9fc0ce6a6f",
+      "review": "Five existing Keccak-f1600 call sites dispatch through FnOnce API, exactly one supplied permutation call at each unchanged absorb/finalize/squeeze boundary. Rates, padding and message/output byte counts unchanged. Test SHAKE imports updated."
+    },
+    {
+      "path": "crates/iroha_zkp_vole/src/lib.rs",
+      "historical_sha256": "aeb97c943cd993f7fa721e62c83c3b74d2e53626c8b470d7ebecd2eadc187f02",
+      "current_sha256": "21fd68201b734722c2b0eb122d846c2ef43fb823a3eeeeb34566f0bfc53c3979",
+      "review": "Rustdoc only: current candidate/diagnostic integration and deterministic runtime Keccak backend selection; no executable body change."
+    },
+    {
+      "path": "crates/iroha_zkp_vole/src/prg.rs",
+      "historical_sha256": "58449cb9390e4ce66e71f5ea6fd3245eb69f05ee68c28c7e73a04514df13db81",
+      "current_sha256": "016859916c53283f3b017d4bf694004e7bb673e2c893a9b4e5429de974f2dee7",
+      "review": "BlockEncrypt renamed BlockCipherEncrypt; PRG encrypt_blocks input slices, batching, key-construction boundaries and block counts unchanged. Provider internals explicitly unpriced."
+    },
+    {
+      "path": "crates/iroha_zkp_vole/src/randomness.rs",
+      "historical_sha256": "8d57e99b8eb555687ed2c4d82465d7242890e036d35bdca10399ef1bca7ddb26",
+      "current_sha256": "9af7f182cbfc4b2704ecd1cb7fe23a938682344ac01aa52a15df9a4b137c5e96",
+      "review": "Test SHAKE provider imports only."
+    },
+    {
+      "path": "crates/iroha_zkp_vole/src/transcript.rs",
+      "historical_sha256": "ea6b44d9a5c11fc80e3afdff7eaf262dd024b446001098c2f85ccdf9759bb1a2",
+      "current_sha256": "467107be728d8adbaeaaaebd895fe85fe9aa8ab157641862bc99ca454b937bb8",
+      "review": "Test SHAKE provider imports only."
+    },
+    {
+      "path": "crates/iroha_zkp_vole/src/vole.rs",
+      "historical_sha256": "5fcfe9c24e0e4a7319a0e4ed8ab99e7fbc83cd07c89f997864e393fbc9d09f31",
+      "current_sha256": "b684143fb2d9df535670e44080af932d10357fe211c5990a29782b9b91126a8e",
+      "review": "Test polynomial degree expression only; verifier body unchanged."
+    }
+  ],
+  "unchanged_model_sha256": "18a6fdd3f808f1b73d3e2e6c9903a0a069f1866c0af04783eb03b0c21e7841f1",
+  "current_inventory_sha256": "3e66fcbac6430d78221cb8cce1d78cbf5869d6aab6ecc243640b3f05cf5ec7d9",
+  "source_scope": "61 selected logical source/spec/model inputs; not a compiler, dependency, allocator or cryptographic qualification closure.",
+  "formulas_changed": false,
+  "all_numeric_cases_and_lifetime_envelope_equal_historical": true,
+  "keccak_api_review": {
+    "path": "/Users/takemiyamakoto/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/keccak-0.2.2/src/lib.rs",
+    "sha256": "ce94cd46d22744b05154e3a14c79e9c9ff9d9c0f067d911e64e8b9a918ed2583",
+    "finding": "with_f1600 forwards to with_p1600::<F1600_ROUNDS>; its BackendClosure invokes the supplied FnOnce once with the selected permutation. This justifies source API call counts, not implementation cost or cryptographic validation."
+  }
+}

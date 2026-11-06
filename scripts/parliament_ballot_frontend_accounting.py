@@ -16,14 +16,14 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-REVIEWED_SOURCE_SHA256 = "85637106cc477d878f5935f559db568dd7450fac3f8edcc3dde04d44b9f30741"
+REVIEWED_SOURCE_SHA256 = "b3756c955e8592372fa2d1ec8871fc5066f2a5411400ee8a5e0a924446e146ba"
 ROWS = {"candidate": (33, 10538), "comparator": (22, 10463)}
 PROOF_BYTES = {("candidate", "registration"): 160148, ("candidate", "vote"): 233012,
                ("comparator", "registration"): 109498, ("comparator", "vote"): 158074}
 
 
 def source_inventory(repo: Path) -> dict:
-    """Refuse drift in the same 81 source/build files as the reviewed model."""
+    """Refuse drift in the same 91 source/build files as the reviewed model."""
     paths = [p.relative_to(repo).as_posix()
              for directory in ("crates/iroha_zkp_vole/src", "crates/iroha_parliament_ballot_proof/src", "vendor/aes/src")
              for p in (repo / directory).rglob("*.rs")]

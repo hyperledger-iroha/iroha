@@ -305,6 +305,17 @@ impl GatewayPolicy {
         }
         self.evaluate_rate_only(ctx)
     }
+    /// Refuse a client that is already banned or out of rate credits, without charging it.
+    ///
+    /// Handlers run this before expensive work; the admitted request is charged once later by
+    /// [`Self::evaluate`] or [`Self::evaluate_rate_only`].
+    #[must_use]
+    pub fn precheck_rate(&self, client: &ClientFingerprint, now: Instant) -> PolicyDecision {
+        match self.rate_limiter.precheck(client, now) {
+            Ok(()) => PolicyDecision::Allow,
+            Err(err) => PolicyDecision::Deny(PolicyViolation::RateLimited(err)),
+        }
+    }
     /// Evaluate only the client rate limit for a source that has no provider or manifest envelope.
     #[must_use]
     pub fn evaluate_rate_only(&self, ctx: &RequestContext<'_>) -> PolicyDecision {

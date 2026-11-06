@@ -45,8 +45,8 @@ use crate::{
     status,
     telemetry::StateTelemetry,
     tx::{
-        CheckedTransaction, allows_unregistered_authority,
-        instructions_allow_multisig_envelope_authority,
+        CheckedTransaction, allows_unregistered_authority_with_selection,
+        instructions_allow_multisig_envelope_authority_with_selection,
     },
 };
 use core::time::Duration;
@@ -1152,6 +1152,11 @@ impl PreparedQueueManifestDiagnostics {
     }
 }
 trait QueueAdmissionStateAccess {
+    /// Committed selection shared by every admission classification.
+    fn runtime_selection(&self) -> &iroha_data_model::runtime::definition::RootSelectionV1;
+    /// Check the committed payload grammar before any input can enter the queue.
+    fn check_runtime_payload(&mut self, transaction: &AcceptedTransaction<'_>)
+    -> Result<(), Error>;
     /// Original allocation pool retained by this exact committed observation.
     fn execution_budget(&self) -> iroha_allocation::AllocationBudget;
     fn authority_exists(&mut self, authority: &AccountId) -> bool;
@@ -1244,6 +1249,29 @@ fn exemption_needs_committed_time(
 }
 
 impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
+    fn runtime_selection(&self) -> &iroha_data_model::runtime::definition::RootSelectionV1 {
+        self.view.world().runtime_selection()
+    }
+    fn check_runtime_payload(
+        &mut self,
+        transaction: &AcceptedTransaction<'_>,
+    ) -> Result<(), Error> {
+        if let Some(signed) = transaction.external() {
+            crate::runtime::ironwood::admission::transaction(
+                signed,
+                self.view.world().runtime_selection(),
+            )
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(reason) => {
+                    Error::UnsupportedTransactionAdmission { reason }
+                }
+                crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                    Error::Deferred(original)
+                }
+            })?;
+        }
+        Ok(())
+    }
     fn execution_budget(&self) -> iroha_allocation::AllocationBudget {
         self.view.execution_budget()
     }
@@ -2295,9 +2323,13 @@ impl Queue {
         alias: &str,
         rules: &GovernanceRules,
         tx: &CheckedTransaction<'_>,
+        selection: &iroha_data_model::runtime::definition::RootSelectionV1,
     ) -> Result<(), Error> {
         if let Some(Executable::Instructions(instructions)) = tx.as_accepted().executable()
-            && instructions_allow_multisig_envelope_authority(instructions)
+            && instructions_allow_multisig_envelope_authority_with_selection(
+                instructions,
+                selection,
+            )
         {
             return Ok(());
         }
@@ -4312,6 +4344,9 @@ impl Queue {
         retired: &mut QueuePrivacyRetirements,
         #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
     ) -> Result<PreparedQueueAdmission, Failure> {
+        if let Err(error) = state_access.check_runtime_payload(checked.as_accepted()) {
+            return Err(Self::refused(error, checked));
+        }
         if let Err(err) = validate_current_admission_route(&routing_plan) {
             return Err(Self::refused(err, checked));
         }
@@ -4369,7 +4404,11 @@ impl Queue {
         if let Some(transaction) = checked.as_accepted().external() {
             let authority = transaction.authority();
             if !state_access.authority_exists(authority)
-                && !allows_unregistered_authority(transaction.instructions(), authority)
+                && !allows_unregistered_authority_with_selection(
+                    transaction.instructions(),
+                    authority,
+                    state_access.runtime_selection(),
+                )
             {
                 return Err(Self::refused(
                     Error::UnregisteredAuthority {
@@ -4460,7 +4499,10 @@ impl Queue {
             let alias = status.alias.clone();
             let allows_multisig_envelope_authority = match checked.as_accepted().executable() {
                 Some(Executable::Instructions(instructions)) => {
-                    instructions_allow_multisig_envelope_authority(instructions)
+                    instructions_allow_multisig_envelope_authority_with_selection(
+                        instructions,
+                        state_access.runtime_selection(),
+                    )
                 }
                 Some(
                     Executable::ContractCall(_)
@@ -4536,8 +4578,12 @@ impl Queue {
                 let quorum_required = !allows_multisig_envelope_authority
                     && authority_rules.quorum.unwrap_or(0).saturating_sub(1) > 0
                     && !authority_rules.validators.is_empty();
-                let quorum_result =
-                    Self::enforce_manifest_quorum(&alias, authority_rules, &checked);
+                let quorum_result = Self::enforce_manifest_quorum(
+                    &alias,
+                    authority_rules,
+                    &checked,
+                    state_access.runtime_selection(),
+                );
                 if quorum_required {
                     match quorum_result {
                         Ok(()) => {
@@ -9420,6 +9466,85 @@ pub mod tests {
             &ALICE_KEYPAIR,
             time_source,
         )
+    }
+    #[test]
+    fn ironwood_payloads_are_refused_before_queue_custody() {
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let (_, proof, bootstrap) =
+            crate::runtime::catalog::tests::privacy_resolution_instructions();
+        for instruction in [proof, bootstrap] {
+            let accepted = accepted_tx_with(
+                AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+                &ALICE_KEYPAIR,
+                &time_source,
+                vec![instruction],
+                Metadata::default(),
+            );
+            register_accepted_tx_authority_for_queue_test(&mut state, &accepted);
+            let original = norito::encode_canonical(accepted.external().unwrap()).unwrap();
+            let failure = queue.push(accepted, state.view()).unwrap_err();
+            assert!(
+                matches!(failure.err, Error::UnsupportedTransactionAdmission { ref reason } if reason.contains("inactive Ironwood payload grammar")),
+                "{:?}",
+                failure.err
+            );
+            assert_eq!(
+                norito::encode_canonical(failure.tx.external().unwrap()).unwrap(),
+                original
+            );
+            assert_eq!(queue.active_len(), 0);
+            assert!(queue.txs_per_user.is_empty());
+        }
+    }
+    #[test]
+    fn ironwood_multisig_admission_reaches_committed_state_before_and_after_activation() {
+        use iroha_executor_data_model::isi::multisig::{MultisigProposalNonce, MultisigPropose};
+        for active in [false, true] {
+            for bootstrap in [false, true] {
+                let mut world = world_with_test_domains();
+                if active {
+                    crate::runtime::ironwood::install_for_test(&mut world);
+                }
+                let mut state = State::new(
+                    world,
+                    Kura::blank_kura_for_testing(),
+                    LiveQueryStore::start_test(),
+                );
+                let (_, time_source) = TimeSource::new_mock(Duration::default());
+                let queue = Queue::test(config_factory(), &time_source);
+                let (_, proof, pool) =
+                    crate::runtime::catalog::tests::privacy_resolution_instructions();
+                let authority = AccountId::new(ALICE_KEYPAIR.public_key().clone());
+                let proposal: InstructionBox = MultisigPropose::new(
+                    authority.clone(),
+                    MultisigProposalNonce::new([0x91; 32]).unwrap(),
+                    vec![if bootstrap { pool } else { proof }],
+                    None,
+                )
+                .into();
+                let accepted = accepted_tx_with(
+                    authority,
+                    &ALICE_KEYPAIR,
+                    &time_source,
+                    vec![proposal],
+                    Metadata::default(),
+                );
+                register_accepted_tx_authority_for_queue_test(&mut state, &accepted);
+                // Torii/gossip resolve the plan before queue custody. Test that full path,
+                // including ConfigLaneRouter's state-free probe and the selected fallback.
+                queue
+                    .route_plan_with_state(&accepted, &state)
+                    .expect("opaque proposal routes under committed grammar");
+                queue.push(accepted, state.view()).expect("admission preserves the predecessor opaque carrier and permits active Ironwood proposals");
+                assert_eq!(queue.active_len(), 1);
+            }
+        }
     }
     #[test]
     fn anonymous_ballot_cannot_enter_account_queue_without_the_state_adapter() {

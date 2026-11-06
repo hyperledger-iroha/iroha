@@ -40,7 +40,7 @@ use super::transparent_stark::{
 };
 use fastpq_isi::FASTPQ_QUERY_COUNT_V1;
 #[cfg(test)]
-use iroha_data_model::privacy::PrivacyProtocolIdV1;
+use iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1;
 use rand::TryRng;
 use rayon::prelude::*;
 use row_streams::RowStreamsV1;
@@ -7008,7 +7008,7 @@ mod tests {
     };
     pub(super) const DOMAINS: AggregateStarkDomainsV1 = AggregateStarkDomainsV1 {
         digest_context: TransparentStarkDigestContextV1::new(
-            PrivacyProtocolIdV1::PqMaspStarkV1,
+            PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
             b"aggregate-test-profile-v1",
         ),
         base_leaf: b"aggregate-test-base-leaf",
@@ -7090,8 +7090,10 @@ mod tests {
 
     #[test]
     fn explicit_commitment_556_column_geometry_bounds_cpu_preparation() {
+        use sha3::{Digest as _, Sha3_384};
+
         let context = TransparentStarkDigestContextV1::new(
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             b"atomic-private-settlement-stark-profile-v1",
         );
         let catalog =
@@ -7103,19 +7105,54 @@ mod tests {
                 b"atomic-private-settlement-stark-base-leaf-v1",
                 b"vector-row-leaf",
                 0,
-                0,
+                17,
                 0,
             )
             .unwrap();
         let group = 0_u16.to_be_bytes();
         let width = 556_u16.to_be_bytes();
-        let payload_bytes = 556 * 8;
-        let words = crate::privacy_engines::privacy_outer_hash::PrivacyOuterFrameV1::byte_count_for_field_lengths_v1(
+        let row: Vec<F> = (0..556).map(F).collect();
+        let payload: Vec<u8> = row.iter().flat_map(|value| value.0.to_be_bytes()).collect();
+        let payload_bytes = payload.len();
+        assert_eq!(payload_bytes, 4_448);
+
+        // Materialize the canonical APS leaf independently of the size estimator and hash writer.
+        let mut frame = b"iroha:privacy:stark:sha3-384:frame:v1\0".to_vec();
+        frame.extend_from_slice(&catalog);
+        for label in [domain.protocol, domain.profile, domain.role, domain.phase] {
+            frame.extend_from_slice(&u16::try_from(label.len()).unwrap().to_be_bytes());
+            frame.extend_from_slice(label);
+        }
+        for coordinate in [0_u64, 17, 0] {
+            frame.extend_from_slice(&coordinate.to_be_bytes());
+        }
+        frame.extend_from_slice(&3_u32.to_be_bytes());
+        for field in [group.as_slice(), width.as_slice(), payload.as_slice()] {
+            frame.extend_from_slice(&u64::try_from(field.len()).unwrap().to_be_bytes());
+            frame.extend_from_slice(field);
+        }
+        assert_eq!(
+            frame.len(),
+            4_714,
+            "APS frame with the 32-byte catalog commitment"
+        );
+        let digest: [u8; 48] = Sha3_384::digest(&frame).into();
+        assert_eq!(
+            hex::encode(digest),
+            "4f6c761d9d49dc31ab7502696ff7b9ed82950c3144b4d04073ee51291c6a66e1986465be56e112844de0744330549abf"
+        );
+        assert_eq!(
+            row_leaf_hash_v1(context, domain.role, 0, 17, &row)
+                .unwrap()
+                .to_bytes(),
+            digest
+        );
+        let frame_bytes = crate::privacy_engines::privacy_outer_hash::PrivacyOuterFrameV1::byte_count_for_field_lengths_v1(
             domain,
             &[group.len(), width.len(), payload_bytes],
         )
         .unwrap();
-        assert_eq!(words, 4730, "actual APS byte-frame geometry");
+        assert_eq!(frame_bytes, frame.len());
         let rows = private_row_preparation_rows_v1(
             domain,
             &[&group, &width],
@@ -7127,7 +7164,7 @@ mod tests {
         assert_eq!(131_072_usize.div_ceil(rows), 32);
         assert!(rows * payload_bytes <= PRIVATE_ROW_PAYLOAD_BUDGET_BYTES_V1);
         assert!(
-            rows * words
+            rows * frame_bytes
                 <= crate::privacy_engines::privacy_outer_hash::MAX_PRIVACY_OUTER_BATCH_BYTES_V1
         );
         assert!(
@@ -7380,7 +7417,7 @@ mod tests {
         let initial_state = actual.state();
         let mut invalid = domains;
         invalid.digest_context = TransparentStarkDigestContextV1::new(
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             b"borrowed-domain-other-profile-v1",
         );
         invalid.query_seed = invalid.base_leaf;
@@ -7429,7 +7466,7 @@ mod tests {
         }
         let mut substituted = TransparentTranscriptV1::new(
             TransparentStarkDigestContextV1::new(
-                PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
                 b"aggregate-test-profile-v1",
             ),
             b"aggregate-test-suite",
@@ -7658,19 +7695,15 @@ mod tests {
             "q=136 cannot substantiate a 161-bit query term"
         );
     }
-    type AggregateFixtureV1 = (
-        AggregateProofLayoutV1,
-        AggregateStarkProofV1,
-        Vec<Vec<Vec<E>>>,
-        Vec<Vec<E>>,
-    );
-
-    fn fixture() -> AggregateFixtureV1 {
-        fixture_with_parameters(PARAMETERS)
+    fn fixture() -> &'static (AggregateProofLayoutV1, AggregateStarkProofV1) {
+        static FIXTURE: std::sync::OnceLock<(AggregateProofLayoutV1, AggregateStarkProofV1)> =
+            std::sync::OnceLock::new();
+        FIXTURE.get_or_init(|| fixture_with_parameters(PARAMETERS))
     }
+
     pub(super) fn fixture_with_parameters(
         parameters: AggregateStarkParametersV1,
-    ) -> AggregateFixtureV1 {
+    ) -> (AggregateProofLayoutV1, AggregateStarkProofV1) {
         let layout = layout();
         let rows = layout.common_lde_size();
         let base_lde = vec![(0..rows).map(|index| F(index as u64)).collect()];
@@ -7825,7 +7858,7 @@ mod tests {
             queries,
             grinding_nonce: 0,
         };
-        (layout, proof, compositions, vec![vec![E::ZERO; rows]; 2])
+        (layout, proof)
     }
     pub(super) fn deep_fixture(layout: &AggregateProofLayoutV1) -> AggregateDeepProofV1 {
         let mut next_value = 1_u64;
@@ -7945,15 +7978,15 @@ mod tests {
             fri_commitment_layout: AggregateFriCommitmentLayoutV1::Paired,
             ..PARAMETERS
         };
-        let (layout, proof, _, _) = fixture_with_parameters(parameters);
+        let (layout, proof) = fixture_with_parameters(parameters);
         let indices = proof_query_indices_v1(&proof);
         verify_all_merkle_openings_v1(&proof, parameters, &DOMAINS, &layout, &indices).unwrap();
         let wire = encode_proof_v1(&proof, parameters, &layout).unwrap();
         let decoded = decode_proof_v1(&wire, parameters, &layout).unwrap();
         assert_eq!(decoded, proof);
         assert!(decode_proof_v1(&wire, PARAMETERS, &layout).is_err());
-        let (_, scalar_proof, _, _) = fixture();
-        let scalar_wire = encode_proof_v1(&scalar_proof, PARAMETERS, &layout).unwrap();
+        let (_, scalar_proof) = fixture();
+        let scalar_wire = encode_proof_v1(scalar_proof, PARAMETERS, &layout).unwrap();
         assert!(decode_proof_v1(&scalar_wire, parameters, &layout).is_err());
         assert!(wire.len() < scalar_wire.len());
         for which in 0..4 {
@@ -8032,34 +8065,34 @@ mod tests {
     }
     #[test]
     fn deep_codec_is_exact_and_every_value_is_transcript_bound() {
-        let (layout, proof, _, _) = fixture();
-        let deep = deep_fixture(&layout);
+        let (layout, proof) = fixture();
+        let deep = deep_fixture(layout);
         let bytes =
-            encode_proof_with_deep_v1(&proof, &deep, PARAMETERS, &layout).expect("DEEP encoding");
+            encode_proof_with_deep_v1(proof, &deep, PARAMETERS, layout).expect("DEEP encoding");
         let (decoded_proof, decoded_deep) =
-            decode_proof_with_deep_v1(&bytes, PARAMETERS, &layout).expect("DEEP decoding");
-        assert_eq!(decoded_proof, proof);
+            decode_proof_with_deep_v1(&bytes, PARAMETERS, layout).expect("DEEP decoding");
+        assert_eq!(&decoded_proof, proof);
         assert_eq!(decoded_deep, deep);
         assert_eq!(
             bytes.len(),
-            exact_encoded_proof_with_deep_bytes_v1(&proof, &deep, PARAMETERS, &layout)
+            exact_encoded_proof_with_deep_bytes_v1(proof, &deep, PARAMETERS, layout)
                 .expect("exact DEEP wire length")
         );
         assert_eq!(
             bytes.len(),
-            encode_proof_v1(&proof, PARAMETERS, &layout)
+            encode_proof_v1(proof, PARAMETERS, layout)
                 .expect("base encoding")
                 .len()
-                + exact_deep_opening_bytes_v1(PARAMETERS, &layout)
+                + exact_deep_opening_bytes_v1(PARAMETERS, layout)
                     .expect("exact DEEP payload length")
         );
-        let insertion = deep_insertion_offset_v1(PARAMETERS, &layout).expect("DEEP offset");
-        let deep_len = exact_deep_opening_bytes_v1(PARAMETERS, &layout).expect("DEEP bytes");
+        let insertion = deep_insertion_offset_v1(PARAMETERS, layout).expect("DEEP offset");
+        let deep_len = exact_deep_opening_bytes_v1(PARAMETERS, layout).expect("DEEP bytes");
         let field_count = deep_len / core::mem::size_of::<[u64; 4]>();
         let mut canonical_transcript = transcript();
-        let canonical_point = derive_deep_point_v1(&mut canonical_transcript, PARAMETERS, &layout)
+        let canonical_point = derive_deep_point_v1(&mut canonical_transcript, PARAMETERS, layout)
             .expect("canonical point");
-        absorb_deep_openings_v1(&mut canonical_transcript, &deep, PARAMETERS, &layout)
+        absorb_deep_openings_v1(&mut canonical_transcript, &deep, PARAMETERS, layout)
             .expect("canonical DEEP absorption");
         let canonical_state = canonical_transcript.state();
         for field in 0..field_count {
@@ -8072,15 +8105,15 @@ mod tests {
             );
             changed_bytes[coefficient_offset..coefficient_offset + 8]
                 .copy_from_slice(&(coefficient + 1).to_be_bytes());
-            let (_, changed_deep) = decode_proof_with_deep_v1(&changed_bytes, PARAMETERS, &layout)
+            let (_, changed_deep) = decode_proof_with_deep_v1(&changed_bytes, PARAMETERS, layout)
                 .expect("canonical changed DEEP field");
             let mut changed_transcript = transcript();
             assert_eq!(
-                derive_deep_point_v1(&mut changed_transcript, PARAMETERS, &layout)
+                derive_deep_point_v1(&mut changed_transcript, PARAMETERS, layout)
                     .expect("changed point"),
                 canonical_point
             );
-            absorb_deep_openings_v1(&mut changed_transcript, &changed_deep, PARAMETERS, &layout)
+            absorb_deep_openings_v1(&mut changed_transcript, &changed_deep, PARAMETERS, layout)
                 .expect("changed DEEP absorption");
             assert_ne!(
                 changed_transcript.state(),
@@ -8093,34 +8126,34 @@ mod tests {
         let second = reordered[insertion + 32..insertion + 64].to_vec();
         reordered[insertion..insertion + 32].copy_from_slice(&second);
         reordered[insertion + 32..insertion + 64].copy_from_slice(&first);
-        let (_, reordered_deep) = decode_proof_with_deep_v1(&reordered, PARAMETERS, &layout)
+        let (_, reordered_deep) = decode_proof_with_deep_v1(&reordered, PARAMETERS, layout)
             .expect("shape-preserving reorder decodes");
         let mut reordered_transcript = transcript();
-        derive_deep_point_v1(&mut reordered_transcript, PARAMETERS, &layout)
+        derive_deep_point_v1(&mut reordered_transcript, PARAMETERS, layout)
             .expect("reordered point");
         absorb_deep_openings_v1(
             &mut reordered_transcript,
             &reordered_deep,
             PARAMETERS,
-            &layout,
+            layout,
         )
         .expect("reordered absorption");
         assert_ne!(reordered_transcript.state(), canonical_state);
         let mut omitted = bytes.clone();
         omitted.drain(insertion..insertion + 32);
-        assert!(decode_proof_with_deep_v1(&omitted, PARAMETERS, &layout).is_err());
+        assert!(decode_proof_with_deep_v1(&omitted, PARAMETERS, layout).is_err());
         let mut duplicated = bytes.clone();
         duplicated.splice(
             insertion..insertion,
             bytes[insertion..insertion + 32].iter().copied(),
         );
-        assert!(decode_proof_with_deep_v1(&duplicated, PARAMETERS, &layout).is_err());
+        assert!(decode_proof_with_deep_v1(&duplicated, PARAMETERS, layout).is_err());
         let mut noncanonical = bytes;
         noncanonical[insertion..insertion + 8].copy_from_slice(
             &crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1.to_be_bytes(),
         );
         assert_eq!(
-            decode_proof_with_deep_v1(&noncanonical, PARAMETERS, &layout),
+            decode_proof_with_deep_v1(&noncanonical, PARAMETERS, layout),
             Err(AggregateStarkErrorV1::NonCanonicalField)
         );
     }
@@ -9409,18 +9442,9 @@ mod tests {
         }
     }
 
-    fn opened_leaf_fixture_v1() -> &'static (AggregateProofLayoutV1, AggregateStarkProofV1) {
-        static FIXTURE: std::sync::OnceLock<(AggregateProofLayoutV1, AggregateStarkProofV1)> =
-            std::sync::OnceLock::new();
-        FIXTURE.get_or_init(|| {
-            let (layout, proof, _, _) = fixture();
-            (layout, proof)
-        })
-    }
-
     #[test]
     fn opened_query_hashes_match_sequential_bytes_and_bound_each_batch() {
-        let (layout, proof) = opened_leaf_fixture_v1();
+        let (layout, proof) = fixture();
         let indices = proof_query_indices_v1(proof);
         let rounds = layout.fri_rounds(PARAMETERS).expect("fixture rounds");
         let count = OPENED_QUERY_HASH_BATCH_V1 + 1;
@@ -9509,7 +9533,7 @@ mod tests {
 
     #[test]
     fn opened_leaf_parallel_verifier_matches_original_on_valid_and_malformed_proofs() {
-        let (layout, proof) = opened_leaf_fixture_v1();
+        let (layout, proof) = fixture();
         let indices = proof_query_indices_v1(proof);
         let pools = [1, 8].map(|threads| {
             rayon::ThreadPoolBuilder::new()
@@ -9572,7 +9596,7 @@ mod tests {
 
     #[test]
     fn opened_leaf_duplicate_error_precedes_a_later_parallel_query_error() {
-        let (layout, proof) = opened_leaf_fixture_v1();
+        let (layout, proof) = fixture();
         let indices = proof_query_indices_v1(proof);
         let rounds = layout.fri_rounds(PARAMETERS).expect("rounds");
         let round = rounds - 1;
@@ -9834,8 +9858,8 @@ mod tests {
 
     #[test]
     fn merkle_verification_jobs_preserve_validity_and_first_error_across_workers() {
-        let (layout, proof, _, _) = fixture();
-        let indices = proof_query_indices_v1(&proof);
+        let (layout, proof) = fixture();
+        let indices = proof_query_indices_v1(proof);
         let pools = [1, 2, 4].map(|threads| {
             rayon::ThreadPoolBuilder::new()
                 .num_threads(threads)
@@ -9845,7 +9869,7 @@ mod tests {
         for pool in &pools {
             assert_eq!(
                 pool.install(|| verify_all_merkle_openings_v1(
-                    &proof, PARAMETERS, &DOMAINS, &layout, &indices
+                    proof, PARAMETERS, &DOMAINS, layout, &indices
                 )),
                 Ok(())
             );
@@ -9856,7 +9880,7 @@ mod tests {
         for pool in &pools {
             assert_eq!(
                 pool.install(|| verify_all_merkle_openings_v1(
-                    &changed, PARAMETERS, &DOMAINS, &layout, &indices
+                    &changed, PARAMETERS, &DOMAINS, layout, &indices
                 )),
                 Err(AggregateStarkErrorV1::TraceOpening)
             );
@@ -9867,17 +9891,17 @@ mod tests {
         for pool in &pools {
             assert_eq!(
                 pool.install(|| verify_all_merkle_openings_v1(
-                    &changed, PARAMETERS, &DOMAINS, &layout, &indices
+                    &changed, PARAMETERS, &DOMAINS, layout, &indices
                 )),
                 Err(AggregateStarkErrorV1::ConstraintOpening)
             );
         }
-        changed = proof;
+        changed = proof.clone();
         changed.fri_mask_roots[0] = PrivacyOuterDigestV1::default();
         for pool in &pools {
             assert_eq!(
                 pool.install(|| verify_all_merkle_openings_v1(
-                    &changed, PARAMETERS, &DOMAINS, &layout, &indices
+                    &changed, PARAMETERS, &DOMAINS, layout, &indices
                 )),
                 Err(AggregateStarkErrorV1::FriOpening)
             );
@@ -9934,58 +9958,58 @@ mod tests {
     }
     #[test]
     fn fixed_wire_length_preserves_distinct_minimal_frontier_shapes() {
-        let (layout, template, _, _) = fixture();
-        let clustered = codec_shape_with_query_stride_v1(&template, &layout, 1);
+        let (layout, template) = fixture();
+        let clustered = codec_shape_with_query_stride_v1(template, layout, 1);
         let scattered = codec_shape_with_query_stride_v1(
-            &template,
-            &layout,
+            template,
+            layout,
             layout.common_lde_size() / PARAMETERS.query_count,
         );
-        let clustered_used = minimal_encoded_proof_bytes_v1(&clustered, PARAMETERS, &layout)
+        let clustered_used = minimal_encoded_proof_bytes_v1(&clustered, PARAMETERS, layout)
             .expect("clustered prefix");
-        let scattered_used = minimal_encoded_proof_bytes_v1(&scattered, PARAMETERS, &layout)
+        let scattered_used = minimal_encoded_proof_bytes_v1(&scattered, PARAMETERS, layout)
             .expect("scattered prefix");
         assert_ne!(clustered_used, scattered_used);
-        let deep = deep_fixture(&layout);
+        let deep = deep_fixture(layout);
         for proof in [&clustered, &scattered] {
-            let base = encode_proof_v1(proof, PARAMETERS, &layout).expect("base wire");
+            let base = encode_proof_v1(proof, PARAMETERS, layout).expect("base wire");
             assert_eq!(
                 base.len(),
-                maximum_encoded_proof_bytes_v1(PARAMETERS, &layout).unwrap()
+                maximum_encoded_proof_bytes_v1(PARAMETERS, layout).unwrap()
             );
-            assert_eq!(decode_proof_v1(&base, PARAMETERS, &layout).unwrap(), *proof);
-            let wire = encode_proof_with_deep_v1(proof, &deep, PARAMETERS, &layout).unwrap();
+            assert_eq!(decode_proof_v1(&base, PARAMETERS, layout).unwrap(), *proof);
+            let wire = encode_proof_with_deep_v1(proof, &deep, PARAMETERS, layout).unwrap();
             assert_eq!(
                 wire.len(),
-                maximum_encoded_proof_with_deep_bytes_v1(PARAMETERS, &layout).unwrap()
+                maximum_encoded_proof_with_deep_bytes_v1(PARAMETERS, layout).unwrap()
             );
             assert_eq!(
-                decode_proof_with_deep_v1(&wire, PARAMETERS, &layout).unwrap(),
+                decode_proof_with_deep_v1(&wire, PARAMETERS, layout).unwrap(),
                 (proof.clone(), deep.clone())
             );
         }
     }
     #[test]
     fn fixed_base_wire_rejects_short_form_and_nonzero_padding() {
-        let (layout, proof, _, _) = fixture();
-        let wire = encode_proof_v1(&proof, PARAMETERS, &layout).expect("base wire");
-        let used = minimal_encoded_proof_bytes_v1(&proof, PARAMETERS, &layout).unwrap();
+        let (layout, proof) = fixture();
+        let wire = encode_proof_v1(proof, PARAMETERS, layout).expect("base wire");
+        let used = minimal_encoded_proof_bytes_v1(proof, PARAMETERS, layout).unwrap();
         assert!(used < wire.len(), "fixture must exercise padding");
         assert!(wire[used..].iter().all(|byte| *byte == 0));
-        assert!(decode_proof_v1(&wire[..used], PARAMETERS, &layout).is_err());
+        assert!(decode_proof_v1(&wire[..used], PARAMETERS, layout).is_err());
         for offset in [used, used + (wire.len() - used) / 2, wire.len() - 1] {
             let mut nonzero = wire.clone();
             nonzero[offset] = 1;
             assert_eq!(
-                decode_proof_v1(&nonzero, PARAMETERS, &layout),
+                decode_proof_v1(&nonzero, PARAMETERS, layout),
                 Err(AggregateStarkErrorV1::MalformedProof)
             );
         }
         assert_eq!(
             encode_proof_v1(
-                &decode_proof_v1(&wire, PARAMETERS, &layout).unwrap(),
+                &decode_proof_v1(&wire, PARAMETERS, layout).unwrap(),
                 PARAMETERS,
-                &layout
+                layout
             )
             .unwrap(),
             wire
@@ -9993,83 +10017,82 @@ mod tests {
     }
     #[test]
     fn fixed_deep_wire_rejects_short_form_nonzero_and_extra_tail() {
-        let (layout, proof, _, _) = fixture();
-        let deep = deep_fixture(&layout);
-        let wire = encode_proof_with_deep_v1(&proof, &deep, PARAMETERS, &layout).unwrap();
-        let used = minimal_encoded_proof_bytes_v1(&proof, PARAMETERS, &layout).unwrap()
-            + exact_deep_opening_bytes_v1(PARAMETERS, &layout).unwrap();
+        let (layout, proof) = fixture();
+        let deep = deep_fixture(layout);
+        let wire = encode_proof_with_deep_v1(proof, &deep, PARAMETERS, layout).unwrap();
+        let used = minimal_encoded_proof_bytes_v1(proof, PARAMETERS, layout).unwrap()
+            + exact_deep_opening_bytes_v1(PARAMETERS, layout).unwrap();
         assert!(used < wire.len());
         assert!(wire[used..].iter().all(|byte| *byte == 0));
         for size in [0, used, wire.len() - 1] {
-            assert!(decode_proof_with_deep_v1(&wire[..size], PARAMETERS, &layout).is_err());
+            assert!(decode_proof_with_deep_v1(&wire[..size], PARAMETERS, layout).is_err());
         }
         for offset in [used, used + (wire.len() - used) / 2, wire.len() - 1] {
             let mut nonzero = wire.clone();
             nonzero[offset] = 1;
             assert_eq!(
-                decode_proof_with_deep_v1(&nonzero, PARAMETERS, &layout),
+                decode_proof_with_deep_v1(&nonzero, PARAMETERS, layout),
                 Err(AggregateStarkErrorV1::MalformedProof)
             );
         }
         let mut extra = wire.clone();
         extra.push(0);
-        assert!(decode_proof_with_deep_v1(&extra, PARAMETERS, &layout).is_err());
-        let (decoded, decoded_deep) =
-            decode_proof_with_deep_v1(&wire, PARAMETERS, &layout).unwrap();
+        assert!(decode_proof_with_deep_v1(&extra, PARAMETERS, layout).is_err());
+        let (decoded, decoded_deep) = decode_proof_with_deep_v1(&wire, PARAMETERS, layout).unwrap();
         assert_eq!(
-            encode_proof_with_deep_v1(&decoded, &decoded_deep, PARAMETERS, &layout).unwrap(),
+            encode_proof_with_deep_v1(&decoded, &decoded_deep, PARAMETERS, layout).unwrap(),
             wire
         );
     }
     #[test]
     fn fixed_wire_refuses_a_budget_that_only_fits_minimal_frontiers() {
-        let (layout, proof, _, _) = fixture();
-        let deep = deep_fixture(&layout);
-        let base = encode_proof_v1(&proof, PARAMETERS, &layout).unwrap();
-        let wire = encode_proof_with_deep_v1(&proof, &deep, PARAMETERS, &layout).unwrap();
+        let (layout, proof) = fixture();
+        let deep = deep_fixture(layout);
+        let base = encode_proof_v1(proof, PARAMETERS, layout).unwrap();
+        let wire = encode_proof_with_deep_v1(proof, &deep, PARAMETERS, layout).unwrap();
         let mut bounded = PARAMETERS;
         bounded.maximum_proof_bytes = base.len() - 1;
         assert!(
-            minimal_encoded_proof_bytes_v1(&proof, bounded, &layout).unwrap()
+            minimal_encoded_proof_bytes_v1(proof, bounded, layout).unwrap()
                 <= bounded.maximum_proof_bytes
         );
         assert_eq!(
-            encode_proof_v1(&proof, bounded, &layout),
+            encode_proof_v1(proof, bounded, layout),
             Err(AggregateStarkErrorV1::ProofTooLarge)
         );
         assert_eq!(
-            decode_proof_v1(&base, bounded, &layout),
+            decode_proof_v1(&base, bounded, layout),
             Err(AggregateStarkErrorV1::ProofTooLarge)
         );
         bounded.maximum_proof_bytes = wire.len() - 1;
         assert_eq!(
-            encode_proof_with_deep_v1(&proof, &deep, bounded, &layout),
+            encode_proof_with_deep_v1(proof, &deep, bounded, layout),
             Err(AggregateStarkErrorV1::ProofTooLarge)
         );
         assert_eq!(
-            decode_proof_with_deep_v1(&wire, bounded, &layout),
+            decode_proof_with_deep_v1(&wire, bounded, layout),
             Err(AggregateStarkErrorV1::ProofTooLarge)
         );
     }
     #[test]
     fn fixed_wire_rejects_duplicate_and_out_of_range_query_indices() {
-        let (layout, proof, _, _) = fixture();
-        let deep = deep_fixture(&layout);
+        let (layout, proof) = fixture();
+        let deep = deep_fixture(layout);
         let rounds = layout.fri_rounds(PARAMETERS).unwrap();
         let roots = layout.trace_groups.len() * 2 + PARAMETERS.security_lanes * (2 + rounds + 1);
         let first_query = 8
             + roots * PRIVACY_OUTER_DIGEST_BYTES_V1
             + PARAMETERS.security_lanes * PARAMETERS.terminal_size().unwrap() * 32
             + 8;
-        let stride = (encoded_non_frontier_bytes_v1(PARAMETERS, &layout).unwrap() - first_query)
+        let stride = (encoded_non_frontier_bytes_v1(PARAMETERS, layout).unwrap() - first_query)
             / PARAMETERS.query_count;
-        let base = encode_proof_v1(&proof, PARAMETERS, &layout).unwrap();
-        let deep_wire = encode_proof_with_deep_v1(&proof, &deep, PARAMETERS, &layout).unwrap();
+        let base = encode_proof_v1(proof, PARAMETERS, layout).unwrap();
+        let deep_wire = encode_proof_with_deep_v1(proof, &deep, PARAMETERS, layout).unwrap();
         for with_deep in [false, true] {
             let (wire, offset) = if with_deep {
                 (
                     &deep_wire,
-                    first_query + exact_deep_opening_bytes_v1(PARAMETERS, &layout).unwrap(),
+                    first_query + exact_deep_opening_bytes_v1(PARAMETERS, layout).unwrap(),
                 )
             } else {
                 (&base, first_query)
@@ -10085,9 +10108,9 @@ mod tests {
             );
             for invalid in [duplicate, outside] {
                 let error = if with_deep {
-                    decode_proof_with_deep_v1(&invalid, PARAMETERS, &layout).unwrap_err()
+                    decode_proof_with_deep_v1(&invalid, PARAMETERS, layout).unwrap_err()
                 } else {
-                    decode_proof_v1(&invalid, PARAMETERS, &layout).unwrap_err()
+                    decode_proof_v1(&invalid, PARAMETERS, layout).unwrap_err()
                 };
                 assert_eq!(error, AggregateStarkErrorV1::InvalidProofShape);
             }
@@ -10163,7 +10186,7 @@ mod tests {
                 fri_commitment_layout: commitment_layout,
                 ..PARAMETERS
             };
-            let (layout, proof, _, _) = fixture_with_parameters(parameters);
+            let (layout, proof) = fixture_with_parameters(parameters);
             let encoded = encode_proof_v1(&proof, parameters, &layout).expect("encode");
             assert_eq!(
                 encoded.len(),
@@ -10296,20 +10319,20 @@ mod tests {
     }
     #[test]
     fn exact_codec_accepts_opaque_digest_roots_and_rejects_short_width() {
-        let (layout, proof, _, _) = fixture();
-        let encoded = encode_proof_v1(&proof, PARAMETERS, &layout).expect("encode");
+        let (layout, proof) = fixture();
+        let encoded = encode_proof_v1(proof, PARAMETERS, layout).expect("encode");
         let root_offset = PARAMETERS.proof_magic.len() + core::mem::size_of::<u16>() * 2;
         let mut old_width = encoded.clone();
         old_width.drain(root_offset + 32..root_offset + PRIVACY_OUTER_DIGEST_BYTES_V1);
         assert!(
-            decode_proof_v1(&old_width, PARAMETERS, &layout).is_err(),
+            decode_proof_v1(&old_width, PARAMETERS, layout).is_err(),
             "a truncated 32-byte root cannot decode as an exact 48-byte root"
         );
         let mut noncanonical = encoded;
         noncanonical[root_offset..root_offset + 8].copy_from_slice(
             &crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1.to_le_bytes(),
         );
-        let decoded = decode_proof_v1(&noncanonical, PARAMETERS, &layout)
+        let decoded = decode_proof_v1(&noncanonical, PARAMETERS, layout)
             .expect("opaque outer root is not a field");
         assert_eq!(
             decoded.trace_groups[0].base_root.to_bytes()[..8],
@@ -10318,36 +10341,36 @@ mod tests {
     }
     #[test]
     fn exact_codec_rejects_noncanonical_base_and_every_extension_opening_class() {
-        let (layout, proof, _, _) = fixture();
+        let (layout, proof) = fixture();
         let noncanonical = crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
         let mut changed = proof.clone();
         changed.queries[0].trace_groups[0].base_current[0] = noncanonical;
         assert_eq!(
-            encode_proof_v1(&changed, PARAMETERS, &layout),
+            encode_proof_v1(&changed, PARAMETERS, layout),
             Err(AggregateStarkErrorV1::NonCanonicalField)
         );
         changed = proof.clone();
         changed.queries[0].composition_values[0][0][1] = noncanonical;
         assert_eq!(
-            encode_proof_v1(&changed, PARAMETERS, &layout),
+            encode_proof_v1(&changed, PARAMETERS, layout),
             Err(AggregateStarkErrorV1::NonCanonicalField)
         );
         changed = proof.clone();
         changed.queries[0].fri_mask_values[0][2] = noncanonical;
         assert_eq!(
-            encode_proof_v1(&changed, PARAMETERS, &layout),
+            encode_proof_v1(&changed, PARAMETERS, layout),
             Err(AggregateStarkErrorV1::NonCanonicalField)
         );
         changed = proof.clone();
         changed.queries[0].fri_lanes[0].rounds[0].low[3] = noncanonical;
         assert_eq!(
-            encode_proof_v1(&changed, PARAMETERS, &layout),
+            encode_proof_v1(&changed, PARAMETERS, layout),
             Err(AggregateStarkErrorV1::NonCanonicalField)
         );
-        changed = proof;
+        changed = proof.clone();
         changed.fri_lanes[0].terminal_values[0][0] = noncanonical;
         assert_eq!(
-            encode_proof_v1(&changed, PARAMETERS, &layout),
+            encode_proof_v1(&changed, PARAMETERS, layout),
             Err(AggregateStarkErrorV1::NonCanonicalField)
         );
     }
@@ -10411,21 +10434,21 @@ mod tests {
             ),
             Err(AggregateStarkErrorV1::TraceOpening)
         );
-        let (layout, proof, _, _) = fixture();
+        let (layout, proof) = fixture();
         let mut changed = proof.clone();
         changed.trace_groups[0].base_frontier.pop();
-        assert!(encode_proof_v1(&changed, PARAMETERS, &layout).is_err());
+        assert!(encode_proof_v1(&changed, PARAMETERS, layout).is_err());
         changed = proof.clone();
         changed.trace_groups[0].base_frontier.swap(0, 1);
-        let encoded = encode_proof_v1(&changed, PARAMETERS, &layout).expect("shape-valid");
-        let decoded = decode_proof_v1(&encoded, PARAMETERS, &layout).expect("decode");
+        let encoded = encode_proof_v1(&changed, PARAMETERS, layout).expect("shape-valid");
+        let decoded = decode_proof_v1(&encoded, PARAMETERS, layout).expect("decode");
         let expected_indices = proof_query_indices_v1(&decoded);
         assert!(
             verify_all_merkle_openings_v1(
                 &decoded,
                 PARAMETERS,
                 &DOMAINS,
-                &layout,
+                layout,
                 &expected_indices,
             )
             .is_err()

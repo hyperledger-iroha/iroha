@@ -24620,7 +24620,7 @@ struct ResolvedSiteHost {
     hostname: String,
     index_document: String,
     spa_fallback: bool,
-    stored: StoredManifest,
+    stored: Arc<StoredManifest>,
 }
 fn normalized_site_request_host(headers: &HeaderMap) -> Result<String, Response> {
     let Some(host) = headers
@@ -24801,7 +24801,7 @@ fn resolve_site_host(
 fn find_local_site_manifest_by_cid(
     state: &SharedAppState,
     cid_bytes: &[u8],
-) -> Result<Option<StoredManifest>, Response> {
+) -> Result<Option<Arc<StoredManifest>>, Response> {
     if !state.sorafs_node.is_enabled() {
         return Err(storage_disabled_response());
     }
@@ -24849,7 +24849,7 @@ fn chunk_profile_from_manifest_descriptor(manifest: &ManifestV1) -> Result<Chunk
 pub(crate) fn resolve_site_manifest_by_cid_unchecked(
     state: &SharedAppState,
     cid: &str,
-) -> Result<StoredManifest, Response> {
+) -> Result<Arc<StoredManifest>, Response> {
     let cid_bytes = decode_canonical_content_cid(cid)
         .ok_or_else(|| json_error(StatusCode::BAD_REQUEST, "invalid content CID"))?;
     if let Some(stored) = find_local_site_manifest_by_cid(state, &cid_bytes)? {
@@ -24864,14 +24864,14 @@ pub(crate) fn resolve_site_manifest_by_cid_unchecked(
 fn resolve_site_manifest_by_cid(
     state: &SharedAppState,
     cid: &str,
-) -> Result<StoredManifest, Response> {
+) -> Result<Arc<StoredManifest>, Response> {
     resolve_site_manifest_by_cid_unchecked(state, cid)
 }
 async fn validate_local_gateway_manifest(
     state: &SharedAppState,
-    stored: &StoredManifest,
+    stored: &Arc<StoredManifest>,
 ) -> Result<(), Response> {
-    let stored = stored.clone();
+    let stored = Arc::clone(stored);
     sorafs_heavy_blocking_task(state, "SoraFS gateway manifest validation", move || {
         let manifest_bytes = stored
             .load_manifest_bytes()
@@ -24931,13 +24931,28 @@ fn gateway_request_remote(headers: &HeaderMap) -> Result<SocketAddr, Response> {
     ))
 }
 
+/// Refuse an already banned or rate-exhausted client before any manifest, token or payload work.
+///
+/// Not charged: the admitted request is charged once by the full gateway policy.
+#[allow(clippy::result_large_err)]
+fn precheck_gateway_client_rate(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    remote: SocketAddr,
+) -> Result<(), Response> {
+    let fingerprint = gateway_client_fingerprint(remote, headers, &state.trusted_proxy_nets);
+    state
+        .precheck_gateway_rate(&fingerprint)
+        .map_err(gateway_policy_violation_response)
+}
 async fn enforce_local_gateway_pre_read(
     state: &SharedAppState,
     headers: &HeaderMap,
-    stored: &StoredManifest,
+    stored: &Arc<StoredManifest>,
     requested_provider_id: Option<[u8; 32]>,
     remote: SocketAddr,
 ) -> Result<(), Response> {
+    precheck_gateway_client_rate(state, headers, remote)?;
     validate_local_gateway_manifest(state, stored).await?;
     let provider_id = authoritative_sorafs_provider_id(state)?;
     if requested_provider_id.is_some_and(|requested| requested != provider_id) {
@@ -25998,25 +26013,15 @@ fn resolve_manifest_storage_id(
         .sorafs_node
         .storage()
         .ok_or_else(storage_disabled_response)?;
-    let manifests = storage.manifests();
-    if let Some(stored) = manifests
-        .iter()
-        .find(|stored| stored.manifest_id().eq_ignore_ascii_case(reference))
-    {
-        return Ok(stored.manifest_id().to_owned());
-    }
-    if let Ok(cid_bytes) = hex::decode(reference)
-        && let Some(stored) = manifests
-            .iter()
-            .find(|stored| stored.manifest_cid() == cid_bytes.as_slice())
-    {
-        return Ok(stored.manifest_id().to_owned());
-    }
-    Err(storage_backend_error(
-        StorageBackendError::ManifestNotFound {
-            manifest_id: reference.to_owned(),
-        },
-    ))
+    // One indexed lookup under the storage read lock; no manifest metadata is copied before
+    // the request is authenticated or rate limited.
+    storage
+        .resolve_manifest_reference(reference)
+        .ok_or_else(|| {
+            storage_backend_error(StorageBackendError::ManifestNotFound {
+                manifest_id: reference.to_owned(),
+            })
+        })
 }
 fn gateway_client_fingerprint(
     remote: SocketAddr,
@@ -27039,6 +27044,9 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
     if !state.sorafs_node.is_enabled() {
         return storage_disabled_response();
     }
+    if let Err(response) = precheck_gateway_client_rate(&state, &headers, remote) {
+        return response;
+    }
     let ManifestResolution {
         manifest_id,
         blinded_b64,
@@ -27476,21 +27484,20 @@ const DIGEST_MISMATCH_REASON: &str =
                     size: length,
                 }],
             };
-            let writer = CarStreamingWriter::new(&sub_plan);
-            let car_stats = writer
-                .write_from_reader(&mut Cursor::new(payload.as_slice()), io::sink())
-                .map_err(|error| {
-                    error!(
-                        ?error,
-                        manifest_id = worker_manifest_hex,
-                        "failed to size verified CAR range response"
-                    );
-                    json_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "failed to assemble CAR range",
-                    )
-                })?;
-            if car_stats.car_size > MAX_CAR_RANGE_RESPONSE_BYTES {
+            // The canonical layout fixes the archive length, so the response is bounded and
+            // reserved before it is encoded exactly once.
+            let car_size = sub_plan.car_size().map_err(|error| {
+                error!(
+                    ?error,
+                    manifest_id = worker_manifest_hex,
+                    "failed to size verified CAR range response"
+                );
+                json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to assemble CAR range",
+                )
+            })?;
+            if car_size > MAX_CAR_RANGE_RESPONSE_BYTES {
                 return Err(json_error(
                     StatusCode::PAYLOAD_TOO_LARGE,
                     format!(
@@ -27498,7 +27505,7 @@ const DIGEST_MISMATCH_REASON: &str =
                     ),
                 ));
             }
-            let car_capacity = usize::try_from(car_stats.car_size).map_err(|_| {
+            let car_capacity = usize::try_from(car_size).map_err(|_| {
                 json_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "CAR range response length exceeds host limits",
@@ -27512,7 +27519,7 @@ const DIGEST_MISMATCH_REASON: &str =
                     "CAR range response memory is unavailable",
                 )
             })?;
-            let emitted = writer
+            let car_stats = CarStreamingWriter::new(&sub_plan)
                 .write_from_reader(&mut Cursor::new(payload.as_slice()), &mut car_bytes)
                 .map_err(|error| {
                     error!(
@@ -27525,7 +27532,7 @@ const DIGEST_MISMATCH_REASON: &str =
                         "failed to assemble CAR range",
                     )
                 })?;
-            if emitted.car_size != car_stats.car_size || car_bytes.len() != car_capacity {
+            if car_stats.car_size != car_size || car_bytes.len() != car_capacity {
                 return Err(json_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "CAR range response size changed during canonical encoding",
@@ -27682,6 +27689,9 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
 ) -> Response {
     if !state.sorafs_node.is_enabled() {
         return storage_disabled_response();
+    }
+    if let Err(response) = precheck_gateway_client_rate(&state, &headers, remote) {
+        return response;
     }
     let ManifestResolution {
         manifest_id,
@@ -28934,10 +28944,23 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                 .expect("validated PoR verification context has a sample seed");
             let inflight_guard = ProofStreamInflightGuard::new(state.telemetry.clone(), "por");
             let start = Instant::now();
-            let samples = match state
-                .sorafs_node
-                .sample_por(manifest.manifest_id(), count, seed)
-            {
+            // Sampling reads and verifies stored chunks; keep that disk and hashing work on the
+            // bounded heavy pool rather than an async executor thread.
+            let sampled = {
+                let worker_state = Arc::clone(&state);
+                let manifest_id = manifest.manifest_id().to_owned();
+                sorafs_heavy_blocking_task(&state, "SoraFS PoR sampling", move || {
+                    Ok(worker_state
+                        .sorafs_node
+                        .sample_por(&manifest_id, count, seed))
+                })
+                .await
+            };
+            let sampled = match sampled {
+                Ok(sampled) => sampled,
+                Err(response) => return response,
+            };
+            let samples = match sampled {
                 Ok(samples) => samples,
                 Err(err) => {
                     state.telemetry.with_metrics(|metrics| {
@@ -30451,10 +30474,16 @@ fn storage_backend_error(err: StorageBackendError) -> Response {
             StatusCode::NOT_FOUND,
             format!("manifest {manifest_id} not found"),
         ),
-        StorageBackendError::PayloadUnavailable { .. } => json_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "manifest payload is quarantined pending verified repair",
-        ),
+        StorageBackendError::PayloadUnavailable { .. } => {
+            crate::utils::respond_with_status_and_format(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &iroha_torii_shared::ErrorEnvelope::new(
+                    "sorafs_payload_quarantined",
+                    "manifest payload is quarantined pending verified repair",
+                ),
+                crate::utils::current_response_format(),
+            )
+        }
         StorageBackendError::ManifestRetirementInProgress { manifest_id } => json_error(
             StatusCode::CONFLICT,
             format!("manifest {manifest_id} retirement is already in progress"),
@@ -30611,12 +30640,108 @@ mod storage_backend_error_tests {
             response.status(),
             axum::http::StatusCode::SERVICE_UNAVAILABLE
         );
+        let format = crate::utils::typed_response_format_for_content_type(
+            response.headers()[axum::http::header::CONTENT_TYPE]
+                .to_str()
+                .unwrap(),
+        )
+        .expect("quarantine response declares its canonical encoding");
         let bytes = axum::body::to_bytes(response.into_body(), 1024)
             .await
             .unwrap();
-        let text = std::str::from_utf8(&bytes).unwrap();
-        assert!(text.contains("quarantined"));
-        assert!(!text.contains("damaged-manifest"));
+        let envelope: iroha_torii_shared::ErrorEnvelope = match format {
+            crate::utils::ResponseFormat::Json => norito::json::from_slice(&bytes).unwrap(),
+            crate::utils::ResponseFormat::Norito => norito::decode_from_bytes(&bytes).unwrap(),
+        };
+        assert_eq!(envelope.code(), "sorafs_payload_quarantined");
+        assert_eq!(
+            envelope.message(),
+            "manifest payload is quarantined pending verified repair"
+        );
+        assert!(!String::from_utf8_lossy(&bytes).contains("damaged-manifest"));
+    }
+    #[tokio::test]
+    async fn quarantined_payload_reason_survives_http_error_contract() {
+        use axum::{Router, body::Body, http::Request, routing::get};
+        use iroha_torii_shared::ErrorEnvelope;
+        use tower::ServiceExt as _;
+
+        let router = Router::new()
+            .route(
+                "/quarantined",
+                get(|| async {
+                    storage_backend_error(StorageBackendError::PayloadUnavailable {
+                        manifest_id: "damaged-manifest".to_owned(),
+                    })
+                }),
+            )
+            .route(
+                "/unrelated",
+                get(|| async {
+                    super::json_error(
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                        "unrelated internal storage marker",
+                    )
+                }),
+            )
+            .layer(axum::middleware::from_fn(crate::capture_response_format))
+            .layer(axum::middleware::from_fn(
+                crate::enforce_typed_error_contract,
+            ));
+        for accept in ["application/json", crate::utils::NORITO_MIME_TYPE] {
+            for (path, code, message) in [
+                (
+                    "/quarantined",
+                    "sorafs_payload_quarantined",
+                    "manifest payload is quarantined pending verified repair",
+                ),
+                (
+                    "/unrelated",
+                    "service_unavailable",
+                    "The service is temporarily unavailable.",
+                ),
+            ] {
+                let response = router
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(path)
+                            .header(axum::http::header::ACCEPT, accept)
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE
+                );
+                let content_type = if accept == "application/json" {
+                    "application/json; charset=utf-8"
+                } else {
+                    accept
+                };
+                assert_eq!(
+                    response.headers()[axum::http::header::CONTENT_TYPE],
+                    content_type
+                );
+                assert_eq!(response.headers()[RETRY_AFTER], "1");
+                let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                    .await
+                    .unwrap();
+                let envelope: ErrorEnvelope = if accept == "application/json" {
+                    norito::json::from_slice(&bytes).unwrap()
+                } else {
+                    norito::decode_from_bytes(&bytes).unwrap()
+                };
+                assert_eq!(envelope.code(), code);
+                assert_eq!(envelope.message(), message);
+                assert_eq!(envelope.details.unwrap().retry_after_seconds, Some(1));
+                let text = String::from_utf8_lossy(&bytes);
+                assert!(!text.contains("damaged-manifest"));
+                assert!(!text.contains("unrelated internal storage marker"));
+            }
+        }
     }
     use sorafs_node::scheduler::{FetchRateScope, SchedulerAdmissionError};
     use std::time::Duration;

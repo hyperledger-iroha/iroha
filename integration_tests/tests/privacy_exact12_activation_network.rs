@@ -29,8 +29,9 @@ use iroha_data_model::{
     privacy::{
         JindoLimitsV1, PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
         PrivacyCompiledProfileUnavailableReasonV1, PrivacyExact12CapabilityManifestV1,
-        PrivacyProofEnvelopeV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsUpdateV1,
-        PrivacyProtocolLimitsV1, PrivacyProtocolPolicyV1, privacy_exact12_fixture_bundle_v1,
+        PrivacyProtocolLimitsUpdateV1, PrivacyProtocolPolicyV1, PrivacyRuntimeProofEnvelopeV1,
+        PrivacyRuntimeProtocolIdV1, PrivacyRuntimeProtocolLimitsV1,
+        privacy_exact12_fixture_bundle_v1,
     },
     transaction::{
         FeePaymentIntent, SignedTransaction, TransactionBuilder,
@@ -53,11 +54,14 @@ const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 // Each isolated ordinary submission executes in the next native certified global carrier.
 const EXECUTION_CARRIER_BLOCKS: u64 = 1;
-const ZK_AMS_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkAmsV1;
-const ZK_ACE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
-const VEGA_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::VegaExistingCredentialZkV1;
-const ZK_X509_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
-const UNAVAILABLE_PROTOCOLS: [PrivacyProtocolIdV1; 4] = [
+const ZK_AMS_PROTOCOL: PrivacyRuntimeProtocolIdV1 = PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1;
+const ZK_ACE_PROTOCOL: PrivacyRuntimeProtocolIdV1 =
+    PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1;
+const VEGA_PROTOCOL: PrivacyRuntimeProtocolIdV1 =
+    PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1;
+const ZK_X509_PROTOCOL: PrivacyRuntimeProtocolIdV1 =
+    PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1;
+const UNAVAILABLE_PROTOCOLS: [PrivacyRuntimeProtocolIdV1; 4] = [
     ZK_ACE_PROTOCOL,
     ZK_AMS_PROTOCOL,
     VEGA_PROTOCOL,
@@ -65,16 +69,16 @@ const UNAVAILABLE_PROTOCOLS: [PrivacyProtocolIdV1; 4] = [
 ];
 #[derive(Clone, Copy)]
 struct ExpectedProtocolState {
-    protocol_id: PrivacyProtocolIdV1,
+    protocol_id: PrivacyRuntimeProtocolIdV1,
     compiled_profile: PrivacyCompiledProfileResultV1,
     policy: Option<PrivacyProtocolPolicyV1>,
 }
-fn is_expected_unavailable(protocol_id: PrivacyProtocolIdV1) -> bool {
+fn is_expected_unavailable(protocol_id: PrivacyRuntimeProtocolIdV1) -> bool {
     UNAVAILABLE_PROTOCOLS.contains(&protocol_id)
 }
 // Pin actual implementation diagnostics; no resource policy can complete a missing relation.
 fn expected_unavailable_reason(
-    protocol_id: PrivacyProtocolIdV1,
+    protocol_id: PrivacyRuntimeProtocolIdV1,
 ) -> Option<PrivacyCompiledProfileUnavailableReasonV1> {
     match protocol_id {
         ZK_X509_PROTOCOL => {
@@ -87,7 +91,7 @@ fn expected_unavailable_reason(
     }
 }
 fn expected_unavailable_error(
-    protocol_id: PrivacyProtocolIdV1,
+    protocol_id: PrivacyRuntimeProtocolIdV1,
 ) -> Option<CompiledPrivacyProfileErrorV1> {
     match protocol_id {
         ZK_X509_PROTOCOL => {
@@ -101,7 +105,7 @@ fn expected_unavailable_error(
 }
 #[test]
 fn unavailable_profile_diagnostics_match_the_exact_compiled_catalog() {
-    for protocol_id in PrivacyProtocolIdV1::ALL {
+    for protocol_id in PrivacyRuntimeProtocolIdV1::ALL {
         let expected_error = expected_unavailable_error(protocol_id);
         assert_eq!(
             expected_error.is_some(),
@@ -155,12 +159,12 @@ fn error_chain_contains(error: &eyre::Report, needle: &str) -> bool {
 }
 fn compiled_available_profiles() -> Result<Vec<CompiledPrivacyProfileV1>> {
     ensure!(
-        PrivacyProtocolIdV1::COUNT == 12,
+        PrivacyRuntimeProtocolIdV1::COUNT == 12,
         "first-release exact-12 registry cardinality drifted to {}",
-        PrivacyProtocolIdV1::COUNT
+        PrivacyRuntimeProtocolIdV1::COUNT
     );
     let mut profiles = Vec::new();
-    for protocol_id in PrivacyProtocolIdV1::ALL {
+    for protocol_id in PrivacyRuntimeProtocolIdV1::ALL {
         match compiled_privacy_profile_v1(protocol_id) {
             Ok(profile) => {
                 ensure!(
@@ -190,17 +194,17 @@ fn compiled_available_profiles() -> Result<Vec<CompiledPrivacyProfileV1>> {
         }
     }
     ensure!(
-        profiles.len() == PrivacyProtocolIdV1::COUNT - UNAVAILABLE_PROTOCOLS.len(),
+        profiles.len() == PrivacyRuntimeProtocolIdV1::COUNT - UNAVAILABLE_PROTOCOLS.len(),
         "available exact-12 profile count drifted: expected {}, got {}",
-        PrivacyProtocolIdV1::COUNT - UNAVAILABLE_PROTOCOLS.len(),
+        PrivacyRuntimeProtocolIdV1::COUNT - UNAVAILABLE_PROTOCOLS.len(),
         profiles.len()
     );
     for pair in profiles.windows(2) {
-        let left = PrivacyProtocolIdV1::ALL
+        let left = PrivacyRuntimeProtocolIdV1::ALL
             .iter()
             .position(|protocol_id| *protocol_id == pair[0].protocol_id)
             .expect("compiled protocol belongs to exact-12 registry");
-        let right = PrivacyProtocolIdV1::ALL
+        let right = PrivacyRuntimeProtocolIdV1::ALL
             .iter()
             .position(|protocol_id| *protocol_id == pair[1].protocol_id)
             .expect("compiled protocol belongs to exact-12 registry");
@@ -217,14 +221,14 @@ fn expected_states(
 ) -> Result<Vec<ExpectedProtocolState>> {
     let policies = policies.into_iter().collect::<Vec<_>>();
     ensure!(
-        profiles.len() == PrivacyProtocolIdV1::COUNT - UNAVAILABLE_PROTOCOLS.len()
+        profiles.len() == PrivacyRuntimeProtocolIdV1::COUNT - UNAVAILABLE_PROTOCOLS.len()
             && policies.len() == profiles.len(),
         "expected-state construction requires exactly {} available profiles and policies",
-        PrivacyProtocolIdV1::COUNT - UNAVAILABLE_PROTOCOLS.len()
+        PrivacyRuntimeProtocolIdV1::COUNT - UNAVAILABLE_PROTOCOLS.len()
     );
     let mut available = profiles.iter().copied().zip(policies);
-    let mut expected = Vec::with_capacity(PrivacyProtocolIdV1::COUNT);
-    for protocol_id in PrivacyProtocolIdV1::ALL {
+    let mut expected = Vec::with_capacity(PrivacyRuntimeProtocolIdV1::COUNT);
+    for protocol_id in PrivacyRuntimeProtocolIdV1::ALL {
         let compiled_profile = compiled_privacy_profile_snapshot_result_v1(protocol_id);
         let policy = match compiled_profile {
             PrivacyCompiledProfileResultV1::Available(snapshot) => {
@@ -281,15 +285,15 @@ fn assert_exact12_snapshot(
         snapshot.committed_height
     );
     ensure!(
-        expected.len() == PrivacyProtocolIdV1::COUNT
-            && snapshot.protocols.len() == PrivacyProtocolIdV1::COUNT,
+        expected.len() == PrivacyRuntimeProtocolIdV1::COUNT
+            && snapshot.protocols.len() == PrivacyRuntimeProtocolIdV1::COUNT,
         "{context}: exact-12 row count drifted"
     );
     for (index, ((row, state), protocol_id)) in snapshot
         .protocols
         .iter()
         .zip(expected)
-        .zip(PrivacyProtocolIdV1::ALL)
+        .zip(PrivacyRuntimeProtocolIdV1::ALL)
         .enumerate()
     {
         ensure!(
@@ -419,7 +423,7 @@ async fn instructions_transaction(
 }
 async fn unavailable_protocol_transaction(
     client: &Client,
-    mut envelope: PrivacyProofEnvelopeV1,
+    mut envelope: PrivacyRuntimeProofEnvelopeV1,
 ) -> Result<SignedTransaction> {
     // Keep one exact client-owned payload while deriving the self-referential fields. Building a
     // second client transaction would change its time/nonce and stale the resulting intent.
@@ -428,14 +432,21 @@ async fn unavailable_protocol_transaction(
         .statement
         .digest()
         .wrap_err("bind unavailable-protocol fixture to the actual network")?;
-    let draft =
-        instruction_transaction(client, SubmitPrivacyProofV1::new(envelope.clone())).await?;
+    let draft = instruction_transaction(
+        client,
+        SubmitPrivacyProofV1::new(
+            (envelope.clone())
+                .try_into()
+                .expect("frozen Exact12 test input"),
+        ),
+    )
+    .await?;
     bind_unavailable_fixture_transaction(draft, envelope, client.client().key_pair().private_key())
 }
 
 fn bind_unavailable_fixture_transaction(
     draft: SignedTransaction,
-    mut envelope: PrivacyProofEnvelopeV1,
+    mut envelope: PrivacyRuntimeProofEnvelopeV1,
     private_key: &iroha_crypto::PrivateKey,
 ) -> Result<SignedTransaction> {
     let payload = draft.payload().clone();
@@ -461,7 +472,9 @@ fn bind_unavailable_fixture_transaction(
         .wrap_err("derive unavailable-protocol statement digest")?;
     let transaction = TransactionBuilder::from_payload(payload)
         .wrap_err("reopen unavailable-protocol payload")?
-        .with_instructions([SubmitPrivacyProofV1::new(envelope)])
+        .with_instructions([SubmitPrivacyProofV1::new(
+            (envelope).try_into().expect("frozen Exact12 test input"),
+        )])
         .try_sign(private_key)
         .wrap_err("sign unavailable-protocol transaction")?;
     ensure!(
@@ -483,10 +496,15 @@ fn unavailable_fixture_transactions_preserve_native_admission_boundaries() -> Re
             .iter()
             .find(|row| row.protocol_id == protocol_id)
             .expect("exact12 fixture includes every protocol");
-        let envelope: PrivacyProofEnvelopeV1 = norito::decode_from_bytes(&row.envelope_norito)?;
+        let envelope: PrivacyRuntimeProofEnvelopeV1 =
+            norito::decode_from_bytes(&row.envelope_norito)?;
         let network_id = envelope.statement.context().network_id;
         let mut builder = TransactionBuilder::new(network_id, ALICE_ID.clone(), no_fee())
-            .with_instructions([SubmitPrivacyProofV1::new(envelope.clone())]);
+            .with_instructions([SubmitPrivacyProofV1::new(
+                (envelope.clone())
+                    .try_into()
+                    .expect("frozen Exact12 test input"),
+            )]);
         builder.set_ttl(Duration::from_secs(3_600));
         let draft = builder.try_sign(ALICE_KEYPAIR.private_key())?;
         let draft_hash = draft.hash();
@@ -737,7 +755,7 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart_impl() -> 
                         protocol_id.canonical_label()
                     )
                 })?;
-            let envelope: PrivacyProofEnvelopeV1 =
+            let envelope: PrivacyRuntimeProofEnvelopeV1 =
                 norito::decode_from_bytes(&fixture_row.envelope_norito).wrap_err_with(|| {
                     format!(
                         "decode canonical `{}` fixture envelope",
@@ -863,8 +881,8 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart_impl() -> 
     result
 }
 
-fn jindo_limits(count: u32) -> PrivacyProtocolLimitsV1 {
-    PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+fn jindo_limits(count: u32) -> PrivacyRuntimeProtocolLimitsV1 {
+    PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
         max_polynomial_count: count,
     })
 }
@@ -876,7 +894,7 @@ fn expected_with_jindo_policy(
     expected_states(
         profiles,
         profiles.iter().map(|profile| {
-            if profile.protocol_id == PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1 {
+            if profile.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1 {
                 policy
             } else {
                 None
@@ -914,8 +932,8 @@ async fn advance_policy_height(client: &Client, target: u64) -> Result<()> {
 #[test]
 fn canonical_policy_expectations_preserve_profiles_and_future_limits() {
     let profiles = compiled_available_profiles().expect("exact native catalog");
-    let protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
-    let defaults = PrivacyProtocolLimitsV1::canonical_default_v1(protocol_id);
+    let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
+    let defaults = PrivacyRuntimeProtocolLimitsV1::canonical_default_v1(protocol_id);
     let policy = PrivacyProtocolPolicyV1 {
         protocol_id,
         current_limits: defaults,
@@ -929,7 +947,7 @@ fn canonical_policy_expectations_preserve_profiles_and_future_limits() {
         .validate_at_committed_height(2)
         .expect("ordinary future decrease");
     let expected = expected_with_jindo_policy(&profiles, Some(policy)).unwrap();
-    assert_eq!(expected.len(), PrivacyProtocolIdV1::COUNT);
+    assert_eq!(expected.len(), PrivacyRuntimeProtocolIdV1::COUNT);
     for state in expected {
         assert_eq!(
             state.compiled_profile,
@@ -999,8 +1017,8 @@ async fn canonical_exact12_policy_updates_survive_four_peer_replay_and_restart_i
             .map(|peer| bounded_client(peer.client()))
             .collect::<Vec<_>>();
         let client = all_clients[0].clone();
-        let protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
-        let defaults = PrivacyProtocolLimitsV1::canonical_default_v1(protocol_id);
+        let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
+        let defaults = PrivacyRuntimeProtocolLimitsV1::canonical_default_v1(protocol_id);
         ensure!(
             defaults != jindo_limits(1),
             "Jindo fixture requires a nontrivial safe decrease"
@@ -1030,9 +1048,11 @@ async fn canonical_exact12_policy_updates_survive_four_peer_replay_and_restart_i
         let unauthorized = submit_instruction(
             &client,
             SchedulePrivacyProtocolLimitsUpdateV1::new(
-                protocol_id,
+                (protocol_id).try_into().expect("frozen Exact12 test input"),
                 next_execution_height(&client).await? + 4,
-                jindo_limits(1),
+                (jindo_limits(1))
+                    .try_into()
+                    .expect("frozen Exact12 test input"),
             ),
             "ordinary resource update still requires CanEnactGovernance",
         )
@@ -1069,8 +1089,8 @@ async fn canonical_exact12_policy_updates_survive_four_peer_replay_and_restart_i
             (jindo_limits(u32::MAX), true),
             (defaults, true),
             (
-                PrivacyProtocolLimitsV1::canonical_default_v1(
-                    PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+                PrivacyRuntimeProtocolLimitsV1::canonical_default_v1(
+                    PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1,
                 ),
                 true,
             ),
@@ -1080,7 +1100,11 @@ async fn canonical_exact12_policy_updates_survive_four_peer_replay_and_restart_i
             let effective = if future { incoming + 4 } else { incoming };
             let error = submit_instruction(
                 &client,
-                SchedulePrivacyProtocolLimitsUpdateV1::new(protocol_id, effective, limits),
+                SchedulePrivacyProtocolLimitsUpdateV1::new(
+                    (protocol_id).try_into().expect("frozen Exact12 test input"),
+                    effective,
+                    (limits).try_into().expect("frozen Exact12 test input"),
+                ),
                 "invalid limits, no-op, foreign tag or current-height schedule must reject",
             )
             .await
@@ -1114,7 +1138,13 @@ async fn canonical_exact12_policy_updates_survive_four_peer_replay_and_restart_i
         };
         let schedule_transaction = instruction_transaction(
             &client,
-            SchedulePrivacyProtocolLimitsUpdateV1::new(protocol_id, effective, jindo_limits(1)),
+            SchedulePrivacyProtocolLimitsUpdateV1::new(
+                (protocol_id).try_into().expect("frozen Exact12 test input"),
+                effective,
+                (jindo_limits(1))
+                    .try_into()
+                    .expect("frozen Exact12 test input"),
+            ),
         )
         .await?;
         let accepted_hash = submit_signed_transaction(
@@ -1137,7 +1167,13 @@ async fn canonical_exact12_policy_updates_survive_four_peer_replay_and_restart_i
         .await?;
         let duplicate = instruction_transaction(
             &client,
-            SchedulePrivacyProtocolLimitsUpdateV1::new(protocol_id, effective + 1, jindo_limits(1)),
+            SchedulePrivacyProtocolLimitsUpdateV1::new(
+                (protocol_id).try_into().expect("frozen Exact12 test input"),
+                effective + 1,
+                (jindo_limits(1))
+                    .try_into()
+                    .expect("frozen Exact12 test input"),
+            ),
         )
         .await?;
         ensure!(
@@ -1268,7 +1304,11 @@ async fn canonical_exact12_policy_updates_survive_four_peer_replay_and_restart_i
         let increase_effective = increase_scheduled + 3;
         let increase_transaction = instruction_transaction(
             &client,
-            SchedulePrivacyProtocolLimitsUpdateV1::new(protocol_id, increase_effective, defaults),
+            SchedulePrivacyProtocolLimitsUpdateV1::new(
+                (protocol_id).try_into().expect("frozen Exact12 test input"),
+                increase_effective,
+                (defaults).try_into().expect("frozen Exact12 test input"),
+            ),
         )
         .await?;
         submit_signed_transaction(

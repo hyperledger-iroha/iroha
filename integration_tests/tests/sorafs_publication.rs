@@ -34,9 +34,7 @@ use iroha_data_model::{
             ReserveMovementKindV1, ReservePolicyV1, ReserveProviderTermsV1, ReserveTier,
         },
     },
-    sumeragi_finality::{
-        MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint, SumeragiFinalityVerifier,
-    },
+    sumeragi_finality::SumeragiFinalityCheckpoint,
 };
 use iroha_executor_data_model::permission::sorafs::{
     CanOperateSorafsRepair, CanSetSorafsReservePolicy, CanUpsertSorafsProviderCredit,
@@ -71,6 +69,15 @@ use std::{
 use tokio::time::{Duration, Instant, timeout, timeout_at};
 
 const TICKET: &str = "REP-PUBLICATION-NATIVE-1";
+
+/// Key of the CLI publisher, an ordinary account holding no granted permission.
+fn cli_publisher() -> KeyPair {
+    KeyPair::from_seed(vec![0x9B; 32], iroha_crypto::Algorithm::Ed25519)
+}
+
+fn cli_publisher_id() -> AccountId {
+    AccountId::new(cli_publisher().public_key().clone())
+}
 
 pub struct PublishedNetwork {
     pub network: sandbox::SerializedNetwork,
@@ -399,10 +406,18 @@ pub async fn create_and_publish(
                 ALICE_ID.clone(),
             ));
     }
-    builder = builder.with_genesis_instruction(Mint::asset_quantity(
-        1000_u32,
-        AssetId::of(asset.clone(), ALICE_ID.clone()),
-    ));
+    builder = builder
+        .with_genesis_instruction(Mint::asset_quantity(
+            1000_u32,
+            AssetId::of(asset.clone(), ALICE_ID.clone()),
+        ))
+        // The CLI publishes from an ordinary account: registered and funded for the pin
+        // fee, with no granted permission. Publication must not need ledger-wide reads.
+        .with_genesis_instruction(Register::account(Account::new(cli_publisher_id())))
+        .with_genesis_instruction(Mint::asset_quantity(
+            1000_u32,
+            AssetId::of(asset.clone(), cli_publisher_id()),
+        ));
     for instruction in authority.genesis_instructions()?.into_iter().chain(
         PublicationComplianceFixture::genesis_instructions(&ALICE_ID)?,
     ) {
@@ -516,7 +531,7 @@ pub async fn create_and_publish(
         false,
     )
     .await?;
-    let assigned_floor = wire::prove(
+    let assigned_height = wire::prove(
         &http,
         &publisher,
         &base,
@@ -526,6 +541,10 @@ pub async fn create_and_publish(
         false,
     )
     .await?;
+    // Compact publication evidence authenticates execution but never replaces the trust root.
+    // Advance it separately so later requests bind the assertion's committed block.
+    let assigned_floor =
+        wire::advance_checkpoint(&http, &network, &checkpoint, assigned_height).await?;
     let source_request = iroha_data_model::sorafs::publication::SorafsAssignedSourceRequestV1 {
         target_provider: *providers[1].id.as_bytes(),
         source_provider: *providers[0].id.as_bytes(),
@@ -605,7 +624,7 @@ pub async fn create_and_publish(
             "full completion authority must bind the signer"
         );
     }
-    let floor = wire::prove(
+    let completed_height = wire::prove(
         &http,
         &publisher,
         &base,
@@ -615,6 +634,8 @@ pub async fn create_and_publish(
         true,
     )
     .await?;
+    let floor =
+        wire::advance_checkpoint(&http, &network, &assigned_floor, completed_height).await?;
     Ok(PublishedNetwork {
         network,
         authority,
@@ -930,7 +951,40 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
         payload.join("hello.txt"),
         b"actual same-source SoraFS CLI publication\n",
     )?;
-    let deploy_client = client(&published.network, 0, &ALICE_KEYPAIR);
+    let publisher = cli_publisher();
+    let publisher_id = cli_publisher_id();
+    let governor = client(&published.network, 0, &ALICE_KEYPAIR);
+    let reader = governor.clone();
+    let reader_id = publisher_id.clone();
+    let (granted, roles) = read_on_dedicated_thread(move || {
+        let client = reader.client();
+        Ok((
+            client
+                .query(FindPermissionsByAccountId::new(reader_id.clone()))
+                .execute_all()?,
+            client
+                .query(FindRolesByAccountId { id: reader_id })
+                .execute_all()?,
+        ))
+    })
+    .await?;
+    ensure!(
+        granted.is_empty() && roles.is_empty(),
+        "the CLI publisher must hold no granted permission or role"
+    );
+    // Ordinary transaction fees only; the pin fee was minted in genesis.
+    let native_fee_asset =
+        iroha_genesis::signed_genesis_root_fee_policy(&published.network.genesis().0)?.fee_asset_id;
+    submit_instruction(
+        &governor,
+        Transfer::asset_quantity(
+            AssetId::of(native_fee_asset, ALICE_ID.clone()),
+            10_000_u32,
+            publisher_id,
+        ),
+    )
+    .await?;
+    let deploy_client = client(&published.network, 0, &publisher);
     let mut config = toml::Table::new();
     set(
         &mut config,
@@ -950,12 +1004,12 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
     set(
         &mut config,
         &["account", "public_key"],
-        ALICE_KEYPAIR.public_key().to_string(),
+        publisher.public_key().to_string(),
     );
     set(
         &mut config,
         &["account", "private_key"],
-        iroha_crypto::ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone())
+        iroha_crypto::ExposedPrivateKey(publisher.private_key().clone())
             .try_to_multihash_string()?,
     );
     set(
@@ -1032,25 +1086,11 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
             && receipt["gateway_verification"]["success"].as_bool() == Some(true),
         "CLI failed native finality or asset verification"
     );
-    let successor_path = out_dir.join("publication.finality.to");
-    let successor_metadata = fs::metadata(&successor_path)?;
     ensure!(
-        successor_metadata.len() <= MAX_FINALITY_CHECKPOINT_BYTES as u64,
-        "CLI finality checkpoint exceeded bound"
-    );
-    ensure!(
-        successor_metadata.permissions().mode() & 0o777 == 0o600,
-        "CLI finality checkpoint must be owner-only"
-    );
-    let successor = SumeragiFinalityCheckpoint::decode_canonical(&fs::read(successor_path)?)?;
-    SumeragiFinalityVerifier::from_trusted_checkpoint(
-        &successor,
-        &published.network.network_id(),
-        published.network.chain_id().as_ref(),
-    )?;
-    ensure!(
-        successor.height() > published.floor.height(),
-        "CLI did not persist authenticated publication progress"
+        receipt["provider_ingest"]["finalized_height"]
+            .as_u64()
+            .is_some_and(|height| height > published.floor.height()),
+        "CLI did not authenticate completion after its trusted checkpoint"
     );
     ensure!(fs::metadata(out_dir.join("native-cli.manifest.to"))?.len() <= 4 * 1024 * 1024);
     let manifest: ManifestV1 = wire::decode(
@@ -1061,7 +1101,7 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
         &published.http,
         &published.network.network_id(),
         &published.network.peers()[0].torii_url(),
-        &ALICE_KEYPAIR,
+        &publisher,
         ManifestDigest::from_manifest(&manifest)?,
         true,
     )
@@ -1070,7 +1110,7 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
         &published.http,
         &deploy_client,
         &published.network.peers()[0].torii_url(),
-        &ALICE_KEYPAIR,
+        &publisher,
         &row,
         &published.floor,
         true,

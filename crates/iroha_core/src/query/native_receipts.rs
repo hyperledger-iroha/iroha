@@ -7,6 +7,11 @@
 //! remaining native proof graph and
 //! receipt/tree scratch before allocation; this scoped write owner does not fund those graphs.
 
+mod lifecycle;
+pub use lifecycle::{
+    LifecycleWitnessBytes, LifecycleWitnessReadError, lifecycle_activation_witness_owned,
+};
+
 mod amx_begins;
 pub use amx_begins::{
     NativeAmxBeginRelayErrorV1, NativeAmxBeginRelayPollV1, NativeAmxBeginRelayReadV1,
@@ -82,9 +87,18 @@ fn original_source(
         .root_scope()
         .into();
     let finality = build_proof(view, height).map_err(|error| error.to_string())?;
-    let decoded = finality
-        .decode_checked(scope)
-        .map_err(|error| error.to_string())?;
+    original_source_from_proof(view, height, scope, finality)
+}
+
+// Only native verified producers inside this module supply this owned proof. Keeping the
+// archive join here lets consecutive receipt reads share their actual finality reader,
+// while retaining every carrier, namespace, allocation and write-root check.
+fn original_source_from_proof(
+    view: &impl StateReadOnly,
+    height: u64,
+    scope: iroha_data_model::sumeragi_finality::CertifiedResultScope,
+    finality: SumeragiFinalityProof,
+) -> Result<OriginalReceiptSource, String> {
     let budget = view.prepared_contract_cache().execution_budget().clone();
     let archive = NativeContextArchive::open_existing(
         view.kura(),
@@ -95,29 +109,16 @@ fn original_source(
     let bytes = archive
         .read_exact(height, finality.block_header.hash())
         .map_err(|error| error.to_string())?;
-    let projection =
-        ordinary_writes::decode_projection(&bytes, &budget).map_err(|error| error.to_string())?;
-    if projection.carrier_height != height
-        || projection.carrier_hash != finality.block_header.hash()
-    {
-        return Err("original write archive names another certified carrier".into());
-    }
-    if !projection.casting_bindings.belongs_to(&budget) {
-        return Err("original casting array belongs to another allocation pool".into());
-    }
-    let witness = projection.witness;
-    let path = NativeLaneStateProof::from_witness(witness.get(), &budget)
-        .map_err(|error| error.to_string())?;
-    if !path.verify(
+    let projection = checked_original_projection(
+        &bytes,
+        &budget,
         *view.network_id(),
         height,
-        decoded.execution().ordinary_writes_root,
-    ) || !path
-        .matches_state_payload(*view.network_id(), height, projection.lane_payload)
-        .map_err(|error| error.to_string())?
-    {
-        return Err("archived original writes differ from certified native execution".into());
-    }
+        scope,
+        &finality,
+    )
+    .map_err(|error| error.to_string())?;
+    let witness = projection.witness;
     archive
         .recheck_namespace()
         .map_err(|error| error.to_string())?;
@@ -127,6 +128,41 @@ fn original_source(
         witness,
         casting_bindings: projection.casting_bindings,
     })
+}
+
+// One archive/proof join for all historical readers. The caller retains its namespace
+// and the exact paid bytes; neither a copied DTO nor a current World value supplies authority.
+fn checked_original_projection<'a>(
+    bytes: &'a iroha_allocation::ChargedBuffer<u8>,
+    budget: &iroha_allocation::AllocationBudget,
+    network: iroha_data_model::NetworkId,
+    height: u64,
+    scope: iroha_data_model::sumeragi_finality::CertifiedResultScope,
+    finality: &SumeragiFinalityProof,
+) -> Result<ordinary_writes::DecodedProjection<'a>, LifecycleWitnessReadError> {
+    let decoded = finality.decode_checked(scope)?;
+    let projection = ordinary_writes::decode_projection(bytes, budget)?;
+    if projection.carrier_height != height
+        || projection.carrier_hash != finality.block_header.hash()
+    {
+        return Err(LifecycleWitnessReadError::Invalid(
+            "original write archive names another certified carrier",
+        ));
+    }
+    if !projection.casting_bindings.belongs_to(budget) {
+        return Err(LifecycleWitnessReadError::Invalid(
+            "original casting array belongs to another allocation pool",
+        ));
+    }
+    let path = NativeLaneStateProof::from_witness(projection.witness.get(), budget)?;
+    if !path.verify(network, height, decoded.execution().ordinary_writes_root)
+        || !path.matches_state_payload(network, height, projection.lane_payload)?
+    {
+        return Err(LifecycleWitnessReadError::Invalid(
+            "archived original writes differ from certified native execution",
+        ));
+    }
+    Ok(projection)
 }
 
 /// Prove one AMX record from its original persisted native execution.
@@ -600,4 +636,22 @@ mod tests {
             "only the original native-bound bytes restore the source"
         );
     }
+}
+
+/// Exact selected-runtime branch from the original archived fixture witness.
+#[cfg(feature = "iroha-core-tests")]
+pub(crate) fn lifecycle_runtime_proof_for_testing(
+    view: &impl StateReadOnly,
+    height: u64,
+) -> Result<
+    iroha_data_model::sumeragi_finality::lifecycle_runtime::AllocatedLifecycleRuntimeProofV1,
+    String,
+> {
+    let source = original_source(view, height)?;
+    iroha_data_model::sumeragi_finality::lifecycle_runtime::LifecycleRuntimeProofV1::from_witness(
+        source.witness.get(),
+        *view.network_id(),
+        height,
+        &view.execution_budget(),
+    )
 }

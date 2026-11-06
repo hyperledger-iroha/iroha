@@ -26,10 +26,11 @@ fn redigest_ivm_release_statement_v1(
 }
 fn native_bound_statement_material_v1(
     domain: &[u8],
-    statement: &PrivacyStatementV1,
+    statement: &PrivacyRuntimeStatementV1,
     consensus_binding: &PrivacyNativeConsensusBindingV1,
 ) -> Result<Vec<u8>, PrivacyReleaseEvidenceErrorClassV1> {
-    let statement_bytes = norito::encode_canonical(statement)
+    let statement_bytes = statement
+        .canonical_wire_bytes_v1()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     let statement_len = u64::try_from(statement_bytes.len())
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
@@ -47,7 +48,7 @@ pub(super) fn run_ivm_private_note_stage_v1(
     case_kind: PrivacyReleaseCaseKindV1,
 ) -> Result<StageMaterialV1, PrivacyReleaseEvidenceErrorClassV1> {
     let maximum = case_kind == PrivacyReleaseCaseKindV1::MaximumShapeResource;
-    let protocol_id = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
     let fixture_seed =
         stage_purpose_seed_v1(protocol_id, case_kind, b"canonical-fixture-encryption")?;
     let mut fixture_rng = EvidenceRng06::new(fixture_seed);
@@ -79,7 +80,7 @@ pub(super) fn run_ivm_private_note_stage_v1(
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
     verify_ivm_private_note_v1(&statement, &consensus_binding, &consensus_limits, &proof)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected)?;
-    let original_typed = PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement.clone());
+    let original_typed = PrivacyRuntimeStatementV1::IrohaIvmPrivateNoteStarkV1(statement.clone());
     let original_material = native_bound_statement_material_v1(
         b"iroha.privacy.release.ivm-private-note.bound-statement.v1",
         &original_typed,
@@ -252,7 +253,7 @@ pub(super) fn run_pq_masp_stage_v1(
     case_kind: PrivacyReleaseCaseKindV1,
 ) -> Result<StageMaterialV1, PrivacyReleaseEvidenceErrorClassV1> {
     let maximum = case_kind == PrivacyReleaseCaseKindV1::MaximumShapeResource;
-    let protocol_id = PrivacyProtocolIdV1::PqMaspStarkV1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::PqMaspStarkV1;
     let keygen_seed = stage_purpose_seed_v1(protocol_id, case_kind, b"canonical-fixture-keygen")?;
     let fixture_seed =
         stage_purpose_seed_v1(protocol_id, case_kind, b"canonical-fixture-encryption")?;
@@ -287,7 +288,7 @@ pub(super) fn run_pq_masp_stage_v1(
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
     verify_pq_masp_v1(&statement, &consensus_binding, &consensus_limits, &proof)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected)?;
-    let original_typed = PrivacyStatementV1::PqMaspStarkV1(statement.clone());
+    let original_typed = PrivacyRuntimeStatementV1::PqMaspStarkV1(statement.clone());
     let original_material = native_bound_statement_material_v1(
         b"iroha.privacy.release.pq-masp.bound-statement.v1",
         &original_typed,
@@ -511,7 +512,7 @@ mod tests {
 
     #[test]
     fn ivm_release_fixtures_reach_consensus_and_relation_preflight_without_proving() {
-        let protocol_id = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+        let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
         for case_kind in [
             PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd,
             PrivacyReleaseCaseKindV1::MaximumShapeResource,
@@ -546,7 +547,7 @@ mod tests {
 
     #[test]
     fn pq_masp_release_fixtures_reach_consensus_and_relation_preflight_without_proving() {
-        let protocol_id = PrivacyProtocolIdV1::PqMaspStarkV1;
+        let protocol_id = PrivacyRuntimeProtocolIdV1::PqMaspStarkV1;
         for case_kind in [
             PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd,
             PrivacyReleaseCaseKindV1::MaximumShapeResource,

@@ -2054,3 +2054,135 @@ async fn committed_padding_and_retention_refuse_before_original_wallet_effects()
         );
     }
 }
+
+#[test]
+fn ironwood_onecall_schema_policy_is_explicit_and_bound_before_sharing() {
+    let client = client_with_base_url(&"http://context.invalid/".parse().unwrap());
+    let (proof, intent) = context(&client);
+    let original = request(&client, &proof, &intent);
+    let anchor = original.0.schema;
+    let digest = original.0.digest;
+    let successor = Hash::new(b"independently qualified successor");
+    let expanded = original
+        .with_world_schemas(vec![successor, anchor])
+        .unwrap();
+    assert_ne!(expanded.0.digest, digest);
+    assert!(expanded.0.schemas.contains(&anchor));
+    assert!(expanded.0.schemas.contains(&successor));
+    let shared = expanded.clone();
+    assert!(expanded.with_world_schemas(vec![anchor]).is_err());
+    assert!(shared.with_world_schemas(vec![successor]).is_err());
+    assert_eq!(
+        request(&client, &proof, &intent)
+            .with_world_schemas(vec![anchor])
+            .unwrap()
+            .0
+            .digest,
+        digest
+    );
+}
+
+#[test]
+fn ironwood_exact_schema_resumes_original_digest_independently_of_policy_setter_order() {
+    let client = client_with_base_url(&"http://context.invalid/".parse().unwrap());
+    let (proof, intent) = context(&client);
+    let original = request(&client, &proof, &intent);
+    let anchor = original.0.schema;
+    let old_sdk_digest = original.0.exact_schema_digest;
+    let successor = Hash::new(b"qualified second schema");
+    let third = Hash::new(b"qualified third schema");
+    let direct = original
+        .with_world_schemas(vec![anchor, successor])
+        .unwrap();
+    let direct_digest = direct.0.digest;
+    let reordered = request(&client, &proof, &intent)
+        .with_world_schemas(vec![anchor, third])
+        .unwrap()
+        .with_world_schemas(vec![successor, anchor, successor])
+        .unwrap();
+    assert_eq!(direct_digest, reordered.0.digest);
+    assert_ne!(direct_digest, old_sdk_digest);
+    for reset in [direct, reordered] {
+        let reset = reset.with_world_schemas(vec![anchor]).unwrap();
+        assert_eq!(
+            reset.0.digest, old_sdk_digest,
+            "exact pins resume pre-family journals"
+        );
+        assert_eq!(reset.plan().request_context_digest, old_sdk_digest);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn ironwood_onecall_default_native_family_accepts_successor_cut_through_preparation_driver() {
+    let family = iroha_data_model::sumeragi_finality::native_world_schema_family_v1();
+    // The portable family is sorted by hash, not activation order. Exercise both
+    // directions so this includes baseline requests reading the successor cut.
+    for (anchor, successor) in [(family[0], family[1]), (family[1], family[0])] {
+        for exact in [false, true] {
+            let mut native = NativeFinalityFixture::start("ironwood-onecall-schema-transition");
+            let mut builder =
+                client_with_base_url(&"http://context.invalid/".parse().unwrap()).to_builder();
+            builder.network_id = native.network_id();
+            builder.chain = native.chain_id().parse().unwrap();
+            let client = builder.build().unwrap();
+            let (mut proof, intent) = context(&client);
+            for context in &mut proof.contexts {
+                context.pool.world.schema_hash = anchor;
+            }
+            let request = request(&client, &proof, &intent);
+            assert_eq!(request.0.schemas, family);
+            let old_sdk_digest = request.0.exact_schema_digest;
+            let request = if exact {
+                let pinned = request.with_world_schemas(vec![anchor]).unwrap();
+                assert_eq!(pinned.0.digest, old_sdk_digest);
+                assert_eq!(pinned.plan().request_context_digest, old_sdk_digest);
+                pinned
+            } else {
+                assert_ne!(request.0.digest, old_sdk_digest);
+                request
+            };
+            for context in &mut proof.contexts {
+                context.pool.world.schema_hash = successor;
+            }
+            let verifier = native.verifier();
+            let block = native.block_with_submitted_work(native.next_header());
+            let finality =
+                native.certify_with_world_root(block, proof.contexts[0].pool.world.root().unwrap());
+            let client = client
+                .to_builder()
+                .http_transport(Arc::new(FinalityTransport(finality)))
+                .build()
+                .unwrap();
+            let root = tempfile::tempdir().unwrap();
+            let wallet = Arc::new(RefusingWallet::default());
+            let operation = OneCallPrivateSettlementOperation::with_source(
+                client.account_client().unwrap(),
+                request,
+                Arc::new(
+                    FileWorkflowStorage::open_or_create(root.path().join("journals")).unwrap(),
+                ),
+                Arc::new(
+                    FilePrivateSettlementArtifacts::open(&root.path().join("artifacts"), &[29; 32])
+                        .unwrap(),
+                ),
+                Arc::new(Source {
+                    proof: Some(proof),
+                    reads: AtomicUsize::new(0),
+                }),
+                wallet.clone(),
+                verifier,
+            )
+            .unwrap();
+            let result = operation.run(&PrivateSettlementRunOptions::default()).await;
+            assert!(
+                result.is_err(),
+                "fixture deliberately refuses at the wallet"
+            );
+            assert_eq!(
+                wallet.open.load(Ordering::SeqCst),
+                usize::from(!exact),
+                "only the default qualified family reaches the wallet through PreparationDriver"
+            );
+        }
+    }
+}

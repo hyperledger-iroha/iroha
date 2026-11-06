@@ -6,7 +6,9 @@ use crate::{
     NetworkId,
     account::AccountId,
     block::{
-        BlockSignatures, builder::BlockBuilder, execution_output::NetworkExecutionOutputV1,
+        BlockSignatures,
+        builder::BlockBuilder,
+        execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
         output_test_support,
     },
     isi::Log,
@@ -70,6 +72,62 @@ fn certify_attempts(fixture: &mut NativeFinalityFixture) -> VerifiedSumeragiBloc
     NativeFinalityFixture::install_network_results(&mut block, vec![Ok(vec![]), rejected()]);
     let proof = fixture.certify(block);
     fixture.verifier().verify_retained_decision(&proof).unwrap()
+}
+
+#[test]
+fn lifecycle_ledger_finality_keeps_the_complete_network_row() {
+    use crate::block::execution_output::{NetworkExecutionOutputV2, TriggerLifecycleEffectsV1};
+    let mut fixture = NativeFinalityFixture::start("lifecycle-ledger-finality");
+    let header = fixture.next_header();
+    let mut builder = BlockBuilder::new(header);
+    for label in ["applied lifecycle", "rejected lifecycle"] {
+        builder.push_transaction(transaction(
+            fixture.network_id(),
+            header.creation_time_ms,
+            label,
+        ));
+    }
+    let mut block = builder.build(BlockSignatures::default());
+    let outputs = [Ok(vec![]), rejected()]
+        .into_iter()
+        .enumerate()
+        .map(|(index, result)| {
+            ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+                execution: NetworkExecutionOutputV1 {
+                    input_index: index as u32,
+                    result: TransactionResult::new(result),
+                    completions: vec![],
+                },
+                trigger_lifecycle: TriggerLifecycleEffectsV1::Complete { effects: vec![] },
+            })
+        })
+        .collect();
+    output_test_support::install(&mut block, outputs, 0).unwrap();
+    let proof = fixture.certify(block);
+    let block = fixture.verifier().verify_retained_decision(&proof).unwrap();
+    let selected = reader(&fixture);
+    for (index, accepted) in [(0, true), (1, false)] {
+        let (envelope, signed) = attempt(&block, index);
+        let bytes = envelope.to_canonical_bytes().unwrap();
+        let decoded = KagemushaWalletLedgerFinalityV1::decode_canonical(&bytes).unwrap();
+        assert_eq!(decoded, envelope);
+        assert_eq!(
+            decoded
+                .verify(&selected, fixture.chain_id(), &signed)
+                .unwrap()
+                .accepted(),
+            accepted
+        );
+        let mut substituted = decoded;
+        substituted.inclusion.output =
+            ExecutionOutputV1::Network(substituted.inclusion.output.network().unwrap().clone());
+        assert!(
+            substituted
+                .verify(&selected, fixture.chain_id(), &signed)
+                .is_err(),
+            "the authenticated leaf includes lifecycle coverage"
+        );
+    }
 }
 
 /// The envelope Torii serves for one Network input, and the signed wire the wallet retained.

@@ -26,7 +26,7 @@ pub fn read(
 ) -> Result<PrivateSettlementPolicyV1, ExecutionAttemptError<String>> {
     if let Some(protocol) = protocol {
         if protocol.protocol_id
-            != iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
+            != iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1
         {
             return Err("private-settlement protocol identity differs".into());
         }

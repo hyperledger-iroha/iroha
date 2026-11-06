@@ -87,8 +87,8 @@ use iroha_data_model::{
     },
     privacy::{
         PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
-        PrivacyCompiledProfileCatalogV1, PrivacyExact12CapabilityManifestV1, PrivacyProtocolIdV1,
-        validate_privacy_capability_archive_v1,
+        PrivacyCompiledProfileCatalogV1, PrivacyExact12CapabilityManifestV1,
+        PrivacyRuntimeProtocolIdV1, validate_privacy_capability_archive_v1,
     },
     proof::ProofAttachment,
     smart_contract::ContractAddress,
@@ -6458,13 +6458,16 @@ fn privacy_compiled_profile_catalog() -> napi::Result<PrivacyCompiledProfileCata
             format!("build local privacy compiled-profile catalog: {error}"),
         )
     })?;
-    debug_assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::ALL.len());
+    debug_assert_eq!(
+        catalog.protocols.len(),
+        PrivacyRuntimeProtocolIdV1::ALL.len()
+    );
     debug_assert!(
         catalog
             .protocols
             .iter()
             .map(|row| row.protocol_id)
-            .eq(PrivacyProtocolIdV1::ALL)
+            .eq(PrivacyRuntimeProtocolIdV1::ALL)
     );
     Ok(catalog)
 }
@@ -6569,7 +6572,7 @@ pub fn privacy_require_exact12_capability_tuple_v1(
     expected_network_id: Uint8Array,
 ) -> napi::Result<bool> {
     let expected_network_id = parse_transaction_network_id_bytes(expected_network_id.as_ref())?;
-    let protocol_id = PrivacyProtocolIdV1::from_canonical_label(&protocol_id).ok_or_else(|| {
+    let protocol_id = PrivacyRuntimeProtocolIdV1::from_canonical_label(&protocol_id).ok_or_else(|| {
         napi::Error::new(
             napi::Status::InvalidArg,
             "protocol_id must be one exact retained Exact12 identifier; aliases and retired identifiers are rejected",
@@ -8870,12 +8873,14 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             sources: Some(vec![
                 JsKotodamaSourceFile {
                     source_name: "parts/view.ko".into(),
-                    source: "view fn value() authorize(anyone) -> int { return arith::value(); }"
+                    source: "view fn value(int input) authorize(anyone) -> int { return arith::value(input: input); }"
                         .into(),
                 },
                 JsKotodamaSourceFile {
                     source_name: "math.ko".into(),
-                    source: "module Math { export fn value() -> int { return 7; } }".into(),
+                    // Source maps describe emitted instructions; keep the helper's work
+                    // dependent on a runtime argument so literal folding cannot remove it.
+                    source: "module Math { export fn value(int input) -> int { return input + 7; } }".into(),
                 },
             ]),
             imports: None,
@@ -8893,7 +8898,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
         let mut request = JsKotodamaCompileRequest {
             artifacts: Vec::new(),
             source:
-                "seiyaku App { view fn value() authorize(anyone) -> int { return calc::value(); } }"
+                "seiyaku App { view fn value(int input) authorize(anyone) -> int { return calc::value(input: input); } }"
                     .into(),
             source_name: Some("app.ko".into()),
             sources: None,
@@ -8910,7 +8915,8 @@ seiyaku Privacy { permission CanCommitPrivateInput;
                 }],
                 sources: Some(vec![JsKotodamaSourceFile {
                     source_name: "src/body.ko".into(),
-                    source: "export fn value() -> int { return 7; }".into(),
+                    // Keep emitted work in the companion for its source-map assertion.
+                    source: "export fn value(int input) -> int { return input + 7; }".into(),
                 }]),
                 exports: vec!["value".into()],
                 imports: None,
@@ -8926,7 +8932,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             .sources
             .as_mut()
             .expect("companions")[0]
-            .source = "export fn value() -> int { return missing; }".into();
+            .source = "export fn value(int input) -> int { return missing; }".into();
         let invalid = compile_kotodama_request(&request).expect("bounded invalid source");
         assert!(!invalid.ok);
         let diagnostics = invalid.diagnostics_json.expect("native package diagnostic");
@@ -8969,13 +8975,13 @@ seiyaku Privacy { permission CanCommitPrivateInput;
         catalog
             .validate()
             .expect("canonical compiled-profile catalog");
-        assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::COUNT);
+        assert_eq!(catalog.protocols.len(), PrivacyRuntimeProtocolIdV1::COUNT);
         assert!(
             catalog
                 .protocols
                 .iter()
                 .map(|row| row.protocol_id)
-                .eq(PrivacyProtocolIdV1::ALL)
+                .eq(PrivacyRuntimeProtocolIdV1::ALL)
         );
     }
     #[test]
@@ -8991,7 +8997,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
         let catalog: PrivacyCompiledProfileCatalogV1 =
             norito::decode_from_bytes(&bytes).expect("decode N-API compiled-profile catalog");
         catalog.validate().expect("N-API compiled-profile catalog");
-        assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::COUNT);
+        assert_eq!(catalog.protocols.len(), PrivacyRuntimeProtocolIdV1::COUNT);
         assert!(
             norito::decode_from_bytes::<iroha_data_model::privacy::PrivacyCapabilitySnapshotV1>(
                 &bytes
@@ -9041,12 +9047,12 @@ seiyaku Privacy { permission CanCommitPrivateInput;
                 .code()
         );
     }
-    fn available_exact12_capability_manifest_archive() -> (PrivacyProtocolIdV1, Vec<u8>) {
+    fn available_exact12_capability_manifest_archive() -> (PrivacyRuntimeProtocolIdV1, Vec<u8>) {
         use iroha_data_model::privacy::{
             PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PrivacyCapabilityRowV1,
             PrivacyCapabilitySnapshotV1, PrivacyConsensusPolicyV1,
         };
-        let active_protocol = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1;
+        let active_protocol = PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1;
         let catalog = privacy_compiled_profile_catalog().expect("compiled-profile catalog");
         let protocols = catalog
             .protocols
@@ -9076,8 +9082,8 @@ seiyaku Privacy { permission CanCommitPrivateInput;
     #[test]
     fn privacy_exact12_optional_policy_preserves_native_availability_and_tuple_binding() {
         use iroha_data_model::privacy::{
-            PrivacyCompiledProfileResultV1, PrivacyParameterDigestV1, PrivacyProtocolLimitsV1,
-            PrivacyProtocolPolicyV1,
+            PrivacyCompiledProfileResultV1, PrivacyParameterDigestV1, PrivacyProtocolPolicyV1,
+            PrivacyRuntimeProtocolLimitsV1,
         };
         let (protocol, archive) = available_exact12_capability_manifest_archive();
         let mut manifest = decode_privacy_exact12_capability_manifest_v1(&archive).unwrap();
@@ -9088,7 +9094,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             .find(|row| row.protocol_id == protocol)
             .unwrap();
         let mut limits = row.effective_protocol_limits_v1().unwrap();
-        let PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(ref mut pgc) = limits else {
+        let PrivacyRuntimeProtocolLimitsV1::AnonymousPgcKOutOfNV1(ref mut pgc) = limits else {
             panic!("selected PGC limits")
         };
         pgc.max_recipient_count = 1;
@@ -9158,7 +9164,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
         assert!(
             privacy_require_exact12_capability_tuple_v1(
                 Uint8Array::from(archive.clone()),
-                PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
+                PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1
                     .canonical_label()
                     .to_owned(),
                 test_network_id_bytes(b"privacy-exact12-network"),

@@ -14,19 +14,22 @@ impl StorageBackend {
             .next()
             .map(|(id, _)| id.clone()))
     }
-    /// Returns a clone of the stored manifest metadata, if present.
+    /// Returns a shared handle to the stored manifest metadata, if present.
+    ///
+    /// Stored descriptors are immutable, so the handle is a stable snapshot without copying the
+    /// manifest's file and chunk records.
     #[must_use]
-    pub fn manifest(&self, manifest_id: &str) -> Option<StoredManifest> {
+    pub fn manifest(&self, manifest_id: &str) -> Option<Arc<StoredManifest>> {
         self.state
             .read()
             .expect("storage state poisoned")
             .manifests
             .get(manifest_id)
-            .map(|manifest| manifest.as_ref().clone())
+            .cloned()
     }
-    /// Returns a clone of the stored manifest metadata, looked up by digest.
+    /// Returns a shared handle to the stored manifest metadata, looked up by digest.
     #[must_use]
-    pub fn manifest_by_digest(&self, digest: &[u8; 32]) -> Option<StoredManifest> {
+    pub fn manifest_by_digest(&self, digest: &[u8; 32]) -> Option<Arc<StoredManifest>> {
         let manifest_id = hex::encode(digest);
         self.state
             .read()
@@ -34,16 +37,36 @@ impl StorageBackend {
             .manifests
             .get(&manifest_id)
             .filter(|manifest| manifest.manifest_digest == *digest)
-            .map(|manifest| manifest.as_ref().clone())
+            .cloned()
+    }
+    /// Resolve a client manifest reference to its canonical stored identifier.
+    ///
+    /// Stored identifiers are the lowercase hex encoding of the manifest digest, so an
+    /// identifier reference in any letter case resolves through one map lookup. Any other
+    /// reference is decoded as a hex manifest CID and resolves to the lowest identifier carrying
+    /// that CID. No manifest metadata is copied.
+    #[must_use]
+    pub fn resolve_manifest_reference(&self, reference: &str) -> Option<String> {
+        let state = self.state.read().expect("storage state poisoned");
+        let canonical = reference.to_ascii_lowercase();
+        if state.manifests.contains_key(canonical.as_str()) {
+            return Some(canonical);
+        }
+        let cid = hex::decode(reference).ok()?;
+        state
+            .manifests
+            .iter()
+            .find(|(_, manifest)| manifest.manifest_cid() == cid.as_slice())
+            .map(|(manifest_id, _)| manifest_id.clone())
     }
     /// Return the deterministic preferred manifest for a content CID without cloning the store.
     ///
     /// Site manifests (those with a root `index.html`) rank ahead of blob-only variants, followed
     /// by file count, manifest digest, and manifest identifier. The final two keys preserve the
     /// previous deterministic tie-breaking of the sorted full-snapshot implementation while this
-    /// lookup retains and clones only the selected manifest.
+    /// lookup retains only a shared handle to the selected manifest.
     #[must_use]
-    pub fn manifest_by_cid_prefer_site(&self, cid: &[u8]) -> Option<StoredManifest> {
+    pub fn manifest_by_cid_prefer_site(&self, cid: &[u8]) -> Option<Arc<StoredManifest>> {
         let state = self.state.read().expect("storage state poisoned");
         state
             .manifests
@@ -63,6 +86,6 @@ impl StorageBackend {
                     .then_with(|| left.manifest_digest().cmp(right.manifest_digest()))
                     .then_with(|| left.manifest_id().cmp(right.manifest_id()))
             })
-            .map(|manifest| manifest.as_ref().clone())
+            .cloned()
     }
 }

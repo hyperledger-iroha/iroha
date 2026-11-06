@@ -14,7 +14,7 @@ use iroha_data_model::{
     asset::AssetDefinitionId,
     privacy::{
         IrohaIvmPrivateNoteStarkStatementV1, PrivacyActionDigestV1, PrivacyNullifierV1,
-        PrivacyPoolIdV1, PrivacyProtocolIdV1, PrivacyRootV1, PrivacyStatementContextV1,
+        PrivacyPoolIdV1, PrivacyRootV1, PrivacyRuntimeProtocolIdV1, PrivacyStatementContextV1,
         PrivacyTransactionIntentDigestV1, PrivacyValueBalanceV1,
     },
 };
@@ -63,8 +63,9 @@ fn context_from_compiled_profile_v1(
     }
 }
 fn context() -> Result<PrivacyStatementContextV1, IvmPrivateNoteReleaseFixtureErrorV1> {
-    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
-        .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?;
+    let profile =
+        compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
+            .map_err(|_| IvmPrivateNoteReleaseFixtureErrorV1)?;
     Ok(context_from_compiled_profile_v1(&profile))
 }
 fn conservation_program() -> Result<PrivateProgramV1, IvmPrivateNoteReleaseFixtureErrorV1> {
@@ -340,8 +341,9 @@ mod tests {
     use rand_chacha::ChaCha12Rng;
     #[test]
     fn release_context_binds_every_compiled_profile_digest() {
-        let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
-            .expect("compiled IVM private-note profile");
+        let profile =
+            compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
+                .expect("compiled IVM private-note profile");
         let baseline =
             norito::encode_canonical(&context_from_compiled_profile_v1(&profile)).expect("context");
         let mutations: [fn(&mut CompiledPrivacyProfileV1); 5] = [

@@ -1,4 +1,4 @@
-//! Authored source controls only; no compilation or execution has occurred.
+//! Canonical registration metadata, general batches and contract-call records.
 use super::*;
 use crate::{
     account::AccountId,
@@ -70,7 +70,7 @@ fn metadata_wire(entries: &[(&str, &str)]) -> Vec<u8> {
 
 fn scan_metadata_bytes(bytes: &[u8]) -> Result<(), ScanError> {
     let mut budget = Budget::new(limits());
-    scan_metadata(Cursor::root(bytes, &mut budget)?, &mut budget)
+    test_scan_metadata(Cursor::root(bytes, &mut budget)?, &mut budget)
 }
 
 fn invocation_parts(address: &[u8], hash: &[u8], entrypoint: &[u8], arguments: &[u8]) -> Vec<u8> {
@@ -126,34 +126,21 @@ fn original_numeric_json_boundaries_have_exact_decimal_wire_and_scan() {
 }
 
 #[test]
-fn registration_numbers_refuse_noncanonical_spellings_and_other_keys() {
-    for text in [
-        "",
-        "00",
-        "01",
-        "-0",
-        "-1",
-        "+1",
-        "1.0",
-        "1e0",
-        " 1",
-        "1 ",
-        "18446744073709551616",
-        "100000000000000000000",
-        "１",
-    ] {
+fn metadata_numbers_refuse_noncanonical_spellings() {
+    for text in ["", "00", "01", "-0", "+1", "1e0", " 1", "1 ", "１"] {
         for name in ["__registered_at_ms", "__registered_block_height"] {
             assert_eq!(
                 scan_metadata_bytes(&metadata_wire(&[(name, text)])),
-                Err(ScanError::UnsupportedMetadata)
+                Err(ScanError::NonCanonical),
+                "metadata number {text:?}",
             );
         }
     }
-    assert_eq!(
-        scan_metadata_bytes(&metadata_wire(&[("other", "1")])),
-        Err(ScanError::UnsupportedMetadata)
-    );
-    // This preexisting scanner subset is intentionally preserved even at reserved
+    assert!(scan_metadata_bytes(&metadata_wire(&[("other", "1")])).is_ok());
+    // Canonical floating-point JSON preserves its type-signalling decimal suffix.
+    assert_eq!(Json::from_raw_json("1.0".into()).unwrap().get(), "1.0");
+    assert!(scan_metadata_bytes(&metadata_wire(&[("__registered_at_ms", "1.0")])).is_ok());
+    // Metadata values retain the model's general JSON semantics even at reserved
     // names. The typed registration producer separately refuses quoted numbers.
     for text in ["\"1\"", "null", "true", "false", "[]", "{}"] {
         assert!(scan_metadata_bytes(&metadata_wire(&[("__registered_at_ms", text)])).is_ok());
@@ -180,28 +167,25 @@ fn registration_metadata_retains_order_and_full_consumption_checks() {
 }
 
 #[test]
-fn numeric_digit_scan_is_precharged_at_exact_boundary() {
-    let mut bounds = limits();
-    bounds.max_work = 19;
-    assert_eq!(
-        canonical_registration_u64("18446744073709551615", &mut Budget::new(bounds)),
-        Err(ScanError::Limit)
-    );
-    // The malformed overflow spelling must not reach the digit predicate when
-    // work is short: otherwise it would report Ok(false), not the resource error.
-    assert_eq!(
-        canonical_registration_u64("18446744073709551616", &mut Budget::new(bounds)),
-        Err(ScanError::Limit)
-    );
-    bounds.max_work = 20;
-    assert_eq!(
-        canonical_registration_u64("18446744073709551615", &mut Budget::new(bounds)),
-        Ok(true)
-    );
-    assert_eq!(
-        canonical_registration_u64("18446744073709551616", &mut Budget::new(bounds)),
-        Ok(false)
-    );
+fn numeric_json_scan_is_precharged_before_its_predicate() {
+    for (text, expected) in [
+        ("18446744073709551615", Ok(())),
+        ("18446744073709551616", Ok(())),
+        ("018446744073709551615", Err(ScanError::NonCanonical)),
+    ] {
+        let bytes = metadata_wire(&[("__registered_at_ms", text)]);
+        let mut bounds = limits();
+        bounds.max_work = 19;
+        let mut budget = Budget::new(bounds);
+        let scanned = Cursor::root(&bytes, &mut budget)
+            .and_then(|cursor| test_scan_metadata(cursor, &mut budget));
+        assert_eq!(scanned, Err(ScanError::Limit));
+        // Both valid and malformed numeric spellings first need the complete
+        // conservative byte-visit allowance, including outer-field traversal.
+        let mut budget = Budget::new(limits());
+        let cursor = Cursor::root(&bytes, &mut budget).unwrap();
+        assert_eq!(test_scan_metadata(cursor, &mut budget), expected);
+    }
 }
 
 #[test]
@@ -256,7 +240,7 @@ fn original_one_call_batch_and_registration_metadata_match_canonical_action() {
 }
 
 #[test]
-fn batch_count_and_variant_boundaries_remain_closed() {
+fn general_contract_calls_and_batches_validate_every_item() {
     let original = invocation();
     for value in [
         Executable::ContractCall(original.clone()),
@@ -267,13 +251,12 @@ fn batch_count_and_variant_boundaries_remain_closed() {
     ] {
         let bytes = payload(&value);
         let mut budget = Budget::new(limits());
-        assert_eq!(
-            scan_executable(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget),
-            Err(ScanError::UnsupportedExecutable)
+        assert!(
+            test_scan_executable(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget).is_ok()
         );
     }
-    // A dynamic InstructionBox body is not skipped even when its enclosing item
-    // has valid framing. The registry path remains unsupported.
+    // A malformed dynamic InstructionBox body is not skipped merely because
+    // its enclosing item has valid framing.
     let mut item = 0u32.to_le_bytes().to_vec();
     item.extend(field(&[]));
     let mut sequence = 1u64.to_le_bytes().to_vec();
@@ -282,8 +265,8 @@ fn batch_count_and_variant_boundaries_remain_closed() {
     bytes.extend(field(&sequence));
     let mut budget = Budget::new(limits());
     assert_eq!(
-        scan_executable(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget),
-        Err(ScanError::UnsupportedExecutable)
+        test_scan_executable(Cursor::root(&bytes, &mut budget).unwrap(), &mut budget),
+        Err(ScanError::Length)
     );
 }
 
@@ -313,23 +296,22 @@ fn contract_hash_marker_and_every_outer_field_are_consumed() {
 }
 
 #[test]
-fn argument_presence_wire_cap_and_selector_bounds_are_enforced() {
+fn argument_wire_cap_and_complete_selector_text_are_enforced() {
     use crate::transaction::executable::MAX_CONTRACT_ARGUMENT_RECORD_BYTES;
     for arguments in [None, Some(vec![])] {
-        assert_eq!(
+        assert!(
             scan_invocation_bytes(&invocation_bytes(
                 ADDRESS,
                 &[1; 32],
                 "entry",
                 arguments.as_deref()
-            )),
-            Err(ScanError::UnsupportedExecutable)
+            ))
+            .is_ok()
         );
     }
     for name in ["", " entry", "entry ", "\u{2003}entry"] {
-        assert_eq!(
-            scan_invocation_bytes(&invocation_bytes(ADDRESS, &[1; 32], name, Some(&[1]))),
-            Err(ScanError::UnsupportedExecutable)
+        assert!(
+            scan_invocation_bytes(&invocation_bytes(ADDRESS, &[1; 32], name, Some(&[1]))).is_ok()
         );
     }
     assert!(
@@ -348,7 +330,7 @@ fn argument_presence_wire_cap_and_selector_bounds_are_enforced() {
             &"x".repeat(256),
             Some(&[1])
         ))
-        .is_err()
+        .is_ok()
     );
     let maximum = vec![0u8; MAX_CONTRACT_ARGUMENT_RECORD_BYTES];
     // These opaque zero bytes deliberately demonstrate outer framing scope only;

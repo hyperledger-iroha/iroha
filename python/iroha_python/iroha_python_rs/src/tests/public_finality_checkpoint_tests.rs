@@ -454,6 +454,67 @@ fn public_checkpoint_pages_match_original_prefix_and_replay() {
         assert_eq!(tip, page1.tip_proof_chain_json);
     });
 }
+#[test]
+fn public_checkpoint_page_verification_releases_the_gil() {
+    use std::sync::{
+        Arc, Barrier,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+    const BLOCKS: u64 = 40;
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1000)).unwrap();
+    for height in 2..=BLOCKS {
+        chain.commit_at(height * 1000, Vec::new());
+    }
+    let view = chain.state().view();
+    let frames: Vec<Vec<u8>> = (1..=BLOCKS)
+        .map(|height| norito::to_bytes(&build_proof(&view, height).unwrap()).unwrap())
+        .collect();
+    let genesis = build_proof(&view, 1).unwrap().block_wire;
+    drop(view);
+    let initial = call(&genesis, &frames[..2], chain.network_id(), CHAIN).unwrap();
+    let expected = advance(
+        &initial.checkpoint,
+        &frames[1..].iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        chain.network_id(),
+        CHAIN,
+    )
+    .unwrap();
+    Python::initialize();
+    let attached = Arc::new(AtomicUsize::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    let ready = Arc::new(Barrier::new(2));
+    let helper = {
+        let (attached, stop, ready) = (attached.clone(), stop.clone(), ready.clone());
+        std::thread::spawn(move || {
+            ready.wait();
+            while !stop.load(Ordering::SeqCst) {
+                // Blocks while another thread holds the GIL.
+                Python::attach(|_| attached.fetch_add(1, Ordering::SeqCst));
+            }
+        })
+    };
+    Python::attach(|py| {
+        let proof_tuple =
+            PyTuple::new(py, frames[1..].iter().map(|wire| PyBytes::new(py, wire))).unwrap();
+        let network = super::super::PyNetworkId::parse(&chain.network_id().to_string()).unwrap();
+        let checkpoint = PyBytes::new(py, &initial.checkpoint);
+        attached.store(0, Ordering::SeqCst);
+        ready.wait();
+        let (metadata_json, checkpoint, _) =
+            advance_public_finality_checkpoint_v1(py, &checkpoint, &proof_tuple, &network, CHAIN)
+                .unwrap();
+        // Without a GIL release the helper cannot attach until this closure ends.
+        let during = attached.load(Ordering::SeqCst);
+        stop.store(true, Ordering::SeqCst);
+        assert_eq!(checkpoint.bind(py).as_bytes(), expected.checkpoint);
+        assert_eq!(metadata_json, expected.metadata_json);
+        assert!(
+            during > 0,
+            "another thread never attached during page verification"
+        );
+    });
+    helper.join().unwrap();
+}
 
 fn large_genesis_fixture() -> CertifiedTestChain {
     let mut config = TestChainConfig::new(World::new(), 1000);

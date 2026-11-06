@@ -148,11 +148,11 @@ fn x509_model_plan_preserves_original_context_and_binds_only_one_proof_occurrenc
         attachments.actions()[0].statement_digest.as_bytes(),
         &projection.action_digest
     );
-    let statement: PrivacyStatementV1 =
+    let statement: PrivacyRuntimeStatementV1 =
         norito::decode_canonical(&projection.statement_norito).unwrap();
     assert_eq!(
         statement,
-        PrivacyStatementV1::IrohaZkX509StarkP256V1(projection.statement)
+        PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(projection.statement)
     );
     payload.attachments = None;
     assert_eq!(
@@ -301,7 +301,7 @@ fn x509_native_admission_checks_original_network_and_authority_before_selection(
 // Independently framed structural container with no valid MAIN or CA proof. This test-only
 // encoder owns no production codec and its success means framing/header binding only.
 fn structural_container(statement: &IrohaZkX509StarkP256StatementV1) -> Vec<u8> {
-    let digest = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone())
+    let digest = PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement.clone())
         .digest()
         .unwrap();
     let genesis = statement.context.network_id.as_bytes();

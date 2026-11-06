@@ -10,8 +10,8 @@ use crate::{
     },
     parameter::Parameters,
     privacy::{
-        PrivacyProtocolIdV1, PrivacyProtocolLimitsV1, PrivacyProtocolPolicyKeyV1,
-        PrivacyProtocolPolicyV1, PrivateSettlementPolicyParameterErrorV1,
+        PrivacyProtocolPolicyKeyV1, PrivacyProtocolPolicyV1, PrivacyRuntimeProtocolIdV1,
+        PrivacyRuntimeProtocolLimitsV1, PrivateSettlementPolicyParameterErrorV1,
         PrivateSettlementPolicyV1, PrivateSettlementValidityLimitsV1,
         private_settlement_admission_deadline_v1, private_settlement_protocol_admission_open_v1,
         validate_private_settlement_sponsor_v1,
@@ -134,7 +134,7 @@ impl PrivateSettlementContextsProofV1 {
     pub fn verify(
         &self,
         network: NetworkId,
-        schema: Hash,
+        schema: impl crate::sumeragi_finality::WorldStateSchemaPolicyV1,
         request: &PrivateSettlementContextRequestV1,
         block: &VerifiedSumeragiBlock,
     ) -> Result<(), FinalityReadError> {
@@ -150,7 +150,7 @@ impl PrivateSettlementContextsProofV1 {
             if proof.pool.world != first.pool.world || proof.lanes != first.lanes {
                 return Err(invalid().into());
             }
-            proof.verify(network, schema, *key, block)?;
+            proof.verify(network, &schema, *key, block)?;
         }
         Ok(())
     }
@@ -393,7 +393,7 @@ impl PrivateSettlementContextProofV1 {
     pub fn verify(
         &self,
         network: NetworkId,
-        schema: Hash,
+        schema: impl crate::sumeragi_finality::WorldStateSchemaPolicyV1,
         key: PrivateSettlementPoolKeyV1,
         block: &VerifiedSumeragiBlock,
     ) -> Result<VerifiedPrivateSettlementContextV1<'_>, FinalityReadError> {
@@ -420,7 +420,7 @@ impl PrivateSettlementContextProofV1 {
                 .validate_protocol_policy(self.protocol_policy.as_ref())
                 .map_err(private_policy_error)?;
         }
-        let protocol = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+        let protocol = PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
         let protocol_key = PrivacyProtocolPolicyKeyV1::new(protocol);
         let limits = if let Some(policy) = &self.protocol_policy {
             world.verify_table_value("world.privacy_protocol_policies", &protocol_key, policy)?;
@@ -433,7 +433,7 @@ impl PrivateSettlementContextProofV1 {
             policy.current_limits
         } else {
             world.verify_privacy_protocol_policy_absent(protocol)?;
-            PrivacyProtocolLimitsV1::canonical_default_v1(protocol)
+            PrivacyRuntimeProtocolLimitsV1::canonical_default_v1(protocol)
         };
         if !private_settlement_protocol_admission_open_v1(&limits) {
             return Err(invalid().into());

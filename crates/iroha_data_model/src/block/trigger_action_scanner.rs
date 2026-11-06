@@ -1,15 +1,12 @@
-//! Concrete, deliberately incomplete scanner for the unreleased Action frame carrier.
+//! Bounded canonical Action-frame validation with original allocation custody.
 //!
-//! This scanner is not installed as `TriggerLifecycleActionValidatorV1`. It proves
-//! the supported closed subset and refuses all other nested kinds. Full variant
-//! coverage, codec/schema scratch custody and the execution owner's complete
-//! physical ceiling must be closed before that trait is implemented or activated.
-//! The legacy scan paths check only the outer argument-record bytes. The explicit
-//! `scan_owned_with_canonical_arguments` seam also checks the inner record/atom wire,
-//! but not the authenticated callable schema or pointer payload semantics.
-//! Registration numeric values are a structural subset; registration and execution
-//! semantics remain separate.
-//! It never constructs an owned Action, executable, filter, metadata map or JSON tree.
+//! The outer Action, executable sequence, metadata and argument records are
+//! borrowed. Account controllers use their funded destination. Each dynamic
+//! instruction or complex filter is validated one at a time through its typed
+//! canonical codec inside a prepaid transient scratch scope; no root Action or
+//! whole executable graph is materialized. Unknown registry IDs and variants
+//! are refused. This establishes wire semantics, not invocation authorization,
+//! callable schemas, execution, activation or authenticated lifecycle coverage.
 
 #[path = "action_frame_argument_record.rs"]
 mod argument_record;
@@ -22,7 +19,7 @@ use crate::{
     account::prepared_decode::{AccountDecodeError, AccountDestination},
     trigger::action::Action,
 };
-use iroha_allocation::AllocationBudget;
+use iroha_allocation::{AllocationBudget, AllocationReservation, ChargedBuffer};
 use iroha_primitives::json::MAX_JSON_BYTES;
 use norito::core::{self as ncore, DecodeBudgetContext, DecodeLimits};
 
@@ -30,6 +27,15 @@ use super::{TriggerLifecycleActionSemanticsV1, TriggerLifecycleStateKindV1};
 pub use cursor::ActionScannerLimitsV1;
 use cursor::{Budget, Cursor, ScanError};
 pub use custody::{ActionFrameProductionFailureV1, RetainedActionFrameBytesV1};
+
+/// Debit an embedded frame discovered by a typed lifecycle subtree decoder.
+/// Ordinary decoding and producer-only prepaid scopes have no scanner counters.
+pub(crate) fn charge_typed_nested_frame(
+    len: usize,
+    instruction: bool,
+) -> Result<(), norito::Error> {
+    cursor::charge_typed_nested_frame(len, instruction)
+}
 
 const SCANNER_FLAGS: u8 = ncore::header_flags::COMPACT_LEN;
 
@@ -40,10 +46,21 @@ pub enum ActionFrameScanFailureV1 {
     Structure(&'static str),
     /// Original Norito envelope, resource or canonical-comparison failure.
     Codec(norito::Error),
+    /// Original cumulative encoder work or exact-comparison refusal.
+    Encode(ncore::BoundedEncodeWorkError),
     /// Original funded account decoder failure, without replacement or retry.
     Authority(AccountDecodeError),
     /// Original exact-backing admission or allocator refusal, before any copy.
     Capture(iroha_allocation::ChargedBufferError),
+    /// Original admission refusal for audited semantic-normalization scratch.
+    Scratch(iroha_allocation::AllocationRefusal),
+    /// Original typed-subtree failure and its still-retained physical scratch ceiling.
+    Typed {
+        /// Original refusal without a replacement diagnostic.
+        error: norito::Error,
+        /// Original reservation retained until the error and partial decode retire.
+        scratch: AllocationReservation,
+    },
 }
 
 /// A refused preparation retains both its first typed failure and any captured
@@ -101,6 +118,7 @@ pub struct BoundedActionFrameScannerV1<'pool> {
     budget: Budget,
     account_work: DecodeBudgetContext,
     failure: Option<ActionFrameScanFailureV1>,
+    typed_scratch_bytes: usize,
 }
 
 impl<'pool> BoundedActionFrameScannerV1<'pool> {
@@ -118,6 +136,7 @@ impl<'pool> BoundedActionFrameScannerV1<'pool> {
             budget: Budget::new(limits),
             account_work: DecodeBudgetContext::try_new_owned(account_limits, pool)?,
             failure: None,
+            typed_scratch_bytes: account_limits.max_total_allocated_bytes(),
         })
     }
 
@@ -173,7 +192,7 @@ impl<'pool> BoundedActionFrameScannerV1<'pool> {
 
     /// Scan a completed producer owner without recapture or early charge release.
     /// A failure retains the same allocation and first scanner refusal. Success
-    /// remains restricted to this scanner's supported subset.
+    /// validates the complete Action wire grammar.
     ///
     /// # Errors
     /// Returns the same owner together with this scanner's first retained refusal.
@@ -190,14 +209,12 @@ impl<'pool> BoundedActionFrameScannerV1<'pool> {
         self.scan_owned_impl(frame, false)
     }
 
-    /// Scan the same Action owner and the canonical wire of its supported inner record.
+    /// Validate a retained Action and every present argument record's inner wire.
     ///
-    /// Unlike `scan_owned`, a supported one-call Batch must contain a canonical
-    /// `EntrypointArgumentRecordV1`, not merely bounded opaque argument bytes.
-    /// The inner frame is borrowed directly from this Action owner, shares every
-    /// cumulative limit, and counts as another frame. Both success and refusal
-    /// retain the exact original owner and pool charge. This still authenticates
-    /// no callable schema, pointer semantics, registration or lifecycle mutation.
+    /// This explicit additional policy is stricter than canonical model validation:
+    /// the model stores a bounded opaque ContractArgumentRecord byte vector.
+    /// Callable schema hashes and pointer semantics still require execution context.
+    /// The policy also follows typed instructions containing nested trigger Actions.
     ///
     /// # Errors
     /// Returns the same owner together with this scanner's first retained refusal,
@@ -218,7 +235,7 @@ impl<'pool> BoundedActionFrameScannerV1<'pool> {
     fn scan_owned_impl(
         &mut self,
         frame: RetainedActionFrameBytesV1,
-        validate_argument_wire: bool,
+        validate_arguments: bool,
     ) -> Result<
         (
             RetainedActionFrameBytesV1,
@@ -233,11 +250,13 @@ impl<'pool> BoundedActionFrameScannerV1<'pool> {
             ));
         }
         if self.failure.is_none() {
-            let scanned = if validate_argument_wire {
-                self.scan_once_with_canonical_arguments(frame.as_bytes())
-            } else {
-                self.scan_once(frame.as_bytes())
-            };
+            let scanned = self
+                .budget
+                .begin_frame(frame.as_bytes().len())
+                .map_err(ActionFrameScanFailureV1::from)
+                .and_then(|()| {
+                    self.scan_admitted_frame_with_arguments(frame.as_bytes(), validate_arguments)
+                });
             match scanned {
                 Ok(semantics) => return Ok((frame, semantics)),
                 Err(error) => {
@@ -260,8 +279,8 @@ impl<'pool> BoundedActionFrameScannerV1<'pool> {
     /// original typed error. Admission failure returns no byte owner. A previously
     /// refused scanner performs no allocation, copy or subsequent scan.
     ///
-    /// Success means only the existing supported subset passed. It does not make
-    /// a globally validated Action or authenticate supplied bytes, their producer,
+    /// Success validates the complete Action wire grammar but does not authenticate
+    /// supplied bytes, their producer,
     /// lifecycle state, journal, retry semantics or an output ceiling. The source
     /// bytes must already have their own acquisition/serialization custody.
     ///
@@ -336,14 +355,6 @@ impl<'pool> BoundedActionFrameScannerV1<'pool> {
         self.scan_admitted_frame(frame)
     }
 
-    fn scan_once_with_canonical_arguments(
-        &mut self,
-        frame: &[u8],
-    ) -> Result<TriggerLifecycleActionSemanticsV1, ActionFrameScanFailureV1> {
-        self.budget.begin_frame(frame.len())?;
-        self.scan_admitted_frame_with_arguments(frame, true)
-    }
-
     // Each caller performs exactly one begin_frame before entering this parser.
     // The custody path additionally charges the full copy before allocation.
     fn scan_admitted_frame(
@@ -356,7 +367,7 @@ impl<'pool> BoundedActionFrameScannerV1<'pool> {
     fn scan_admitted_frame_with_arguments(
         &mut self,
         frame: &[u8],
-        validate_argument_wire: bool,
+        validate_arguments: bool,
     ) -> Result<TriggerLifecycleActionSemanticsV1, ActionFrameScanFailureV1> {
         // Exact schema, flags, padding, uncompressed length and CRC precede any
         // nested interpretation. Ambient layout flags cannot select another grammar.
@@ -375,25 +386,35 @@ impl<'pool> BoundedActionFrameScannerV1<'pool> {
         let metadata = action.field(&mut self.budget)?;
         action.finish()?;
 
-        if validate_argument_wire {
-            if let Some((record, enclosing)) =
-                scan_executable_with_record(executable, &mut self.budget)?
-            {
-                argument_record::scan_nested(record, enclosing, &mut self.budget)?;
-            }
-        } else {
-            scan_executable(executable, &mut self.budget)?;
-        }
+        crate::transaction::executable::with_canonical_argument_record_validation(
+            validate_arguments,
+            || {
+                scan_executable(
+                    executable,
+                    &mut self.budget,
+                    self.pool,
+                    &self.account_work,
+                    self.typed_scratch_bytes,
+                    validate_arguments,
+                )
+            },
+        )?;
         cursor::repeats(repeats, &mut self.budget)?;
         self.scan_authority(authority)?;
-        let (filter_kind, scheduled) =
-            scan_filter(filter, authority.full_bytes(), &mut self.budget)?;
+        let (filter_kind, scheduled) = scan_filter(
+            filter,
+            authority.full_bytes(),
+            &mut self.budget,
+            self.pool,
+            &self.account_work,
+            self.typed_scratch_bytes,
+        )?;
         let retry = cursor::retry_policy(retry, &mut self.budget)?;
         // This is the real Action constructor invariant, not a lifecycle hint.
         if retry.is_some() && !scheduled {
             return Err(ScanError::InvalidValue.into());
         }
-        scan_metadata(metadata, &mut self.budget)?;
+        scan_metadata(metadata, &mut self.budget, self.pool, &self.account_work)?;
         Ok(TriggerLifecycleActionSemanticsV1 {
             filter_kind,
             has_retry_policy: retry.is_some(),
@@ -405,98 +426,320 @@ impl<'pool> BoundedActionFrameScannerV1<'pool> {
         mut authority: Cursor<'_>,
     ) -> Result<(), ActionFrameScanFailureV1> {
         let bytes = authority.full_bytes();
-        // Multisig has additional sequence/sort/scratch obligations. Refuse it
-        // until that concrete branch has its own cumulative scanner coverage.
-        if authority.u32(&mut self.budget)? != 0 {
-            return Err(ScanError::UnsupportedAuthority.into());
+        // Traverse the complete controller shape under the same field, depth and
+        // element limits before its physically funded semantic decoder runs.
+        match authority.u32(&mut self.budget)? {
+            0 => {
+                let _public_key = authority.field(&mut self.budget)?;
+            }
+            1 => {
+                let mut policy = authority.field(&mut self.budget)?;
+                let mut version = policy.field(&mut self.budget)?;
+                version.byte(&mut self.budget)?;
+                version.finish()?;
+                let mut threshold = policy.field(&mut self.budget)?;
+                threshold.byte(&mut self.budget)?;
+                threshold.byte(&mut self.budget)?;
+                threshold.finish()?;
+                let mut members = policy.field(&mut self.budget)?;
+                let count = members.u64(&mut self.budget)?;
+                self.budget.elements(count)?;
+                for _ in 0..count {
+                    let mut member = members.field(&mut self.budget)?;
+                    let _public_key = member.field(&mut self.budget)?;
+                    let mut weight = member.field(&mut self.budget)?;
+                    weight.byte(&mut self.budget)?;
+                    weight.byte(&mut self.budget)?;
+                    weight.finish()?;
+                    member.finish()?;
+                }
+                members.finish()?;
+                policy.finish()?;
+            }
+            _ => return Err(ScanError::UnsupportedAuthority.into()),
         }
-        let _public_key = authority.field(&mut self.budget)?;
         authority.finish()?;
         // Bound the additional payload decode and exact serialization traversals
         // before entering either one. Crypto validation is separately limited by
         // the funded cumulative decoder and its closed key algorithm set.
-        let work = u64::try_from(bytes.len()).map_err(|_| ScanError::Limit)?;
+        let visits = bytes.len().checked_mul(1024).ok_or(ScanError::Limit)?;
         self.budget
-            .work(work.checked_mul(4).ok_or(ScanError::Limit)?)?;
+            .work(u64::try_from(visits).map_err(|_| ScanError::Limit)?)?;
+        let limits = ncore::EncodeWorkLimits {
+            max_frame_bytes: bytes.len(),
+            max_byte_visits: visits,
+            max_operations: visits,
+            max_depth: (self.budget.limits.max_depth as usize)
+                .saturating_sub(authority.enclosing_depth()),
+        };
         let mut destination = AccountDestination::new(self.pool);
-        self.account_work
-            .with(|| -> Result<(), ActionFrameScanFailureV1> {
-                let _payload = ncore::PayloadCtxGuard::enter_with_flags(bytes, SCANNER_FLAGS);
-                destination.decode(bytes, self.pool, None)?;
-                if !destination.belongs_to(self.pool) {
-                    return Err(ScanError::InvalidValue.into());
-                }
-                let account = destination
-                    .complete
-                    .as_ref()
-                    .ok_or(ScanError::InvalidValue)?;
-                // Exact stream comparison rejects accepted-but-normalized account
-                // encodings without allocating a second account or output Vec.
-                norito::codec::verify_exact_payload(&account.value, bytes)?;
-                Ok(())
-            })
+        let decode_work = self.account_work.with_enclosing_depth(
+            authority.enclosing_depth(),
+            self.budget.limits.max_depth as usize,
+        )?;
+        ncore::with_bounded_encode_work(limits, || {
+            Ok(
+                decode_work.with(|| -> Result<(), ActionFrameScanFailureV1> {
+                    let _payload = ncore::PayloadCtxGuard::enter_with_flags(bytes, SCANNER_FLAGS);
+                    destination.decode(bytes, self.pool, None)?;
+                    if !destination.belongs_to(self.pool) {
+                        return Err(ScanError::InvalidValue.into());
+                    }
+                    let account = destination
+                        .complete
+                        .as_ref()
+                        .ok_or(ScanError::InvalidValue)?;
+                    // Exact stream comparison rejects normalization without a
+                    // second account or replacement output allocation.
+                    norito::codec::verify_exact_payload(&account.value, bytes)?;
+                    Ok(())
+                }),
+            )
+        })
+        .map_err(ActionFrameScanFailureV1::Encode)?
         // Destination drops the actual account before its retained charge.
     }
 }
 
-fn scan_executable(value: Cursor<'_>, budget: &mut Budget) -> Result<(), ScanError> {
-    scan_executable_with_record(value, budget).map(|_| ())
+impl super::TriggerLifecycleActionValidatorV1 for BoundedActionFrameScannerV1<'_> {
+    fn validate_canonical_action(
+        &mut self,
+        frame: &[u8],
+        payload: &[u8],
+    ) -> Result<TriggerLifecycleActionSemanticsV1, String> {
+        if self.failure.is_none() {
+            let checked = (|| -> Result<(), ActionFrameScanFailureV1> {
+                self.budget
+                    .work(u64::try_from(frame.len()).map_err(|_| ScanError::Limit)?)?;
+                let actual = norito::canonical_frame_payload::<Action>(frame, SCANNER_FLAGS)?;
+                if actual.as_ptr() != payload.as_ptr() || actual.len() != payload.len() {
+                    return Err(ActionFrameScanFailureV1::Structure(
+                        "Action payload does not belong to its original frame",
+                    ));
+                }
+                Ok(())
+            })();
+            if let Err(failure) = checked {
+                self.budget.refuse();
+                self.failure = Some(failure);
+            }
+        }
+        self.scan(frame).map_err(|failure| match failure {
+            ActionFrameScanFailureV1::Structure(message) => (*message).to_owned(),
+            _ => "bounded canonical Action validation refused".to_owned(),
+        })
+    }
 }
 
-fn scan_executable_with_record<'frame>(
-    mut value: Cursor<'frame>,
+fn typed_subtree(
+    value: Cursor<'_>,
     budget: &mut Budget,
-) -> Result<Option<(&'frame [u8], Cursor<'frame>)>, ScanError> {
-    let mut argument_record = None;
+    pool: &AllocationBudget,
+    decode_work: &DecodeBudgetContext,
+    scratch_bytes: usize,
+    validate: impl FnOnce(&[u8], ncore::EncodeWorkLimits) -> Result<(), norito::Error>,
+) -> Result<(), ActionFrameScanFailureV1> {
+    let bytes = value.full_bytes();
+    // Budget every admitted subtree before typed parsing. The canonical writer
+    // has the same hard ceiling; it cannot do unbounded work during comparison.
+    let visits = bytes.len().checked_mul(1024).ok_or(ScanError::Limit)?;
+    budget.work(u64::try_from(visits).map_err(|_| ScanError::Limit)?)?;
+    let limits = ncore::EncodeWorkLimits {
+        max_frame_bytes: bytes.len(),
+        max_byte_visits: visits,
+        max_operations: visits,
+        max_depth: (budget.limits.max_depth as usize).saturating_sub(value.enclosing_depth()),
+    };
+    let decode_work = decode_work
+        .with_enclosing_depth(value.enclosing_depth(), budget.limits.max_depth as usize)?;
+    let scratch = pool
+        .try_reserve_bytes(scratch_bytes)
+        .map_err(ActionFrameScanFailureV1::Scratch)?;
+    let result = cursor::with_typed_frame_budget(budget, || {
+        ncore::with_prepaid_validation(&scratch, &decode_work, || {
+            crate::isi::with_lifecycle_instruction_validation(|| validate(bytes, limits))
+        })
+    });
+    if let Err(error) = result {
+        return Err(ActionFrameScanFailureV1::Typed { error, scratch });
+    }
+    Ok(())
+}
+
+fn validate_typed_payload<T>(
+    bytes: &[u8],
+    limits: ncore::EncodeWorkLimits,
+) -> Result<(), norito::Error>
+where
+    T: norito::SerializePayload + for<'de> norito::DeserializePayload<'de>,
+{
+    ncore::with_bounded_encode_work(limits, || {
+        let _flags = ncore::DecodeFlagsGuard::enter(SCANNER_FLAGS);
+        let (value, used) = ncore::decode_field_canonical::<T>(bytes)?;
+        if used != bytes.len() {
+            return Err(norito::Error::LengthMismatch);
+        }
+        norito::codec::verify_exact_payload(&value, bytes)
+    })
+    .map_err(|error| match error {
+        ncore::BoundedEncodeWorkError::Codec(error) => error,
+        ncore::BoundedEncodeWorkError::Refused(reason) => norito::Error::InvalidValue {
+            context: match reason {
+                ncore::EncodeWorkRefusal::ByteVisits => "Action subtree byte visit limit",
+                ncore::EncodeWorkRefusal::Operations => "Action subtree operation limit",
+                ncore::EncodeWorkRefusal::Depth => "Action subtree serializer depth limit",
+                ncore::EncodeWorkRefusal::FrameBytes => "Action subtree frame byte limit",
+                ncore::EncodeWorkRefusal::NestedScope => "Action subtree nested encoder scope",
+                ncore::EncodeWorkRefusal::Source => "Action subtree source encoding refusal",
+            },
+        },
+    })
+}
+
+fn scan_instruction(
+    mut value: Cursor<'_>,
+    budget: &mut Budget,
+    pool: &AllocationBudget,
+    decode_work: &DecodeBudgetContext,
+    scratch_bytes: usize,
+) -> Result<(), ActionFrameScanFailureV1> {
+    let mut name = value.field(budget)?;
+    let wire_id = name.string(budget)?;
+    name.finish()?;
+    let mut framed = value.field(budget)?;
+    let bytes = framed.byte_vector(budget)?;
+    framed.finish()?;
+    value.finish()?;
+    budget.begin_frame(bytes.len())?;
+    // Registry lookup traverses one fixed release inventory without constructing
+    // the ordinary mutable registry or copying an instruction's outer pair.
+    budget.work(65_536)?;
+    let frame = framed.nested_root(bytes, budget)?;
+    typed_subtree(
+        frame,
+        budget,
+        pool,
+        decode_work,
+        scratch_bytes,
+        |bytes, limits| crate::isi::registry::validate_lifecycle_frame(wire_id, bytes, limits),
+    )
+}
+
+fn scan_instruction_sequence(
+    mut sequence: Cursor<'_>,
+    budget: &mut Budget,
+    pool: &AllocationBudget,
+    decode_work: &DecodeBudgetContext,
+    scratch_bytes: usize,
+) -> Result<(), ActionFrameScanFailureV1> {
+    let count = sequence.u64(budget)?;
+    budget.elements(count)?;
+    for _ in 0..count {
+        scan_instruction(
+            sequence.field(budget)?,
+            budget,
+            pool,
+            decode_work,
+            scratch_bytes,
+        )?;
+    }
+    sequence.finish()?;
+    Ok(())
+}
+
+fn scan_bytecode(mut value: Cursor<'_>, budget: &mut Budget) -> Result<(), ScanError> {
+    let mut bytes = value.field(budget)?;
+    bytes.byte_vector(budget)?;
+    bytes.finish()?;
+    value.finish()
+}
+
+fn scan_hash(mut value: Cursor<'_>, budget: &mut Budget) -> Result<(), ScanError> {
+    for _ in 0..3 {
+        value.u64(budget)?;
+    }
+    let last = value.u64(budget)?;
+    value.finish()?;
+    if last & (1u64 << 56) == 0 {
+        return Err(ScanError::InvalidValue);
+    }
+    Ok(())
+}
+
+fn scan_executable(
+    mut value: Cursor<'_>,
+    budget: &mut Budget,
+    pool: &AllocationBudget,
+    decode_work: &DecodeBudgetContext,
+    scratch_bytes: usize,
+    validate_arguments: bool,
+) -> Result<(), ActionFrameScanFailureV1> {
     match value.u32(budget)? {
-        0 => {
-            // ConstVec uses the element sequence codec even for empty values.
-            // A dynamic InstructionBox registry must never be skipped by length.
-            let mut sequence = value.field(budget)?;
-            let count = sequence.u64(budget)?;
-            budget.elements(count)?;
-            if count != 0 {
-                return Err(ScanError::UnsupportedExecutable);
-            }
-            sequence.finish()?;
+        0 => scan_instruction_sequence(
+            value.field(budget)?,
+            budget,
+            pool,
+            decode_work,
+            scratch_bytes,
+        )?,
+        1 => scan_call(value.field(budget)?, budget, validate_arguments)?,
+        2 => scan_bytecode(value.field(budget)?, budget)?,
+        3 => {
+            let mut proved = value.field(budget)?;
+            scan_bytecode(proved.field(budget)?, budget)?;
+            scan_instruction_sequence(
+                proved.field(budget)?,
+                budget,
+                pool,
+                decode_work,
+                scratch_bytes,
+            )?;
+            scan_hash(proved.field(budget)?, budget)?;
+            scan_hash(proved.field(budget)?, budget)?;
+            proved.finish()?;
         }
         4 => {
             let mut sequence = value.field(budget)?;
             let count = sequence.u64(budget)?;
             budget.elements(count)?;
-            match count {
-                0 => {} // Preserve the original empty Batch subset.
-                1 => {
-                    let mut item = sequence.field(budget)?;
-                    if item.u32(budget)? != 1 {
-                        return Err(ScanError::UnsupportedExecutable);
-                    }
-                    argument_record = Some(scan_contract_invocation_record(
+            for _ in 0..count {
+                let mut item = sequence.field(budget)?;
+                match item.u32(budget)? {
+                    0 => scan_instruction(
                         item.field(budget)?,
                         budget,
-                    )?);
-                    item.finish()?;
+                        pool,
+                        decode_work,
+                        scratch_bytes,
+                    )?,
+                    1 => scan_call(item.field(budget)?, budget, validate_arguments)?,
+                    _ => return Err(ScanError::UnsupportedExecutable.into()),
                 }
-                _ => return Err(ScanError::UnsupportedExecutable),
+                item.finish()?;
             }
             sequence.finish()?;
         }
-        2 => {
-            let mut bytecode = value.field(budget)?;
-            let mut bytes = bytecode.field(budget)?;
-            let _ = bytes.byte_vector(budget)?;
-            bytes.finish()?;
-            bytecode.finish()?;
-        }
-        _ => return Err(ScanError::UnsupportedExecutable),
+        _ => return Err(ScanError::UnsupportedExecutable.into()),
     }
     value.finish()?;
-    Ok(argument_record)
+    Ok(())
 }
 
-// This is the narrow one-call Batch used by the scheduled-contract SDK. It
-// checks original outer field grammar only, not the argument record's nested
-// schema/atoms, deployed code binding, execution or lifecycle semantics.
+fn scan_call(
+    value: Cursor<'_>,
+    budget: &mut Budget,
+    validate_arguments: bool,
+) -> Result<(), ActionFrameScanFailureV1> {
+    if let Some((record, enclosing)) = scan_contract_invocation_record(value, budget)? {
+        if validate_arguments {
+            argument_record::scan_nested(record, enclosing, budget)?;
+        }
+    }
+    Ok(())
+}
+
+// Borrow the invocation fields before canonical argument-record validation.
+// Callable schema authorization and deployed-code binding remain execution work.
 #[cfg(test)]
 fn scan_contract_invocation(value: Cursor<'_>, budget: &mut Budget) -> Result<(), ScanError> {
     scan_contract_invocation_record(value, budget).map(|_| ())
@@ -505,7 +748,7 @@ fn scan_contract_invocation(value: Cursor<'_>, budget: &mut Budget) -> Result<()
 fn scan_contract_invocation_record<'frame>(
     mut value: Cursor<'frame>,
     budget: &mut Budget,
-) -> Result<(&'frame [u8], Cursor<'frame>), ScanError> {
+) -> Result<Option<(&'frame [u8], Cursor<'frame>)>, ScanError> {
     scan_contract_address(value.field(budget)?, budget)?;
     let mut hash = value.field(budget)?;
     // Hash serializes exactly 32 raw bytes. Preserve its original marker rule;
@@ -520,23 +763,16 @@ fn scan_contract_invocation_record<'frame>(
     }
 
     let mut entrypoint = value.field(budget)?;
-    let name = entrypoint.bounded_string(255, budget)?;
+    // The model stores an arbitrary UTF-8 selector. Callable/schema admission
+    // owns selector semantics; the lifecycle scanner establishes exact wire.
+    entrypoint.string(budget)?;
     entrypoint.finish()?;
-    // Retain the SDK's nonempty, untrimmed UTF-8 selector subset. Charge both
-    // boundary traversals before trim; no selector String is constructed.
-    budget.work(
-        u64::try_from(name.len())
-            .map_err(|_| ScanError::Limit)?
-            .checked_mul(2)
-            .ok_or(ScanError::Limit)?,
-    )?;
-    if name.is_empty() || name.trim() != name {
-        return Err(ScanError::UnsupportedExecutable);
-    }
 
     let mut arguments = value.field(budget)?;
     let Some(mut record) = arguments.option(budget)? else {
-        return Err(ScanError::UnsupportedExecutable);
+        arguments.finish()?;
+        value.finish()?;
+        return Ok(None);
     };
     // ContractArgumentRecord delegates directly to Vec<u8>. Probe the fixed
     // sequence length before any payload traversal, then let byte_vector enforce
@@ -544,9 +780,7 @@ fn scan_contract_invocation_record<'frame>(
     // eight-byte prefix read is deliberately charged twice.
     let mut prefix = record;
     let count = prefix.u64(budget)?;
-    if count == 0
-        || count > crate::transaction::executable::MAX_CONTRACT_ARGUMENT_RECORD_BYTES as u64
-    {
+    if count > crate::transaction::executable::MAX_CONTRACT_ARGUMENT_RECORD_BYTES as u64 {
         return Err(ScanError::UnsupportedExecutable);
     }
     let original_record = record.byte_vector(budget)?;
@@ -554,7 +788,7 @@ fn scan_contract_invocation_record<'frame>(
     arguments.finish()?;
     value.finish()?;
     // Carry this actual field cursor into the nested frame; do not reset depth.
-    Ok((original_record, record))
+    Ok(Some((original_record, record)))
 }
 
 fn scan_contract_address(mut value: Cursor<'_>, budget: &mut Budget) -> Result<(), ScanError> {
@@ -595,14 +829,37 @@ fn scan_filter(
     mut value: Cursor<'_>,
     original_authority: &[u8],
     budget: &mut Budget,
-) -> Result<(TriggerLifecycleStateKindV1, bool), ScanError> {
+    pool: &AllocationBudget,
+    decode_work: &DecodeBudgetContext,
+    scratch_bytes: usize,
+) -> Result<(TriggerLifecycleStateKindV1, bool), ActionFrameScanFailureV1> {
     let result = match value.u32(budget)? {
+        0 => {
+            typed_subtree(
+                value.field(budget)?,
+                budget,
+                pool,
+                decode_work,
+                scratch_bytes,
+                validate_typed_payload::<crate::events::pipeline::PipelineEventFilterBox>,
+            )?;
+            (TriggerLifecycleStateKindV1::Pipeline, false)
+        }
         1 => {
-            let mut data = value.field(budget)?;
-            if data.u32(budget)? != 0 {
-                return Err(ScanError::UnsupportedFilter);
+            let data = value.field(budget)?;
+            let mut tag = data;
+            if tag.u32(budget)? == 0 {
+                tag.finish()?;
+            } else {
+                typed_subtree(
+                    data,
+                    budget,
+                    pool,
+                    decode_work,
+                    scratch_bytes,
+                    validate_typed_payload::<crate::events::data::DataEventFilter>,
+                )?;
             }
-            data.finish()?;
             (TriggerLifecycleStateKindV1::Data, false)
         }
         2 => {
@@ -613,7 +870,7 @@ fn scan_filter(
             let mut by_call = value.field(budget)?;
             let mut id = by_call.field(budget)?;
             if let Some(mut trigger_id) = id.option(budget)? {
-                scan_name(trigger_id.field(budget)?, budget)?;
+                scan_name(trigger_id.field(budget)?, budget, pool)?;
                 trigger_id.finish()?;
             }
             id.finish()?;
@@ -621,120 +878,178 @@ fn scan_filter(
             let Some(authority_value) = authority.option(budget)? else {
                 // Action::ensure_authority rewrites None to Some, so None is
                 // not a canonical persistent Action even when decoding accepts it.
-                return Err(ScanError::NonCanonical);
+                return Err(ScanError::NonCanonical.into());
             };
             let candidate = authority_value.full_bytes();
             budget.work(u64::try_from(candidate.len()).map_err(|_| ScanError::Limit)?)?;
             // The compared original subtree was already completely validated.
             if candidate != original_authority {
-                return Err(ScanError::InvalidValue);
+                return Err(ScanError::InvalidValue.into());
             }
             authority.finish()?;
             by_call.finish()?;
             (TriggerLifecycleStateKindV1::ByCall, false)
         }
-        // Pipeline remains unsupported. TriggerCompleted is forbidden by Action.
-        _ => return Err(ScanError::UnsupportedFilter),
+        // TriggerCompleted notifications are forbidden by Action.
+        _ => return Err(ScanError::UnsupportedFilter.into()),
     };
     value.finish()?;
     Ok(result)
 }
 
-fn scan_name<'a>(mut value: Cursor<'a>, budget: &mut Budget) -> Result<&'a str, ScanError> {
-    let text = value.string(budget)?;
+fn scan_name<'a>(
+    mut value: Cursor<'a>,
+    budget: &mut Budget,
+    pool: &AllocationBudget,
+) -> Result<&'a str, ActionFrameScanFailureV1> {
+    use iroha_model_base::name::{MAX_NAME_BYTES, Name};
+    let text = value.bounded_string(MAX_NAME_BYTES, budget)?;
     value.finish()?;
-    budget.work(u64::try_from(text.len()).map_err(|_| ScanError::Limit)?)?;
-    // Visible ASCII is already NFC and avoids the unowned ICU normalizer scratch.
-    if text.is_empty()
-        || text.len() > 255
-        || text
-            .bytes()
-            .any(|byte| !(0x21..=0x7e).contains(&byte) || matches!(byte, b'@' | b'#' | b'$'))
-    {
-        return Err(ScanError::UnsupportedMetadata);
-    }
+    // The same pinned NFC implementation used by Name owns its audited bounded
+    // scratch for the entire call. No replacement string or Name is constructed.
+    budget.work(u64::try_from(text.len()).map_err(|_| ScanError::Limit)? * 8)?;
+    let scratch = Name::canonical_validation_scratch_bytes(text);
+    budget.work(u64::try_from(scratch).map_err(|_| ScanError::Limit)?)?;
+    let _scratch = pool
+        .try_reserve_bytes(scratch)
+        .map_err(ActionFrameScanFailureV1::Scratch)?;
+    Name::validate_canonical(text).map_err(|_| ScanError::InvalidValue)?;
     Ok(text)
 }
 
-fn scan_metadata(mut value: Cursor<'_>, budget: &mut Budget) -> Result<(), ScanError> {
+struct JsonScratch(ChargedBuffer<u8>);
+impl AsRef<[u8]> for JsonScratch {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
+impl AsMut<[u8]> for JsonScratch {
+    fn as_mut(&mut self) -> &mut [u8] {
+        self.0.as_mut_slice()
+    }
+}
+impl From<norito::json::Error> for ActionFrameScanFailureV1 {
+    fn from(error: norito::json::Error) -> Self {
+        Self::Codec(error.into_core_error())
+    }
+}
+
+fn scan_metadata(
+    mut value: Cursor<'_>,
+    budget: &mut Budget,
+    pool: &AllocationBudget,
+    decode_work: &DecodeBudgetContext,
+) -> Result<(), ActionFrameScanFailureV1> {
     let count = value.u64(budget)?;
     budget.elements(count)?;
     let mut previous: Option<&str> = None;
     for _ in 0..count {
         let mut entry = value.field(budget)?;
-        let name = scan_name(entry.field(budget)?, budget)?;
+        let name = scan_name(entry.field(budget)?, budget, pool)?;
         if let Some(prior) = previous {
             budget
                 .work(u64::try_from(prior.len().min(name.len())).map_err(|_| ScanError::Limit)?)?;
             if prior >= name {
-                return Err(ScanError::NonCanonical);
+                return Err(ScanError::NonCanonical.into());
             }
         }
         previous = Some(name);
-        // Json is a derived one-field JsonWireRef containing a canonical string.
         let mut json = entry.field(budget)?;
         let mut string = json.field(budget)?;
-        // Json's fixed V1 byte ceiling is independent of caller scan limits.
-        // Refuse from the length prefix before UTF-8 or canonical-text traversal.
         let text = string.bounded_string(MAX_JSON_BYTES, budget)?;
         string.finish()?;
         json.finish()?;
         entry.finish()?;
-        budget.work(u64::try_from(text.len()).map_err(|_| ScanError::Limit)?)?;
-        // These literals and unescaped printable ASCII strings are a closed
-        // canonical subset. Only the two registration keys additionally accept
-        // canonical decimal u64. This scanner does not enforce registration rules.
-        if !matches!(text, "null" | "true" | "false" | "[]" | "{}") {
-            let bytes = text.as_bytes();
-            if bytes.len() < 2
-                || bytes[0] != b'"'
-                || bytes[bytes.len() - 1] != b'"'
-                || bytes[1..bytes.len() - 1]
-                    .iter()
-                    .any(|byte| !(0x20..=0x7e).contains(byte) || matches!(*byte, b'"' | b'\\'))
-            {
-                // Preserve the existing nonnumeric subset at every name, including
-                // reserved names. Only add numbers at the original registration
-                // keys; the producer enforces the narrower exact numeric pair.
-                budget.work(
-                    u64::try_from(name.len())
-                        .map_err(|_| ScanError::Limit)?
-                        .checked_mul(2)
-                        .ok_or(ScanError::Limit)?,
-                )?;
-                if !matches!(name, "__registered_at_ms" | "__registered_block_height")
-                    || !canonical_registration_u64(text, budget)?
-                {
-                    return Err(ScanError::UnsupportedMetadata);
-                }
-            }
-        }
+        // Lexical preflight, visitors, string/number kernels and exact writer
+        // comparison share the original cumulative decoder scope. Reserve a
+        // conservative fixed number of byte visits before entering those kernels.
+        budget.work(
+            u64::try_from(text.len())
+                .map_err(|_| ScanError::Limit)?
+                .checked_mul(32)
+                .ok_or(ScanError::Limit)?,
+        )?;
+        decode_work
+            .with_enclosing_depth(string.enclosing_depth(), budget.limits.max_depth as usize)?
+            .with(|| {
+                norito::json::validate_canonical_json_with_buffer(
+                    text,
+                    |length| -> Result<JsonScratch, ActionFrameScanFailureV1> {
+                        let mut bytes = ChargedBuffer::new(length, pool)
+                            .map_err(ActionFrameScanFailureV1::Capture)?;
+                        for _ in 0..length {
+                            bytes.push_reserved(0);
+                        }
+                        Ok(JsonScratch(bytes))
+                    },
+                )
+            })?;
     }
-    value.finish()
+    value.finish()?;
+    Ok(())
 }
 
-fn canonical_registration_u64(text: &str, budget: &mut Budget) -> Result<bool, ScanError> {
-    // Json::from(u64) emits decimal text inside JsonWireRef, not an integer
-    // payload. Check the original spelling without allocation, normalization or
-    // dynamic parse errors. Charge the one finite digit pass before reading it.
-    if text.is_empty() || text.len() > 20 {
-        return Ok(false);
+#[cfg(test)]
+fn test_scan_error(error: ActionFrameScanFailureV1) -> ScanError {
+    match error {
+        ActionFrameScanFailureV1::Structure(message) => [
+            ScanError::Refused,
+            ScanError::Limit,
+            ScanError::Length,
+            ScanError::NonCanonical,
+            ScanError::InvalidValue,
+            ScanError::UnsupportedExecutable,
+            ScanError::UnsupportedAuthority,
+            ScanError::UnsupportedFilter,
+        ]
+        .into_iter()
+        .find(|kind| kind.message() == message)
+        .unwrap(),
+        _ => ScanError::NonCanonical,
     }
-    budget.work(u64::try_from(text.len()).map_err(|_| ScanError::Limit)?)?;
-    let mut number = 0u64;
-    for (index, byte) in text.bytes().enumerate() {
-        if !byte.is_ascii_digit() || (index == 0 && byte == b'0' && text.len() != 1) {
-            return Ok(false);
-        }
-        let Some(next) = number
-            .checked_mul(10)
-            .and_then(|n| n.checked_add(u64::from(byte - b'0')))
-        else {
-            return Ok(false);
-        };
-        number = next;
-    }
-    Ok(true)
+}
+
+#[cfg(test)]
+fn test_scan_metadata(value: Cursor<'_>, budget: &mut Budget) -> Result<(), ScanError> {
+    let pool = AllocationBudget::new(8 * 1024 * 1024);
+    let work = DecodeBudgetContext::try_new_owned(
+        DecodeLimits::new(1_000_000, 4 * 1024 * 1024, 8_000_000, 8 * 1024 * 1024, 32),
+        &pool,
+    )
+    .unwrap();
+    scan_metadata(value, budget, &pool, &work).map_err(test_scan_error)
+}
+
+#[cfg(test)]
+fn test_scan_name<'a>(value: Cursor<'a>, budget: &mut Budget) -> Result<&'a str, ScanError> {
+    let pool = AllocationBudget::new(8 * 1024 * 1024);
+    scan_name(value, budget, &pool).map_err(test_scan_error)
+}
+
+#[cfg(test)]
+fn test_scan_filter(
+    value: Cursor<'_>,
+    authority: &[u8],
+    budget: &mut Budget,
+) -> Result<(TriggerLifecycleStateKindV1, bool), ScanError> {
+    let pool = AllocationBudget::new(8 * 1024 * 1024);
+    let work = DecodeBudgetContext::try_new_owned(
+        DecodeLimits::new(100_000, 2_000_000, 100_000, 2_000_000, 32),
+        &pool,
+    )
+    .unwrap();
+    scan_filter(value, authority, budget, &pool, &work, 2_000_000).map_err(test_scan_error)
+}
+
+#[cfg(test)]
+fn test_scan_executable(value: Cursor<'_>, budget: &mut Budget) -> Result<(), ScanError> {
+    let pool = AllocationBudget::new(8 * 1024 * 1024);
+    let work = DecodeBudgetContext::try_new_owned(
+        DecodeLimits::new(100_000, 2_000_000, 100_000, 2_000_000, 32),
+        &pool,
+    )
+    .unwrap();
+    scan_executable(value, budget, &pool, &work, 2_000_000, false).map_err(test_scan_error)
 }
 
 #[cfg(test)]

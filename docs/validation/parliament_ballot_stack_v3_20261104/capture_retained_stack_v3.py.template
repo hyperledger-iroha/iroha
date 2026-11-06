@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""Capture artifact-bound ARM64 diagnostics for the retained November 4 workers.
+
+Requires Python 3.11+, pytest, Xcode llvm-objdump and the original cache receipts.
+No environment variables, Rust builds or worker execution. Output must be new.
+This intentionally does not validate or certify the latest working-tree build:
+the retained-image identity is the premise, and live-source qualification remains
+unavailable because the reviewed rustup/lock inputs have drifted.
+"""
+import argparse
+from collections import Counter
+from datetime import datetime, timezone
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+
+def digest(path):
+    """Hash retained bytes without treating paths as source provenance."""
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def write_json(path, value):
+    """Write a deterministic, inspectable JSON artifact."""
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + '\n')
+
+
+def main():
+    """Capture both modes while preserving every unresolved proof boundary."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--root', type=Path, required=True)
+    parser.add_argument('--cache', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    root, cache, output = (value.resolve() for value in (args.root, args.cache, args.output))
+    output.mkdir(parents=True, exist_ok=False)
+    paths = {
+        'analyzer': root / 'scripts/parliament_ballot_stack_audit.py',
+        'tests': root / 'scripts/tests/parliament_ballot_stack_audit_test.py',
+        'driver': Path(__file__).resolve(),
+        'build_receipt': cache / 'build/build-receipt.json',
+        'v2_receipt': cache / 'stack-v2/receipt.json',
+        'triage': cache / 'next-campaign-review-20261104T055051Z/review.json',
+        'reference_receipt': cache / 'stack-v3-reference/download.json',
+        'reference_pdf': cache / 'stack-v3-reference/arm-ddi0602-2025-03.pdf',
+        'reference_text': cache / 'stack-v3-reference/arm-ddi0602-2025-03.txt',
+    }
+    report = {
+        'schema': 'parliament-retained-image-stack-v3-capture-v1',
+        'observed_utc': datetime.now(timezone.utc).isoformat(),
+        'scope': 'Artifact-bound static analysis of retained November 4 workers; not latest working-tree or live candidate qualification.',
+        'capture_passed': False, 'failure': None, 'captures': {}, 'commands': [],
+        'input_sha256_before': {}, 'input_sha256_after': {},
+        'original_stack_v2_sha256_before': {}, 'original_stack_v2_sha256_after': {},
+        'no_build_or_worker_execution': True,
+        'latest_source_build_validated': False,
+        'historical_evidence_rebound': False,
+        'complete_stack_certificate': False,
+        'complete_workspace_certificate': False,
+        'physical_cost_calibrated': False,
+        'profile_qualified': False,
+        'release_qualified': False,
+    }
+    try:
+        expected = {
+            'analyzer': 'd6952d3521cf628a2630a865308b196c2ba67c38a8922b3c786370cb6332dda4',
+            'tests': '9819f4f8f3079bef6234aad6078bd60839b74d761ff5eef085cb6ff73175099c',
+        }
+        for key, value in expected.items():
+            if digest(paths[key]) != value:
+                raise ValueError('reviewed helper changed: ' + key)
+        build = json.loads(paths['build_receipt'].read_text())
+        triage = json.loads(paths['triage'].read_text())
+        reference = json.loads(paths['reference_receipt'].read_text())
+        if digest(paths['reference_pdf']) != reference['sha256']:
+            raise ValueError('reviewed Arm reference changed')
+        report['reference'] = reference
+        report['build_inputs_different_from_retained_capture_at_prior_review'] = triage['build_inputs_different_from_retained_capture']
+        if set(build['binaries']) != {'portable', 'accel'}:
+            raise ValueError('both retained binary modes required')
+        for mode, binary in build['binaries'].items():
+            paths[mode] = Path(binary['path'])
+            if digest(paths[mode]) != binary['sha256'] or binary['sha256'] != triage['binaries'][mode]['sha256']:
+                raise ValueError('retained binary identity changed: ' + mode)
+        paths['objdump'] = Path(subprocess.check_output(['xcrun', '--find', 'llvm-objdump'], text=True).strip())
+        report['input_sha256_before'] = {str(path): digest(path) for path in paths.values()}
+        report['original_stack_v2_sha256_before'] = {
+            str(path): digest(path) for path in sorted((cache / 'stack-v2').rglob('*')) if path.is_file()
+        }
+        for key in ('analyzer', 'tests', 'driver'):
+            (output / (paths[key].name + '.template')).write_bytes(paths[key].read_bytes())
+        spec = importlib.util.spec_from_file_location('reviewed_stack_analyzer', paths['analyzer'])
+        analyzer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(analyzer)
+        command = [sys.executable, '-m', 'pytest', '-q', str(paths['tests'])]
+        completed = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=120)
+        log = output / 'tests.txt'
+        log.write_text(completed.stdout + completed.stderr)
+        report['commands'].append({'command': command, 'exit': completed.returncode, 'log': str(log), 'sha256': digest(log)})
+        if completed.returncode:
+            raise ValueError('focused analyzer regression failed')
+        patterns = {
+            'parliament_memory_entry::workspace::worker': 1,
+            '<parliament_memory_entry::budget::Reservation>::verify': 1,
+            'iroha_zkp_vole::proof::verify::': 2,
+            'parliament_memory_entry::fatal::exhausted': 1,
+        }
+        for mode in ('portable', 'accel'):
+            raw, identity = analyzer.capture(paths[mode], output / mode)
+            for field, key in [('binary_sha256', mode), ('objdump_sha256', 'objdump'), ('script_sha256', 'analyzer')]:
+                if identity[field] != report['input_sha256_before'][str(paths[key])]:
+                    raise ValueError('capture identity changed: ' + field)
+            result = analyzer.audit(raw['disassembly'], raw['starts'], raw['stubs'], list(patterns))
+            result['identity'] = identity
+            if len(result['roots']) != 5 or any(sum(pattern in row['root'] for row in result['roots']) != count for pattern, count in patterns.items()):
+                raise ValueError('expected five exact root identities')
+            if any(row['complete_stack_bound_bytes'] is not None for row in result['roots']):
+                raise ValueError('unexpected complete bound; independent frontier review required')
+            prior = json.loads((cache / f'stack-v2/{mode}.json').read_text())
+            if prior['identity']['binary_sha256'] != identity['binary_sha256']:
+                raise ValueError('v2/v3 binary mismatch')
+            comparisons = []
+            protected = {'native_edge', 'exceptional_terminal', 'indirect_branch', 'indirect_call', 'inconsistent_sp_merge'}
+            for row in result['roots']:
+                old = next(item for item in prior['roots'] if item['root'] == row['root'] and item['address'] == row['address'])
+                key = lambda item: (item['function'], item['address'], item['kind'], item['detail'], item['caller_depth_bytes'])
+                old_frontiers = {key(item) for item in old['frontiers'] if item['kind'] in protected}
+                new_frontiers = {key(item) for item in row['frontiers'] if item['kind'] in protected}
+                if not old_frontiers <= new_frontiers:
+                    raise ValueError('previous native/trap/indirect/merge frontier disappeared')
+                old_recursive = {item['address'] for group in old['positive_weight_recursive_components'] for item in group}
+                new_recursive = {item['address'] for group in row['positive_weight_recursive_components'] for item in group}
+                if not old_recursive <= new_recursive:
+                    raise ValueError('previous recursive frontier disappeared')
+                comparisons.append({
+                    'root': row['root'], 'address': row['address'],
+                    'v2_frontier_kind_counts': old['frontier_kind_counts'],
+                    'v3_frontier_kind_counts': row['frontier_kind_counts'],
+                    'previous_native_trap_indirect_merge_frontiers_preserved': True,
+                    'previous_recursive_frontier_nodes_preserved': True,
+                    'v2_positive_weight_recursive_components': len(old['positive_weight_recursive_components']),
+                    'v3_positive_weight_recursive_components': len(row['positive_weight_recursive_components']),
+                })
+            destination = output / (mode + '.json')
+            write_json(destination, result)
+            report['captures'][mode] = {
+                'path': str(destination), 'sha256': digest(destination),
+                'binary_sha256': identity['binary_sha256'],
+                'function_count': result['function_count'], 'text_instructions': result['text_instructions'],
+                'whole_image_frame_error_count': result['whole_image_frame_error_count'],
+                'whole_image_frame_error_kinds': dict(Counter(item['kind'] for function in result['functions'] for item in function['frame_errors'])),
+                'roots': [{key: row[key] for key in ['root', 'address', 'direct_reachable_functions', 'resolved_region_stack_bytes', 'complete_stack_bound_bytes', 'frontier_kind_counts']} for row in result['roots']],
+                'v2_comparisons': comparisons,
+            }
+    except Exception as error:
+        report['failure'] = type(error).__name__ + ': ' + str(error)
+    finally:
+        report['input_sha256_after'] = {path: digest(path) for path in report['input_sha256_before']}
+        report['original_stack_v2_sha256_after'] = {path: digest(path) for path in report['original_stack_v2_sha256_before']}
+        report['input_changes'] = [path for path, value in report['input_sha256_before'].items() if report['input_sha256_after'][path] != value]
+        report['original_stack_v2_changes'] = [path for path, value in report['original_stack_v2_sha256_before'].items() if report['original_stack_v2_sha256_after'][path] != value]
+        report['capture_passed'] = report['failure'] is None and not report['input_changes'] and not report['original_stack_v2_changes'] and len(report['captures']) == 2
+        write_json(output / 'receipt.json', report)
+    print(json.dumps({'output': str(output), 'capture_passed': report['capture_passed'], 'failure': report['failure']}))
+    return 0 if report['capture_passed'] else 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

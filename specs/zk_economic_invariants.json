@@ -140,7 +140,7 @@
  },
  "closed_lists": {
   "exact12": {
-   "path": "crates/iroha_data_model/src/privacy.rs",
+   "path": "crates/iroha_data_model/src/privacy/exact12_wire.rs",
    "enum": "PrivacyProtocolIdV1",
    "variants": [
     "ZkAcePqAuthorizationV1",
@@ -289,7 +289,7 @@
    "protocol_list": {
     "path": "crates/iroha_core_privacy/src/privacy_state.rs",
     "name": "PRIVACY_PUBLIC_RESERVE_PROTOCOLS_V1",
-    "members": ["OrchardHalo2ActionsV1", "IrohaIvmPrivateNoteStarkV1"]
+    "members": ["IronwoodHalo2ActionsV1", "OrchardHalo2ActionsV1", "IrohaIvmPrivateNoteStarkV1"]
    }
   },
   "root_roles": {
@@ -302,7 +302,7 @@
     {"variant": "AccountRegistry", "management": "ProofManaged", "protocols": ["zk_ams"]},
     {"variant": "Revocation", "management": "GovernanceManaged", "protocols": ["bootle_lantern"]},
     {"variant": "CertificateAuthorityMembership", "management": "GovernanceManaged", "protocols": ["zk_x509"]},
-    {"variant": "NoteCommitmentAnchor", "management": "ProofManaged", "protocols": ["orchard", "pq_masp"]},
+    {"variant": "NoteCommitmentAnchor", "management": "ProofManaged", "protocols": ["ironwood", "orchard", "pq_masp"]},
     {"variant": "OutputSet", "management": "ProofManaged", "protocols": ["fcmp"]},
     {"variant": "ProgramState", "management": "ProofManaged", "protocols": ["ivm_private_note"]}
    ]
@@ -361,7 +361,8 @@
     {"variant": "Unavailable", "native_implementation_available": false}
    ],
    "meaning": "Native implementation presence only. Availability does not establish proof soundness, authorization, release qualification or an economic effect. There is no protocol lifecycle switch."
-  }
+  },
+  "runtime_protocols": {"path": "crates/iroha_data_model/src/privacy.rs", "enum": "PrivacyRuntimeProtocolIdV1"}
  },
  "protocols": [
   {
@@ -1597,6 +1598,121 @@
    "effects": [],
    "defects": [],
    "owner_tasks": ["C.9", "C.6", "C.7"]
+  },
+  {
+   "id": "ironwood",
+   "title": "Governed Ironwood Halo2 actions",
+   "ledger_effects": ["OrchardActions"],
+   "value_bearing": true,
+   "pool": {
+    "boundary": "public_reserve",
+    "unit": "Units of one asset definition in one balance scope, held as independently bound Ironwood notes.",
+    "supply_source": "Deposits of existing transparent units into the pool reserve. The pool starts from the empty tree.",
+    "asset_binding": "One asset definition, balance scope and reserve account per pool, fixed at bootstrap."
+   },
+   "lifecycle": {
+    "retained_state_readability": {
+     "status": "defined",
+     "statement": "Commitments, nullifiers, roots, root heads and pool configuration are committed World records with their provenance; restore validates the complete set and refuses orphans, wrong roles and rows of another origin. The record of an output keeps its commitment and provenance; the ciphertext a recipient decrypts is carried by the signed statement in the block. A statement anchored to a root that left the committed retained-root window is refused and is proved again against a retained root; commitment records are not pruned.",
+     "sites": [
+      {"path": "crates/iroha_core_privacy/src/privacy_state.rs", "symbol": "pub fn validate_privacy_persisted_state_v1("}
+     ],
+     "tests": [
+      {
+       "path": "crates/iroha_core_privacy/src/privacy_state.rs",
+       "test": "orchard_persisted_state_rejects_orphans_wrong_roles_and_cross_origin_state",
+       "status": "existing",
+       "shows": "Restore refuses orphan rows, wrong roles and rows of another origin."
+      },
+      {
+       "path": "crates/iroha_core_privacy/src/privacy_state.rs",
+       "test": "public_reserve_restore_requires_exact_governed_index",
+       "status": "existing",
+       "shows": "Restore accepts exactly the custody rows the governed pools imply."
+      }
+     ]
+    },
+    "cancellation_expiry": {
+     "status": "defined",
+     "statement": "A bundle carries an expiry height and is refused after it; it has no pending state to cancel.",
+     "sites": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "|| state_transaction.block_height() > effect.expiry_height()",
+       "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"
+      }
+     ]
+    },
+    "failure_atomicity": {
+     "status": "defined",
+     "statement": "The checks on a verified effect complete before the first pool record is written. A public leg, when the effect has one, is applied before the pool records, and its refusal fails the instruction. A failed instruction fails its transaction, whose writes are discarded whole. One privacy action index per verified action binds the effect to its place in the transaction.",
+     "sites": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": ".reserve_privacy_action(expected_action_index, encoded_action_bytes)?;",
+       "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"
+      }
+     ],
+     "tests": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+       "test": "dropped_transaction_discards_a_faulty_pool_withdrawal",
+       "status": "added",
+       "verifier_fault": true,
+       "exercises": ["apply_faulty_verifier_pool_effect"],
+       "shows": "A wrongly verified withdrawal staged in a transaction that is not applied leaves the reserve whole.",
+       "harness": {
+        "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+        "symbol": "fn apply_faulty_verifier_pool_effect(",
+        "included_by": {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "include!(\"asset/privacy_economic_invariant_tests.rs\");"}
+       }
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+       "test": "faulty_verifier_pool_deposit_moves_existing_units_and_never_mints",
+       "status": "added",
+       "verifier_fault": true,
+       "exercises": ["apply_faulty_verifier_pool_effect"],
+       "asserts": ["no public-reserve transfer"],
+       "shows": "With verification forced to succeed, a deposit above the depositor's balance is refused, a funded deposit debits the depositor by what the reserve gains, the transparent total is unchanged and a balanced effect has no public leg.",
+       "harness": {
+        "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+        "symbol": "fn apply_faulty_verifier_pool_effect(",
+        "included_by": {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "include!(\"asset/privacy_economic_invariant_tests.rs\");"}
+       }
+      }
+     ]
+    },
+    "exits": {
+     "key_revocation": {
+      "status": "defined",
+      "statement": "The key of the reserve account holds no spending power over pool backing: the owner, a delegate, a batch leg and a burn cannot debit a reserve, the reserve account cannot sign a directional leg, and it cannot be re-keyed or unregistered while it backs a pool. A note is spent by the key inside the proof relation; the ledger knows no note key, so a lost or compromised note key has no ledger remedy. A withdrawal is credited only to the signer of the submission.",
+      "sites": [
+       {
+        "path": "crates/iroha_core/src/smartcontracts/isi/asset.rs",
+        "symbol": "\"governed privacy public reserve requires its exact verified pool bridge\""
+       },
+       {
+        "path": "crates/iroha_core/src/smartcontracts/isi/multisig.rs",
+        "symbol": "cannot rekey account {old_account}: it is the reserve account for governed privacy pool {:?}"
+       }
+      ]
+     },
+     "policy_revocation": {
+      "status": "not_applicable",
+      "statement": "The optional ordinary resource policy has no revocation or lifecycle state. Governance updates bounded resource limits at an exact future block; it does not suspend the protocol. Credential/issuer revocation and relation-correction exits are recorded separately."
+     },
+     "correction": {
+      "status": "not_defined",
+      "statement": "No path carries the notes or the reserve of a pool to a corrected relation.",
+      "defects": ["D-CORRECTION-NO-POOL-EXIT"]
+     }
+    }
+   },
+   "effects": ["ironwood.pool_bootstrap", "ironwood.shield", "ironwood.transfer", "ironwood.unshield"],
+   "defects": ["D-CORRECTION-NO-POOL-EXIT", "D-POOL-NO-TURNSTILE-OR-CAP"],
+   "owner_tasks": ["P.16", "P.2"],
+   "runtime_variant": "IronwoodHalo2ActionsV1"
   }
  ],
  "effects": [
@@ -5790,6 +5906,963 @@
    ],
    "required_before_enabling": "The ballot and tally relations (P.8). The lock stays the exact transfer into escrow of the plain ballot.",
    "defects": ["D-VOTING-ZK-BALLOT-REFUSED"]
+  },
+  {
+   "id": "ironwood.pool_bootstrap",
+   "protocol": "ironwood",
+   "operation": "privacy::BootstrapPrivacyIronwoodPoolV1",
+   "class": "reserve_movement",
+   "summary": "Governance binds one balance (asset definition, reserve account, balance scope) as the public reserve of a new Ironwood pool that starts from the empty note tree. Any balance already on it is held in reserve custody but funds no withdrawal: the custody row starts with a funded allowance of zero.",
+   "effect_status": "implemented",
+   "handler": {
+    "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+    "symbol": "impl Execute for iroha_data_model::isi::privacy::BootstrapPrivacyIronwoodPoolV1"
+   },
+   "authorized_issuance_source": {
+    "kind": "governance_authority",
+    "statement": "The signer holds CanEnactGovernance, or the block is the signed initial genesis block. The bootstrap issues nothing: the payload carries neither a root nor notes.",
+    "sites": [
+     {
+      "path": "crates/iroha_core/src/smartcontracts/isi/privacy/governance_authorization.rs",
+      "symbol": "pub(super) fn ensure_privacy_governance("
+     }
+    ]
+   },
+   "proof": {"authorizes": false, "why": "Governance authority; the bootstrap carries no proof."},
+   "invariants": [
+    {
+     "kind": "asset_namespace_isolation",
+     "status": "enforced",
+     "statement": "A balance backs at most one pool across all reserve-owning protocols, and a pool is bootstrapped once.",
+     "sites": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "\"public-reserve asset {reserve_asset_id} already backs a governed privacy pool\"",
+       "within": "fn prepare_privacy_public_reserve_custody_v1("
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "\"Orchard pool is already initialized\"",
+       "within": "impl Execute for BootstrapPrivacyOrchardPoolV1 {"
+      }
+     ],
+     "does_not_establish": ["proof_soundness"],
+     "tests": [
+      {
+       "path": "crates/iroha_core_privacy/src/privacy_state.rs",
+       "test": "public_reserve_lookup_checks_full_id_and_refuses_cross_protocol_owner",
+       "status": "existing",
+       "shows": "The custody lookup matches the full asset id and refuses a row under another protocol."
+      },
+      {
+       "path": "crates/iroha_core_privacy/src/privacy_state.rs",
+       "test": "public_reserve_restore_requires_exact_governed_index",
+       "status": "existing",
+       "shows": "Restore accepts exactly the custody rows the governed pools imply."
+      }
+     ]
+    },
+    {
+     "kind": "no_transparent_boundary",
+     "status": "not_applicable",
+     "statement": "The pool has a transparent boundary by design.",
+     "why": "An Orchard pool has a public reserve; the row records its creation."
+    },
+    {
+     "kind": "bounded_custody",
+     "status": "enforced",
+     "statement": "The reserve account, its asset definition and their domain cannot be unregistered, and the reserve account cannot be re-keyed, while they back a pool.",
+     "sites": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/domain/asset_alias_scope.rs",
+       "symbol": "cannot unregister account {account_id}: it is the reserve account for governed privacy pool {:?}",
+       "within": "impl Execute for Unregister<Account> {"
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/domain/asset_alias_scope.rs",
+       "symbol": "cannot unregister asset definition {asset_definition_id}: it backs governed privacy pool {:?}",
+       "within": "impl Execute for Unregister<AssetDefinition> {"
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/world.rs",
+       "symbol": "cannot unregister domain {domain_id}: asset definition {} backs governed privacy pool {:?}"
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/multisig.rs",
+       "symbol": "cannot rekey account {old_account}: it is the reserve account for governed privacy pool {:?}"
+      },
+      {
+       "path": "crates/iroha_core/src/state/deserialize_world.rs",
+       "symbol": "crate::privacy_state::validate_privacy_public_reserve_dependencies_v1("
+      }
+     ],
+     "does_not_establish": ["proof_soundness", "hidden_conservation"],
+     "tests": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/domain.rs",
+       "test": "unregister_account_rejects_governed_orchard_reserve_dependency_atomically",
+       "status": "existing",
+       "shows": "Unregistering a reserve account is refused without a write.",
+       "asserts": ["reserve account for governed privacy pool"]
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/domain.rs",
+       "test": "unregister_asset_definition_rejects_governed_orchard_dependency_atomically",
+       "status": "existing",
+       "shows": "Unregistering a reserve asset definition is refused without a write.",
+       "asserts": ["backs governed privacy pool"]
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/domain.rs",
+       "test": "unregister_domain_rejects_governed_orchard_asset_cascade_before_mutation",
+       "status": "existing",
+       "shows": "A domain cascade that would remove a reserve asset is refused before any mutation.",
+       "asserts": ["backs governed privacy pool"]
+      }
+     ]
+    }
+   ],
+   "exposure_after_erroneous_acceptance": {
+    "hidden_inflation": {"possible": "not_applicable", "bound": "No proof authorizes this effect."},
+    "reserve_theft": {"possible": "not_applicable", "bound": "No proof authorizes this effect."},
+    "transparent_minting": {"possible": "not_applicable", "bound": "No proof authorizes this effect."}
+   },
+   "mutation_tests": [
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/domain.rs",
+     "test": "unregister_account_rejects_governed_orchard_reserve_dependency_atomically",
+     "status": "existing",
+     "shows": "Unregistering a reserve account is refused without a write."
+    }
+   ],
+   "defects": []
+  },
+  {
+   "id": "ironwood.shield",
+   "protocol": "ironwood",
+   "operation": "privacy::SubmitPrivacyIronwoodProofV1",
+   "class": "deposit",
+   "summary": "An Ironwood bundle with a value balance into the pool moves the submitter's transparent units into the pool reserve and appends note commitments.",
+   "effect_status": "implemented",
+   "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for SubmitPrivacyIronwoodProofV1"},
+   "apply_sites": [
+    {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"},
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/asset.rs",
+     "symbol": "pub(crate) fn execute_verified_privacy_pool_public_balance_transfer("
+    }
+   ],
+   "authorized_issuance_source": {
+    "kind": "existing_transparent_balance",
+    "statement": "The deposited amount is debited from the submitter's own transparent balance; the notes it funds are hidden."
+   },
+   "proof": {"authorizes": true},
+   "invariants": [
+    {
+     "kind": "existing_asset_movement",
+     "status": "enforced",
+     "statement": "A deposit moves units the depositor already holds: the depositor is debited by exactly what the reserve is credited, through the same exact transfer as any transparent movement. The reserve account itself cannot submit a directional leg.",
+     "sites": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset.rs",
+       "symbol": "VerifiedPrivacyPublicBalancePurpose::PoolDeposit(owner),",
+       "within": "pub(crate) fn execute_verified_privacy_pool_public_balance_transfer("
+      },
+      {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "\"privacy public bridge source and destination must differ\""}
+     ],
+     "does_not_establish": ["proof_soundness"],
+     "tests": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+       "test": "faulty_verifier_pool_deposit_moves_existing_units_and_never_mints",
+       "status": "added",
+       "verifier_fault": true,
+       "exercises": ["apply_faulty_verifier_pool_effect"],
+       "asserts": ["no public-reserve transfer"],
+       "shows": "With verification forced to succeed, a deposit above the depositor's balance is refused, a funded deposit debits the depositor by what the reserve gains, the transparent total is unchanged and a balanced effect has no public leg.",
+       "harness": {
+        "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+        "symbol": "fn apply_faulty_verifier_pool_effect(",
+        "included_by": {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "include!(\"asset/privacy_economic_invariant_tests.rs\");"}
+       }
+      }
+     ]
+    },
+    {
+     "kind": "existing_asset_movement",
+     "status": "enforced",
+     "statement": "The deposit raises the committed funded allowance on the exact custody row of its pool by exactly the existing units it debits from the depositor and credits to the reserve, in the same transaction as both balances. The prepared delta is rejoined to the live balances before either is written, so a stale or replayed deposit credits nothing; a zero, self, cross-asset or cross-scope movement, a forged owner and a retained allowance above the reserve balance are refused. No other movement raises the allowance: ordinary incoming transfers, mint credits and bootstrap commitments leave it unchanged.",
+     "sites": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset.rs",
+       "symbol": "RetainedNumericAssetMovementPurpose::PrivacyPoolDeposit(owner, binding) => ("
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset.rs",
+       "symbol": "NumericAssetTransferSourcePolicy::PrivacyPoolDeposit(owner) => {",
+       "within": "fn prepare_privacy_reserve_allowance_update("
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset.rs",
+       "symbol": ".checked_add(amount)",
+       "within": "fn prepare_privacy_reserve_allowance_update("
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset.rs",
+       "symbol": "\"funded privacy allowance requires an exact nonzero public movement\"",
+       "within": "fn prepare_privacy_reserve_allowance_update("
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset.rs",
+       "symbol": "NumericAssetTransferSourcePolicy::PrivacyPoolDeposit(_)",
+       "within": "fn apply_prechecked_numeric_asset_transfer_delta_exact("
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset.rs",
+       "symbol": "\"governed privacy public reserve delta must conserve exact live balances\"",
+       "within": "fn apply_prechecked_numeric_asset_transfer_delta_exact("
+      }
+     ],
+     "does_not_establish": ["proof_soundness", "hidden_conservation"],
+     "tests": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/prepared_source_additional_owner_tests.rs",
+       "test": "funded_turnstile_apply_rechecks_deposit_owner_and_consumes_exact_delta_once",
+       "status": "existing",
+       "exercises": ["apply_prechecked_numeric_asset_transfer_delta_exact"],
+       "asserts": ["reserve delta must conserve", "does not match governed reserve custody", "allowance exceeds its exact balance"],
+       "shows": "Through the apply owner, a prepared deposit of 3 raises the allowance by exactly 3; the same prepared delta applied again is refused as not conserving the live balances; a deposit under a forged bootstrap digest is refused; and a retained allowance of 4 over a reserve of 3 is refused, not repaired or topped up. Custody and both balances are unchanged by every refusal."
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/prepared_source_additional_owner_tests.rs",
+       "test": "funded_turnstile_rejects_zero_self_cross_asset_and_cross_scope_effects",
+       "status": "existing",
+       "exercises": ["prepare_privacy_reserve_allowance_update"],
+       "asserts": ["exact nonzero public movement"],
+       "shows": "An allowance credit for a zero amount, from the reserve itself, from another asset definition or from another balance scope is refused, and the allowance stays zero over a reserve that holds 10 units."
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+       "test": "funded_turnstile_does_not_authorize_bootstrap_balance_or_unsolicited_topups",
+       "status": "existing",
+       "verifier_fault": true,
+       "exercises": ["apply_faulty_verifier_pool_effect"],
+       "asserts": ["exceeds funded allowance"],
+       "shows": "With verification forced to succeed, for an Orchard and a private-IVM reserve owner: custody bootstrapped over a reserve that already holds 10 units starts with zero allowance and a withdrawal of one is refused; units minted to the depositor and moved into the reserve by an ordinary transfer leave the allowance at zero and a withdrawal is still refused; a deposit of 3 raises it to exactly 3; a withdrawal of 4 is refused although the reserve holds 17; a withdrawal of 3 is paid and exhausts the allowance, and the same withdrawal again is refused. The pool legs change no transparent total.",
+       "harness": {
+        "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+        "symbol": "fn apply_faulty_verifier_pool_effect(",
+        "included_by": {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "include!(\"asset/privacy_economic_invariant_tests.rs\");"}
+       }
+      }
+     ]
+    },
+    {
+     "kind": "asset_namespace_isolation",
+     "status": "enforced",
+     "statement": "A public leg is applied only when the reserve asset it names (asset definition, reserve account and balance scope) is the custody row of exactly this pool: the same protocol, namespace and bootstrap digest. A pool cannot reach the reserve of another pool, another asset or an ordinary balance.",
+     "sites": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset.rs",
+       "symbol": "\"verified privacy pool bridge does not match governed reserve custody\"",
+       "within": "pub(crate) fn execute_verified_privacy_pool_public_balance_transfer("
+      },
+      {"path": "crates/iroha_core_privacy/src/privacy_state.rs", "symbol": "pub fn privacy_public_reserve_owner_v1("}
+     ],
+     "does_not_establish": ["proof_soundness"],
+     "tests": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+       "test": "faulty_verifier_pool_effect_cannot_reach_another_pool_asset_scope_or_account",
+       "status": "added",
+       "verifier_fault": true,
+       "exercises": ["apply_faulty_verifier_pool_effect"],
+       "asserts": ["does not match governed reserve custody"],
+       "shows": "With verification forced to succeed, an effect of another pool, another protocol, another asset definition, another balance scope or an ordinary account is refused and no balance changes.",
+       "harness": {
+        "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+        "symbol": "fn apply_faulty_verifier_pool_effect(",
+        "included_by": {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "include!(\"asset/privacy_economic_invariant_tests.rs\");"}
+       }
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_public_reserve_tests.rs",
+       "test": "privacy_pool_bridge_requires_exact_owner_and_direction_before_reserve_debit",
+       "status": "existing",
+       "verifier_fault": true,
+       "exercises": ["execute_verified_privacy_pool_public_balance_transfer"],
+       "asserts": ["does not match governed reserve custody"],
+       "shows": "A forged bootstrap digest and a balanced direction are refused before any reserve debit; the exact owner debits exactly one unit."
+      },
+      {
+       "path": "crates/iroha_core_privacy/src/privacy_state.rs",
+       "test": "public_reserve_lookup_checks_full_id_and_refuses_cross_protocol_owner",
+       "status": "existing",
+       "shows": "The custody lookup matches the full asset id and refuses a row under another protocol."
+      }
+     ]
+    },
+    {
+     "kind": "asset_namespace_isolation",
+     "status": "enforced",
+     "statement": "Statement, verified effect and committed pool state name the same asset definition, balance scope and reserve account; the reserve account cannot sign a directional leg.",
+     "sites": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "\"Orchard statement asset differs from the governed pool asset\""
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "|| effect.reserve_account() != snapshot.state().reserve_account()",
+       "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "\"Orchard reserve account cannot submit a directional public bridge\"",
+       "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"
+      }
+     ],
+     "does_not_establish": ["proof_soundness"],
+     "defects": ["D-ORCHARD-APPLY-NOT-MUTATION-TESTED"]
+    },
+    {
+     "kind": "spent_once",
+     "status": "enforced",
+     "statement": "Each action nullifier is new in the pool namespace, checked before verification and again on the verified effect, and its record carries the pool's bootstrap digest.",
+     "sites": [
+      {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "\"Orchard nullifier was already consumed\""},
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "\"verified Orchard nullifier was already consumed\"",
+       "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "\"native Orchard effect contains duplicate nullifier keys\"",
+       "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"
+      }
+     ],
+     "does_not_establish": ["proof_soundness"],
+     "defects": ["D-ORCHARD-APPLY-NOT-MUTATION-TESTED"]
+    },
+    {
+     "kind": "ledger_derived_successor",
+     "status": "enforced",
+     "statement": "The successor frontier is derived by the ledger from the committed frontier and the statement's note commitments; the effect must equal it, anchor in the retained window and not be past its expiry height.",
+     "sites": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": ".derive_successor(&note_commitments)",
+       "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "\"native Orchard effect is inconsistent with trusted state or its statement\"",
+       "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"
+      }
+     ],
+     "does_not_establish": ["proof_soundness"],
+     "tests": [
+      {
+       "path": "crates/iroha_core_privacy/src/privacy_verifier.rs",
+       "test": "verified_orchard_effect_is_complete_and_derived_from_authoritative_frontier",
+       "status": "existing",
+       "shows": "The verified effect is complete and derived from the authoritative frontier."
+      }
+     ],
+     "defects": ["D-ORCHARD-APPLY-NOT-MUTATION-TESTED"]
+    },
+    {
+     "kind": "bounded_custody",
+     "status": "not_enforced",
+     "statement": "No committed supply or issuance cap bounds a deposit: a deposit within the depositor's balance is accepted whatever the pool already holds, and nothing on the ledger bounds the hidden value it appends. Only the public side is bounded: the deposit raises the funded allowance by exactly the units it moves (the existing_asset_movement invariant above), so it adds to what can leave the pool only what it brought in.",
+     "defects": ["D-POOL-NO-TURNSTILE-OR-CAP"]
+    }
+   ],
+   "exposure_after_erroneous_acceptance": {
+    "hidden_inflation": {
+     "possible": "yes",
+     "bound": "Without a ledger bound inside the pool: a deposit of n units can append notes of any hidden value. The ledger sees the n units arrive and nothing about the notes."
+    },
+    "reserve_theft": {
+     "possible": "yes",
+     "bound": "The funded allowance of this one pool's reserve, never more than its balance: one asset definition, one reserve account, one balance scope. Units that ordinary transfers, mints or the bootstrap balance put into the reserve, reserves of other pools, other assets and every balance that backs no pool are not reachable. Notes inflated by a wrong deposit proof leave through a later unshield, paid from allowance that verified deposits funded; the inflating deposit adds only the units it debits."
+    },
+    "transparent_minting": {"possible": "no", "bound": "The deposit debits the submitter by exactly what the reserve gains; the transparent total is unchanged."},
+    "summary": "A wrongly accepted shield is hidden inflation. Its cost is carried by the depositors of the same pool when the inflated notes are withdrawn; the funded allowance bounds the total and protects no individual depositor."
+   },
+   "mutation_tests": [
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+     "test": "faulty_verifier_pool_deposit_moves_existing_units_and_never_mints",
+     "status": "added",
+     "verifier_fault": true,
+     "exercises": ["apply_faulty_verifier_pool_effect"],
+     "asserts": ["no public-reserve transfer"],
+     "shows": "With verification forced to succeed, a deposit above the depositor's balance is refused, a funded deposit debits the depositor by what the reserve gains, the transparent total is unchanged and a balanced effect has no public leg.",
+     "harness": {
+      "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+      "symbol": "fn apply_faulty_verifier_pool_effect(",
+      "included_by": {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "include!(\"asset/privacy_economic_invariant_tests.rs\");"}
+     }
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+     "test": "faulty_verifier_pool_effect_cannot_reach_another_pool_asset_scope_or_account",
+     "status": "added",
+     "verifier_fault": true,
+     "exercises": ["apply_faulty_verifier_pool_effect"],
+     "asserts": ["does not match governed reserve custody"],
+     "shows": "With verification forced to succeed, an effect of another pool, another protocol, another asset definition, another balance scope or an ordinary account is refused and no balance changes.",
+     "harness": {
+      "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+      "symbol": "fn apply_faulty_verifier_pool_effect(",
+      "included_by": {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "include!(\"asset/privacy_economic_invariant_tests.rs\");"}
+     }
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+     "test": "funded_turnstile_does_not_authorize_bootstrap_balance_or_unsolicited_topups",
+     "status": "existing",
+     "verifier_fault": true,
+     "exercises": ["apply_faulty_verifier_pool_effect"],
+     "asserts": ["exceeds funded allowance"],
+     "shows": "With verification forced to succeed, for an Orchard and a private-IVM reserve owner: custody bootstrapped over a reserve that already holds 10 units starts with zero allowance and a withdrawal of one is refused; units minted to the depositor and moved into the reserve by an ordinary transfer leave the allowance at zero and a withdrawal is still refused; a deposit of 3 raises it to exactly 3; a withdrawal of 4 is refused although the reserve holds 17; a withdrawal of 3 is paid and exhausts the allowance, and the same withdrawal again is refused. The pool legs change no transparent total.",
+     "harness": {
+      "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+      "symbol": "fn apply_faulty_verifier_pool_effect(",
+      "included_by": {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "include!(\"asset/privacy_economic_invariant_tests.rs\");"}
+     }
+    }
+   ],
+   "defects": ["D-HARNESS-NO-SEAM-AFTER-VERIFIER", "D-ORCHARD-APPLY-NOT-MUTATION-TESTED", "D-POOL-NO-TURNSTILE-OR-CAP"]
+  },
+  {
+   "id": "ironwood.transfer",
+   "protocol": "ironwood",
+   "operation": "privacy::SubmitPrivacyIronwoodProofV1",
+   "class": "settlement",
+   "summary": "A balanced Ironwood bundle consumes nullifiers and appends note commitments with no public leg.",
+   "effect_status": "implemented",
+   "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for SubmitPrivacyIronwoodProofV1"},
+   "apply_sites": [
+    {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"}
+   ],
+   "authorized_issuance_source": {"kind": "existing_pool_units", "statement": "No unit is issued: notes are spent and created inside one pool."},
+   "proof": {"authorizes": true},
+   "invariants": [
+    {
+     "kind": "spent_once",
+     "status": "enforced",
+     "statement": "Each action nullifier is new in the pool namespace, checked before verification and again on the verified effect, and its record carries the pool's bootstrap digest.",
+     "sites": [
+      {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "\"Orchard nullifier was already consumed\""},
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "\"verified Orchard nullifier was already consumed\"",
+       "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "\"native Orchard effect contains duplicate nullifier keys\"",
+       "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"
+      }
+     ],
+     "does_not_establish": ["proof_soundness"],
+     "defects": ["D-ORCHARD-APPLY-NOT-MUTATION-TESTED"]
+    },
+    {
+     "kind": "ledger_derived_successor",
+     "status": "enforced",
+     "statement": "The successor frontier is derived by the ledger from the committed frontier and the statement's note commitments; the effect must equal it, anchor in the retained window and not be past its expiry height.",
+     "sites": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": ".derive_successor(&note_commitments)",
+       "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "\"native Orchard effect is inconsistent with trusted state or its statement\"",
+       "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"
+      }
+     ],
+     "does_not_establish": ["proof_soundness"],
+     "tests": [
+      {
+       "path": "crates/iroha_core_privacy/src/privacy_verifier.rs",
+       "test": "verified_orchard_effect_is_complete_and_derived_from_authoritative_frontier",
+       "status": "existing",
+       "shows": "The verified effect is complete and derived from the authoritative frontier."
+      }
+     ],
+     "defects": ["D-ORCHARD-APPLY-NOT-MUTATION-TESTED"]
+    },
+    {
+     "kind": "existing_asset_movement",
+     "status": "enforced",
+     "statement": "A balanced effect has no public leg: the bridge is not called for it and refuses the direction if it is.",
+     "sites": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset.rs",
+       "symbol": "\"balanced privacy effect has no public-reserve transfer\"",
+       "within": "pub(crate) fn execute_verified_privacy_pool_public_balance_transfer("
+      }
+     ],
+     "does_not_establish": ["proof_soundness"],
+     "tests": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+       "test": "faulty_verifier_pool_deposit_moves_existing_units_and_never_mints",
+       "status": "added",
+       "verifier_fault": true,
+       "exercises": ["apply_faulty_verifier_pool_effect"],
+       "asserts": ["no public-reserve transfer"],
+       "shows": "With verification forced to succeed, a deposit above the depositor's balance is refused, a funded deposit debits the depositor by what the reserve gains, the transparent total is unchanged and a balanced effect has no public leg.",
+       "harness": {
+        "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+        "symbol": "fn apply_faulty_verifier_pool_effect(",
+        "included_by": {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "include!(\"asset/privacy_economic_invariant_tests.rs\");"}
+       }
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_public_reserve_tests.rs",
+       "test": "privacy_pool_bridge_requires_exact_owner_and_direction_before_reserve_debit",
+       "status": "existing",
+       "verifier_fault": true,
+       "exercises": ["execute_verified_privacy_pool_public_balance_transfer"],
+       "asserts": ["does not match governed reserve custody"],
+       "shows": "A forged bootstrap digest and a balanced direction are refused before any reserve debit; the exact owner debits exactly one unit."
+      }
+     ]
+    },
+    {
+     "kind": "asset_namespace_isolation",
+     "status": "enforced",
+     "statement": "Statement, verified effect and committed pool state name the same asset definition, balance scope and reserve account; the reserve account cannot sign a directional leg.",
+     "sites": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "\"Orchard statement asset differs from the governed pool asset\""
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "|| effect.reserve_account() != snapshot.state().reserve_account()",
+       "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "\"Orchard reserve account cannot submit a directional public bridge\"",
+       "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"
+      }
+     ],
+     "does_not_establish": ["proof_soundness"],
+     "defects": ["D-ORCHARD-APPLY-NOT-MUTATION-TESTED"]
+    }
+   ],
+   "exposure_after_erroneous_acceptance": {
+    "hidden_inflation": {"possible": "yes", "bound": "Without a ledger bound inside the pool: output notes may carry more hidden value than the spent notes."},
+    "reserve_theft": {
+     "possible": "yes",
+     "bound": "The funded allowance of this one pool's reserve, never more than its balance: one asset definition, one reserve account, one balance scope. Units that ordinary transfers, mints or the bootstrap balance put into the reserve, reserves of other pools, other assets and every balance that backs no pool are not reachable. Inflated notes leave through a later unshield, paid from allowance that verified deposits funded."
+    },
+    "transparent_minting": {"possible": "no", "bound": "A balanced effect has no public leg and touches no asset balance."},
+    "summary": "A wrongly accepted transfer is hidden inflation inside one pool; it becomes reserve theft only at an unshield."
+   },
+   "mutation_tests": [
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+     "test": "faulty_verifier_pool_deposit_moves_existing_units_and_never_mints",
+     "status": "added",
+     "verifier_fault": true,
+     "exercises": ["apply_faulty_verifier_pool_effect"],
+     "asserts": ["no public-reserve transfer"],
+     "shows": "With verification forced to succeed, a deposit above the depositor's balance is refused, a funded deposit debits the depositor by what the reserve gains, the transparent total is unchanged and a balanced effect has no public leg.",
+     "harness": {
+      "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+      "symbol": "fn apply_faulty_verifier_pool_effect(",
+      "included_by": {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "include!(\"asset/privacy_economic_invariant_tests.rs\");"}
+     }
+    }
+   ],
+   "defects": ["D-HARNESS-NO-SEAM-AFTER-VERIFIER", "D-ORCHARD-APPLY-NOT-MUTATION-TESTED"]
+  },
+  {
+   "id": "ironwood.unshield",
+   "protocol": "ironwood",
+   "operation": "privacy::SubmitPrivacyIronwoodProofV1",
+   "class": "withdrawal",
+   "summary": "An Ironwood bundle with a value balance out of the pool debits the pool reserve and credits the submitter.",
+   "effect_status": "implemented",
+   "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "impl Execute for SubmitPrivacyIronwoodProofV1"},
+   "apply_sites": [
+    {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"},
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/asset.rs",
+     "symbol": "pub(crate) fn execute_verified_privacy_pool_public_balance_transfer("
+    }
+   ],
+   "authorized_issuance_source": {"kind": "pool_reserve", "statement": "No unit is issued: the amount is debited from the reserve of the pool."},
+   "proof": {"authorizes": true},
+   "invariants": [
+    {
+     "kind": "exact_reserve_debit_before_equal_credit",
+     "status": "enforced",
+     "statement": "A withdrawal debits the reserve by exactly the amount it credits, rejoined to the live balances before either is written. A debit above the reserve balance is refused, so the reserve is never negative, and only the exact verified bridge of the owning pool may debit it: the reserve owner, a transfer delegate, a batch leg, the general proof bridge and a burn are refused.",
+     "sites": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset.rs",
+       "symbol": "\"governed privacy public reserve delta must conserve exact live balances\""
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset.rs",
+       "symbol": "\"governed privacy public reserve requires its exact verified pool bridge\"",
+       "within": "fn ensure_privacy_public_reserve_source_policy_for_owner("
+      },
+      {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "\"governed privacy public reserve cannot be burned\""}
+     ],
+     "does_not_establish": ["proof_soundness", "hidden_conservation", "depositor_protection"],
+     "tests": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+       "test": "faulty_verifier_pool_withdrawal_is_bounded_by_the_reserve_balance",
+       "status": "added",
+       "verifier_fault": true,
+       "exercises": ["apply_faulty_verifier_pool_effect"],
+       "shows": "With verification forced to succeed, a withdrawal above the reserve balance is refused, a withdrawal of the whole reserve is paid, an empty reserve pays nothing, and the transparent total is unchanged. Run for an Orchard and a private-IVM reserve owner.",
+       "harness": {
+        "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+        "symbol": "fn apply_faulty_verifier_pool_effect(",
+        "included_by": {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "include!(\"asset/privacy_economic_invariant_tests.rs\");"}
+       }
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_public_reserve_tests.rs",
+       "test": "privacy_public_reserve_refuses_owner_delegate_general_bridge_and_burn",
+       "status": "existing",
+       "exercises": ["execute_verified_privacy_public_balance_transfer"],
+       "asserts": ["exact verified pool bridge", "cannot be burned"],
+       "shows": "The reserve owner, an exact transfer delegate, the general proof bridge and a burn cannot debit a pool reserve."
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_public_reserve_tests.rs",
+       "test": "privacy_reserve_rejection_is_leg_local_in_independent_batch",
+       "status": "existing",
+       "shows": "An ordinary batch transfer cannot debit a reserve; the refused leg credits nothing and its sibling applies."
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/prepared_source_additional_owner_tests.rs",
+       "test": "privacy_public_reserve_apply_rejects_nonconserving_delta_before_balances_change",
+       "status": "existing",
+       "asserts": ["reserve delta must conserve"],
+       "shows": "A prepared reserve movement whose delta does not conserve the live balances is refused before either balance is written."
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/prepared_source_additional_owner_tests.rs",
+       "test": "privacy_public_reserve_apply_rejects_stale_destination_balance",
+       "status": "existing",
+       "shows": "A prepared reserve movement against a stale destination balance is refused."
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/prepared_source_additional_owner_tests.rs",
+       "test": "prepared_user_transfer_rechecks_new_privacy_reserve_custody_at_apply",
+       "status": "existing",
+       "shows": "A transfer prepared before a balance became a reserve is refused when it is applied."
+      }
+     ]
+    },
+    {
+     "kind": "asset_namespace_isolation",
+     "status": "enforced",
+     "statement": "A public leg is applied only when the reserve asset it names (asset definition, reserve account and balance scope) is the custody row of exactly this pool: the same protocol, namespace and bootstrap digest. A pool cannot reach the reserve of another pool, another asset or an ordinary balance.",
+     "sites": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset.rs",
+       "symbol": "\"verified privacy pool bridge does not match governed reserve custody\"",
+       "within": "pub(crate) fn execute_verified_privacy_pool_public_balance_transfer("
+      },
+      {"path": "crates/iroha_core_privacy/src/privacy_state.rs", "symbol": "pub fn privacy_public_reserve_owner_v1("}
+     ],
+     "does_not_establish": ["proof_soundness"],
+     "tests": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+       "test": "faulty_verifier_pool_effect_cannot_reach_another_pool_asset_scope_or_account",
+       "status": "added",
+       "verifier_fault": true,
+       "exercises": ["apply_faulty_verifier_pool_effect"],
+       "asserts": ["does not match governed reserve custody"],
+       "shows": "With verification forced to succeed, an effect of another pool, another protocol, another asset definition, another balance scope or an ordinary account is refused and no balance changes.",
+       "harness": {
+        "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+        "symbol": "fn apply_faulty_verifier_pool_effect(",
+        "included_by": {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "include!(\"asset/privacy_economic_invariant_tests.rs\");"}
+       }
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_public_reserve_tests.rs",
+       "test": "privacy_pool_bridge_requires_exact_owner_and_direction_before_reserve_debit",
+       "status": "existing",
+       "verifier_fault": true,
+       "exercises": ["execute_verified_privacy_pool_public_balance_transfer"],
+       "asserts": ["does not match governed reserve custody"],
+       "shows": "A forged bootstrap digest and a balanced direction are refused before any reserve debit; the exact owner debits exactly one unit."
+      },
+      {
+       "path": "crates/iroha_core_privacy/src/privacy_state.rs",
+       "test": "public_reserve_lookup_checks_full_id_and_refuses_cross_protocol_owner",
+       "status": "existing",
+       "shows": "The custody lookup matches the full asset id and refuses a row under another protocol."
+      }
+     ]
+    },
+    {
+     "kind": "asset_namespace_isolation",
+     "status": "enforced",
+     "statement": "Statement, verified effect and committed pool state name the same asset definition, balance scope and reserve account; the reserve account cannot sign a directional leg.",
+     "sites": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "\"Orchard statement asset differs from the governed pool asset\""
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "|| effect.reserve_account() != snapshot.state().reserve_account()",
+       "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "\"Orchard reserve account cannot submit a directional public bridge\"",
+       "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"
+      }
+     ],
+     "does_not_establish": ["proof_soundness"],
+     "defects": ["D-ORCHARD-APPLY-NOT-MUTATION-TESTED"]
+    },
+    {
+     "kind": "spent_once",
+     "status": "enforced",
+     "statement": "Each action nullifier is new in the pool namespace, checked before verification and again on the verified effect, and its record carries the pool's bootstrap digest.",
+     "sites": [
+      {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "\"Orchard nullifier was already consumed\""},
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "\"verified Orchard nullifier was already consumed\"",
+       "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "\"native Orchard effect contains duplicate nullifier keys\"",
+       "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"
+      }
+     ],
+     "does_not_establish": ["proof_soundness"],
+     "defects": ["D-ORCHARD-APPLY-NOT-MUTATION-TESTED"]
+    },
+    {
+     "kind": "ledger_derived_successor",
+     "status": "enforced",
+     "statement": "The successor frontier is derived by the ledger from the committed frontier and the statement's note commitments; the effect must equal it, anchor in the retained window and not be past its expiry height.",
+     "sites": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": ".derive_successor(&note_commitments)",
+       "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+       "symbol": "\"native Orchard effect is inconsistent with trusted state or its statement\"",
+       "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {"
+      }
+     ],
+     "does_not_establish": ["proof_soundness"],
+     "tests": [
+      {
+       "path": "crates/iroha_core_privacy/src/privacy_verifier.rs",
+       "test": "verified_orchard_effect_is_complete_and_derived_from_authoritative_frontier",
+       "status": "existing",
+       "shows": "The verified effect is complete and derived from the authoritative frontier."
+      }
+     ],
+     "defects": ["D-ORCHARD-APPLY-NOT-MUTATION-TESTED"]
+    },
+    {
+     "kind": "bounded_custody",
+     "status": "enforced",
+     "statement": "A withdrawal is bounded by the committed funded allowance on the exact custody row of its pool (asset definition, reserve account, balance scope, protocol, namespace and bootstrap digest): verified pool deposits minus verified pool withdrawals. The debit consumes allowance and reserve balance together in one transaction and is refused when the allowance is short, whatever the reserve holds. Bootstrap starts the allowance at zero, also over an existing balance, and ordinary incoming transfers, mint credits and bootstrap commitments never raise it. Apply refuses a stale or replayed prepared delta and an allowance above the live reserve balance, which it does not repair; restore refuses an allowance above the retained balance and has no default for a missing one. The allowance is one counter per reserve: it bounds what leaves the Orchard pool, not whose funded units a withdrawal takes.",
+     "sites": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset.rs",
+       "symbol": "\"privacy public withdrawal exceeds funded allowance\"",
+       "within": "fn prepare_privacy_reserve_allowance_update("
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset.rs",
+       "symbol": "\"privacy public reserve funded allowance exceeds its exact balance\"",
+       "within": "fn prepare_privacy_reserve_allowance_update("
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset.rs",
+       "symbol": "\"governed privacy public reserve delta must conserve exact live balances\"",
+       "within": "fn apply_prechecked_numeric_asset_transfer_delta_exact("
+      },
+      {"path": "crates/iroha_core_privacy/src/privacy_state.rs", "symbol": "funded_allowance: Quantity::zero(),"},
+      {
+       "path": "crates/iroha_core_privacy/src/privacy_state.rs",
+       "symbol": "\"privacy public reserve funded allowance exceeds its exact balance\"",
+       "within": "pub fn validate_privacy_public_reserve_dependencies_v1<"
+      },
+      {
+       "path": "crates/iroha_core/src/state/deserialize_world.rs",
+       "symbol": "crate::privacy_state::validate_privacy_public_reserve_dependencies_v1( &privacy_commitments.view(), &accounts.view(), &asset_definitions.view(), &assets.view(),"
+      }
+     ],
+     "does_not_establish": ["proof_soundness", "hidden_conservation", "depositor_protection"],
+     "tests": [
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+       "test": "funded_turnstile_does_not_authorize_bootstrap_balance_or_unsolicited_topups",
+       "status": "existing",
+       "verifier_fault": true,
+       "exercises": ["apply_faulty_verifier_pool_effect"],
+       "asserts": ["exceeds funded allowance"],
+       "shows": "With verification forced to succeed, for an Orchard and a private-IVM reserve owner: custody bootstrapped over a reserve that already holds 10 units starts with zero allowance and a withdrawal of one is refused; units minted to the depositor and moved into the reserve by an ordinary transfer leave the allowance at zero and a withdrawal is still refused; a deposit of 3 raises it to exactly 3; a withdrawal of 4 is refused although the reserve holds 17; a withdrawal of 3 is paid and exhausts the allowance, and the same withdrawal again is refused. The pool legs change no transparent total.",
+       "harness": {
+        "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+        "symbol": "fn apply_faulty_verifier_pool_effect(",
+        "included_by": {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "include!(\"asset/privacy_economic_invariant_tests.rs\");"}
+       }
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+       "test": "funded_turnstile_failed_deposit_withdrawal_batch_rolls_back_counter_and_balances",
+       "status": "existing",
+       "verifier_fault": true,
+       "exercises": ["apply_faulty_verifier_pool_effect"],
+       "shows": "With verification forced to succeed, for an Orchard and a private-IVM reserve owner: a deposit of 6 and a withdrawal of 2 in one transaction leave an allowance of 4, a third leg withdrawing 5 is refused, and the transaction that is not applied leaves the allowance at zero, the reserve and depositor balances as they were and no event.",
+       "harness": {
+        "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+        "symbol": "fn apply_faulty_verifier_pool_effect(",
+        "included_by": {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "include!(\"asset/privacy_economic_invariant_tests.rs\");"}
+       }
+      },
+      {
+       "path": "crates/iroha_core/src/smartcontracts/isi/asset/prepared_source_additional_owner_tests.rs",
+       "test": "funded_turnstile_apply_rechecks_deposit_owner_and_consumes_exact_delta_once",
+       "status": "existing",
+       "exercises": ["apply_prechecked_numeric_asset_transfer_delta_exact"],
+       "asserts": ["reserve delta must conserve", "does not match governed reserve custody", "allowance exceeds its exact balance"],
+       "shows": "Through the apply owner, a prepared deposit of 3 raises the allowance by exactly 3; the same prepared delta applied again is refused as not conserving the live balances; a deposit under a forged bootstrap digest is refused; and a retained allowance of 4 over a reserve of 3 is refused, not repaired or topped up. Custody and both balances are unchanged by every refusal."
+      },
+      {
+       "path": "crates/iroha_core_privacy/src/privacy_state/funded_allowance_tests.rs",
+       "test": "funded_reserve_restore_keeps_bootstrap_identity_and_requires_exact_backing",
+       "status": "existing",
+       "exercises": ["validate_privacy_public_reserve_dependencies_v1"],
+       "asserts": ["funded allowance exceeds its exact balance"],
+       "shows": "A custody row with an allowance of 7 passes persisted-state validation before and after a JSON roundtrip and keeps that allowance; the reserve-dependency check of restore refuses it with no reserve balance, with a balance of 6 and with 100 units held only under another balance scope, and accepts it over a balance of 7 or 8."
+      },
+      {
+       "path": "crates/iroha_core_privacy/src/privacy_state/funded_allowance_tests.rs",
+       "test": "funded_reserve_record_roundtrips_without_reset_and_rejects_missing_allowance",
+       "status": "existing",
+       "shows": "A custody record keeps an allowance of 7 through validation and a JSON roundtrip; the same record without its funded_allowance field, or with -1, 07 or a non-number in it, does not decode."
+      }
+     ],
+     "defects": ["D-POOL-NO-TURNSTILE-OR-CAP"]
+    }
+   ],
+   "exposure_after_erroneous_acceptance": {
+    "hidden_inflation": {"possible": "not_applicable", "bound": "A withdrawal creates no hidden value; it is where hidden inflation becomes a transparent loss."},
+    "reserve_theft": {
+     "possible": "yes",
+     "bound": "The funded allowance of this one pool's reserve: verified deposits minus verified withdrawals of one asset definition, one reserve account and one balance scope, never more than the reserve balance. Units that ordinary transfers, mints or the bootstrap balance put into the reserve are not reachable, nor are reserves of other pools, other assets and every balance that backs no pool. The ledger pays any amount up to the allowance to the submitter, including allowance that other depositors funded; later honest withdrawals of the same pool fail once it is exhausted."
+    },
+    "transparent_minting": {
+     "possible": "no",
+     "bound": "The reserve is debited by exactly the credited amount and never below zero; the transparent total is unchanged."
+    },
+    "summary": "A wrongly accepted unshield is reserve theft bounded by the funded allowance of one pool's reserve. The bound limits the loss of the pool as a whole; it does not show that any shielded balance is backed."
+   },
+   "mutation_tests": [
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+     "test": "faulty_verifier_pool_withdrawal_is_bounded_by_the_reserve_balance",
+     "status": "added",
+     "verifier_fault": true,
+     "exercises": ["apply_faulty_verifier_pool_effect"],
+     "shows": "With verification forced to succeed, a withdrawal above the reserve balance is refused, a withdrawal of the whole reserve is paid, an empty reserve pays nothing, and the transparent total is unchanged. Run for an Orchard and a private-IVM reserve owner.",
+     "harness": {
+      "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+      "symbol": "fn apply_faulty_verifier_pool_effect(",
+      "included_by": {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "include!(\"asset/privacy_economic_invariant_tests.rs\");"}
+     }
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+     "test": "faulty_verifier_pool_effect_cannot_reach_another_pool_asset_scope_or_account",
+     "status": "added",
+     "verifier_fault": true,
+     "exercises": ["apply_faulty_verifier_pool_effect"],
+     "asserts": ["does not match governed reserve custody"],
+     "shows": "With verification forced to succeed, an effect of another pool, another protocol, another asset definition, another balance scope or an ordinary account is refused and no balance changes.",
+     "harness": {
+      "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+      "symbol": "fn apply_faulty_verifier_pool_effect(",
+      "included_by": {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "include!(\"asset/privacy_economic_invariant_tests.rs\");"}
+     }
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+     "test": "dropped_transaction_discards_a_faulty_pool_withdrawal",
+     "status": "added",
+     "verifier_fault": true,
+     "exercises": ["apply_faulty_verifier_pool_effect"],
+     "shows": "A wrongly verified withdrawal staged in a transaction that is not applied leaves the reserve whole.",
+     "harness": {
+      "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+      "symbol": "fn apply_faulty_verifier_pool_effect(",
+      "included_by": {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "include!(\"asset/privacy_economic_invariant_tests.rs\");"}
+     }
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_public_reserve_tests.rs",
+     "test": "privacy_pool_bridge_requires_exact_owner_and_direction_before_reserve_debit",
+     "status": "existing",
+     "verifier_fault": true,
+     "exercises": ["execute_verified_privacy_pool_public_balance_transfer"],
+     "asserts": ["does not match governed reserve custody"],
+     "shows": "A forged bootstrap digest and a balanced direction are refused before any reserve debit; the exact owner debits exactly one unit."
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+     "test": "funded_turnstile_does_not_authorize_bootstrap_balance_or_unsolicited_topups",
+     "status": "existing",
+     "verifier_fault": true,
+     "exercises": ["apply_faulty_verifier_pool_effect"],
+     "asserts": ["exceeds funded allowance"],
+     "shows": "With verification forced to succeed, for an Orchard and a private-IVM reserve owner: custody bootstrapped over a reserve that already holds 10 units starts with zero allowance and a withdrawal of one is refused; units minted to the depositor and moved into the reserve by an ordinary transfer leave the allowance at zero and a withdrawal is still refused; a deposit of 3 raises it to exactly 3; a withdrawal of 4 is refused although the reserve holds 17; a withdrawal of 3 is paid and exhausts the allowance, and the same withdrawal again is refused. The pool legs change no transparent total.",
+     "harness": {
+      "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+      "symbol": "fn apply_faulty_verifier_pool_effect(",
+      "included_by": {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "include!(\"asset/privacy_economic_invariant_tests.rs\");"}
+     }
+    },
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+     "test": "funded_turnstile_failed_deposit_withdrawal_batch_rolls_back_counter_and_balances",
+     "status": "existing",
+     "verifier_fault": true,
+     "exercises": ["apply_faulty_verifier_pool_effect"],
+     "shows": "With verification forced to succeed, for an Orchard and a private-IVM reserve owner: a deposit of 6 and a withdrawal of 2 in one transaction leave an allowance of 4, a third leg withdrawing 5 is refused, and the transaction that is not applied leaves the allowance at zero, the reserve and depositor balances as they were and no event.",
+     "harness": {
+      "path": "crates/iroha_core/src/smartcontracts/isi/asset/privacy_economic_invariant_tests.rs",
+      "symbol": "fn apply_faulty_verifier_pool_effect(",
+      "included_by": {"path": "crates/iroha_core/src/smartcontracts/isi/asset.rs", "symbol": "include!(\"asset/privacy_economic_invariant_tests.rs\");"}
+     }
+    }
+   ],
+   "defects": ["D-HARNESS-NO-SEAM-AFTER-VERIFIER", "D-ORCHARD-APPLY-NOT-MUTATION-TESTED", "D-POOL-NO-TURNSTILE-OR-CAP"]
   }
  ],
  "operations": {
@@ -6136,7 +7209,14 @@
    "value_bearing": false,
    "reason": "verification_only",
    "note": "The dedicated X509 request consumes only its certificate replay nullifier. It moves no asset value and remains natively unavailable until the joint security reduction is complete."
-  }
+  },
+  "privacy::BootstrapPrivacyIronwoodPoolV1": {"value_bearing": true, "effects": ["ironwood.pool_bootstrap"]},
+  "privacy::SchedulePrivacyIronwoodLimitsUpdateV1": {
+   "value_bearing": false,
+   "reason": "administrative",
+   "note": "A governed record of a key, policy, profile, issuer, parameter set or lifecycle state. It creates, moves and locks no unit."
+  },
+  "privacy::SubmitPrivacyIronwoodProofV1": {"value_bearing": true, "effects": ["ironwood.shield", "ironwood.transfer", "ironwood.unshield"]}
  },
  "tripwire": {
   "what": "Identifiers of ledger value. The handler of an operation recorded as moving no value, with the functions of its file it calls, must name none that its entry does not record.",
@@ -6243,7 +7323,7 @@
    "owner": ["P.20", "P.2"],
    "path": "crates/iroha_core/src/private_settlement/state.rs",
    "symbol": ".is_some_and(|retirement| expiry_height >= retirement)",
-   "line": 533,
+   "line": 534,
    "summary": "A settlement pool policy can carry a retirement height. A bundle that expires at or after it is refused, and settlement pools have no transparent boundary, so notes of a retired pool can neither move nor leave.",
    "required": "Define how notes leave a pool whose policy is retired or replaced: a successor pool reachable by a settlement leg, or an explicit withdrawal with its own ledger invariant."
   },
@@ -6275,7 +7355,7 @@
    "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
    "symbol": "} else if let Some(commitments) = self.bootstrap.initial_note_commitments() {",
    "within": "impl Execute for BootstrapPrivacyProofManagedPoolV1 {",
-   "line": 1158,
+   "line": 1374,
    "summary": "A private-IVM pool is bootstrapped with a non-empty set of genesis note commitments chosen by governance. Their hidden value is matched by no reserve deposit and consumes no committed issuance allowance, although the pool has a transparent exit. Bootstrap starts the reserve's funded allowance at zero, so a genesis note can be withdrawn only from allowance that verified deposits funded: it is paid by other depositors.",
    "required": "Shielded value seeded at bootstrap is matched by an equal reserve deposit when the pool is admitted, or the genesis set carries a committed public amount (finding R6-22, item 2)."
   },
@@ -6286,7 +7366,7 @@
    "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
    "symbol": "if let Some(outputs) = self.bootstrap.initial_fcmp_outputs() {",
    "within": "impl Execute for BootstrapPrivacyProofManagedPoolV1 {",
-   "line": 1132,
+   "line": 1348,
    "summary": "The whole supply of an FCMP++ pool is the hidden value of the genesis outputs governance supplies at bootstrap. No public figure, committed allowance or backing asset movement bounds it.",
    "required": "State the issuance source of the pool: a committed public supply figure the bootstrap is checked against, or a funded bridge with its own invariant (plan: an added bridge requires explicit economics)."
   },
@@ -6296,7 +7376,7 @@
    "owner": ["P.2", "P.19"],
    "path": "crates/iroha_data_model/src/privacy/protocol.rs",
    "symbol": "pub struct PrivacyPqMaspPoolBootstrapV1 {",
-   "line": 1354,
+   "line": 1468,
    "summary": "The whole supply of a PQ-MASP pool is the hidden value of the genesis note commitments governance supplies at bootstrap. No public figure, committed allowance or backing asset movement bounds it.",
    "required": "State the issuance source of the pool: a committed public supply figure the bootstrap is checked against, or a funded bridge with its own invariant."
   },
@@ -6305,9 +7385,9 @@
    "kind": "issuance_unbounded",
    "owner": ["P.2", "P.10"],
    "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
-   "symbol": "instruction.bootstrap.total_supply,",
+   "symbol": "bootstrap.total_supply,",
    "within": "pub(crate) fn execute_pgc_bootstrap(",
-   "line": 1598,
+   "line": 1812,
    "summary": "The total supply of an Anonymous PGC pool is a public number governance chooses at bootstrap. It is bound to no asset definition and consumes no committed issuance allowance; the bootstrap proof is the only check that the encrypted balances sum to it.",
    "required": "Name what a PGC unit is: bind the pool to an asset and a committed allowance, or state that the units are pool-local with no claim on any asset."
   },
@@ -6339,7 +7419,7 @@
    "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
    "symbol": "match effects.into_ledger() {",
    "within": "fn execute_after_admission(",
-   "line": 4508,
+   "line": 4789,
    "summary": "The proof handler applies checks to a verified effect (Orchard, FCMP++, Anonymous PGC, ZK-ACE) inline after its verifier call. PGC bootstrap checks the native verifier outputs inside the original-invocation consumer and applies State changes in execute_pgc_bootstrap. No test-only entry point injects an erroneously accepted effect at either boundary to observe the remaining ledger checks. Only the public reserve bridge and the private-note apply function are reachable that way today.",
    "required": "Split the handler into verification and an apply function over the verified effect (the single state executor per role of P.1), and give every ledger effect a test-only constructor like the proof-managed one (P.3)."
   },
@@ -6401,28 +7481,28 @@
    "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
    "symbol": "\"native Orchard effect is inconsistent with trusted state or its statement\"",
    "within": "VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {",
-   "line": 4566,
+   "line": 4849,
    "summary": "No test in the ledger crate submits an Orchard bundle, valid or mutated: the nullifier, anchor, successor and expiry checks of the Orchard apply arm are exercised by no test there.",
    "required": "P.16 supplies genuine Orchard proofs and mutations; P.3 supplies the shared ledger-effect tests."
   }
  ],
  "summary": {
-  "protocols": 25,
-  "value_bearing_protocols": 11,
-  "operations": 91,
-  "value_bearing_operations": 18,
-  "effects": 29,
+  "protocols": 26,
+  "value_bearing_protocols": 12,
+  "operations": 94,
+  "value_bearing_operations": 20,
+  "effects": 33,
   "effects_by_class": {
    "private_issuance": 5,
    "transparent_supply_change": 1,
-   "deposit": 5,
-   "withdrawal": 3,
-   "reserve_movement": 3,
-   "settlement": 8,
+   "deposit": 6,
+   "withdrawal": 4,
+   "reserve_movement": 4,
+   "settlement": 9,
    "inter_pool_movement": 4
   },
-  "effects_by_status": {"implemented": 18, "gated": 5, "unreachable": 3, "absent": 3},
-  "invariants_by_status": {"enforced": 74, "enforced_by_absence": 6, "not_enforced": 11, "not_applicable": 1},
+  "effects_by_status": {"implemented": 22, "gated": 5, "unreachable": 3, "absent": 3},
+  "invariants_by_status": {"enforced": 92, "enforced_by_absence": 6, "not_enforced": 12, "not_applicable": 2},
   "cited_tests": 68,
   "added_tests": 9,
   "defects": 16,

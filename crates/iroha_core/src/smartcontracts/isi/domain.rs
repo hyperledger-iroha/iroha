@@ -269,8 +269,8 @@ mod tests {
         permission::Permission,
         prelude::Domain,
         privacy::{
-            PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
-            PrivacyProtocolIdV1,
+            PrivacyNamespaceScopeV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
+            PrivacyRuntimeNamespaceV1, PrivacyRuntimeProtocolIdV1,
         },
         role::{Role, RoleId},
         smart_contract::ContractAddress,
@@ -541,8 +541,8 @@ mod tests {
         asset_definition_id: AssetDefinitionId,
         reserve_account: AccountId,
     ) -> crate::privacy_state::PrivacyCommitmentKeyV1 {
-        let namespace = PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+        let namespace = PrivacyRuntimeNamespaceV1::new(
+            PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
             PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                 pool_id: PrivacyPoolIdV1::new([0xD1; 32]),
             }),

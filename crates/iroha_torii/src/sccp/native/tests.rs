@@ -561,27 +561,32 @@ async fn pause_and_anchor_handlers_reject_unknown_queries_and_preserve_source_re
         } else {
             Instant::now() + Duration::from_secs(30)
         };
-        for response in [
-            handler_fast_pause(
-                State(app.clone()),
-                RawQuery(query.map(str::to_owned)),
-                Extension(RouteExecutionDeadline(deadline)),
-                HeaderMap::new(),
-                ConnectInfo(remote),
-            )
-            .await
-            .unwrap(),
-            handler_evidence_anchor(
-                State(app.clone()),
-                Path("1".into()),
-                RawQuery(query.map(str::to_owned)),
-                Extension(RouteExecutionDeadline(deadline)),
-                HeaderMap::new(),
-                ConnectInfo(remote),
-            )
-            .await
-            .unwrap(),
-        ] {
+        // Each response retains its original pool lease until its body drops.
+        // Exercise these independent handler contracts sequentially so the pause
+        // response cannot occupy the separately required anchor scan admission.
+        for anchor in [false, true] {
+            let response = if anchor {
+                handler_evidence_anchor(
+                    State(app.clone()),
+                    Path("1".into()),
+                    RawQuery(query.map(str::to_owned)),
+                    Extension(RouteExecutionDeadline(deadline)),
+                    HeaderMap::new(),
+                    ConnectInfo(remote),
+                )
+                .await
+                .unwrap()
+            } else {
+                handler_fast_pause(
+                    State(app.clone()),
+                    RawQuery(query.map(str::to_owned)),
+                    Extension(RouteExecutionDeadline(deadline)),
+                    HeaderMap::new(),
+                    ConnectInfo(remote),
+                )
+                .await
+                .unwrap()
+            };
             assert_eq!(response.status(), expected);
         }
     }
@@ -837,6 +842,106 @@ fn genesis_finality_app() -> (
 }
 
 #[tokio::test]
+async fn anchor_admission_funds_a_complete_scan_without_replacing_inherited_limits() {
+    use iroha_core::sumeragi::finality::read_commit_certificate;
+    use std::sync::Arc;
+
+    fn admission() -> crate::QueryAdmissionPermit {
+        crate::QueryAdmissionPermit {
+            _query: Arc::new(tokio::sync::Semaphore::new(1))
+                .try_acquire_owned()
+                .unwrap(),
+            heavy: None,
+            body: None,
+            fanout_memory: None,
+        }
+    }
+
+    // Reuse one genuine successor frame to exercise the original Kura reader and
+    // header decoder 4096 times. This isolates the cumulative admission defect;
+    // it does not assert that repeated DATA forms an authenticated anchor chunk.
+    let (mut app, mut chain) = genesis_finality_app();
+    chain.commit(Vec::new());
+    let view = app.state.view();
+    let scan = |owner: &HistoryProducerOwner| {
+        let mut completed = 0;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let result = owner.scope(|| -> Result<(), Box<dyn std::error::Error>> {
+            for _ in 0..iroha_data_model::sccp::generation::SCCP_ANCHOR_CHUNK_SIZE_V1 {
+                let original = read_commit_certificate(
+                    &view,
+                    NonZeroU64::new(2).unwrap(),
+                    owner.cold_frames(),
+                    deadline,
+                )?;
+                let bytes = &original.certificate().consensus_header;
+                let limits = norito::canonical_decode_limits(bytes.len());
+                let _scratch = owner
+                    .cold_frames()
+                    .try_reserve_bytes(limits.max_total_allocated_bytes())?;
+                let _: iroha_sumeragi::message::BlockHeader =
+                    norito::decode_canonical_with_limits(bytes, limits)?;
+                completed += 1;
+            }
+            Ok(())
+        });
+        assert_eq!(owner.cold_frames().reserved_bytes(), 0);
+        eprintln!(
+            "anchor admission: completed={completed}, cumulative={}, peak_live={}",
+            owner.allocation_context().consumed_allocated_bytes(),
+            owner.cold_frames().peak_reserved_bytes(),
+        );
+        (completed, result)
+    };
+    let anchor = Selection::Anchor(NonZeroU64::new(1).unwrap());
+    {
+        let mut ordinary = admission();
+        assert!(
+            admit_memory(&app, Selection::FastPause, &mut ordinary)
+                .unwrap()
+                .is_none()
+        );
+        let inherited = HistoryProducerOwner::from_admission(&ordinary).unwrap();
+        let limit = inherited.allocation_limit_for_test();
+        inherited.physical_scope(|| {
+            assert!(admit_memory(&app, anchor, &mut ordinary).unwrap().is_none());
+            let preserved = HistoryProducerOwner::from_admission(&ordinary).unwrap();
+            assert!(preserved.cold_frames().same_pool(inherited.cold_frames()));
+            assert_eq!(preserved.allocation_limit_for_test(), limit);
+            assert!(admit_memory(&app, anchor, &mut admission()).is_err());
+        });
+        let (completed, result) = scan(&inherited);
+        assert!(completed > 0 && completed < 4096);
+        assert!(
+            result.is_err(),
+            "ordinary cumulative admission must remain finite"
+        );
+    }
+    {
+        let mut original = admission();
+        assert!(admit_memory(&app, anchor, &mut original).unwrap().is_none());
+        let owner = HistoryProducerOwner::from_admission(&original).unwrap();
+        let (completed, result) = scan(&owner);
+        result.expect("configured original native-finality admission funds the chunk scan");
+        assert_eq!(completed, 4096);
+        assert!(
+            owner.allocation_context().consumed_allocated_bytes()
+                > owner.cold_frames().peak_reserved_bytes() as u64
+        );
+    }
+    drop(view);
+    // An operator's smaller configured ceiling must refuse rather than silently
+    // adopting the default, retrying under a new owner or clearing decoder scopes.
+    Arc::get_mut(&mut app).unwrap().finality_working_set_bytes = 48_000_000;
+    let mut constrained = admission();
+    let refusal = admit_memory(&app, anchor, &mut constrained)
+        .unwrap()
+        .expect("native profile floor exceeds the explicitly reduced ceiling");
+    assert_eq!(refusal.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(constrained.fanout_memory.is_none());
+}
+
+#[tokio::test]
 async fn latest_genesis_finality_is_unavailable_and_never_cacheable() {
     let (app, _chain) = genesis_finality_app();
     let remote = "127.0.0.1:1234".parse().unwrap();
@@ -899,4 +1004,188 @@ async fn authenticated_rotation_expiry_has_its_dedicated_gone_response() {
         json.get("code").and_then(norito::json::Value::as_str),
         Some("sccp_rotation_pruned")
     );
+}
+
+#[tokio::test]
+async fn original_state_busy_survives_the_canonical_http_error_contract() {
+    use axum::{Router, body::Body, http::Request, routing::get};
+    use iroha_allocation::release::ReleaseNotification;
+    use iroha_core::state::StateViewError;
+    use iroha_torii_shared::ErrorEnvelope;
+    use tower::ServiceExt as _;
+
+    fn permanent_error(kind: &str) -> (SccpNativeReadError, &'static str) {
+        match kind {
+            "changed" => (
+                SccpNativeReadError::View(StateViewError::Changed),
+                "sccp_unavailable",
+            ),
+            "poisoned" => (
+                SccpNativeReadError::View(StateViewError::Poisoned),
+                "sccp_unavailable",
+            ),
+            "source" => (
+                SccpNativeReadError::Unavailable("private original source marker"),
+                "sccp_unavailable",
+            ),
+            "capacity" => (SccpNativeReadError::PhysicalAllocation, "sccp_capacity"),
+            _ => panic!("unexpected static refusal case"),
+        }
+    }
+    let router = Router::new()
+        .route(
+            "/busy",
+            get(|| async {
+                let original = ReleaseNotification::new_charged(());
+                source_error(&SccpNativeReadError::View(StateViewError::Busy(
+                    original.observe(),
+                )))
+            }),
+        )
+        .route(
+            "/actual/{kind}",
+            get(
+                |axum::extract::Path(kind): axum::extract::Path<String>| async move {
+                    source_error(&permanent_error(&kind).0)
+                },
+            ),
+        )
+        .route(
+            "/original/{kind}",
+            get(
+                |axum::extract::Path(kind): axum::extract::Path<String>| async move {
+                    let (error, code) = permanent_error(&kind);
+                    let mut response = super::super::error(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        code,
+                        error.to_string(),
+                    );
+                    response.headers_mut().insert(
+                        header::CACHE_CONTROL,
+                        HeaderValue::from_static("private, no-store"),
+                    );
+                    response
+                },
+            ),
+        )
+        .layer(axum::middleware::from_fn(crate::capture_response_format))
+        .layer(axum::middleware::from_fn(
+            crate::enforce_typed_error_contract,
+        ));
+    for accept in ["application/json", crate::utils::NORITO_MIME_TYPE] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/busy")
+                    .header(header::ACCEPT, accept)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let content_type = if accept == "application/json" {
+            "application/json; charset=utf-8"
+        } else {
+            accept
+        };
+        assert_eq!(response.headers()[header::CONTENT_TYPE], content_type);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
+        assert_eq!(response.headers()[header::RETRY_AFTER], "1");
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let envelope: ErrorEnvelope = if accept == "application/json" {
+            norito::json::from_slice(&bytes).unwrap()
+        } else {
+            norito::decode_from_bytes(&bytes).unwrap()
+        };
+        assert_eq!(envelope.code(), "sccp_state_busy");
+        assert_eq!(
+            envelope.message(),
+            "The SCCP committed state is temporarily busy."
+        );
+        assert_eq!(envelope.details.unwrap().retry_after_seconds, Some(1));
+
+        for kind in ["changed", "poisoned", "source", "capacity"] {
+            let mut responses = Vec::new();
+            for prefix in ["actual", "original"] {
+                responses.push(
+                    router
+                        .clone()
+                        .oneshot(
+                            Request::builder()
+                                .uri(format!("/{prefix}/{kind}"))
+                                .header(header::ACCEPT, accept)
+                                .body(Body::empty())
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap(),
+                );
+            }
+            let expected = responses.pop().unwrap();
+            let actual = responses.pop().unwrap();
+            assert_eq!(actual.status(), expected.status());
+            assert_eq!(actual.headers(), expected.headers());
+            assert_eq!(
+                axum::body::to_bytes(actual.into_body(), 4096)
+                    .await
+                    .unwrap(),
+                axum::body::to_bytes(expected.into_body(), 4096)
+                    .await
+                    .unwrap(),
+                "existing HTTP refusal changed for {kind} with {accept}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn permanent_state_and_source_refusals_retain_their_original_mapping() {
+    use iroha_core::{
+        state::StateViewError, sumeragi::finality::NativeCommitCertificateReadErrorV1,
+    };
+
+    for (error, code) in [
+        (
+            SccpNativeReadError::View(StateViewError::Changed),
+            "sccp_unavailable",
+        ),
+        (
+            SccpNativeReadError::View(StateViewError::Poisoned),
+            "sccp_unavailable",
+        ),
+        (
+            SccpNativeReadError::Unavailable("source"),
+            "sccp_unavailable",
+        ),
+        (SccpNativeReadError::PhysicalAllocation, "sccp_capacity"),
+        (
+            SccpNativeReadError::Source(NativeCommitCertificateReadErrorV1::Allocation),
+            "sccp_capacity",
+        ),
+    ] {
+        let actual = source_error(&error);
+        let expected =
+            super::super::error(StatusCode::SERVICE_UNAVAILABLE, code, error.to_string());
+        assert_eq!(actual.status(), expected.status());
+        assert_eq!(
+            actual.headers()[header::CONTENT_TYPE],
+            expected.headers()[header::CONTENT_TYPE]
+        );
+        assert_eq!(actual.headers()[header::CACHE_CONTROL], "private, no-store");
+        assert_eq!(
+            axum::body::to_bytes(actual.into_body(), 4096)
+                .await
+                .unwrap(),
+            axum::body::to_bytes(expected.into_body(), 4096)
+                .await
+                .unwrap()
+        );
+    }
 }

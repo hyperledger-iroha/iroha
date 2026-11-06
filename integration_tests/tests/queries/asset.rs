@@ -3,13 +3,25 @@ use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
-    client::QueryError,
-    data_model::{prelude::*, query::builder::SingleQueryError},
+    collections::{Collection, ListQuery, field},
+    data_model::prelude::*,
 };
 use iroha_model_base::domain::DomainId;
 use iroha_test_network::submit_ensure_domain_for_network;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use std::{thread, time::Duration};
+#[derive(norito::JsonDeserialize)]
+struct DefinitionQuantity {
+    id: AssetDefinitionId,
+    total_quantity: Quantity,
+}
+#[derive(norito::JsonDeserialize)]
+struct HolderQuantity {
+    id: AssetId,
+    account_id: AccountId,
+    asset: AssetDefinitionId,
+    quantity: Quantity,
+}
 const UNREGISTER_ATTEMPTS: usize = 30;
 const UNREGISTER_DELAY: Duration = Duration::from_millis(250);
 #[test]
@@ -104,7 +116,7 @@ fn test_total_quantity(
             definition_name,
             asset_spec,
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(DomainId::try_new("wonderland", "universal")?),
         )
     };
     test_client.submit(
@@ -130,37 +142,48 @@ fn test_total_quantity(
         .cloned()
         .map(|account_id| AssetId::new(definition_id.clone(), account_id))
         .collect::<Vec<_>>();
-    let get_quantity = || -> Result<Quantity, SingleQueryError<QueryError>> {
+    let get_quantity = || -> Result<Option<Quantity>> {
         const MAX_ATTEMPTS: usize = 5;
         let mut last_err = None;
         for attempt in 1..=MAX_ATTEMPTS {
-            match test_client
-                .client()
-                .query(FindAssetDefinitions::new())
-                .execute_all()
-            {
-                Ok(defs) => {
-                    if let Some(def) = defs
-                        .into_iter()
-                        .find(|asset_definition| asset_definition.id() == definition_id)
-                    {
-                        return Ok(def.total_quantity().clone());
-                    }
-                    last_err = Some(SingleQueryError::ExpectedOneGotNone);
-                }
-                Err(err) => {
-                    last_err = Some(SingleQueryError::QueryError(err));
-                }
+            let observation = (|| -> Result<Option<Quantity>> {
+                let page = test_client.list_page(
+                    &Collection::AssetDefinitions,
+                    &ListQuery::new()
+                        .limit(64)
+                        .filter(field("id").eq(definition_id.to_string())),
+                )?;
+                eyre::ensure!(
+                    page.next_cursor.is_none(),
+                    "definition lookup must be complete"
+                );
+                eyre::ensure!(
+                    page.total.is_none(),
+                    "definition lookup did not request a total"
+                );
+                eyre::ensure!(page.items.len() <= 1, "definition ID must be unique");
+                page.items
+                    .into_iter()
+                    .next()
+                    .map(|row| {
+                        let definition: DefinitionQuantity = norito::json::from_value(row)?;
+                        eyre::ensure!(
+                            &definition.id == definition_id,
+                            "unexpected definition in exact lookup"
+                        );
+                        Ok(definition.total_quantity)
+                    })
+                    .transpose()
+            })();
+            match observation {
+                Ok(value) => return Ok(value),
+                Err(error) => last_err = Some(error),
             }
             if attempt < MAX_ATTEMPTS {
-                println!(
-                    "retrying total_quantity query for {definition_id} (attempt {}/{MAX_ATTEMPTS})",
-                    attempt + 1
-                );
                 thread::sleep(Duration::from_millis(250 * attempt as u64));
             }
         }
-        Err(last_err.unwrap_or(SingleQueryError::ExpectedOneGotNone))
+        Err(last_err.expect("every observation failed"))
     };
     // Assert that initial total quantity before any burns and mints is zero
     let initial_total_asset_quantity =
@@ -181,27 +204,44 @@ fn test_total_quantity(
     // Assert that total asset quantity is equal to: `n_accounts * (initial_value + to_mint - to_burn)`
     let total_asset_quantity = observed_after_burn;
     let log_balances = |stage: &str, definition_total: &Quantity| -> Result<Quantity> {
-        let assets = test_client
-            .client()
-            .query(FindAssets::new())
-            .execute_all()
-            .map_err(|e| eyre!("failed to fetch assets: {e}"))?;
+        let page = test_client.list_page(
+            &Collection::AssetHolders(definition_id.clone()),
+            &ListQuery::new().limit(64),
+        )?;
+        eyre::ensure!(
+            page.next_cursor.is_none(),
+            "holder balances must fit one coherent page"
+        );
+        eyre::ensure!(
+            page.total.is_none() && page.items.len() <= 64,
+            "holder page exceeded its envelope"
+        );
+        let mut assets = std::collections::BTreeMap::new();
+        for row in page.items {
+            let holder: HolderQuantity = norito::json::from_value(row)?;
+            eyre::ensure!(&holder.asset == definition_id, "holder definition mismatch");
+            eyre::ensure!(
+                holder.id == AssetId::new(holder.asset, holder.account_id),
+                "holder identity mismatch"
+            );
+            eyre::ensure!(
+                assets.insert(holder.id, holder.quantity).is_none(),
+                "duplicate holder"
+            );
+        }
         let mut manual_total = Quantity::zero();
         let mut missing_accounts = Vec::new();
         println!(
             "[{stage}] balances for asset definition {definition_id} (definition total {definition_total})"
         );
         for (account_id, asset_id) in accounts.iter().zip(&asset_ids) {
-            let balance = assets
-                .iter()
-                .find(|asset| asset.id() == asset_id)
-                .map_or_else(
-                    || {
-                        missing_accounts.push(account_id.clone());
-                        Quantity::zero()
-                    },
-                    |asset| asset.value().clone(),
-                );
+            let balance = assets.get(asset_id).map_or_else(
+                || {
+                    missing_accounts.push(account_id.clone());
+                    Quantity::zero()
+                },
+                Clone::clone,
+            );
             println!("    account {account_id}: balance {balance}");
             manual_total = manual_total
                 .checked_add(&balance)
@@ -235,20 +275,19 @@ fn test_total_quantity(
     let mut last_value: Option<Quantity> = None;
     for _ in 0..UNREGISTER_ATTEMPTS {
         match get_quantity() {
-            Err(SingleQueryError::ExpectedOneGotNone) => {
+            Ok(None) => {
                 removed = true;
                 break;
             }
-            Err(SingleQueryError::QueryError(err)) => {
+            Err(err) => {
                 if let Some(reason) = sandbox::sandbox_reason(&eyre::Report::msg(err.to_string())) {
                     return Err(eyre::Report::msg(format!(
                         "sandboxed network restriction detected while running {context}: {reason}"
                     )));
                 }
-                return Err(eyre::Report::new(err));
+                return Err(err);
             }
-            Err(other) => return Err(eyre::Report::new(other)),
-            Ok(value) => {
+            Ok(Some(value)) => {
                 last_value = Some(value);
             }
         }
@@ -260,34 +299,39 @@ fn test_total_quantity(
             last_value
         ));
     }
-    let remaining_assets = test_client
-        .client()
-        .query(FindAssets::new())
-        .execute_all()?;
+    let remaining_assets = test_client.list_page(
+        &Collection::ExplorerAssets,
+        &ListQuery::new()
+            .limit(64)
+            .filter(field("definition_id").eq(definition_id.to_string())),
+    )?;
     assert!(
-        remaining_assets
-            .iter()
-            .all(|asset| asset.id().definition() != definition_id),
+        remaining_assets.next_cursor.is_none(),
+        "asset absence requires a complete page"
+    );
+    assert!(remaining_assets.total.is_none());
+    assert!(
+        remaining_assets.items.is_empty(),
         "expected assets for {definition_id} to be removed after unregister"
     );
     Ok(())
 }
 fn wait_for_quantity<F>(get_quantity: &F, expected: &Quantity, context: &str) -> Result<Quantity>
 where
-    F: Fn() -> Result<Quantity, SingleQueryError<QueryError>>,
+    F: Fn() -> Result<Option<Quantity>>,
 {
     const MAX_ATTEMPTS: usize = 30; // 7.5 seconds at 250ms
     const DELAY: Duration = Duration::from_millis(250);
     let mut last_err: Option<eyre::Report> = None;
     for attempt in 1..=MAX_ATTEMPTS {
         match get_quantity() {
-            Ok(value) if value == *expected => return Ok(value),
+            Ok(Some(value)) if value == *expected => return Ok(value),
             Ok(value) => {
                 last_err = Some(eyre!(
-                    "{context}: expected {expected}, got {value} (attempt {attempt}/{MAX_ATTEMPTS})"
+                    "{context}: expected {expected}, got {value:?} (attempt {attempt}/{MAX_ATTEMPTS})"
                 ));
             }
-            Err(err) => last_err = Some(eyre::Report::new(err)),
+            Err(err) => last_err = Some(err),
         }
         thread::sleep(DELAY);
     }

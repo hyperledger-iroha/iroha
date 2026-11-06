@@ -1,17 +1,289 @@
 //! Observer/sync-only node catches up behind a small validator swarm.
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox;
-use iroha::data_model::prelude::*;
+use iroha::data_model::{
+    isi::register::RegisterPeerWithPop,
+    prelude::*,
+    query::{parameters::FetchSize, peer::prelude::FindPeers},
+};
+use iroha::query::AsyncQueryBuilderExt as _;
 use iroha_config::base::toml::WriteExt as _;
-use iroha_model_base::name::Name;
+use iroha_model_base::{name::Name, peer::PeerId};
 use iroha_primitives::unique_vec::UniqueVec;
 use iroha_test_network::{
     NetworkBuilder, NetworkPeer, NetworkPeerBuilder, init_instruction_registry,
 };
 use iroha_test_samples::ALICE_ID;
 use norito::json::Value as JsonValue;
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    num::NonZeroU64,
+    time::Duration,
+};
 use toml::{Table, Value as TomlValue};
+
+// Runtime registration grants the observer delegated-read ingress authority;
+// it does not add a validator to the authenticated genesis committee.
+fn first_observer_transaction(observer_id: PeerId, pop: Vec<u8>) -> [InstructionBox; 2] {
+    [
+        RegisterPeerWithPop::new(observer_id, pop).into(),
+        SetKeyValue::account(
+            ALICE_ID.clone(),
+            "note".parse::<Name>().expect("valid metadata key"),
+            norito::json!("v1"),
+        )
+        .into(),
+    ]
+}
+
+fn checked_history_body(status: reqwest::StatusCode, body: String) -> Result<String> {
+    if status.is_success() {
+        return Ok(body);
+    }
+    // Keep complete successful responses; bound only failed-response diagnostics.
+    let prefix = String::from_utf8_lossy(&body.as_bytes()[..body.len().min(4096)]);
+    Err(eyre!(
+        "history request returned {status}; body bytes={}; prefix={prefix:?}",
+        body.len()
+    ))
+}
+
+#[test]
+fn first_observer_transaction_preserves_real_pop_and_initial_metadata() {
+    init_instruction_registry();
+    let key = iroha_crypto::KeyPair::from_seed(
+        b"observer registration fixture".to_vec(),
+        iroha_crypto::Algorithm::BlsNormal,
+    );
+    let peer = PeerId::new(key.public_key().clone());
+    let pop = iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("real BLS PoP");
+    let instructions = first_observer_transaction(peer.clone(), pop.clone());
+    assert_eq!(instructions.len(), 2);
+    let Some(iroha_data_model::isi::RegisterBox::Peer(registration)) =
+        instructions[0]
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::RegisterBox>()
+    else {
+        panic!("ordinary runtime peer registration");
+    };
+    assert_eq!(registration.peer, peer);
+    assert_eq!(registration.pop, pop);
+    assert_eq!(registration.activation_at, None);
+    assert_eq!(registration.expiry_at, None);
+    iroha_crypto::bls_normal_pop_verify(registration.peer.public_key(), &registration.pop)
+        .expect("registration retains the observer's valid proof");
+    assert_eq!(
+        instructions[1],
+        InstructionBox::from(SetKeyValue::account(
+            ALICE_ID.clone(),
+            "note".parse::<Name>().unwrap(),
+            norito::json!("v1"),
+        ))
+    );
+}
+
+#[test]
+fn history_response_diagnostics_preserve_refusal_and_bound_display() {
+    let complete = "x".repeat(8192);
+    assert_eq!(
+        checked_history_body(reqwest::StatusCode::OK, complete.clone()).unwrap(),
+        complete
+    );
+    let refusal = checked_history_body(
+        reqwest::StatusCode::FORBIDDEN,
+        r#"{"code":"untrusted_proxy_ingress"}"#.to_owned(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(refusal.contains("403 Forbidden"));
+    assert!(refusal.contains("untrusted_proxy_ingress"));
+    let body = format!("{}undisplayed-tail", "é".repeat(4096));
+    let expected_count = format!("body bytes={}", body.len());
+    let diagnostic = checked_history_body(reqwest::StatusCode::BAD_REQUEST, body)
+        .unwrap_err()
+        .to_string();
+    assert!(diagnostic.contains("400 Bad Request"));
+    assert!(diagnostic.contains(&expected_count));
+    assert!(!diagnostic.contains("undisplayed-tail"));
+    assert!(diagnostic.len() < 4200);
+}
+
+fn applied_heights_match(heights: &[u64], expected_peers: usize, target: u64) -> Result<bool> {
+    eyre::ensure!(
+        expected_peers > 0 && heights.len() == expected_peers,
+        "expected {expected_peers} applied heights, got {heights:?}"
+    );
+    eyre::ensure!(
+        heights.iter().all(|&height| height <= target),
+        "unexpected applied height above {target}: {heights:?}"
+    );
+    Ok(heights.iter().all(|&height| height == target))
+}
+
+fn status_busy_retry_delay(error: &eyre::Report) -> Option<Duration> {
+    match error.downcast_ref::<iroha::Error>() {
+        Some(iroha::Error::StatusUnavailable {
+            reason: Some(iroha::StatusFailureReason::StateBusy),
+            retry_after,
+        }) => Some(Duration::from_millis(200).max(retry_after.unwrap_or_default())),
+        _ => None,
+    }
+}
+
+// Both encodings can refuse a read while State is being published. Keep the
+// original phase deadline across all readers and honor only that typed refusal.
+async fn read_status_until<T, F>(
+    deadline: tokio::time::Instant,
+    mut read: impl FnMut() -> F,
+) -> Result<T>
+where
+    F: std::future::Future<Output = Result<T>>,
+{
+    let mut last_busy: Option<eyre::Report> = None;
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        match tokio::time::timeout_at(deadline, read()).await {
+            Ok(Ok(value)) if tokio::time::Instant::now() < deadline => return Ok(value),
+            Err(_) | Ok(Ok(_)) => break,
+            Ok(Err(err)) => {
+                let Some(delay) = status_busy_retry_delay(&err) else {
+                    return Err(err);
+                };
+                last_busy = Some(err);
+                let now = tokio::time::Instant::now();
+                if delay >= deadline.saturating_duration_since(now) {
+                    break;
+                }
+                tokio::time::sleep_until(now + delay).await;
+            }
+        }
+    }
+    Err(last_busy.unwrap_or_else(|| eyre!("status read deadline elapsed")))
+}
+
+async fn wait_for_applied_heights(
+    peers: &[&NetworkPeer],
+    target: u64,
+    sync_timeout: Duration,
+) -> Result<Vec<u64>> {
+    let deadline = tokio::time::Instant::now() + sync_timeout;
+    let mut heights = Vec::with_capacity(peers.len());
+    loop {
+        heights.clear();
+        for peer in peers {
+            let status = read_status_until(deadline, || peer.status())
+                .await
+                .wrap_err_with(|| format!("peer {} did not report its applied height before {target} check; prior peers: {heights:?}", peer.id()))?;
+            heights.push(status.blocks);
+        }
+        if applied_heights_match(&heights, peers.len(), target)? {
+            return Ok(heights);
+        }
+        let now = tokio::time::Instant::now();
+        eyre::ensure!(
+            now < deadline,
+            "applied heights did not reach {target} within {sync_timeout:?}: {heights:?}"
+        );
+        tokio::time::sleep_until((now + Duration::from_millis(200)).min(deadline)).await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn status_reads_retry_only_explicit_contention_within_one_deadline() {
+    use std::future::ready;
+    use tokio::time::Instant;
+    let busy = |after| {
+        eyre::Report::from(iroha::Error::StatusUnavailable {
+            reason: Some(iroha::StatusFailureReason::StateBusy),
+            retry_after: Some(after),
+        })
+    };
+    let start = Instant::now();
+    let deadline = start + Duration::from_secs(3);
+    let mut attempts = 0;
+    let observed = read_status_until(deadline, || {
+        attempts += 1;
+        ready(if attempts == 1 {
+            Err(busy(Duration::from_secs(1)))
+        } else {
+            Ok(6)
+        })
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        (observed, attempts, Instant::now() - start),
+        (6, 2, Duration::from_secs(1))
+    );
+
+    // The second reader cannot start a fresh budget or wait past the first one's deadline.
+    let mut calls = 0;
+    let err = read_status_until::<(), _>(deadline, || {
+        calls += 1;
+        ready(Err(busy(Duration::from_secs(2))))
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(calls, 1);
+    assert_eq!(status_busy_retry_delay(&err), Some(Duration::from_secs(2)));
+    let mut calls = 0;
+    let err = read_status_until::<(), _>(deadline, || {
+        calls += 1;
+        ready(Err(eyre!("unclassified 503")))
+    })
+    .await
+    .unwrap_err();
+    assert_eq!((calls, err.to_string()), (1, "unclassified 503".to_owned()));
+    assert!(
+        read_status_until(deadline, || async {
+            tokio::time::sleep_until(deadline).await;
+            Ok(6)
+        })
+        .await
+        .is_err()
+    );
+    assert_eq!(Instant::now(), deadline);
+}
+
+#[test]
+fn applied_status_retry_requires_the_exact_typed_state_busy_reason() {
+    let busy = iroha::Error::StatusUnavailable {
+        reason: Some(iroha::StatusFailureReason::StateBusy),
+        retry_after: Some(Duration::from_secs(1)),
+    };
+    assert_eq!(
+        status_busy_retry_delay(&eyre::Report::from(busy)),
+        Some(Duration::from_secs(1))
+    );
+    for error in [
+        iroha::Error::StatusUnavailable {
+            reason: None,
+            retry_after: None,
+        },
+        iroha::Error::Http {
+            operation: "diagnostic.status",
+            status: 503,
+            retry_after: None,
+            body: b"status_state_busy".to_vec(),
+        },
+    ] {
+        assert!(status_busy_retry_delay(&eyre::Report::from(error)).is_none());
+    }
+    assert!(status_busy_retry_delay(&eyre!("status_state_busy")).is_none());
+}
+
+#[test]
+fn applied_height_readiness_requires_every_peer_at_the_exact_target() {
+    assert!(!applied_heights_match(&[6, 6, 6, 6, 5], 5, 6).unwrap());
+    assert!(!applied_heights_match(&[5; 5], 5, 6).unwrap());
+    assert!(applied_heights_match(&[6; 5], 5, 6).unwrap());
+    assert!(applied_heights_match(&[6; 4], 5, 6).is_err());
+    assert!(applied_heights_match(&[7; 5], 5, 6).is_err());
+    assert!(applied_heights_match(&[], 0, 6).is_err());
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn observer_node_catches_up() -> Result<()> {
@@ -27,6 +299,7 @@ fn observer_node_catches_up() -> Result<()> {
     let observer = NetworkPeerBuilder::new()
         .with_seed(Some(b"observer"))
         .build(network.env());
+    network.attach_peer_client_context(&observer)?;
     // Prepare a trusted_peers override including existing peers and the observer itself.
     // The observer is trusted for networking/block sync, but it is intentionally omitted
     // from `trusted_peers_pop` so the validator roster remains the four validator peers.
@@ -78,6 +351,19 @@ fn observer_node_catches_up() -> Result<()> {
         )))
         .collect();
     let genesis = network.genesis();
+    let (epoch, _) =
+        iroha_data_model::sumeragi_finality::authenticated_genesis(&genesis.0)?.into_parts();
+    let voters: HashSet<_> = epoch
+        .committee
+        .iter()
+        .map(|member| member.validator.clone())
+        .collect();
+    assert_eq!(voters.len(), 4);
+    assert_eq!(
+        voters,
+        network.peers().iter().map(NetworkPeer::id).collect()
+    );
+    assert!(!voters.contains(&observer.id()));
     for peer in network.peers() {
         sandbox::handle_result(
             rt.block_on(async {
@@ -143,8 +429,14 @@ fn observer_node_catches_up() -> Result<()> {
     // 1st block: set note = "v1"
     println!("observer_sync: submitting v1");
     let t1_lo = now_ms();
-    client.submit(
-        SetKeyValue::account(alice.clone(), key.clone(), norito::json!("v1")),
+    // The default signed genesis grants Alice CanManagePeers. Register the
+    // observer with its genuine PoP in this existing transaction so delegated
+    // history reads are authorized without an extra height or history row.
+    client.submit_all(
+        first_observer_transaction(
+            observer.id(),
+            observer.bls_pop().expect("observer has a BLS PoP").to_vec(),
+        ),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     println!("observer_sync: v1 committed");
@@ -204,31 +496,83 @@ fn observer_node_catches_up() -> Result<()> {
     rt.block_on(async { network.ensure_blocks_with(|h| h.total >= 6).await })?;
     wait_for_observer(6)?;
     let t_hi = now_ms();
-    // Verify exact height parity across validators and observer
-    let mut validator_totals = Vec::new();
-    for p in network.peers() {
-        let s = rt
-            .block_on(async { p.status().await })
-            .expect("peer status");
-        validator_totals.push(s.blocks);
-    }
-    let target_height = *validator_totals.iter().max().unwrap_or(&0);
-    wait_for_observer(target_height)?;
-    let mut all_totals = Vec::new();
-    for p in network.peers() {
-        let s = rt
-            .block_on(async { p.status().await })
-            .expect("peer status");
-        all_totals.push(s.blocks);
-    }
-    let s_obs = rt
-        .block_on(async { observer.status().await })
-        .expect("observer status");
-    all_totals.push(s_obs.blocks);
+    // Kura/once_block can reach six before the observer publishes applied state.
+    // Require actual /status height six on all four validators and the observer
+    // under the original synchronization timeout before asserting exact parity.
+    let peers: Vec<_> = network
+        .peers()
+        .iter()
+        .chain(std::iter::once(&observer))
+        .collect();
+    assert_eq!(peers.len(), 5);
+    let all_totals = rt.block_on(wait_for_applied_heights(&peers, 6, sync_timeout))?;
     assert!(
         all_totals.iter().all(|&t| t == all_totals[0]),
         "heights differ: {all_totals:?}"
     );
+    // Registry membership authorizes read delegation, independently of voting.
+    // Require the complete five-peer registry and unchanged four signing roles.
+    rt.block_on(async {
+        let deadline = tokio::time::Instant::now() + sync_timeout;
+        tokio::time::timeout_at(deadline, async {
+            let expected_registry: HashSet<_> = peers.iter().map(|peer| peer.id()).collect();
+            assert_eq!(expected_registry.len(), 5);
+            for peer in &peers {
+                eyre::ensure!(
+                    tokio::time::Instant::now() < deadline,
+                    "observer registry/role verification deadline"
+                );
+                let client = peer.client();
+                let account = client.account_client();
+                let mut rows = account
+                    .query(FindPeers)
+                    .with_fetch_size(FetchSize {
+                        fetch_size: NonZeroU64::new(5),
+                    })
+                    .execute()
+                    .await?;
+                eyre::ensure!(
+                    !rows.has_more(),
+                    "observer registry must be one complete page"
+                );
+                let mut registry = Vec::with_capacity(5);
+                while let Some(row) = rows.next().await {
+                    registry.push(row?);
+                    eyre::ensure!(registry.len() <= 5, "observer registry exceeded five peers");
+                }
+                eyre::ensure!(
+                    tokio::time::Instant::now() < deadline,
+                    "observer registry/role verification deadline"
+                );
+                assert_eq!(registry.len(), 5, "peer {} registry count", peer.id());
+                assert_eq!(
+                    registry.into_iter().collect::<HashSet<_>>(),
+                    expected_registry
+                );
+                let operator = client.client().with_request_deadline(deadline.into_std());
+                let status = integration_tests::sync::run_on_dedicated_thread(move || {
+                    operator.get_sumeragi_status()
+                })
+                .await??;
+                eyre::ensure!(
+                    tokio::time::Instant::now() < deadline,
+                    "observer registry/role verification deadline"
+                );
+                assert!(status.halted.is_none(), "peer {} halted", peer.id());
+                let expected_signer = voters
+                    .contains(&peer.id())
+                    .then(|| peer.id().public_key().clone());
+                assert_eq!(status.signer, expected_signer, "peer {} role", peer.id());
+            }
+            eyre::ensure!(
+                tokio::time::Instant::now() < deadline,
+                "observer registry/role verification deadline"
+            );
+            Ok::<(), eyre::Report>(())
+        })
+        .await
+        .wrap_err("observer registry/role verification exceeded the synchronization timeout")?
+    })?;
     // Verify state reflects latest metadata values on all peers (validators + observer).
     // Kura heights can advance before state/indices are fully applied, so poll for metadata.
     let note_key: Name = "note".parse().unwrap();
@@ -240,11 +584,10 @@ fn observer_node_catches_up() -> Result<()> {
         let mut last_zone_note: Option<String> = None;
         loop {
             let client = peer.client();
-            let accounts = client.client().query(FindAccounts).execute_all().unwrap();
-            let alice = accounts
-                .into_iter()
-                .find(|a| a.id() == &ALICE_ID.clone())
-                .expect("Alice account must exist");
+            let alice = client
+                .client()
+                .query_single(FindAccountById::new(ALICE_ID.clone()))?;
+            assert_eq!(alice.id(), &*ALICE_ID);
             if let Some(note) = alice.metadata().get(&note_key) {
                 last_note = Some(note.as_ref().to_string());
             }
@@ -276,13 +619,13 @@ fn observer_node_catches_up() -> Result<()> {
             limit
         );
         let body = rt.block_on(async {
-            integration_tests::http::client()
+            let response = integration_tests::http::client()
                 .get(url)
                 .header("Accept", "application/json")
                 .send()
-                .await?
-                .text()
-                .await
+                .await?;
+            let status = response.status();
+            checked_history_body(status, response.text().await?)
         })?;
         let parsed: JsonValue = norito::json::from_str(&body)?;
         let (items, total) = match parsed {
@@ -358,15 +701,15 @@ fn observer_node_catches_up() -> Result<()> {
             let body = norito::json::to_json(&env)?;
             let client = integration_tests::http::client();
             let resp_txt = rt.block_on(async {
-                client
+                let response = client
                     .post(url)
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
                     .body(body)
                     .send()
-                    .await?
-                    .text()
-                    .await
+                    .await?;
+                let status = response.status();
+                checked_history_body(status, response.text().await?)
             })?;
             let parsed: JsonValue = norito::json::from_str(&resp_txt)?;
             let (items, total) = match parsed {
@@ -465,68 +808,29 @@ fn observer_node_catches_up() -> Result<()> {
             "observer last two entrypoint_hash identical"
         );
     }
-    let fetch_status_json = |url: String| -> Result<JsonValue> {
-        let body = rt.block_on(async {
-            integration_tests::http::client()
-                .get(&url)
-                .header("Accept", "application/json")
-                .send()
-                .await?
-                .error_for_status()?
-                .text()
-                .await
-        })?;
-        norito::json::from_str(&body).wrap_err_with(|| {
-            let snippet = body.chars().take(120).collect::<String>();
-            format!("HTTP /status did not return JSON from {url}; body starts with `{snippet}`")
-        })
-    };
-    // HTTP /status parity snapshot: compare HTTP JSON blocks/non_empty with peer.status()
-    for p in network.peers() {
-        let s = rt
-            .block_on(async { p.status().await })
-            .expect("peer status");
-        let url = format!("{}/status", p.torii_url());
-        let jv = fetch_status_json(url)?;
-        let blocks = jv
-            .as_object()
-            .and_then(|m| m.get("blocks").and_then(norito::json::Value::as_u64))
-            .unwrap_or_default();
-        let non_empty = jv
-            .as_object()
-            .and_then(|m| {
-                m.get("blocks_non_empty")
-                    .and_then(norito::json::Value::as_u64)
-            })
-            .unwrap_or_default();
-        assert_eq!(blocks, s.blocks, "HTTP /status mismatch (blocks)");
-        assert_eq!(
-            non_empty, s.blocks_non_empty,
-            "HTTP /status mismatch (non_empty)"
-        );
-    }
-    {
-        let s = rt
-            .block_on(async { observer.status().await })
-            .expect("observer status");
-        let url = format!("{}/status", observer.torii_url());
-        let jv = fetch_status_json(url)?;
-        let blocks = jv
-            .as_object()
-            .and_then(|m| m.get("blocks").and_then(norito::json::Value::as_u64))
-            .unwrap_or_default();
-        let non_empty = jv
-            .as_object()
-            .and_then(|m| {
-                m.get("blocks_non_empty")
-                    .and_then(norito::json::Value::as_u64)
-            })
-            .unwrap_or_default();
-        assert_eq!(blocks, s.blocks, "Observer HTTP /status mismatch (blocks)");
-        assert_eq!(
-            non_empty, s.blocks_non_empty,
-            "Observer HTTP /status mismatch (non_empty)"
-        );
-    }
-    Ok(())
+    // Read the same peer through its normal SDK context and the public JSON
+    // representation. JsonOnly enforces the response media type and schema;
+    // missing counters cannot silently compare equal to zero.
+    rt.block_on(async {
+        let deadline = tokio::time::Instant::now() + sync_timeout;
+        for peer in peers {
+            let status = read_status_until(deadline, || peer.status()).await?;
+            let mut builder = peer.client().client().to_builder().api_token(None);
+            builder.headers.clear();
+            builder.operator_key_pair = None;
+            builder.wire_format_preference = iroha::client::WireFormatPreference::JsonOnly;
+            let json_client = builder.build()?;
+            let json_status =
+                read_status_until(deadline, || async { Ok(json_client.status().get().await?) })
+                    .await?;
+            assert_eq!(status.blocks, 6, "peer {} final applied height", peer.id());
+            assert_eq!(
+                (json_status.blocks, json_status.blocks_non_empty),
+                (status.blocks, status.blocks_non_empty),
+                "public JSON status counters disagree for peer {}",
+                peer.id()
+            );
+        }
+        Ok(())
+    })
 }

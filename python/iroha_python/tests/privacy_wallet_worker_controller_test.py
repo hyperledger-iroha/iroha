@@ -248,9 +248,11 @@ def test_generic11_worker_registry_is_closed_and_ordered() -> None:
 
 
 def test_atomic_private_settlement_has_purpose_separated_commands_and_errors() -> None:
-    assert [int(command) for command in worker.PrivacyWalletWorkerCommandV1] == list(
+    assert [int(command) for command in worker.PrivacyWalletWorkerCommandV1][:9] == list(
         range(1, 10)
     )
+    assert [int(command) for command in worker.PrivacyWalletWorkerCommandV1][9:11] == [10, 11]
+    assert [int(command) for command in worker.PrivacyWalletWorkerCommandV1][11:] == [12, 13, 14, 15]
     assert worker.PrivacyWalletWorkerCommandV1.IMPORT_PRIVATE_SETTLEMENT == 6
     assert worker.PrivacyWalletWorkerCommandV1.INSPECT_PRIVATE_SETTLEMENT == 7
     assert worker.PrivacyWalletWorkerCommandV1.CANCEL_PRIVATE_SETTLEMENT == 8
@@ -652,3 +654,38 @@ def test_import_requires_path_not_bytes_and_execute_requires_immutable_public_by
             canonical_public_intent=bytearray(b"{}"),
             canonical_execution_plan=b"{}",
         )
+
+
+@pytest.mark.parametrize("transport_fails", [False, True])
+def test_ironwood_pipe_seed_frame_is_authenticated_and_erased(monkeypatch, tmp_path, transport_fails):
+    command = worker.PrivacyWalletWorkerCommandV1.IMPORT_IRONWOOD_DEPOSIT_SEED
+    # A remote invalid-payload result is enough: transport erasure precedes result decoding.
+    replies = response_frame(command, 1, bytes((255, 0, 1)))
+    owner, process = controller(monkeypatch, tmp_path, replies)
+    captured = []
+    def write(frame):
+        captured.append(frame)
+        decoded = worker._read_frame(io.BytesIO(frame), AUTH_KEY)
+        assert decoded[0] == command
+        assert decoded[2] == b"public" + bytes(range(1, 33))
+        if transport_fails:
+            raise OSError("inert pipe failed")
+        return len(frame)
+    process.stdin.write = write
+    seed = bytearray(range(1, 33))
+    with pytest.raises(worker.PrivacyWalletWorkerErrorV1):
+        owner._exchange(command, b"public", secret=seed)
+    assert len(captured) == 1
+    assert isinstance(captured[0], bytearray) and not any(captured[0])
+    assert seed == bytearray(range(1, 33)), "caller retains seed ownership"
+    worker._zeroize(seed)
+
+
+def test_ironwood_pipe_seed_rejects_immutable_or_malformed_seed_before_io(monkeypatch, tmp_path):
+    from dataclasses import replace
+    owner, process = controller(monkeypatch, tmp_path, b"")
+    bound = replace(binding(), protocol_id="ironwood-halo2-actions-v1")
+    for seed in (b"x" * 32, bytearray(32), bytearray(31)):
+        with pytest.raises(ValueError):
+            owner.import_ironwood_deposit_seed(seed, bound, b"{}", ttl_millis=120_000, chain_discriminant=73)
+    assert process.stdin.buffer == AUTH_KEY, "only the initial authentication handshake was written"

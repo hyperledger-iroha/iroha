@@ -1,7 +1,3 @@
-#[cfg(not(feature = "std"))]
-extern crate alloc;
-#[cfg(not(feature = "std"))]
-use alloc::{vec, vec::Vec};
 use libm::log;
 pub use num_traits::float::FloatCore;
 
@@ -9,7 +5,8 @@ use crate::CurveAffine;
 use core::ops::Neg;
 use ff::{Field, PrimeField};
 use group::Group;
-use plonky2_maybe_rayon::*;
+#[cfg(feature = "std")]
+use rayon::prelude::*;
 
 const BATCH_SIZE: usize = 64;
 
@@ -478,27 +475,42 @@ pub fn msm_best<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
         log(f64::from(bases.len() as u32)).ceil() as usize
     };
 
-    #[cfg(feature = "std")]
-    if c < 10 {
+    // Affine scheduling requires finite coordinates. Identity bases contribute zero;
+    // the complete group-arithmetic path already handles them without unwrapping absent
+    // coordinates. Keep the parallel implementation when the caller enables it.
+    if c < 10 || bases.iter().any(|base| bool::from(base.is_identity())) {
+        #[cfg(feature = "std")]
         return msm_parallel(coeffs, bases);
-    }
-    #[cfg(not(feature = "std"))]
-    if c < 10 {
-        let mut acc = C::Curve::identity();
-        msm_serial(coeffs, bases, &mut acc);
-        return acc;
+        #[cfg(not(feature = "std"))]
+        {
+            let mut acc = C::Curve::identity();
+            msm_serial(coeffs, bases, &mut acc);
+            return acc;
+        }
     }
 
     // coeffs to byte representation
-    let coeffs: Vec<_> = coeffs.par_iter().map(|a| a.to_repr()).collect();
+    #[cfg(feature = "std")]
+    let coefficient_iter = coeffs.par_iter();
+    #[cfg(not(feature = "std"))]
+    let coefficient_iter = coeffs.iter();
+    let coeffs: Vec<_> = coefficient_iter.map(|a| a.to_repr()).collect();
     // copy bases into `Affine` to skip in on curve check for every access
-    let bases_local: Vec<_> = bases.par_iter().map(Affine::from).collect();
+    #[cfg(feature = "std")]
+    let base_iter = bases.par_iter();
+    #[cfg(not(feature = "std"))]
+    let base_iter = bases.iter();
+    let bases_local: Vec<_> = base_iter.map(Affine::from).collect();
 
     // number of windows
     let number_of_windows = C::Scalar::NUM_BITS as usize / c + 1;
     // accumumator for each window
     let mut acc = vec![C::Curve::identity(); number_of_windows];
-    acc.par_iter_mut().enumerate().rev().for_each(|(w, acc)| {
+    #[cfg(feature = "std")]
+    let windows = acc.par_iter_mut();
+    #[cfg(not(feature = "std"))]
+    let windows = acc.iter_mut();
+    windows.enumerate().rev().for_each(|(w, acc)| {
         // jacobian buckets for already scheduled points
         let mut j_bucks = vec![Bucket::<C>::None; 1 << (c - 1)];
 
@@ -547,10 +559,6 @@ pub fn msm_best<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
 
 #[cfg(test)]
 mod test {
-    #[cfg(not(feature = "std"))]
-    extern crate alloc;
-    #[cfg(not(feature = "std"))]
-    use alloc::vec::Vec;
     use core::ops::Neg;
     use ff::{Field, PrimeField};
     use group::{Curve, Group};
@@ -610,7 +618,7 @@ mod test {
 
     #[cfg(feature = "std")]
     fn run_msm_cross<C: CurveAffine>(min_k: usize, max_k: usize) {
-        use plonky2_maybe_rayon::*;
+        use rayon::prelude::*;
 
         let points = (0..1 << max_k)
             .into_par_iter()

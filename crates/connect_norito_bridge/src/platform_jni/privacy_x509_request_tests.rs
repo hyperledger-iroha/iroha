@@ -17,7 +17,7 @@ fn fixture() -> (
         .expect("maintained fixtures")
         .rows
         .into_iter()
-        .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)
+        .find(|row| row.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1)
         .expect("X509 row");
     let request = norito::decode_canonical(&row.submit_proof_instruction_norito)
         .expect("canonical proof-free request");
@@ -35,7 +35,7 @@ fn fixture() -> (
 fn request_admitted(
     archive: &[u8],
     profile: &PrivacyCompiledProfileSnapshotV1,
-    protocol_limits: &PrivacyProtocolLimitsV1,
+    protocol_limits: &PrivacyRuntimeProtocolLimitsV1,
     limits: &PrivacyConsensusLimitsV1,
     expected_network: &[u8; 32],
 ) -> bool {
@@ -54,7 +54,7 @@ fn request_admitted(
 #[test]
 fn request_construction_and_inspection_bind_actual_context_without_proof_bytes() {
     let (request, _, _, _) = fixture();
-    let statement = norito::encode_canonical(&PrivacyStatementV1::IrohaZkX509StarkP256V1(
+    let statement = norito::encode_canonical(&PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(
         request.statement.clone(),
     ))
     .unwrap();
@@ -107,7 +107,7 @@ fn request_construction_and_inspection_bind_actual_context_without_proof_bytes()
 fn request_boundary_rejects_materialized_inline_wrong_type_and_malformed_frames() {
     let (request, _, materialized, _) = fixture();
     let canonical = norito::encode_canonical(&request).unwrap();
-    let independent = norito::encode_canonical(&PrivacyStatementV1::IrohaZkX509StarkP256V1(
+    let independent = norito::encode_canonical(&PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(
         request.statement.clone(),
     ))
     .unwrap();
@@ -151,7 +151,7 @@ fn request_boundary_rejects_materialized_inline_wrong_type_and_malformed_frames(
     assert!(inspect_request(&norito::encode_canonical(&bad).unwrap()).is_none());
     for row in privacy_exact12_fixture_bundle_v1().unwrap().rows {
         assert!(inspect_request(&row.envelope_norito).is_none());
-        if row.protocol_id != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
+        if row.protocol_id != PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 {
             assert!(inspect_request(&row.submit_proof_instruction_norito).is_none());
             assert!(create_request(&row.statement_norito, 0).is_none());
         }
@@ -178,7 +178,7 @@ fn materialization_uses_original_action_statement_and_preserves_privacy_ordinal(
     let materialized =
         materialize_statement(&request_frame, &action_frame, intent.as_bytes()).unwrap();
     assert_eq!(materialized, expected_statement);
-    let tagged: PrivacyStatementV1 = norito::decode_canonical(&materialized).unwrap();
+    let tagged: PrivacyRuntimeStatementV1 = norito::decode_canonical(&materialized).unwrap();
     assert_eq!(
         tagged.context().action_index,
         request.statement.context.action_index
@@ -251,7 +251,7 @@ fn materialization_uses_original_action_statement_and_preserves_privacy_ordinal(
             changed_intent.as_bytes(),
         )
         .unwrap();
-        let changed: PrivacyStatementV1 = norito::decode_canonical(&changed).unwrap();
+        let changed: PrivacyRuntimeStatementV1 = norito::decode_canonical(&changed).unwrap();
         assert_ne!(
             changed.context().transaction_intent_digest,
             tagged.context().transaction_intent_digest
@@ -324,7 +324,7 @@ fn independent_request_ordinal_is_not_replaced_by_attachment_ordinal() {
         intent.as_bytes(),
     )
     .unwrap();
-    let output: PrivacyStatementV1 = norito::decode_canonical(&output).unwrap();
+    let output: PrivacyRuntimeStatementV1 = norito::decode_canonical(&output).unwrap();
     assert_eq!(output.context().action_index, 0);
     assert_eq!(action.action_index, 1);
     assert_eq!(
@@ -338,7 +338,9 @@ fn request_admission_checks_network_all_five_identities_and_resource_limits() {
     let sample = privacy_action_role_samples_v1()
         .unwrap()
         .into_iter()
-        .find(|sample| sample.envelope.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)
+        .find(|sample| {
+            sample.envelope.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1
+        })
         .unwrap();
     let profile = PrivacyCompiledProfileSnapshotV1 {
         protocol_id: sample.envelope.protocol_id,
@@ -349,9 +351,10 @@ fn request_admission_checks_network_all_five_identities_and_resource_limits() {
         verifier_digest: sample.envelope.verifier_digest,
         statement_schema_digest: sample.envelope.statement_schema_digest,
         engine_manifest_digest: sample.envelope.engine_manifest_digest,
-        protocol_limits: PrivacyProtocolLimitsV1::IrohaZkX509StarkP256V1,
+        protocol_limits: PrivacyRuntimeProtocolLimitsV1::IrohaZkX509StarkP256V1,
     };
-    let PrivacyStatementV1::IrohaZkX509StarkP256V1(mut statement) = sample.envelope.statement
+    let PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(mut statement) =
+        sample.envelope.statement
     else {
         unreachable!()
     };
@@ -411,7 +414,7 @@ fn request_admission_checks_network_all_five_identities_and_resource_limits() {
         ));
     }
     let mut wrong_profile = profile;
-    wrong_profile.protocol_id = PrivacyProtocolIdV1::VeRangeTransparentRangeV1;
+    wrong_profile.protocol_id = PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1;
     assert!(!request_admitted(
         &archive,
         &wrong_profile,
@@ -428,9 +431,9 @@ fn request_admission_checks_network_all_five_identities_and_resource_limits() {
         &reduced_limits,
         &network,
     ));
-    let index = PrivacyProtocolIdV1::ALL
+    let index = PrivacyRuntimeProtocolIdV1::ALL
         .iter()
-        .position(|protocol| *protocol == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)
+        .position(|protocol| *protocol == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1)
         .unwrap();
     assert!(!super::super::java_privacy_exact12_submit_proof_admitted(
         b"unqualified",

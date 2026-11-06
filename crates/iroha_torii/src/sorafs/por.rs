@@ -1647,13 +1647,13 @@ impl PorStorage for sorafs_node::NodeHandle {
             return false;
         };
         let grace = self.gc_config().retention_grace_secs();
-        storage.manifests().into_iter().any(|manifest| {
-            if manifest.manifest_digest() != &manifest_digest {
-                return false;
-            }
-            let retention = manifest.retention_epoch();
-            retention == 0 || now_secs < retention.saturating_add(grace)
-        })
+        // Stored identifiers are the hex manifest digest, so this is one indexed lookup.
+        storage
+            .manifest_by_digest(&manifest_digest)
+            .is_some_and(|manifest| {
+                let retention = manifest.retention_epoch();
+                retention == 0 || now_secs < retention.saturating_add(grace)
+            })
     }
 }
 #[derive(Default)]

@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/Users/takemiyamakoto/dev/iroha/docs/validation/sns_current_cut_takeover_20261104/verify.py", line 70, in <module>
+    main()
+    ~~~~^^
+  File "/Users/takemiyamakoto/dev/iroha/docs/validation/sns_current_cut_takeover_20261104/verify.py", line 41, in main
+    assert digest(root / name) == expected, name
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Cargo.lock

@@ -16,7 +16,7 @@ mod custody_tests {
         block.contracts.insert(
             key,
             IvmBytecodeEntry {
-                original_contract: blob,
+                original_contract: blob.into(),
                 code_hash: Hash::new(b"incorrect derived contract hash"),
                 count: NonZeroU64::MIN,
             },

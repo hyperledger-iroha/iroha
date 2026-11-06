@@ -6,8 +6,8 @@ only in opaque handles, canonical public intent/plan bytes, and public signed
 transaction results.  The Rust process owns all credential reads, decoding,
 proving, signing, single-use custody, and zeroization.
 
-This IPWW controller is closed over the eleven generic protocols plus one
-purpose-separated atomic private-settlement command family. ZK-X509 uses its
+This IPWW controller preserves the eleven generic protocols and adds the explicitly
+selected Ironwood profile and purpose-separated atomic private-settlement commands. ZK-X509 uses its
 separately authenticated, profile-owned worker transport and is intentionally
 rejected here rather than routed through a generic bundle.
 
@@ -73,6 +73,12 @@ PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1: dict[str, str] = {
 }
 
 
+PRIVACY_WORKER_OPERATION_SCHEMAS_V1 = {
+    **PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1,
+    "ironwood-halo2-actions-v1": "ironwood_note_action_v1",
+}
+
+
 class PrivacyWalletWorkerCommandV1(IntEnum):
     """Closed IPWW v1 command registry."""
 
@@ -85,6 +91,12 @@ class PrivacyWalletWorkerCommandV1(IntEnum):
     INSPECT_PRIVATE_SETTLEMENT = 7
     CANCEL_PRIVATE_SETTLEMENT = 8
     PROVE_PRIVATE_SETTLEMENT = 9
+    DERIVE_IRONWOOD_ADDRESS = 10
+    SCAN_IRONWOOD_RECEIPTS = 11
+    EXPORT_IRONWOOD_VIEWING_KEY = 12
+    SCAN_IRONWOOD_RECEIPTS_WITH_VIEWING_KEY = 13
+    IMPORT_IRONWOOD_DEPOSIT = 14
+    IMPORT_IRONWOOD_DEPOSIT_SEED = 15
 
 
 class PrivacyWalletWorkerErrorCodeV1(IntEnum):
@@ -152,7 +164,7 @@ class PrivacyWalletWitnessBindingV1:
         _require_text(self.signer_wallet_id, _MAX_SIGNER_BYTES_V1, "signer_wallet_id")
         _require_text(self.protocol_id, _MAX_PROTOCOL_BYTES_V1, "protocol_id")
         if (
-            self.protocol_id not in PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1
+            self.protocol_id not in PRIVACY_WORKER_OPERATION_SCHEMAS_V1
             and self.protocol_id != ATOMIC_PRIVATE_SETTLEMENT_PROTOCOL_LABEL_V1
         ):
             raise ValueError("protocol_id is not in the closed worker registry")
@@ -233,6 +245,18 @@ class PrivateSettlementPreparedProofV1:
 
 
 @dataclass(frozen=True)
+class IronwoodRecipientV1:
+    """Public address and compiled profile binding exported by the merchant worker."""
+
+    address: bytes
+    compiled_profile_digest: bytes
+
+    def __post_init__(self) -> None:
+        _require_nonzero_bytes(self.address, 43, "Ironwood address")
+        _require_nonzero_bytes(self.compiled_profile_digest, 32, "Ironwood profile")
+
+
+@dataclass(frozen=True)
 class PrivacyWalletSignedActionV1:
     """Public signed result returned after terminal witness consumption."""
 
@@ -254,6 +278,8 @@ class PrivacyWalletSignedActionV1:
     encoded_proof_envelope_bytes: int
     adaptive_signed_transaction_bytes: int
     submitted_versioned_transaction_bytes: int
+    ironwood_direct_instruction_index: int | None = None
+    ironwood_output_action_indices: tuple[int, ...] = ()
 
 
 class _Cursor:
@@ -412,6 +438,55 @@ class PrivacyWalletWorkerControllerV1:
         response = self._exchange(PrivacyWalletWorkerCommandV1.IMPORT, payload)
         return self._decode_lease(response, binding)
 
+    def import_ironwood_deposit(
+        self, payer_key_path: str | os.PathLike[str], binding: PrivacyWalletWitnessBindingV1,
+        canonical_public_action: bytes, *, ttl_millis: int, chain_discriminant: int,
+    ) -> PrivacyWalletWitnessLeaseV1:
+        """Import a native zero-spend deposit under the independently selected address prefix.
+
+        Only Rust opens the owner-only payer seed. The explicit prefix remains bound
+        to this lease through prepare/execute; the worker default cannot select it.
+        """
+        _require_generic_binding(binding)
+        path = _require_credential_path(payer_key_path)
+        if binding.protocol_id != "ironwood-halo2-actions-v1":
+            raise ValueError("Ironwood deposit requires its exact profile")
+        if type(ttl_millis) is not int or not (PRIVACY_WALLET_WORKER_MIN_TTL_MILLIS_V1 <= ttl_millis <= PRIVACY_WALLET_WORKER_MAX_TTL_MILLIS_V1):
+            raise ValueError("ttl_millis is outside the closed worker range")
+        if type(chain_discriminant) is not int or not 0 <= chain_discriminant <= 65535:
+            raise ValueError("chain_discriminant must be an exact unsigned 16-bit integer")
+        if type(canonical_public_action) is not bytes or not 0 < len(canonical_public_action) <= 512 * 1024:
+            raise ValueError("canonical_public_action must be bounded bytes")
+        payload = (_put_text(os.fspath(path)) + _encode_binding(binding) + struct.pack(">Q", ttl_millis)
+                   + struct.pack(">H", chain_discriminant)
+                   + struct.pack(">I", len(canonical_public_action)) + canonical_public_action)
+        return self._decode_lease(self._exchange(PrivacyWalletWorkerCommandV1.IMPORT_IRONWOOD_DEPOSIT, payload), binding)
+
+    def import_ironwood_deposit_seed(
+        self, seed: bytearray, binding: PrivacyWalletWitnessBindingV1,
+        canonical_public_action: bytes, *, ttl_millis: int, chain_discriminant: int,
+    ) -> PrivacyWalletWitnessLeaseV1:
+        """Pass a seed over the authenticated private pipe, without a credential file.
+
+        The caller owns and must erase ``seed``. The temporary transport allocation
+        is preallocated before copying the seed and erased even if transport fails.
+        """
+        _require_generic_binding(binding)
+        if type(seed) is not bytearray or len(seed) != 32 or not any(seed):
+            raise ValueError("seed must be a nonzero 32-byte bytearray")
+        if binding.protocol_id != "ironwood-halo2-actions-v1":
+            raise ValueError("Ironwood deposit requires its exact profile")
+        if type(ttl_millis) is not int or not (PRIVACY_WALLET_WORKER_MIN_TTL_MILLIS_V1 <= ttl_millis <= PRIVACY_WALLET_WORKER_MAX_TTL_MILLIS_V1):
+            raise ValueError("ttl_millis is outside the closed worker range")
+        if type(chain_discriminant) is not int or not 0 <= chain_discriminant <= 65535:
+            raise ValueError("chain_discriminant must be an exact unsigned 16-bit integer")
+        if type(canonical_public_action) is not bytes or not 0 < len(canonical_public_action) <= 512 * 1024:
+            raise ValueError("canonical_public_action must be bounded bytes")
+        payload = (_encode_binding(binding) + struct.pack(">QH", ttl_millis, chain_discriminant)
+                   + struct.pack(">I", len(canonical_public_action)) + canonical_public_action)
+        response = self._exchange(PrivacyWalletWorkerCommandV1.IMPORT_IRONWOOD_DEPOSIT_SEED, payload, secret=seed)
+        return self._decode_lease(response, binding)
+
     def inspect(
         self,
         handle: PrivacyWalletWitnessHandleV1,
@@ -477,6 +552,131 @@ class PrivacyWalletWorkerControllerV1:
         )
         response = self._exchange(PrivacyWalletWorkerCommandV1.EXECUTE, payload)
         return self._decode_signed_action(response, binding)
+
+    def derive_ironwood_address(
+        self,
+        credential_path: str | os.PathLike[str],
+        *,
+        diversifier_index: int = 0,
+        internal_scope: bool = False,
+    ) -> IronwoodRecipientV1:
+        """Export a recipient from an owner-only raw 32-byte key file read only by Rust.
+
+        The returned address can be shared with a payer; the merchant key cannot.
+        An internal address can separately receive payer change.
+        """
+        path = _require_credential_path(credential_path)
+        if type(diversifier_index) is not int or not 0 <= diversifier_index < 2**32:
+            raise ValueError("diversifier_index must be an unsigned 32-bit integer")
+        if type(internal_scope) is not bool:
+            raise TypeError("internal_scope must be bool")
+        encoded = os.fspath(path).encode("utf-8")
+        payload = struct.pack(">H", len(encoded)) + encoded
+        payload += struct.pack(">IB", diversifier_index, int(internal_scope))
+        response = self._exchange(PrivacyWalletWorkerCommandV1.DERIVE_IRONWOOD_ADDRESS, payload)
+        try:
+            cursor = _Cursor(response)
+            if cursor.u8() != 6:
+                raise PrivacyWalletWorkerErrorV1("Ironwood response has the wrong result tag")
+            public = cursor.bytes_u32(75, "Ironwood recipient")
+            cursor.finish()
+            if len(public) != 75:
+                raise PrivacyWalletWorkerErrorV1("Ironwood recipient has the wrong length")
+            return IronwoodRecipientV1(public[:43], public[43:])
+        except (PrivacyWalletWorkerErrorV1, ValueError, TypeError) as error:
+            raise self._malformed(str(error)) from error
+
+    def export_ironwood_viewing_key(
+        self,
+        spending_credential_path: str | os.PathLike[str],
+        viewing_credential_path: str | os.PathLike[str],
+        *,
+        internal_scope: bool = False,
+    ) -> bytes:
+        """Create an owner-only incoming-viewing credential natively and return its profile.
+
+        The destination must not exist. Transfer this restricted credential to a receipt
+        verifier through owner-controlled secure custody; neither key enters Python.
+        A verifier using it cannot spend notes or determine their spentness.
+        """
+        source = _require_credential_path(spending_credential_path)
+        destination = _require_credential_path(viewing_credential_path)
+        if type(internal_scope) is not bool:
+            raise TypeError("internal_scope must be bool")
+        payload = _put_text(os.fspath(source))
+        payload += _put_text(os.fspath(destination))
+        payload += bytes([int(internal_scope)])
+        response = self._exchange(PrivacyWalletWorkerCommandV1.EXPORT_IRONWOOD_VIEWING_KEY, payload)
+        try:
+            cursor = _Cursor(response)
+            if cursor.u8() != 6:
+                raise PrivacyWalletWorkerErrorV1("Ironwood response has the wrong result tag")
+            profile = cursor.bytes_u32(32, "Ironwood profile")
+            cursor.finish()
+            _require_nonzero_bytes(profile, 32, "Ironwood profile")
+            return profile
+        except (PrivacyWalletWorkerErrorV1, ValueError, TypeError) as error:
+            raise self._malformed(str(error)) from error
+
+    def scan_ironwood_receipts_with_viewing_key(
+        self,
+        credential_path: str | os.PathLike[str],
+        canonical_request: bytes,
+    ) -> bytes:
+        """Check receipts with an owner-only incoming-viewing credential and no spending key.
+
+        Trust, checkpoint, unique-memo and durable receipt-identity rules are identical
+        to scan_ironwood_receipts. The request's internal_scope must match the credential.
+        """
+        return self._scan_ironwood_receipts(credential_path, canonical_request, viewing_key_only=True)
+
+    def scan_ironwood_receipts(
+        self,
+        credential_path: str | os.PathLike[str],
+        canonical_request: bytes,
+    ) -> bytes:
+        """Authenticate complete committed blocks and return canonical native receipt JSON.
+
+        Discovery covers direct submissions in signed Instructions/Batch transactions,
+        not notes emitted indirectly by contracts, triggers or nested proposals.
+
+        The owner must independently choose and persist the trusted checkpoint and
+        network/chain/profile/asset/pool pins; never accept these authority inputs from
+        the payer or from the same untrusted server supplying proof frames. Bind expected
+        recipient/amount/memo to the merchant's own invoice. The request also supplies
+        proof frames, viewing scope and an optional exact expected_receipt. A non-null
+        expectation fixes tx hash, direct instruction/action indices, recipient, amount,
+        and all 512 memo bytes. A null expectation discovers decryptable notes in the
+        strict checkpoint extension (the boundary block is excluded). To check a receipt
+        in that boundary block, use an independently trusted earlier checkpoint. The result
+        exposes receipt_identity=(transaction_hash_hex, action_index). Before crediting, the
+        application must atomically persist that identity with its credit and checkpoint,
+        deduplicate repeated/retried pages, and match a unique invoice memo. Discovery alone
+        is not an invoice acceptance check. The result contains its authenticated checkpoint;
+        no note opening, spending key or witness is returned. Caller persists a new checkpoint
+        only after the requested receipt check succeeds.
+        """
+        return self._scan_ironwood_receipts(credential_path, canonical_request, viewing_key_only=False)
+
+    def _scan_ironwood_receipts(
+        self, credential_path: str | os.PathLike[str], canonical_request: bytes, *, viewing_key_only: bool,
+    ) -> bytes:
+        path = _require_credential_path(credential_path)
+        request = _require_public_bytes(canonical_request, PRIVACY_WALLET_WORKER_MAX_FRAME_BYTES_V1 - 8192, "Ironwood receipt request")
+        encoded = os.fspath(path).encode("utf-8")
+        payload = struct.pack(">H", len(encoded)) + encoded + struct.pack(">I", len(request)) + request
+        command = (PrivacyWalletWorkerCommandV1.SCAN_IRONWOOD_RECEIPTS_WITH_VIEWING_KEY
+                   if viewing_key_only else PrivacyWalletWorkerCommandV1.SCAN_IRONWOOD_RECEIPTS)
+        response = self._exchange(command, payload)
+        try:
+            cursor = _Cursor(response)
+            if cursor.u8() != 6:
+                raise PrivacyWalletWorkerErrorV1("Ironwood response has the wrong result tag")
+            result = cursor.bytes_u32(PRIVACY_WALLET_WORKER_MAX_FRAME_BYTES_V1 - 8192, "Ironwood receipts")
+            cursor.finish()
+            return result
+        except (PrivacyWalletWorkerErrorV1, ValueError, TypeError) as error:
+            raise self._malformed(str(error)) from error
 
     def import_private_settlement_credential(
         self,
@@ -649,14 +849,15 @@ class PrivacyWalletWorkerControllerV1:
         self._abort()
         return PrivacyWalletWorkerErrorV1(message)
 
-    def _exchange(self, command: PrivacyWalletWorkerCommandV1, payload: bytes) -> bytes:
+    def _exchange(self, command: PrivacyWalletWorkerCommandV1, payload: bytes, *, secret: bytearray | None = None) -> bytes:
         with self._lock:
             if self._closed:
                 raise PrivacyWalletWorkerErrorV1("privacy wallet worker session is closed")
             sequence = self._next_sequence
             if sequence > _U64_MAX:
                 raise self._malformed("privacy wallet worker sequence space is exhausted")
-            encoded = _encode_frame(command, sequence, payload, self._auth_key)
+            encoded = (_encode_frame(command, sequence, payload, self._auth_key) if secret is None
+                       else _encode_secret_frame(command, sequence, payload, secret, self._auth_key))
             try:
                 assert self._process.stdin is not None
                 self._process.stdin.write(encoded)
@@ -671,6 +872,9 @@ class PrivacyWalletWorkerControllerV1:
                 raise PrivacyWalletWorkerErrorV1(
                     "native privacy wallet worker transport failed"
                 ) from error
+            finally:
+                if isinstance(encoded, bytearray):
+                    _zeroize(encoded)
             response_command, response_sequence, response_payload = response
             if response_command != command or response_sequence != sequence:
                 raise self._malformed("worker response command or sequence does not match request")
@@ -702,7 +906,7 @@ class PrivacyWalletWorkerControllerV1:
             protocol_id = cursor.text(_MAX_PROTOCOL_BYTES_V1, "protocol_id")
             operation_schema = cursor.text(_MAX_OPERATION_SCHEMA_BYTES_V1, "operation_schema")
             cursor.finish()
-            expected_schema = PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1.get(protocol_id)
+            expected_schema = PRIVACY_WORKER_OPERATION_SCHEMAS_V1.get(protocol_id)
             if (
                 handle.value[0] & 0x80 != 0
                 or expires_at_millis == 0
@@ -732,7 +936,8 @@ class PrivacyWalletWorkerControllerV1:
     ) -> PrivacyWalletSignedActionV1:
         try:
             cursor = _Cursor(payload)
-            if cursor.u8() != 3:
+            result_tag = cursor.u8()
+            if result_tag not in (3, 7):
                 raise PrivacyWalletWorkerErrorV1("signed action has the wrong result tag")
             protocol_id = cursor.text(_MAX_PROTOCOL_BYTES_V1, "protocol_id")
             operation_schema = cursor.text(_MAX_OPERATION_SCHEMA_BYTES_V1, "operation_schema")
@@ -749,8 +954,14 @@ class PrivacyWalletWorkerControllerV1:
             public_key = cursor.bytes_u16(_MAX_PUBLIC_KEY_BYTES_V1, "public key")
             digests = tuple(cursor.take(_DIGEST_BYTES_V1) for _ in range(4))
             counts = tuple(cursor.u32() for _ in range(5))
+            direct_index = cursor.u32() if result_tag == 7 else None
+            output_indices = tuple(cursor.u8() for _ in range(cursor.u8())) if result_tag == 7 else ()
+            if ((result_tag == 7) != (protocol_id == "ironwood-halo2-actions-v1")
+                    or len(output_indices) > 2 or any(index >= 2 for index in output_indices)
+                    or len(set(output_indices)) != len(output_indices)):
+                raise PrivacyWalletWorkerErrorV1("signed Ironwood output mapping is invalid")
             cursor.finish()
-            expected_schema = PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1.get(protocol_id)
+            expected_schema = PRIVACY_WORKER_OPERATION_SCHEMAS_V1.get(protocol_id)
             if (
                 protocol_id != binding.protocol_id
                 or operation_schema != expected_schema
@@ -788,6 +999,8 @@ class PrivacyWalletWorkerControllerV1:
                 encoded_proof_envelope_bytes=counts[2],
                 adaptive_signed_transaction_bytes=counts[3],
                 submitted_versioned_transaction_bytes=counts[4],
+                ironwood_direct_instruction_index=direct_index,
+                ironwood_output_action_indices=output_indices,
             )
         except (PrivacyWalletWorkerErrorV1, TypeError, ValueError) as error:
             raise self._malformed(str(error)) from error
@@ -1031,7 +1244,7 @@ def _require_generic_binding(
 ) -> PrivacyWalletWitnessBindingV1:
     if not isinstance(binding, PrivacyWalletWitnessBindingV1):
         raise TypeError("binding must be a PrivacyWalletWitnessBindingV1")
-    if binding.protocol_id not in PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1:
+    if binding.protocol_id not in PRIVACY_WORKER_OPERATION_SCHEMAS_V1:
         raise ValueError("binding does not select a generic privacy-worker protocol")
     return binding
 
@@ -1108,6 +1321,26 @@ def _encode_frame(
     return struct.pack(">I", len(framed)) + framed
 
 
+def _encode_secret_frame(command, sequence, payload, secret, auth_key) -> bytearray:
+    size = 18 + len(payload) + len(secret) + 32
+    if size > PRIVACY_WALLET_WORKER_MAX_FRAME_BYTES_V1 or not 1 <= sequence <= _U64_MAX:
+        raise PrivacyWalletWorkerErrorV1("invalid secret worker frame")
+    encoded = bytearray(4 + size)
+    try:
+        struct.pack_into(">I", encoded, 0, size)
+        encoded[4:8] = _MAGIC_V1
+        encoded[8] = PRIVACY_WALLET_WORKER_PROTOCOL_VERSION_V1
+        encoded[9] = int(command)
+        struct.pack_into(">QI", encoded, 10, sequence, len(payload) + len(secret))
+        encoded[22:22 + len(payload)] = payload
+        encoded[22 + len(payload):-32] = secret
+        encoded[-32:] = hmac.digest(auth_key, memoryview(encoded)[4:-32], "sha256")
+        return encoded
+    except BaseException:
+        _zeroize(encoded)
+        raise
+
+
 def _read_exact(reader: IO[bytes], count: int) -> bytes:
     chunks = bytearray()
     while len(chunks) < count:
@@ -1162,7 +1395,50 @@ def _zeroize(value: bytearray) -> None:
     value[:] = b"\0" * len(value)
 
 
+
+def ironwood_deposit_public_action_v1(
+    *, asset_definition_id: str, pool_id: bytes, anchor: bytes, anchor_epoch: int,
+    expiry_height: int, recipient: IronwoodRecipientV1, amount: int, memo: bytes,
+    expected_profile_digest: bytes,
+) -> dict[str, object]:
+    """Build the witness-free action for a zero-spend merchant deposit.
+
+    Put this exact object in the owner bundle, public intent and execution plan. The
+    owner witness is {"spends": [], "changes": []}. Use orchard_contract_calls for the
+    independently fixed registry open/close calls; the native prepare/authorize pipeline
+    binds their complete ordered Batch. public_debit equals amount, so a previously
+    funded payer note cannot silently replace the public-balance decrease. The expected
+    profile must come from the payer's independently selected worker/profile binding,
+    not be copied from the merchant export. No coin selection or change is computed.
+    """
+    _require_text(asset_definition_id, 512, "asset_definition_id")
+    _require_nonzero_bytes(pool_id, 32, "pool_id")
+    _require_nonzero_bytes(anchor, 32, "anchor")
+    if not isinstance(recipient, IronwoodRecipientV1):
+        raise TypeError("recipient must be an IronwoodRecipientV1")
+    _require_nonzero_bytes(expected_profile_digest, 32, "expected_profile_digest")
+    if not hmac.compare_digest(recipient.compiled_profile_digest, expected_profile_digest):
+        raise ValueError("exported recipient profile does not match the selected profile")
+    for name, value in (("amount", amount), ("anchor_epoch", anchor_epoch), ("expiry_height", expiry_height)):
+        if type(value) is not int or not 1 <= value <= _U64_MAX:
+            raise ValueError(f"{name} must be a positive u64")
+    if amount > (1 << 63) - 1:
+        raise ValueError("amount exceeds the native signed value-balance bound")
+    if type(memo) is not bytes or len(memo) != 512:
+        raise ValueError("memo must contain exactly 512 bytes")
+    return {
+        "anchor_epoch": anchor_epoch, "anchor_hex": anchor.hex(),
+        "asset_definition_id": asset_definition_id, "expiry_height": expiry_height,
+        "minimum_action_count": 1, "pool_id_hex": pool_id.hex(),
+        "public_balance_scope": "global", "public_debit_decimal": str(amount),
+        "outputs": [{"recipient_hex": recipient.address.hex(), "value_decimal": str(amount), "memo_hex": memo.hex()}],
+        "changes": [],
+    }
+
 __all__ = [
+    "IronwoodRecipientV1",
+    "PRIVACY_WORKER_OPERATION_SCHEMAS_V1",
+    "ironwood_deposit_public_action_v1",
     "ATOMIC_PRIVATE_SETTLEMENT_PROTOCOL_LABEL_V1",
     "PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1",
     "PRIVACY_WALLET_WORKER_MAX_EXECUTION_PLAN_BYTES_V1",

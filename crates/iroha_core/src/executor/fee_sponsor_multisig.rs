@@ -86,8 +86,9 @@ fn instruction_at(executable: &Executable, index: usize) -> Option<&InstructionB
 
 fn decode_multisig(
     instruction: &InstructionBox,
+    selection: &iroha_data_model::runtime::definition::RootSelectionV1,
 ) -> Result<Option<MultisigInstructionBox>, Attempt<NexusFeeAdmissionError>> {
-    match MultisigInstructionBox::try_from(instruction) {
+    match crate::runtime::ironwood::admission::multisig_instruction(instruction, selection) {
         Ok(value) => Ok(Some(value)),
         Err(error) => {
             match multisig_instruction_decode_attempt(error, |error| invalid(error.to_string())) {
@@ -111,6 +112,7 @@ fn instruction_hash(
 /// A preceding proposal is authority only for a later approval of this exact target and hash.
 fn earlier_proposal(
     payload: &TransactionPayload,
+    selection: &iroha_data_model::runtime::definition::RootSelectionV1,
     index: usize,
     target: &AccountId,
     proposal_id: &MultisigProposalId,
@@ -124,7 +126,9 @@ fn earlier_proposal(
         let Some(instruction) = instruction_at(&payload.instructions, earlier) else {
             continue;
         };
-        let Some(MultisigInstructionBox::Propose(propose)) = decode_multisig(instruction)? else {
+        let Some(MultisigInstructionBox::Propose(propose)) =
+            decode_multisig(instruction, selection)?
+        else {
             continue;
         };
         if propose.account == *target
@@ -165,7 +169,7 @@ pub(super) fn selector_matches(
     let Some(instruction) = instruction_at(&payload.instructions, index) else {
         return Ok(false);
     };
-    let Some(multisig) = decode_multisig(instruction)? else {
+    let Some(multisig) = decode_multisig(instruction, world.runtime_selection())? else {
         return Ok(false);
     };
     let (target, instructions, same_envelope) = match &multisig {
@@ -177,6 +181,7 @@ pub(super) fn selector_matches(
         MultisigInstructionBox::Approve(approve) => {
             if let Some(instructions) = earlier_proposal(
                 payload,
+                world.runtime_selection(),
                 index,
                 &approve.account,
                 &approve.proposal_id,

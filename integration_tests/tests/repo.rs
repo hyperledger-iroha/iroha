@@ -3,10 +3,10 @@ use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
+    collections::{Collection, FilterExpr, ListQuery, Page, field},
     data_model::{
         prelude::*,
-        query::repo::prelude::FindRepoAgreements,
-        repo::{RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
+        repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     },
 };
 use iroha_crypto::{Algorithm, KeyPair};
@@ -17,12 +17,11 @@ use iroha_model_base::metadata::Metadata;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
 use std::{
+    collections::BTreeSet,
     convert::TryFrom,
-    sync::{Mutex, OnceLock},
+    sync::OnceLock,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-static GENESIS_STATUS: OnceLock<std::result::Result<(), ()>> = OnceLock::new();
-static START_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 fn install_quiet_tracing() {
     static QUIET_TRACE: OnceLock<()> = OnceLock::new();
     QUIET_TRACE.get_or_init(|| {});
@@ -37,44 +36,11 @@ fn quiet_network_builder() -> NetworkBuilder {
         .with_auto_populated_trusted_peers()
         .with_peers(4)
 }
-fn loopback_bind_allowed() -> bool {
-    static LOOPBACK_BIND_ALLOWED: OnceLock<bool> = OnceLock::new();
-    *LOOPBACK_BIND_ALLOWED.get_or_init(|| std::net::TcpListener::bind(("127.0.0.1", 0)).is_ok())
-}
-fn start_test_network() -> Option<(sandbox::SerializedNetwork, tokio::runtime::Runtime)> {
-    if !ivm_build_profile_exists() {
-        eprintln!("Skipping test: missing IVM build profile");
-        return None;
-    }
-    if !loopback_bind_allowed() {
-        eprintln!("Skipping test: environment denies binding TCP sockets on 127.0.0.1");
-        return None;
-    }
-    if matches!(GENESIS_STATUS.get(), Some(Err(()))) {
-        eprintln!("Skipping test: failed to start network (cached)");
-        return None;
-    }
-    let serial_guard = sandbox::serial_guard();
-    let guard = START_MUTEX.get_or_init(|| Mutex::new(())).lock().unwrap();
-    if matches!(GENESIS_STATUS.get(), Some(Err(()))) {
-        eprintln!("Skipping test: failed to start network (cached)");
-        drop(guard);
-        return None;
-    }
-    let builder = quiet_network_builder();
-    let (network, runtime) = builder.build_blocking();
-    if let Err(err) = runtime.block_on(async { network.start_all().await }) {
-        eprintln!("Skipping test: failed to start network: {err}");
-        let _ = GENESIS_STATUS.set(Err(()));
-        drop(guard);
-        return None;
-    }
-    let _ = GENESIS_STATUS.set(Ok(()));
-    drop(guard);
-    Some((
-        sandbox::SerializedNetwork::new(network, serial_guard),
-        runtime,
-    ))
+fn start_test_network(
+    context: &'static str,
+) -> Result<Option<(sandbox::SerializedNetwork, tokio::runtime::Runtime)>> {
+    eyre::ensure!(ivm_build_profile_exists(), "missing IVM build profile");
+    sandbox::start_network_blocking_or_skip(quiet_network_builder(), context)
 }
 fn repo_outsider_key_pair() -> KeyPair {
     KeyPair::try_from_seed(vec![42; 32], Algorithm::Ed25519).expect("fixture repo outsider key")
@@ -133,6 +99,296 @@ fn grant_repo_consents(
     )?;
     Ok(())
 }
+fn quoted_transaction(
+    client: &Client,
+    instructions: impl IntoIterator<Item = InstructionBox>,
+    metadata: Metadata,
+) -> Result<SignedTransaction> {
+    let account = client.account_client();
+    let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        instructions,
+        FeePaymentIntent::authority(Vec::new(), None),
+        metadata,
+    ))?;
+    let quote = client
+        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })?;
+    eyre::ensure!(
+        payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent),
+        "repo fee quote changed payer or gas bound"
+    );
+    payload.fee_payment = quote.intent;
+    account.sign_transaction(payload).map_err(Into::into)
+}
+fn fund_runtime_signer(client: &Client, signer: AccountId) -> Result<()> {
+    let fee_asset: AssetDefinitionId =
+        iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?;
+    client.submit(
+        Transfer::asset_quantity(AssetId::new(fee_asset, ALICE_ID.clone()), 100u32, signer),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    Ok(())
+}
+#[derive(norito::JsonSerialize, norito::JsonDeserialize)]
+struct AssetProjection {
+    id: AssetId,
+    definition_id: AssetDefinitionId,
+    account_id: AccountId,
+    value: Quantity,
+}
+fn coherent_assets_from_page(
+    page: Page<norito::json::Value>,
+    expected: &BTreeSet<AssetId>,
+) -> Result<Vec<Asset>> {
+    eyre::ensure!(
+        page.next_cursor.is_none(),
+        "asset snapshot must fit one coherent page"
+    );
+    eyre::ensure!(
+        page.items.len() <= expected.len(),
+        "asset snapshot returned excess rows"
+    );
+    let mut seen = BTreeSet::new();
+    page.items
+        .into_iter()
+        .map(|value| {
+            let row: AssetProjection = norito::json::from_value(value)?;
+            eyre::ensure!(
+                expected.contains(&row.id),
+                "asset snapshot returned an unrequested identity"
+            );
+            eyre::ensure!(
+                row.id.definition() == &row.definition_id && row.id.account() == &row.account_id,
+                "asset snapshot identity disagrees with its definition or account"
+            );
+            eyre::ensure!(
+                seen.insert(row.id.clone()),
+                "asset snapshot repeated an identity"
+            );
+            Ok(Asset::new(row.id, row.value))
+        })
+        .collect()
+}
+fn coherent_assets(
+    client: &Client,
+    expected: &[(&AssetId, Option<Quantity>)],
+) -> Result<Vec<Asset>> {
+    let ids = expected
+        .iter()
+        .map(|(id, _)| (*id).clone())
+        .collect::<BTreeSet<_>>();
+    eyre::ensure!(
+        ids.len() == expected.len() && !ids.is_empty() && ids.len() < 64,
+        "asset snapshot requires one to 63 distinct identities"
+    );
+    let filter = FilterExpr::Or(
+        ids.iter()
+            .map(|id| field("id").eq(id.to_string()))
+            .collect(),
+    );
+    // Explorer applies the predicate after its bounded native scan. Include the
+    // fixture's genesis and fee assets in that scan so all selected balances are
+    // observed together; reject any continuation instead of combining snapshots.
+    let page = client.list_page(
+        &Collection::ExplorerAssets,
+        &ListQuery::new().filter(filter).limit(64),
+    )?;
+    coherent_assets_from_page(page, &ids)
+}
+#[test]
+fn coherent_asset_snapshot_rejects_incomplete_or_inconsistent_pages() -> Result<()> {
+    let definition = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("wonderland", "universal")?,
+        "usd".parse()?,
+    );
+    let id = AssetId::new(definition.clone(), ALICE_ID.clone());
+    let other = AssetId::new(definition.clone(), BOB_ID.clone());
+    let expected = BTreeSet::from([id.clone(), other.clone()]);
+    let row = norito::json::to_value(&AssetProjection {
+        id: id.clone(),
+        definition_id: definition.clone(),
+        account_id: ALICE_ID.clone(),
+        value: Quantity::from(1000u32),
+    })?;
+    let page = |items, next_cursor| Page {
+        items,
+        next_cursor,
+        total: None,
+    };
+    let assets = coherent_assets_from_page(page(vec![row.clone()], None), &expected)?;
+    assert_eq!(asset_value(&assets, &id), Some(Quantity::from(1000u32)));
+    assert_eq!(asset_value(&assets, &other), None);
+    assert!(coherent_assets_from_page(page(Vec::new(), None), &expected)?.is_empty());
+    assert!(
+        coherent_assets_from_page(page(vec![row.clone()], Some("more".into())), &expected).is_err()
+    );
+    assert!(
+        coherent_assets_from_page(page(vec![row.clone(), row.clone()], None), &expected).is_err()
+    );
+    assert!(
+        coherent_assets_from_page(page(vec![row.clone()], None), &BTreeSet::from([other])).is_err()
+    );
+    let different_definition = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("wonderland", "universal")?,
+        "bond".parse()?,
+    );
+    for (field, replacement) in [
+        (
+            "definition_id",
+            norito::json::to_value(&different_definition)?,
+        ),
+        ("account_id", norito::json::to_value(&*BOB_ID)?),
+        ("value", norito::json::Value::from("-1")),
+        ("value", norito::json::Value::from("invalid quantity")),
+    ] {
+        let mut malformed = row.clone();
+        let norito::json::Value::Object(fields) = &mut malformed else {
+            panic!("asset projection must be an object");
+        };
+        fields.insert(field.into(), replacement);
+        assert!(
+            coherent_assets_from_page(page(vec![malformed], None), &expected).is_err(),
+            "snapshot accepted inconsistent {field}"
+        );
+    }
+    Ok(())
+}
+// The native agreement collection projects the ledger fields below. It does
+// not expose collateral metadata; do not fabricate a complete RepoAgreement.
+#[derive(norito::JsonDeserialize)]
+struct RepoCollateralProjection {
+    asset_definition_id: AssetDefinitionId,
+    quantity: Quantity,
+}
+#[derive(norito::JsonDeserialize)]
+struct RepoAgreementProjection {
+    id: RepoAgreementId,
+    initiator: AccountId,
+    counterparty: AccountId,
+    custodian: Option<AccountId>,
+    cash_leg: RepoCashLeg,
+    cash_source: AssetId,
+    collateral_leg: RepoCollateralProjection,
+    collateral_custody_asset: AssetId,
+    rate_bps: u16,
+    maturity_timestamp_ms: u64,
+    initiated_timestamp_ms: u64,
+    last_margin_check_timestamp_ms: u64,
+    governance: RepoGovernance,
+    settlement_timestamp_ms: Option<u64>,
+    status: String,
+}
+fn repo_agreement_from_page(
+    page: Page<norito::json::Value>,
+    id: &RepoAgreementId,
+) -> Result<Option<RepoAgreementProjection>> {
+    eyre::ensure!(
+        page.next_cursor.is_none() && page.items.len() <= 1,
+        "exact repo agreement query returned excess rows or continuation"
+    );
+    let Some(row) = page.items.into_iter().next() else {
+        return Ok(None);
+    };
+    let agreement: RepoAgreementProjection = norito::json::from_value(row)?;
+    eyre::ensure!(
+        &agreement.id == id,
+        "repo agreement query returned a different identity"
+    );
+    eyre::ensure!(
+        agreement.initiator == *ALICE_ID && agreement.counterparty == *BOB_ID,
+        "repo agreement participants differ from the fixture"
+    );
+    eyre::ensure!(
+        agreement.cash_source.definition() == agreement.cash_leg.asset_definition_id()
+            && agreement.cash_source.account() == &agreement.counterparty,
+        "repo cash source disagrees with its leg or counterparty"
+    );
+    eyre::ensure!(
+        agreement.collateral_custody_asset.definition()
+            == &agreement.collateral_leg.asset_definition_id
+            && agreement.collateral_custody_asset.account()
+                == agreement
+                    .custodian
+                    .as_ref()
+                    .unwrap_or(&agreement.counterparty),
+        "repo collateral custody disagrees with its leg or holder"
+    );
+    eyre::ensure!(
+        *agreement.cash_leg.quantity() == Quantity::from(1000u32)
+            && agreement.collateral_leg.quantity == Quantity::from(1100u32)
+            && agreement.rate_bps == 0,
+        "repo agreement quantities or rate differ from the fixture"
+    );
+    eyre::ensure!(
+        agreement.initiated_timestamp_ms < agreement.maturity_timestamp_ms
+            && agreement.last_margin_check_timestamp_ms >= agreement.initiated_timestamp_ms,
+        "repo agreement timestamps are inconsistent"
+    );
+    let expected_status = if agreement.settlement_timestamp_ms.is_some() {
+        "settled"
+    } else {
+        "active"
+    };
+    eyre::ensure!(
+        agreement.status == expected_status,
+        "repo agreement status differs from settlement timestamp"
+    );
+    Ok(Some(agreement))
+}
+#[test]
+fn exact_repo_projection_rejects_excess_or_inconsistent_rows() -> Result<()> {
+    let id: RepoAgreementId = "snapshot_repo".parse()?;
+    let domain = DomainId::try_new("wonderland", "universal")?;
+    let cash = AssetDefinitionId::derive_from_components(domain.clone(), "usd".parse()?);
+    let collateral = AssetDefinitionId::derive_from_components(domain, "bond".parse()?);
+    let row = norito::json!({
+        "id": (id.to_string()),
+        "initiator": (ALICE_ID.to_string()),
+        "counterparty": (BOB_ID.to_string()),
+        "custodian": null,
+        "cash_leg": {"asset_definition_id": (cash.to_string()), "quantity": "1000"},
+        "cash_source": (AssetId::new(cash, BOB_ID.clone()).to_string()),
+        "collateral_leg": {"asset_definition_id": (collateral.to_string()), "quantity": "1100"},
+        "collateral_custody_asset": (AssetId::new(collateral, BOB_ID.clone()).to_string()),
+        "rate_bps": 0,
+        "maturity_timestamp_ms": 2000,
+        "initiated_timestamp_ms": 1000,
+        "last_margin_check_timestamp_ms": 1000,
+        "governance": {"haircut_bps": 1500, "margin_frequency_secs": 300, "allow_early_repayment": false},
+        "settlement_timestamp_ms": null,
+        "status": "active"
+    });
+    let page = |items, next_cursor| Page {
+        items,
+        next_cursor,
+        total: None,
+    };
+    assert!(repo_agreement_from_page(page(Vec::new(), None), &id)?.is_none());
+    let agreement = repo_agreement_from_page(page(vec![row.clone()], None), &id)?
+        .expect("complete agreement projection");
+    assert_eq!(agreement.id, id);
+    assert_eq!(agreement.governance.margin_frequency_secs, 300);
+    assert!(repo_agreement_from_page(page(vec![row.clone()], Some("more".into())), &id).is_err());
+    assert!(repo_agreement_from_page(page(vec![row.clone(), row.clone()], None), &id).is_err());
+    for (field, replacement) in [
+        ("id", norito::json::Value::from("different_repo")),
+        ("initiator", norito::json::Value::from(BOB_ID.to_string())),
+        ("status", norito::json::Value::from("settled")),
+        ("maturity_timestamp_ms", norito::json::Value::from(999u64)),
+    ] {
+        let mut malformed = row.clone();
+        let norito::json::Value::Object(fields) = &mut malformed else {
+            panic!("repo projection must be an object");
+        };
+        fields.insert(field.into(), replacement);
+        assert!(
+            repo_agreement_from_page(page(vec![malformed], None), &id).is_err(),
+            "agreement query accepted inconsistent {field}"
+        );
+    }
+    Ok(())
+}
 fn error_chain_contains(err: &eyre::Report, needle: &str) -> bool {
     err.chain().any(|cause| cause.to_string().contains(needle))
 }
@@ -152,7 +408,7 @@ fn wait_for_assets(
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "assets were not queried".to_owned();
     while Instant::now() < deadline {
-        match client.client().query(FindAssets::new()).execute_all() {
+        match coherent_assets(client, expected) {
             Ok(assets) => {
                 let all_match = expected.iter().all(|(asset_id, expected_value)| {
                     asset_value(&assets, asset_id).as_ref() == expected_value.as_ref()
@@ -180,30 +436,22 @@ fn wait_for_repo_agreement(
     client: &Client,
     agreement_id: &RepoAgreementId,
     context: &str,
-) -> Result<RepoAgreement> {
+) -> Result<RepoAgreementProjection> {
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
     const TIMEOUT: Duration = Duration::from_secs(30);
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "repo agreements were not queried".to_owned();
     while Instant::now() < deadline {
+        let query = ListQuery::new()
+            .filter(field("id").eq(agreement_id.to_string()))
+            .limit(2);
         match client
-            .client()
-            .query(FindRepoAgreements::new())
-            .execute_all()
+            .list_page(&Collection::RepoAgreements, &query)
+            .map_err(Into::<eyre::Report>::into)
+            .and_then(|page| repo_agreement_from_page(page, agreement_id))
         {
-            Ok(agreements) => {
-                last_observed = agreements
-                    .iter()
-                    .map(|agreement| agreement.id().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                if let Some(agreement) = agreements
-                    .into_iter()
-                    .find(|agreement| agreement.id() == agreement_id)
-                {
-                    return Ok(agreement);
-                }
-            }
+            Ok(Some(agreement)) => return Ok(agreement),
+            Ok(None) => last_observed = "agreement not present".to_owned(),
             Err(err) => {
                 last_observed = format!("query failed: {err}");
             }
@@ -217,7 +465,10 @@ fn wait_for_repo_agreement(
 #[test]
 #[allow(clippy::too_many_lines)]
 fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
-    let Some((network, _rt)) = start_test_network() else {
+    let Some((network, _rt)) = start_test_network(stringify!(
+        repo_roundtrip_transfers_balances_and_seals_agreement
+    ))?
+    else {
         return Ok(());
     };
     let client = network.client();
@@ -238,7 +489,7 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
                 __asset_definition_id.clone(),
                 "usd".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(DomainId::try_new("wonderland", "universal")?),
             )
         })
         .into(),
@@ -248,7 +499,7 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
                 __asset_definition_id.clone(),
                 "bond".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(DomainId::try_new("wonderland", "universal")?),
             )
         })
         .into(),
@@ -263,25 +514,17 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
         )
         .into(),
     ];
-    let setup_tx = {
-        let account = client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                setup_instructions,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                metadata.clone(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+    let setup_tx = quoted_transaction(&client, setup_instructions, metadata.clone())?;
     client.submit_transaction_and_wait(&setup_tx)?;
     // Initiate the repo: Alice borrows cash, pledging collateral.
     let agreement_id: RepoAgreementId = "daily_repo".parse()?;
     let repo_instruction_template = || -> Result<RepoIsi> {
+        // Both participant consents and the early-repayment rejection must commit
+        // before this absolute maturity; those are separate consensus blocks.
         let maturity_ms = u64::try_from(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)?
-                .checked_add(Duration::from_secs(3))
+                .checked_add(Duration::from_secs(60))
                 .ok_or_else(|| eyre!("maturity timestamp overflow"))?
                 .as_millis(),
         )
@@ -304,32 +547,13 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
     let repo_instruction = repo_instruction_template()?;
     grant_repo_consents(&client, &repo_instruction, (&BOB_ID, &BOB_KEYPAIR))?;
     let repo_instruction_box = repo_instr_box(repo_instruction);
-    let repo_tx = {
-        let account = client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                vec![repo_instruction_box],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                metadata.clone(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+    let repo_tx = quoted_transaction(&client, vec![repo_instruction_box], metadata.clone())?;
     client.submit_transaction_and_wait(&repo_tx)?;
     // Ensure duplicate agreement IDs are rejected while active.
     let duplicate_repo = repo_instruction_template()?;
     let duplicate_instruction_box = repo_instr_box(duplicate_repo);
-    let duplicate_tx = {
-        let account = client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                vec![duplicate_instruction_box],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                metadata.clone(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+    let duplicate_tx =
+        quoted_transaction(&client, vec![duplicate_instruction_box], metadata.clone())?;
     let duplicate_err = client
         .submit_transaction_and_wait(&duplicate_tx)
         .unwrap_err();
@@ -373,17 +597,11 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
     assert_eq!(*bob_collateral.value(), Quantity::from(1100_u64));
     let repo_snapshot = wait_for_repo_agreement(&client, &agreement_id, "repo maturity lookup")?;
     let future_reverse = ReverseRepoIsi::new(agreement_id.clone());
-    let future_tx = {
-        let account = client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                vec![repo_instr_box(future_reverse)],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                metadata.clone(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+    let future_tx = quoted_transaction(
+        &client,
+        vec![repo_instr_box(future_reverse)],
+        metadata.clone(),
+    )?;
     let future_err = client.submit_transaction_and_wait(&future_tx).unwrap_err();
     assert!(
         error_chain_contains(&future_err, "before its recorded maturity"),
@@ -391,27 +609,21 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
     );
     let now_ms = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())
         .expect("current timestamp fits in u64");
-    if *repo_snapshot.maturity_timestamp_ms() >= now_ms {
+    if repo_snapshot.maturity_timestamp_ms >= now_ms {
         std::thread::sleep(Duration::from_millis(
             repo_snapshot
-                .maturity_timestamp_ms()
+                .maturity_timestamp_ms
                 .saturating_sub(now_ms)
                 .saturating_add(500),
         ));
     }
     let reverse_repo_instruction = ReverseRepoIsi::new(agreement_id.clone());
     let counterparty_client = alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &client);
-    let reverse_tx = {
-        let account = counterparty_client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                vec![repo_instr_box(reverse_repo_instruction)],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                metadata.clone(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+    let reverse_tx = quoted_transaction(
+        &counterparty_client,
+        vec![repo_instr_box(reverse_repo_instruction)],
+        metadata.clone(),
+    )?;
     counterparty_client.submit_transaction_and_wait(&reverse_tx)?;
     let assets_after_reverse = wait_for_assets(
         &client,
@@ -462,7 +674,7 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
         u64::try_from(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)?
-                .checked_add(Duration::from_secs(3))
+                .checked_add(Duration::from_secs(60))
                 .expect("maturity arithmetic")
                 .as_millis(),
         )
@@ -470,17 +682,11 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
         RepoGovernance::new(1_500, 3, false),
     );
     grant_repo_consents(&client, &reopened_repo, (&BOB_ID, &BOB_KEYPAIR))?;
-    let reopened_tx = {
-        let account = client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                vec![repo_instr_box(reopened_repo)],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                metadata.clone(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+    let reopened_tx = quoted_transaction(
+        &client,
+        vec![repo_instr_box(reopened_repo)],
+        metadata.clone(),
+    )?;
     let reopened_err = client
         .submit_transaction_and_wait(&reopened_tx)
         .expect_err("settled repo identifier must remain consumed");
@@ -490,15 +696,18 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
     );
     let settled = wait_for_repo_agreement(&client, &agreement_id, "settled tombstone")?;
     assert_eq!(
-        settled.settlement_timestamp_ms(),
-        &Some(*settled.maturity_timestamp_ms())
+        &settled.settlement_timestamp_ms,
+        &Some(settled.maturity_timestamp_ms)
     );
     Ok(())
 }
 #[test]
 #[allow(clippy::too_many_lines)]
 fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
-    let Some((network, _rt)) = start_test_network() else {
+    let Some((network, _rt)) = start_test_network(stringify!(
+        repo_margin_call_enforces_cadence_and_participant_rules
+    ))?
+    else {
         return Ok(());
     };
     let client = network.client();
@@ -521,7 +730,7 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
                 __asset_definition_id.clone(),
                 "usd".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(DomainId::try_new("wonderland", "universal")?),
             )
         })
         .into(),
@@ -531,7 +740,7 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
                 __asset_definition_id.clone(),
                 "bond".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(DomainId::try_new("wonderland", "universal")?),
             )
         })
         .into(),
@@ -546,18 +755,9 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         )
         .into(),
     ];
-    let setup_tx = {
-        let account = client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                setup_instructions,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                metadata.clone(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+    let setup_tx = quoted_transaction(&client, setup_instructions, metadata.clone())?;
     client.submit_transaction_and_wait(&setup_tx)?;
+    fund_runtime_signer(&client, outsider_id.clone())?;
     let agreement_id: RepoAgreementId = "margin_repo".parse()?;
     let maturity_ms = u64::try_from(
         SystemTime::now()
@@ -584,39 +784,32 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         RepoGovernance::new(1_500, 300, false),
     );
     grant_repo_consents(&client, &repo_instruction, (&BOB_ID, &BOB_KEYPAIR))?;
-    let repo_tx = {
-        let account = client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                vec![repo_instr_box(repo_instruction)],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                metadata.clone(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+    let repo_tx = quoted_transaction(
+        &client,
+        vec![repo_instr_box(repo_instruction)],
+        metadata.clone(),
+    )?;
     client.submit_transaction_and_wait(&repo_tx)?;
     let repo_snapshot = wait_for_repo_agreement(&client, &agreement_id, "margin repo initiation")?;
-    let initial_last_margin_ms = *repo_snapshot.last_margin_check_timestamp_ms();
-    let expected_first_due = repo_snapshot
-        .next_margin_check_after(initial_last_margin_ms)
-        .expect("margin cadence configured");
+    let initial_last_margin_ms = repo_snapshot.last_margin_check_timestamp_ms;
+    let expected_first_due = initial_last_margin_ms
+        .checked_add(
+            repo_snapshot
+                .governance
+                .margin_frequency_millis()
+                .expect("margin cadence configured"),
+        )
+        .expect("margin cadence timestamp fits u64");
     assert!(
         expected_first_due > initial_last_margin_ms,
         "margin cadence should advance beyond the initiation timestamp"
     );
     let premature_err = client
-        .submit_transaction_and_wait(&{
-            let account = client.account_client();
-            account
-                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                    vec![repo_instr_box(RepoMarginCallIsi::new(agreement_id.clone()))],
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                    metadata.clone(),
-                ))
-                .and_then(|payload| account.sign_transaction(payload))
-                .expect("build integration-test transaction")
-        })
+        .submit_transaction_and_wait(&quoted_transaction(
+            &client,
+            vec![repo_instr_box(RepoMarginCallIsi::new(agreement_id.clone()))],
+            metadata.clone(),
+        )?)
         .unwrap_err();
     assert!(
         error_chain_contains(&premature_err, "margin check is not yet due"),
@@ -624,23 +817,16 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
     );
     let after_reject = wait_for_repo_agreement(&client, &agreement_id, "rejected margin call")?;
     assert_eq!(
-        *after_reject.last_margin_check_timestamp_ms(),
-        initial_last_margin_ms,
+        after_reject.last_margin_check_timestamp_ms, initial_last_margin_ms,
         "rejected margin call should not advance the schedule"
     );
     let unauthorized_client = alt_client((outsider_id.clone(), outsider_keypair), &client);
     let unauthorized_err = unauthorized_client
-        .submit_transaction_and_wait(&{
-            let account = unauthorized_client.account_client();
-            account
-                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                    vec![repo_instr_box(RepoMarginCallIsi::new(agreement_id))],
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                    metadata,
-                ))
-                .and_then(|payload| account.sign_transaction(payload))
-                .expect("build integration-test transaction")
-        })
+        .submit_transaction_and_wait(&quoted_transaction(
+            &unauthorized_client,
+            vec![repo_instr_box(RepoMarginCallIsi::new(agreement_id))],
+            metadata,
+        )?)
         .unwrap_err();
     assert!(
         error_chain_contains(
@@ -654,7 +840,9 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
-    let Some((network, _rt)) = start_test_network() else {
+    let Some((network, _rt)) =
+        start_test_network(stringify!(repo_roundtrip_with_custodian_routes_collateral))?
+    else {
         return Ok(());
     };
     let client = network.client();
@@ -677,7 +865,7 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
                 __asset_definition_id.clone(),
                 "usd".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(DomainId::try_new("wonderland", "universal")?),
             )
         })
         .into(),
@@ -687,7 +875,7 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
                 __asset_definition_id.clone(),
                 "bond".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(DomainId::try_new("wonderland", "universal")?),
             )
         })
         .into(),
@@ -702,23 +890,15 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         )
         .into(),
     ];
-    let setup_tx = {
-        let account = client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                setup_instructions,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                metadata.clone(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+    let setup_tx = quoted_transaction(&client, setup_instructions, metadata.clone())?;
     client.submit_transaction_and_wait(&setup_tx)?;
+    fund_runtime_signer(&client, custodian_id.clone())?;
     let agreement_id: RepoAgreementId = "tri_party_repo".parse()?;
+    // Reserve time for both separately signed consents before repo initiation.
     let maturity_timestamp_ms = u64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)?
-            .checked_add(Duration::from_secs(3))
+            .checked_add(Duration::from_secs(60))
             .ok_or_else(|| eyre!("maturity timestamp overflow"))?
             .as_millis(),
     )
@@ -742,17 +922,11 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         &repo_instruction,
         (&custodian_id, &custodian_keypair),
     )?;
-    let repo_tx = {
-        let account = client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                vec![repo_instr_box(repo_instruction)],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                metadata.clone(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+    let repo_tx = quoted_transaction(
+        &client,
+        vec![repo_instr_box(repo_instruction)],
+        metadata.clone(),
+    )?;
     client.submit_transaction_and_wait(&repo_tx)?;
     let alice_cash_id = AssetId::new(cash_def_id.clone(), ALICE_ID.clone());
     let bob_cash_id = AssetId::new(cash_def_id.clone(), BOB_ID.clone());
@@ -799,33 +973,27 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
     let stored_agreement =
         wait_for_repo_agreement(&client, &agreement_id, "tri-party repo initiation")?;
     assert_eq!(
-        stored_agreement.custodian(),
+        &stored_agreement.custodian,
         &Some(custodian_id.clone()),
         "custodian id should be persisted in repo agreement"
     );
     let now_ms = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())
         .expect("current timestamp fits in u64");
-    if *stored_agreement.maturity_timestamp_ms() >= now_ms {
+    if stored_agreement.maturity_timestamp_ms >= now_ms {
         std::thread::sleep(Duration::from_millis(
             stored_agreement
-                .maturity_timestamp_ms()
+                .maturity_timestamp_ms
                 .saturating_sub(now_ms)
                 .saturating_add(500),
         ));
     }
     let reverse_repo_instruction = ReverseRepoIsi::new(agreement_id.clone());
     let custodian_client = alt_client((custodian_id.clone(), custodian_keypair), &client);
-    let reverse_tx = {
-        let account = custodian_client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                vec![repo_instr_box(reverse_repo_instruction)],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                metadata.clone(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+    let reverse_tx = quoted_transaction(
+        &custodian_client,
+        vec![repo_instr_box(reverse_repo_instruction)],
+        metadata.clone(),
+    )?;
     custodian_client.submit_transaction_and_wait(&reverse_tx)?;
     let assets_after_reverse = wait_for_assets(
         &client,
@@ -865,8 +1033,8 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
     );
     let settled = wait_for_repo_agreement(&client, &agreement_id, "tri-party reverse repo")?;
     assert_eq!(
-        settled.settlement_timestamp_ms(),
-        &Some(*settled.maturity_timestamp_ms())
+        &settled.settlement_timestamp_ms,
+        &Some(settled.maturity_timestamp_ms)
     );
     Ok(())
 }

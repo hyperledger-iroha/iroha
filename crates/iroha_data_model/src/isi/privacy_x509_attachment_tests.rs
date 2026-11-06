@@ -4,9 +4,9 @@ pub(super) fn x509_reference_request() -> SubmitPrivacyZkX509CertificateV1 {
     let sample = crate::privacy::privacy_action_role_samples_v1()
         .unwrap()
         .into_iter()
-        .find(|sample| sample.envelope.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)
+        .find(|sample| sample.envelope.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1)
         .unwrap();
-    let PrivacyStatementV1::IrohaZkX509StarkP256V1(mut statement) = sample.envelope.statement
+    let PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(mut statement) = sample.envelope.statement
     else {
         unreachable!()
     };
@@ -253,7 +253,7 @@ fn x509_borrowed_profile_preserves_limits_and_exact_request_charge() {
     let sample = crate::privacy::privacy_action_role_samples_v1()
         .unwrap()
         .into_iter()
-        .find(|s| s.envelope.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)
+        .find(|s| s.envelope.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1)
         .unwrap();
     let request = x509_reference_request();
     let payload = x509_reference_payload(request.clone(), false);
@@ -281,7 +281,7 @@ fn x509_borrowed_profile_preserves_limits_and_exact_request_charge() {
     );
     assert_eq!(
         digest,
-        PrivacyStatementV1::IrohaZkX509StarkP256V1(materialized.clone())
+        PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(materialized.clone())
             .digest()
             .unwrap()
     );
@@ -331,7 +331,7 @@ fn x509_borrowed_profile_preserves_limits_and_exact_request_charge() {
     let mut tight = limits;
     tight.max_proof_bytes_per_action = 3;
     tight.max_statement_and_encrypted_output_bytes_per_transaction = u32::try_from(
-        norito::canonical_frame_len(&PrivacyStatementV1::IrohaZkX509StarkP256V1(
+        norito::canonical_frame_len(&PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(
             materialized.clone(),
         ))
         .unwrap(),
@@ -385,7 +385,7 @@ fn x509_inline_execution_is_retired_while_envelope_interchange_remains_valid() {
     let sample = crate::privacy::privacy_action_role_samples_v1()
         .unwrap()
         .into_iter()
-        .find(|s| s.envelope.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)
+        .find(|s| s.envelope.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1)
         .unwrap();
     sample
         .envelope
@@ -397,13 +397,13 @@ fn x509_inline_execution_is_retired_while_envelope_interchange_remains_valid() {
         .unwrap();
     let frame = norito::encode_canonical(&sample.envelope).unwrap();
     assert_eq!(
-        norito::decode_canonical::<PrivacyProofEnvelopeV1>(&frame).unwrap(),
+        norito::decode_canonical::<PrivacyRuntimeProofEnvelopeV1>(&frame).unwrap(),
         sample.envelope
     );
     let mut payload = x509_reference_payload(x509_reference_request(), false);
     payload.attachments = None;
     payload.instructions =
-        Executable::Instructions(vec![SubmitPrivacyProofV1::new(sample.envelope).into()].into());
+        Executable::Instructions(vec![SubmitPrivacyProofV1::new((sample.envelope).try_into().expect("frozen Exact12 test input")).into()].into());
     assert!(matches!(
         payload.privacy_transaction_intent_binding_if_present_v1(),
         Err(PrivacyTransactionIntentErrorV1::X509RequiresSignedAttachment)
@@ -449,14 +449,14 @@ fn x509_request_and_action_statement_have_exact_native_frame_layouts() {
             <= SubmitPrivacyZkX509CertificateV1::canonical_instruction_box_frame_byte_limit_v1()
     );
     // The exact replacement equation is checked independently against actual serialization.
-    let tagged = PrivacyStatementV1::IrohaZkX509StarkP256V1(request.statement.clone());
+    let tagged = PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(request.statement.clone());
     let tagged_frame = norito::canonical_frame_len(&tagged).unwrap();
     let concrete_frame = norito::canonical_frame_len(&request).unwrap();
     let request_header =
         crate::isi::framed_instruction_payload_len_for::<SubmitPrivacyZkX509CertificateV1>(0)
             .unwrap();
     let tagged_header =
-        crate::isi::framed_instruction_payload_len_for::<PrivacyStatementV1>(0).unwrap();
+        crate::isi::framed_instruction_payload_len_for::<PrivacyRuntimeStatementV1>(0).unwrap();
     assert_eq!(
         concrete_frame - request_header,
         tagged_frame - tagged_header - 4

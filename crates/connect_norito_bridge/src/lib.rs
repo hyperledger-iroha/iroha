@@ -47,7 +47,7 @@ use iroha_data_model::{
         PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
         PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1, PrivacyCapabilityArchiveValidationStatusV1,
         PrivacyCompiledProfileCatalogArchiveValidationStatusV1, PrivacyCompiledProfileCatalogV1,
-        PrivacyExact12FixtureBundleValidationStatusV1, PrivacyProtocolIdV1,
+        PrivacyExact12FixtureBundleValidationStatusV1, PrivacyRuntimeProtocolIdV1,
         privacy_exact12_fixture_bundle_bytes_v1, validate_privacy_capability_archive_v1,
         validate_privacy_exact12_fixture_bundle_v1,
     },
@@ -1073,13 +1073,16 @@ static PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_V1: OnceLock<Result<Vec<u8>, c_i
 static PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_INITIALIZATIONS_V1: AtomicU64 = AtomicU64::new(0);
 fn privacy_compiled_profile_catalog() -> Result<PrivacyCompiledProfileCatalogV1, c_int> {
     let catalog = compiled_privacy_profile_catalog_v1().map_err(|_| ERR_CONNECT_ENCODE)?;
-    debug_assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::ALL.len());
+    debug_assert_eq!(
+        catalog.protocols.len(),
+        PrivacyRuntimeProtocolIdV1::ALL.len()
+    );
     debug_assert!(
         catalog
             .protocols
             .iter()
             .map(|row| row.protocol_id)
-            .eq(PrivacyProtocolIdV1::ALL)
+            .eq(PrivacyRuntimeProtocolIdV1::ALL)
     );
     Ok(catalog)
 }
@@ -12833,13 +12836,13 @@ mod tests {
         catalog
             .validate()
             .expect("canonical compiled-profile catalog");
-        assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::COUNT);
+        assert_eq!(catalog.protocols.len(), PrivacyRuntimeProtocolIdV1::COUNT);
         assert!(
             catalog
                 .protocols
                 .iter()
                 .map(|row| row.protocol_id)
-                .eq(PrivacyProtocolIdV1::ALL)
+                .eq(PrivacyRuntimeProtocolIdV1::ALL)
         );
     }
     fn take_privacy_compiled_profile_catalog_output(
@@ -12910,7 +12913,7 @@ mod tests {
         );
         let catalog = take_privacy_compiled_profile_catalog_output(out_ptr, out_len);
         catalog.validate().expect("FFI compiled-profile catalog");
-        assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::COUNT);
+        assert_eq!(catalog.protocols.len(), PrivacyRuntimeProtocolIdV1::COUNT);
         let mut substituted = catalog;
         let profile = substituted
             .protocols

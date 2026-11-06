@@ -8,9 +8,9 @@ pub enum PrivacyProfileStatementLimitsError {
     )]
     ProtocolMismatch {
         /// Protocol encoded by the limits.
-        limits_protocol: PrivacyProtocolIdV1,
+        limits_protocol: PrivacyRuntimeProtocolIdV1,
         /// Protocol encoded by the statement.
-        statement_protocol: PrivacyProtocolIdV1,
+        statement_protocol: PrivacyRuntimeProtocolIdV1,
     },
     /// A statement count exceeds the protocol-specific maximum.
     #[error("privacy statement count {field:?} value {count} exceeds active maximum {max}")]
@@ -153,10 +153,10 @@ impl IrohaZkAmsProofV1 {
 #[norito(tag = "protocol", content = "proof", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
-    name = "iroha_data_model::privacy::PrivacyProofV1",
-    frame = "iroha.privacy.proof.v1"
+    name = "iroha_data_model::privacy::PrivacyRuntimeProofV1",
+    frame = "iroha.privacy.runtime-proof.v1"
 )]
-pub enum PrivacyProofV1 {
+pub enum PrivacyRuntimeProofV1 {
     /// ZK-ACE post-quantum authorization proof.
     ZkAcePqAuthorizationV1(PrivacyProofBytesV1),
     /// Anonymous PGC k-out-of-n payment proof.
@@ -181,28 +181,37 @@ pub enum PrivacyProofV1 {
     IrohaIvmPrivateNoteStarkV1(PrivacyProofBytesV1),
     /// Post-quantum MASP STARK proof.
     PqMaspStarkV1(PrivacyProofBytesV1),
+    /// Ironwood V3 cross-address Halo2 action proof.
+    IronwoodHalo2ActionsV1(PrivacyProofBytesV1),
 }
-impl PrivacyProofV1 {
+impl PrivacyRuntimeProofV1 {
     /// Exact protocol carried by this proof variant.
     #[must_use]
-    pub const fn protocol_id(&self) -> PrivacyProtocolIdV1 {
+    pub const fn protocol_id(&self) -> PrivacyRuntimeProtocolIdV1 {
         match self {
-            Self::ZkAcePqAuthorizationV1(_) => PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
-            Self::AnonymousPgcKOutOfNV1(_) => PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
-            Self::VeRangeTransparentRangeV1(_) => PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
-            Self::IrohaZkAmsV1(_) => PrivacyProtocolIdV1::IrohaZkAmsV1,
-            Self::VegaExistingCredentialZkV1(_) => PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
-            Self::IrohaZkX509StarkP256V1(_) => PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            Self::ZkAcePqAuthorizationV1(_) => PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1,
+            Self::AnonymousPgcKOutOfNV1(_) => PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
+            Self::VeRangeTransparentRangeV1(_) => {
+                PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1
+            }
+            Self::IrohaZkAmsV1(_) => PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1,
+            Self::VegaExistingCredentialZkV1(_) => {
+                PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1
+            }
+            Self::IrohaZkX509StarkP256V1(_) => PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
             Self::IrohaJindoPolynomialCommitmentV1(_) => {
-                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
+                PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1
             }
             Self::IrohaBootleLanternAnoncredV1(_) => {
-                PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
+                PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1
             }
-            Self::OrchardHalo2ActionsV1(_) => PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
-            Self::MoneroFcmpPlusPlusV1(_) => PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
-            Self::IrohaIvmPrivateNoteStarkV1(_) => PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-            Self::PqMaspStarkV1(_) => PrivacyProtocolIdV1::PqMaspStarkV1,
+            Self::OrchardHalo2ActionsV1(_) => PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
+            Self::IronwoodHalo2ActionsV1(_) => PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1,
+            Self::MoneroFcmpPlusPlusV1(_) => PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1,
+            Self::IrohaIvmPrivateNoteStarkV1(_) => {
+                PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1
+            }
+            Self::PqMaspStarkV1(_) => PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
         }
     }
     /// Borrow the protocol-specific native proof payload.
@@ -217,6 +226,7 @@ impl PrivacyProofV1 {
             | Self::IrohaJindoPolynomialCommitmentV1(bytes)
             | Self::IrohaBootleLanternAnoncredV1(bytes)
             | Self::OrchardHalo2ActionsV1(bytes)
+            | Self::IronwoodHalo2ActionsV1(bytes)
             | Self::MoneroFcmpPlusPlusV1(bytes)
             | Self::IrohaIvmPrivateNoteStarkV1(bytes)
             | Self::PqMaspStarkV1(bytes) => bytes,
@@ -238,6 +248,7 @@ impl PrivacyProofV1 {
             | Self::IrohaJindoPolynomialCommitmentV1(bytes)
             | Self::IrohaBootleLanternAnoncredV1(bytes)
             | Self::OrchardHalo2ActionsV1(bytes)
+            | Self::IronwoodHalo2ActionsV1(bytes)
             | Self::MoneroFcmpPlusPlusV1(bytes)
             | Self::IrohaIvmPrivateNoteStarkV1(bytes)
             | Self::PqMaspStarkV1(bytes) => bytes,
@@ -1002,16 +1013,19 @@ pub enum PrivacyProofValidationError {
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
-    name = "iroha_data_model::privacy::PrivacyProofEnvelopeV1",
-    frame = "iroha.privacy.proof-envelope.v1"
+    name = "iroha_data_model::privacy::PrivacyRuntimeProofEnvelopeV1",
+    frame = "iroha.privacy.runtime-proof-envelope.v1"
 )]
-pub struct PrivacyProofEnvelopeV1 {
+pub struct PrivacyRuntimeProofEnvelopeV1 {
     /// Mandatory first-release wire marker; invalid markers fail decoding.
     pub wire_magic: PrivacyProofWireMagicV1,
-    /// Commitment to the final ordered Exact12 catalog and security models.
+    /// Commitment to the immutable base Exact12 catalog and security models.
+    ///
+    /// Additive protocols bind their separate protocol and profile identities without changing
+    /// this deployed field; the base commitment does not activate an extension.
     pub catalog_commitment: PrivacyExact12CatalogCommitmentV1,
     /// Exact protocol identity.
-    pub protocol_id: PrivacyProtocolIdV1,
+    pub protocol_id: PrivacyRuntimeProtocolIdV1,
     /// Exact proof-system profile.
     pub proof_system_id: PrivacyProofSystemIdV1,
     /// Exact native verifier engine.
@@ -1029,11 +1043,11 @@ pub struct PrivacyProofEnvelopeV1 {
     /// Digest of the complete protocol-tagged statement.
     pub statement_digest: PrivacyStatementDigestV1,
     /// Protocol-typed public statement.
-    pub statement: PrivacyStatementV1,
+    pub statement: PrivacyRuntimeStatementV1,
     /// Protocol-typed proof bytes.
-    pub proof: PrivacyProofV1,
+    pub proof: PrivacyRuntimeProofV1,
 }
-impl PrivacyProofEnvelopeV1 {
+impl PrivacyRuntimeProofEnvelopeV1 {
     /// Validate internal protocol bindings and resource limits.
     ///
     /// This validates only the envelope's intrinsic shape. Chain admission must
@@ -1145,7 +1159,8 @@ impl PrivacyProofEnvelopeV1 {
         &self,
         limits: &PrivacyConsensusLimitsV1,
     ) -> Result<(), PrivacyProofEnvelopeValidationError> {
-        let encoded_len = norito::canonical_frame_len(self)
+        let encoded_len = self
+            .canonical_wire_frame_len_v1()
             .map_err(|_| PrivacyProofEnvelopeValidationError::EncodingFailure)?;
         let encoded_len = u64::try_from(encoded_len)
             .map_err(|_| PrivacyProofEnvelopeValidationError::EncodedLengthOverflow)?;
@@ -1171,7 +1186,7 @@ impl PrivacyProofEnvelopeV1 {
     pub fn validate_against_profile_v1(
         &self,
         profile: &PrivacyCompiledProfileSnapshotV1,
-        protocol_limits: &PrivacyProtocolLimitsV1,
+        protocol_limits: &PrivacyRuntimeProtocolLimitsV1,
         consensus_limits: &PrivacyConsensusLimitsV1,
     ) -> Result<(), PrivacyProofEnvelopeValidationError> {
         // Preserve envelope-header failure precedence; intrinsic validation below
@@ -1203,7 +1218,7 @@ impl PrivacyProofEnvelopeV1 {
 /// Shared canonical semantic profile identity checks for envelopes and borrowed attached statements.
 pub(crate) fn validate_privacy_profile_identity_v1(
     profile: &PrivacyCompiledProfileSnapshotV1,
-    protocol_id: PrivacyProtocolIdV1,
+    protocol_id: PrivacyRuntimeProtocolIdV1,
     proof_system_id: PrivacyProofSystemIdV1,
     engine_id: PrivacyEngineIdV1,
     context: &PrivacyStatementContextV1,
@@ -1276,17 +1291,17 @@ pub enum PrivacyProofEnvelopeValidationError {
     #[error("privacy envelope protocol {envelope:?} differs from statement protocol {statement:?}")]
     StatementProtocolMismatch {
         /// Envelope protocol.
-        envelope: PrivacyProtocolIdV1,
+        envelope: PrivacyRuntimeProtocolIdV1,
         /// Statement variant protocol.
-        statement: PrivacyProtocolIdV1,
+        statement: PrivacyRuntimeProtocolIdV1,
     },
     /// Envelope and proof protocol variants differ.
     #[error("privacy envelope protocol {envelope:?} differs from proof protocol {proof:?}")]
     ProofProtocolMismatch {
         /// Envelope protocol.
-        envelope: PrivacyProtocolIdV1,
+        envelope: PrivacyRuntimeProtocolIdV1,
         /// Proof variant protocol.
-        proof: PrivacyProtocolIdV1,
+        proof: PrivacyRuntimeProtocolIdV1,
     },
     /// ZK-AMS statement action and typed proof action differ.
     #[error("ZK-AMS statement action and proof variant differ")]
@@ -1367,9 +1382,9 @@ pub enum PrivacyProofEnvelopeValidationError {
     #[error("privacy profile protocol {profile:?} differs from envelope protocol {envelope:?}")]
     ProfileProtocolMismatch {
         /// Governed protocol.
-        profile: PrivacyProtocolIdV1,
+        profile: PrivacyRuntimeProtocolIdV1,
         /// Envelope protocol.
-        envelope: PrivacyProtocolIdV1,
+        envelope: PrivacyRuntimeProtocolIdV1,
     },
     /// Governed and envelope proof systems differ.
     #[error(
@@ -1433,7 +1448,7 @@ mod exact12_fixture {
         num::{NonZeroU32, NonZeroU64},
         str::FromStr as _,
     };
-    const _: [(); 12] = [(); PrivacyProtocolIdV1::COUNT];
+    const _: [(); 12] = [(); PrivacyRuntimeProtocolIdV1::EXACT12_COUNT];
     const EXACT12_CANONICAL_HEADER_V1: [&str; 4] = [
         "# Iroha first-release privacy parity matrix v1.",
         "# UTF-8, LF only, tab-separated, no aliases and no extension rows.",
@@ -1645,8 +1660,8 @@ mod exact12_fixture {
             seed_public_key: zk_ams_seed_key(seed.wrapping_add(32)),
         }
     }
-    pub(super) fn zk_ams_provision_statement(ring_size: u8) -> PrivacyStatementV1 {
-        PrivacyStatementV1::IrohaZkAmsV1(IrohaZkAmsStatementV1 {
+    pub(super) fn zk_ams_provision_statement(ring_size: u8) -> PrivacyRuntimeStatementV1 {
+        PrivacyRuntimeStatementV1::IrohaZkAmsV1(IrohaZkAmsStatementV1 {
             context: context(),
             issuer_id: PrivacyIssuerIdV1::new(raw(40)),
             issuer_public_key: p256_point(42),
@@ -1785,9 +1800,11 @@ mod exact12_fixture {
             .computed_record_digest()
             .expect("test issuer-policy digest");
     }
-    fn sample_authorization_statements(asset: &AssetDefinitionId) -> [PrivacyStatementV1; 5] {
+    fn sample_authorization_statements(
+        asset: &AssetDefinitionId,
+    ) -> [PrivacyRuntimeStatementV1; 5] {
         [
-            PrivacyStatementV1::ZkAcePqAuthorizationV1(ZkAcePqAuthorizationStatementV1 {
+            PrivacyRuntimeStatementV1::ZkAcePqAuthorizationV1(ZkAcePqAuthorizationStatementV1 {
                 context: context(),
                 identity_commitment: zk_ace_identity_commitment(10),
                 policy_id: PrivacyPolicyIdV1::new(raw(11)),
@@ -1800,7 +1817,7 @@ mod exact12_fixture {
                 authorization_epoch: 7,
                 replay_nullifier: zk_ace_replay_nullifier(15),
             }),
-            PrivacyStatementV1::AnonymousPgcKOutOfNV1(AnonymousPgcKOutOfNStatementV1 {
+            PrivacyRuntimeStatementV1::AnonymousPgcKOutOfNV1(AnonymousPgcKOutOfNStatementV1 {
                 context: context(),
                 asset_definition_id: asset.clone(),
                 pool_id: PrivacyPoolIdV1::new(raw(20)),
@@ -1812,15 +1829,17 @@ mod exact12_fixture {
                 transfer_ciphertexts: (1..=16).map(p256_ciphertext).collect(),
                 recipient_count: 2,
             }),
-            PrivacyStatementV1::VeRangeTransparentRangeV1(VeRangeTransparentRangeStatementV1 {
-                context: context(),
-                asset_definition_id: asset.clone(),
-                policy_id: PrivacyPolicyIdV1::new(raw(35)),
-                value_commitments: vec![p256_point(36), p256_point(37)],
-                bit_length: PrivacyVeRangeBitLengthV1::Bits32,
-                aggregation_count: 2,
-            }),
-            PrivacyStatementV1::IrohaZkAmsV1(IrohaZkAmsStatementV1 {
+            PrivacyRuntimeStatementV1::VeRangeTransparentRangeV1(
+                VeRangeTransparentRangeStatementV1 {
+                    context: context(),
+                    asset_definition_id: asset.clone(),
+                    policy_id: PrivacyPolicyIdV1::new(raw(35)),
+                    value_commitments: vec![p256_point(36), p256_point(37)],
+                    bit_length: PrivacyVeRangeBitLengthV1::Bits32,
+                    aggregation_count: 2,
+                },
+            ),
+            PrivacyRuntimeStatementV1::IrohaZkAmsV1(IrohaZkAmsStatementV1 {
                 context: context(),
                 issuer_id: PrivacyIssuerIdV1::new(raw(40)),
                 issuer_public_key: p256_point(42),
@@ -1837,32 +1856,38 @@ mod exact12_fixture {
                     anchors: vec![zk_ams_anchor(44), zk_ams_anchor(45)],
                 }),
             }),
-            PrivacyStatementV1::VegaExistingCredentialZkV1(VegaExistingCredentialStatementV1 {
-                context: context(),
-                issuer_id: PrivacyIssuerIdV1::new(raw(49)),
-                issuer_record_epoch: 3,
-                issuer_record_digest: PrivacyVegaIssuerRecordDigestV1::new(raw(51)),
-                document_type: PrivacyCredentialDocumentTypeV1::Iso18013_5Mdl,
-                namespace: PrivacyVegaMdlNamespaceV1::OrgIso18013_5_1,
-                digest_algorithm: PrivacyVegaMdlDigestAlgorithmV1::Sha256,
-                issuer_authentication_algorithm: PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
-                device_authentication_algorithm: PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
-                issuer_public_key: p256_point(50),
-                device_authentication_digest: PrivacyVegaDeviceAuthenticationDigestV1::new(raw(57)),
-                presentation_date: PrivacyVegaMdlDateV1 {
-                    year: 2_026,
-                    month: 7,
-                    day: 26,
+            PrivacyRuntimeStatementV1::VegaExistingCredentialZkV1(
+                VegaExistingCredentialStatementV1 {
+                    context: context(),
+                    issuer_id: PrivacyIssuerIdV1::new(raw(49)),
+                    issuer_record_epoch: 3,
+                    issuer_record_digest: PrivacyVegaIssuerRecordDigestV1::new(raw(51)),
+                    document_type: PrivacyCredentialDocumentTypeV1::Iso18013_5Mdl,
+                    namespace: PrivacyVegaMdlNamespaceV1::OrgIso18013_5_1,
+                    digest_algorithm: PrivacyVegaMdlDigestAlgorithmV1::Sha256,
+                    issuer_authentication_algorithm:
+                        PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
+                    device_authentication_algorithm:
+                        PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
+                    issuer_public_key: p256_point(50),
+                    device_authentication_digest: PrivacyVegaDeviceAuthenticationDigestV1::new(
+                        raw(57),
+                    ),
+                    presentation_date: PrivacyVegaMdlDateV1 {
+                        year: 2_026,
+                        month: 7,
+                        day: 26,
+                    },
+                    minimum_age_years: 18,
+                    reader_challenge: PrivacyChallengeV1::new(raw(58)),
+                    session_transcript_digest: PrivacySessionTranscriptDigestV1::new(raw(59)),
                 },
-                minimum_age_years: 18,
-                reader_challenge: PrivacyChallengeV1::new(raw(58)),
-                session_transcript_digest: PrivacySessionTranscriptDigestV1::new(raw(59)),
-            }),
+            ),
         ]
     }
-    fn sample_identity_statements() -> [PrivacyStatementV1; 3] {
+    fn sample_identity_statements() -> [PrivacyRuntimeStatementV1; 3] {
         [
-            PrivacyStatementV1::IrohaZkX509StarkP256V1(IrohaZkX509StarkP256StatementV1 {
+            PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(IrohaZkX509StarkP256StatementV1 {
                 context: context(),
                 trust_anchor_id: PrivacyIssuerIdV1::new(raw(61)),
                 certificate_policy_id: PrivacyPolicyIdV1::new(raw(62)),
@@ -1903,7 +1928,7 @@ mod exact12_fixture {
                 wallet_challenge: PrivacyChallengeV1::new(raw(67)),
                 certificate_nullifier: nullifier(68),
             }),
-            PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(
+            PrivacyRuntimeStatementV1::IrohaJindoPolynomialCommitmentV1(
                 IrohaJindoPolynomialCommitmentStatementV1 {
                     context: context(),
                     polynomial_commitments: (70..74).map(jindo_commitment).collect(),
@@ -1911,7 +1936,7 @@ mod exact12_fixture {
                     claimed_evaluations: (4..8).map(jindo_field).collect(),
                 },
             ),
-            PrivacyStatementV1::IrohaBootleLanternAnoncredV1(
+            PrivacyRuntimeStatementV1::IrohaBootleLanternAnoncredV1(
                 IrohaBootleLanternAnoncredStatementV1 {
                     context: context(),
                     issuer_id: PrivacyIssuerIdV1::new(raw(72)),
@@ -1936,9 +1961,9 @@ mod exact12_fixture {
             ),
         ]
     }
-    fn sample_pool_statements(asset: &AssetDefinitionId) -> [PrivacyStatementV1; 4] {
+    fn sample_pool_statements(asset: &AssetDefinitionId) -> [PrivacyRuntimeStatementV1; 4] {
         [
-            PrivacyStatementV1::OrchardHalo2ActionsV1(OrchardHalo2ActionsStatementV1 {
+            PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(OrchardHalo2ActionsStatementV1 {
                 context: context(),
                 asset_definition_id: asset.clone(),
                 public_balance_scope: AssetBalanceScope::Global,
@@ -1949,7 +1974,7 @@ mod exact12_fixture {
                 value_balance: PrivacyValueBalanceV1::balanced(),
                 expiry_height: 10_000,
             }),
-            PrivacyStatementV1::MoneroFcmpPlusPlusV1({
+            PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1({
                 let output = fcmp_output(91);
                 MoneroFcmpPlusPlusStatementV1 {
                     context: context(),
@@ -1965,7 +1990,7 @@ mod exact12_fixture {
                     encrypted_outputs: vec![fcmp_encrypted_output(output, 92)],
                 }
             }),
-            PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1({
+            PrivacyRuntimeStatementV1::IrohaIvmPrivateNoteStarkV1({
                 let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
                     context: context(),
                     asset_definition_id: asset.clone(),
@@ -1986,7 +2011,7 @@ mod exact12_fixture {
                     .expect("compute private-IVM fixture action digest");
                 statement
             }),
-            PrivacyStatementV1::PqMaspStarkV1(PqMaspStarkStatementV1 {
+            PrivacyRuntimeStatementV1::PqMaspStarkV1(PqMaspStarkStatementV1 {
                 context: context(),
                 asset_definition_id: asset.clone(),
                 pool_id: PrivacyPoolIdV1::new(raw(101)),
@@ -2004,114 +2029,137 @@ mod exact12_fixture {
             }),
         ]
     }
-    pub(super) fn sample_statements() -> Vec<PrivacyStatementV1> {
+    pub(super) fn sample_statements() -> Vec<PrivacyRuntimeStatementV1> {
         let asset = asset_definition_id();
-        let mut statements = Vec::with_capacity(PrivacyProtocolIdV1::COUNT);
+        let mut statements = Vec::with_capacity(PrivacyRuntimeProtocolIdV1::EXACT12_COUNT);
         statements.extend(sample_authorization_statements(&asset));
         statements.extend(sample_identity_statements());
         statements.extend(sample_pool_statements(&asset));
         statements
     }
     #[cfg(test)]
-    pub(super) fn statement_for(protocol: PrivacyProtocolIdV1) -> PrivacyStatementV1 {
+    pub(super) fn statement_for(protocol: PrivacyRuntimeProtocolIdV1) -> PrivacyRuntimeStatementV1 {
+        if protocol == PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1 {
+            let PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement) =
+                statement_for(PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1)
+            else {
+                unreachable!("Orchard fixture has its typed variant")
+            };
+            return PrivacyRuntimeStatementV1::IronwoodHalo2ActionsV1(statement);
+        }
         sample_statements()
             .into_iter()
             .find(|statement| statement.protocol_id() == protocol)
             .expect("sample statement for every protocol")
     }
-    pub(super) fn proof_for(protocol: PrivacyProtocolIdV1) -> PrivacyProofV1 {
+    pub(super) fn proof_for(protocol: PrivacyRuntimeProtocolIdV1) -> PrivacyRuntimeProofV1 {
         let bytes = PrivacyProofBytesV1::new(vec![0xA5, 0x5A, 1]);
         match protocol {
-            PrivacyProtocolIdV1::ZkAcePqAuthorizationV1 => {
-                PrivacyProofV1::ZkAcePqAuthorizationV1(bytes)
+            PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1 => {
+                PrivacyRuntimeProofV1::ZkAcePqAuthorizationV1(bytes)
             }
-            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 => {
-                PrivacyProofV1::AnonymousPgcKOutOfNV1(bytes)
+            PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1 => {
+                PrivacyRuntimeProofV1::AnonymousPgcKOutOfNV1(bytes)
             }
-            PrivacyProtocolIdV1::VeRangeTransparentRangeV1 => {
-                PrivacyProofV1::VeRangeTransparentRangeV1(bytes)
+            PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1 => {
+                PrivacyRuntimeProofV1::VeRangeTransparentRangeV1(bytes)
             }
-            PrivacyProtocolIdV1::IrohaZkAmsV1 => PrivacyProofV1::IrohaZkAmsV1(
+            PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1 => PrivacyRuntimeProofV1::IrohaZkAmsV1(
                 IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(bytes),
             ),
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV1 => {
-                PrivacyProofV1::VegaExistingCredentialZkV1(bytes)
+            PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1 => {
+                PrivacyRuntimeProofV1::VegaExistingCredentialZkV1(bytes)
             }
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 => {
-                PrivacyProofV1::IrohaZkX509StarkP256V1(bytes)
+            PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 => {
+                PrivacyRuntimeProofV1::IrohaZkX509StarkP256V1(bytes)
             }
-            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1 => {
-                PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(bytes)
+            PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1 => {
+                PrivacyRuntimeProofV1::IrohaJindoPolynomialCommitmentV1(bytes)
             }
-            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => {
-                PrivacyProofV1::IrohaBootleLanternAnoncredV1(bytes)
+            PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1 => {
+                PrivacyRuntimeProofV1::IrohaBootleLanternAnoncredV1(bytes)
             }
-            PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => {
-                PrivacyProofV1::OrchardHalo2ActionsV1(bytes)
+            PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1 => {
+                PrivacyRuntimeProofV1::OrchardHalo2ActionsV1(bytes)
             }
-            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1 => {
-                PrivacyProofV1::MoneroFcmpPlusPlusV1(bytes)
+            PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1 => {
+                PrivacyRuntimeProofV1::IronwoodHalo2ActionsV1(bytes)
             }
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
-                PrivacyProofV1::IrohaIvmPrivateNoteStarkV1(bytes)
+            PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1 => {
+                PrivacyRuntimeProofV1::MoneroFcmpPlusPlusV1(bytes)
             }
-            PrivacyProtocolIdV1::PqMaspStarkV1 => PrivacyProofV1::PqMaspStarkV1(bytes),
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
+                PrivacyRuntimeProofV1::IrohaIvmPrivateNoteStarkV1(bytes)
+            }
+            PrivacyRuntimeProtocolIdV1::PqMaspStarkV1 => {
+                PrivacyRuntimeProofV1::PqMaspStarkV1(bytes)
+            }
         }
     }
-    pub(super) fn statement_variant_name(statement: &PrivacyStatementV1) -> &'static str {
+    pub(super) fn statement_variant_name(statement: &PrivacyRuntimeStatementV1) -> &'static str {
         match statement {
-            PrivacyStatementV1::ZkAcePqAuthorizationV1(_) => "ZkAcePqAuthorizationV1",
-            PrivacyStatementV1::AnonymousPgcKOutOfNV1(_) => "AnonymousPgcKOutOfNV1",
-            PrivacyStatementV1::VeRangeTransparentRangeV1(_) => "VeRangeTransparentRangeV1",
-            PrivacyStatementV1::IrohaZkAmsV1(_) => "IrohaZkAmsV1",
-            PrivacyStatementV1::VegaExistingCredentialZkV1(_) => "VegaExistingCredentialZkV1",
-            PrivacyStatementV1::IrohaZkX509StarkP256V1(_) => "IrohaZkX509StarkP256V1",
-            PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(_) => {
+            PrivacyRuntimeStatementV1::ZkAcePqAuthorizationV1(_) => "ZkAcePqAuthorizationV1",
+            PrivacyRuntimeStatementV1::AnonymousPgcKOutOfNV1(_) => "AnonymousPgcKOutOfNV1",
+            PrivacyRuntimeStatementV1::VeRangeTransparentRangeV1(_) => "VeRangeTransparentRangeV1",
+            PrivacyRuntimeStatementV1::IrohaZkAmsV1(_) => "IrohaZkAmsV1",
+            PrivacyRuntimeStatementV1::VegaExistingCredentialZkV1(_) => {
+                "VegaExistingCredentialZkV1"
+            }
+            PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(_) => "IrohaZkX509StarkP256V1",
+            PrivacyRuntimeStatementV1::IrohaJindoPolynomialCommitmentV1(_) => {
                 "IrohaJindoPolynomialCommitmentV1"
             }
-            PrivacyStatementV1::IrohaBootleLanternAnoncredV1(_) => "IrohaBootleLanternAnoncredV1",
-            PrivacyStatementV1::OrchardHalo2ActionsV1(_) => "OrchardHalo2ActionsV1",
-            PrivacyStatementV1::MoneroFcmpPlusPlusV1(_) => "MoneroFcmpPlusPlusV1",
-            PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(_) => "IrohaIvmPrivateNoteStarkV1",
-            PrivacyStatementV1::PqMaspStarkV1(_) => "PqMaspStarkV1",
+            PrivacyRuntimeStatementV1::IrohaBootleLanternAnoncredV1(_) => {
+                "IrohaBootleLanternAnoncredV1"
+            }
+            PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(_) => "OrchardHalo2ActionsV1",
+            PrivacyRuntimeStatementV1::IronwoodHalo2ActionsV1(_) => "IronwoodHalo2ActionsV1",
+            PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1(_) => "MoneroFcmpPlusPlusV1",
+            PrivacyRuntimeStatementV1::IrohaIvmPrivateNoteStarkV1(_) => {
+                "IrohaIvmPrivateNoteStarkV1"
+            }
+            PrivacyRuntimeStatementV1::PqMaspStarkV1(_) => "PqMaspStarkV1",
         }
     }
-    pub(super) fn proof_variant_name(proof: &PrivacyProofV1) -> &'static str {
+    pub(super) fn proof_variant_name(proof: &PrivacyRuntimeProofV1) -> &'static str {
         match proof {
-            PrivacyProofV1::ZkAcePqAuthorizationV1(_) => "ZkAcePqAuthorizationV1",
-            PrivacyProofV1::AnonymousPgcKOutOfNV1(_) => "AnonymousPgcKOutOfNV1",
-            PrivacyProofV1::VeRangeTransparentRangeV1(_) => "VeRangeTransparentRangeV1",
-            PrivacyProofV1::IrohaZkAmsV1(_) => "IrohaZkAmsV1",
-            PrivacyProofV1::VegaExistingCredentialZkV1(_) => "VegaExistingCredentialZkV1",
-            PrivacyProofV1::IrohaZkX509StarkP256V1(_) => "IrohaZkX509StarkP256V1",
-            PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(_) => {
+            PrivacyRuntimeProofV1::ZkAcePqAuthorizationV1(_) => "ZkAcePqAuthorizationV1",
+            PrivacyRuntimeProofV1::AnonymousPgcKOutOfNV1(_) => "AnonymousPgcKOutOfNV1",
+            PrivacyRuntimeProofV1::VeRangeTransparentRangeV1(_) => "VeRangeTransparentRangeV1",
+            PrivacyRuntimeProofV1::IrohaZkAmsV1(_) => "IrohaZkAmsV1",
+            PrivacyRuntimeProofV1::VegaExistingCredentialZkV1(_) => "VegaExistingCredentialZkV1",
+            PrivacyRuntimeProofV1::IrohaZkX509StarkP256V1(_) => "IrohaZkX509StarkP256V1",
+            PrivacyRuntimeProofV1::IrohaJindoPolynomialCommitmentV1(_) => {
                 "IrohaJindoPolynomialCommitmentV1"
             }
-            PrivacyProofV1::IrohaBootleLanternAnoncredV1(_) => "IrohaBootleLanternAnoncredV1",
-            PrivacyProofV1::OrchardHalo2ActionsV1(_) => "OrchardHalo2ActionsV1",
-            PrivacyProofV1::MoneroFcmpPlusPlusV1(_) => "MoneroFcmpPlusPlusV1",
-            PrivacyProofV1::IrohaIvmPrivateNoteStarkV1(_) => "IrohaIvmPrivateNoteStarkV1",
-            PrivacyProofV1::PqMaspStarkV1(_) => "PqMaspStarkV1",
+            PrivacyRuntimeProofV1::IrohaBootleLanternAnoncredV1(_) => {
+                "IrohaBootleLanternAnoncredV1"
+            }
+            PrivacyRuntimeProofV1::OrchardHalo2ActionsV1(_) => "OrchardHalo2ActionsV1",
+            PrivacyRuntimeProofV1::IronwoodHalo2ActionsV1(_) => "IronwoodHalo2ActionsV1",
+            PrivacyRuntimeProofV1::MoneroFcmpPlusPlusV1(_) => "MoneroFcmpPlusPlusV1",
+            PrivacyRuntimeProofV1::IrohaIvmPrivateNoteStarkV1(_) => "IrohaIvmPrivateNoteStarkV1",
+            PrivacyRuntimeProofV1::PqMaspStarkV1(_) => "PqMaspStarkV1",
         }
     }
     fn try_envelope(
-        statement: PrivacyStatementV1,
-    ) -> Result<PrivacyProofEnvelopeV1, PrivacyProofEnvelopeValidationError> {
+        statement: PrivacyRuntimeStatementV1,
+    ) -> Result<PrivacyRuntimeProofEnvelopeV1, PrivacyProofEnvelopeValidationError> {
         let proof = match &statement {
-            PrivacyStatementV1::IrohaZkAmsV1(IrohaZkAmsStatementV1 {
+            PrivacyRuntimeStatementV1::IrohaZkAmsV1(IrohaZkAmsStatementV1 {
                 action: PrivacyZkAmsActionV1::ProvisionAccount(_),
                 ..
-            }) => {
-                PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
-                    PrivacyProofBytesV1::new(vec![0xA5, 0x5A, 1]),
-                ))
-            }
+            }) => PrivacyRuntimeProofV1::IrohaZkAmsV1(
+                IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(PrivacyProofBytesV1::new(
+                    vec![0xA5, 0x5A, 1],
+                )),
+            ),
             _ => proof_for(statement.protocol_id()),
         };
-        PrivacyProofEnvelopeV1::bind_v1(statement, proof)
+        PrivacyRuntimeProofEnvelopeV1::bind_v1(statement, proof)
     }
     #[cfg(test)]
-    pub(super) fn envelope(statement: PrivacyStatementV1) -> PrivacyProofEnvelopeV1 {
+    pub(super) fn envelope(statement: PrivacyRuntimeStatementV1) -> PrivacyRuntimeProofEnvelopeV1 {
         try_envelope(statement).expect("fixture statement has a canonical digest")
     }
     /// One compiled semantic row of the canonical exact-12 cross-SDK fixture.
@@ -2122,7 +2170,7 @@ mod exact12_fixture {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct PrivacyExact12TypedEnvelopeRowV1 {
         /// Closed protocol identity in canonical discriminant order.
-        pub protocol_id: PrivacyProtocolIdV1,
+        pub protocol_id: PrivacyRuntimeProtocolIdV1,
         /// Actual typed statement variant selected for the sample.
         pub statement_variant: &'static str,
         /// Actual typed proof variant selected for the sample envelope.
@@ -2146,7 +2194,7 @@ mod exact12_fixture {
     )]
     pub struct PrivacyExact12TypedFixtureRowV1 {
         /// Closed protocol identity in canonical discriminant order.
-        pub protocol_id: PrivacyProtocolIdV1,
+        pub protocol_id: PrivacyRuntimeProtocolIdV1,
         /// Complete canonical [`PrivacyStatementV1`] bytes.
         pub statement_norito: Vec<u8>,
         /// Complete canonical [`PrivacyProofEnvelopeV1`] bytes.
@@ -2179,7 +2227,7 @@ mod exact12_fixture {
     pub struct PrivacyExact12FixtureBundleV1 {
         /// Exact first-release bundle version.
         pub version: u32,
-        /// Twelve rows in [`PrivacyProtocolIdV1::ALL`] order.
+        /// Twelve rows in [`PrivacyProtocolIdV1::EXACT12_PROTOCOLS`] order.
         pub rows: Vec<PrivacyExact12TypedFixtureRowV1>,
     }
     /// Maximum accepted encoded size of the complete exact-12 fixture bundle.
@@ -2245,6 +2293,9 @@ mod exact12_fixture {
         /// Deterministic transaction construction or signature validation failed.
         #[error("exact12 deterministic transaction fixture failed: {0}")]
         Transaction(String),
+        /// A fixture attempted to leave the original closed instruction grammar.
+        #[error("exact12 fixture wire grammar mismatch: {0}")]
+        WireGrammar(#[from] Exact12PrivacyWireError),
     }
     struct PrivacyExact12CompleteRowV1 {
         submit_proof_wire_id: &'static str,
@@ -2305,10 +2356,10 @@ mod exact12_fixture {
         Ok(submission)
     }
     fn exact12_complete_row_v1(
-        statement: PrivacyStatementV1,
+        statement: PrivacyRuntimeStatementV1,
         row_index: usize,
     ) -> Result<PrivacyExact12CompleteRowV1, PrivacyExact12FixtureErrorV1> {
-        if let PrivacyStatementV1::IrohaZkX509StarkP256V1(statement) = statement {
+        if let PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement) = statement {
             return exact12_x509_complete_row_v1(statement, row_index);
         }
         let envelope = try_envelope(statement)?;
@@ -2336,7 +2387,14 @@ mod exact12_fixture {
                     )
                 })?,
             instructions: Executable::Instructions(
-                vec![InstructionBox::from(SubmitPrivacyProofV1::new(envelope))].into(),
+                vec![InstructionBox::from(SubmitPrivacyProofV1::new(
+                    envelope.try_into().map_err(|_| {
+                        PrivacyExact12FixtureErrorV1::Transaction(
+                            "fixture is outside frozen Exact12 grammar".into(),
+                        )
+                    })?,
+                ))]
+                .into(),
             ),
             time_to_live_ms: NonZeroU64::new(60_000),
             nonce: Some(nonce),
@@ -2399,7 +2457,7 @@ mod exact12_fixture {
                 slot_index: 0,
             },
         );
-        let proof = proof_for(PrivacyProtocolIdV1::IrohaZkX509StarkP256V1);
+        let proof = proof_for(PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1);
         let mut plan = SignedAttachmentPlanV1::new();
         plan.push_action(PlannedActionV1 {
             operation: ActionOperationV1::NativeInstruction(
@@ -2457,8 +2515,8 @@ mod exact12_fixture {
             .materialize_statement_v1(action, intent, &PrivacyConsensusLimitsV1::taira_default())
             .map_err(|e| failure(e.to_string()))?;
         let transaction_intent_digest = *materialized.context.transaction_intent_digest.as_bytes();
-        let statement = PrivacyStatementV1::IrohaZkX509StarkP256V1(materialized);
-        let envelope = PrivacyProofEnvelopeV1::bind_v1(statement.clone(), proof)?;
+        let statement = PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(materialized);
+        let envelope = PrivacyRuntimeProofEnvelopeV1::bind_v1(statement.clone(), proof)?;
         let unsigned_transaction_payload_norito = TransactionBuilder::from_payload(payload.clone())
             .map_err(|e| failure(e.to_string()))?
             .encode_payload();
@@ -2471,8 +2529,8 @@ mod exact12_fixture {
             .map_err(|e| failure(e.to_string()))?;
         Ok(PrivacyExact12CompleteRowV1 {
             submit_proof_wire_id: SubmitPrivacyZkX509CertificateV1::WIRE_ID,
-            statement,
-            envelope,
+            statement: statement.try_into()?,
+            envelope: envelope.try_into()?,
             submit_proof_instruction_norito: norito::encode_canonical(&request)?,
             transaction_intent_projection_norito: norito::encode_canonical(&action_statement)?,
             transaction_intent_digest,
@@ -2482,61 +2540,68 @@ mod exact12_fixture {
         })
     }
     /// Maximum governed limits of one protocol, for ordinary committed policy.
-    pub(super) fn sample_protocol_limits(protocol: PrivacyProtocolIdV1) -> PrivacyProtocolLimitsV1 {
+    pub(super) fn sample_protocol_limits(
+        protocol: PrivacyRuntimeProtocolIdV1,
+    ) -> PrivacyRuntimeProtocolLimitsV1 {
         match protocol {
-            PrivacyProtocolIdV1::ZkAcePqAuthorizationV1 => {
-                PrivacyProtocolLimitsV1::ZkAcePqAuthorizationV1
+            PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1 => {
+                PrivacyRuntimeProtocolLimitsV1::ZkAcePqAuthorizationV1
             }
-            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 => {
-                PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
+            PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1 => {
+                PrivacyRuntimeProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
                     max_anonymity_set_size: ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1,
                     max_recipient_count: ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
                 })
             }
-            PrivacyProtocolIdV1::VeRangeTransparentRangeV1 => {
-                PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
+            PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1 => {
+                PrivacyRuntimeProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
                     max_aggregation_count: VERANGE_TAIRA_MAX_AGGREGATION_COUNT_V1,
                 })
             }
-            PrivacyProtocolIdV1::IrohaZkAmsV1 => {
-                PrivacyProtocolLimitsV1::IrohaZkAmsV1(ZkAmsLimitsV1 {
+            PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1 => {
+                PrivacyRuntimeProtocolLimitsV1::IrohaZkAmsV1(ZkAmsLimitsV1 {
                     max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1,
                     max_ring_size: ZK_AMS_MAX_RING_SIZE_V1,
                 })
             }
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV1 => {
-                PrivacyProtocolLimitsV1::VegaExistingCredentialZkV1
+            PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1 => {
+                PrivacyRuntimeProtocolLimitsV1::VegaExistingCredentialZkV1
             }
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 => {
-                PrivacyProtocolLimitsV1::IrohaZkX509StarkP256V1
+            PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 => {
+                PrivacyRuntimeProtocolLimitsV1::IrohaZkX509StarkP256V1
             }
-            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1 => {
-                PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+            PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1 => {
+                PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
                     max_polynomial_count: IROHA_JINDO_MAX_POLYNOMIALS_V1,
                 })
             }
-            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => {
-                PrivacyProtocolLimitsV1::IrohaBootleLanternAnoncredV1
+            PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1 => {
+                PrivacyRuntimeProtocolLimitsV1::IrohaBootleLanternAnoncredV1
             }
-            PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => {
-                PrivacyProtocolLimitsV1::OrchardHalo2ActionsV1(OrchardLimitsV1 {
+            PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1 => {
+                PrivacyRuntimeProtocolLimitsV1::OrchardHalo2ActionsV1(OrchardLimitsV1 {
                     max_action_count: ORCHARD_MAX_ACTIONS_V1,
                 })
             }
-            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1 => {
-                PrivacyProtocolLimitsV1::MoneroFcmpPlusPlusV1(FcmpLimitsV1 {
+            PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1 => {
+                PrivacyRuntimeProtocolLimitsV1::IronwoodHalo2ActionsV1(OrchardLimitsV1 {
+                    max_action_count: ORCHARD_MAX_ACTIONS_V1,
+                })
+            }
+            PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1 => {
+                PrivacyRuntimeProtocolLimitsV1::MoneroFcmpPlusPlusV1(FcmpLimitsV1 {
                     max_input_count: FCMP_MAX_INPUTS_V1,
                     max_output_count: FCMP_MAX_OUTPUTS_V1,
                 })
             }
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
-                PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
+                PrivacyRuntimeProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
                     max_input_count: IVM_PRIVATE_NOTE_MAX_INPUTS_V1,
                     max_output_count: IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
                 })
             }
-            PrivacyProtocolIdV1::PqMaspStarkV1 => {
-                PrivacyProtocolLimitsV1::PqMaspStarkV1(PqMaspLimitsV1 {
+            PrivacyRuntimeProtocolIdV1::PqMaspStarkV1 => {
+                PrivacyRuntimeProtocolLimitsV1::PqMaspStarkV1(PqMaspLimitsV1 {
                     max_input_count: PQ_MASP_MAX_INPUTS_V1,
                     max_output_count: PQ_MASP_MAX_OUTPUTS_V1,
                 })
@@ -2545,7 +2610,7 @@ mod exact12_fixture {
     }
     /// Canonical semantic profile for the structural envelope fixture.
     pub(super) fn sample_profile(
-        envelope: &PrivacyProofEnvelopeV1,
+        envelope: &PrivacyRuntimeProofEnvelopeV1,
     ) -> PrivacyCompiledProfileSnapshotV1 {
         PrivacyCompiledProfileSnapshotV1 {
             protocol_id: envelope.protocol_id,
@@ -2571,7 +2636,7 @@ mod exact12_fixture {
         /// The role the sample selects.
         pub role: PrivacyActionRoleV1,
         /// Canonical envelope of the sample statement and placeholder proof.
-        pub envelope: PrivacyProofEnvelopeV1,
+        pub envelope: PrivacyRuntimeProofEnvelopeV1,
         /// Canonical profile whose identities and limits bind the structural envelope.
         pub profile: PrivacyCompiledProfileSnapshotV1,
     }
@@ -2596,7 +2661,7 @@ mod exact12_fixture {
     }
     /// Build one structurally valid sample for each of the thirteen Exact12 roles.
     ///
-    /// The rows are in [`PrivacyActionRoleV1::ALL`] order. Like the other
+    /// The rows are in [`PrivacyActionRoleV1::EXACT12_ROLES`] order. Like the other
     /// helpers of this module the function exists only in tests and in builds
     /// that enable `iroha_data_model/privacy-exact12-conformance`.
     ///
@@ -2625,7 +2690,7 @@ mod exact12_fixture {
         if samples
             .iter()
             .map(|sample| sample.role)
-            .ne(PrivacyActionRoleV1::ALL)
+            .ne(PrivacyActionRoleV1::EXACT12_ROLES)
         {
             return Err(PrivacyExact12FixtureErrorV1::RoleCoverage);
         }
@@ -2651,13 +2716,15 @@ mod exact12_fixture {
             .enumerate()
             .map(|(row_index, statement)| {
                 let complete = exact12_complete_row_v1(statement, row_index)?;
-                let protocol_id = complete.statement.protocol_id();
+                let protocol_id = complete.statement.protocol_id().into();
                 let proof_envelope = complete.envelope;
                 let canonical_envelope = norito::encode_canonical(&proof_envelope)?;
                 Ok(PrivacyExact12TypedEnvelopeRowV1 {
                     protocol_id,
-                    statement_variant: statement_variant_name(&proof_envelope.statement),
-                    proof_variant: proof_variant_name(&proof_envelope.proof),
+                    statement_variant: statement_variant_name(
+                        &proof_envelope.statement.clone().into(),
+                    ),
+                    proof_variant: proof_variant_name(&proof_envelope.proof.clone().into()),
                     statement_digest: *proof_envelope.statement_digest.as_bytes(),
                     envelope_sha256: Sha256::digest(canonical_envelope).into(),
                 })
@@ -2682,7 +2749,7 @@ mod exact12_fixture {
             .enumerate()
             .map(|(row_index, statement)| {
                 let complete = exact12_complete_row_v1(statement, row_index)?;
-                let protocol_id = complete.statement.protocol_id();
+                let protocol_id = complete.statement.protocol_id().into();
                 let statement_norito = norito::encode_canonical(&complete.statement)?;
                 let envelope_norito = norito::encode_canonical(&complete.envelope)?;
                 Ok(PrivacyExact12TypedFixtureRowV1 {
@@ -2702,7 +2769,7 @@ mod exact12_fixture {
                 })
             })
             .collect::<Result<Vec<_>, PrivacyExact12FixtureErrorV1>>()?;
-        if rows.len() != PrivacyProtocolIdV1::COUNT {
+        if rows.len() != PrivacyRuntimeProtocolIdV1::EXACT12_COUNT {
             return Err(PrivacyExact12FixtureErrorV1::RowCount { actual: rows.len() });
         }
         Ok(PrivacyExact12FixtureBundleV1 { version: 1, rows })
@@ -2795,7 +2862,7 @@ mod exact12_fixture {
     pub fn privacy_exact12_matrix_bytes_v1() -> Result<Vec<u8>, PrivacyExact12FixtureErrorV1> {
         let semantic_rows = privacy_exact12_typed_envelope_rows_v1()?;
         let mut registry_preimage = Vec::new();
-        for protocol_id in PrivacyProtocolIdV1::ALL {
+        for protocol_id in PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS {
             registry_preimage.extend_from_slice(protocol_id.canonical_label().as_bytes());
             registry_preimage.push(b'\n');
         }
@@ -2811,7 +2878,10 @@ mod exact12_fixture {
             canonical_sha256_hex_v1(&registry_sha256)
         )
         .expect("writing to String cannot fail");
-        for (index, protocol_id) in PrivacyProtocolIdV1::ALL.into_iter().enumerate() {
+        for (index, protocol_id) in PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS
+            .into_iter()
+            .enumerate()
+        {
             let variant = protocol_id.canonical_typed_variant_label();
             writeln!(
                 &mut output,

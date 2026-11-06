@@ -262,6 +262,7 @@ fn parent_registration_sources(
 #[cfg(unix)]
 fn original_epoch_zero_commit_releases_paid_escrow_after_real_four_seven_four_rotation_and_restart()
 -> Result<()> {
+    let _descriptor_slots = iroha_test_network::reserve_disposable_ceremony_descriptors()?;
     ensure!(
         std::env::var("IROHA_TEST_NETWORK_PARALLELISM")
             .ok()

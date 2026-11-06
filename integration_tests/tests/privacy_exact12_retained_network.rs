@@ -28,7 +28,7 @@ use iroha::{
             PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
             PrivacyCompiledProfileUnavailableReasonV1, PrivacyConsensusLimitsV1,
             PrivacyExact12CapabilityManifestV1, PrivacyExact12CapabilityRowV1, PrivacyPolicyIdV1,
-            PrivacyPoolIdV1, PrivacyProtocolIdV1, PrivacyStatementDigestV1,
+            PrivacyPoolIdV1, PrivacyRuntimeProtocolIdV1, PrivacyStatementDigestV1,
         },
         query::{block::prelude::FindBlocks, transaction::prelude::FindTransactions},
         transaction::{
@@ -59,13 +59,17 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::time::{Instant, sleep, timeout};
-const ZK_ACE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
-const PGC_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1;
-const VERANGE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::VeRangeTransparentRangeV1;
-const BOOTLE_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1;
-const FCMP_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1;
-const IVM_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
-const AVAILABLE_PROTOCOLS: [PrivacyProtocolIdV1; 5] = [
+const ZK_ACE_PROTOCOL: PrivacyRuntimeProtocolIdV1 =
+    PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1;
+const PGC_PROTOCOL: PrivacyRuntimeProtocolIdV1 = PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1;
+const VERANGE_PROTOCOL: PrivacyRuntimeProtocolIdV1 =
+    PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1;
+const BOOTLE_PROTOCOL: PrivacyRuntimeProtocolIdV1 =
+    PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1;
+const FCMP_PROTOCOL: PrivacyRuntimeProtocolIdV1 = PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1;
+const IVM_PROTOCOL: PrivacyRuntimeProtocolIdV1 =
+    PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+const AVAILABLE_PROTOCOLS: [PrivacyRuntimeProtocolIdV1; 5] = [
     PGC_PROTOCOL,
     VERANGE_PROTOCOL,
     BOOTLE_PROTOCOL,
@@ -84,7 +88,7 @@ const TORII_CONTENT_BUDGET_BYTES: i64 = 128 * 1024 * 1024;
 const NETWORK_FRAME_BUDGET_BYTES: i64 = 128 * 1024 * 1024;
 #[derive(Clone, Copy)]
 struct ProtocolExpectationV1 {
-    protocol: PrivacyProtocolIdV1,
+    protocol: PrivacyRuntimeProtocolIdV1,
     compiled: PrivacyCompiledProfileSnapshotV1,
 }
 fn bounded_client(client: Client) -> Client {
@@ -126,7 +130,7 @@ fn is_exact_transaction_replay(error: &eyre::Report) -> bool {
 }
 fn protocol_row(
     snapshot: &PrivacyExact12CapabilityManifestV1,
-    protocol: PrivacyProtocolIdV1,
+    protocol: PrivacyRuntimeProtocolIdV1,
 ) -> Result<PrivacyExact12CapabilityRowV1> {
     snapshot
         .protocols
@@ -441,7 +445,7 @@ async fn wait_for_asset_quantities(
 fn resign_replaced_envelope(
     client: &Client,
     valid: &SignedTransaction,
-    envelope: iroha::data_model::privacy::PrivacyProofEnvelopeV1,
+    envelope: iroha::data_model::privacy::PrivacyRuntimeProofEnvelopeV1,
     context: &str,
 ) -> Result<SignedTransaction> {
     let (valid_intent, _) = valid
@@ -450,7 +454,9 @@ fn resign_replaced_envelope(
         .ok_or_else(|| eyre!("{context}: canonical action omitted privacy submission"))?;
     let adversarial = TransactionBuilder::from_payload(valid.payload().clone())
         .wrap_err_with(|| format!("{context}: reopen canonical payload"))?
-        .with_instructions([SubmitPrivacyProofV1::new(envelope)])
+        .with_instructions([SubmitPrivacyProofV1::new(
+            (envelope).try_into().expect("frozen Exact12 test input"),
+        )])
         .try_sign(client.client().key_pair().private_key())
         .wrap_err_with(|| format!("{context}: independently sign adversarial transaction"))?;
     adversarial
@@ -529,7 +535,8 @@ fn independently_resign_corrupted_proof(
         .privacy_transaction_intent_binding_if_present_v1()
         .wrap_err_with(|| format!("{context}: scan canonical action before corruption"))?
         .ok_or_else(|| eyre!("{context}: canonical action omitted privacy submission"))?;
-    let mut envelope = submission.envelope.clone();
+    let submission_envelope = submission.runtime_envelope();
+    let mut envelope = submission_envelope.clone();
     let proof = envelope.proof.bytes_mut();
     ensure!(
         proof.bytes.len() > 8,
@@ -551,20 +558,22 @@ fn independently_resign_cross_profile_proof(
         .privacy_transaction_intent_binding_if_present_v1()
         .wrap_err("scan target action before cross-profile substitution")?
         .ok_or_else(|| eyre!("target action omitted privacy submission"))?;
+    let target_submission_envelope = target_submission.runtime_envelope();
     let (_, donor_submission) = donor
         .privacy_transaction_intent_binding_if_present_v1()
         .wrap_err("scan donor action before cross-profile substitution")?
         .ok_or_else(|| eyre!("donor action omitted privacy submission"))?;
+    let donor_submission_envelope = donor_submission.runtime_envelope();
     ensure!(
-        target_submission.envelope.protocol_id != donor_submission.envelope.protocol_id,
+        target_submission_envelope.protocol_id != donor_submission_envelope.protocol_id,
         "cross-profile substitution requires different protocols"
     );
-    let mut envelope = target_submission.envelope.clone();
+    let mut envelope = target_submission_envelope.clone();
     envelope
         .proof
         .bytes_mut()
         .bytes
-        .clone_from(&donor_submission.envelope.proof.bytes().bytes);
+        .clone_from(&donor_submission_envelope.proof.bytes().bytes);
     envelope
         .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
         .wrap_err("cross-profile bytes must preserve the generic envelope contract")?;
@@ -578,7 +587,8 @@ fn independently_resign_wrong_statement_digest(
         .privacy_transaction_intent_binding_if_present_v1()
         .wrap_err("scan canonical action before statement-digest substitution")?
         .ok_or_else(|| eyre!("canonical action omitted privacy submission"))?;
-    let mut envelope = submission.envelope.clone();
+    let submission_envelope = submission.runtime_envelope();
+    let mut envelope = submission_envelope.clone();
     let mut wrong = *envelope.statement_digest.as_bytes();
     wrong[0] ^= 0x80;
     envelope.statement_digest = PrivacyStatementDigestV1::new(wrong);

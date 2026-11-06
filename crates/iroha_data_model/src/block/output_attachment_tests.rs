@@ -183,3 +183,76 @@ fn final_wire_validation_accounts_for_post_attachment_signature_growth() {
         .validate_execution_outputs(&fixture::limits())
         .unwrap();
 }
+
+#[test]
+fn lifecycle_wire_limit_counts_complete_trace_and_refuses_before_attachment() {
+    use crate::{
+        account::AccountId,
+        events::data::DataEventFilter,
+        trigger::action::{Action, Repeats},
+    };
+    use execution_output::*;
+    let key = iroha_crypto::KeyPair::from_seed(vec![0x77; 32], iroha_crypto::Algorithm::Ed25519);
+    let action = Action::new(
+        Vec::<crate::isi::InstructionBox>::new(),
+        Repeats::Exactly(1),
+        AccountId::new(key.public_key().clone()),
+        DataEventFilter::Any,
+    )
+    .unwrap();
+    let ExecutionOutputV1::Network(execution) = fixture::network(0, Ok(Vec::new())) else {
+        unreachable!()
+    };
+    let outputs = vec![ExecutionOutputV1::NetworkWithLifecycle(
+        NetworkExecutionOutputV2 {
+            execution,
+            trigger_lifecycle: TriggerLifecycleEffectsV1::Complete {
+                effects: vec![TriggerLifecycleEffectV1 {
+                    ordinal: 0,
+                    trigger_id: "wire_trace".parse().unwrap(),
+                    origin: TriggerLifecycleOriginV1::Derived {
+                        callback_index: None,
+                    },
+                    change: TriggerLifecycleChangeV1::Insert {
+                        after: TriggerLifecycleStateV1 {
+                            kind: TriggerLifecycleStateKindV1::Data,
+                            registered_at_height: None,
+                            action_hash: None,
+                            retry_state: None,
+                            action: TriggerLifecycleActionFrameV1 {
+                                codec: TriggerLifecycleActionCodecV1::NoritoCanonicalV1,
+                                bytes: norito::encode_canonical(&action).unwrap(),
+                            },
+                        },
+                    },
+                }],
+            },
+        },
+    )];
+    let mut measured = fixture::proposal(1);
+    fixture::install(&mut measured, outputs.clone(), 1).unwrap();
+    let bytes = measured.encode_wire().unwrap().len() as u64;
+    for cap in [bytes - 1, bytes] {
+        let mut candidate = fixture::proposal(1);
+        let mut limits = fixture::limits();
+        limits.max_executed_wire_bytes = cap;
+        limits.max_total_output_bytes = cap;
+        limits.max_output_bytes = cap;
+        let result = candidate.set_execution_outputs(
+            outputs.clone(),
+            1,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            &limits,
+        );
+        assert_eq!(result.is_ok(), cap == bytes);
+        assert_eq!(candidate.has_results(), cap == bytes);
+        if cap < bytes {
+            assert!(
+                matches!(result, Err(SetExecutionOutputsError::ExecutedWireTooLarge { actual, limit }) if actual == bytes && limit == cap)
+            );
+        }
+    }
+}
