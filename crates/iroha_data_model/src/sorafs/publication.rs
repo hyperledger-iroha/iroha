@@ -82,7 +82,7 @@ pub struct SorafsPublicationProofV1 {
 }
 
 /// Opaque successful verification of the client's original challenged assertion.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct VerifiedSorafsPublicationV1 {
     height: u64,
     completed: bool,
@@ -208,7 +208,7 @@ mod tests {
         use super::*;
         use crate::{
             account::AccountId,
-            block::{SignedBlock, builder::BlockBuilder},
+            block::{BlockHeader, SignedBlock, builder::BlockBuilder},
             sorafs::pin_registry::{ManifestDigest, ReplicationOrderId},
             sumeragi_finality::test_fixtures::NativeFinalityFixture,
             transaction::{FeePaymentIntent, TransactionBuilder, TransactionResultInner},
@@ -229,10 +229,26 @@ mod tests {
             seed: u8,
             result: TransactionResultInner,
         ) -> (SignedTransaction, SignedBlock) {
-            let header = fixture.next_header();
+            assertion_in(
+                fixture.next_header(),
+                fixture.network_id(),
+                checkpoint,
+                seed,
+                result,
+            )
+        }
+
+        /// One block at `header` holding a single assertion bound to `checkpoint`.
+        fn assertion_in(
+            header: BlockHeader,
+            network: NetworkId,
+            checkpoint: &SumeragiFinalityCheckpoint,
+            seed: u8,
+            result: TransactionResultInner,
+        ) -> (SignedTransaction, SignedBlock) {
             let signer = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
             let mut builder = TransactionBuilder::new(
-                fixture.network_id(),
+                network,
                 AccountId::new(signer.public_key().clone()),
                 FeePaymentIntent::authority(vec![], None),
             );
@@ -346,6 +362,68 @@ mod tests {
                 &published.signed,
                 &published.proof
             ));
+        }
+
+        /// The independently selected signed genesis of `fixture`, without later decisions.
+        fn genesis_checkpoint(fixture: &NativeFinalityFixture) -> SumeragiFinalityCheckpoint {
+            let mut verifier = SumeragiFinalityVerifier::new(
+                fixture.genesis(),
+                fixture.chain_id(),
+                fixture.genesis_proof().committee.clone(),
+            )
+            .unwrap();
+            verifier.verify(fixture.genesis_proof()).unwrap();
+            verifier.export_checkpoint(fixture.genesis_proof()).unwrap()
+        }
+
+        #[test]
+        fn incumbent_boundary_carries_an_old_checkpoint_into_the_next_epoch() {
+            // H1..H3 are epoch zero; H4, the first epoch-one block, executes the assertion.
+            let mut assertion = None;
+            let (fixture, chain) =
+                NativeFinalityFixture::short_npos_boundary_chain_with_successor_block(
+                    4,
+                    |fixture, header| {
+                        let checkpoint = genesis_checkpoint(fixture);
+                        let (signed, block) = assertion_in(
+                            header,
+                            fixture.network_id(),
+                            &checkpoint,
+                            13,
+                            Ok(Vec::new()),
+                        );
+                        assertion = Some((checkpoint, signed, inclusion(&block)));
+                        block
+                    },
+                );
+            let (checkpoint, signed, inclusion) = assertion.unwrap();
+            let network = fixture.network_id();
+            let certificate = |height: usize| {
+                SumeragiCommitCertificateV1::from_proof(&chain[height - 1]).unwrap()
+            };
+            let proof = SorafsPublicationProofV1 {
+                epoch_boundaries: vec![certificate(3)],
+                certificate: certificate(4),
+                inclusion,
+            };
+            let verified =
+                verify_sorafs_publication_v1(&network, &checkpoint, &signed, &proof).unwrap();
+            assert_eq!(verified.height(), 4);
+            // Epoch one has no authority until epoch zero's quorum certifies its boundary.
+            let mut skipped = proof.clone();
+            skipped.epoch_boundaries.clear();
+            assert!(
+                verify_sorafs_publication_v1(&network, &checkpoint, &signed, &skipped).is_err()
+            );
+            // An ordinary epoch-zero certificate selects no successor.
+            let mut ordinary = proof.clone();
+            ordinary.epoch_boundaries = vec![certificate(2)];
+            assert!(
+                verify_sorafs_publication_v1(&network, &checkpoint, &signed, &ordinary).is_err()
+            );
+            let mut forged = proof;
+            forged.epoch_boundaries[0].commit_qc[0] ^= 1;
+            assert!(verify_sorafs_publication_v1(&network, &checkpoint, &signed, &forged).is_err());
         }
 
         #[test]

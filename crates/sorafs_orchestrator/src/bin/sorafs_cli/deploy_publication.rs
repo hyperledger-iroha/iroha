@@ -9,8 +9,8 @@ use iroha_data_model::{
         },
         publication::{
             PUBLICATION_PROOF_MAX_BYTES_V1, SorafsPublicationPreparationV1,
-            SorafsPublicationProofRequestV1, SorafsPublicationProofV1,
-            VerifiedSorafsPublicationV1, verify_sorafs_publication_v1,
+            SorafsPublicationProofRequestV1, SorafsPublicationProofV1, VerifiedSorafsPublicationV1,
+            verify_sorafs_publication_v1,
         },
     },
     sumeragi_finality::{

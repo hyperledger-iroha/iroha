@@ -257,7 +257,20 @@ target/release/iroha \
 ```
 
 The `mcp_discovery` check validates native stateless `server/discover`. The
-public-reset verifier consumes that same scoped diagnostic contract.
+doctor is an independently invoked diagnostic; deployment completion uses the
+actual validator cohort, retained state and readiness.
+
+Both doctor scopes also require the exact operator-signature challenge from
+`/v1/runtime/release` and `/v1/runtime/upgrades`. These are protected operator
+reads, not anonymous release or selection advertisements. A passing challenge
+establishes route posture only. To inspect their contents, use `iroha --config
+<runtime-client.toml> --operator-private-key-file <runtime-operator.key> ops runtime
+release` and `ops runtime upgrade list` with the dedicated allow-listed operator key.
+Do not substitute an account key, bearer token or a Parliament permission.
+If release metadata returns `route_not_found`, compare each serving validator's
+`/status` build with the corresponding source route inventory before changing
+ingress. A binary that lacks the route requires a history-preserving release
+rollout; removing authentication does not repair it.
 
 ## Ordinary account onboarding and funding
 

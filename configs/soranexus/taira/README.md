@@ -920,10 +920,31 @@ target/release/iroha \
 The public doctor defaults to `--scope basic` for essential network and MCP
 connectivity. Valid local-clock fallback is reported as a warning; malformed
 time or MCP responses fail. `--scope full` adds advanced product readiness and
-synchronized-time requirements. Public-reset selects the doctor scope from its
-signed qualification scope.
+synchronized-time requirements. The doctor is an independently invoked diagnostic;
+deployment completion uses the actual validator cohort, retained state and readiness.
 The public doctor remains non-mutating and does not impersonate an operator.
-It requires the exact two-field operator-signature `401` from
+Both scopes check `/v1/runtime/release` and `/v1/runtime/upgrades` for the exact
+operator-signature challenge. A missing release route fails the doctor check; a passing
+challenge proves only that the protected route is mounted, not the deployed
+release or committed selection. Both reads require a dedicated allow-listed
+operator key, independently of account permissions. Use the native signed reads
+with runtime-only inputs:
+
+```bash
+iroha --config /absolute/runtime/client.toml \
+  --operator-private-key-file /absolute/runtime/operator.key ops runtime release
+iroha --config /absolute/runtime/client.toml \
+  --operator-private-key-file /absolute/runtime/operator.key ops runtime upgrade list
+```
+
+For `route_not_found` on release metadata, compare `/status` build identities and
+the release route on each validator with the candidate source. An older serving
+binary that lacks the route needs a qualified, history-preserving rollout; an
+API token or account grant cannot add it. An `operator_signature_missing` reply
+on upgrade state requires the signed read above. Keep operator authentication,
+Parliament authorization and provider-owner completion policy intact.
+
+The doctor also requires the exact two-field operator-signature `401` from
 `/v1/sumeragi/status` and, in full scope, the exact two-field canonical-account
 `401` from `/v1/soracloud/status`; arbitrary gateway challenges fail closed. Exact runtime
 topology and four-replica Inrou convergence belong to the signed Inrou canary,
@@ -1018,6 +1039,11 @@ Serving SoraFS content on Taira therefore needs separate provider nodes and:
 - DNS and a TLS certificate for the CID host suffix. Use a dedicated
   registrable domain on the Public Suffix List rather than a `sora.org`
   subdomain, so hosted content cannot set cookies for other `sora.org` sites.
+
+Publishing needs no granted permission. Any account that pays the pin and
+transaction fees can register a manifest and receives compact finality
+evidence (commit certificates and Merkle paths, no block bodies) for its own
+publication assertions.
 
 ## Retained source-coupled assets
 

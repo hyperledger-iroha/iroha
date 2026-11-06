@@ -1583,6 +1583,63 @@ async fn node_capabilities_http_bootstraps_without_registered_account() {
     }
     fixture.shutdown().await;
 }
+#[tokio::test]
+async fn runtime_governance_http_routes_require_operator_signatures() {
+    let fixture = RuntimeApiRouterFixture::standard("runtime-operator-route-contract-test");
+    for (method, path) in [
+        (HttpMethod::GET, "/v1/runtime/release"),
+        (HttpMethod::GET, "/v1/runtime/upgrades"),
+        (HttpMethod::GET, "/v1/runtime/containments"),
+        (HttpMethod::POST, "/v1/runtime/upgrades/draft"),
+        (HttpMethod::POST, "/v1/runtime/upgrades/propose"),
+        (HttpMethod::POST, "/v1/runtime/upgrades/cancel/invalid-id"),
+        (HttpMethod::POST, "/v1/runtime/upgrades/attest/invalid-id"),
+    ] {
+        // Even malformed draft bodies and identifiers must reach the mandatory
+        // operator gate before payload decoding. A missing route returning 404
+        // must not be mistaken for a working protected runtime endpoint.
+        let body = if method == HttpMethod::POST {
+            Body::from("{")
+        } else {
+            Body::empty()
+        };
+        let mut request = Request::builder()
+            .method(method.clone())
+            .uri(path)
+            .header(axum::http::header::ACCEPT, "application/json")
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(body)
+            .expect("unsigned runtime request");
+        request
+            .extensions_mut()
+            .insert(crate::loopback_connect_info());
+        let response = fixture
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("production runtime route response");
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "{method} {path}"
+        );
+        assert_eq!(
+            response.headers()[axum::http::header::WWW_AUTHENTICATE],
+            "IrohaOperatorSignature realm=\"torii\"",
+            "{method} {path}"
+        );
+        let body = torii_body_bytes(response, "runtime operator challenge body").await;
+        let challenge: norito::json::Value =
+            norito::json::from_slice(&body).expect("typed runtime operator challenge");
+        assert_eq!(
+            challenge["code"].as_str(),
+            Some("operator_signature_missing"),
+            "{method} {path}"
+        );
+    }
+    fixture.shutdown().await;
+}
 #[cfg(not(feature = "app_api"))]
 #[tokio::test]
 async fn public_sorafs_gateway_routes_are_mounted_without_app_api() {
