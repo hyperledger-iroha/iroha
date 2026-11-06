@@ -120,6 +120,50 @@ pub enum KagemushaWalletLedgerActionV1 {
     },
     /// Retain the complete signed Request and historical fee terms by their digests.
     RetainRequest(Vec<u8>),
+    /// Stage 0 of a native-suffix Unload: the immutable header and the genuine anchor.
+    /// It verifies the anchor and records both originals; it moves no value.
+    SuffixUnloadBegin {
+        /// Wallet incarnation; equal to the header's.
+        wallet: [u8; 32],
+        /// Suffix authority digest of `header`; it keys every stage of this Unload.
+        authority: [u8; 32],
+        /// Paid account named by the header.
+        account: AccountId,
+        /// Stage ordinal; exactly zero.
+        ordinal: u128,
+        /// Canonical `KagemushaWalletSuffixHeaderV1` frame.
+        header: Vec<u8>,
+        /// Canonical `KagemushaWalletSuffixAnchorV1` frame.
+        anchor: Vec<u8>,
+    },
+    /// Stage `1..=chunk_count`: one chunk of complete steps, verified in full. Appends are
+    /// independent of each other and may execute in any order after Begin.
+    SuffixUnloadAppend {
+        /// Wallet incarnation; equal to the header's.
+        wallet: [u8; 32],
+        /// Suffix authority digest of the Begin header.
+        authority: [u8; 32],
+        /// Paid account named by the header.
+        account: AccountId,
+        /// Stage ordinal: the chunk index plus one.
+        ordinal: u128,
+        /// Canonical `KagemushaWalletSuffixChunkV1` frame whose digest the header lists.
+        chunk: Vec<u8>,
+    },
+    /// Stage `chunk_count + 1`: the Unload receipt; pays the header's account once per
+    /// nullifier after every chunk chains from the anchor to the tip.
+    SuffixUnloadFinalize {
+        /// Wallet incarnation; equal to the header's.
+        wallet: [u8; 32],
+        /// Suffix authority digest of the Begin header.
+        authority: [u8; 32],
+        /// Paid account named by the header.
+        account: AccountId,
+        /// Stage ordinal: the chunk count plus one.
+        ordinal: u128,
+        /// Canonical `KagemushaWalletSuffixUnloadV1` frame.
+        unload: Vec<u8>,
+    },
 }
 
 isi! {
@@ -198,6 +242,156 @@ mod tests {
             norito::json::to_json(&row).unwrap()
         );
     }
+    fn account(seed: u8) -> AccountId {
+        AccountId::new(
+            iroha_crypto::KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        )
+    }
+
+    /// One sample of every action, in declaration order.
+    fn every_action() -> Vec<KagemushaWalletLedgerActionV1> {
+        use KagemushaWalletLedgerActionV1 as A;
+        vec![
+            A::Register {
+                scheme: vec![1],
+                asset: vec![2],
+                reserve: account(3),
+                balance_scope: AssetBalanceScope::Global,
+            },
+            A::InstallVerifierPack {
+                asset: [2; 32],
+                manifest_digest: [3; 32],
+                pack: vec![4],
+            },
+            A::Activate(vec![5]),
+            A::Abandon(vec![6]),
+            A::CloseLoads(vec![7]),
+            A::IssueLoad {
+                wallet: [2; 32],
+                asset: [4; 32],
+                ordinal: 0,
+                request_id: [3; 32],
+                amount: 7,
+                charge: None,
+            },
+            A::Unload(vec![8]),
+            A::ClaimFee(vec![9]),
+            A::RetainCertificate {
+                asset: [1; 32],
+                certificate: vec![10],
+            },
+            A::RetainCredential {
+                credential: vec![11],
+                certificates: vec![12],
+            },
+            A::RetainRequest(vec![13]),
+            A::SuffixUnloadBegin {
+                wallet: [2; 32],
+                authority: [5; 32],
+                account: account(4),
+                ordinal: 0,
+                header: vec![14],
+                anchor: vec![15],
+            },
+            A::SuffixUnloadAppend {
+                wallet: [2; 32],
+                authority: [5; 32],
+                account: account(4),
+                ordinal: 1,
+                chunk: vec![16],
+            },
+            A::SuffixUnloadFinalize {
+                wallet: [2; 32],
+                authority: [5; 32],
+                account: account(4),
+                ordinal: 2,
+                unload: vec![17],
+            },
+        ]
+    }
+
+    #[test]
+    fn appended_suffix_actions_keep_every_historical_discriminant() {
+        // Existing actions keep wire tags 0..=10 (their payload fields are unchanged); the
+        // native-suffix stages are appended as 11, 12 and 13.
+        for (expected, action) in every_action().into_iter().enumerate() {
+            let frame = norito::encode_canonical(&action).unwrap();
+            let header = norito::core::Header::read(frame.as_slice()).unwrap();
+            let start = frame.len() - usize::try_from(header.length).unwrap();
+            let tag = u32::from_le_bytes(frame[start..start + 4].try_into().unwrap());
+            assert_eq!(tag, u32::try_from(expected).unwrap(), "{action:?}");
+        }
+    }
+
+    #[test]
+    fn suffix_stages_roundtrip_through_canonical_registry_and_json() {
+        let registry = super::super::registry::default();
+        for action in every_action().into_iter().skip(11) {
+            let value = KagemushaWalletLedgerV1::new([1; 32], action);
+            let bytes = norito::to_bytes(&value).unwrap();
+            assert_eq!(
+                registry
+                    .decode(KagemushaWalletLedgerV1::WIRE_ID, &bytes)
+                    .unwrap()
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<KagemushaWalletLedgerV1>(),
+                Some(&value)
+            );
+            let json = norito::json::to_json(&value).unwrap();
+            assert!(json.contains("\"suffix_unload_"), "{json}");
+            assert_eq!(
+                norito::json::from_str::<KagemushaWalletLedgerV1>(&json).unwrap(),
+                value
+            );
+        }
+    }
+
+    /// Historical replay of committed production ledger instructions: every retained
+    /// original decodes under the appended action enum to its historical variant and
+    /// re-encodes to the identical bytes. Run with
+    /// `KAGEMUSHA_RETAINED_LEDGER_INSTRUCTIONS=<dir>`, where each `*.bin` is one committed
+    /// instruction's own canonical frame (the payload inside its `InstructionBox` frame).
+    #[test]
+    #[ignore = "reads retained committed ledger instruction originals from a local directory"]
+    fn retained_committed_ledger_instructions_decode_and_reencode_exactly() {
+        let directory = std::env::var("KAGEMUSHA_RETAINED_LEDGER_INSTRUCTIONS")
+            .expect("KAGEMUSHA_RETAINED_LEDGER_INSTRUCTIONS");
+        let registry = super::super::registry::default();
+        let mut checked = 0;
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("bin") {
+                continue;
+            }
+            let original = std::fs::read(&path).unwrap();
+            let decoded = registry
+                .decode(KagemushaWalletLedgerV1::WIRE_ID, &original)
+                .unwrap()
+                .unwrap();
+            let value = decoded
+                .as_any()
+                .downcast_ref::<KagemushaWalletLedgerV1>()
+                .unwrap()
+                .clone();
+            assert!(
+                !matches!(
+                    value.action,
+                    KagemushaWalletLedgerActionV1::SuffixUnloadBegin { .. }
+                        | KagemushaWalletLedgerActionV1::SuffixUnloadAppend { .. }
+                        | KagemushaWalletLedgerActionV1::SuffixUnloadFinalize { .. }
+                ),
+                "{path:?}"
+            );
+            assert_eq!(norito::to_bytes(&value).unwrap(), original, "{path:?}");
+            checked += 1;
+        }
+        assert!(checked > 0);
+        println!("KAGEMUSHA_RETAINED_LEDGER_INSTRUCTIONS_CHECKED={checked}");
+    }
+
     #[test]
     fn ledger_instruction_roundtrips_through_canonical_registry_and_json() {
         let value = KagemushaWalletLedgerV1::new(

@@ -34,6 +34,21 @@ use tempfile::TempDir;
 const KEY_FD: i32 = 198;
 const PUBLIC_FD: i32 = 201;
 const FINALITY_FD: i32 = 202;
+// A process has one descriptor table. Concurrent disposable networks may share the
+// same placeholder slots; every command still retains and maps only its own inputs.
+static CEREMONY_DESCRIPTOR_SLOTS: iroha_fs::SharedProcessDescriptorReservations =
+    iroha_fs::SharedProcessDescriptorReservations::new(&[KEY_FD, 200, PUBLIC_FD, FINALITY_FD]);
+
+/// Reserve the native key, retained-credential and phase-input slots before opening a network.
+/// Hold this owner through all seat launches; the last owner releases the parent slots.
+///
+/// # Errors
+/// Refuses a slot already owned by another descriptor or an exhausted descriptor table.
+pub fn reserve_disposable_ceremony_descriptors()
+-> std::io::Result<Arc<iroha_fs::ReservedProcessDescriptors>> {
+    CEREMONY_DESCRIPTOR_SLOTS.acquire()
+}
+
 const MAX_PUBLIC_FRAME_BYTES: usize = 32 * 1024 * 1024;
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(600);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -652,7 +667,15 @@ fn inherit_native_descriptors<const N: usize>(
     command: &mut ResolvedCommand,
     descriptors: [(BorrowedFd<'_>, i32); N],
 ) -> std::io::Result<()> {
-    command.inherit_descriptors(&descriptors).map(|_| ())
+    if let Some(reserved) = CEREMONY_DESCRIPTOR_SLOTS.active()? {
+        let mut result = Ok(());
+        command.configure(|options| {
+            result = options.inherit_reserved_descriptors(&reserved, &descriptors);
+        });
+        result
+    } else {
+        command.inherit_descriptors(&descriptors).map(|_| ())
+    }
 }
 
 fn inherit_rotation_descriptors(
@@ -2640,8 +2663,14 @@ mod tests {
         let destinations = parameters[4];
         assert!((1..=3).contains(&destinations));
         let owned_mode = parameters[5];
-        assert!((0..=2).contains(&owned_mode));
+        assert!((0..=4).contains(&owned_mode));
         assert!(owned_mode == 0 || destinations == 3);
+        let mut reservations = (owned_mode >= 3).then(|| {
+            let original = reserve_disposable_ceremony_descriptors().unwrap();
+            let second = reserve_disposable_ceremony_descriptors().unwrap();
+            assert!(Arc::ptr_eq(&original, &second));
+            original
+        });
         let root = tempfile::tempdir().unwrap();
         // Only this isolated child owns the occupied refusal-control destination.
         // Duplication must never overwrite this unrelated original, even CLOEXEC.
@@ -2738,6 +2767,10 @@ mod tests {
             )
             .unwrap();
         }
+        // The configured command independently retains the slot reservation through exec.
+        if owned_mode == 4 {
+            drop(reservations.take());
+        }
         if let Some(original) = occupied.as_mut() {
             let error = command.output_async().await.unwrap_err();
             assert_eq!(error.raw_os_error(), Some(nix::libc::EBUSY));
@@ -2815,6 +2848,14 @@ mod tests {
     async fn native_owned_rotation_handoff_preserves_unrelated_occupied_destination() {
         let output = observe_rotation_descriptor_handoff([203, 204, 205], true, 3, 2).await;
         assert!(output.status.success());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn native_reserved_ceremony_slots_retain_the_command_and_exact_inputs() {
+        for mode in [3, 4] {
+            let output = observe_rotation_descriptor_handoff([210, 211, 212], true, 3, mode).await;
+            assert!(output.status.success());
+        }
     }
 
     /// Inspect the actual peer spawn paths without claiming a completed DKG.

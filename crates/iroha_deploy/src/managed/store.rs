@@ -1596,6 +1596,55 @@ fn ownership_contention_uses_only_the_platform_ownership_opener_class() {
     assert!(!ownership_contended(&std::io::Error::from_raw_os_error(32)));
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn port_reservations_close_owned_sockets_on_drop() {
+    use std::os::fd::AsRawFd as _;
+
+    const CHILD_ENV: &str = "IROHA_TEST_PORT_RESERVATION_DROP_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        // No other test may allocate descriptors between drop and inspection. Network
+        // endpoints remain globally reusable, even in an otherwise isolated test process.
+        let result = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "managed::store::port_reservations_close_owned_sockets_on_drop",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "socket drop child failed: {}{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr),
+        );
+        return;
+    }
+
+    let ports = LocalnetPorts::reserve().unwrap();
+    let descriptors: Vec<_> = ports
+        .reservations
+        .iter()
+        .map(|listener| format!("/dev/fd/{}", listener.as_raw_fd()))
+        .collect();
+    assert_eq!(descriptors.len(), 8);
+    for descriptor in &descriptors {
+        fs::metadata(descriptor).expect("reserved socket descriptor is live");
+    }
+    drop(ports);
+    for descriptor in &descriptors {
+        let error = fs::metadata(descriptor).expect_err("reservation retained a socket after drop");
+        assert!(
+            error.kind() == std::io::ErrorKind::NotFound
+                || error.raw_os_error() == Some(rustix::io::Errno::BADF.raw_os_error()),
+            "unexpected descriptor inspection error: {error}",
+        );
+    }
+}
+
 #[cfg(test)]
 #[path = "pre_session_down_tests.rs"]
 mod pre_session_tests;

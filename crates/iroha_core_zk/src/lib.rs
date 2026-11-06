@@ -59,6 +59,8 @@ pub mod kagemusha_wallet_proofs_v1;
 /// Immutable arbitrary-asset registration transport verified against installed native genesis.
 pub mod kagemusha_wallet_registration_v1;
 pub mod kagemusha_wallet_state_v1;
+/// Native suffix Unload verification: complete step-by-step checks from a genuine anchor.
+pub mod kagemusha_wallet_suffix_unload_v1;
 /// Client-side construction of final Kaigi authorization and usage artifacts.
 pub mod kaigi_client_v1;
 /// Exact native PIPA-R built-in relations and their canonical proof containers.

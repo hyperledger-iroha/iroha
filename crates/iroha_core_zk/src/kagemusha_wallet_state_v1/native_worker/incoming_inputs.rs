@@ -205,6 +205,53 @@ impl NativeFoldWorkerV1 {
     }
 }
 
+/// Native suffix verification (option a, 2026-11-06): Receive admission's exact verdict
+/// ([`NativeFoldWorkerV1::receive_admission`]) for one retained suffix Receive, from tapes that
+/// [`PreparationV1::suffix_receive_admission_fields`] built. It runs the incoming Omega
+/// transport, the incoming Q-σ, the three strict nonproof predicate assignments and every
+/// decide under the qualified source grant. `Ok(true)` means the later fold would burn this
+/// Payment; a suffix verifier must refuse it. Cancellation is never a verdict.
+///
+/// # Errors
+/// The verdict owners' own errors, or [`Error::Cancelled`].
+pub(crate) fn suffix_receive_burns(
+    installed: &InstalledVerifierPackV1,
+    sources: &QualifiedWalletSourcesV1,
+    budget: MemoryBudget,
+    fields: crate::kagemusha_wallet_preparation_v1::ReceiveAdmissionFieldsV1,
+    cancellation: Option<&iroha_pasta::CancellationToken>,
+) -> Result<bool, Error> {
+    let route = super::inputs::receive_route(fields.renewed, &fields.payment)?;
+    let selector = route
+        .incoming
+        .ok_or(Error::Proof("Receive incoming selector"))?;
+    let root = sources.scope().root();
+    let signatures = super::inputs::receive_signatures_under(
+        &fields.objects,
+        super::inputs::key(&fields.own_key, 0)?,
+        fields.renewed,
+        [root.x, root.y],
+    )?;
+    let verdict = receive_verdict(
+        installed,
+        sources,
+        budget,
+        route,
+        receive::PredicateInputs {
+            before: fields.before,
+            after: fields.after,
+            statement: fields.statement,
+            consumed: fields.consumed,
+            incoming_statement: fields.incoming_statement,
+            objects: fields.objects,
+            signatures,
+            incoming_selector: selector,
+        },
+        cancellation,
+    )?;
+    Ok(verdict.burns())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn receive(
     worker: &NativeFoldWorkerV1,

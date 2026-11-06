@@ -35,7 +35,11 @@ use axum::{
     response::{IntoResponse as _, Response},
 };
 use iroha_core::{
-    kagemusha_wallet_v1::{Issuance, Registration, validate_row},
+    kagemusha_wallet_v1::{
+        Issuance, Registration,
+        suffix::{SuffixFinal, final_key},
+        validate_row,
+    },
     smartcontracts::isi::tx::transaction_history_byte_limit,
     state::{State as CoreState, WorldReadOnly},
 };
@@ -644,6 +648,49 @@ impl PayoutClaim {
         })
     }
 
+    /// The payout of a native-suffix Finalize, from its immutable Final row: the account
+    /// payout (`OFFLINE_UNLOAD`) and a quoted online charge (`OFFLINE_CHARGE`). A Final row
+    /// exists only after a successful Finalize; Begin and Append move nothing.
+    fn suffix(
+        ledger: &impl LedgerRecords,
+        scheme: [u8; 32],
+        wallet: [u8; 32],
+        authority: [u8; 32],
+        account: &AccountId,
+        ordinal: u128,
+        unload: &[u8],
+    ) -> Result<Option<Self>, crate::Error> {
+        use iroha_data_model::kagemusha::kagemusha_wallet_suffix_unload_v1::{
+            KagemushaWalletSuffixDigestRoleV1, kagemusha_wallet_suffix_digest_v1,
+        };
+        let Some(row) = read_record::<SuffixFinal>(ledger, &final_key(scheme, authority))? else {
+            return Ok(None);
+        };
+        if row.wallet != wallet
+            || row.account != *account
+            || row.ordinal != ordinal
+            || row.unload
+                != kagemusha_wallet_suffix_digest_v1(
+                    KagemushaWalletSuffixDigestRoleV1::Unload,
+                    unload,
+                )
+        {
+            return Err(record_error("suffix Final row differs from its Finalize"));
+        }
+        let mut payees = vec![(row.account, row.account_payout, Kind::OfflineUnload)];
+        if let Some(charge) = row.charge {
+            payees.push((charge.beneficiary, charge.amount, Kind::OfflineCharge));
+        }
+        Ok(Some(Self {
+            scheme,
+            asset: row.asset,
+            key: row.payout.key,
+            source: row.payout.source,
+            amount: row.payout.amount,
+            payees,
+        }))
+    }
+
     /// Rows of this payout when its immutable record names `entrypoint`; a claim the record
     /// credits to an earlier transaction moved nothing here.
     fn movements(
@@ -720,6 +767,19 @@ fn offline_instruction_movements(
         KagemushaWalletLedgerActionV1::ClaimFee(bytes) => {
             PayoutClaim::fee(bytes, &scheme)?.movements(entrypoint, ledger, credited, out)
         }
+        KagemushaWalletLedgerActionV1::SuffixUnloadFinalize {
+            wallet,
+            authority,
+            account,
+            ordinal,
+            unload,
+        } => match PayoutClaim::suffix(
+            ledger, scheme, *wallet, *authority, account, *ordinal, unload,
+        )? {
+            Some(claim) => claim.movements(entrypoint, ledger, credited, out),
+            None => Ok(()),
+        },
+        // Register, retention, Begin and Append stages move no value.
         _ => Ok(()),
     }
 }

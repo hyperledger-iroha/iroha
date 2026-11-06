@@ -45,6 +45,21 @@ fn counted<T>(action: impl FnOnce() -> T) -> (T, Counts) {
     (result, counts)
 }
 
+// Parser equivalence fixtures need time for genuine proof and wallet preparation on loaded
+// debug builds. These original finite intervals do not change the separate short-expiry or
+// deep-history latency controls, and are never extended after signing or authorization.
+pub(super) fn ready_fixture(renewal_validity_ms: u64) -> Fixture {
+    let fixture = Fixture::enrolled_with_renewal_validity(20_000, renewal_validity_ms);
+    let readiness_budget = Duration::from_millis(
+        fixture
+            .initial
+            .expires_at_unix_ms
+            .saturating_sub(now_ms().unwrap()),
+    );
+    wait_until(fixture.initial.issued_at_unix_ms + 10_000, readiness_budget);
+    fixture
+}
+
 // Two genuine signed bodies, one naturally expired and canonically retired request, and
 // unchanged native custody. No forged History, proof, signature or synthetic expiry clock.
 pub(super) fn history() -> (Fixture, BodyHistory) {
@@ -92,11 +107,7 @@ fn build_history_with_bodies(
     >,
 ) -> (Fixture, BodyHistory) {
     assert!((2..=3).contains(&count), "small genuine parser fixture");
-    let fixture = Fixture::enrolled_with_renewal_validity(4_000, 8_000);
-    wait_until(
-        fixture.initial.issued_at_unix_ms + 2_000,
-        Duration::from_secs(4),
-    );
+    let fixture = ready_fixture(30_000);
     let mut retained: Option<BodyHistory> = None;
     for ordinal in 1..=count {
         if let Some(history) = retained.as_ref() {
@@ -109,7 +120,7 @@ fn build_history_with_bodies(
                     .unsigned
                     .statement
                     .expires_at_unix_ms,
-                Duration::from_secs(10),
+                Duration::from_millis(fixture.policy.max_validity_ms + 2_000),
             );
         }
         drop(retained.take());
@@ -122,7 +133,11 @@ fn build_history_with_bodies(
             let authorization = turn
                 .authorize_retained(&fixture.owner, &previous, fixture.options.deadline)
                 .unwrap();
-            let terms = Terms::new(now_ms().unwrap() + 8_000, &fixture.options).unwrap();
+            let terms = Terms::new(
+                now_ms().unwrap() + fixture.policy.max_validity_ms,
+                &fixture.options,
+            )
+            .unwrap();
             let unsigned = fixture
                 .owner
                 .select_renewal_unsigned(
@@ -154,7 +169,11 @@ fn build_history_with_bodies(
                 .unwrap();
             (finished, authorization)
         } else {
-            let terms = Terms::new(now_ms().unwrap() + 8_000, &fixture.options).unwrap();
+            let terms = Terms::new(
+                now_ms().unwrap() + fixture.policy.max_validity_ms,
+                &fixture.options,
+            )
+            .unwrap();
             let unsigned = fixture
                 .owner
                 .select_renewal_unsigned(

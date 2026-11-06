@@ -1218,6 +1218,110 @@ fn kagemusha_vector_frame(name: &str) -> Vec<u8> {
 }
 
 #[test]
+fn block_proofs_kagemusha_owner_projects_suffix_stages_from_outer_fields_only() {
+    use iroha_data_model::{
+        isi::{
+            InstructionBox,
+            kagemusha_wallet::{KagemushaWalletLedgerActionV1 as Action, KagemushaWalletLedgerV1},
+        },
+        transaction::{FeePaymentIntent, TransactionBuilder},
+    };
+    let scheme = [0x21; 32];
+    let wallet = [0x22; 32];
+    let authority = [0x23; 32];
+    let account_of = |seed: u8| {
+        AccountId::new(
+            iroha_crypto::KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        )
+    };
+    let paid = account_of(9);
+    let ledger = |action: Action| InstructionBox::from(KagemushaWalletLedgerV1::new(scheme, action));
+    let begin = |wallet: [u8; 32], authority: [u8; 32], ordinal: u128| Action::SuffixUnloadBegin {
+        wallet,
+        authority,
+        account: paid.clone(),
+        ordinal,
+        // Stage frames are never decoded for the projection.
+        header: vec![0xFF; 3],
+        anchor: Vec::new(),
+    };
+    let key = iroha_crypto::KeyPair::from_seed(vec![7; 32], iroha_crypto::Algorithm::Ed25519);
+    let signer = AccountId::new(key.public_key().clone());
+    let network = iroha_data_model::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+        Hash::prehashed([0x5A; 32]),
+    ));
+    let signed = TransactionBuilder::new(
+        network,
+        signer.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([
+        ledger(begin(wallet, authority, 0)),
+        ledger(Action::SuffixUnloadAppend {
+            wallet,
+            authority,
+            account: paid.clone(),
+            ordinal: 1,
+            chunk: vec![1],
+        }),
+        ledger(Action::SuffixUnloadFinalize {
+            wallet,
+            authority,
+            account: paid.clone(),
+            ordinal: 2,
+            unload: vec![2],
+        }),
+        // Misshaped ordinals and zero identifiers name no attempt.
+        ledger(begin(wallet, authority, 1)),
+        ledger(begin([0; 32], authority, 0)),
+        ledger(begin(wallet, [0; 32], 0)),
+        ledger(Action::SuffixUnloadAppend {
+            wallet,
+            authority,
+            account: paid.clone(),
+            ordinal: 0,
+            chunk: vec![1],
+        }),
+        ledger(Action::SuffixUnloadFinalize {
+            wallet,
+            authority,
+            account: paid.clone(),
+            ordinal: 1,
+            unload: vec![2],
+        }),
+    ])
+    .sign(key.private_key());
+    let owner = KagemushaLedgerEntryOwnerV1::from_signed(&signed).unwrap();
+    let attempt = |ordinal, stage| KagemushaLedgerAttemptV1 {
+        scheme,
+        kind: KagemushaLedgerAttemptKindV1::SuffixUnload {
+            account: paid.clone(),
+            authority,
+            ordinal,
+            stage,
+        },
+        wallet,
+    };
+    assert_eq!(
+        owner.attempts,
+        vec![
+            attempt(0, KagemushaLedgerSuffixStageV1::Begin),
+            attempt(1, KagemushaLedgerSuffixStageV1::Append),
+            attempt(2, KagemushaLedgerSuffixStageV1::Finalize),
+        ]
+    );
+    // The relaying signer and the paid account own every stage; anyone else gets the same
+    // absence as for an unrelated input.
+    assert!(owner.is_attempt_of(&signer, &scheme, &wallet));
+    assert!(owner.is_attempt_of(&paid, &scheme, &wallet));
+    assert!(!owner.is_attempt_of(&account_of(10), &scheme, &wallet));
+    assert!(!owner.is_attempt_of(&paid, &[0x24; 32], &wallet));
+    assert!(!owner.is_attempt_of(&paid, &scheme, &[0x25; 32]));
+}
+
+#[test]
 fn block_proofs_kagemusha_owner_names_only_explicit_activate_and_unload_frames() {
     use iroha_data_model::{
         isi::{

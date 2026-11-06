@@ -108,9 +108,9 @@ pub use lifecycle::{
 };
 pub use maintenance::MaintenanceViewV1;
 pub use map_custody::{PreparationMapV1, PreparationMapsV1};
-pub(crate) use native_worker::NativeFoldWorkerV1;
 #[cfg(test)]
 pub(crate) use native_worker::{FoldRetentionCountsV1, perturb_retained_key_for_test};
+pub(crate) use native_worker::{NativeFoldWorkerV1, suffix_receive_burns};
 pub use preparation_custody::{PreparationCustodyV1, PreparationOriginalV1};
 #[cfg(any(test, feature = "test-utils"))]
 pub use scheduling::PublicationForTest;

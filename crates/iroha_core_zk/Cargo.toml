@@ -36,6 +36,10 @@ required-features = ["zk-tests"]
 name = "native_key_writer_allocation"
 path = "tests/native_key_writer_allocation.rs"
 
+[[test]]
+name = "kagemusha_suffix_corpus"
+path = "tests/kagemusha_suffix_corpus.rs"
+
 [features]
 # Offline packaging generators are built only through explicit artifact selection.
 dev-tools = []

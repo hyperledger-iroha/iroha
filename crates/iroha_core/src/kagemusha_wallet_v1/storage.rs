@@ -62,10 +62,16 @@ where
 /// enclosing snapshot must be authenticated against the finalized World state commitment.
 pub fn validate_row(key: &KagemushaWalletLedgerKeyV1, bytes: &[u8]) -> Result<()> {
     let (kind, scheme, owner, entry) = &key.components();
-    if *scheme == [0; 32] || *owner == [0; 32] || (*kind != ISSUANCE && *entry != [0; 32]) {
+    if *scheme == [0; 32]
+        || *owner == [0; 32]
+        || (*kind != ISSUANCE && *kind != super::suffix::STAGE && *entry != [0; 32])
+    {
         return Err(Error::Binding);
     }
     match *kind {
+        super::suffix::BEGIN | super::suffix::STAGE | super::suffix::FINAL => {
+            super::suffix::validate_suffix_row(*kind, scheme, owner, entry, bytes)
+        }
         super::event_evidence::KIND => {
             let value: super::event_evidence::KagemushaLoadEventPathV1 =
                 decode(bytes, super::event_evidence::CAP)?;
@@ -325,6 +331,9 @@ pub fn validate_snapshot<'a>(
             }
             RESERVE_ACCOUNT | RESERVE_ASSET => {
                 actual_count = actual_count.checked_add(1).ok_or(Error::Overflow)?
+            }
+            super::suffix::STAGE | super::suffix::FINAL => {
+                super::suffix::validate_snapshot_row(row_key, bytes, &lookup)?;
             }
             _ => {}
         }
