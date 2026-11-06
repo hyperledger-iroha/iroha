@@ -4,7 +4,7 @@
 //! TODO: Compile and execute both cases on the current candidate; no release claim.
 
 #[path = "../common/first_load_fixture.rs"]
-mod first_load_fixture;
+pub(super) mod first_load_fixture;
 #[path = "../common/ordinary_load_fixture.rs"]
 mod load_fixture;
 #[path = "../common/ordinary_load_receipt.rs"]
