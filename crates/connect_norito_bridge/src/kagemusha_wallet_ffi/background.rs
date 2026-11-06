@@ -75,6 +75,12 @@ impl state::FoldObserverV1 for Inner {
         };
         observation::capture(self, id);
     }
+    fn running(&self, running: &state::FoldRunningV1) {
+        self.lock().fold.set_running(running);
+    }
+    fn ended(&self, running: &state::FoldRunningV1) {
+        self.lock().fold.end_running(running);
+    }
 }
 /// Process lifetime peak resident set size, read at the end of each fold sub-proof.
 #[cfg(unix)]
@@ -274,7 +280,8 @@ impl Background {
     pub(super) fn record_native_work(&self, record: &state::NativeWorkRecordV1) {
         self.inner.lock().fold.record_native_work(record);
     }
-    /// Observation-only fold telemetry: the last 64 sub-proofs and cumulative counts.
+    /// Observation-only fold telemetry: the last 64 sub-proofs, the turn running now and
+    /// cumulative counts.
     pub(super) fn fold_metrics(&self) -> state::FoldMetricsV1 {
         let mut metrics = self.inner.lock().fold.clone();
         metrics.set_process_peak_rss_bytes(peak_rss_bytes());

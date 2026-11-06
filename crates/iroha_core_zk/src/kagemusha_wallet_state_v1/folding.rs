@@ -500,7 +500,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         // owner reads it, for the same key and a byte-exact durable prefix; every turn that
         // proves nothing drops it.
         let retained = guard.take_retained();
-        let mut turn = FoldTurnV1::start();
+        let mut turn = guard.turn();
         let result = match self.fold_turn(&guard, &mut turn, retained) {
             Ok(ControlFlow::Continue((prepared, native))) => {
                 return Ok(ControlFlow::Continue(FoldJobV1 {

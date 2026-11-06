@@ -331,7 +331,8 @@ impl Scheduler {
     }
 
     /// Report every finished fold sub-proof of this scheduler to `observer`, replacing an
-    /// earlier observer. Observation only: nothing reads the reports back.
+    /// earlier observer, and the public facts of each selected turn that starts after this
+    /// call while it runs. Observation only: nothing reads the reports back.
     pub fn observe(&self, observer: Arc<dyn FoldObserverV1>) {
         self.0.lock().observer = Some(observer);
     }
@@ -345,7 +346,7 @@ impl Scheduler {
         cause: Option<FoldCancelCauseV1>,
         ingests: u32,
     ) {
-        let observer = self.0.lock().observer.clone();
+        let observer = turn.observer();
         if let Some(mut record) = turn.finish(result, cause)
             && let Some(observer) = observer
         {
@@ -645,6 +646,12 @@ pub(super) struct FoldGuard {
 }
 
 impl FoldGuard {
+    /// Open this sub-proof's fold turn on the calling thread; while it runs, the facts it reads
+    /// reach the scheduler's fold observer (observation only).
+    pub(super) fn turn(&self) -> FoldTurnV1 {
+        FoldTurnV1::start(self.scheduler.0.lock().observer.clone())
+    }
+
     /// Report the finished turn to the observer while this sub-proof still holds the slot,
     /// so a joining payment returns only after its cancellation was reported.
     pub(super) fn report(&self, turn: FoldTurnV1, result: Result<FoldStatus, &Error>) {
@@ -809,7 +816,7 @@ impl Scheduler {
         let Some(guard) = self.start() else {
             return Ok(false);
         };
-        let mut turn = FoldTurnV1::start();
+        let mut turn = guard.turn();
         turn.select(sequence, 0);
         super::fold_metrics::enter(super::FoldPhaseV1::Prove);
         let result = work(&guard.token).map(|()| FoldStatus::Checkpoint {
@@ -835,7 +842,7 @@ impl Scheduler {
         let Some(guard) = self.start() else {
             return Ok(None);
         };
-        let mut turn = FoldTurnV1::start();
+        let mut turn = guard.turn();
         turn.select(sequence, 0);
         super::fold_metrics::enter(super::FoldPhaseV1::Prove);
         if let Err(error) = work(&guard.token).and_then(|()| guard.token.check()) {
