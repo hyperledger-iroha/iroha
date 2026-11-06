@@ -3859,7 +3859,7 @@ impl QualifiedOperatorPreseedStore {
         Ok(Self { backend, manifests })
     }
 
-    fn manifest_by_digest(&self, digest: &[u8; 32]) -> eyre::Result<Option<StoredManifest>> {
+    fn manifest_by_digest(&self, digest: &[u8; 32]) -> eyre::Result<Option<Arc<StoredManifest>>> {
         let Some(qualified) = self.manifests.get(digest) else {
             return Ok(None);
         };

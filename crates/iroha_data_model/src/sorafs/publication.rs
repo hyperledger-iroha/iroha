@@ -1,21 +1,25 @@
 //! Publication evidence anchored in an independently selected native finality checkpoint.
+//!
+//! A proof carries quorum certificates and Merkle paths only, never a block body, so any
+//! publisher can authenticate its own assertion without reading other dataspaces.
 
 use super::pin_registry::{PinManifestRecord, ReplicationOrderRecord};
 use crate::{
     NetworkId,
     isi::sorafs::AssertSorafsPublicationV1,
-    query::CommittedTransaction,
     sumeragi_finality::{
-        SumeragiFinalityCheckpoint, SumeragiFinalityProof, SumeragiFinalityVerifier,
+        CertifiedTransactionInclusionV1, SumeragiCommitCertificateV1, SumeragiCommitVerifierV1,
+        SumeragiFinalityCheckpoint, SumeragiFinalityVerifier,
     },
-    transaction::{Executable, SignedTransaction, TransactionEntrypoint},
+    transaction::{Executable, SignedTransaction},
 };
 use norito::{Decode, Encode};
 
-/// Maximum canonical publication response, including its authenticated executed block carrier.
+/// Maximum canonical publication response.
 pub const PUBLICATION_PROOF_MAX_BYTES_V1: usize = 32 * 1024 * 1024;
-/// Maximum consecutive current-certificate proofs accepted in one publication response.
-pub const PUBLICATION_PROOF_MAX_BLOCKS_V1: usize = 1024;
+/// Maximum validator-epoch boundaries one publication response may cross from the client's
+/// trusted checkpoint to the block that executed the assertion.
+pub const PUBLICATION_PROOF_MAX_EPOCH_BOUNDARIES_V1: usize = 256;
 
 /// Bounded request for metadata or one chunk under an exact live native replication assignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
@@ -62,24 +66,31 @@ pub struct SorafsPublicationProofRequestV1 {
 }
 
 /// Untrusted canonical carrier for a challenged native publication assertion.
+///
+/// Every component is DATA until [`verify_sorafs_publication_v1`] authenticates it under the
+/// client's own checkpoint: no response can supply its trust root or an epoch authority.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::sorafs::publication::SorafsPublicationProofV1")]
 pub struct SorafsPublicationProofV1 {
-    /// Consecutive canonical certified blocks, including the independently pinned floor.
-    /// The last frame contains the exact successful signed assertion.
-    pub lineage: Vec<SumeragiFinalityProof>,
+    /// Incumbent epoch-boundary certificates after the epoch of the client's checkpoint, in
+    /// height order, up to the epoch that executed the assertion.
+    pub epoch_boundaries: Vec<SumeragiCommitCertificateV1>,
+    /// Commit certificate of the block that executed the assertion.
+    pub certificate: SumeragiCommitCertificateV1,
+    /// Membership of the exact signed assertion and its joined execution output.
+    pub inclusion: CertifiedTransactionInclusionV1,
 }
 
 /// Opaque successful verification of the client's original challenged assertion.
 #[derive(Debug)]
 pub struct VerifiedSorafsPublicationV1 {
-    finality: SumeragiFinalityCheckpoint,
+    height: u64,
     completed: bool,
 }
 impl VerifiedSorafsPublicationV1 {
-    /// Verified compact prefix that can be retained as the next independent checkpoint.
-    pub fn finality(&self) -> &SumeragiFinalityCheckpoint {
-        &self.finality
+    /// Height of the quorum-certified block that executed the assertion.
+    pub const fn height(&self) -> u64 {
+        self.height
     }
     /// Whether the proven instruction required every assigned provider's finalized completion.
     pub const fn completed(&self) -> bool {
@@ -94,11 +105,12 @@ pub struct SorafsPublicationProofErrorV1;
 
 /// Verify the exact signed assertion against independently pinned network and predecessor state.
 ///
-/// `checkpoint` must come from an independently authenticated local selection or a preceding
-/// call's verified output. The caller must first compare its chain label with the configured
-/// chain using `SumeragiFinalityVerifier::from_trusted_checkpoint`. A proof response cannot supply
-/// its own trust root. The caller must start a monotonic deadline before generating its challenge
-/// and reject verification after that deadline.
+/// `checkpoint` must come from an independently authenticated local selection, such as one
+/// derived from the signed genesis. The caller must first compare its chain label with the
+/// configured chain using `SumeragiFinalityVerifier::from_trusted_checkpoint`. A proof response
+/// cannot supply its own trust root or epoch authority: every epoch boundary is verified under
+/// the incumbent quorum that `checkpoint` selects. The caller must start a monotonic deadline
+/// before generating its challenge and reject verification after that deadline.
 ///
 /// # Errors
 /// Rejects a proof that fails finality, binding or freshness verification.
@@ -109,8 +121,7 @@ pub fn verify_sorafs_publication_v1(
     proof: &SorafsPublicationProofV1,
 ) -> Result<VerifiedSorafsPublicationV1, SorafsPublicationProofErrorV1> {
     let rejected = SorafsPublicationProofErrorV1;
-    if proof.lineage.len() < 2
-        || proof.lineage.len() > PUBLICATION_PROOF_MAX_BLOCKS_V1
+    if proof.epoch_boundaries.len() > PUBLICATION_PROOF_MAX_EPOCH_BOUNDARIES_V1
         || norito::canonical_frame_len(proof).map_err(|_| rejected)?
             > PUBLICATION_PROOF_MAX_BYTES_V1
         || expected.network_id() != Some(network)
@@ -133,56 +144,34 @@ pub fn verify_sorafs_publication_v1(
     {
         return Err(rejected);
     }
-    let mut verifier = SumeragiFinalityVerifier::from_trusted_checkpoint(
+    let native = SumeragiFinalityVerifier::from_trusted_checkpoint(
         checkpoint,
         network,
         checkpoint.chain_id(),
     )
     .map_err(|_| rejected)?;
-    // Certificate witnesses may differ between honest replicas; authenticate the same decision.
-    verifier
-        .verify_same_decision(checkpoint.tip(), &proof.lineage[0])
-        .map_err(|_| rejected)?;
-    let mut verified_tip = None;
-    for edge in &proof.lineage[1..] {
-        verified_tip = Some(verifier.verify(edge).map_err(|_| rejected)?);
+    // The client's checkpoint fixes the only epoch authority; each boundary must be certified
+    // by the incumbent quorum before its successor can sign anything this proof relies on.
+    let mut certificates = SumeragiCommitVerifierV1::new(&native).map_err(|_| rejected)?;
+    for boundary in &proof.epoch_boundaries {
+        certificates
+            .verify_epoch_boundary(boundary)
+            .map_err(|_| rejected)?;
     }
-    let verified_tip = verified_tip.ok_or(rejected)?;
-    let block = verified_tip.block();
-    let entry_hash = expected.hash_as_entrypoint();
-    let input_index = block
-        .network_entrypoints()
-        .position(|entry| entry.hash() == entry_hash)
-        .and_then(|index| u32::try_from(index).ok())
-        .ok_or(rejected)?;
-    let entrypoint = block
-        .network_entrypoint_at(input_index as usize)
-        .ok_or(rejected)?;
-    if entrypoint != &TransactionEntrypoint::External(expected.clone()) {
+    let verified = certificates
+        .verify(&proof.certificate)
+        .map_err(|_| rejected)?;
+    if verified.height() <= checkpoint.height() {
         return Err(rejected);
     }
-    let (output_index, _) = block.network_output_at(input_index).ok_or(rejected)?;
-    let output = block
-        .execution_outputs()
-        .get(output_index as usize)
-        .ok_or(rejected)?
-        .clone();
-    let committed = CommittedTransaction {
-        block_hash: block.hash(),
-        entrypoint_hash: entrypoint.hash(),
-        entrypoint_proof: block.network_input_proof(input_index).ok_or(rejected)?,
-        entrypoint: entrypoint.clone(),
-        output_hash: iroha_crypto::HashOf::new(&output),
-        output_proof: block.output_proof(output_index).ok_or(rejected)?,
-        output,
-    };
-    verified_tip
-        .verify_committed_transaction(network, &committed)
+    let result = verified
+        .verify_external_execution(network, expected, &proof.inclusion)
         .map_err(|_| rejected)?;
+    if result.0.is_err() {
+        return Err(rejected);
+    }
     Ok(VerifiedSorafsPublicationV1 {
-        finality: verifier
-            .export_checkpoint(proof.lineage.last().ok_or(rejected)?)
-            .map_err(|_| rejected)?,
+        height: verified.height(),
         completed: assertion.require_complete,
     })
 }
@@ -212,6 +201,169 @@ mod tests {
             );
             bytes.push(0);
             assert!(norito::decode_canonical::<SorafsAssignedSourceRequestV1>(&bytes).is_err());
+        }
+    }
+
+    mod compact_proof {
+        use super::*;
+        use crate::{
+            account::AccountId,
+            block::{SignedBlock, builder::BlockBuilder},
+            sorafs::pin_registry::{ManifestDigest, ReplicationOrderId},
+            sumeragi_finality::test_fixtures::NativeFinalityFixture,
+            transaction::{FeePaymentIntent, TransactionBuilder, TransactionResultInner},
+        };
+        use iroha_crypto::{Algorithm, KeyPair};
+        use std::time::Duration;
+
+        struct Published {
+            fixture: NativeFinalityFixture,
+            checkpoint: SumeragiFinalityCheckpoint,
+            signed: SignedTransaction,
+            proof: SorafsPublicationProofV1,
+        }
+
+        fn assertion_block(
+            fixture: &NativeFinalityFixture,
+            checkpoint: &SumeragiFinalityCheckpoint,
+            seed: u8,
+            result: TransactionResultInner,
+        ) -> (SignedTransaction, SignedBlock) {
+            let header = fixture.next_header();
+            let signer = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+            let mut builder = TransactionBuilder::new(
+                fixture.network_id(),
+                AccountId::new(signer.public_key().clone()),
+                FeePaymentIntent::authority(vec![], None),
+            );
+            builder.set_creation_time(Duration::from_millis(header.creation_time_ms - 1));
+            let signed = builder
+                .with_instructions([AssertSorafsPublicationV1 {
+                    manifest_digest: ManifestDigest([1; 32]),
+                    order_id: ReplicationOrderId([2; 32]),
+                    assignment_revision: 1,
+                    canonical_order_digest: [3; 32],
+                    require_complete: true,
+                    challenge: [seed; 32],
+                    minimum_height: checkpoint.height(),
+                    minimum_block_hash: *checkpoint.block_hash().as_ref(),
+                }])
+                .sign(signer.private_key());
+            let mut block = BlockBuilder::new(header);
+            block.push_transaction(signed.clone());
+            let mut block = block.build(crate::block::BlockSignatures::default());
+            NativeFinalityFixture::install_network_results(&mut block, vec![result]);
+            (signed, block)
+        }
+
+        fn inclusion(block: &SignedBlock) -> CertifiedTransactionInclusionV1 {
+            CertifiedTransactionInclusionV1 {
+                entry_proof: block.network_input_proof(0).unwrap(),
+                output: block.execution_outputs()[0].clone(),
+                output_proof: block.output_proof(0).unwrap(),
+            }
+        }
+
+        fn publish(result: TransactionResultInner) -> Published {
+            let mut fixture = NativeFinalityFixture::start("sorafs-publication-proof");
+            let checkpoint = fixture.checkpoint();
+            let (signed, block) = assertion_block(&fixture, &checkpoint, 7, result);
+            let inclusion = inclusion(&block);
+            let certified = fixture.certify(block);
+            let certificate = SumeragiCommitCertificateV1::from_proof(&certified).unwrap();
+            Published {
+                fixture,
+                checkpoint,
+                signed,
+                proof: SorafsPublicationProofV1 {
+                    epoch_boundaries: Vec::new(),
+                    certificate,
+                    inclusion,
+                },
+            }
+        }
+
+        #[test]
+        fn certificate_and_inclusion_prove_applied_assertion_without_block_bodies() {
+            let published = publish(Ok(Vec::new()));
+            let network = published.fixture.network_id();
+            let verified = verify_sorafs_publication_v1(
+                &network,
+                &published.checkpoint,
+                &published.signed,
+                &published.proof,
+            )
+            .unwrap();
+            assert_eq!(verified.height(), 2);
+            assert!(verified.completed());
+            // The proof is a header, quorum certificate, result and two Merkle paths.
+            assert!(norito::canonical_frame_len(&published.proof).unwrap() < 64 * 1024);
+        }
+
+        #[test]
+        fn substituted_or_unbound_publication_evidence_is_rejected() {
+            let published = publish(Ok(Vec::new()));
+            let network = published.fixture.network_id();
+            let reject = |checkpoint, signed, proof| {
+                verify_sorafs_publication_v1(&network, checkpoint, signed, proof).is_err()
+            };
+            let foreign = NativeFinalityFixture::start("foreign-publication-network");
+            assert!(
+                verify_sorafs_publication_v1(
+                    &foreign.network_id(),
+                    &published.checkpoint,
+                    &published.signed,
+                    &published.proof,
+                )
+                .is_err()
+            );
+            // Another signed assertion cannot borrow this inclusion or certificate.
+            let (other, other_block) =
+                assertion_block(&published.fixture, &published.checkpoint, 9, Ok(Vec::new()));
+            assert!(reject(&published.checkpoint, &other, &published.proof));
+            let mut substituted = published.proof.clone();
+            substituted.inclusion = inclusion(&other_block);
+            assert!(reject(
+                &published.checkpoint,
+                &published.signed,
+                &substituted
+            ));
+            let mut forged = published.proof.clone();
+            forged.certificate.commit_qc[0] ^= 1;
+            assert!(reject(&published.checkpoint, &published.signed, &forged));
+            let mut flooded = published.proof.clone();
+            flooded.epoch_boundaries = vec![
+                published.proof.certificate.clone();
+                PUBLICATION_PROOF_MAX_EPOCH_BOUNDARIES_V1 + 1
+            ];
+            assert!(reject(&published.checkpoint, &published.signed, &flooded));
+            // A newer floor than the one the assertion names is not its checkpoint.
+            let mut advanced = published.fixture;
+            let (_, later) = assertion_block(&advanced, &published.checkpoint, 11, Ok(Vec::new()));
+            advanced.certify(later);
+            assert!(reject(
+                &advanced.checkpoint(),
+                &published.signed,
+                &published.proof
+            ));
+        }
+
+        #[test]
+        fn rejected_execution_is_not_publication() {
+            let published = publish(Err(
+                crate::transaction::error::TransactionRejectionReason::Validation(
+                    crate::ValidationFail::NotPermitted("fixture rejection".into()),
+                ),
+            ));
+            assert!(
+                verify_sorafs_publication_v1(
+                    &published.fixture.network_id(),
+                    &published.checkpoint,
+                    &published.signed,
+                    &published.proof,
+                )
+                .is_err()
+            );
         }
     }
 }

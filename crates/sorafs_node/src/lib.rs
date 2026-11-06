@@ -1387,7 +1387,10 @@ fn same_local_file_identity(
     expected.identity() == opened.identity()
 }
 const REPUTATION_EVENT_CHANNEL_CAPACITY: usize = 128;
-fn reconciliation_divergence_count(storage: &StorageBackend, manifests: &[StoredManifest]) -> u32 {
+fn reconciliation_divergence_count(
+    storage: &StorageBackend,
+    manifests: &[Arc<StoredManifest>],
+) -> u32 {
     let mut divergence_count = 0_u32;
     let manifest_count = storage.manifest_count();
     let index_count = storage.index_manifest_count();
@@ -3590,7 +3593,7 @@ struct GcEvictionAuditLinkV1 {
 #[derive(Debug)]
 struct GcStorageSnapshot {
     identity: GcStorageIdentityV1,
-    manifests: Vec<StoredManifest>,
+    manifests: Vec<Arc<StoredManifest>>,
     chunk_refcounts: Vec<ChunkRefcountEntry>,
 }
 fn gc_manifest_identity_digest(manifest: &StoredManifest) -> [u8; 32] {
@@ -3620,7 +3623,7 @@ fn gc_manifest_identity_digest(manifest: &StoredManifest) -> [u8; 32] {
     }
     *hasher.finalize().as_bytes()
 }
-fn gc_manifest_set_digest(manifests: &[StoredManifest]) -> [u8; 32] {
+fn gc_manifest_set_digest(manifests: &[Arc<StoredManifest>]) -> [u8; 32] {
     let mut identities = manifests
         .iter()
         .map(|manifest| {
@@ -3661,7 +3664,7 @@ fn gc_chunk_refcounts_digest(refcounts: &[ChunkRefcountEntry]) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 fn gc_storage_identity_from_parts(
-    manifests: &[StoredManifest],
+    manifests: &[Arc<StoredManifest>],
     chunk_refcounts: &[ChunkRefcountEntry],
     total_bytes: u64,
     gc_counters: (u64, u64),

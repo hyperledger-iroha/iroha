@@ -17376,11 +17376,11 @@
             "path": "crates/iroha_data_model/src/sorafs/publication.rs",
             "symbols": [
               "PUBLICATION_PROOF_MAX_BYTES_V1",
-              "PUBLICATION_PROOF_MAX_BLOCKS_V1"
+              "PUBLICATION_PROOF_MAX_EPOCH_BOUNDARIES_V1"
             ],
             "exprs": {
               "PUBLICATION_PROOF_MAX_BYTES_V1": "32 * 1024 * 1024",
-              "PUBLICATION_PROOF_MAX_BLOCKS_V1": "1024"
+              "PUBLICATION_PROOF_MAX_EPOCH_BOUNDARIES_V1": "256"
             }
           },
           {

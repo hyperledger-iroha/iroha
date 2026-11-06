@@ -4100,6 +4100,32 @@ impl AppState {
             }
         }
     }
+    /// Refuse an already banned or exhausted gateway client before expensive work.
+    ///
+    /// The check is not charged; admitted requests are charged once by the full policy.
+    #[cfg(feature = "app_api")]
+    #[allow(clippy::result_large_err)]
+    fn precheck_gateway_rate(
+        &self,
+        client: &sorafs::gateway::ClientFingerprint,
+    ) -> Result<(), sorafs::gateway::PolicyViolation> {
+        let Some(policy) = &self.sorafs_gateway_policy else {
+            return Ok(());
+        };
+        match policy.precheck_rate(client, std::time::Instant::now()) {
+            sorafs::gateway::PolicyDecision::Allow => Ok(()),
+            sorafs::gateway::PolicyDecision::Deny(violation) => {
+                #[cfg(feature = "telemetry")]
+                {
+                    let (reason, detail) = violation.telemetry_labels();
+                    self.telemetry.with_metrics(|metrics| {
+                        metrics.record_sorafs_gar_violation(reason, detail);
+                    });
+                }
+                Err(violation)
+            }
+        }
+    }
     #[cfg(feature = "app_api")]
     fn publish_gar_violation_event(
         &self,

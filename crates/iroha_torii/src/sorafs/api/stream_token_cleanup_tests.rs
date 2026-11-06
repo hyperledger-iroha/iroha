@@ -131,9 +131,10 @@ async fn range_admission_cancellation_keeps_physical_permits_and_releases_discar
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn static_rejection_callback_uses_physical_worker_without_a_cleanup_ticket() {
+async fn static_rejection_is_local_and_needs_no_cleanup_ticket_or_native_callback() {
     use std::sync::atomic::Ordering;
     let (context, signed, durable, probe, cleanup) = range_cleanup_context(1);
+    // Hold the only cleanup ticket: a static rejection must not need one.
     let ticket = context
         .app
         .stream_token_cleanup
@@ -142,43 +143,24 @@ async fn static_rejection_callback_uses_physical_worker_without_a_cleanup_ticket
         .try_reserve()
         .unwrap();
     let observed = signed.observer_calls.load(Ordering::SeqCst);
-    probe.gate_point.store(2, Ordering::Release);
-    let release = GateRelease(probe.gate.clone());
-    let app = context.app.clone();
     let manifest = context.manifest();
-    let rejected = tokio::spawn(async move {
-        enforce_stream_token_for_request(
-            &app,
-            &enforcement_headers("malformed%%%"),
-            &manifest,
-            "static-with-full-cleanup",
-            enforcement_route(1),
-        )
-        .await
-    });
-    wait_for_range_cleanup(|| probe.gate.entered.load(Ordering::Acquire) == 1).await;
-    assert_eq!(context.app.query_inflight.available_permits(), 0);
-    assert_eq!(context.app.query_heavy_inflight.available_permits(), 0);
-    assert!(
-        context
-            .app
-            .stream_token_cleanup
-            .as_ref()
-            .unwrap()
-            .try_reserve()
-            .is_err()
-    );
-    assert_eq!(signed.observer_calls.load(Ordering::SeqCst), observed);
-    drop(release);
-    let response = rejected
-        .await
-        .unwrap()
-        .expect_err("malformed token remains rejected");
+    let response = enforce_stream_token_for_request(
+        &context.app,
+        &enforcement_headers("malformed%%%"),
+        &manifest,
+        "static-with-full-cleanup",
+        enforcement_route(1),
+    )
+    .await
+    .expect_err("malformed token remains rejected");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(durable.requests().len(), 1);
-    assert_eq!(durable.outcomes().len(), 1);
+    // The native provider callback never runs, so nothing is recorded, leased or released.
+    assert_eq!(probe.gate.entered.load(Ordering::Acquire), 0);
+    assert!(durable.requests().is_empty());
+    assert!(durable.outcomes().is_empty());
     assert_eq!(durable.active_leases(), 0);
     assert!(probe.release_calls.lock().unwrap().is_empty());
+    assert_eq!(signed.observer_calls.load(Ordering::SeqCst), observed);
     drop(ticket);
     cleanup.finish().await;
 }

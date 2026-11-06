@@ -10,7 +10,7 @@ use iroha_data_model::{
         publication::{
             PUBLICATION_PROOF_MAX_BYTES_V1, SorafsPublicationPreparationV1,
             SorafsPublicationProofRequestV1, SorafsPublicationProofV1,
-            verify_sorafs_publication_v1,
+            VerifiedSorafsPublicationV1, verify_sorafs_publication_v1,
         },
     },
     sumeragi_finality::{
@@ -441,7 +441,7 @@ fn assert_and_verify(
     floor: &SumeragiFinalityCheckpoint,
     completed: bool,
     out: &Path,
-) -> Result<SumeragiFinalityCheckpoint, String> {
+) -> Result<VerifiedSorafsPublicationV1, String> {
     let PublicationSession {
         client,
         base,
@@ -507,7 +507,7 @@ fn assert_and_verify(
         }
         if response.status() != StatusCode::OK {
             return Err(format!(
-                "publication proof unavailable with {}; full block carriers require CanReadAllLedgerData and a checkpoint within 1023 blocks",
+                "publication proof unavailable with {}; the checkpoint must be a committed block before the assertion and within 256 validator epochs",
                 response.status()
             ));
         }
@@ -523,7 +523,7 @@ fn assert_and_verify(
             return Err("publication phase proof substituted".to_owned());
         }
         write_bytes(out, &bytes)?;
-        return Ok(verified.finality().clone());
+        return Ok(verified);
     }
 }
 
@@ -567,7 +567,9 @@ pub(super) fn qualify(
         config,
         started,
     };
-    let assigned_floor = assert_and_verify(
+    // Both assertions bind the same independently selected checkpoint: the compact proof
+    // authenticates execution under it and never replaces it.
+    assert_and_verify(
         session,
         &assigned,
         &checkpoint,
@@ -669,27 +671,13 @@ pub(super) fn qualify(
     {
         return Err("publication assignment changed while supplying source bytes".to_owned());
     }
-    let finality = assert_and_verify(
+    let completed = assert_and_verify(
         session,
         &complete,
-        &assigned_floor,
+        &checkpoint,
         true,
         &out_dir.join("publication.completed.proof.to"),
     )?;
-    // Only successfully authenticated execution advances the retained trust root. A private,
-    // same-directory spool makes replacement atomic and removes partial writes on failure.
-    let checkpoint_path = out_dir.join("publication.finality.to");
-    let checkpoint_bytes = finality
-        .encode_canonical()
-        .map_err(|_| "publication checkpoint encoding failed".to_owned())?;
-    let mut checkpoint_spool = fetch_spool::create(Some(&checkpoint_path))?;
-    checkpoint_spool
-        .write_all(&checkpoint_bytes)
-        .map_err(|_| "publication checkpoint write failed".to_owned())?;
-    fetch_spool::publish(checkpoint_spool, &checkpoint_path)?;
-    fs::File::open(out_dir)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|_| "publication checkpoint directory sync failed".to_owned())?;
     Ok(Value::Object(Map::from_iter([
         ("state".into(), Value::from("completed")),
         ("assignment_finalized".into(), Value::from(true)),
@@ -710,11 +698,7 @@ pub(super) fn qualify(
             "provider_count".into(),
             Value::from(order.assignments.len() as u64),
         ),
-        ("finalized_height".into(), Value::from(finality.height())),
-        (
-            "finalized_block_hash_hex".into(),
-            Value::from(hex_encode(finality.block_hash().as_ref())),
-        ),
+        ("finalized_height".into(), Value::from(completed.height())),
         ("direct_http_ingest".into(), Value::from(false)),
     ])))
 }
