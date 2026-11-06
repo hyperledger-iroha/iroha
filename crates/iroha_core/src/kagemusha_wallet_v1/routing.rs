@@ -32,7 +32,12 @@ pub fn dataspace(
                 .body
                 .asset_digest
         }
-        Action::IssueLoad { wallet, .. } => {
+        // Suffix stages route by the immutable wallet row of the outer wallet, never by a
+        // stage frame: every stage of one Unload names the same scope.
+        Action::IssueLoad { wallet, .. }
+        | Action::SuffixUnloadBegin { wallet, .. }
+        | Action::SuffixUnloadAppend { wallet, .. }
+        | Action::SuffixUnloadFinalize { wallet, .. } => {
             let key = storage::key(storage::WALLET, scheme, *wallet);
             let bytes = world
                 .kagemusha_wallet_ledger()

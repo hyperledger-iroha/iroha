@@ -8873,12 +8873,14 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             sources: Some(vec![
                 JsKotodamaSourceFile {
                     source_name: "parts/view.ko".into(),
-                    source: "view fn value() authorize(anyone) -> int { return arith::value(); }"
+                    source: "view fn value(int input) authorize(anyone) -> int { return arith::value(input: input); }"
                         .into(),
                 },
                 JsKotodamaSourceFile {
                     source_name: "math.ko".into(),
-                    source: "module Math { export fn value() -> int { return 7; } }".into(),
+                    // Source maps describe emitted instructions; keep the helper's work
+                    // dependent on a runtime argument so literal folding cannot remove it.
+                    source: "module Math { export fn value(int input) -> int { return input + 7; } }".into(),
                 },
             ]),
             imports: None,
@@ -8896,7 +8898,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
         let mut request = JsKotodamaCompileRequest {
             artifacts: Vec::new(),
             source:
-                "seiyaku App { view fn value() authorize(anyone) -> int { return calc::value(); } }"
+                "seiyaku App { view fn value(int input) authorize(anyone) -> int { return calc::value(input: input); } }"
                     .into(),
             source_name: Some("app.ko".into()),
             sources: None,
@@ -8913,7 +8915,8 @@ seiyaku Privacy { permission CanCommitPrivateInput;
                 }],
                 sources: Some(vec![JsKotodamaSourceFile {
                     source_name: "src/body.ko".into(),
-                    source: "export fn value() -> int { return 7; }".into(),
+                    // Keep emitted work in the companion for its source-map assertion.
+                    source: "export fn value(int input) -> int { return input + 7; }".into(),
                 }]),
                 exports: vec!["value".into()],
                 imports: None,
@@ -8929,7 +8932,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
             .sources
             .as_mut()
             .expect("companions")[0]
-            .source = "export fn value() -> int { return missing; }".into();
+            .source = "export fn value(int input) -> int { return missing; }".into();
         let invalid = compile_kotodama_request(&request).expect("bounded invalid source");
         assert!(!invalid.ok);
         let diagnostics = invalid.diagnostics_json.expect("native package diagnostic");

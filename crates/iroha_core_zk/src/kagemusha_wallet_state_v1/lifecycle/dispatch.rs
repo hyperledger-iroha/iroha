@@ -14,12 +14,13 @@ pub use projection::CreditProjectionV1;
 
 use super::super::capacity::{FROZEN_BOUND, PLAN_BOUND};
 
-// Only the actual review owner supplies ReviewedUnbound. Ordinary exact recovery and the
-// independently reserved Archive path retain their existing preparation behavior.
+// Only the actual review owner supplies either reviewed admission. Retained preparation
+// admission can never create a binding or replace the selected plan's source/choices.
 #[derive(Clone, Copy)]
 enum DispatchAdmission<'a> {
     Ordinary,
     ReviewedUnbound { checkpoint: &'a [u8; 32] },
+    ReviewedPreparing(&'a RetainedPreparationBindingV1),
     Archive(&'a super::super::scheduling::ArchiveDispatchPermit),
 }
 
@@ -340,6 +341,35 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         self.preparation_entry(&manifest, &request.request_id)?
             .map(|entry| self.exact_bound_status(&entry, &intent, &bytes))
             .transpose()
+    }
+
+    // Authenticate both the exact intent and every selected preparation locator. This
+    // observation grants no execution; only an opaque approved review may retain it.
+    pub(in crate::kagemusha_wallet_state_v1) fn retained_preparation_review_binding(
+        &mut self,
+        request: &OperationRequestV1,
+    ) -> Result<(BoundRequestStatusV1, RetainedPreparationBindingV1), Error> {
+        let intent = NativeIntentV1::user(request.clone());
+        let bytes = self.canonical_intent(&intent)?;
+        let (checkpoint, manifest) = self.manifest()?;
+        let entry = self
+            .preparation_entry(&manifest, &request.request_id)?
+            .ok_or(Error::OperationConflict)?;
+        let status = self.exact_bound_status(&entry, &intent, &bytes)?;
+        Ok((
+            status,
+            Self::retained_preparation_binding(checkpoint, &entry)?,
+        ))
+    }
+
+    fn retained_preparation_binding(
+        checkpoint: [u8; 32],
+        entry: &Entry,
+    ) -> Result<RetainedPreparationBindingV1, Error> {
+        Ok(RetainedPreparationBindingV1 {
+            checkpoint,
+            entry: digest("wallet-reviewed-preparation", &archive::encode(entry)?),
+        })
     }
 
     fn preparation_entry(
@@ -745,6 +775,20 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
         )
     }
 
+    // Only the financial review owner reaches this after renewed hardware approval and
+    // its complete current-source recheck. Absence or changed preparation is a refusal.
+    pub(in crate::kagemusha_wallet_state_v1) fn execute_reviewed_preparing(
+        &mut self,
+        request: OperationRequestV1,
+        binding: &RetainedPreparationBindingV1,
+    ) -> Result<ReviewedExecutionV1, Error> {
+        self.execute_intent_with(
+            NativeIntentV1::user(request),
+            None,
+            DispatchAdmission::ReviewedPreparing(binding),
+        )
+    }
+
     pub(in crate::kagemusha_wallet_state_v1) fn execute_archive_intent(
         &mut self,
         request: NativeIntentV1,
@@ -773,18 +817,31 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
             DispatchAdmission::ReviewedUnbound { checkpoint } => Some(*checkpoint),
             _ => None,
         };
+        let reviewed_preparation = match admission {
+            DispatchAdmission::ReviewedPreparing(binding) => Some(binding),
+            _ => None,
+        };
         let archive_permit = match admission {
             DispatchAdmission::Archive(permit) => Some(permit),
             _ => None,
         };
         // Resolve the source-selected request before requiring a Released head: Advance may
         // already have irreversibly selected this operation and still owe its receipt.
-        let (_, selected_manifest) = self.manifest()?;
+        let (selected_checkpoint, selected_manifest) = self.manifest()?;
         if let Some(entry) = self.preparation_entry(&selected_manifest, &request.request_id())? {
             if reviewed_checkpoint.is_some() {
                 return self
                     .exact_bound_status(&entry, &request, &bytes)
                     .map(ReviewedExecutionV1::Existing);
+            }
+            if let Some(expected) = reviewed_preparation {
+                let status = self.exact_bound_status(&entry, &request, &bytes)?;
+                if !matches!(status, BoundRequestStatusV1::Preparing) {
+                    return Ok(ReviewedExecutionV1::Existing(status));
+                }
+                if Self::retained_preparation_binding(selected_checkpoint, &entry)? != *expected {
+                    return Err(Error::OperationConflict);
+                }
             }
             entry.require_request(
                 &mut self.archive,
@@ -810,6 +867,8 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
             {
                 return Ok(ReviewedExecutionV1::Executed(completion));
             }
+        } else if reviewed_preparation.is_some() {
+            return Err(Error::OperationConflict);
         }
         let _payment = if let Some(permit) = archive_permit {
             if request.kind() != KagemushaWalletOperationKindV1::ArchiveSent {
@@ -842,6 +901,15 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
                     .exact_bound_status(&entry, &request, &bytes)
                     .map(ReviewedExecutionV1::Existing);
             }
+            if let Some(expected) = reviewed_preparation {
+                let status = self.exact_bound_status(&entry, &request, &bytes)?;
+                if !matches!(status, BoundRequestStatusV1::Preparing) {
+                    return Ok(ReviewedExecutionV1::Existing(status));
+                }
+                if Self::retained_preparation_binding(selected, &entry)? != *expected {
+                    return Err(Error::OperationConflict);
+                }
+            }
             entry.require_request(
                 &mut self.archive,
                 &self.scheme_id,
@@ -851,6 +919,9 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
             )?;
             entry
         } else {
+            if reviewed_preparation.is_some() {
+                return Err(Error::OperationConflict);
+            }
             if let Some(expected) = reviewed_checkpoint {
                 self.require_no_preparation_draft(request.request_id())?;
                 if selected != expected {

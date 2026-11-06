@@ -244,8 +244,7 @@ impl<const INDEX: usize, T> norito::core::DecodeField<INDEX, T> for LocateHeader
 }
 
 #[test]
-fn original_header_alignment_refusal_and_inline_nonzero_invalidity_keep_their_actual_causes_and_original_counter()
- {
+fn borrowed_header_and_inline_decoders_keep_intrinsic_invalidity_without_allocating() {
     use norito::core::DecodeRecordFields;
     let flags = header_flags::COMPACT_LEN;
     let _flags = DecodeFlagsGuard::enter(flags);
@@ -296,6 +295,15 @@ fn original_header_alignment_refusal_and_inline_nonzero_invalidity_keep_their_ac
             .unwrap(),
         original
     );
+    let (canonical, allocations) = measured(|| {
+        decoder.with_limits(zero, zero, || {
+            norito::core::decode_field_canonical::<BlockHeader>(span.get(input.as_slice()).unwrap())
+        })
+    });
+    let (decoded, used) = canonical.unwrap().unwrap();
+    assert_eq!(decoded, original);
+    assert_eq!(used, span.get(input.as_slice()).unwrap().len());
+    assert_eq!(allocations, 0);
     input.as_mut_slice()[span.start + height.start..span.start + height.end].fill(0);
 
     let pointer = input.as_slice().as_ptr();
@@ -317,21 +325,18 @@ fn original_header_alignment_refusal_and_inline_nonzero_invalidity_keep_their_ac
     });
     assert_eq!(
         allocations, 0,
-        "logical copy refusal must precede the actual heap allocation"
+        "borrowed canonical decoding must allocate nothing"
     );
     let owning = owning.unwrap().unwrap_err();
-    assert_eq!(owning.kind(), DecodeAttemptErrorKind::EnclosingLimit);
-    assert_eq!(
+    assert_eq!(owning.kind(), DecodeAttemptErrorKind::Invalid);
+    assert!(owning.local_refusal().is_none());
+    assert!(matches!(
         std::error::Error::source(&owning)
             .unwrap()
             .downcast_ref::<norito::Error>()
-            .unwrap()
-            .decode_resource_error(),
-        Some(DecodeResourceError::TotalAllocationExceeded {
-            attempted: copied_bytes as u64,
-            limit: 0
-        })
-    );
+            .unwrap(),
+        norito::Error::InvalidNonZero
+    ));
     let (inline, allocations) = measured(|| {
         classify_decode_attempt(|| {
             decoder
@@ -343,22 +348,11 @@ fn original_header_alignment_refusal_and_inline_nonzero_invalidity_keep_their_ac
     let inline = inline.unwrap_err();
     assert_eq!(inline.kind(), DecodeAttemptErrorKind::Invalid);
     assert!(matches!(inline.into_error(), norito::Error::InvalidNonZero));
-    assert_eq!(owning.kind(), DecodeAttemptErrorKind::EnclosingLimit);
     assert_eq!(input.as_slice().as_ptr(), pointer);
     assert_eq!(Hash::new(input.as_slice()), hash);
     drop(decoder);
     drop(caller);
-    assert_eq!(
-        pool.reserved_bytes(),
-        floor + PreparedDecodeWorkspace::allocation_layouts()[0].size()
-    );
-    assert_eq!(
-        owning.into_error().decode_resource_error(),
-        Some(DecodeResourceError::TotalAllocationExceeded {
-            attempted: copied_bytes as u64,
-            limit: 0
-        })
-    );
+    assert!(matches!(owning.into_error(), norito::Error::InvalidNonZero));
     assert_eq!(pool.reserved_bytes(), floor);
     drop(input);
     assert_eq!(pool.reserved_bytes(), 0);

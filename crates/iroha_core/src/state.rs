@@ -403,7 +403,7 @@ mod tiered_publication;
 use crate::execution_attempt::ExecutionAttemptError;
 pub use block_proofs::{
     BlockProofLimits, BlockProofResource, KagemushaLedgerAttemptKindV1, KagemushaLedgerAttemptV1,
-    KagemushaLedgerEntryInclusionV1, KagemushaLedgerEntryOwnerV1,
+    KagemushaLedgerEntryInclusionV1, KagemushaLedgerEntryOwnerV1, KagemushaLedgerSuffixStageV1,
 };
 use block_proofs::{
     block_proofs_for_entry_from_kura, executed_block_wire_from_kura,
@@ -42702,6 +42702,15 @@ impl StateTransaction<'_, '_> {
                 Error::InvariantViolation("KAGEMUSHA package proof-byte count overflow".into())
             })?;
         let verify_calls = if lineage.is_some() { 2 } else { 1 };
+        self.register_confidential_usage(proof_bytes, verify_calls)
+    }
+    /// Reserve one native-suffix Unload stage's exact proof work as one confidential
+    /// operation, checked against the existing transaction and block quotas before any proof.
+    pub(crate) fn register_kagemusha_suffix_proofs(
+        &mut self,
+        proof_bytes: usize,
+        verify_calls: u32,
+    ) -> Result<(), Error> {
         self.register_confidential_usage(proof_bytes, verify_calls)
     }
     /// Return the exact index required by the next privacy proof in this transaction.

@@ -1,7 +1,9 @@
 //! KAGEMUSHA's closed instruction boundary. Foreign callers never supply a proof verdict.
 //! All ledger effects use the original WSV transaction and canonical asset movement owner.
 use super::*;
-use crate::kagemusha_wallet_v1::{self as wallet, NativePackageVerifier, wsv::WsvLedger};
+use crate::kagemusha_wallet_v1::{
+    self as wallet, NativePackageVerifier, SuffixUnloadVerifier, suffix::StageId, wsv::WsvLedger,
+};
 use iroha_data_model::{
     block::consensus::SumeragiRootScope,
     isi::kagemusha_wallet::{KagemushaWalletLedgerActionV1 as Action, KagemushaWalletLedgerV1},
@@ -52,7 +54,7 @@ pub(crate) fn execute_with_verifier(
     instruction: KagemushaWalletLedgerV1,
     authority: &AccountId,
     state: &mut StateTransaction<'_, '_>,
-    verifier: &impl NativePackageVerifier,
+    verifier: &(impl NativePackageVerifier + SuffixUnloadVerifier),
 ) -> wallet::Result<()> {
     let scheme_id = instruction.scheme;
     if scheme_id == [0; 32] {
@@ -195,5 +197,62 @@ pub(crate) fn execute_with_verifier(
             }
             ledger.retain_request(request)
         }
+        Action::SuffixUnloadBegin {
+            wallet: wallet_id,
+            authority: suffix_authority,
+            account,
+            ordinal,
+            header,
+            anchor,
+        } => wallet::suffix::begin(
+            &mut ledger,
+            verifier,
+            &StageId {
+                scheme: scheme_id,
+                wallet: wallet_id,
+                authority: suffix_authority,
+                account: &account,
+                ordinal,
+            },
+            &header,
+            &anchor,
+        ),
+        Action::SuffixUnloadAppend {
+            wallet: wallet_id,
+            authority: suffix_authority,
+            account,
+            ordinal,
+            chunk,
+        } => wallet::suffix::append(
+            &mut ledger,
+            verifier,
+            &StageId {
+                scheme: scheme_id,
+                wallet: wallet_id,
+                authority: suffix_authority,
+                account: &account,
+                ordinal,
+            },
+            &chunk,
+        ),
+        Action::SuffixUnloadFinalize {
+            wallet: wallet_id,
+            authority: suffix_authority,
+            account,
+            ordinal,
+            unload,
+        } => wallet::suffix::finalize(
+            &mut ledger,
+            verifier,
+            &StageId {
+                scheme: scheme_id,
+                wallet: wallet_id,
+                authority: suffix_authority,
+                account: &account,
+                ordinal,
+            },
+            &unload,
+        )
+        .map(|_| ()),
     }
 }

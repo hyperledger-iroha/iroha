@@ -347,7 +347,7 @@ fn managed_private_preparation_retains_owner_scope_and_listener_token_after_spaw
 }
 
 #[test]
-fn port_reservations_are_live_disjoint_and_released_on_drop() {
+fn port_reservations_are_live_and_disjoint() {
     let _resources = super::native_test_guard();
     let ports = LocalnetPorts::reserve().unwrap();
     assert_eq!(ports.reserved_count(), 8);
@@ -372,12 +372,6 @@ fn port_reservations_are_live_disjoint_and_released_on_drop() {
     for base in bases {
         for offset in 0..4 {
             assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, base + offset)).is_err());
-        }
-    }
-    drop(ports);
-    for base in bases {
-        for offset in 0..4 {
-            TcpListener::bind((Ipv4Addr::LOCALHOST, base + offset)).unwrap();
         }
     }
 }

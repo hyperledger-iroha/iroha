@@ -251,9 +251,10 @@ impl QueryFanoutMemoryEnvelope {
         Ok(envelope)
     }
 
-    /// Original finite admission for the full-native single/interval GETs.
+    /// Original finite admission for full-native single/interval and completed-anchor GETs.
     /// The same pool funds accumulated proofs, held payload, one source frame
-    /// and final encoding; this factory never changes an inherited envelope.
+    /// and final encoding, or a cumulative original anchor-chunk scan; this factory
+    /// never changes an inherited envelope.
     /// Prepared native children still charge this pool; the selected profile
     /// does not guarantee that every legal native block shape will fit.
     #[expect(

@@ -430,6 +430,33 @@ fn encode_value<T: norito::core::NoritoSerialize + norito::json::JsonSerialize>(
     Ok(PreparedResponse { response, bytes })
 }
 
+// Completed anchors read an entire 4096-successor chunk. Their original admission
+// uses the configured native-finality corridor, since the ordinary query grant
+// cannot fund that cumulative scan even when only one frame is live at a time.
+// A present outer owner is never replaced, enlarged or reset by this selection.
+fn admit_memory(
+    app: &SharedAppState,
+    selection: Selection,
+    admission: &mut crate::QueryAdmissionPermit,
+) -> Result<Option<Response>, Error> {
+    let anchor = matches!(selection, Selection::Anchor(_));
+    if anchor {
+        HistoryProducerOwner::validate_finality_inheritance(admission)?;
+    }
+    if admission.fanout_memory.is_none() {
+        let original = if anchor {
+            crate::try_acquire_native_finality_memory(app)
+        } else {
+            crate::try_acquire_new_query_fanout_memory(app)
+        };
+        admission.fanout_memory = Some(match original {
+            Ok(reservation) => reservation,
+            Err(response) => return Ok(Some(response)),
+        });
+    }
+    Ok(None)
+}
+
 async fn serve(
     app: SharedAppState,
     selection: Selection,
@@ -449,11 +476,8 @@ async fn serve(
     let key = crate::rate_limit_key(&headers, Some(remote.ip()), route.path(), principal);
     crate::rate_limit_requests_with_cost(&app, &key, crate::FINALITY_HEAVY_QUERY_RATE_COST).await?;
     let mut admission = crate::acquire_query_admission(app.as_ref(), true).await?;
-    if admission.fanout_memory.is_none() {
-        admission.fanout_memory = Some(match crate::try_acquire_new_query_fanout_memory(&app) {
-            Ok(reservation) => reservation,
-            Err(response) => return Ok(response),
-        });
+    if let Some(response) = admit_memory(&app, selection, &mut admission)? {
+        return Ok(response);
     }
     let owner = HistoryProducerOwner::from_admission(&admission)?;
     let state = app.state.clone();

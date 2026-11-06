@@ -18,6 +18,9 @@ use iroha_executor_data_model::permission::asset_definition::CanManageKagemushaW
 use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
 use mv::storage::StorageReadOnly as _;
 
+#[path = "suffix_genuine_tests.rs"]
+mod suffix_genuine_tests;
+
 #[path = "load_event_evidence_tests.rs"]
 mod load_event_evidence_tests;
 
@@ -2013,4 +2016,202 @@ fn ordinary_load_receipt_is_recovered_after_growth_and_local_qc_loss() {
         source.receipt_for(&memory.authority, &foreign_scheme, &wallet, &request),
         Err(Error::Binding)
     ));
+}
+
+/// Real WSV adapter whose installed verifier identity is the suffix fixture's; every other
+/// read, reservation, row write and the payout go through the production `WsvLedger`.
+struct InstalledWsv<'a, 'b, 'c>(wsv::WsvLedger<'a, 'b, 'c>);
+impl Transaction for InstalledWsv<'_, '_, '_> {
+    fn authority(&self) -> &AccountId {
+        self.0.authority()
+    }
+    fn transaction_hash(&self) -> Digest {
+        self.0.transaction_hash()
+    }
+    fn block_height(&self) -> u64 {
+        self.0.block_height()
+    }
+    fn registration(&self, scheme: &Digest, asset: &Digest) -> Result<Registration> {
+        self.0.registration(scheme, asset)
+    }
+    fn wallet(&self, scheme: &Digest, wallet: &Digest) -> Result<Option<WalletRecord>> {
+        self.0.wallet(scheme, wallet)
+    }
+    fn issuance(&self, scheme: &Digest, wallet: &Digest, request: &Digest) -> Result<Option<Issuance>> {
+        self.0.issuance(scheme, wallet, request)
+    }
+    fn payout(
+        &self,
+        scheme: &Digest,
+        key: KagemushaWalletPayoutKeyV1,
+    ) -> Result<Option<KagemushaWalletPayoutRecordV1>> {
+        self.0.payout(scheme, key)
+    }
+    fn certificate(&self, scheme: &Digest, digest: &Digest) -> Result<KagemushaWalletSignerCertificateV1> {
+        self.0.certificate(scheme, digest)
+    }
+    fn fee_inputs(&self, claim: &KagemushaWalletFeeClaimV1) -> Result<FeeInputs> {
+        self.0.fee_inputs(claim)
+    }
+    fn apply(&mut self, batch: Batch) -> Result<()> {
+        self.0.apply(batch)
+    }
+}
+impl suffix::SuffixTransaction for InstalledWsv<'_, '_, '_> {
+    fn suffix_row(&self, key: &KagemushaWalletLedgerKeyV1) -> Result<Option<Vec<u8>>> {
+        self.0.suffix_row(key)
+    }
+    fn suffix_installation(&self, _: &Digest) -> Result<(Digest, Digest)> {
+        Ok(([0x61; 32], [0x62; 32]))
+    }
+    fn reserve_suffix_proofs(&mut self, proof_bytes: usize, verify_calls: u32) -> Result<()> {
+        self.0.reserve_suffix_proofs(proof_bytes, verify_calls)
+    }
+    fn insert_suffix(&mut self, rows: Vec<(KagemushaWalletLedgerKeyV1, Vec<u8>)>) -> Result<()> {
+        self.0.insert_suffix(rows)
+    }
+}
+
+#[test]
+fn suffix_unload_stages_route_stage_and_pay_once_through_the_real_reserve() {
+    use super::suffix_tests::{Double, build_suffix};
+    use iroha_data_model::isi::kagemusha_wallet::{
+        KagemushaWalletLedgerActionV1 as Action, KagemushaWalletLedgerV1,
+    };
+    let mut memory = Memory::new();
+    memory
+        .balances
+        .insert(memory.registration.reserve.clone(), 1_000_000);
+    let suffix = build_suffix(memory.registration.scheme.network_id);
+    memory.balances.insert(suffix.beneficiary.clone(), 0);
+    let mut state = world_state(&memory, true);
+    register(&mut state, &memory, 1).unwrap();
+    let wallet_key = storage::key(storage::WALLET, suffix.scheme, suffix.wallet);
+    transact(&mut state, 2, |tx| {
+        let record = WalletRecord {
+            asset: memory.registration.asset.asset_digest(),
+            phase: Phase::Active,
+            activation: [1; 32],
+            next_load: 0,
+        };
+        tx.world
+            .kagemusha_wallet_ledger
+            .insert(wallet_key, storage::encode(&record)?);
+        Ok(())
+    })
+    .unwrap();
+    // Every stage routes by the immutable wallet row of its outer wallet.
+    for action in [
+        Action::SuffixUnloadBegin {
+            wallet: suffix.wallet,
+            authority: suffix.authority,
+            account: suffix.account.clone(),
+            ordinal: 0,
+            header: suffix.header.clone(),
+            anchor: suffix.anchor.clone(),
+        },
+        Action::SuffixUnloadAppend {
+            wallet: suffix.wallet,
+            authority: suffix.authority,
+            account: suffix.account.clone(),
+            ordinal: 1,
+            chunk: Vec::new(),
+        },
+        Action::SuffixUnloadFinalize {
+            wallet: suffix.wallet,
+            authority: suffix.authority,
+            account: suffix.account.clone(),
+            ordinal: 3,
+            unload: Vec::new(),
+        },
+    ] {
+        let instruction = KagemushaWalletLedgerV1::new(suffix.scheme, action);
+        assert_eq!(
+            routing::dataspace(&state.view().world, &instruction).unwrap(),
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL
+        );
+    }
+    let double = Double::new(true);
+    fn installed<'a, 'b, 'c>(
+        tx: &'a mut StateTransaction<'b, 'c>,
+        authority: &AccountId,
+    ) -> Result<InstalledWsv<'a, 'b, 'c>> {
+        Ok(InstalledWsv(wsv::WsvLedger::new(tx, authority)?))
+    }
+    let relayer = memory.authority.clone();
+    transact(&mut state, 3, |tx| {
+        suffix::begin(&mut installed(tx, &relayer)?, &double, &suffix.stage(0), &suffix.header, &suffix.anchor)
+    })
+    .unwrap();
+    // Appends commit in reverse order, each in its own block.
+    transact(&mut state, 4, |tx| {
+        suffix::append(&mut installed(tx, &relayer)?, &double, &suffix.stage(2), &suffix.chunks[1])
+    })
+    .unwrap();
+    // A Finalize before every Append is refused and leaves the reserve untouched.
+    assert!(matches!(
+        transact(&mut state, 5, |tx| {
+            suffix::finalize(&mut installed(tx, &relayer)?, &double, &suffix.stage(3), &suffix.unload)
+        }),
+        Err(Error::Unavailable)
+    ));
+    transact(&mut state, 5, |tx| {
+        suffix::append(&mut installed(tx, &relayer)?, &double, &suffix.stage(1), &suffix.chunks[0])
+    })
+    .unwrap();
+    let reserve_before = balance(&state, &memory, &memory.registration.reserve);
+    let account_before = balance(&state, &memory, &suffix.account);
+    let payout = transact(&mut state, 6, |tx| {
+        suffix::finalize(&mut installed(tx, &relayer)?, &double, &suffix.stage(3), &suffix.unload)
+    })
+    .unwrap();
+    let scale = memory.registration.asset.scale;
+    let quantity =
+        |value: u128| Quantity::from_canonical_numeric(Numeric::new(value, scale)).unwrap();
+    assert_eq!(
+        balance(&state, &memory, &memory.registration.reserve),
+        reserve_before.checked_sub(&quantity(suffix.terms.amount)).unwrap()
+    );
+    assert_eq!(
+        balance(&state, &memory, &suffix.account),
+        account_before
+            .checked_add(&quantity(suffix.terms.account_payout))
+            .unwrap()
+    );
+    assert_eq!(
+        balance(&state, &memory, &suffix.beneficiary),
+        quantity(suffix.terms.online_charge)
+    );
+    // An exact retry in a later transaction returns the original payout and moves nothing.
+    assert_eq!(
+        transact(&mut state, 7, |tx| {
+            suffix::finalize(&mut installed(tx, &relayer)?, &double, &suffix.stage(3), &suffix.unload)
+        })
+        .unwrap(),
+        payout
+    );
+    assert_eq!(
+        balance(&state, &memory, &suffix.beneficiary),
+        quantity(suffix.terms.online_charge)
+    );
+    let view = state.view();
+    let world = view.world.kagemusha_wallet_ledger();
+    assert_eq!(
+        world.get(&payout.key.ledger_key(suffix.scheme)),
+        Some(&storage::encode(&payout).unwrap())
+    );
+    let rows: BTreeMap<_, _> = world
+        .iter()
+        .map(|(key, value)| (*key, value.clone()))
+        .collect();
+    storage::validate_snapshot(rows.iter(), |key| rows.get(key).map(Vec::as_slice)).unwrap();
+    // A snapshot that lost the Begin row cannot be trusted.
+    let mut without_begin = rows.clone();
+    without_begin.remove(&suffix::begin_key(suffix.scheme, suffix.authority));
+    assert!(
+        storage::validate_snapshot(without_begin.iter(), |key| without_begin
+            .get(key)
+            .map(Vec::as_slice))
+        .is_err()
+    );
 }

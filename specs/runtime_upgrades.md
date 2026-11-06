@@ -90,7 +90,11 @@ World fields after it (design §4, "Add an instruction", "Add storage"):
   `ContainmentResolved` bits of `RuntimeUpgradeEventSet`. Both additions are appended, so every
   payload a660d601da wrote still decodes. a660d601da cannot decode a payload that uses them, and
   its peers fail this release's handshake (`ConsensusConfigCaps`), so Taira's validators switch to
-  this release together. A storage descriptor likewise names only its
+  this release together. `iroha.kagemusha.wallet.ledger.v1` likewise gained three appended
+  actions, the native-suffix Unload stages `SuffixUnloadBegin`, `SuffixUnloadAppend` and
+  `SuffixUnloadFinalize` (wire tags 11–13); its earlier actions keep their tags and bytes, and the
+  stages keep their rows in the installed `world.kagemusha_wallet_ledger` table, so they need no
+  addition and no new table. A storage descriptor likewise names only its
   value's nominal type, and World value layouts are not pinned yet (TODO: pin them from the State
   field registry the same way). This release declares two additions, in activation order:
   `iroha.runtime.endorsed_change_set_proposal.v1`, and `iroha.game_partition.v1`, which adds the

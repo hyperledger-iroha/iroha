@@ -230,7 +230,10 @@ codec-direction hashes, and uses the existing shared contract checker.
 
 | Fixture | Coverage | SHA-256 |
 | --- | --- | --- |
-| `fresh_event_identity_frames.json` | 55 data filters, five governance filters, 11 game sessions, nine event messages and 23 subscriptions | `c32171f5c8e0cf816f51912e75ff6de296c23b29d1f0b183c2c23b142719164b` |
+| `fresh_event_identity_frames.json` | 55 data filters, five governance filters, 11 game sessions, nine event messages and 23 subscriptions | `cd961e21f9844ae96dc12ef553a682a31186f39fcea3633984fa16820234f9d1` |
+
+The runtime-upgrade filter full-set mask reflects all nine implemented lifecycle
+events. Its root, Some and combined Vec frames bind the 0x1ff mask.
 
 The default Configuration and Bridge filter masks each carry their single
 event bit in their root/Some frames and in the combined Vec. The ignored

@@ -248,8 +248,7 @@ impl<const INDEX: usize, T> norito::core::DecodeField<INDEX, T> for LocatePulseL
 }
 
 #[test]
-fn original_pulse_scalar_alignment_refusal_and_inline_hash_invalidity_keep_their_actual_causes_and_original_counter()
- {
+fn borrowed_pulse_and_inline_decoders_keep_intrinsic_invalidity_without_allocating() {
     use norito::core::DecodeRecordFields;
     let flags = header_flags::COMPACT_LEN;
     let _flags = DecodeFlagsGuard::enter(flags);
@@ -314,6 +313,17 @@ fn original_pulse_scalar_alignment_refusal_and_inline_hash_invalidity_keep_their
         &input.as_slice()[span.start + network.start..span.start + network.end],
         original.network_id.as_bytes()
     );
+    let (canonical, allocations) = measured(|| {
+        decoder.with_limits(zero, zero, || {
+            norito::core::decode_field_canonical::<FinalizedGlobalThresholdBeaconPulseV1>(
+                span.get(input.as_slice()).unwrap(),
+            )
+        })
+    });
+    let (decoded, used) = canonical.unwrap().unwrap();
+    assert_eq!(decoded, original);
+    assert_eq!(used, span.get(input.as_slice()).unwrap().len());
+    assert_eq!(allocations, 0);
     input.as_mut_slice()[span.start + network.end - 1] &= !1;
 
     let pointer = input.as_slice().as_ptr();
@@ -324,29 +334,32 @@ fn original_pulse_scalar_alignment_refusal_and_inline_hash_invalidity_keep_their
     let (owning, allocations) = measured(|| {
         caller.with_limits(zero, zero, || {
             classify_decode_attempt(|| {
-                decoder.with_limits(protocol, protocol, || {
-            norito::core::decode_field_canonical::<FinalizedGlobalThresholdBeaconPulseV1>(bytes)
-        }).unwrap()
+                decoder
+                    .with_limits(protocol, protocol, || {
+                        norito::core::decode_field_canonical::<FinalizedGlobalThresholdBeaconPulseV1>(
+                            bytes,
+                        )
+                    })
+                    .unwrap()
             })
         })
     });
     assert_eq!(
         allocations, 0,
-        "logical copy refusal must precede the actual heap allocation"
+        "borrowed canonical decoding must allocate nothing"
     );
     let owning = owning.unwrap().unwrap_err();
-    assert_eq!(owning.kind(), DecodeAttemptErrorKind::EnclosingLimit);
-    assert_eq!(
+    assert_eq!(owning.kind(), DecodeAttemptErrorKind::Invalid);
+    assert!(owning.local_refusal().is_none());
+    assert!(matches!(
         std::error::Error::source(&owning)
             .unwrap()
             .downcast_ref::<norito::Error>()
-            .unwrap()
-            .decode_resource_error(),
-        Some(DecodeResourceError::TotalAllocationExceeded {
-            attempted: scalar_bytes as u64,
-            limit: 0
-        })
-    );
+            .unwrap(),
+        norito::Error::InvalidValue {
+            context: "hash lsb"
+        }
+    ));
     let (inline, allocations) = measured(|| {
         classify_decode_attempt(|| {
             decoder
@@ -365,22 +378,17 @@ fn original_pulse_scalar_alignment_refusal_and_inline_hash_invalidity_keep_their
             context: "hash lsb"
         }
     ));
-    assert_eq!(owning.kind(), DecodeAttemptErrorKind::EnclosingLimit);
     assert_eq!(input.as_slice().as_ptr(), pointer);
     assert_eq!(Hash::new(input.as_slice()), hash);
     drop(decoder);
     drop(caller);
-    assert_eq!(
-        pool.reserved_bytes(),
-        floor + PreparedDecodeWorkspace::allocation_layouts()[0].size()
-    );
-    assert_eq!(
-        owning.into_error().decode_resource_error(),
-        Some(DecodeResourceError::TotalAllocationExceeded {
-            attempted: scalar_bytes as u64,
-            limit: 0
-        })
-    );
+    assert_eq!(pool.reserved_bytes(), floor);
+    assert!(matches!(
+        owning.into_error(),
+        norito::Error::InvalidValue {
+            context: "hash lsb"
+        }
+    ));
     assert_eq!(pool.reserved_bytes(), floor);
     drop(input);
     assert_eq!(pool.reserved_bytes(), 0);

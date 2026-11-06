@@ -97,6 +97,20 @@ impl<'a> CommandOptions<'a> {
         self.inner.inherit_descriptors(mappings)
     }
 
+    /// Install inputs into this command's owned Unix descriptor reservations.
+    ///
+    /// # Errors
+    /// Refuses invalid, repeated or unreserved destinations and source duplication failures.
+    #[cfg(unix)]
+    pub fn inherit_reserved_descriptors(
+        &mut self,
+        reservations: &Arc<iroha_fs::ReservedProcessDescriptors>,
+        mappings: &[(std::os::fd::BorrowedFd<'_>, std::os::fd::RawFd)],
+    ) -> io::Result<()> {
+        self.inner
+            .inherit_reserved_descriptors(reservations, mappings)
+    }
+
     /// Set one child environment entry.
     pub fn env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
         self.inner.env(key, value);

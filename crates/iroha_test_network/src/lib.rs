@@ -17,7 +17,8 @@ pub use disposable_rotation_ceremony::{
     DisposableGenesisConfigSeat, DisposableGenesisDkgOutput, DisposablePendingCustodyInput,
     DisposablePreparedBeaconCustody, DisposableRetainedBeaconCredential,
     DisposableRotationDkgOutput, DisposableRotationProofInput, DisposableRotationSeatOutput,
-    GenesisDkgRunConfig, prepare_disposable_pending_custody, run_disposable_genesis_dkg,
+    GenesisDkgRunConfig, prepare_disposable_pending_custody,
+    reserve_disposable_ceremony_descriptors, run_disposable_genesis_dkg,
     run_disposable_genesis_dkg_from_configs, run_disposable_rotation_dkg,
 };
 mod development_process;

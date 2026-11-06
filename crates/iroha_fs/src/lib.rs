@@ -2469,6 +2469,8 @@ mod owner_atomic_tests;
 mod custody_transaction_tests;
 
 #[cfg(unix)]
-pub use platform::inherit_descriptors;
+pub use platform::{
+    ReservedProcessDescriptors, SharedProcessDescriptorReservations, inherit_descriptors,
+};
 
 mod build_input_command;

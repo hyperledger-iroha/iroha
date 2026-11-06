@@ -82,7 +82,11 @@ pub struct SorafsPublicationProofV1 {
 }
 
 /// Opaque successful verification of the client's original challenged assertion.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
+#[expect(
+    missing_copy_implementations,
+    reason = "verifier-issued publication evidence retains explicit ownership"
+)]
 pub struct VerifiedSorafsPublicationV1 {
     height: u64,
     completed: bool,
@@ -209,6 +213,8 @@ mod tests {
         use crate::{
             account::AccountId,
             block::{BlockHeader, SignedBlock, builder::BlockBuilder},
+            isi::Log,
+            level::Level,
             sorafs::pin_registry::{ManifestDigest, ReplicationOrderId},
             sumeragi_finality::test_fixtures::NativeFinalityFixture,
             transaction::{FeePaymentIntent, TransactionBuilder, TransactionResultInner},
@@ -234,6 +240,7 @@ mod tests {
                 fixture.network_id(),
                 checkpoint,
                 seed,
+                true,
                 result,
             )
         }
@@ -244,9 +251,11 @@ mod tests {
             network: NetworkId,
             checkpoint: &SumeragiFinalityCheckpoint,
             seed: u8,
+            complete: bool,
             result: TransactionResultInner,
         ) -> (SignedTransaction, SignedBlock) {
-            let signer = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+            // A zero challenge is a negative test input, but signing still needs a valid key.
+            let signer = KeyPair::from_seed(vec![seed.max(1); 32], Algorithm::Ed25519);
             let mut builder = TransactionBuilder::new(
                 network,
                 AccountId::new(signer.public_key().clone()),
@@ -259,7 +268,7 @@ mod tests {
                     order_id: ReplicationOrderId([2; 32]),
                     assignment_revision: 1,
                     canonical_order_digest: [3; 32],
-                    require_complete: true,
+                    require_complete: complete,
                     challenge: [seed; 32],
                     minimum_height: checkpoint.height(),
                     minimum_block_hash: *checkpoint.block_hash().as_ref(),
@@ -280,10 +289,17 @@ mod tests {
             }
         }
 
-        fn publish(result: TransactionResultInner) -> Published {
+        fn publish(complete: bool, seed: u8, result: TransactionResultInner) -> Published {
             let mut fixture = NativeFinalityFixture::start("sorafs-publication-proof");
             let checkpoint = fixture.checkpoint();
-            let (signed, block) = assertion_block(&fixture, &checkpoint, 7, result);
+            let (signed, block) = assertion_in(
+                fixture.next_header(),
+                fixture.network_id(),
+                &checkpoint,
+                seed,
+                complete,
+                result,
+            );
             let inclusion = inclusion(&block);
             let certified = fixture.certify(block);
             let certificate = SumeragiCommitCertificateV1::from_proof(&certified).unwrap();
@@ -301,29 +317,77 @@ mod tests {
 
         #[test]
         fn certificate_and_inclusion_prove_applied_assertion_without_block_bodies() {
-            let published = publish(Ok(Vec::new()));
+            for complete in [false, true] {
+                let published = publish(complete, 7, Ok(Vec::new()));
+                let bytes = norito::encode_canonical(&published.proof).unwrap();
+                let decoded: SorafsPublicationProofV1 = norito::decode_canonical(&bytes).unwrap();
+                assert_eq!(decoded, published.proof);
+                let verified = verify_sorafs_publication_v1(
+                    &published.fixture.network_id(),
+                    &published.checkpoint,
+                    &published.signed,
+                    &decoded,
+                )
+                .unwrap();
+                assert_eq!(verified.height(), 2);
+                assert_eq!(verified.completed(), complete);
+                assert_eq!(published.fixture.genesis_proof().committee.len(), 4);
+                let qc: iroha_sumeragi::message::Qc =
+                    norito::decode_canonical(&decoded.certificate.commit_qc).unwrap();
+                assert_eq!(qc.signers.count_ones(), 3);
+                // The proof is a header, quorum certificate, result and two Merkle paths.
+                assert!(bytes.len() < 64 * 1024);
+                let mut trailing = bytes;
+                trailing.push(0);
+                assert!(norito::decode_canonical::<SorafsPublicationProofV1>(&trailing).is_err());
+            }
+        }
+
+        #[test]
+        fn zero_challenge_and_non_assertion_are_not_publication() {
+            let published = publish(true, 0, Ok(Vec::new()));
             let network = published.fixture.network_id();
-            let verified = verify_sorafs_publication_v1(
-                &network,
-                &published.checkpoint,
-                &published.signed,
-                &published.proof,
+            assert!(
+                verify_sorafs_publication_v1(
+                    &network,
+                    &published.checkpoint,
+                    &published.signed,
+                    &published.proof,
+                )
+                .is_err()
+            );
+            let signer = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
+            let transaction = TransactionBuilder::new(
+                network,
+                AccountId::new(signer.public_key().clone()),
+                FeePaymentIntent::authority(vec![], None),
             )
-            .unwrap();
-            assert_eq!(verified.height(), 2);
-            assert!(verified.completed());
-            // The proof is a header, quorum certificate, result and two Merkle paths.
-            assert!(norito::canonical_frame_len(&published.proof).unwrap() < 64 * 1024);
+            .with_instructions([Log::new(Level::INFO, "not an assertion".into())])
+            .sign(signer.private_key());
+            assert!(
+                verify_sorafs_publication_v1(
+                    &network,
+                    &published.checkpoint,
+                    &transaction,
+                    &published.proof,
+                )
+                .is_err()
+            );
         }
 
         #[test]
         fn substituted_or_unbound_publication_evidence_is_rejected() {
-            let published = publish(Ok(Vec::new()));
+            let published = publish(true, 7, Ok(Vec::new()));
             let network = published.fixture.network_id();
             let reject = |checkpoint, signed, proof| {
                 verify_sorafs_publication_v1(&network, checkpoint, signed, proof).is_err()
             };
-            let foreign = NativeFinalityFixture::start("foreign-publication-network");
+            // Network identity comes from genesis, not the separately selected chain label.
+            let foreign = NativeFinalityFixture::start_at(
+                published.fixture.chain_id(),
+                published.fixture.genesis().header().creation_time_ms + 1,
+            );
+            assert_ne!(foreign.network_id(), network);
             assert!(
                 verify_sorafs_publication_v1(
                     &foreign.network_id(),
@@ -337,8 +401,32 @@ mod tests {
             let (other, other_block) =
                 assertion_block(&published.fixture, &published.checkpoint, 9, Ok(Vec::new()));
             assert!(reject(&published.checkpoint, &other, &published.proof));
+            let (other_phase, _) = assertion_in(
+                published.fixture.latest().block_header.clone(),
+                network,
+                &published.checkpoint,
+                7,
+                false,
+                Ok(Vec::new()),
+            );
+            assert!(reject(
+                &published.checkpoint,
+                &other_phase,
+                &published.proof
+            ));
+            // Single-leaf paths with identical outputs are identical witnesses. Include a
+            // second transaction so the substituted paths bind a different input/output tree.
+            let mut other_builder = BlockBuilder::new(other_block.header());
+            other_builder.push_transaction(other.clone());
+            other_builder.push_transaction(published.signed.clone());
+            let mut other_block = other_builder.build(crate::block::BlockSignatures::default());
+            NativeFinalityFixture::install_network_results(
+                &mut other_block,
+                vec![Ok(Vec::new()), Ok(Vec::new())],
+            );
             let mut substituted = published.proof.clone();
             substituted.inclusion = inclusion(&other_block);
+            assert_ne!(substituted.inclusion, published.proof.inclusion);
             assert!(reject(
                 &published.checkpoint,
                 &published.signed,
@@ -362,6 +450,50 @@ mod tests {
                 &published.signed,
                 &published.proof
             ));
+        }
+
+        #[test]
+        fn independently_valid_fork_does_not_supply_the_assertions_floor() {
+            let mut selected = publish(true, 7, Ok(Vec::new())).fixture;
+            let fork = publish(true, 9, Ok(Vec::new())).fixture;
+            let checkpoint = selected.checkpoint();
+            let fork_checkpoint = fork.checkpoint();
+            assert_eq!(selected.network_id(), fork.network_id());
+            assert_eq!(checkpoint.height(), fork_checkpoint.height());
+            assert_ne!(checkpoint.block_hash(), fork_checkpoint.block_hash());
+            for (bound, substituted) in [
+                (&checkpoint, &fork_checkpoint),
+                (&fork_checkpoint, &checkpoint),
+            ] {
+                let (signed, block) = assertion_block(&selected, bound, 11, Ok(Vec::new()));
+                let inclusion = inclusion(&block);
+                let certified = selected.certify(block);
+                let proof = SorafsPublicationProofV1 {
+                    epoch_boundaries: Vec::new(),
+                    certificate: SumeragiCommitCertificateV1::from_proof(&certified).unwrap(),
+                    inclusion,
+                };
+                if bound == &checkpoint {
+                    assert!(
+                        verify_sorafs_publication_v1(
+                            &selected.network_id(),
+                            bound,
+                            &signed,
+                            &proof,
+                        )
+                        .is_ok()
+                    );
+                }
+                assert!(
+                    verify_sorafs_publication_v1(
+                        &selected.network_id(),
+                        substituted,
+                        &signed,
+                        &proof,
+                    )
+                    .is_err()
+                );
+            }
         }
 
         /// The independently selected signed genesis of `fixture`, without later decisions.
@@ -390,6 +522,7 @@ mod tests {
                             fixture.network_id(),
                             &checkpoint,
                             13,
+                            true,
                             Ok(Vec::new()),
                         );
                         assertion = Some((checkpoint, signed, inclusion(&block)));
@@ -428,17 +561,33 @@ mod tests {
 
         #[test]
         fn rejected_execution_is_not_publication() {
-            let published = publish(Err(
-                crate::transaction::error::TransactionRejectionReason::Validation(
-                    crate::ValidationFail::NotPermitted("fixture rejection".into()),
+            let published = publish(
+                true,
+                7,
+                Err(
+                    crate::transaction::error::TransactionRejectionReason::Validation(
+                        crate::ValidationFail::NotPermitted("fixture rejection".into()),
+                    ),
                 ),
-            ));
+            );
             assert!(
                 verify_sorafs_publication_v1(
                     &published.fixture.network_id(),
                     &published.checkpoint,
                     &published.signed,
                     &published.proof,
+                )
+                .is_err()
+            );
+            let successful = publish(true, 7, Ok(Vec::new()));
+            let mut substituted = successful.proof;
+            substituted.inclusion.output = published.proof.inclusion.output;
+            assert!(
+                verify_sorafs_publication_v1(
+                    &successful.fixture.network_id(),
+                    &successful.checkpoint,
+                    &successful.signed,
+                    &substituted,
                 )
                 .is_err()
             );

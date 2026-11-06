@@ -28,6 +28,26 @@ pub fn finite_release_deadline() -> Result<u64> {
         .ok_or_else(|| eyre!("disposable release timestamp overflow"))
 }
 
+/// Give each epoch of the signed liability horizon its own bounded progress wait.
+#[cfg(unix)]
+async fn advance_liability_horizon(
+    mut observed: u64,
+    release: u64,
+    mut advance: impl AsyncFnMut(u64, u64) -> Result<u64>,
+) -> Result<()> {
+    ensure!(
+        observed <= release && release <= MAX_QUALIFICATION_HEIGHT,
+        "withdrawal progress exceeds the bounded fixture history"
+    );
+    let mut tick = 0;
+    while observed < release {
+        let checkpoint = observed.saturating_add(EPOCH).min(release);
+        tick = advance(checkpoint, tick).await?;
+        observed = checkpoint;
+    }
+    Ok(())
+}
+
 struct Observation {
     prepared: PublicLanePreparationV1,
     chain: Vec<CertifiedBlock>,
@@ -434,9 +454,16 @@ impl WithdrawalLifecycle {
             after_replacement.chain.last().expect("authenticated tip"),
             expected,
         )?;
-        self.reject_early(after_replacement, "remains slashable")
-            .await?;
-        advance_to_height(network, voters, self.pending.liability_release_height).await?;
+        let observed = self
+            .reject_early(after_replacement, "remains slashable")
+            .await?
+            .prepared
+            .observed_height;
+        let release = self.pending.liability_release_height;
+        advance_liability_horizon(observed, release, async |checkpoint, tick| {
+            advance_progress_window(network, voters, checkpoint, release, tick, None).await
+        })
+        .await?;
         let deadline = Instant::now() + WAIT;
         let before = loop {
             let observation = self.observe(self.unbond_intent()).await?;
@@ -1036,6 +1063,59 @@ pub async fn schedule_retained_withdrawal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn liability_horizon_preserves_bounded_paid_progress_across_epoch_windows() -> Result<()>
+    {
+        // Case 4 rejected the early withdrawal at H194. A four-second cadence
+        // exhausts one WAIT before H385, while each complete epoch fits.
+        let mut applied = 194;
+        let release = 385;
+        let mut windows = Vec::new();
+        let mut signed = Vec::new();
+        advance_liability_horizon(applied, release, async |checkpoint, tick| {
+            let steps = checkpoint - applied;
+            ensure!(
+                Duration::from_secs(4 * steps) < WAIT,
+                "one window exhausted WAIT"
+            );
+            windows.push((checkpoint, tick));
+            for i in 0..steps {
+                signed.push((applied + i + 1, tick + i));
+            }
+            applied = checkpoint;
+            Ok(tick + steps)
+        })
+        .await?;
+        assert_eq!(windows, [(258, 0), (322, 64), (385, 128)]);
+        assert_eq!(signed, (195..=release).zip(0..).collect::<Vec<_>>());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn liability_horizon_stops_on_failure_and_refuses_invalid_ranges() -> Result<()> {
+        let mut attempted = Vec::new();
+        let error = advance_liability_horizon(194, 385, async |checkpoint, tick| {
+            attempted.push((checkpoint, tick));
+            ensure!(checkpoint < 322, "unresolved transaction");
+            Ok(tick + EPOCH)
+        })
+        .await
+        .expect_err("a stalled window must not start another deadline");
+        assert_eq!(error.to_string(), "unresolved transaction");
+        assert_eq!(attempted, [(258, 0), (322, 64)]);
+        for (from, release) in [(194, 193), (194, MAX_QUALIFICATION_HEIGHT + 1)] {
+            assert!(
+                advance_liability_horizon(from, release, async |_, _| unreachable!())
+                    .await
+                    .is_err()
+            );
+        }
+        advance_liability_horizon(385, 385, async |_, _| unreachable!()).await?;
+        Ok(())
+    }
     use iroha_test_samples::BOB_ID;
 
     fn observation(

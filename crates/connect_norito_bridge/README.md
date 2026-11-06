@@ -93,7 +93,7 @@ unprovisioned runtime fails unavailable. Full real-wallet and physical-device
 qualification remain open.
 
 Observation selector 4 takes an empty identity and returns diagnostic UTF-8 JSON
-(`iroha.kagemusha.fold-metrics.v3`) in DATA kind 12 with zero sequence/detail. Its
+(`iroha.kagemusha.fold-metrics.v4`) in DATA kind 12 with zero sequence/detail. Its
 131,072-byte limit is specific to this selector; financial DATA limits do not change.
 The open, non-closing handle is still required. The call reads only the bounded
 background log, acquires no custody and does not cancel or schedule proofs. Unknown

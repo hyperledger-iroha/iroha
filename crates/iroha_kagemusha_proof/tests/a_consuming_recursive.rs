@@ -18,6 +18,8 @@ mod common;
 mod load_objects;
 #[path = "a_consuming_recursive/native_load_tests.rs"]
 mod native_load_tests;
+#[path = "a_consuming_recursive/suffix_digest_tests.rs"]
+mod suffix_digest_tests;
 use catalog::{LoadFixture, send_chain::load_outer};
 use load_outer::load_chain::bootstrap_outer::bootstrap_chain::SourceProfile;
 #[path = "common/unload_objects.rs"]

@@ -10,7 +10,10 @@
 //! reports after its publication. Idle and caught-up wakes report nothing. A record names
 //! its head's durable sub-proofs (`ordinal`) and, once the turn read the head's schedule,
 //! every sub-proof that head needs, Ω included (`stages`), so a host can show how far a fold
-//! has come. Values are public names, durations and counts only. Verification deltas
+//! has come. While a selected turn runs, its observer also holds those facts as far as the
+//! turn has read them, with its start ([`FoldRunningV1`]); the turn's record, or its drop
+//! without one, ends them, so a host can size and time a running sub-proof before it
+//! records. Values are public names, durations and counts only. Verification deltas
 //! include calls answered by the parameter owner's successful-verification and
 //! folded-generator memos.
 //! `engineMicros` reports nested key-original revalidation, key reconstruction, physical
@@ -32,7 +35,7 @@ use std::{
     cell::Cell,
     collections::VecDeque,
     fmt::Write as _,
-    sync::OnceLock,
+    sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -50,7 +53,7 @@ use super::{Error, FoldStatus};
 use crate::kagemusha_wallet_proofs_v1::KagemushaWalletVerificationCountsV1;
 
 /// Schema of [`FoldMetricsV1::to_json`].
-pub const FOLD_METRICS_SCHEMA_V1: &str = "iroha.kagemusha.fold-metrics.v3";
+pub const FOLD_METRICS_SCHEMA_V1: &str = "iroha.kagemusha.fold-metrics.v4";
 
 /// Most recent sub-proof records one [`FoldMetricsV1`] keeps.
 pub const FOLD_METRICS_RECORDS_V1: usize = 64;
@@ -277,14 +280,53 @@ impl FoldSubProofV1 {
     pub const fn phase(&self, phase: FoldPhaseV1) -> Duration {
         self.phases[phase.index()]
     }
+
+    // The turn this record reports, named as [`FoldRunningV1`] names it.
+    const fn turn(&self) -> (u64, u128, u32) {
+        (self.started_native_micros, self.sequence, self.ordinal)
+    }
 }
 
-/// Receives every finished sub-proof of one scheduler (observation only).
+/// The public facts of a selected turn while it runs, as far as it has read them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FoldRunningV1 {
+    /// Start relative to the process-local monotonic origin, in whole microseconds; the
+    /// turn's record carries the same start.
+    pub started_native_micros: u64,
+    /// Head sequence being folded.
+    pub sequence: u128,
+    /// Operation of that head, once its released step was read.
+    pub operation: Option<KagemushaWalletOperationKindV1>,
+    /// Zero-based sub-proof ordinal: the head's durable sub-proofs when the turn selected it.
+    pub ordinal: u32,
+    /// Sub-proofs the head's fold needs, Ω included, once the turn read the head's schedule.
+    pub stages: Option<u32>,
+}
+
+impl FoldRunningV1 {
+    // A scheduler starts a turn only after the previous one's proof released the background
+    // slot, so its start, head and ordinal name one turn.
+    const fn turn(&self) -> (u64, u128, u32) {
+        (self.started_native_micros, self.sequence, self.ordinal)
+    }
+}
+
+/// Receives every finished sub-proof of one scheduler, and the public facts of each selected
+/// turn while it runs (observation only).
 pub trait FoldObserverV1: Send + Sync {
     /// Called on the folding thread: before the background slot is released for a turn that
     /// ended before its proof finished, after the publication otherwise. It must not block,
-    /// and must not call the scheduler or the wallet.
+    /// and must not call the scheduler or the wallet. A record ends its turn's running facts.
     fn sub_proof(&self, record: &FoldSubProofV1);
+
+    /// Called on the folding thread each time a selected turn reads a public fact: its head
+    /// and ordinal, then its operation and its schedule. The facts replace any kept before.
+    /// Same rules as [`Self::sub_proof`].
+    fn running(&self, _running: &FoldRunningV1) {}
+
+    /// A turn that reported [`Self::running`] ended without a record: its prepared job or its
+    /// proof was dropped. Called on the dropping thread, with the same rules.
+    fn ended(&self, _running: &FoldRunningV1) {}
 }
 
 /// The fixed Native entry boundaries measured independently of fold turns.
@@ -422,10 +464,12 @@ pub struct FoldCountsV1 {
     pub overlapped_ingests: u64,
 }
 
-/// The last [`FOLD_METRICS_RECORDS_V1`] sub-proof records and cumulative counts of one owner.
+/// The last [`FOLD_METRICS_RECORDS_V1`] sub-proof records, the running turn and cumulative
+/// counts of one owner.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FoldMetricsV1 {
     records: VecDeque<FoldSubProofV1>,
+    running: Option<FoldRunningV1>,
     native_work: VecDeque<NativeWorkRecordV1>,
     native_work_count: u64,
     counts: FoldCountsV1,
@@ -453,8 +497,10 @@ impl FoldMetricsV1 {
         &self.native_work
     }
 
-    /// Count `record` and keep it, dropping the oldest record beyond the bound.
+    /// Count `record` and keep it, dropping the oldest record beyond the bound. It ends its
+    /// turn's running facts; a later turn's stay.
     pub fn record(&mut self, record: &FoldSubProofV1) {
+        self.end(record.turn());
         let counts = &mut self.counts;
         counts.sub_proofs = counts.sub_proofs.saturating_add(1);
         counts.overlapped_ingests = counts
@@ -500,14 +546,38 @@ impl FoldMetricsV1 {
         self.counts
     }
 
+    /// Keep the public facts of the selected turn that runs now, replacing any kept before.
+    pub fn set_running(&mut self, running: &FoldRunningV1) {
+        self.running = Some(*running);
+    }
+
+    /// Forget `running` once its turn ended without a record, unless a later turn replaced it.
+    pub fn end_running(&mut self, running: &FoldRunningV1) {
+        self.end(running.turn());
+    }
+
+    /// The selected turn that runs now, as far as it has read its head; `None` when idle.
+    #[must_use]
+    pub const fn running(&self) -> Option<FoldRunningV1> {
+        self.running
+    }
+
+    fn end(&mut self, turn: (u64, u128, u32)) {
+        if self.running.is_some_and(|running| running.turn() == turn) {
+            self.running = None;
+        }
+    }
+
     /// One-line log record: fixed names, whole microseconds, counts and bytes only.
     #[must_use]
     pub fn to_json(&self) -> String {
         let counts = self.counts;
         let (_, sampled_native_micros) = native_mark();
         let mut output = format!(
-            "{{\"schema\":\"{FOLD_METRICS_SCHEMA_V1}\",\"sampledNativeMicros\":{sampled_native_micros},\"counts\":{{"
+            "{{\"schema\":\"{FOLD_METRICS_SCHEMA_V1}\",\"sampledNativeMicros\":{sampled_native_micros},\"running\":"
         );
+        push_running(&mut output, self.running.as_ref());
+        output.push_str(",\"counts\":{");
         for (index, (field, value)) in [
             ("subProofs", counts.sub_proofs),
             ("checkpoints", counts.checkpoints),
@@ -656,6 +726,21 @@ fn push_optional_u64(output: &mut String, value: Option<u64>) {
         None => output.push_str("null"),
     }
 }
+fn push_running(output: &mut String, running: Option<&FoldRunningV1>) {
+    let Some(running) = running else {
+        output.push_str("null");
+        return;
+    };
+    let _ = write!(
+        output,
+        "{{\"startedNativeMicros\":{},\"sequence\":{},\"operation\":",
+        running.started_native_micros, running.sequence
+    );
+    push_name(output, running.operation.map(operation_name));
+    let _ = write!(output, ",\"ordinal\":{},\"stages\":", running.ordinal);
+    push_optional_u64(output, running.stages.map(u64::from));
+    output.push('}');
+}
 fn push_bridge(output: &mut String, value: NativeBridgeMetricsV1) {
     let _ = write!(
         output,
@@ -781,7 +866,6 @@ const fn operation_name(kind: KagemushaWalletOperationKindV1) -> &'static str {
 /// The open turn of this thread.
 #[derive(Clone, Copy)]
 struct Active {
-    started_native_micros: u64,
     phase: FoldPhaseV1,
     since: Instant,
     elapsed: [Duration; FoldPhaseV1::COUNT],
@@ -822,8 +906,11 @@ pub(super) fn stage(stage: FoldStageV1) {
 }
 
 /// One fold turn on the calling thread, open from [`Self::start`] until it is finished or
-/// dropped. Only a turn that selected a sub-proof yields a record.
+/// dropped. Only a turn that selected a sub-proof yields a record; until then, or its drop,
+/// its observer keeps the facts it has read.
 pub(super) struct FoldTurnV1 {
+    started_native_micros: u64,
+    observer: Option<Arc<dyn FoldObserverV1>>,
     sequence: Option<u128>,
     ordinal: u32,
     stages: Option<u32>,
@@ -833,12 +920,12 @@ pub(super) struct FoldTurnV1 {
 }
 
 impl FoldTurnV1 {
-    /// Open a turn on this thread in [`FoldPhaseV1::SyncManifest`].
-    pub(super) fn start() -> Self {
+    /// Open a turn on this thread in [`FoldPhaseV1::SyncManifest`]. Once it selects a
+    /// sub-proof, `observer` receives each public fact it reads.
+    pub(super) fn start(observer: Option<Arc<dyn FoldObserverV1>>) -> Self {
         let (now, started_native_micros) = native_mark();
         let _ = ACTIVE.try_with(|cell| {
             cell.set(Some(Active {
-                started_native_micros,
                 phase: FoldPhaseV1::SyncManifest,
                 since: now,
                 elapsed: [Duration::ZERO; FoldPhaseV1::COUNT],
@@ -848,6 +935,8 @@ impl FoldTurnV1 {
             }));
         });
         Self {
+            started_native_micros,
+            observer,
             sequence: None,
             ordinal: 0,
             stages: None,
@@ -861,16 +950,42 @@ impl FoldTurnV1 {
     pub(super) fn select(&mut self, sequence: u128, ordinal: u32) {
         self.sequence = Some(sequence);
         self.ordinal = ordinal;
+        self.report_running();
     }
 
     /// The selected head's fold needs `stages` sub-proofs, Ω included.
     pub(super) fn stages(&mut self, stages: usize) {
         self.stages = u32::try_from(stages).ok();
+        self.report_running();
     }
 
     /// The operation of the selected head.
     pub(super) fn operation(&mut self, kind: KagemushaWalletOperationKindV1) {
         self.operation = Some(kind);
+        self.report_running();
+    }
+
+    /// What the turn has read so far, once it selected a sub-proof.
+    fn running(&self) -> Option<FoldRunningV1> {
+        Some(FoldRunningV1 {
+            started_native_micros: self.started_native_micros,
+            sequence: self.sequence?,
+            operation: self.operation,
+            ordinal: self.ordinal,
+            stages: self.stages,
+        })
+    }
+
+    /// Observer that received this turn's running facts. A replacement observes only later
+    /// turns, so the same observer must receive this turn's record.
+    pub(super) fn observer(&self) -> Option<Arc<dyn FoldObserverV1>> {
+        self.observer.clone()
+    }
+
+    fn report_running(&self) {
+        if let (Some(observer), Some(running)) = (&self.observer, self.running()) {
+            observer.running(&running);
+        }
     }
 
     /// The turn adopts the exact bytes of an interrupted publication.
@@ -884,9 +999,10 @@ impl FoldTurnV1 {
     }
 
     /// Close the turn. `cause` is the scheduler signal that cancelled it, if any; only that
-    /// signal makes a `Cancelled` error a cancellation.
+    /// signal makes a `Cancelled` error a cancellation. The record it returns ends its
+    /// running facts once the observer records it; a selected turn without one ends them here.
     pub(super) fn finish(
-        self,
+        mut self,
         result: Result<FoldStatus, &Error>,
         cause: Option<FoldCancelCauseV1>,
     ) -> Option<FoldSubProofV1> {
@@ -904,12 +1020,12 @@ impl FoldTurnV1 {
             Err(Error::Cancelled) => cause.map_or(FoldOutcomeV1::Failed, FoldOutcomeV1::Cancelled),
             Err(_) => FoldOutcomeV1::Failed,
         };
-        let mut started_native_micros = ended_native_micros;
+        // The observer ends the running facts with this record, so the drop must not.
+        self.observer = None;
         let mut phases = [Duration::ZERO; FoldPhaseV1::COUNT];
         let mut stage = None;
         let mut verification = KagemushaWalletVerificationCountsV1::default();
         let work = active.map_or_else(iroha_plonk::work_metrics::WorkMetrics::default, |active| {
-            started_native_micros = active.started_native_micros;
             phases = active.elapsed;
             let spent = &mut phases[active.phase.index()];
             *spent = spent.saturating_add(now.saturating_duration_since(active.since));
@@ -919,7 +1035,7 @@ impl FoldTurnV1 {
             iroha_plonk::work_metrics::WorkMetrics::current_thread().since(active.work)
         });
         Some(FoldSubProofV1 {
-            started_native_micros,
+            started_native_micros: self.started_native_micros,
             ended_native_micros,
             sequence,
             operation: self.operation,
@@ -940,6 +1056,10 @@ impl Drop for FoldTurnV1 {
     fn drop(&mut self) {
         // A finished turn already took its state; an unwinding one must not leave it open.
         let _ = ACTIVE.try_with(|cell| cell.set(None));
+        // A selected turn that yields no record ends the running facts it reported.
+        if let (Some(observer), Some(running)) = (self.observer.take(), self.running()) {
+            observer.ended(&running);
+        }
     }
 }
 

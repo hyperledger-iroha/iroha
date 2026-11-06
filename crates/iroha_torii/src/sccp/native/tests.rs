@@ -561,27 +561,32 @@ async fn pause_and_anchor_handlers_reject_unknown_queries_and_preserve_source_re
         } else {
             Instant::now() + Duration::from_secs(30)
         };
-        for response in [
-            handler_fast_pause(
-                State(app.clone()),
-                RawQuery(query.map(str::to_owned)),
-                Extension(RouteExecutionDeadline(deadline)),
-                HeaderMap::new(),
-                ConnectInfo(remote),
-            )
-            .await
-            .unwrap(),
-            handler_evidence_anchor(
-                State(app.clone()),
-                Path("1".into()),
-                RawQuery(query.map(str::to_owned)),
-                Extension(RouteExecutionDeadline(deadline)),
-                HeaderMap::new(),
-                ConnectInfo(remote),
-            )
-            .await
-            .unwrap(),
-        ] {
+        // Each response retains its original pool lease until its body drops.
+        // Exercise these independent handler contracts sequentially so the pause
+        // response cannot occupy the separately required anchor scan admission.
+        for anchor in [false, true] {
+            let response = if anchor {
+                handler_evidence_anchor(
+                    State(app.clone()),
+                    Path("1".into()),
+                    RawQuery(query.map(str::to_owned)),
+                    Extension(RouteExecutionDeadline(deadline)),
+                    HeaderMap::new(),
+                    ConnectInfo(remote),
+                )
+                .await
+                .unwrap()
+            } else {
+                handler_fast_pause(
+                    State(app.clone()),
+                    RawQuery(query.map(str::to_owned)),
+                    Extension(RouteExecutionDeadline(deadline)),
+                    HeaderMap::new(),
+                    ConnectInfo(remote),
+                )
+                .await
+                .unwrap()
+            };
             assert_eq!(response.status(), expected);
         }
     }
@@ -834,6 +839,106 @@ fn genesis_finality_app() -> (
     fixture.state = std::sync::Arc::clone(chain.state());
     fixture.kura = std::sync::Arc::clone(chain.kura());
     (app, chain)
+}
+
+#[tokio::test]
+async fn anchor_admission_funds_a_complete_scan_without_replacing_inherited_limits() {
+    use iroha_core::sumeragi::finality::read_commit_certificate;
+    use std::sync::Arc;
+
+    fn admission() -> crate::QueryAdmissionPermit {
+        crate::QueryAdmissionPermit {
+            _query: Arc::new(tokio::sync::Semaphore::new(1))
+                .try_acquire_owned()
+                .unwrap(),
+            heavy: None,
+            body: None,
+            fanout_memory: None,
+        }
+    }
+
+    // Reuse one genuine successor frame to exercise the original Kura reader and
+    // header decoder 4096 times. This isolates the cumulative admission defect;
+    // it does not assert that repeated DATA forms an authenticated anchor chunk.
+    let (mut app, mut chain) = genesis_finality_app();
+    chain.commit(Vec::new());
+    let view = app.state.view();
+    let scan = |owner: &HistoryProducerOwner| {
+        let mut completed = 0;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let result = owner.scope(|| -> Result<(), Box<dyn std::error::Error>> {
+            for _ in 0..iroha_data_model::sccp::generation::SCCP_ANCHOR_CHUNK_SIZE_V1 {
+                let original = read_commit_certificate(
+                    &view,
+                    NonZeroU64::new(2).unwrap(),
+                    owner.cold_frames(),
+                    deadline,
+                )?;
+                let bytes = &original.certificate().consensus_header;
+                let limits = norito::canonical_decode_limits(bytes.len());
+                let _scratch = owner
+                    .cold_frames()
+                    .try_reserve_bytes(limits.max_total_allocated_bytes())?;
+                let _: iroha_sumeragi::message::BlockHeader =
+                    norito::decode_canonical_with_limits(bytes, limits)?;
+                completed += 1;
+            }
+            Ok(())
+        });
+        assert_eq!(owner.cold_frames().reserved_bytes(), 0);
+        eprintln!(
+            "anchor admission: completed={completed}, cumulative={}, peak_live={}",
+            owner.allocation_context().consumed_allocated_bytes(),
+            owner.cold_frames().peak_reserved_bytes(),
+        );
+        (completed, result)
+    };
+    let anchor = Selection::Anchor(NonZeroU64::new(1).unwrap());
+    {
+        let mut ordinary = admission();
+        assert!(
+            admit_memory(&app, Selection::FastPause, &mut ordinary)
+                .unwrap()
+                .is_none()
+        );
+        let inherited = HistoryProducerOwner::from_admission(&ordinary).unwrap();
+        let limit = inherited.allocation_limit_for_test();
+        inherited.physical_scope(|| {
+            assert!(admit_memory(&app, anchor, &mut ordinary).unwrap().is_none());
+            let preserved = HistoryProducerOwner::from_admission(&ordinary).unwrap();
+            assert!(preserved.cold_frames().same_pool(inherited.cold_frames()));
+            assert_eq!(preserved.allocation_limit_for_test(), limit);
+            assert!(admit_memory(&app, anchor, &mut admission()).is_err());
+        });
+        let (completed, result) = scan(&inherited);
+        assert!(completed > 0 && completed < 4096);
+        assert!(
+            result.is_err(),
+            "ordinary cumulative admission must remain finite"
+        );
+    }
+    {
+        let mut original = admission();
+        assert!(admit_memory(&app, anchor, &mut original).unwrap().is_none());
+        let owner = HistoryProducerOwner::from_admission(&original).unwrap();
+        let (completed, result) = scan(&owner);
+        result.expect("configured original native-finality admission funds the chunk scan");
+        assert_eq!(completed, 4096);
+        assert!(
+            owner.allocation_context().consumed_allocated_bytes()
+                > owner.cold_frames().peak_reserved_bytes() as u64
+        );
+    }
+    drop(view);
+    // An operator's smaller configured ceiling must refuse rather than silently
+    // adopting the default, retrying under a new owner or clearing decoder scopes.
+    Arc::get_mut(&mut app).unwrap().finality_working_set_bytes = 48_000_000;
+    let mut constrained = admission();
+    let refusal = admit_memory(&app, anchor, &mut constrained)
+        .unwrap()
+        .expect("native profile floor exceeds the explicitly reduced ceiling");
+    assert_eq!(refusal.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(constrained.fanout_memory.is_none());
 }
 
 #[tokio::test]

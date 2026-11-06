@@ -1476,3 +1476,139 @@ fn unused_insert() -> IndexedInsert<Fp> {
         slot_siblings: [Fp::from(0); 32],
     }
 }
+
+/// Native suffix verification of one retained Receive (option a, 2026-11-06): the exact
+/// successor and statement of the installed `σ_recv` evaluator, derived from an opened source
+/// state that the suffix owner already authenticated, rather than from a released custody
+/// step. Every field is recomputed by the same `derive` owner as Receive preparation; the
+/// caller compares the result with the retained step byte for byte. This grants no Advance,
+/// signing, custody or payout capability.
+///
+/// # Errors
+/// An invalid Request, consumed-credit insertion, nonce, evaluator refusal or a statement
+/// for another scheme or credential.
+pub(crate) fn suffix_receive_successor_v1(
+    scheme: &KagemushaWalletSchemeV1,
+    credential: &KagemushaWalletCredentialV1,
+    source_state: &KagemushaWalletStateV1,
+    request_original: &[u8],
+    consumed: &KagemushaWalletIndexedInsertV1,
+    successor_nonce: [u8; 32],
+    effect: KagemushaWalletEffectV1,
+) -> Result<(KagemushaWalletStateV1, KagemushaWalletStatementV1), Error> {
+    let request = request(request_original, scheme)?;
+    let sequence = source_state
+        .core
+        .sequence
+        .checked_add(1)
+        .ok_or(Error::Authority)?;
+    let leaf = KagemushaWalletConsumedCreditLeafV1 {
+        credit_id: request.credit_id(),
+        amount: request.body.amount,
+        receive_sequence: sequence,
+    };
+    let consumed_root = authority(consumed.verify(
+        &source_state.core.consumed_credit_root,
+        &leaf.key(),
+        &authority(leaf.leaf_value())?,
+    ))?;
+    let body = request_fields(&request.body)?;
+    let relation = SigmaRelation::RECEIVE;
+    let witness = StepWitness {
+        relation_id: scheme.relation_id,
+        predecessor: state_fields(source_state)?,
+        successor_nonce: word(successor_nonce)?,
+        inputs: StepInputs::Receive(Box::new(ReceiveInputs {
+            payer_wallet: body.payer_wallet,
+            payer_account_digest: body.payer_account,
+            receiver_account_digest: body.receiver_account,
+            send_ordinal: body.send_ordinal,
+            receiver_credential_digest: body.receiver_credential_digest,
+            request: body.terms,
+            successor_consumed_credit: word(consumed_root)?,
+        })),
+    };
+    if witness.request_body() != body {
+        return Err(Error::Authority);
+    }
+    let (state, statement) = derive(source_state, relation, &witness, effect)?;
+    authority(statement.validate_for_scheme(scheme))?;
+    authority(statement.validate_for_credential(credential))?;
+    Ok((state, statement))
+}
+
+impl PreparationV1<'_> {
+    /// Receive admission's exact verdict tapes ([`Self::receive_admission_fields`]) for one
+    /// retained suffix Receive, from its opened source state and exact originals. The own
+    /// receipt is the same admission placeholder: no incoming predicate reads it, and the
+    /// suffix owner verifies the genuine receipt separately. Native-only (it needs the
+    /// installed pack); it grants no acceptance by itself.
+    ///
+    /// # Errors
+    /// Another installation or credential, or changed/noncanonical originals.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn suffix_receive_admission_fields(
+        &self,
+        owner: &AuthenticatedCredentialV1,
+        before: &KagemushaWalletStateV1,
+        after: &KagemushaWalletStateV1,
+        statement: &KagemushaWalletStatementV1,
+        request_original: &[u8],
+        payment_original: &[u8],
+        payer_credential_original: &[u8],
+        consumed: &KagemushaWalletIndexedInsertV1,
+    ) -> Result<ReceiveAdmissionFieldsV1, Error> {
+        if statement.effect.kind() != KagemushaWalletOperationKindV1::Receive {
+            return Err(Error::Authority);
+        }
+        let scheme = self.installed.verifier().scheme();
+        let request = request(request_original, scheme)?;
+        if payer_credential_original.is_empty()
+            || payer_credential_original.len() > KAGEMUSHA_WALLET_CREDENTIAL_MAX_BYTES_V1
+        {
+            return Err(Error::Authority);
+        }
+        let payer: KagemushaWalletCredentialV1 = read_original(|| {
+            norito::decode_canonical_with_limits(
+                payer_credential_original,
+                norito::canonical_decode_limits(payer_credential_original.len()),
+            )
+        })?;
+        let incoming = incoming_original::payment(payment_original)?;
+        let quoted = &request.receiver_credential;
+        let quoted_certificate = authority(request.certificates.certificate(
+            &quoted.body.issuer_certificate,
+            KagemushaWalletSignerRoleV1::Enrollment,
+        ))?;
+        let (receipt, own_key) = admission_receipt(owner, statement, &incoming.payment_digest)?;
+        Ok(ReceiveAdmissionFieldsV1 {
+            before: self.state_fields(owner, before, &self.admission_lineage(owner, before)?)?,
+            after: self.state_fields(owner, after, &self.admission_lineage(owner, after)?)?,
+            statement: self.statement_fields(owner, statement)?,
+            consumed: insertion(consumed)?,
+            incoming_statement: incoming.incoming_statement,
+            objects: [
+                signed_tape(
+                    authority(incoming.payment.signed_request())?
+                        .body
+                        .transcript(),
+                    &incoming.payment.request.signature,
+                ),
+                signed_tape(payer.body.transcript(), &payer.signature),
+                incoming.receipt,
+                incoming.compact,
+                incoming.omega,
+                incoming.payment.send.step_proof.bytes.clone(),
+                receipt,
+                signed_tape(quoted.body.transcript(), &quoted.signature),
+                signed_tape(
+                    quoted_certificate.body.transcript(),
+                    &quoted_certificate.signature,
+                ),
+            ],
+            own_key,
+            renewed: quoted.credential_digest() != owner.credential.credential_digest(),
+            payment: incoming.payment,
+        })
+    }
+}
