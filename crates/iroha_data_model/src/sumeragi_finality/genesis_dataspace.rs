@@ -9,15 +9,22 @@
 //! [`verify_genesis_dataspace_v1`] binds one dataspace selector to an authenticated signed
 //! genesis and its exact context preimage; [`GenesisDataspaceAuthorityV1::verify_cut`]
 //! rechecks the governed lane policy and the runtime catalog at one certified World cut.
+//! A genesis that signs neither the crypto-admission nor the staking policy predates
+//! genesis-authored policy, and its context may carry the retired pre-policy tail.
 use super::{AuthenticatedSignedGenesisV1, VerifiedSumeragiBlock, VerifiedWorldStateSnapshotV1};
 use crate::{
     NetworkId,
-    block::{BlockHeader, consensus::SumeragiRootScope},
+    block::{
+        BlockHeader,
+        consensus::{PublicLaneStakingPolicy, SumeragiRootScope},
+    },
+    crypto_admission_policy::CryptoAdmissionPolicyV1,
     isi::SetParameter,
     nexus::{
         LaneLifecycleParameterV1, LaneVisibility, MAX_NEXUS_AMX_CONTEXT_BYTES_V1,
         NexusAmxContextCatalogV1, NexusAmxContextError, NexusCatalogTransitionV1,
-        NexusCatalogValidationError, NexusRuntimeCatalogV1, decode_nexus_amx_context_v1,
+        NexusCatalogValidationError, NexusRuntimeCatalogV1, decode_nexus_amx_context_any_layout_v1,
+        decode_nexus_amx_context_v1,
     },
     parameter::{CustomParameter, Parameter, Parameters},
     sns::dataspace_id_for_alias,
@@ -317,13 +324,38 @@ fn decode_lane_policy(
         .map_err(GenesisDataspaceError::LanePolicy)
 }
 
+/// Whether signed genesis assigns its crypto-admission or staking policy.
+///
+/// Nodes write the pre-policy context tail only for a genesis that assigns neither; a genesis
+/// that assigns either commits the current tail.
+fn signs_genesis_policy(genesis: &AuthenticatedSignedGenesisV1) -> bool {
+    let crypto = CryptoAdmissionPolicyV1::parameter_id();
+    let staking = PublicLaneStakingPolicy::parameter_id();
+    genesis.block().external_transactions().any(|transaction| {
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            return false;
+        };
+        instructions.iter().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<SetParameter>()
+                .is_some_and(|set| {
+                    matches!(set.inner(), Parameter::Custom(custom)
+                        if custom.id() == &crypto || custom.id() == &staking)
+                })
+        })
+    })
+}
+
 /// Verify that authenticated signed genesis declares the selected dataspace and its lane.
 ///
 /// # Errors
 /// A malformed selector; a non-Global root; a preimage that does not hash to the signed
-/// context or is not a valid context; a dataspace, lane, autoscale or routing catalog that
-/// differs from the selector or can divert it; a missing, repeated or mismatched native lane
-/// policy; or any catalog transition, lane lifecycle or runtime catalog parameter in genesis.
+/// context or is not a valid context (the pre-policy tail is valid only for a genesis that
+/// signs neither the crypto-admission nor the staking policy); a dataspace, lane, autoscale or
+/// routing catalog that differs from the selector or can divert it; a missing, repeated or
+/// mismatched native lane policy; or any catalog transition, lane lifecycle or runtime
+/// catalog parameter in genesis.
 pub fn verify_genesis_dataspace_v1(
     genesis: &AuthenticatedSignedGenesisV1,
     amx_preimage: &[u8],
@@ -340,7 +372,11 @@ pub fn verify_genesis_dataspace_v1(
     {
         return Err(GenesisDataspaceError::ContextHash);
     }
-    let catalog = decode_nexus_amx_context_v1(amx_preimage)?;
+    let catalog = if signs_genesis_policy(genesis) {
+        decode_nexus_amx_context_v1(amx_preimage)?
+    } else {
+        decode_nexus_amx_context_any_layout_v1(amx_preimage)?.1
+    };
     let mut named = catalog
         .dataspaces()
         .iter()

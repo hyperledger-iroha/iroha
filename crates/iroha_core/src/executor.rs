@@ -7623,6 +7623,7 @@ impl Executor {
         state_transaction.bind_kagemusha_load_entrypoint_v1(None);
         state_transaction.bind_privacy_transaction_intent_v1(None);
         // A local refusal has no completed execution, fee, gas, or effect result.
+        state_transaction.sorafs_repair_entrypoint = None;
         // The transaction overlay remains poisoned until its owner drops it.
         state_transaction
             .ensure_execution_ready()
@@ -7650,6 +7651,7 @@ impl Executor {
         // an instruction is. Transaction validation already walked the same envelopes against the
         // same selection (`StateBlock::execute_signed_transaction_in_overlay`); this keeps the
         // guarantee for every caller of the executor.
+        crate::runtime::sorafs_repair::prepare_signed_boundary(state_transaction, transaction)?;
         crate::runtime::envelope::admit_envelopes(
             state_transaction.world.runtime_selection.get(),
             state_transaction.block_height(),

@@ -90,13 +90,18 @@ World fields after it (design §4, "Add an instruction", "Add storage"):
   `ContainmentResolved` bits of `RuntimeUpgradeEventSet`. Both additions are appended, so every
   payload a660d601da wrote still decodes. a660d601da cannot decode a payload that uses them, and
   its peers fail this release's handshake (`ConsensusConfigCaps`), so Taira's validators switch to
-  this release together. A storage descriptor likewise names only its
+  this release together. The threshold-key lifecycle retains its original three actions and
+  frozen layout. The explicitly owner-authorized Taira SoraFS repair is a separate new
+  instruction and kernel, described in `sorafs/taira_repair_v1.md`; it does not reinterpret
+  that lifecycle. A storage descriptor likewise names only its
   value's nominal type, and World value layouts are not pinned yet (TODO: pin them from the State
-  field registry the same way). This release declares two additions, in activation order:
+  field registry the same way). This release declares the following additions, in activation order:
   `iroha.runtime.endorsed_change_set_proposal.v1`, and `iroha.game_partition.v1`, which adds the
   six `iroha.game_partition.*.v1` instructions and the `world.game_partitions` table. Activating
   the game-partition addition on a live network waits until in-flight unit exports are live
-  obligations (TODO in `additions.rs`).
+  obligations (TODO in `additions.rs`). The third addition, `iroha.sorafs.bootstrap.repair.v1`,
+  publishes a new interface, implementation and separately identified kernel; its exact
+  Taira-only transition changes no existing binding, profile or installed storage.
 - **Definitions.** Each addition publishes one native implementation, one interface per wire ID it
   adds and one storage definition per field; a cell's definition carries its initial bytes. Like
   the baseline bundle it declares a conservative superset of dependencies, every storage definition

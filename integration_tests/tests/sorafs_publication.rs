@@ -5,7 +5,9 @@
 //! use explicit software custody and bounded authenticated source transport, without State writes.
 
 use super::{
-    sorafs_network::{bounded_storage, submit_instruction},
+    sorafs_network::{
+        bounded_storage, prepare_transaction, submit_instruction, submit_transaction,
+    },
     sorafs_publication_authority::PublicationAuthorityFixture,
     sorafs_publication_compliance::PublicationComplianceFixture,
     sorafs_publication_config::{ProviderFixture, set},
@@ -61,7 +63,7 @@ use sorafs_manifest::{
 use std::{
     borrow::Cow,
     fs,
-    io::Write as _,
+    io::{Read as _, Write as _},
     os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
@@ -100,7 +102,7 @@ pub fn now() -> Result<u64> {
     Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())
 }
 
-fn merge(target: &mut toml::Table, overlay: toml::Table) {
+pub fn merge(target: &mut toml::Table, overlay: toml::Table) {
     for (key, value) in overlay {
         match (target.get_mut(&key), value) {
             (Some(toml::Value::Table(existing)), toml::Value::Table(next)) => merge(existing, next),
@@ -111,16 +113,20 @@ fn merge(target: &mut toml::Table, overlay: toml::Table) {
     }
 }
 
-async fn fund_and_declare(
+/// Fund every provider identity, then install reserve policy, reserve, credit and a
+/// `capacity_gib` capacity declaration through ordinary signed transactions.
+pub async fn fund_and_declare(
     network: &Network,
     providers: &[ProviderFixture],
     asset: AssetDefinitionId,
-) -> Result<()> {
+    capacity_gib: u64,
+) -> Result<u64> {
     let governor = client(network, 0, &ALICE_KEYPAIR);
     // NPoS genesis funds the test-network bootstrap accounts, not caller-registered workers.
     // Fund every separate production custody account through ordinary signed transfers.
     let native_fee_asset =
         iroha_genesis::signed_genesis_root_fee_policy(&network.genesis().0)?.fee_asset_id;
+    let mut funding = Vec::new();
     for provider in providers {
         ensure!(
             provider.owner() != provider.completion_signer(),
@@ -135,16 +141,19 @@ async fn fund_and_declare(
                     .map(|key| AccountId::new(key.public_key().clone())),
             )
         {
-            submit_instruction(
-                &governor,
-                Transfer::asset_quantity(
-                    AssetId::of(native_fee_asset.clone(), ALICE_ID.clone()),
-                    10_000_u32,
-                    account,
-                ),
-            )
-            .await?;
+            funding.push(Transfer::asset_quantity(
+                AssetId::of(native_fee_asset.clone(), ALICE_ID.clone()),
+                10_000_u32,
+                account,
+            ));
         }
+    }
+    // These exact transfers share Alice's authority. Bound each native batch
+    // so setup does not create a separate finality-proof block for every worker.
+    for batch in funding.chunks(5) {
+        let transaction =
+            prepare_transaction(&governor, batch.iter().cloned(), Metadata::default()).await?;
+        submit_transaction(&governor, &transaction).await?;
     }
     let policy = ReserveAuthorityPolicyV1 {
         version: RESERVE_AUTHORITY_POLICY_VERSION_V1,
@@ -164,6 +173,7 @@ async fn fund_and_declare(
     };
     let policy_digest = policy.digest()?;
     submit_instruction(&governor, SetSorafsReservePolicy::new(policy)).await?;
+    let mut earliest_capacity_expiry = u64::MAX;
     for (index, provider) in providers.iter().enumerate() {
         let owner = client(network, 0, &provider.owner_key);
         submit_instruction(&owner, provider.completion_authority()).await?;
@@ -176,7 +186,7 @@ async fn fund_and_declare(
                     tier: ReserveTier::TierA,
                     storage_class: StorageClass::Hot,
                     duration: ReserveDuration::Monthly,
-                    capacity_gib: 2,
+                    capacity_gib,
                 },
                 policy_digest,
             ),
@@ -224,6 +234,12 @@ async fn fund_and_declare(
             },
         )
         .await?;
+        // Admission must cover the complete ingest window measured from the
+        // later pin block, not just one ingest window measured during setup.
+        let valid_until = instant.checked_add(2 * u64::from(
+            iroha_data_model::sorafs::pin_registry::SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1,
+        )).ok_or_else(|| eyre!("publication capacity expiry overflow"))?;
+        earliest_capacity_expiry = earliest_capacity_expiry.min(valid_until);
         let declaration = CapacityDeclarationV1 {
             version: CAPACITY_DECLARATION_VERSION_V1,
             provider_id: *provider.id.as_bytes(),
@@ -231,17 +247,17 @@ async fn fund_and_declare(
                 pool_id: [0xC0 + u8::try_from(index).expect("fixture provider index fits u8"); 32],
                 stake_amount: "1".parse()?,
             },
-            committed_capacity_gib: 2,
+            committed_capacity_gib: capacity_gib,
             chunker_commitments: vec![ChunkerCommitmentV1 {
                 profile_id: "sorafs.sf1@1.0.0".into(),
                 profile_aliases: None,
-                committed_gib: 2,
+                committed_gib: capacity_gib,
                 capability_refs: Vec::new(),
             }],
             lane_commitments: Vec::new(),
             pricing: None,
             valid_from: instant - 120,
-            valid_until: instant + 86400,
+            valid_until,
             metadata: vec![
                 CapacityMetadataEntry {
                     key: "sorafs.owner_account_id".into(),
@@ -260,13 +276,13 @@ async fn fund_and_declare(
         )
         .await?;
     }
-    Ok(())
+    Ok(earliest_capacity_expiry)
 }
 
 pub async fn refresh_adverts(published: &PublishedNetwork) -> Result<()> {
     refresh_network_adverts(&published.http, &published.network, &published.authority).await
 }
-async fn refresh_network_adverts(
+pub async fn refresh_network_adverts(
     http: &reqwest::Client,
     network: &Network,
     authority: &PublicationAuthorityFixture,
@@ -277,18 +293,22 @@ async fn refresh_network_adverts(
             for peer in network.peers().iter().take(3) {
                 let response = http
                     .post(format!(
-                        "{}/v1/sorafs/provider/advert",
-                        peer.torii_url().trim_end_matches('/')
+                        "{}{}",
+                        peer.torii_url().trim_end_matches('/'),
+                        iroha_torii_shared::route_catalog::sorafs::PROVIDER_ADVERT.path(),
                     ))
                     .header("Content-Type", "application/x-norito")
                     .body(norito::encode_canonical(&advert)?)
                     .send()
                     .await?;
-                ensure!(
-                    response.status().is_success(),
-                    "actual signed provider advert rejected: {}",
-                    response.status()
-                );
+                let status = response.status();
+                if !status.is_success() {
+                    let body = wire::bytes(response, 4096).await?;
+                    return Err(eyre!(
+                        "actual signed provider advert rejected: {status}; {}",
+                        String::from_utf8_lossy(&body)
+                    ));
+                }
             }
         }
         Ok::<_, eyre::Report>(())
@@ -341,12 +361,12 @@ pub async fn create_and_publish(
     )
     .with_config_layer(move |layer| {
         layer
+            // Provider overlays enable the SORA Nexus service profile after build;
+            // keep every peer on the same explicitly selected genesis geometry.
+            .write(["nexus", "lane_count"], 1_i64)
             .write(["sorafs", "storage", "enabled"], false)
-            .write(["governance", "sorafs_pin_fee_asset_id"], fee_asset.clone())
-            .write(
-                ["governance", "sorafs_pin_fee_treasury_account"],
-                treasury.clone(),
-            );
+            .write(["gov", "sorafs_pin_fee_asset_id"], fee_asset.clone())
+            .write(["gov", "sorafs_pin_fee_treasury_account"], treasury.clone());
     })
     .with_genesis_instruction(Register::domain(Domain::new(domain)))
     .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
@@ -441,7 +461,7 @@ pub async fn create_and_publish(
             )
             .await?;
     }
-    fund_and_declare(&network, &providers, asset).await?;
+    let capacity_expiry = fund_and_declare(&network, &providers, asset, 2).await?;
     refresh_network_adverts(&http, &network, &authority).await?;
     let data = (0..128 * 1024)
         .map(|index| {
@@ -467,12 +487,20 @@ pub async fn create_and_publish(
         .car_size(car.car_size)
         .pin_policy(PinPolicy {
             min_replicas: 3,
-            retention_epoch: now()? + 86400,
+            retention_epoch: now()? + 2 * u64::from(
+                iroha_data_model::sorafs::pin_registry::SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1,
+            ),
             storage_class: sorafs_manifest::StorageClass::Hot,
         })
         .build()?;
     let digest = ManifestDigest::from_manifest(&manifest)?;
     let publisher = client(&network, 0, &ALICE_KEYPAIR);
+    ensure!(
+        now()?.checked_add(u64::from(
+            iroha_data_model::sorafs::pin_registry::SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1,
+        )).is_some_and(|deadline| deadline < capacity_expiry),
+        "provider capacity must remain valid throughout the later pin's ingest window"
+    );
     submit_instruction(
         &publisher,
         RegisterPinManifest::new(norito::encode_canonical(&manifest)?, None, None),
@@ -739,11 +767,12 @@ pub async fn qualify_storage_lifecycle(published: &PublishedNetwork) -> Result<(
         "corrupt payload must remain unavailable after restart, got {}",
         unavailable.status()
     );
-    let unavailable_body = wire::bytes(unavailable, 65536).await?;
+    let unavailable_body = String::from_utf8(wire::bytes(unavailable, 65536).await?)?;
     ensure!(
-        String::from_utf8(unavailable_body)?
-            .contains("manifest payload is quarantined pending verified repair"),
-        "an unrelated restart or finality error cannot establish payload quarantine"
+        unavailable_body.contains("manifest payload is quarantined pending verified repair"),
+        "an unrelated restart or finality error cannot establish payload quarantine; response body ({} bytes, at most 4096-byte UTF8 prefix): {:?}",
+        unavailable_body.len(),
+        &unavailable_body[..unavailable_body.floor_char_boundary(4096)],
     );
     // An unaffected replica remains available before any repair task can be claimed.
     check_payload(published, 1).await?;
@@ -848,6 +877,50 @@ pub async fn qualify_storage_lifecycle(published: &PublishedNetwork) -> Result<(
     Ok(())
 }
 
+// Read only the child-owned stdout/stderr log, before the private runtime
+// directory is removed. Never copy the adjacent client config or checkpoint.
+fn bounded_cli_failure_log(log: &std::path::Path) -> String {
+    let read = || -> std::io::Result<(u64, Vec<u8>)> {
+        let file = fs::File::open(log)?;
+        let total = file.metadata()?.len();
+        let mut bytes = Vec::new();
+        file.take(4096).read_to_end(&mut bytes)?;
+        Ok((total, bytes))
+    };
+    match read() {
+        Ok((total, bytes)) => format!(
+            "CLI log {total} bytes, first {} bytes: {}",
+            bytes.len(),
+            bytes.escape_ascii()
+        ),
+        Err(error) => format!("CLI log unavailable: {:?}", error.kind()),
+    }
+}
+
+#[test]
+fn cli_failure_log_is_bounded_escaped_and_survives_runtime_cleanup() {
+    let directory = tempfile::tempdir().unwrap();
+    let log = directory.path().join("cli.log");
+    let mut bytes = b"pin registration rejected\n\xff\x1b".to_vec();
+    bytes.resize(4096, b'x');
+    bytes.extend_from_slice(b"unread trailing content");
+    fs::write(&log, &bytes).unwrap();
+    let diagnostic = bounded_cli_failure_log(&log);
+    assert!(diagnostic.starts_with(&format!(
+        "CLI log {} bytes, first 4096 bytes: ",
+        bytes.len()
+    )));
+    assert!(diagnostic.contains(r"pin registration rejected\n\xff\x1b"));
+    assert!(!diagnostic.contains("unread trailing content"));
+    assert!(!diagnostic.contains('\n'));
+    directory.close().unwrap();
+    assert!(diagnostic.contains("pin registration rejected"));
+    assert_eq!(
+        bounded_cli_failure_log(&log),
+        "CLI log unavailable: NotFound"
+    );
+}
+
 async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
     let root = published.runtime_directory.path().join("cli");
     fs::create_dir(&root)?;
@@ -937,13 +1010,16 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
                 .kill()
                 .await
                 .wrap_err("terminate and reap timed-out publication CLI")?;
-            return Err(error).wrap_err("same-source publication CLI exceeded its deadline");
+            return Err(error).wrap_err(format!(
+                "same-source publication CLI exceeded its deadline; {}",
+                bounded_cli_failure_log(&log)
+            ));
         }
     };
     ensure!(
         status.success(),
-        "same-source sorafs_cli deploy failed; runtime log: {}",
-        log.display()
+        "same-source sorafs_cli deploy failed ({status}); {}",
+        bounded_cli_failure_log(&log)
     );
     ensure!(
         fs::metadata(&receipt)?.len() <= 1024 * 1024,

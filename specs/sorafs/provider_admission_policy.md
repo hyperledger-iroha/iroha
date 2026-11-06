@@ -1,7 +1,9 @@
 # SoraFS native provider admission
 
 The sole runtime authority is the council policy and provider history initialized
-by signed genesis or enacted by SORA Parliament in Core. Torii constructs its registry from the same Core State
+by signed genesis, by the one-time post-genesis bootstrap certificate
+([`post_genesis_bootstrap_v1.md`](post_genesis_bootstrap_v1.md)) or enacted by SORA
+Parliament in Core. Torii constructs its registry from the same Core State
 used by its other authoritative reads. Local files, configured public keys and
 signed envelopes alone cannot authorize discovery, PoR, PoTR or gateway admission.
 
@@ -55,8 +57,14 @@ use Parliament and ordinary network-bound council signatures.
 
 Each effect has its own Parliament subject: owner bindings, council policy and
 provider admissions do not share certificate compare-and-set heads. The normal
-Parliament certificate lifecycle binds the exact effect and current subject head;
-there is no post-genesis direct admission instruction or local administrative bypass.
+Parliament certificate lifecycle binds the exact effect and current subject head.
+The only exceptional post-genesis writer is the Taira-only typed repair described in
+[`taira_repair_v1.md`](taira_repair_v1.md). It requires an exact native parent and
+successor, the retained owner authorization and all four scheduled validators'
+signatures. Its newly selected handler applies the same `ConfigureCouncil`,
+`Establish` and `Admit` effects with council-signed, network-bound envelopes, once
+while the admission namespace is empty. The original threshold-key lifecycle is
+unchanged; no local administrative bypass exists.
 
 Core stores immutable predecessor-linked records and the current head in native
 transactional state. Writes include the exact network, committing height/time,

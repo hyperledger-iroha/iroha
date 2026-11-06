@@ -74,6 +74,23 @@ fn tree(root: &Path) -> BTreeMap<PathBuf, (Vec<u8>, SystemTime)> {
 }
 
 #[test]
+fn repair_continuation_never_runs_without_authenticated_replay() {
+    let root = tempfile::tempdir().expect("temporary store root");
+    let mut called = false;
+    let report = check_replay_then(&store_config(root.path()), |_| {
+        called = true;
+        Ok(())
+    })
+    .expect("missing store remains an ordinary empty replay report");
+    assert!(!report.is_ok());
+    assert!(
+        !called,
+        "an unstarted replay cannot grant a repair execution context"
+    );
+    assert!(!root.path().join("kura").exists());
+}
+
+#[test]
 fn check_replay_reports_a_missing_store_as_nothing_to_replay() {
     let root = tempfile::tempdir().expect("temporary store root");
     let report = check_replay(&store_config(root.path())).expect("inspect missing store");

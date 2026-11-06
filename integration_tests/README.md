@@ -465,6 +465,14 @@ the test does not preallocate that disk space.
 The gateway uses a genuinely signed and acknowledged empty compliance catalog;
 its configured optional HTTPS feed is not fetched by this scenario.
 
+The Taira-only repair is specified in `specs/sorafs/taira_repair_v1.md`.
+Its deployment identity deliberately refuses a freshly generated test network.
+Focused Core tests cover the signed certificate boundary, original selection,
+SoraFS initialization, BPNG state preservation and rollback. These tests do not
+replace retained-history replay or actual client verification across the repair.
+The retired lifecycle-carrier publication scenario is removed because its action
+changed an already selected immutable definition and was never deployed.
+
 ### Paid linked full return at the final block
 
 The ignored `native_payment_network::full_return::paid_full_return_preserves_original_and_recovers_both_at_final_tip_without_new_effect` case uses four real validators. The payer's 250,000-unit original succeeds at H2; the receiver's linked full reverse succeeds at H3 with its own fee. All four processes restart at H3. Fresh signed-genesis verifiers recover both original successful inputs, a new return gateway recovers the same reverse without creating a signed carrier, and the two durable inbox identities remain once-only. Complete account snapshots establish the returned receiver principal is absent; query errors do not mean zero. The fee supply must be exactly genesis 300 minus two independently verified one-unit burns.

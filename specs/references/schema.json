@@ -1146,6 +1146,14 @@
       }
     ]
   },
+  "ApplySorafsRepairV1": {
+    "Struct": [
+      {
+        "name": "certificate",
+        "type": "SorafsRepairCertificateV1"
+      }
+    ]
+  },
   "ArchiveId": "Array<u8, 32>",
   "Array<Hash, 256>": {
     "Array": {
@@ -1157,6 +1165,18 @@
     "Array": {
       "len": 4,
       "type": "PrivateSettlementCommitteeKeyProofV1"
+    }
+  },
+  "Array<PublicKey, 4>": {
+    "Array": {
+      "len": 4,
+      "type": "PublicKey"
+    }
+  },
+  "Array<Signature, 4>": {
+    "Array": {
+      "len": 4,
+      "type": "Signature"
     }
   },
   "Array<u16, 8>": {
@@ -3476,6 +3496,22 @@
   "BigInt": {
     "Struct": []
   },
+  "BindingV1": {
+    "Struct": [
+      {
+        "name": "wire_id",
+        "type": "String"
+      },
+      {
+        "name": "interface",
+        "type": "DefinitionId"
+      },
+      {
+        "name": "implementation",
+        "type": "DefinitionId"
+      }
+    ]
+  },
   "BlobDigest": "Array<u8, 32>",
   "BlockEvent": {
     "Struct": [
@@ -5145,6 +5181,193 @@
       }
     ]
   },
+  "CarrierFieldV1": {
+    "Struct": [
+      {
+        "name": "name",
+        "type": "String"
+      },
+      {
+        "name": "node",
+        "type": "u32"
+      }
+    ]
+  },
+  "CarrierNodeV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Unit"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Bool"
+      },
+      {
+        "discriminant": 2,
+        "tag": "U8"
+      },
+      {
+        "discriminant": 3,
+        "tag": "U16"
+      },
+      {
+        "discriminant": 4,
+        "tag": "U32"
+      },
+      {
+        "discriminant": 5,
+        "tag": "U64"
+      },
+      {
+        "discriminant": 6,
+        "tag": "U128"
+      },
+      {
+        "discriminant": 7,
+        "tag": "I64"
+      },
+      {
+        "discriminant": 8,
+        "tag": "String",
+        "type": "CarrierNodeV1::String"
+      },
+      {
+        "discriminant": 9,
+        "tag": "Bytes",
+        "type": "CarrierNodeV1::Bytes"
+      },
+      {
+        "discriminant": 10,
+        "tag": "AccountId"
+      },
+      {
+        "discriminant": 11,
+        "tag": "AssetDefinitionId"
+      },
+      {
+        "discriminant": 12,
+        "tag": "Hash"
+      },
+      {
+        "discriminant": 13,
+        "tag": "Option",
+        "type": "CarrierNodeV1::Option"
+      },
+      {
+        "discriminant": 14,
+        "tag": "Vec",
+        "type": "CarrierNodeV1::Vec"
+      },
+      {
+        "discriminant": 15,
+        "tag": "Map",
+        "type": "CarrierNodeV1::Map"
+      },
+      {
+        "discriminant": 16,
+        "tag": "Struct",
+        "type": "CarrierNodeV1::Struct"
+      },
+      {
+        "discriminant": 17,
+        "tag": "Enum",
+        "type": "CarrierNodeV1::Enum"
+      }
+    ]
+  },
+  "CarrierNodeV1::Bytes": {
+    "Struct": [
+      {
+        "name": "max_bytes",
+        "type": "u32"
+      }
+    ]
+  },
+  "CarrierNodeV1::Enum": {
+    "Struct": [
+      {
+        "name": "variants",
+        "type": "Vec<CarrierVariantV1>"
+      }
+    ]
+  },
+  "CarrierNodeV1::Map": {
+    "Struct": [
+      {
+        "name": "key",
+        "type": "u32"
+      },
+      {
+        "name": "value",
+        "type": "u32"
+      },
+      {
+        "name": "max_len",
+        "type": "u32"
+      }
+    ]
+  },
+  "CarrierNodeV1::Option": {
+    "Struct": [
+      {
+        "name": "inner",
+        "type": "u32"
+      }
+    ]
+  },
+  "CarrierNodeV1::String": {
+    "Struct": [
+      {
+        "name": "max_bytes",
+        "type": "u32"
+      }
+    ]
+  },
+  "CarrierNodeV1::Struct": {
+    "Struct": [
+      {
+        "name": "fields",
+        "type": "Vec<CarrierFieldV1>"
+      }
+    ]
+  },
+  "CarrierNodeV1::Vec": {
+    "Struct": [
+      {
+        "name": "element",
+        "type": "u32"
+      },
+      {
+        "name": "max_len",
+        "type": "u32"
+      }
+    ]
+  },
+  "CarrierSchemaV1": {
+    "Struct": [
+      {
+        "name": "nodes",
+        "type": "Vec<CarrierNodeV1>"
+      }
+    ]
+  },
+  "CarrierVariantV1": {
+    "Struct": [
+      {
+        "name": "discriminant",
+        "type": "u32"
+      },
+      {
+        "name": "name",
+        "type": "String"
+      },
+      {
+        "name": "node",
+        "type": "u32"
+      }
+    ]
+  },
   "CertifiedResultScope": {
     "Enum": [
       {
@@ -5203,6 +5426,42 @@
     ]
   },
   "ChangeSetId": "Array<u8, 32>",
+  "ChangeSetV1": {
+    "Struct": [
+      {
+        "name": "network",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "root",
+        "type": "RootScopeV1"
+      },
+      {
+        "name": "predecessor",
+        "type": "SelectionId"
+      },
+      {
+        "name": "successor",
+        "type": "SelectionId"
+      },
+      {
+        "name": "effective_height",
+        "type": "u64"
+      },
+      {
+        "name": "publish",
+        "type": "Vec<DefinitionDescriptorV1>"
+      },
+      {
+        "name": "transitions",
+        "type": "Vec<SelectionTransitionV1>"
+      },
+      {
+        "name": "qualification",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
   "CheckMusubiPinOutboxV1": {
     "Struct": [
       {
@@ -5387,6 +5646,18 @@
       }
     ]
   },
+  "CommitmentProfileDescriptorV1": {
+    "Struct": [
+      {
+        "name": "scheme",
+        "type": "String"
+      },
+      {
+        "name": "parameters",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
   "CommittedTransaction": {
     "Struct": [
       {
@@ -5422,6 +5693,18 @@
   "CommittedTxPredicate": null,
   "Compact<u32>": {
     "Int": "Compact"
+  },
+  "CompletionClosureV1": {
+    "Struct": [
+      {
+        "name": "obligation",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "definitions",
+        "type": "Vec<DefinitionId>"
+      }
+    ]
   },
   "ConditionalEscrowAttestation": {
     "Struct": [
@@ -7248,6 +7531,65 @@
       }
     ]
   },
+  "DefinitionDescriptorV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Interface",
+        "type": "InterfaceDescriptorV1"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Implementation",
+        "type": "ImplementationDescriptorV1"
+      },
+      {
+        "discriminant": 2,
+        "tag": "Storage",
+        "type": "StorageDescriptorV1"
+      },
+      {
+        "discriminant": 3,
+        "tag": "Event",
+        "type": "EventDescriptorV1"
+      },
+      {
+        "discriminant": 4,
+        "tag": "Permission",
+        "type": "PermissionDescriptorV1"
+      },
+      {
+        "discriminant": 5,
+        "tag": "Parameter",
+        "type": "ParameterDescriptorV1"
+      },
+      {
+        "discriminant": 6,
+        "tag": "HostProfile",
+        "type": "HostProfileDescriptorV1"
+      },
+      {
+        "discriminant": 7,
+        "tag": "ServicesProfile",
+        "type": "ServicesProfileDescriptorV1"
+      },
+      {
+        "discriminant": 8,
+        "tag": "CommitmentProfile",
+        "type": "CommitmentProfileDescriptorV1"
+      },
+      {
+        "discriminant": 9,
+        "tag": "Kernel",
+        "type": "KernelDescriptorV1"
+      },
+      {
+        "discriminant": 10,
+        "tag": "Migration",
+        "type": "MigrationDescriptorV1"
+      }
+    ]
+  },
   "DefinitionId": "Array<u8, 32>",
   "DiagnosticTraceStatus": {
     "Struct": [
@@ -8002,6 +8344,25 @@
       }
     ]
   },
+  "EntrypointV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Instructions",
+        "type": "Vec<DefinitionId>"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Hook",
+        "type": "String"
+      },
+      {
+        "discriminant": 2,
+        "tag": "Query",
+        "type": "String"
+      }
+    ]
+  },
   "EntrypointValueAtomV1": {
     "Enum": [
       {
@@ -8307,6 +8668,18 @@
         "discriminant": 5,
         "tag": "TriggerCompleted",
         "type": "TriggerCompletedEvent"
+      }
+    ]
+  },
+  "EventDescriptorV1": {
+    "Struct": [
+      {
+        "name": "name",
+        "type": "String"
+      },
+      {
+        "name": "schema",
+        "type": "SchemaV1"
       }
     ]
   },
@@ -13325,6 +13698,22 @@
   "HashOf<TransactionResult>": "Hash",
   "HashOf<Vec<InstructionBox>>": "Hash",
   "HeightContextId": "HashOf<ChainParamsRecord>",
+  "HostProfileDescriptorV1": {
+    "Struct": [
+      {
+        "name": "abi_version",
+        "type": "u16"
+      },
+      {
+        "name": "abi_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "metering",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
   "IdBox": {
     "Enum": [
       {
@@ -13391,6 +13780,96 @@
         "discriminant": 12,
         "tag": "RepoAgreementId",
         "type": "RepoAgreementId"
+      }
+    ]
+  },
+  "ImplementationCodeV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Native",
+        "type": "ImplementationCodeV1::Native"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Ivm",
+        "type": "ImplementationCodeV1::Ivm"
+      }
+    ]
+  },
+  "ImplementationCodeV1::Ivm": {
+    "Struct": [
+      {
+        "name": "code_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "entrypoint",
+        "type": "String"
+      }
+    ]
+  },
+  "ImplementationCodeV1::Native": {
+    "Struct": [
+      {
+        "name": "module",
+        "type": "String"
+      },
+      {
+        "name": "reference_closure",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "ImplementationDescriptorV1": {
+    "Struct": [
+      {
+        "name": "entrypoint",
+        "type": "EntrypointV1"
+      },
+      {
+        "name": "code",
+        "type": "ImplementationCodeV1"
+      },
+      {
+        "name": "reads",
+        "type": "Vec<DefinitionId>"
+      },
+      {
+        "name": "writes",
+        "type": "Vec<DefinitionId>"
+      },
+      {
+        "name": "scans",
+        "type": "Vec<DefinitionId>"
+      },
+      {
+        "name": "events",
+        "type": "Vec<DefinitionId>"
+      },
+      {
+        "name": "permissions",
+        "type": "Vec<DefinitionId>"
+      },
+      {
+        "name": "parameters",
+        "type": "Vec<DefinitionId>"
+      },
+      {
+        "name": "invokes",
+        "type": "Vec<DefinitionId>"
+      },
+      {
+        "name": "host_profile",
+        "type": "Option<DefinitionId>"
+      },
+      {
+        "name": "services_profile",
+        "type": "DefinitionId"
+      },
+      {
+        "name": "limits",
+        "type": "ResourceLimitsV1"
       }
     ]
   },
@@ -13615,6 +14094,34 @@
       {
         "discriminant": 13,
         "tag": "Custom"
+      }
+    ]
+  },
+  "InterfaceDescriptorV1": {
+    "Struct": [
+      {
+        "name": "wire_id",
+        "type": "String"
+      },
+      {
+        "name": "payload",
+        "type": "SchemaV1"
+      },
+      {
+        "name": "rejection_codes",
+        "type": "Vec<String>"
+      },
+      {
+        "name": "events",
+        "type": "Vec<DefinitionId>"
+      },
+      {
+        "name": "metering_class",
+        "type": "String"
+      },
+      {
+        "name": "contract_statement",
+        "type": "Array<u8, 32>"
       }
     ]
   },
@@ -14468,6 +14975,18 @@
       }
     ]
   },
+  "KernelDescriptorV1": {
+    "Struct": [
+      {
+        "name": "name",
+        "type": "String"
+      },
+      {
+        "name": "reference_closure",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
   "KeyedHash": {
     "Struct": [
       {
@@ -14798,6 +15317,38 @@
       {
         "name": "value",
         "type": "Json"
+      }
+    ]
+  },
+  "MigrationDescriptorV1": {
+    "Struct": [
+      {
+        "name": "code",
+        "type": "ImplementationCodeV1"
+      },
+      {
+        "name": "from",
+        "type": "Vec<DefinitionId>"
+      },
+      {
+        "name": "to",
+        "type": "Vec<DefinitionId>"
+      },
+      {
+        "name": "cursor",
+        "type": "SchemaV1"
+      },
+      {
+        "name": "host_profile",
+        "type": "Option<DefinitionId>"
+      },
+      {
+        "name": "services_profile",
+        "type": "DefinitionId"
+      },
+      {
+        "name": "limits",
+        "type": "ResourceLimitsV1"
       }
     ]
   },
@@ -19522,6 +20073,9 @@
   "Option<DataSpaceId>": {
     "Option": "DataSpaceId"
   },
+  "Option<DefinitionId>": {
+    "Option": "DefinitionId"
+  },
   "Option<DomainId>": {
     "Option": "DomainId"
   },
@@ -21209,6 +21763,22 @@
       }
     ]
   },
+  "ParameterDescriptorV1": {
+    "Struct": [
+      {
+        "name": "name",
+        "type": "String"
+      },
+      {
+        "name": "schema",
+        "type": "SchemaV1"
+      },
+      {
+        "name": "initial",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
   "Parameters": {
     "Struct": [
       {
@@ -21613,6 +22183,18 @@
       {
         "name": "payload",
         "type": "Json"
+      }
+    ]
+  },
+  "PermissionDescriptorV1": {
+    "Struct": [
+      {
+        "name": "name",
+        "type": "String"
+      },
+      {
+        "name": "payload",
+        "type": "SchemaV1"
       }
     ]
   },
@@ -24281,6 +24863,19 @@
       {
         "name": "min_auditor_approvals",
         "type": "u16"
+      }
+    ]
+  },
+  "ProjectionV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "BareNorito"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Semantic",
+        "type": "String"
       }
     ]
   },
@@ -27058,6 +27653,42 @@
     ]
   },
   "ResolvedSettlementMovements": "Vec<ResolvedSettlementMovement>",
+  "ResourceLimitsV1": {
+    "Struct": [
+      {
+        "name": "max_gas",
+        "type": "u64"
+      },
+      {
+        "name": "max_effects",
+        "type": "u32"
+      },
+      {
+        "name": "max_call_depth",
+        "type": "u16"
+      }
+    ]
+  },
+  "RestrictionKindV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Deprecated"
+      },
+      {
+        "discriminant": 1,
+        "tag": "AdmissionClosed"
+      },
+      {
+        "discriminant": 2,
+        "tag": "CompletionOnly"
+      },
+      {
+        "discriminant": 3,
+        "tag": "Disabled"
+      }
+    ]
+  },
   "RestrictionV1": {
     "Enum": [
       {
@@ -27289,6 +27920,19 @@
       {
         "name": "per_gas_unit_fee",
         "type": "Quantity"
+      }
+    ]
+  },
+  "RootScopeV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Universal"
+      },
+      {
+        "discriminant": 1,
+        "tag": "DataSpace",
+        "type": "DataSpaceId"
       }
     ]
   },
@@ -29601,6 +30245,20 @@
       }
     ]
   },
+  "SchemaV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Codec",
+        "type": "String"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Carrier",
+        "type": "CarrierSchemaV1"
+      }
+    ]
+  },
   "ScopedAccount": {
     "Struct": [
       {
@@ -29682,6 +30340,107 @@
     ]
   },
   "SelectionId": "Array<u8, 32>",
+  "SelectionTransitionV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "InstallStorage",
+        "type": "DefinitionId"
+      },
+      {
+        "discriminant": 1,
+        "tag": "RetireStorage",
+        "type": "DefinitionId"
+      },
+      {
+        "discriminant": 2,
+        "tag": "Activate",
+        "type": "DefinitionId"
+      },
+      {
+        "discriminant": 3,
+        "tag": "Deactivate",
+        "type": "DefinitionId"
+      },
+      {
+        "discriminant": 4,
+        "tag": "Bind",
+        "type": "BindingV1"
+      },
+      {
+        "discriminant": 5,
+        "tag": "Unbind",
+        "type": "String"
+      },
+      {
+        "discriminant": 6,
+        "tag": "Restrict",
+        "type": "SelectionTransitionV1::Restrict"
+      },
+      {
+        "discriminant": 7,
+        "tag": "Lift",
+        "type": "DefinitionId"
+      },
+      {
+        "discriminant": 8,
+        "tag": "SetKernel",
+        "type": "DefinitionId"
+      },
+      {
+        "discriminant": 9,
+        "tag": "SetCommitmentProfile",
+        "type": "DefinitionId"
+      },
+      {
+        "discriminant": 10,
+        "tag": "SetServicesProfile",
+        "type": "DefinitionId"
+      },
+      {
+        "discriminant": 11,
+        "tag": "RetainCompletion",
+        "type": "CompletionClosureV1"
+      },
+      {
+        "discriminant": 12,
+        "tag": "ReleaseCompletion",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "SelectionTransitionV1::Restrict": {
+    "Struct": [
+      {
+        "name": "definition",
+        "type": "DefinitionId"
+      },
+      {
+        "name": "restriction",
+        "type": "RestrictionKindV1"
+      }
+    ]
+  },
+  "ServiceEntryV1": {
+    "Struct": [
+      {
+        "name": "name",
+        "type": "String"
+      },
+      {
+        "name": "reference_closure",
+        "type": "Array<u8, 32>"
+      }
+    ]
+  },
+  "ServicesProfileDescriptorV1": {
+    "Struct": [
+      {
+        "name": "services",
+        "type": "Vec<ServiceEntryV1>"
+      }
+    ]
+  },
   "SetAssetFiLinkAttestationV1": {
     "Struct": [
       {
@@ -31520,6 +32279,50 @@
       "repr": "u32"
     }
   },
+  "SorafsBootstrapGrantV1": {
+    "Struct": [
+      {
+        "name": "account",
+        "type": "AccountId"
+      },
+      {
+        "name": "permission",
+        "type": "Permission"
+      }
+    ]
+  },
+  "SorafsBootstrapPayloadV1": {
+    "Struct": [
+      {
+        "name": "council",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "providers",
+        "type": "Vec<SorafsBootstrapProviderV1>"
+      },
+      {
+        "name": "grants",
+        "type": "Vec<SorafsBootstrapGrantV1>"
+      },
+      {
+        "name": "compliance_operators",
+        "type": "Vec<AccountId>"
+      }
+    ]
+  },
+  "SorafsBootstrapProviderV1": {
+    "Struct": [
+      {
+        "name": "owner",
+        "type": "AccountId"
+      },
+      {
+        "name": "envelope",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
   "SorafsCitizenBondExitPendingV1": {
     "Struct": [
       {
@@ -32091,6 +32894,18 @@
       }
     ]
   },
+  "SorafsRepairCertificateV1": {
+    "Struct": [
+      {
+        "name": "plan",
+        "type": "SorafsRepairPlanV1"
+      },
+      {
+        "name": "signatures",
+        "type": "Array<Signature, 4>"
+      }
+    ]
+  },
   "SorafsRepairLedgerEvent": {
     "Struct": [
       {
@@ -32156,6 +32971,66 @@
       {
         "discriminant": 6,
         "tag": "appealed"
+      }
+    ]
+  },
+  "SorafsRepairPlanV1": {
+    "Struct": [
+      {
+        "name": "version",
+        "type": "u16"
+      },
+      {
+        "name": "chain_id",
+        "type": "ChainId"
+      },
+      {
+        "name": "network_id",
+        "type": "HashOf<BlockHeader>"
+      },
+      {
+        "name": "operation_id",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "parent_height",
+        "type": "u64"
+      },
+      {
+        "name": "parent_block_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "parent_result_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "change_set",
+        "type": "ChangeSetV1"
+      },
+      {
+        "name": "committee",
+        "type": "Array<PublicKey, 4>"
+      },
+      {
+        "name": "expires_at_unix_ms",
+        "type": "u64"
+      },
+      {
+        "name": "authorization_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "release_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "source_closure_digest",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "payload",
+        "type": "SorafsBootstrapPayloadV1"
       }
     ]
   },
@@ -32809,6 +33684,55 @@
       {
         "discriminant": 2,
         "tag": "Cold"
+      }
+    ]
+  },
+  "StorageDescriptorV1": {
+    "Struct": [
+      {
+        "name": "namespace",
+        "type": "String"
+      },
+      {
+        "name": "shape",
+        "type": "StorageShapeV1"
+      },
+      {
+        "name": "value",
+        "type": "SchemaV1"
+      },
+      {
+        "name": "initial",
+        "type": "Option<Vec<u8>>"
+      },
+      {
+        "name": "invariants",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "projection",
+        "type": "ProjectionV1"
+      }
+    ]
+  },
+  "StorageShapeV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Table",
+        "type": "StorageShapeV1::Table"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Cell"
+      }
+    ]
+  },
+  "StorageShapeV1::Table": {
+    "Struct": [
+      {
+        "name": "key",
+        "type": "SchemaV1"
       }
     ]
   },
@@ -37254,6 +38178,15 @@
   "Vec<BondRecord>": {
     "Vec": "BondRecord"
   },
+  "Vec<CarrierFieldV1>": {
+    "Vec": "CarrierFieldV1"
+  },
+  "Vec<CarrierNodeV1>": {
+    "Vec": "CarrierNodeV1"
+  },
+  "Vec<CarrierVariantV1>": {
+    "Vec": "CarrierVariantV1"
+  },
   "Vec<CheckpointDecision>": {
     "Vec": "CheckpointDecision"
   },
@@ -37322,6 +38255,12 @@
   },
   "Vec<DefiOracleAttestationSource>": {
     "Vec": "DefiOracleAttestationSource"
+  },
+  "Vec<DefinitionDescriptorV1>": {
+    "Vec": "DefinitionDescriptorV1"
+  },
+  "Vec<DefinitionId>": {
+    "Vec": "DefinitionId"
   },
   "Vec<Domain>": {
     "Vec": "Domain"
@@ -37782,11 +38721,23 @@
   "Vec<SccpGovernanceSubjectV1>": {
     "Vec": "SccpGovernanceSubjectV1"
   },
+  "Vec<SelectionTransitionV1>": {
+    "Vec": "SelectionTransitionV1"
+  },
+  "Vec<ServiceEntryV1>": {
+    "Vec": "ServiceEntryV1"
+  },
   "Vec<SignedAttachmentOccurrenceV1>": {
     "Vec": "SignedAttachmentOccurrenceV1"
   },
   "Vec<SignedBlock>": {
     "Vec": "SignedBlock"
+  },
+  "Vec<SorafsBootstrapGrantV1>": {
+    "Vec": "SorafsBootstrapGrantV1"
+  },
+  "Vec<SorafsBootstrapProviderV1>": {
+    "Vec": "SorafsBootstrapProviderV1"
   },
   "Vec<StateDescriptor>": {
     "Vec": "StateDescriptor"

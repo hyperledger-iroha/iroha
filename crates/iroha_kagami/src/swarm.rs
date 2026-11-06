@@ -1010,6 +1010,11 @@ fn execution_policy_projection(config: &actual::Root) -> [u8; 32] {
         &config.settlement,
         [0x11; 32],
         [0x22; 32],
+        config
+            .nexus
+            .legacy_genesis
+            .as_ref()
+            .map(|legacy| &legacy.crypto),
     )
 }
 fn validate_runtime_projection_policy(

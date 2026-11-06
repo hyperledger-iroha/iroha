@@ -20,7 +20,8 @@ use crate::governance::manifest::lane_uses_reserved_autoscale_metadata;
 use crate::governance::parliament::{ParliamentDecisionModeV1, ParliamentReducerErrorV1};
 /// Canonical parameter MV value with inseparable validated pipeline fee and limit policies.
 pub use crate::pipeline_gas_policy::{
-    ParameterIngressError, ParameterRetentionError, RetainedStateParameters, StateParameters,
+    LegacyGenesisPolicies, ParameterIngressError, ParameterRetentionError, RetainedStateParameters,
+    StateParameters, install_legacy_genesis_policies, legacy_genesis_policies,
 };
 use crate::private_settlement::{
     carrier::{PrivateSettlementCarrierBindingErrorV1, PrivateSettlementCarrierBindingV1},
@@ -362,6 +363,7 @@ mod fastpq_source_inventory;
 pub(crate) use fastpq_source_inventory::native_capture_fixture;
 pub(crate) mod network_policy_routes;
 mod output_capacity;
+pub use output_capacity::{SorafsRepairRehearsalReport, SorafsRepairWorldChange};
 mod output_publication;
 pub(crate) use output_capacity::{
     ExecutionOutputAttemptError, ExecutionOutputSealError, ExecutionOutputSealMetadata,
@@ -14338,6 +14340,9 @@ pub struct StateTransaction<'block, 'state> {
     pub(crate) canonical_runtime: CellTransaction<'block, 'state, SnapshotNexusRuntime>,
     // An instruction can read but cannot mutate the original execution anchor.
     native_execution_tip: Option<NativeExecutionTip>,
+    /// Exact signed repair plan admitted by the owner-authorized exceptional kernel boundary.
+    /// Ephemeral transaction custody; never serialized or inherited by contract callbacks.
+    pub(crate) sorafs_repair_entrypoint: Option<[u8; 32]>,
     /// Mutable counter shared with the parent [`StateBlock`] recording committed fragments.
     committed_fragments: &'block mut usize,
     /// Lanes whose state was touched in this transaction.
@@ -38010,6 +38015,7 @@ fn compute_execution_policy_digest_v1(
             settlement,
             nexus_policy_digest,
             compute_zk_consensus_policy_hash(zk),
+            nexus.legacy_genesis.as_ref().map(|legacy| &legacy.crypto),
         ),
     )
 }
@@ -39386,6 +39392,7 @@ impl<'state> StateBlock<'state> {
             stake_index_budget: fields.state_ref.stake_index_budget(),
             canonical_runtime: fields.canonical_runtime.transaction(),
             native_execution_tip: *fields.native_execution_tip.get(),
+            sorafs_repair_entrypoint: None,
             committed_fragments: &mut fields.committed_fragments,
             touched_lanes: &mut fields.touched_lanes,
             world,
@@ -43460,6 +43467,7 @@ impl StateTransaction<'_, '_> {
             local_storage_refusal: _,
             canonical_runtime,
             native_execution_tip: _,
+            sorafs_repair_entrypoint: _,
             committed_fragments,
             touched_lanes,
             mut world,

@@ -12,6 +12,8 @@ pub(crate) mod change_set;
 pub(crate) mod containment;
 pub(crate) mod envelope;
 pub(crate) mod obligations;
+/// The owner-authorized, all-four-certified one-time Taira SoraFS transition.
+pub mod sorafs_repair;
 
 use iroha_data_model::runtime::{
     definition::{DefinitionDescriptorV1, DefinitionId, RestrictionV1, RootSelectionV1},

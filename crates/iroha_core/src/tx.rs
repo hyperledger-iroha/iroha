@@ -3331,10 +3331,12 @@ impl StateBlock<'_> {
             routing_decision,
             policy_route,
             genesis,
+            true,
         )
     }
     /// Execute the exact external or authenticated reveal-inner signed owner.
     /// Outer route and rollback custody remain with the accepted entrypoint caller.
+    /// Only the direct external source may enter the all-four repair boundary.
     #[allow(clippy::too_many_lines)]
     fn execute_signed_transaction_in_overlay(
         signed: &SignedTransaction,
@@ -3343,6 +3345,7 @@ impl StateBlock<'_> {
         routing_decision: crate::queue::RoutingDecision,
         policy_route: &CapturedNetworkPolicyRoute,
         genesis: Option<&crate::block::AuthenticatedGenesisTransaction>,
+        external_entrypoint: bool,
     ) -> Result<DataTriggerSequence, ExecutionAttemptError<TransactionRejectionReason>> {
         state_transaction.genesis_execution_scope = None;
         state_transaction
@@ -3355,6 +3358,12 @@ impl StateBlock<'_> {
         // kept the envelope opaque commit the same rejection.
         // TODO(§5.2): the policy route the caller captured is still derived from instruction
         // types; an addition's instruction must route like an unknown one until it activates.
+        if external_entrypoint {
+            crate::runtime::sorafs_repair::prepare_signed_boundary(state_transaction, signed)
+                .map_err(|error| {
+                    ExecutionAttemptError::from(TransactionRejectionReason::Validation(error))
+                })?;
+        }
         crate::runtime::envelope::admit_envelopes(
             state_transaction.world.runtime_selection.get(),
             state_transaction.block_height(),
@@ -3560,6 +3569,7 @@ impl StateBlock<'_> {
             routing_decision,
             policy_route,
             None,
+            false,
         )
     }
     #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]

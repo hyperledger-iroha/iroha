@@ -431,6 +431,10 @@ mod time;
 #[path = "output_network.rs"]
 mod network;
 
+#[path = "repair_rehearsal.rs"]
+mod repair_rehearsal;
+pub use repair_rehearsal::{SorafsRepairRehearsalReport, SorafsRepairWorldChange};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg(test)]
 enum NetworkSuccessDisposition {

@@ -59,6 +59,7 @@ mod scheduler_teu;
 mod set_parameter;
 #[path = "sns.rs"]
 mod sns;
+#[cfg(unix)]
 #[path = "sorafs_moderation_anchor.rs"]
 mod sorafs_moderation_anchor;
 #[path = "sorafs_network.rs"]

@@ -83,7 +83,21 @@ pub type CellInstaller = fn(&mut WorldTransaction<'_, '_>, &[u8]) -> Result<(), 
 /// A World field an addition adds must be a top-level World member: snapshots leave it out, and a
 /// restore reads it empty, until a change set installs its storage
 /// ([`crate::runtime::uninstalled_world_members`]).
-pub const ADDITIONS: &[Addition] = &[ENDORSED_RUNTIME_UPGRADE_PROPOSAL, GAME_PARTITIONS];
+pub const ADDITIONS: &[Addition] = &[
+    ENDORSED_RUNTIME_UPGRADE_PROPOSAL,
+    GAME_PARTITIONS,
+    SORAFS_REPAIR,
+];
+
+/// The owner-authorized, all-four-certified Taira initialization. Its dependency closure is
+/// exactly the frozen baseline, independently of the unfinished game-partition addition.
+/// Its separate kernel boundary is specified in `specs/sorafs/taira_repair_v1.md`.
+pub const SORAFS_REPAIR: Addition = Addition {
+    module: "iroha.sorafs.bootstrap.repair.v1",
+    instructions: &["iroha.sorafs.bootstrap.repair.apply.v1"],
+    rebinds: &[],
+    storage: &[],
+};
 
 /// Runtime-upgrade proposals that carry the trusted release signers' endorsements
 /// (`specs/runtime_upgrades.md`, "Provenance policy"). The baseline

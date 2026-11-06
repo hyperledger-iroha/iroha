@@ -404,7 +404,7 @@ fn same_entrypoint(known: &TransactionEntrypoint, input: &TransactionEntrypoint)
 /// The caller owns the complete authenticated input projection and frozen route;
 /// this function never derives invocation authority from a supplied hash.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-fn execute_network_attempt_with_amx<'attempt>(
+pub(super) fn execute_network_attempt_with_amx<'attempt>(
     state: &'attempt mut StateBlock<'_>,
     inputs: &(impl iroha_data_model::block::execution_output::ExecutionInputs + ?Sized),
     input: &'attempt TransactionEntrypoint,

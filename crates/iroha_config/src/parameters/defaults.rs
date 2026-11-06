@@ -259,6 +259,15 @@ pub mod taira {
     /// Effective `SoraFS` component cap derived from the aggregate budget.
     pub const SORAFS_STORAGE_CAP_BYTES: u64 =
         NEXUS_STORAGE_BUDGET_BYTES * NEXUS_SORAFS_BPS as u64 / STORAGE_WEIGHT_BASIS_POINTS as u64;
+    /// Aggregate SORA Nexus disk budget for a validator that also runs a `SoraFS` provider.
+    ///
+    /// With the fixed weights its `SoraFS` share holds a 4 GiB provider store beside the
+    /// 1600 MiB guest and 512 MiB bundle ceilings, with 1472 MiB headroom.
+    pub const PROVIDER_NEXUS_STORAGE_BUDGET_BYTES: u64 = 12 * 1024 * 1024 * 1024;
+    /// Effective `SoraFS` component cap of a provider validator.
+    pub const PROVIDER_SORAFS_STORAGE_CAP_BYTES: u64 = PROVIDER_NEXUS_STORAGE_BUDGET_BYTES
+        * NEXUS_SORAFS_BPS as u64
+        / STORAGE_WEIGHT_BASIS_POINTS as u64;
     /// Inrou egress request budget per minute.
     pub const INROU_EGRESS_RATE_PER_MINUTE: u32 = 600;
     /// Inrou egress byte budget per minute.

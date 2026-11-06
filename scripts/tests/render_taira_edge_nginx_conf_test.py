@@ -332,6 +332,7 @@ def test_public_torii_cors_matches_runtime_policy_and_browser_sdk_headers() -> N
         "https://mibank.soramitsu.io",
         "https://explorer-bpng.soramitsu.io",
         "https://bokolo-explorer.soramitsu.io",
+        "https://bafyr6ihjtvfsyx5nieck2hieoofa677c62drdrmhsoskvphpvpzstnjlf4.sorafs.taira.sora.org",
     }
     assert len(cors["allowed_origins"]) == len(set(cors["allowed_origins"]))
     assert set(cors["allowed_methods"]) == {"GET", "POST", "DELETE", "OPTIONS"}

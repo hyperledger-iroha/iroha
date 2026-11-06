@@ -304,6 +304,7 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(consensus_keys::RotateConsensusKey => "consensus::RotateConsensusKey"),
     built_in_wire_id!(consensus_keys::DisableConsensusKey => "consensus::DisableConsensusKey"),
     built_in_wire_id!(consensus_keys::ApplyThresholdKeyLifecycleCertificateV1 => "iroha.consensus.threshold-key-lifecycle.apply.v1"),
+    built_in_wire_id!(crate::isi::sorafs_repair::ApplySorafsRepairV1 => "iroha.sorafs.bootstrap.repair.apply.v1", register, tolerant),
     built_in_wire_id!(endorsement::RegisterDomainCommittee => "nexus::RegisterDomainCommittee"),
     built_in_wire_id!(endorsement::SetDomainEndorsementPolicy => "nexus::SetDomainEndorsementPolicy"),
     built_in_wire_id!(endorsement::SubmitDomainEndorsement => "nexus::SubmitDomainEndorsement"),

@@ -88,6 +88,52 @@ impl GenesisExecutionScope {
 }
 
 impl CapturedNetworkPolicyRoute {
+    /// Capture one authenticated external input on the pristine disposable rehearsal owner.
+    /// This grants transaction policy custody only, never a carrier or publication authority.
+    pub(in crate::state) fn for_repair_rehearsal(
+        state: &StateBlock<'_>,
+        accepted: &AcceptedTransaction<'_>,
+    ) -> Result<(RoutingDecision, Self), ExecutionAttemptError<String>> {
+        if state.start_of_block_effects_applied || state._curr_block.is_genesis() {
+            return Err("repair routing requires the pristine successor overlay".into());
+        }
+        let Some(signed) = accepted.external() else {
+            return Err("repair rehearsal requires an external signed input".into());
+        };
+        let height = state._curr_block.height().get();
+        let ledger_time_ms = state
+            .native_execution_tip()
+            .ok_or("repair rehearsal requires an authenticated native parent")?
+            .creation_time_ms();
+        let root_scope = crate::sumeragi::lanes::routing::read_routing_root_scope(&state.world)
+            .map_err(ExecutionAttemptError::Deferred)?
+            .ok_or("repair rehearsal has no immutable root scope")?;
+        let policy = crate::sumeragi::lanes::lane_policy(&state.world)
+            .map_err(ExecutionAttemptError::Deferred)?;
+        let native = crate::sumeragi::lanes::routing::RoutingInputs {
+            root_scope: Some(root_scope),
+            policy: policy.as_ref(),
+            lanes: state.world.sumeragi_lanes(),
+            dataspaces: &state.nexus.dataspace_catalog,
+            world: &state.world,
+            ledger_time_ms,
+        }
+        .execution_route(accepted, height)
+        .map_err(ExecutionAttemptError::Deferred)?
+        .ok_or("repair source has no exact active native lane")?;
+        let projection = signed_projection(state, accepted, native, height, ledger_time_ms)
+            .map_err(ExecutionAttemptError::Deferred)?;
+        Ok((
+            native,
+            Self {
+                native,
+                signed_hash: Some(signed.hash()),
+                projection,
+                candidate_testing: None,
+            },
+        ))
+    }
+
     /// Bind the signed genesis route to the separately authenticated original input.
     pub(crate) fn genesis_execution_scope(
         self,
@@ -206,6 +252,31 @@ impl CapturedNetworkPolicyRoute {
             candidate_testing: None,
         })
     }
+}
+
+/// Shared physical policy resolution for production carriers and disposable diagnostics.
+fn signed_projection(
+    state: &StateBlock<'_>,
+    accepted: &AcceptedTransaction<'_>,
+    native: RoutingDecision,
+    height: u64,
+    ledger_time_ms: u64,
+) -> Result<PolicyProjection, ExecutionDeferred> {
+    let resolved = PhysicalExecutionPolicyRoute::resolve(
+        &state.nexus,
+        &state.world,
+        accepted,
+        height.saturating_sub(1),
+        ledger_time_ms,
+    )
+    .and_then(|route| route.require_dataspace(native).map_err(Into::into));
+    Ok(PolicyProjection::Signed(match resolved {
+        Ok(route) => Ok(route),
+        Err(ExecutionAttemptError::Rejected(error)) => Err(error),
+        Err(ExecutionAttemptError::Deferred(reason)) => {
+            return Err(reason);
+        }
+    }))
 }
 
 fn policy_rejection(message: impl Into<String>) -> TransactionRejectionReason {
@@ -383,21 +454,8 @@ impl CapturedNetworkPolicyRoutes {
                 }
                 PolicyProjection::Genesis(root_scope)
             } else if accepted.external().is_some() {
-                let resolved = PhysicalExecutionPolicyRoute::resolve(
-                    &state.nexus,
-                    &state.world,
-                    &accepted,
-                    height.saturating_sub(1),
-                    ledger_time_ms,
-                )
-                .and_then(|route| route.require_dataspace(native).map_err(Into::into));
-                PolicyProjection::Signed(match resolved {
-                    Ok(route) => Ok(route),
-                    Err(ExecutionAttemptError::Rejected(error)) => Err(error),
-                    Err(ExecutionAttemptError::Deferred(reason)) => {
-                        return Err(ExecutionAttemptError::Deferred(reason));
-                    }
-                })
+                signed_projection(state, &accepted, native, height, ledger_time_ms)
+                    .map_err(ExecutionAttemptError::Deferred)?
             } else {
                 PolicyProjection::SealedCommitment
             };

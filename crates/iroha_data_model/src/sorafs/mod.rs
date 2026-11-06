@@ -16,6 +16,8 @@
 //! moderation ledger.
 /// Commitment-only citizen bonds.
 pub mod anonymity;
+/// One-time post-genesis bootstrap authorized by the scheduled validator quorum.
+pub mod bootstrap;
 /// Capacity marketplace records (provider declarations, telemetry, fees).
 pub mod capacity;
 /// Gateway Authorization Record policy payload types.

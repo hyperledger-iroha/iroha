@@ -840,6 +840,11 @@ mod tests {
             &config.settlement,
             [0x11; 32],
             [0x22; 32],
+            config
+                .nexus
+                .legacy_genesis
+                .as_ref()
+                .map(|legacy| &legacy.crypto),
         )
     }
     #[test]
@@ -972,6 +977,7 @@ mod tests {
                     &fixed.settlement,
                     nexus,
                     zk,
+                    None,
                 ),
                 execution_policy_hash(&fixed),
                 "{label} must change the execution-policy identity"

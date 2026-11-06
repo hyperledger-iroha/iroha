@@ -1986,6 +1986,11 @@ pub(crate) fn configured_execution_policy(
         &config.settlement,
         nexus,
         iroha_core::state::compute_zk_consensus_policy_hash(&config.zk),
+        config
+            .nexus
+            .legacy_genesis
+            .as_ref()
+            .map(|legacy| &legacy.crypto),
     )))
 }
 

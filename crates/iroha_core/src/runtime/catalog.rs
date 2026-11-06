@@ -112,6 +112,9 @@ pub struct AdditionDefinitions {
     pub rebinds: BTreeMap<&'static str, DefinitionId>,
     /// The storage it adds, by World field.
     pub storage: BTreeMap<&'static str, DefinitionId>,
+    /// A separately identified kernel published by a narrowly scoped recovery addition.
+    /// Publishing it does not select it; the exact repair change set does.
+    pub kernel: Option<DefinitionId>,
 }
 
 impl AdditionDefinitions {
@@ -124,6 +127,7 @@ impl AdditionDefinitions {
                 .chain(self.interfaces.values())
                 .copied()
                 .chain([self.implementation])
+                .chain(self.kernel)
                 .collect(),
         )
     }
@@ -561,16 +565,37 @@ impl ReleaseCatalog {
             services_profile,
             layout,
         };
-        let mut storage_so_far = catalog.baseline.installed_storage.clone();
+        let baseline_storage = catalog.baseline.installed_storage.clone();
+        let mut storage_so_far = baseline_storage.clone();
         let mut interfaces_so_far = interfaces;
         for addition in additions {
+            let independent_interfaces;
+            let (storage_dependencies, interface_dependencies) =
+                if addition.module == additions::SORAFS_REPAIR.module {
+                    independent_interfaces = catalog
+                        .baseline
+                        .bindings
+                        .iter()
+                        .map(|binding| {
+                            let wire = payloads
+                                .keys()
+                                .copied()
+                                .find(|wire| *wire == binding.wire_id)
+                                .expect("baseline binding has a registered wire ID");
+                            (wire, binding.interface)
+                        })
+                        .collect();
+                    (&baseline_storage, &independent_interfaces)
+                } else {
+                    (&storage_so_far, &interfaces_so_far)
+                };
             let published = catalog.publish_addition(
                 addition,
                 &shared,
                 &canonical_fields,
                 &payloads,
-                &storage_so_far,
-                &interfaces_so_far,
+                storage_dependencies,
+                interface_dependencies,
             )?;
             storage_so_far.extend(published.storage.values().copied());
             storage_so_far.sort_unstable();
@@ -702,12 +727,18 @@ impl ReleaseCatalog {
                 },
             },
         ))?;
+        let kernel = if module == additions::SORAFS_REPAIR.module {
+            Some(self.publish(Self::sorafs_repair_kernel_descriptor())?)
+        } else {
+            None
+        };
         Ok(AdditionDefinitions {
             module,
             implementation,
             interfaces,
             rebinds,
             storage,
+            kernel,
         })
     }
 
@@ -824,6 +855,69 @@ impl ReleaseCatalog {
             .apply(current, published)
             .map_err(|error| fail(error.to_string()))?;
         Ok(change_set)
+    }
+
+    fn sorafs_repair_kernel_descriptor() -> DefinitionDescriptorV1 {
+        DefinitionDescriptorV1::Kernel(KernelDescriptorV1 {
+            name: "iroha.kernel.taira_sorafs_repair.v1".into(),
+            reference_closure: addition_digest(additions::SORAFS_REPAIR.module, &[b"kernel"]),
+        })
+    }
+
+    /// Draft the sole transition authorized by Taira's all-four repair certificate.
+    /// No earlier addition is installed and no existing binding or profile is changed.
+    /// The new kernel retains ordinary execution and refuses any second repair.
+    ///
+    /// # Errors
+    /// The predecessor is not the frozen kernel, the repair is already selected, or the
+    /// precisely scoped successor is not closed over the published definitions.
+    pub fn sorafs_repair_activation(
+        &self,
+        current: &RootSelectionV1,
+        published: &impl DefinitionLookup,
+        network: NetworkId,
+        effective_height: u64,
+        qualification: [u8; 32],
+    ) -> Result<ChangeSetV1, CatalogError> {
+        let fail = |reason: String| CatalogError::Addition {
+            module: additions::SORAFS_REPAIR.module.into(),
+            reason,
+        };
+        if current.kernel != self.baseline.kernel {
+            return Err(fail("repair requires the exact predecessor kernel".into()));
+        }
+        let mut change = self.activation(
+            additions::SORAFS_REPAIR.module,
+            current,
+            published,
+            network,
+            effective_height,
+            qualification,
+        )?;
+        let mut successor = change
+            .apply(current, published)
+            .map_err(|error| fail(error.to_string()))?
+            .selection;
+        let kernel = Self::sorafs_repair_kernel_descriptor();
+        let kernel_id = kernel.id()?;
+        if published.definition(&kernel_id).is_some() {
+            return Err(fail("repair kernel has already been published".into()));
+        }
+        debug_assert!(
+            change
+                .publish
+                .iter()
+                .any(|descriptor| descriptor == &kernel)
+        );
+        change
+            .transitions
+            .push(SelectionTransitionV1::SetKernel(kernel_id));
+        successor.kernel = kernel_id;
+        change.successor = successor.id()?;
+        change
+            .apply(current, published)
+            .map_err(|error| fail(error.to_string()))?;
+        Ok(change)
     }
 
     /// The first definition `selection` relies on that this release cannot execute, if any.

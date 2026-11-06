@@ -1094,6 +1094,7 @@ Root {
                 latency_decay: 0.25,
             },
         },
+        legacy_genesis: None,
     },
     snapshot: Snapshot {
         mode: ReadWrite,

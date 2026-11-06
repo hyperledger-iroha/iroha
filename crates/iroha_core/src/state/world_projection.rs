@@ -304,7 +304,10 @@ impl WorldBlock<'_> {
         Ok(identities)
     }
 
-    fn project_world<P: WorldProjection>(&self, builder: &mut P) -> Result<(), P::Error> {
+    pub(in crate::state) fn project_world<P: WorldProjection>(
+        &self,
+        builder: &mut P,
+    ) -> Result<(), P::Error> {
         with_world_overlay_fields!(append_world_fields, self, builder);
         Ok(())
     }

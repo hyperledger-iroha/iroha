@@ -729,18 +729,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "attohttpc"
-version = "0.31.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bc84fee5e780a259df0e31fd3206fcb047ecff0eda5a71261f3e7564b78168c"
-dependencies = [
- "base64 0.22.1",
- "http",
- "log",
- "url",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5099,13 +5087,13 @@ dependencies = [
 name = "iroha_monitor"
 version = "2.0.0-rc.2.0"
 dependencies = [
- "attohttpc",
  "axum",
  "clap",
  "crossterm",
  "eyre",
  "norito",
  "ratatui",
+ "reqwest",
  "tokio",
 ]
 

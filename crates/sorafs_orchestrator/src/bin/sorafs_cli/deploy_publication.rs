@@ -21,6 +21,7 @@ use sorafs_car::publisher::{
     PublisherSourceUploadV1,
 };
 use sorafs_manifest::capacity::ReplicationOrderV1;
+use std::io::Seek as _;
 use std::time::Instant;
 
 const PUBLICATION_TIMEOUT: Duration = Duration::from_secs(600);
@@ -402,7 +403,7 @@ pub(super) fn qualify(
     client: &HttpClient,
     base: &Url,
     config: &DeployClientConfig,
-    artifacts: &DeployPackArtifacts,
+    artifacts: &mut DeployPackArtifacts,
     checkpoint: SumeragiFinalityCheckpoint,
     provider_urls: &[String],
     out_dir: &Path,
@@ -480,16 +481,18 @@ pub(super) fn qualify(
         })?;
         for (index, chunk) in artifacts.plan.chunks.iter().enumerate() {
             ensure_live(started)?;
-            let offset = usize::try_from(chunk.offset)
-                .map_err(|_| "source chunk offset overflow".to_owned())?;
-            let end = offset
-                .checked_add(chunk.length as usize)
-                .ok_or_else(|| "source chunk length overflow".to_owned())?;
-            let bytes = artifacts
+            artifacts
                 .payload
-                .get(offset..end)
-                .ok_or_else(|| "source chunk exceeds verified payload".to_owned())?
-                .to_vec();
+                .seek(std::io::SeekFrom::Start(chunk.offset))
+                .map_err(|error| error.to_string())?;
+            let mut bytes = vec![0u8; chunk.length as usize];
+            artifacts
+                .payload
+                .read_exact(&mut bytes)
+                .map_err(|error| error.to_string())?;
+            if blake3::hash(&bytes).as_bytes() != &chunk.digest {
+                return Err("publisher source chunk changed after verification".to_owned());
+            }
             let request = PublisherSourceRequestV1::Chunk(PublisherSourceChunkRequestV1 {
                 provider_id: assignment.provider_id,
                 order_id: order.order_id,

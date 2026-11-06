@@ -103,6 +103,8 @@ allowed_origins = [
   "https://mibank.soramitsu.io",
   "https://explorer-bpng.soramitsu.io",
   "https://bokolo-explorer.soramitsu.io",
+  # SORA CARS on SoraFS; each release has its own CID host origin.
+  "https://bafyr6ihjtvfsyx5nieck2hieoofa677c62drdrmhsoskvphpvpzstnjlf4.sorafs.taira.sora.org",
 ]
 allowed_methods = ["GET", "POST", "DELETE", "OPTIONS"]
 allowed_headers = [
@@ -189,9 +191,11 @@ pow_adaptive_max_extra_bits = 8
 pow_beacon_seed_enabled = false
 
 [sorafs.storage]
-# Taira does not run the embedded SoraFS provider. The capacity is still an
-# exact component of the canonical Nexus disk budget and is checked before the
-# fixed launcher starts a validator.
+# This shared profile does not run the embedded SoraFS provider. The capacity is
+# still an exact component of the canonical Nexus disk budget and is checked
+# before the fixed launcher starts a validator. A provider validator instead uses
+# the exact provider profile (12 GiB budget, 7.5 GiB cap); see
+# docs/source/taira_sorafs_activation.md.
 enabled = false
 max_capacity_bytes = 2684354560
 
@@ -303,8 +307,8 @@ local_budget_bytes = 4294967296
 max_wsv_memory_bytes = 268435456
 
 [nexus.storage.disk_budget_weights]
-# The fixed launcher requires this exact V1 split. Embedded SoraFS provider
-# storage remains disabled even though aggregate accounting reserves its share.
+# The fixed launcher requires this exact V1 split for every validator, including
+# provider validators, which use only the larger exact provider budget.
 kura_blocks_bps = 2500
 wsv_snapshots_bps = 1250
 sorafs_bps = 6250

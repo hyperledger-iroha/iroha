@@ -48,6 +48,19 @@ cargo build -p irohad_lib --release --no-default-features --lib
 
 This flag can be combined with the `--features` flag in order to precisely specify the feature set that you wish.
 
+### Finite SoraFS repair rehearsal
+
+The finite SoraFS repair diagnostic uses
+`--check-replay --rehearse-sorafs-repair <canonical-signed-transaction.to> --repair-execution-time-ms <unix-ms>`.
+It first restores and replays an isolated copy of retained history, then executes
+the sole typed repair through the ordinary signed External transaction and Network
+output owner. Its report includes fees, the complete hash-only World change inventory
+for block-start and transaction phases, and unchanged committed roots after dropping
+the overlay. The signed certificate must satisfy the production Taira boundary;
+the command supplies no alternate network or authorization policy. It never creates
+a signed block, votes, QC, history entry or State publication. Pipeline/Time phases
+and full block finality remain outside this transaction diagnostic's qualification.
+
 ### Standalone beacon preparation
 
 Every `iroha3d_taira beacon-bootstrap` command requires

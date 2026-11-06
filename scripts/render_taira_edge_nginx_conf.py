@@ -69,6 +69,9 @@ PUBLIC_TORII_CORS_ORIGINS = [
     "https://mibank.soramitsu.io",
     "https://explorer-bpng.soramitsu.io",
     "https://bokolo-explorer.soramitsu.io",
+    # SORA CARS on SoraFS: the gateway serves each release on its own CID host, so a
+    # repackaged release replaces this exact origin here and in the Taira Torii config.
+    "https://bafyr6ihjtvfsyx5nieck2hieoofa677c62drdrmhsoskvphpvpzstnjlf4.sorafs.taira.sora.org",
 ]
 PUBLIC_TORII_CORS_METHODS = "GET, POST, DELETE, OPTIONS"
 PUBLIC_TORII_CORS_HEADERS = (

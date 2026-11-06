@@ -5,3 +5,5 @@
 //! containment, adoption anchors and the stable rejections of the mechanism.
 pub mod definition;
 pub mod lifecycle;
+/// Explicit one-time SoraFS successor authorization and certificate.
+pub mod sorafs_repair;

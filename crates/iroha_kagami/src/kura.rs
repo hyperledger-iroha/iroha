@@ -1,4 +1,5 @@
 mod beacon_history;
+mod checkpoint;
 mod finality;
 
 use crate::{Outcome, RunArgs, tui};
@@ -24,6 +25,13 @@ pub struct Args {
 }
 #[derive(Subcommand, Debug, Clone)]
 enum Command {
+    /// Verify a copied Global ledger from a pinned genesis and export its checkpoint.
+    Checkpoint {
+        /// Exact copied lane directory containing the canonical block journals.
+        path_to_block_store: PathBuf,
+        #[clap(flatten)]
+        options: checkpoint::Args,
+    },
     /// Project bounded typed public beacon candidates, with explicit coverage limits.
     BeaconHistory {
         /// Exact lane directory containing the canonical block journals.
@@ -88,6 +96,10 @@ enum Command {
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         match self.command {
+            Command::Checkpoint {
+                path_to_block_store,
+                options,
+            } => checkpoint::run(writer, &path_to_block_store, &options),
             Command::BeaconHistory {
                 path_to_block_store,
                 from,

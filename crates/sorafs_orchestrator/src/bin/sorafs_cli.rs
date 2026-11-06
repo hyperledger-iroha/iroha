@@ -1,5 +1,7 @@
 //! Aggregated CLI entry point for SoraFS packaging helpers.
 #![allow(unexpected_cfgs)]
+#[path = "sorafs_cli/deploy_prepared.rs"]
+mod deploy_prepared;
 #[path = "sorafs_cli/deploy_publication.rs"]
 mod deploy_publication;
 #[path = "sorafs_cli/fetch_spool.rs"]
@@ -548,7 +550,7 @@ struct DeployClientConfig {
 }
 struct DeployPackArtifacts {
     plan: CarBuildPlan,
-    payload: Vec<u8>,
+    payload: deploy_prepared::DeployPayload,
     manifest: ManifestV1,
     manifest_digest_hex: String,
     root_cid_hex: String,
@@ -586,6 +588,8 @@ struct ManifestSubmitRequest<'a> {
     alias_inputs: Option<&'a AliasInputs>,
 }
 fn deploy(raw_args: Vec<String>) -> Result<(), String> {
+    let mut prepared_path: Option<PathBuf> = None;
+    let mut prepared_digest: Option<String> = None;
     let mut finality_checkpoint: Option<PathBuf> = None;
     let mut provider_urls = Vec::new();
     let mut payload_path: Option<PathBuf> = None;
@@ -605,6 +609,8 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             .split_once('=')
             .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
         match key {
+            "--prepared-package" => prepared_path = Some(PathBuf::from(value)),
+            "--prepared-package-blake3-hex" => prepared_digest = Some(value.to_owned()),
             "--finality-checkpoint" => finality_checkpoint = Some(PathBuf::from(value)),
             "--provider-url" => provider_urls.push(value.to_owned()),
             "--payload" => payload_path = Some(PathBuf::from(value)),
@@ -621,8 +627,13 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             }
         }
     }
+    let prepared =
+        deploy_prepared::select(prepared_path, prepared_digest, payload_path.as_deref())?;
     let payload_path = payload_path
-        .ok_or_else(|| "missing required `--payload=PATH` for `sorafs_cli deploy`".to_string())?;
+        .or_else(|| prepared.as_ref().map(|value| value.payload_path()))
+        .ok_or_else(|| {
+            "deploy requires --payload=PATH or a pinned --prepared-package=PATH".to_owned()
+        })?;
     let client_config_path = client_config_path.ok_or_else(|| {
         "missing required `--client-config=PATH` for `sorafs_cli deploy`".to_string()
     })?;
@@ -677,14 +688,18 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
-    let artifacts = build_deploy_artifacts(
-        &payload_path,
-        &car_path,
-        &plan_path,
-        &pack_summary_path,
-        &manifest_path,
-        &manifest_json_path,
-    );
+    let artifacts = if let Some(prepared) = prepared.as_ref() {
+        prepared.load()
+    } else {
+        build_deploy_artifacts(
+            &payload_path,
+            &car_path,
+            &plan_path,
+            &pack_summary_path,
+            &manifest_path,
+            &manifest_json_path,
+        )
+    };
     let mut receipt = Map::new();
     insert_value!(receipt["name"] = deploy_name.clone());
     insert_value!(receipt["payload_path"] = payload_path.display().to_string());
@@ -692,7 +707,7 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     insert_value!(receipt["torii_url"] = torii_url.clone());
     insert_value!(receipt["out_dir"] = out_dir.display().to_string());
     insert_value!(receipt["receipt_path"] = receipt_path.display().to_string());
-    let artifacts = match artifacts {
+    let mut artifacts = match artifacts {
         Ok(artifacts) => artifacts,
         Err(err) => {
             errors.push(err);
@@ -711,11 +726,17 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     insert_value!(receipt["payload_bytes"] = artifacts.manifest.content_length);
     insert_value!(receipt["payload_kind"] = artifacts.payload_kind);
     let mut artifact_paths = Map::new();
-    insert_value!(artifact_paths["car"] = car_path.display().to_string());
-    insert_value!(artifact_paths["plan_json"] = plan_path.display().to_string());
-    insert_value!(artifact_paths["pack_summary_json"] = pack_summary_path.display().to_string());
-    insert_value!(artifact_paths["manifest_to"] = manifest_path.display().to_string());
-    insert_value!(artifact_paths["manifest_json"] = manifest_json_path.display().to_string());
+    if let Some(prepared) = prepared.as_ref() {
+        insert_json!(artifact_paths["prepared_package"] = prepared.receipt());
+    } else {
+        insert_value!(artifact_paths["car"] = car_path.display().to_string());
+        insert_value!(artifact_paths["plan_json"] = plan_path.display().to_string());
+        insert_value!(
+            artifact_paths["pack_summary_json"] = pack_summary_path.display().to_string()
+        );
+        insert_value!(artifact_paths["manifest_to"] = manifest_path.display().to_string());
+        insert_value!(artifact_paths["manifest_json"] = manifest_json_path.display().to_string());
+    }
     insert_value!(
         artifact_paths["pin_register_response"] = register_response_path.display().to_string()
     );
@@ -804,7 +825,7 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             &client,
             &torii_base_url,
             &client_config,
-            &artifacts,
+            &mut artifacts,
             checkpoint,
             &provider_urls,
             &out_dir,
@@ -1090,7 +1111,7 @@ fn build_deploy_artifacts(
     plan.chunks.shrink_to_fit();
     Ok(DeployPackArtifacts {
         plan,
-        payload: payload_bytes,
+        payload: deploy_prepared::DeployPayload::Memory(Cursor::new(payload_bytes)),
         manifest,
         manifest_digest_hex: hex_encode(manifest_digest.as_bytes()),
         root_cid_hex,
@@ -2958,7 +2979,7 @@ fn format_car_error(err: CarWriteError) -> String {
 }
 fn usage() -> String {
     "Usage:
-  sorafs_cli deploy --payload=PATH --client-config=PATH --finality-checkpoint=PATH [--provider-url=URL...] [--torii-url=URL] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--no-peer-discovery] [--summary-out=PATH]
+  sorafs_cli deploy (--payload=PATH | --prepared-package=PATH --prepared-package-blake3-hex=HEX32) --client-config=PATH --finality-checkpoint=PATH [--provider-url=URL...] [--torii-url=URL] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--no-peer-discovery] [--summary-out=PATH]
   sorafs_cli car pack --input=PATH --car-out=PATH [--chunker-handle=HANDLE] [--plan-out=PATH] [--summary-out=PATH]
   sorafs_cli manifest build --summary=PATH --manifest-out=PATH [--manifest-json-out=PATH] [--pin-min-replicas=N] [--pin-storage-class=hot|warm|cold] [--pin-retention-epoch=EPOCH] [--metadata key=value]
   sorafs_cli manifest submit --manifest=PATH --torii-url=URL --network-id=NETWORK_ID (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]

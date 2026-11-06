@@ -175,6 +175,25 @@ impl PublicationAuthorityFixture {
                 policy.canonical_digest()?,
             )?)
     }
+    /// Council-sign the exact network-bound projection, as a Parliament or post-genesis
+    /// bootstrap admission carries it. Unlike genesis material, it names this network.
+    pub fn signed_admission(
+        &self,
+        index: usize,
+        network: NetworkId,
+    ) -> Result<ProviderAdmissionEnvelopeV1> {
+        let policy = self.policy(network)?;
+        let mut envelope = self.initial_material(index, network)?;
+        let digest =
+            sorafs_manifest::provider_admission::compute_envelope_authorization_digest(&envelope)?;
+        envelope.council_signatures = vec![CouncilSignature {
+            signer: policy.trusted_signers[0],
+            signature: Signature::try_new(self.council_key.private_key(), &digest)?
+                .payload()
+                .to_vec(),
+        }];
+        Ok(envelope)
+    }
     /// Sign a fresh provider advert that exactly matches the genesis-admitted body and key.
     pub fn advert(&self, index: usize, network: NetworkId, now: u64) -> Result<ProviderAdvertV1> {
         let material = self

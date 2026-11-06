@@ -2333,10 +2333,20 @@ fn crypto_section_defaults_applied() {
     );
 }
 #[test]
-fn crypto_section_rejects_retired_admission_overrides() {
-    for (field, value, unknown) in [
-        ("allowed_signing", "['ed25519']", "allowed_signing"),
-        ("curves.allowed_curve_ids", "[1]", "curves"),
+fn crypto_section_refuses_retired_admission_overrides_outside_a_complete_legacy_profile() {
+    for (field, value, refusal) in [
+        // Selects the legacy genesis profile, which also configures its staking terms.
+        (
+            "allowed_signing",
+            "['ed25519']",
+            "the legacy genesis profile configures nexus.staking.stake_asset_id",
+        ),
+        // Belongs to the legacy genesis profile, which only `crypto.allowed_signing` selects.
+        (
+            "curves.allowed_curve_ids",
+            "[1]",
+            "legacy genesis profile, which crypto.allowed_signing selects",
+        ),
     ] {
         let table = format!("[crypto]\n{field} = {value}\n")
             .parse()
@@ -2346,12 +2356,11 @@ fn crypto_section_rejects_retired_admission_overrides() {
             .expect("base config should load")
             .with_toml_source(TomlSource::inline(table))
             .read_and_complete::<UserConfig>()
-            .expect_err("node configuration must not select crypto admission policy");
+            .expect("the reader admits the legacy genesis profile's keys")
+            .parse()
+            .expect_err("node configuration must not select crypto admission policy on its own");
         let report = strip_ansi_codes(&format!("{error:?}"));
-        assert!(
-            report.contains(&format!("unknown parameter: `crypto.{unknown}`")),
-            "{report}"
-        );
+        assert!(report.contains(refusal), "{field}: {report}");
     }
 }
 #[test]

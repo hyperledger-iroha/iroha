@@ -66,6 +66,8 @@ pub use sccp::{
 };
 mod socket_addr;
 pub use socket_addr::{ConfigSocketAddr, ConfigSocketAddrError};
+mod legacy_genesis;
+pub use legacy_genesis::{CryptoCurves, CurveIdListConfig};
 type Result<T, E> = core::result::Result<T, Report<[E]>>;
 type KyberKeyInputs = (Vec<u8>, ParameterOrigin, Vec<u8>, ParameterOrigin);
 const MIN_TIMER_INTERVAL: Duration = Duration::from_millis(100);
@@ -1432,7 +1434,9 @@ impl Root {
         };
         let gov = gov_provider_binding_valid.then(|| self.gov.parse());
         let nts = self.nts.parse(&mut emitter);
-        let nexus = self.nexus.parse(&mut emitter);
+        let mut nexus_input = self.nexus;
+        let legacy_staking = nexus_input.staking.take_legacy_genesis();
+        let nexus = nexus_input.parse(&mut emitter);
         let confidential = self.confidential.parse();
         let streaming = if let Some(ref key_pair) = key_pair {
             self.streaming
@@ -1451,7 +1455,11 @@ impl Root {
                 ),
             );
         }
-        let crypto = self.crypto.parse(&mut emitter);
+        let mut crypto_input = self.crypto;
+        let legacy_crypto = crypto_input.take_legacy_genesis();
+        let crypto = crypto_input.parse(&mut emitter);
+        let legacy_genesis =
+            legacy_genesis::parse(legacy_crypto, legacy_staking, &crypto, &mut emitter);
         let settlement = self.settlement.parse(&mut emitter);
         let amx_relay = self.amx_relay.parse(&mut emitter);
         if let Err(err) = concurrency.validate() {
@@ -1472,7 +1480,8 @@ impl Root {
         soracloud_runtime.assert_runtime_posture();
         let sumeragi =
             sumeragi.expect("sumeragi configuration should be valid when emitter succeeds");
-        let nexus = nexus.expect("nexus configuration should be valid when emitter succeeds");
+        let mut nexus = nexus.expect("nexus configuration should be valid when emitter succeeds");
+        nexus.legacy_genesis = legacy_genesis;
         let streaming =
             streaming.expect("streaming configuration should be valid when emitter succeeds");
         let compute = compute.expect("compute configuration should be valid when emitter succeeds");
@@ -8959,6 +8968,13 @@ pub struct Crypto {
         default = "defaults::crypto::SM2_DISTID_DEFAULT.to_owned()"
     )]
     pub sm2_distid_default: String,
+    /// Retired signing allowlist of a network whose signed genesis predates genesis-authored
+    /// crypto admission. Setting it selects that network's legacy genesis profile
+    /// (`legacy_genesis`); every other network authors the policy in genesis.
+    pub allowed_signing: Option<AlgorithmListConfig>,
+    /// Retired curve allowlist configured together with `allowed_signing`.
+    #[config(nested)]
+    pub curves: CryptoCurves,
 }
 impl Crypto {
     /// Convert this user configuration into the runtime representation.
@@ -9466,7 +9482,7 @@ impl From<LaneValidatorModeConfig> for actual::LaneValidatorMode {
     }
 }
 /// Validator modes and capacity; monetary terms come from committed State.
-#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct NexusStaking {
     /// Validator activation policy for public lanes.
@@ -9478,11 +9494,37 @@ pub struct NexusStaking {
     /// Maximum number of validators allowed per lane.
     #[config(default = "defaults::nexus::staking::MAX_VALIDATORS")]
     pub max_validators: NonZeroU32,
+    /// Retired monetary terms of the legacy genesis profile (`crypto.allowed_signing`); a
+    /// genesis that authors its staking policy refuses them. Omitted terms take the
+    /// retired V1 defaults.
+    pub min_validator_stake: Option<Quantity>,
+    /// Retired maximum stake-share rows per validator of the legacy genesis profile.
+    pub max_stake_shares_per_validator: Option<NonZeroU32>,
+    /// Retired maximum pending unbonds per share of the legacy genesis profile.
+    pub max_pending_unbonds_per_share: Option<NonZeroU32>,
+    /// Retired unbonding delay of the legacy genesis profile.
+    pub unbonding_delay_ms: Option<DurationMs>,
+    /// Retired maximum slash ratio (basis points) of the legacy genesis profile.
+    pub max_slash_bps: Option<u16>,
+    /// Retired stake asset literal of the legacy genesis profile.
+    pub stake_asset_id: Option<String>,
+    /// Retired stake escrow account literal of the legacy genesis profile.
+    pub stake_escrow_account_id: Option<String>,
+    /// Retired slash sink account literal of the legacy genesis profile.
+    pub slash_sink_account_id: Option<String>,
 }
 impl_default!(NexusStaking {
     public_validator_mode: LaneValidatorModeConfig::StakeElected,
     restricted_validator_mode: LaneValidatorModeConfig::AdminManaged,
     max_validators: defaults::nexus::staking::MAX_VALIDATORS,
+    min_validator_stake: None,
+    max_stake_shares_per_validator: None,
+    max_pending_unbonds_per_share: None,
+    unbonding_delay_ms: None,
+    max_slash_bps: None,
+    stake_asset_id: None,
+    stake_escrow_account_id: None,
+    slash_sink_account_id: None,
 });
 impl NexusStaking {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStaking> {
@@ -10689,6 +10731,7 @@ impl Nexus {
             }
         }
         Some(actual::Nexus {
+            legacy_genesis: None,
             fees: defaults::nexus::fees::genesis_policy(),
             storage,
             staking,

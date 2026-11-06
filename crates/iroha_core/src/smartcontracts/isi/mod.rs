@@ -63,6 +63,8 @@ pub mod soracloud;
 pub mod soradns;
 /// `SoraFS` pin registry instruction handlers.
 pub mod sorafs;
+/// One-time validator-quorum `SoraFS` bootstrap of a chain whose genesis predates `SoraFS`.
+pub mod sorafs_bootstrap;
 pub mod sorafs_final_promotion_account_custody;
 /// Governed deployment custody and durable final-promotion signer-operation authority.
 pub mod sorafs_final_promotion_authority;
@@ -379,6 +381,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::kaigi::ReportKaigiRelayHealth>,
     dispatch_instruction::<runtime_upgrade::AttestRuntimeSupportV1>,
     dispatch_instruction::<runtime_upgrade::ContainRuntimeV1>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs_repair::ApplySorafsRepairV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<Mint<Quantity, Asset>>,
     dispatch_instruction::<Burn<Quantity, Asset>>,
     dispatch_instruction::<Transfer<Asset, Quantity, Account>>,

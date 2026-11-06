@@ -89,6 +89,8 @@ macro_rules! schema_types {
             // Native publication recovery checks retain authority-wide absence and exact row presence.
             iroha_data_model::isi::musubi::AdvanceMusubiPinOutboxV1,
             iroha_data_model::isi::musubi::CheckMusubiPinOutboxV1,
+            // Separate immutable SoraFS repair wire; its full all-four plan is public review material.
+            iroha_data_model::isi::sorafs_repair::ApplySorafsRepairV1,
             iroha_data_model::smart_contract::ContractArtifactId,
             // Current finalized provider authority and signed discovery material.
             iroha_data_model::sorafs::provider_admission::discovery::ProviderDiscoveryProofV1,
@@ -436,6 +438,19 @@ mod tests {
         let schemas = super::build_schemas();
         assert!(schemas.contains_key::<StoredDaReceipt>());
         assert!(schemas.contains_key::<DaIngestReceipt>());
+    }
+    #[test]
+    fn sorafs_repair_schema_includes_exact_plan_certificate_and_payload() {
+        use iroha_data_model::{
+            isi::sorafs_repair::ApplySorafsRepairV1,
+            runtime::sorafs_repair::{SorafsRepairCertificateV1, SorafsRepairPlanV1},
+            sorafs::bootstrap::SorafsBootstrapPayloadV1,
+        };
+        let schemas = super::build_schemas();
+        assert!(schemas.contains_key::<ApplySorafsRepairV1>());
+        assert!(schemas.contains_key::<SorafsRepairCertificateV1>());
+        assert!(schemas.contains_key::<SorafsRepairPlanV1>());
+        assert!(schemas.contains_key::<SorafsBootstrapPayloadV1>());
     }
     #[test]
     fn no_extra_or_missing_schemas() {

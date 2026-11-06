@@ -1280,6 +1280,11 @@ impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
             TransactionEntrypoint::SealedCommitment(_)
             | TransactionEntrypoint::AnonymousBallot(_) => return None,
         };
+        if matches!(transaction.entrypoint(), TransactionEntrypoint::External(_))
+            && crate::runtime::sorafs_repair::queue_admits(self.view, signed)
+        {
+            return None;
+        }
         crate::runtime::envelope::first_unadmitted_envelope(
             self.view.world().runtime_selection.get(),
             signed.instructions(),

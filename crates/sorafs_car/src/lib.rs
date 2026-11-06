@@ -71,6 +71,7 @@ pub mod publisher;
 #[cfg(feature = "manifest")]
 pub mod reference;
 pub mod scoreboard;
+pub mod streaming_input;
 #[cfg(feature = "manifest")]
 pub mod streaming_verifier;
 #[cfg(feature = "cli")]

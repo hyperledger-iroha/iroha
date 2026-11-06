@@ -189,6 +189,15 @@ fn failure(message: impl Into<String>) -> Report<MainError> {
 /// trust anchor, the replay State cannot be built, or a block fails to replay for a reason other
 /// than a different result. A different result or missing history is reported, not an error.
 pub fn check_replay(config: &Config) -> ReportResult<ReplayCheckReportV1, MainError> {
+    check_replay_then(config, |_| Ok(()))
+}
+
+/// Keep the authenticated temporary State alive for a finite nonpublishing continuation.
+/// The ordinary replay report and restore/replay corridor are unchanged.
+fn check_replay_then(
+    config: &Config,
+    on_matched: impl FnOnce(&State) -> ReportResult<(), MainError>,
+) -> ReportResult<ReplayCheckReportV1, MainError> {
     let store_root = config.kura.store_dir.resolve_relative_path();
     match std::fs::symlink_metadata(&store_root) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -318,7 +327,7 @@ pub fn check_replay(config: &Config) -> ReportResult<ReplayCheckReportV1, MainEr
     let started = Instant::now();
     let report = replay_check::check_replay(
         ReplayCheckInputs {
-            state,
+            state: Arc::clone(&state),
             source_lanes: copy.store_root().join("lanes"),
             genesis_account: AccountId::new(config.genesis.public_key.clone()),
             consensus_mode,
@@ -333,7 +342,95 @@ pub fn check_replay(config: &Config) -> ReportResult<ReplayCheckReportV1, MainEr
         },
     )
     .map_err(|error| Report::new(error).change_context(MainError::CheckReplay))?;
-    Ok(ReplayCheckReportV1::from_core(tip_height, &report))
+    let report = ReplayCheckReportV1::from_core(tip_height, &report);
+    if report.is_ok() && report.replayed_to == tip_height {
+        on_matched(&state)?;
+    }
+    Ok(report)
+}
+
+/// Replay evidence plus one discarded signed repair transaction execution.
+#[derive(Debug, JsonSerialize)]
+struct RepairRehearsalReportV1 {
+    replay: ReplayCheckReportV1,
+    rehearsal: Option<iroha_core::state::SorafsRepairRehearsalReport>,
+}
+
+/// Run finite authenticated replay followed by actual repair transaction rehearsal.
+///
+/// # Errors
+/// Refuses incomplete historical replay, invalid/oversized signed input, resource refusal,
+/// or a rejected repair. No runtime signer, consensus engine or publication path is opened.
+pub fn run_check_repair_rehearsal(
+    config: &Config,
+    signed_path: &std::path::Path,
+    execution_time_ms: u64,
+) -> ReportResult<(), MainError> {
+    use std::io::Read;
+    let mut rehearsal = None;
+    let replay = check_replay_then(config, |state| {
+        let max_bytes = state
+            .view()
+            .world()
+            .parameters()
+            .transaction()
+            .max_tx_bytes()
+            .get();
+        let mut file = std::fs::File::open(signed_path)
+            .map_err(|error| failure(format!("cannot open signed repair input: {error}")))?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| failure(error.to_string()))?;
+        if !metadata.is_file() || metadata.len() > max_bytes {
+            return Err(failure(
+                "signed repair input exceeds the committed transaction byte limit",
+            ));
+        }
+        let capacity = usize::try_from(metadata.len())
+            .ok()
+            .and_then(|len| len.checked_add(1))
+            .ok_or_else(|| failure("signed repair input size overflows this host"))?;
+        let budget = state.ivm_execution_budget();
+        let _charge = budget
+            .try_reserve_bytes(capacity)
+            .map_err(|error| failure(format!("signed repair input allocation refused: {error}")))?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(capacity)
+            .map_err(|error| failure(error.to_string()))?;
+        file.by_ref()
+            .take(capacity as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|error| failure(error.to_string()))?;
+        if bytes.len() as u64 != metadata.len() {
+            return Err(failure("signed repair input changed while being read"));
+        }
+        let signed = norito::decode_canonical(&bytes)
+            .map_err(|error| failure(format!("invalid canonical signed repair input: {error}")))?;
+        rehearsal = Some(
+            state
+                .rehearse_sorafs_repair(signed, execution_time_ms)
+                .map_err(failure)?,
+        );
+        Ok(())
+    })?;
+    let report = RepairRehearsalReportV1 { replay, rehearsal };
+    println!(
+        "{}",
+        norito::json::to_json(&report).map_err(|error| failure(error.to_string()))?
+    );
+    if report.replay.is_ok()
+        && report
+            .rehearsal
+            .as_ref()
+            .is_some_and(|r| r.applied_in_discarded_overlay && !r.state_published)
+    {
+        Ok(())
+    } else {
+        Err(failure(
+            "repair transaction rehearsal did not qualify; inspect the actual replay/output result",
+        ))
+    }
 }
 
 /// Run `--check-replay`: print the report as Norito JSON and fail unless every block matched.

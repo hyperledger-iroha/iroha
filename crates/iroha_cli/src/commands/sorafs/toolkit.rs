@@ -1,6 +1,8 @@
 //! Local SoraFS artifact compilation, validation, signing and archive packaging.
 
+pub mod bootstrap;
 pub mod instruction;
+pub mod provision;
 pub mod validation;
 
 use super::ensure_parent_dir;
@@ -37,6 +39,12 @@ use tiny_keccak::{Hasher as _, Sha3};
 /// Local compiler and archive operations.
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
+    /// Prepare, sign or assemble a local SoraFS all-four-validator repair certificate.
+    #[command(subcommand)]
+    Repair(bootstrap::Command),
+    /// Prepare ordinary provider provisioning and signed public artifacts offline.
+    #[command(subcommand)]
+    Provision(provision::Command),
     /// Compile a Kotodama source into an IVM artifact for publication.
     Compile(CompileArgs),
     /// Package a payload into a CAR and manifest bundle.
@@ -79,7 +87,9 @@ impl Command {
     pub(crate) fn is_artifact_tool(&self) -> bool {
         matches!(
             self,
-            Self::Instruction(_)
+            Self::Repair(_)
+                | Self::Provision(_)
+                | Self::Instruction(_)
                 | Self::Validate(_)
                 | Self::Sign(_)
                 | Self::ReleaseManifest(_)
@@ -93,6 +103,8 @@ impl Command {
         self,
     ) -> std::result::Result<std::process::ExitCode, validation::CliError> {
         match self {
+            Self::Repair(command) => command.run(),
+            Self::Provision(command) => command.run(),
             Self::Instruction(command) => Ok(command.run()),
             Self::Validate(command) => command.run(),
             Self::Sign(args) => validation::run_sign(args),

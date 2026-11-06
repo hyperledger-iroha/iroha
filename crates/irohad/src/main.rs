@@ -16,6 +16,7 @@ mod compatibility_probe;
 #[path = "main/input_close.rs"]
 mod input_close;
 use input_close::spawn_input_close_shutdown;
+mod game_partition;
 /// Field-level explanation of a signed genesis policy mismatch for `--check-config`.
 mod genesis_policy_diagnostics;
 /// Iroha server command-line interface and node bootstrap entrypoint.
@@ -42,7 +43,6 @@ pub mod runtime_provider_registry;
 #[cfg(unix)]
 #[path = "sccp_keeper.rs"]
 mod sccp_keeper;
-mod game_partition;
 mod sccp_staking_policy;
 /// Embedded Soracloud runtime-manager reconciliation.
 #[path = "soracloud_runtime.rs"]
@@ -911,6 +911,13 @@ pub struct StartupArgs {
     /// snapshot directory or the tiered-state directory, and never opens runtime-only secrets.
     #[arg(long, conflicts_with_all = ["check_config", "check_storage", "managed_listeners"])]
     pub check_replay: bool,
+    /// After successful `--check-replay`, execute this canonical signed repair transaction on
+    /// the temporary State and discard its entire overlay. Never signs or publishes a block.
+    #[arg(long, value_name = "SIGNED_TRANSACTION", requires_all = ["check_replay", "repair_execution_time_ms"])]
+    pub rehearse_sorafs_repair: Option<PathBuf>,
+    /// Exact proposed execution time for the finite signed repair transaction rehearsal.
+    #[arg(long, value_name = "UNIX_MS", requires = "rehearse_sorafs_repair")]
+    pub repair_execution_time_ms: Option<u64>,
     /// Require this registered account to retain `SoraCloud` deployment authority
     /// after executing the exact signed genesis during offline validation.
     #[arg(long, value_name = "ACCOUNT_ID", requires = "check_config")]
@@ -8295,6 +8302,17 @@ fn run_main_with_config_guard(
                 |path| format!("config path is specified by `--config` arg: {}", path.display()),
             )
         })?;
+    // A genesis signed before genesis authored its policies keeps the crypto and staking
+    // policy its configuration committed; install it before genesis or State reads it.
+    if let Some(legacy) = config.nexus.legacy_genesis.as_ref() {
+        iroha_core::state::install_legacy_genesis_policies(
+            iroha_core::state::LegacyGenesisPolicies {
+                crypto: legacy.crypto.policy.clone(),
+                staking: legacy.staking.policy.clone(),
+            },
+        )
+        .map_err(|error| Report::new(MainError::Config).attach(error))?;
+    }
     let emergency_fast = config.kura.init_mode == InitMode::Fast;
     if let Some(guard) = launcher_config_guard {
         guard(&config).map_err(|error| {
@@ -8307,6 +8325,12 @@ fn run_main_with_config_guard(
         return compatibility_probe::run_check_storage(&config);
     }
     if args.startup.check_replay {
+        if let Some(path) = &args.startup.rehearse_sorafs_repair {
+            let time = args.startup.repair_execution_time_ms.ok_or_else(|| {
+                Report::new(MainError::CheckReplay).attach("repair execution time is required")
+            })?;
+            return replay_check::run_check_repair_rehearsal(&config, path, time);
+        }
         return replay_check::run_check_replay(&config);
     }
     if args.startup.check_config {
@@ -11276,6 +11300,42 @@ mod tests {
         }
 
         #[test]
+        fn repair_rehearsal_requires_finite_replay_and_explicit_time() {
+            for arguments in [
+                vec!["iroha3d", "--rehearse-sorafs-repair", "repair.to"],
+                vec![
+                    "iroha3d",
+                    "--check-replay",
+                    "--rehearse-sorafs-repair",
+                    "repair.to",
+                ],
+                vec!["iroha3d", "--repair-execution-time-ms", "42"],
+                vec![
+                    "iroha3d",
+                    "--check-config",
+                    "--check-replay",
+                    "--rehearse-sorafs-repair",
+                    "repair.to",
+                    "--repair-execution-time-ms",
+                    "42",
+                ],
+            ] {
+                assert!(Args::try_parse_from(arguments).is_err());
+            }
+            let args = Args::try_parse_from([
+                "iroha3d",
+                "--check-replay",
+                "--rehearse-sorafs-repair",
+                "repair.to",
+                "--repair-execution-time-ms",
+                "42",
+            ])
+            .unwrap();
+            assert!(args.startup.check_replay);
+            assert_eq!(args.startup.repair_execution_time_ms, Some(42));
+        }
+
+        #[test]
         fn inrou_deployment_authority_requires_offline_check_config() {
             let flag = "--require-genesis-inrou-deployment-authority";
             let error = Args::try_parse_from(["iroha3d", flag, "public-account"])
@@ -12657,6 +12717,8 @@ mod tests {
                     json: false,
                     check_storage: false,
                     check_replay: false,
+                    rehearse_sorafs_repair: None,
+                    repair_execution_time_ms: None,
                     require_genesis_inrou_deployment_authority: None,
                     trace_config: false,
                     config_blake3: None,
@@ -12741,6 +12803,8 @@ mod tests {
                     json: false,
                     check_storage: false,
                     check_replay: false,
+                    rehearse_sorafs_repair: None,
+                    repair_execution_time_ms: None,
                     require_genesis_inrou_deployment_authority: None,
                     trace_config: false,
                     config_blake3: None,

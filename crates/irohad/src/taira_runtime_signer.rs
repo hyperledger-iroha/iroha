@@ -25,6 +25,8 @@ use iroha_config::parameters::{
             NEXUS_SORAFS_BPS as TAIRA_NEXUS_SORAFS_BPS_V1,
             NEXUS_STORAGE_BUDGET_BYTES as TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1,
             NEXUS_WSV_SNAPSHOTS_BPS as TAIRA_NEXUS_WSV_SNAPSHOTS_BPS_V1,
+            PROVIDER_NEXUS_STORAGE_BUDGET_BYTES as TAIRA_PROVIDER_NEXUS_STORAGE_BUDGET_BYTES_V1,
+            PROVIDER_SORAFS_STORAGE_CAP_BYTES as TAIRA_PROVIDER_SORAFS_STORAGE_CAP_BYTES_V1,
             SORAFS_STORAGE_CAP_BYTES as TAIRA_SORAFS_STORAGE_CAP_BYTES_V1,
         },
     },
@@ -222,11 +224,22 @@ fn validate_taira_storage_profile_v1(
     sorafs_provider_enabled: bool,
     sorafs_capacity_bytes: u64,
 ) -> Result<(), String> {
-    if local_budget_bytes != Some(TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1)
-        || effective_budget_bytes != Some(TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1)
-    {
+    // A validator either runs no SoraFS provider under the base budget, or runs one under the
+    // exact provider budget whose SoraFS share also holds the guest and bundle ceilings.
+    let (budget, cap) = if sorafs_provider_enabled {
+        (
+            TAIRA_PROVIDER_NEXUS_STORAGE_BUDGET_BYTES_V1,
+            TAIRA_PROVIDER_SORAFS_STORAGE_CAP_BYTES_V1,
+        )
+    } else {
+        (
+            TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1,
+            TAIRA_SORAFS_STORAGE_CAP_BYTES_V1,
+        )
+    };
+    if local_budget_bytes != Some(budget) || effective_budget_bytes != Some(budget) {
         return Err(format!(
-            "Taira launcher requires the exact {TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1}-byte Nexus storage budget"
+            "Taira launcher requires the exact {budget}-byte Nexus storage budget"
         ));
     }
     if weights.kura_blocks_bps != TAIRA_NEXUS_KURA_BLOCKS_BPS_V1
@@ -235,19 +248,14 @@ fn validate_taira_storage_profile_v1(
     {
         return Err("Taira launcher requires the exact V1 Nexus storage weights".to_owned());
     }
-    if configured_sorafs_capacity_bytes != Some(TAIRA_SORAFS_STORAGE_CAP_BYTES_V1) {
+    if configured_sorafs_capacity_bytes != Some(cap) {
         return Err(format!(
-            "Taira launcher requires an explicit {TAIRA_SORAFS_STORAGE_CAP_BYTES_V1}-byte SoraFS storage cap before Nexus clamping"
+            "Taira launcher requires an explicit {cap}-byte SoraFS storage cap before Nexus clamping"
         ));
     }
-    if sorafs_provider_enabled {
-        return Err(
-            "Taira launcher requires embedded SoraFS provider storage to be disabled".to_owned(),
-        );
-    }
-    if sorafs_capacity_bytes != TAIRA_SORAFS_STORAGE_CAP_BYTES_V1 {
+    if sorafs_capacity_bytes != cap {
         return Err(format!(
-            "Taira launcher requires the exact {TAIRA_SORAFS_STORAGE_CAP_BYTES_V1}-byte effective SoraFS storage cap"
+            "Taira launcher requires the exact {cap}-byte effective SoraFS storage cap"
         ));
     }
     Ok(())
@@ -1132,6 +1140,8 @@ mod tests {
             )
             .is_err()
         );
+        // A provider cannot run under the base budget, and the provider budget cannot
+        // run without a provider.
         assert!(
             validate_taira_storage_profile_v1(
                 Some(TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1),
@@ -1140,6 +1150,17 @@ mod tests {
                 Some(TAIRA_SORAFS_STORAGE_CAP_BYTES_V1),
                 true,
                 TAIRA_SORAFS_STORAGE_CAP_BYTES_V1,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_taira_storage_profile_v1(
+                Some(TAIRA_PROVIDER_NEXUS_STORAGE_BUDGET_BYTES_V1),
+                Some(TAIRA_PROVIDER_NEXUS_STORAGE_BUDGET_BYTES_V1),
+                canonical_storage_weights(),
+                Some(TAIRA_PROVIDER_SORAFS_STORAGE_CAP_BYTES_V1),
+                false,
+                TAIRA_PROVIDER_SORAFS_STORAGE_CAP_BYTES_V1,
             )
             .is_err()
         );
@@ -1174,6 +1195,61 @@ mod tests {
                 .is_err(),
                 "normalized noncanonical source cap {configured_cap:?} must be rejected"
             );
+        }
+    }
+
+    #[test]
+    fn launcher_storage_profile_admits_one_exact_provider_profile() {
+        assert_eq!(
+            TAIRA_PROVIDER_NEXUS_STORAGE_BUDGET_BYTES_V1,
+            12 * 1024 * 1024 * 1024
+        );
+        assert_eq!(
+            TAIRA_PROVIDER_SORAFS_STORAGE_CAP_BYTES_V1,
+            7680 * 1024 * 1024
+        );
+        // The share holds a 4 GiB store beside the 1600 MiB guest and 512 MiB bundle ceilings.
+        assert!(
+            TAIRA_PROVIDER_SORAFS_STORAGE_CAP_BYTES_V1 >= (4096 + 1600 + 512 + 1024) * 1024 * 1024
+        );
+        let provider = |budget, effective, cap, capacity| {
+            validate_taira_storage_profile_v1(
+                Some(budget),
+                Some(effective),
+                canonical_storage_weights(),
+                Some(cap),
+                true,
+                capacity,
+            )
+        };
+        provider(
+            TAIRA_PROVIDER_NEXUS_STORAGE_BUDGET_BYTES_V1,
+            TAIRA_PROVIDER_NEXUS_STORAGE_BUDGET_BYTES_V1,
+            TAIRA_PROVIDER_SORAFS_STORAGE_CAP_BYTES_V1,
+            TAIRA_PROVIDER_SORAFS_STORAGE_CAP_BYTES_V1,
+        )
+        .expect("exact Taira provider storage profile");
+        for (budget, effective, cap, capacity) in [
+            (
+                TAIRA_PROVIDER_NEXUS_STORAGE_BUDGET_BYTES_V1 + 1,
+                TAIRA_PROVIDER_NEXUS_STORAGE_BUDGET_BYTES_V1 + 1,
+                TAIRA_PROVIDER_SORAFS_STORAGE_CAP_BYTES_V1,
+                TAIRA_PROVIDER_SORAFS_STORAGE_CAP_BYTES_V1,
+            ),
+            (
+                TAIRA_PROVIDER_NEXUS_STORAGE_BUDGET_BYTES_V1,
+                TAIRA_PROVIDER_NEXUS_STORAGE_BUDGET_BYTES_V1,
+                TAIRA_SORAFS_STORAGE_CAP_BYTES_V1,
+                TAIRA_SORAFS_STORAGE_CAP_BYTES_V1,
+            ),
+            (
+                TAIRA_PROVIDER_NEXUS_STORAGE_BUDGET_BYTES_V1,
+                TAIRA_PROVIDER_NEXUS_STORAGE_BUDGET_BYTES_V1,
+                TAIRA_PROVIDER_SORAFS_STORAGE_CAP_BYTES_V1,
+                TAIRA_PROVIDER_SORAFS_STORAGE_CAP_BYTES_V1 - 1,
+            ),
+        ] {
+            assert!(provider(budget, effective, cap, capacity).is_err());
         }
     }
 
