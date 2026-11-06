@@ -333,7 +333,7 @@ def test_evaluator_uses_selected_host_dependency_without_plonk_build_script(tmp_
                'target': {'kind': [kind]}, 'filenames': [str(host)]}]
     for path in (target_sha2, sha2):
         events.append({'reason': 'compiler-artifact',
-                       'package_id': 'registry+https://github.com/rust-lang/crates.io-index#sha2@0.10.9',
+                       'package_id': 'registry+https://github.com/rust-lang/crates.io-index#sha2@0.11.1',
                        'target': {'name': 'sha2', 'kind': ['lib']},
                        'filenames': [str(path)], 'features': ['std']})
     calls = []
@@ -351,22 +351,66 @@ def test_evaluator_uses_selected_host_dependency_without_plonk_build_script(tmp_
     assert record['sha2Sha256'] == audit.sha(sha2)
 
 
+def standalone_dependency_files(root, version='0.11.1'):
+    manifest = root / 'scripts/native-source-snapshot/Cargo.toml'
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text('[dependencies]\nsha2 = { version = "=' + version
+                        + '", default-features = false }\n')
+    lock = manifest.with_name('Cargo.lock')
+    lock.write_text('version = 4\n[[package]]\nname = "sha2"\nversion = "' + version
+                    + '"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n'
+                    + 'checksum = "' + 'ab' * 32 + '"\n')
+    return manifest, lock
+
+
+@pytest.mark.parametrize('version', ['0.11.1', '0.12.3'])
+def test_standalone_sha2_selection_tracks_exact_manifest_and_lock_pin(tmp_path, version):
+    manifest, lock = standalone_dependency_files(tmp_path, version)
+    assert audit.standalone_sha2_package(manifest, lock) == (
+        'sha2@' + version, 'registry+https://github.com/rust-lang/crates.io-index#sha2@' + version)
+
+
+@pytest.mark.parametrize('defect', ['unpinned', 'foreign_dependency', 'wrong_lock_version',
+                                  'wrong_lock_source', 'duplicate_lock', 'wrong_checksum'])
+def test_standalone_sha2_selection_rejects_unpinned_or_mismatched_package(tmp_path, defect):
+    manifest, lock = standalone_dependency_files(tmp_path)
+    if defect == 'unpinned':
+        manifest.write_text(manifest.read_text().replace('=0.11.1', '0.11.1'))
+    elif defect == 'foreign_dependency':
+        manifest.write_text(manifest.read_text().replace('default-features = false', 'path = "../other"'))
+    elif defect == 'wrong_lock_version':
+        lock.write_text(lock.read_text().replace('0.11.1', '0.10.9'))
+    elif defect == 'wrong_lock_source':
+        lock.write_text(lock.read_text().replace('registry+', 'git+'))
+    elif defect == 'duplicate_lock':
+        lock.write_text(lock.read_text() + lock.read_text().split('version = 4\n', 1)[1])
+    elif defect == 'wrong_checksum':
+        lock.write_text(lock.read_text().replace('ab' * 32, 'not-a-checksum'))
+    with pytest.raises(ValueError, match='Standalone snapshot sha2'):
+        audit.standalone_sha2_package(manifest, lock)
+
+
+def test_standalone_sha2_selection_matches_maintained_current_pin():
+    manifest = audit.ROOT / 'scripts/native-source-snapshot/Cargo.toml'
+    assert audit.standalone_sha2_package(manifest, manifest.with_name('Cargo.lock')) == (
+        'sha2@0.11.1', 'registry+https://github.com/rust-lang/crates.io-index#sha2@0.11.1')
+
+
 @pytest.mark.parametrize('defect', [None, 'foreign_artifact', 'unfinished', 'changed_lock',
-                                  'missing_family', 'wrong_family'])
+                                  'missing_family', 'wrong_family', 'wrong_package', 'wrong_metadata_package'])
 def test_cross_build_with_only_target_sha2_uses_locked_standalone_host_lane(tmp_path, monkeypatch, defect):
     monkeypatch.setattr(audit, 'ROOT', tmp_path)
     monkeypatch.delenv('RUSTC', raising=False)
     monkeypatch.setenv('CARGO_BUILD_TARGET', 'aarch64-linux-android')
     monkeypatch.setenv('RUSTFLAGS', '-C target-feature=+device-only')
     host = 'aarch64-apple-darwin'
-    manifest = tmp_path / 'scripts/native-source-snapshot/Cargo.toml'
-    lock = manifest.with_name('Cargo.lock')
+    manifest, lock = standalone_dependency_files(tmp_path)
     helper, driver = tmp_path / 'helper.rs', tmp_path / 'driver.rs'
     macro = tmp_path / 'target/release/deps/libordinary_macro.dylib'
     target_sha2 = tmp_path / 'target/aarch64-linux-android/release/deps/libsha2-target.rlib'
     host_sha2 = tmp_path / f'target/native-source-snapshot/{host}/debug/deps/libsha2-host.rlib'
     cargo_sha2 = host_sha2.parent.parent / 'libsha2.rlib'
-    for path in (manifest, lock, helper, driver, macro, target_sha2):
+    for path in (helper, driver, macro, target_sha2):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(path.name)
     monkeypatch.setattr(audit, 'HELPER', helper)
@@ -374,7 +418,7 @@ def test_cross_build_with_only_target_sha2_uses_locked_standalone_host_lane(tmp_
     events = [{'reason': 'compiler-artifact', 'package_id': 'ordinary',
                'target': {'kind': ['proc-macro']}, 'filenames': [str(macro)]},
               {'reason': 'compiler-artifact',
-               'package_id': 'registry+https://github.com/rust-lang/crates.io-index#sha2@0.10.9',
+               'package_id': 'registry+https://github.com/rust-lang/crates.io-index#sha2@0.11.1',
                'target': {'name': 'sha2', 'kind': ['lib']},
                'filenames': [str(target_sha2)], 'features': ['std']}]
     calls = []
@@ -384,7 +428,7 @@ def test_cross_build_with_only_target_sha2_uses_locked_standalone_host_lane(tmp_
             return subprocess.CompletedProcess(command, 0, f'rustc fixture\nhost: {host}\n', '')
         if command[0] == 'cargo':
             assert command == ['cargo', 'build', '--offline', '--locked', '--manifest-path', str(manifest),
-                '--package', 'sha2@0.10.9', '--target', host,
+                '--package', 'sha2@0.11.1', '--target', host,
                 '--target-dir', str(tmp_path / 'target/native-source-snapshot'), '--message-format=json']
             assert kwargs['env']['CARGO_ENCODED_RUSTFLAGS'] == ''
             host_sha2.parent.mkdir(parents=True)
@@ -393,11 +437,17 @@ def test_cross_build_with_only_target_sha2_uses_locked_standalone_host_lane(tmp_
             host_sha2.with_suffix('.rmeta').write_bytes(b'compiler metadata')
             output = dict(events[-1])
             output['filenames'] = [str(target_sha2 if defect == 'foreign_artifact' else cargo_sha2)]
-            if defect != 'missing_family':
+            if defect not in ('missing_family', 'wrong_metadata_package'):
                 output['filenames'].append(str(host_sha2.with_suffix('.rmeta')))
+            if defect == 'wrong_package':
+                output['package_id'] = output['package_id'].replace('0.11.1', '0.10.9')
             if defect == 'wrong_family':
                 host_sha2.write_bytes(b'different stale library')
             lines = [json.dumps(output)]
+            if defect == 'wrong_metadata_package':
+                foreign = dict(output, package_id=output['package_id'].replace('0.11.1', '0.10.9'),
+                               filenames=[str(host_sha2.with_suffix('.rmeta'))])
+                lines.append(json.dumps(foreign))
             if defect != 'unfinished':
                 lines.append(json.dumps({'reason': 'build-finished', 'success': True}))
             if defect == 'changed_lock':

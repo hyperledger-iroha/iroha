@@ -17,7 +17,7 @@ RUSTC, when set, selects the same compiler used for the native build.
 """
 from pathlib import Path
 from subprocess import CalledProcessError
-import argparse, ast, hashlib, json, locale, os, re, shlex, subprocess, sys, tarfile, tempfile
+import argparse, ast, hashlib, json, locale, os, re, shlex, subprocess, sys, tarfile, tempfile, tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 DRIVER = ROOT / 'scripts/native_source_snapshot.rs'
@@ -317,12 +317,32 @@ def actual_snapshot(tool):
         raise
 
 
+def standalone_sha2_package(manifest, lock):
+    """Select the helper's exact crates.io sha2 pin, agreeing with its lockfile."""
+    dependency = tomllib.loads(manifest.read_text()).get('dependencies', {}).get('sha2')
+    if (not isinstance(dependency, dict)
+            or any(key in dependency for key in ('path', 'git', 'registry', 'workspace', 'package'))
+            or not isinstance(dependency.get('version'), str)
+            or not re.fullmatch(r'=\d+\.\d+\.\d+', dependency['version'])):
+        raise ValueError('Standalone snapshot sha2 must have one exact crates.io version pin')
+    version = dependency['version'][1:]
+    source = 'registry+https://github.com/rust-lang/crates.io-index'
+    packages = [package for package in tomllib.loads(lock.read_text()).get('package', [])
+                if package.get('name') == 'sha2' and package.get('version') == version]
+    if (len(packages) != 1 or packages[0].get('source') != source
+            or not re.fullmatch(r'[0-9a-f]{64}', packages[0].get('checksum', ''))):
+        raise ValueError('Standalone snapshot sha2 pin must match one locked crates.io package')
+    selector = 'sha2@' + version
+    return selector, source + '#' + selector
+
+
 def standalone_host_sha2():
     """Acquire the evaluator's locked host dependency in a reusable tool lane.
 
     Cross builds need not contain host sha2 now that Plonk has no build script.
-    Build only this small external dependency, never the proof workspace. An
-    explicit host target prevents CARGO_BUILD_TARGET from selecting the device.
+    Build only the exact sha2 version pinned by the maintained helper manifest
+    and lockfile, never the proof workspace. An explicit host target prevents
+    CARGO_BUILD_TARGET from selecting the device.
     """
     compiler = os.environ.get('RUSTC', 'rustc')
     version = subprocess.run([compiler, '-vV'], cwd=ROOT, capture_output=True, text=True, check=True)
@@ -333,12 +353,13 @@ def standalone_host_sha2():
     manifest = ROOT / 'scripts/native-source-snapshot/Cargo.toml'
     lock = manifest.with_name('Cargo.lock')
     before = {path: sha(path) for path in (manifest, lock)}
+    selector, package_id = standalone_sha2_package(manifest, lock)
     lane = ROOT / 'target/native-source-snapshot'
     environment = os.environ.copy()
     # Device-only rustflags cannot apply to the host evaluator dependency.
     environment['CARGO_ENCODED_RUSTFLAGS'] = ''
     result = subprocess.run(['cargo', 'build', '--offline', '--locked', '--manifest-path', str(manifest),
-        '--package', 'sha2@0.10.9', '--target', host, '--target-dir', str(lane), '--message-format=json'],
+        '--package', selector, '--target', host, '--target-dir', str(lane), '--message-format=json'],
         cwd=ROOT, env=environment, capture_output=True, text=True, check=True)
     if any(sha(path) != digest for path, digest in before.items()):
         raise ValueError('Standalone snapshot dependency inputs changed during compilation')
@@ -347,15 +368,15 @@ def standalone_host_sha2():
     if not finished or finished[-1].get('success') is not True:
         raise ValueError('Standalone snapshot dependency build did not finish successfully')
     profile = lane / host / 'debug'
-    libraries = selected_host_sha2(events, profile)
+    selected = [event for event in events if event.get('package_id') == package_id]
+    libraries = selected_host_sha2(selected, profile)
     if len(libraries) != 1:
         raise ValueError('Need one exact standalone host sha2 artifact')
     output, features = next(iter(libraries.items()))
     # Cargo reports a directly selected library at profile/libsha2.rlib plus its
     # exact hashed metadata output. Bind that family, without scanning the cache.
-    metadata = {Path(name).resolve(strict=True) for event in events
+    metadata = {Path(name).resolve(strict=True) for event in selected
         if event.get('reason') == 'compiler-artifact'
-        and event.get('package_id') == 'registry+https://github.com/rust-lang/crates.io-index#sha2@0.10.9'
         for name in event.get('filenames', [])
         if Path(name).suffix == '.rmeta' and Path(name).parent == profile / 'deps'}
     if len(metadata) != 1:
