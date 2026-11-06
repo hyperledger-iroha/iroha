@@ -17,13 +17,13 @@ const CHARGE_CARRIER_MAX: usize = 16 + KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 + A
 pub struct WalletReviewRequest {
     /// Send1 or Unload8 only.
     pub selector: u32,
-    /// Fresh0 or exact-original unstarted1; every other mode is rejected.
+    /// Fresh0, exact-original unstarted1 or retained-preparing2; other modes refuse.
     pub expectation: u32,
     /// Unload face amount only; zero for Send.
     pub amount: WalletU128,
     /// Exactly32 nonzero bytes, bound to the actual review at issuance.
     pub request_id32: *const u8,
-    /// Exact prior projection comparison DATA; empty only for Fresh.
+    /// Exact prior projection comparison DATA for mode1; empty for modes0/2.
     pub expected_projection: *const u8,
     /// Bounded exact projection length; no retired frame is accepted.
     pub expected_projection_length: usize,
@@ -106,6 +106,7 @@ pub(crate) fn request(
             selector,
             expected_projection,
         )?),
+        2 if expected_projection.is_empty() => state::ReviewExpectationV1::RetainedPreparing,
         _ => return Err(Failure::code(INVALID)),
     };
     let b = bounds(selector)?;
@@ -992,7 +993,8 @@ mod tests {
         for (mode, old) in [
             (0, bytes.as_slice()),
             (1, &[][..]),
-            (2, &[][..]),
+            (2, bytes.as_slice()),
+            (3, &[][..]),
             (u32::MAX, bytes.as_slice()),
         ] {
             assert_eq!(
@@ -1019,6 +1021,15 @@ mod tests {
             panic!("exact original projection");
         };
         assert_eq!(actual, expected);
+        for (selector, amount, first, second) in
+            [(1, 0, &[7][..], &[8][..]), (8, 1, &[][..], &[][..])]
+        {
+            let parsed = request(&[9; 32], selector, amount, 2, &[], first, second).unwrap();
+            let expectation = match parsed {
+                Input::Send { expectation, .. } | Input::Unload { expectation, .. } => expectation,
+            };
+            assert_eq!(expectation, state::ReviewExpectationV1::RetainedPreparing);
+        }
     }
     #[test]
     fn existing_review_result_preserves_only_bound_request_outcomes() {
@@ -1524,7 +1535,7 @@ mod tests {
             (std::ptr::null(), 0),
             (zero.as_ptr(), 0),
             (identity.as_ptr(), 1),
-            (identity.as_ptr(), 2),
+            (identity.as_ptr(), 3),
         ] {
             request.request_id32 = id;
             request.expectation = mode;
@@ -1540,16 +1551,18 @@ mod tests {
             assert_eq!(reviews.lock().unwrap().values.len(), 2);
         }
         request.request_id32 = identity.as_ptr();
-        request.expectation = 0;
-        let mut out = WalletResult::default();
-        assert_eq!(
-            unsafe {
-                connect_norito_kagemusha_wallet_review_v1(handle, origin, &request, &mut out)
-            },
-            0
-        );
-        assert_eq!(out.status, 66);
-        crate::connect_norito_free(out.bytes);
+        for mode in [0, 2] {
+            request.expectation = mode;
+            let mut out = WalletResult::default();
+            assert_eq!(
+                unsafe {
+                    connect_norito_kagemusha_wallet_review_v1(handle, origin, &request, &mut out)
+                },
+                0
+            );
+            assert_eq!(out.status, 66);
+            crate::connect_norito_free(out.bytes);
+        }
         let mut out = WalletResult::default();
         assert_eq!(
             unsafe {

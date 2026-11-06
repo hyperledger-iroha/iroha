@@ -66,6 +66,7 @@ fn unadmitted_review_fixture() -> ReviewedOperationV1 {
         request_id: [7; 32],
         unload_beneficiary: None,
         speculation: None,
+        preparation: None,
         projection: NativeOperationReviewV1 {
             kind: KagemushaWalletOperationKindV1::Send,
             amount: request.body.amount,
@@ -111,6 +112,67 @@ fn unadmitted_review_fixture() -> ReviewedOperationV1 {
             request: archive::encode(&open_request).unwrap(),
         },
     }
+}
+
+#[test]
+fn only_explicit_retained_review_admits_preparing_and_absence_never_recovers() {
+    let projection = unadmitted_review_fixture().projection;
+    for expectation in [
+        ReviewExpectationV1::Fresh,
+        ReviewExpectationV1::OriginalUnstarted(projection),
+    ] {
+        assert_eq!(expectation.existing_bound(None).unwrap(), None);
+        assert_eq!(
+            expectation
+                .existing_bound(Some(BoundRequestStatusV1::Preparing))
+                .unwrap(),
+            Some(BoundRequestStatusV1::Preparing)
+        );
+    }
+    let expectation = ReviewExpectationV1::RetainedPreparing;
+    assert!(matches!(
+        expectation.existing_bound(None),
+        Err(Error::OperationConflict)
+    ));
+    assert_eq!(
+        expectation
+            .existing_bound(Some(BoundRequestStatusV1::Preparing))
+            .unwrap(),
+        None
+    );
+    for completion in [
+        Completion::Pending,
+        Completion::Complete(vec![7]),
+        Completion::Archived,
+        Completion::DeliveryDataLoss,
+        Completion::NotPerformed(NotPerformed::StaleHead),
+    ] {
+        let bound = BoundRequestStatusV1::Outcome(completion);
+        assert_eq!(
+            expectation.existing_bound(Some(bound.clone())).unwrap(),
+            Some(bound)
+        );
+    }
+}
+
+#[test]
+fn retained_preparation_review_keeps_its_private_binding_across_maintenance_only() {
+    let mut review = unadmitted_review_fixture();
+    let binding = RetainedPreparationBindingV1 {
+        checkpoint: review.source.archive_checkpoint,
+        entry: [19; 32],
+    };
+    review.preparation = Some(binding);
+    assert!(review.speculation().is_none());
+    let failure = ReviewedExecutionFailureV1::preflight(ReviewMaintenanceWaitV1::Busy, review);
+    let (_, held) = failure.into_parts();
+    assert_eq!(held.unwrap().preparation, Some(binding));
+    assert!(
+        ReviewedExecutionFailureV1::from(Error::OperationConflict)
+            .into_parts()
+            .1
+            .is_none()
+    );
 }
 
 #[test]

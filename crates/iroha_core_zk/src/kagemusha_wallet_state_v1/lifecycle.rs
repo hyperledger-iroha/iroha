@@ -45,10 +45,18 @@ pub enum BoundRequestStatusV1 {
     Outcome(Completion),
 }
 
+// Captured only from the authenticated permanent map. A financial review privately
+// retains this value; neither the request ID nor projection DATA reconstructs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct RetainedPreparationBindingV1 {
+    pub(super) checkpoint: [u8; 32],
+    pub(super) entry: [u8; 32],
+}
+
 /// Result of consuming a request-bound financial review.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReviewedExecutionV1 {
-    /// This review admitted the fresh request through the ordinary single dispatcher.
+    /// This review admitted fresh work or exact retained preparation through the single dispatcher.
     Executed(Completion),
     /// The request was already bound; this review performed no planning or execution.
     Existing(BoundRequestStatusV1),

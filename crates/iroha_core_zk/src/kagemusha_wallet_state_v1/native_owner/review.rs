@@ -7,8 +7,10 @@
 //! before `execute_reviewed`, which uses that σ only after hardware approval, its fresh
 //! recheck and an identical derivation. A declined review drops the σ unsigned.
 //! Review creation binds a nonzero local request ID privately. Existing permanent mappings
-//! are observations only; renewed approval cannot adopt or replan their work.
+//! remain observations for fresh reviews. Explicit retained-preparation review authenticates
+//! the exact permanent binding before renewed approval; it cannot replace its plan or source.
 
+use super::super::lifecycle::RetainedPreparationBindingV1;
 use super::super::object_workspace::{DraftWorkspace, WorkspaceLimits};
 use super::super::scheduling::{Speculation, SpeculationJob};
 use super::*;
@@ -65,7 +67,7 @@ pub struct NativeOperationReviewV1 {
     pub artifact_manifest_digest: [u8; 32],
 }
 
-/// Constraint on a newly authenticated review; neither variant is execution authority.
+/// Constraint on a newly authenticated review; no variant is execution authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[expect(
     clippy::large_enum_variant,
@@ -78,9 +80,23 @@ pub enum ReviewExpectationV1 {
     /// Continue the same unstarted request only if its entire original projection matches.
     /// Exact original action and companion bytes are still required independently.
     OriginalUnstarted(NativeOperationReviewV1),
+    /// Reapprove only this exact already-bound, unselected preparation. Absence refuses;
+    /// selected outcomes remain observations. Native retains every existing plan choice.
+    RetainedPreparing,
 }
 
 impl ReviewExpectationV1 {
+    fn existing_bound(
+        &self,
+        bound: Option<BoundRequestStatusV1>,
+    ) -> Result<Option<BoundRequestStatusV1>, Error> {
+        match (self, bound) {
+            (Self::RetainedPreparing, None) => Err(Error::OperationConflict),
+            (Self::RetainedPreparing, Some(BoundRequestStatusV1::Preparing)) => Ok(None),
+            (_, bound) => Ok(bound),
+        }
+    }
+
     fn require_projection(&self, actual: &NativeOperationReviewV1) -> Result<(), Error> {
         if matches!(self, Self::OriginalUnstarted(expected) if expected != actual) {
             return Err(Error::OperationConflict);
@@ -211,12 +227,15 @@ pub struct ReviewedOperationV1 {
     // The σ_send this Send review may have proved speculatively. Dropping the review cancels
     // it and drops any finished σ unsigned.
     speculation: Option<Speculation<SpeculativeSendV1>>,
+    // Present only after explicit retained-preparation intake authenticated this exact
+    // selected Entry. It cannot be supplied through projection DATA or the mobile ABI.
+    preparation: Option<RetainedPreparationBindingV1>,
 }
 
 /// Reviewed execution refusal with ownership preserved only before execution admission.
 ///
-/// Only authenticated request absence followed by a typed maintenance preflight refusal
-/// returns the same opaque review. The host keeps its
+/// Authenticated request absence or the exact retained preparation followed by a typed
+/// maintenance preflight refusal returns the same opaque review. The host keeps its
 /// original review token and approval; it must not construct or issue a replacement review.
 /// Once execution starts, the existing one-use semantics consume the review on every result.
 #[derive(thiserror::Error)]
@@ -769,6 +788,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             action,
             unload_beneficiary: verified_unload_beneficiary,
             speculation,
+            preparation: None,
         })
     }
 
@@ -928,6 +948,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         expectation: ReviewExpectationV1,
     ) -> Result<ReviewDecisionV1, Error> {
         require_review_identity(request.request_id)?;
+        let recover_preparation = matches!(expectation, ReviewExpectationV1::RetainedPreparing);
         if let ReviewExpectationV1::OriginalUnstarted(expected) = &expectation
             && (expected.scheme_id != self.scheme_id
                 || expected.wallet_id != self.wallet_id
@@ -935,25 +956,38 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         {
             return Err(Error::OperationConflict);
         }
-        if let Some(bound) = self.bound_review_request(request)? {
+        if let Some(bound) = expectation.existing_bound(self.bound_review_request(request)?)? {
             return Ok(ReviewDecisionV1::Existing(bound));
         }
         if let Some(wait) = self.review_maintenance_wait()? {
             return Ok(ReviewDecisionV1::Waiting(wait));
         }
-        self.require_no_preparation_draft(request.request_id)?;
-        let review = self.review_action(
+        if !recover_preparation {
+            self.require_no_preparation_draft(request.request_id)?;
+        }
+        let mut review = self.review_action(
             request.request_id,
             request.action.clone(),
             destination_original,
             unload_beneficiary,
-            true,
+            !recover_preparation,
         )?;
         expectation.require_projection(&review.projection)?;
-        if let Some(bound) = self.bound_review_request(request)? {
-            return Ok(ReviewDecisionV1::Existing(bound));
+        if recover_preparation {
+            let (bound, binding) = self.retained_preparation_review_binding(request)?;
+            if !matches!(bound, BoundRequestStatusV1::Preparing) {
+                return Ok(ReviewDecisionV1::Existing(bound));
+            }
+            if binding.checkpoint != review.source.archive_checkpoint {
+                return Err(Error::OperationConflict);
+            }
+            review.preparation = Some(binding);
+        } else {
+            if let Some(bound) = self.bound_review_request(request)? {
+                return Ok(ReviewDecisionV1::Existing(bound));
+            }
+            self.require_no_preparation_draft(request.request_id)?;
         }
-        self.require_no_preparation_draft(request.request_id)?;
         self.require_current_review_source(&review)?;
         Ok(ReviewDecisionV1::Ready(review))
     }
@@ -961,8 +995,9 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// Classify an exact request identity before authenticating a fresh Send review.
     /// No nonce, map insertion, proof, hardware signature or Advance is produced. The review
     /// may then have its `σ_send` proved speculatively ([`ReviewedOperationV1::speculation`]).
-    /// Exact bound requests return `Existing` before maintenance. Otherwise a current Archive
-    /// fold or selected Pending returns tokenless `Waiting`; an ordinary missing fold errors.
+    /// Fresh intake observes exact bound requests before maintenance. Explicit retained
+    /// preparation intake can issue a newly approved recovery capability, never replan one.
+    /// A current Archive fold or selected Pending returns tokenless `Waiting`.
     /// # Errors
     /// Invalid/foreign Request, missing or changed source/fold/originals, failed controls or unavailable storage/observations.
     pub fn review_send(
@@ -995,8 +1030,8 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// Authenticate current folded Unload amount/destination and optional signed charge.
     /// The fee is withheld from the ledger payout; the offline debit remains the face amount.
     /// No nonce, map insertion, proof, signature or Advance is produced.
-    /// Existing bindings and maintenance waits issue no review. Only authenticated absence
-    /// and a current folded source can produce `Ready`; execution rechecks after approval.
+    /// Fresh intake requires authenticated absence; retained-preparation intake requires
+    /// an exact permanent binding. Both authenticate a current folded source before `Ready`.
     /// # Errors
     /// Unavailable or changed source, missing fold, invalid amount or foreign/malformed
     /// quote/certificates/beneficiary. Charged reviews require the exact canonical beneficiary.
@@ -1030,7 +1065,8 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
 
     /// Admit one actual review after fresh hardware UI approval and recheck its exact source.
     /// Identity, amount and all originals are taken from the privately retained review.
-    /// Exact existing bindings return observation only; ordinary recovery remains separate.
+    /// Fresh reviews observe any existing binding. A retained-preparation review can
+    /// continue only its exact authenticated Entry, preserving every selected plan choice.
     /// # Errors
     /// Expected maintenance preflight refuses with the unchanged review. Operational failures, changed
     /// source/runtime/action, failed controls, invalid identity and execution errors consume it.
@@ -1043,7 +1079,15 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             action: review.action.clone(),
         };
         if let Some(bound) = self.bound_review_request(&request)? {
-            return Ok(ReviewedExecutionV1::Existing(bound));
+            if review.preparation.is_none() || !matches!(bound, BoundRequestStatusV1::Preparing) {
+                return Ok(ReviewedExecutionV1::Existing(bound));
+            }
+            let (_, binding) = self.retained_preparation_review_binding(&request)?;
+            if Some(binding) != review.preparation {
+                return Err(Error::OperationConflict.into());
+            }
+        } else if review.preparation.is_some() {
+            return Err(Error::OperationConflict.into());
         }
         if let Some(wait) = self.review_maintenance_wait()? {
             return Err(ReviewedExecutionFailureV1::preflight(wait, review));
@@ -1062,6 +1106,19 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             false,
         )?;
         review.require_recheck(&fresh)?;
+        if let Some(expected) = review.preparation {
+            let (bound, binding) = self.retained_preparation_review_binding(&request)?;
+            if !matches!(bound, BoundRequestStatusV1::Preparing) {
+                return Ok(ReviewedExecutionV1::Existing(bound));
+            }
+            if binding != expected {
+                return Err(Error::OperationConflict.into());
+            }
+            self.require_current_review_source(&review)?;
+            return self
+                .execute_reviewed_preparing(request, &expected)
+                .map_err(Into::into);
+        }
         if let Some(bound) = self.bound_review_request(&request)? {
             return Ok(ReviewedExecutionV1::Existing(bound));
         }
