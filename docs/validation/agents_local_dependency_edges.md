@@ -2,7 +2,9 @@
 
 The development and agent workflow sections of [AGENTS.md](../../AGENTS.md)
 require coherent manifest and lockfile updates for approved dependency changes.
-The [contributor guard](../../ci/check_agents_guardrails.sh) therefore permits a
+The [contributor guard](../../ci/check_agents_guardrails.sh) and
+[dependency discipline guard](../../ci/check_dependency_discipline.sh) use the
+same validator and exact per-manifest edge list to permit a
 narrow structural case: adding a plain path dependency from one existing
 workspace package to another already present in the lockfile.
 
@@ -22,8 +24,17 @@ edges must remain unchanged. New packages, external edges, dependency removals,
 unmatched manifest changes, unavailable metadata or helper failures reject the
 exception. Existing new-crate, workspace-member, external-dependency and SoraNet
 privacy checks remain in place. Changes outside this structural case need their
-own reviewed dependency-policy update; there is no environment-variable bypass.
+own reviewed dependency-policy update. The contributor guard has no
+environment-variable bypass. Dependency discipline retains its existing explicit
+`DEPENDENCY_DISCIPLINE_ALLOW=<dep1,dep2>` approval mechanism; validator refusal
+grants no local exception and applies that ordinary dependency policy. An allowed
+local edge in one manifest never exempts the same name in another manifest.
 
 Run `python3 -m pytest -q scripts/tests/check_agents_local_dependency_edges_test.py`
 for the positive and mutation controls, and run
 `AGENTS_BASE_REF=<base> bash ci/check_agents_guardrails.sh` for the complete guard.
+Run `python3 -B -m unittest discover -s scripts/tests -p check_dependency_discipline_test.py -v`
+for shell integration controls using synthetic tree bases in temporary Git
+workspaces and locked offline Cargo metadata, without commits or Rust compilation.
+Check dependency discipline with
+`AGENTS_BASE_REF=<base> bash ci/check_dependency_discipline.sh`.

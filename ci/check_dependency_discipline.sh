@@ -29,7 +29,16 @@ fi
 
 ALLOW_LIST="${DEPENDENCY_DISCIPLINE_ALLOW:-}"
 
-python3 - "$base_commit" "$ALLOW_LIST" "${toml_files[@]}" <<'PY'
+# Share the exact per-manifest local-edge exception with the AGENTS guard.
+# A refusal grants no exception; ordinary explicit approval policy still applies.
+local_edges="{}"
+if ! local_edges="$(python3 scripts/check_agents_local_dependency_edges.py --base "${base_commit}")"; then
+	echo "warning: no validated local-edge exception; applying normal dependency approval policy." >&2
+	local_edges="{}"
+fi
+
+LOCAL_EDGES="${local_edges}" python3 - "$base_commit" "$ALLOW_LIST" "${toml_files[@]}" <<'PY'
+import json
 import os
 import subprocess
 import sys
@@ -103,6 +112,7 @@ def main() -> int:
     paths = sys.argv[3:]
 
     allowed = {item.strip() for item in allowed_raw.split(",") if item.strip()}
+    local_edges = json.loads(os.environ["LOCAL_EDGES"])
 
     failures: List[Tuple[str, List[str]]] = []
 
@@ -123,7 +133,7 @@ def main() -> int:
             print(f"error: failed to parse {path}: {exc}", file=sys.stderr)
             return 1
 
-        added = collect_deps(current_doc) - collect_deps(base_doc) - allowed
+        added = collect_deps(current_doc) - collect_deps(base_doc) - allowed - set(local_edges.get(path, []))
         if added:
             failures.append((path, sorted(added)))
 
@@ -135,7 +145,7 @@ def main() -> int:
         print("Set DEPENDENCY_DISCIPLINE_ALLOW=<dep1,dep2> to acknowledge intentional additions.", file=sys.stderr)
         return 1
 
-    print("Dependency discipline guard passed: no new dependencies added relative to base.")
+    print("Dependency discipline guard passed: no unapproved new dependencies relative to base.")
     return 0
 
 
