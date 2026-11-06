@@ -132,6 +132,28 @@ final class KagemushaWalletReviewV1Tests: XCTestCase {
     }
   }
 
+  func testRetainedPreparingHasItsOwnWireAdmissionWithoutProjectionData() throws {
+    let identity = Data(repeating: 9, count: 32)
+    for selector: UInt32 in [1, 8] {
+      let input = try KagemushaWalletReviewInputV1(requestID: identity, expectation: .retainedPreparing,
+        selector: selector, amount: .init(low: selector == 8 ? 1 : 0, high: 0),
+        first: selector == 1 ? Data([1]) : Data(), second: selector == 1 ? Data([2]) : Data())
+      input.withRequest { request in
+        XCTAssertEqual(request.pointee.expectation, 2)
+        XCTAssertEqual(request.pointee.expected_projection_length, 0)
+        XCTAssertEqual(Data(bytes: request.pointee.request_id32!, count: 32), identity)
+        XCTAssertEqual(request.pointee.selector, selector)
+      }
+    }
+    let fresh = try KagemushaWalletReviewInputV1(requestID: identity, expectation: .fresh,
+      selector: 1, first: Data([1]), second: Data([2]))
+    fresh.withRequest { XCTAssertEqual($0.pointee.expectation, 0) }
+    for id in [Data(), Data(count: 32), Data(repeating: 1, count: 31)] {
+      XCTAssertThrowsError(try KagemushaWalletReviewInputV1(requestID: id, expectation: .retainedPreparing,
+        selector: 1, first: Data([1]), second: Data([2])))
+    }
+  }
+
   func testBoundEnvelopeRefusesLengthTokenAndNestedMetadataConfusion() throws {
     let valid = try bound(1, payload: Data([7]))
     for kind: UInt32 in [1, 10] {
