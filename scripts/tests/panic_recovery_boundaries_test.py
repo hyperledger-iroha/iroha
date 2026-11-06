@@ -2095,6 +2095,53 @@ def test_reviewed_native_sns_attempt_include_seals_full_raw_caller(tmp_path: Pat
     assert any("source inventory drifted" in error for error in failures), failures
 
 
+@pytest.mark.parametrize("changed", ("trigger_lifecycle.rs", "trigger_lifecycle_tests.rs"))
+def test_state_lifecycle_unwind_scope_and_tests_are_sealed_without_executor_module_edge(
+    tmp_path: Path, changed: str,
+) -> None:
+    """A State method called by executor must not hide its rethrow boundary."""
+    module = load_guard_module()
+    core = tmp_path / "crates/iroha_core/src"
+    state = core / "state"
+    state.mkdir(parents=True)
+    (core / "executor.rs").write_text(
+        "fn dispatch(tx: &mut StateTransaction) { tx.with_trigger_lifecycle_origin(); }\n",
+        encoding="utf-8",
+    )
+    owner = state / "trigger_lifecycle.rs"
+    owner.write_text(
+        '#[cfg(test)]\n#[path = "trigger_lifecycle_tests.rs"]\nmod tests;\n'
+        "fn restore() { let outcome = std::panic::catch_unwind(run); "
+        "restore_origin(); if let Err(panic) = outcome { std::panic::resume_unwind(panic); } }\n",
+        encoding="utf-8",
+    )
+    tests = state / "trigger_lifecycle_tests.rs"
+    tests.write_text("fn restoration_test() { original_assertion(); }\n", encoding="utf-8")
+    for path in (owner, tests):
+        assert module.CORE_RECOVERY_SUPPORT_PATHS.count(path.relative_to(tmp_path)) == 1
+    sources, failures = module.torii_rust_source_closure(tmp_path)
+    assert failures == []
+    assert {owner.resolve(), tests.resolve()} <= set(sources)
+    reviewed = module.torii_boundary_inventory(tmp_path, sources)
+    assert reviewed[2]["catch_unwind"] == 1
+    assert any(
+        record.startswith("crates/iroha_core/src/state/trigger_lifecycle.rs\t")
+        and record.endswith("catch_unwind:catch_unwind=1")
+        for record in reviewed[0]
+    )
+
+    target = state / changed
+    target.write_text(target.read_text(encoding="utf-8") + "fn changed_policy() {}\n", encoding="utf-8")
+    observed = module.torii_boundary_inventory(tmp_path)
+    assert observed[2] == reviewed[2], "restoration/test drift needs no new boundary"
+    assert any(
+        "source inventory drifted" in failure
+        for failure in module.closed_torii_boundary_inventory_failures(
+            tmp_path, reviewed[0], observed_inventory=observed,
+        )
+    )
+
+
 @pytest.mark.parametrize("name", ("amx_approvals", "amx_roles", "role_removal"))
 def test_nested_amx_support_resolves_from_original_tests_module_directory(
     tmp_path: Path, name: str

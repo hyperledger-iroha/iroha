@@ -215,9 +215,12 @@ overflow in `beacon_bootstrap::seat_attempt::aggregate_tests` after five
 tests fail. The trusted release-surface digest was stale across the upstream
 merges and still needs candidate-bound validation. The generated-artifact guard
 passes: retained capture text has narrow manifest exemptions and all eight
-FAEST tables have a registered owner. The State candidate checker remains red because the merge
-removed State tables and the candidates were measured over the previous table
-schema (to be measured again by G.2 or G.3).
+FAEST tables have a registered owner. The [refreshed State comparison](docs/validation/state_candidates_takeover_20261104/README.md)
+passes the unchanged checker and exact raw-record reproduction: seven retained
+runs supply 151 records, 95 native rows and 210 circuit rows for the matching
+canonical table schema. The original timeout remains excluded. This is
+frozen-source candidate evidence; no construction is selected, and current-source,
+lifecycle-witness and release qualification remain open.
 
 ## Deployment state
 
@@ -579,6 +582,9 @@ passes.
   adds reviewed instruction coverage and image-bound ordinary control-flow facts.
   Every original resource obligation remains active, including the deferred
   Shape merge; all ten complete stack bounds remain unknown.
+  The [retained frontend composition](docs/validation/parliament_ballot_frontend_composition_20261104/README.md)
+  bounds one ordinary wrapper and its record leaf at 139 instruction events;
+  all other callees and the 17 exceptional-entry words remain unbounded.
   A [conditional adapter bound](docs/validation/parliament_ballot_adapter_bound/README.md)
   isolates the ordinary wrapper's stack, instructions and owned input block;
   native and complete verifier costs remain opaque.
