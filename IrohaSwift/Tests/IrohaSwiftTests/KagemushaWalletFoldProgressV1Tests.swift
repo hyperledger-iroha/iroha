@@ -41,33 +41,49 @@ final class KagemushaWalletFoldProgressV1Tests: XCTestCase {
      row(60, 90, 2, "receive", "q", 0, 12, "checkpoint")]
   }
 
-  func testLearnsTheHeadSchedulesAndPaceFromItsTurns() throws {
+  private func micros(_ seconds: Double) -> Double { seconds * Double(second) }
+
+  func testLearnsTheHeadSchedulesAndCostsFromItsTurns() throws {
     let reading = try progress(100, loadThenReceive)
     XCTAssertEqual(reading.sampledNativeMicros, 100 * second)
     XCTAssertEqual(reading.head, 2)
     XCTAssertEqual(reading.schedules, ["load": 3, "receive": 12])
-    XCTAssertEqual(reading.subProofMicros, 22_500_000)
+    XCTAssertEqual(reading.costs, ["load": [0: 20 * second, 1: 20 * second, 2: 20 * second], "receive": [0: 30 * second]])
     XCTAssertNil(try progress(10, []).head)
+    XCTAssertEqual(try progress(10, []).costs, [:])
+    // An ordinal proved twice costs its mean; adopted, cancelled and instant turns proved nothing here.
+    let sends = try progress(100, [
+      row(0, 10, 1, "send", "q", 0, 5, "checkpoint"),
+      row(10, 30, 2, "send", "q", 0, 5, "checkpoint"),
+      row(30, 31, 3, "send", "q", 0, 5, "adopted"),
+      row(31, 40, 3, "send", "a", 1, 5, "cancelled"),
+      row(40, 40, 3, "send", "a", 1, 5, "checkpoint")])
+    XCTAssertEqual(sends.costs, ["send": [0: 15 * second]])
   }
 
-  func testCountsTheCurrentHeadAndEveryHeadFoldedSinceTheWaitBegan() throws {
+  func testWeighsTheCurrentHeadAndEveryHeadFoldedSinceTheWaitBeganByTime() throws {
     let reading = try progress(100, loadThenReceive)
     // The Receive head's own turn says it needs twelve; no schedule passed in names receive.
     let schedules = ["load": 3]
     let whole = try XCTUnwrap(reading.estimate(backlog: 1, running: true, firstHead: 1, schedules: schedules))
     XCTAssertEqual(whole.proved, 4)
     XCTAssertEqual(whole.remaining, 11)
-    XCTAssertEqual(whole.runningShare, 4.0 / 9.0, accuracy: 1e-9)
-    XCTAssertEqual(whole.fraction, (4 + 4.0 / 9.0) / 15, accuracy: 1e-9)
-    XCTAssertEqual(whole.remainingMicros, 237_500_000)
+    XCTAssertTrue(whole.timed)
+    // The Load's three at 20 s and the Receive's first at 30 s are done; its other eleven at its 30 s mean remain.
+    XCTAssertEqual(whole.provedWeight, micros(90), accuracy: 1e-3)
+    XCTAssertEqual(whole.remainingWeight, micros(330), accuracy: 1e-3)
+    // The running sub-proof began when the last turn ended, 10 s before this reading.
+    XCTAssertEqual(whole.runningWeight, micros(10), accuracy: 1e-3)
+    XCTAssertEqual(whole.fraction, 100.0 / 420, accuracy: 1e-9)
+    XCTAssertEqual(whole.remainingMicros, 320 * second)
     // A wait that began after the Load folded counts the Receive head alone.
     let later = try XCTUnwrap(reading.estimate(backlog: 1, running: true, firstHead: 2, schedules: schedules))
     XCTAssertEqual(later.proved, 1)
-    XCTAssertEqual(later.fraction, (1 + 4.0 / 9.0) / 12, accuracy: 1e-9)
+    XCTAssertEqual(later.fraction, 40.0 / 360, accuracy: 1e-9)
     // A parked worker spends nothing on a sub-proof.
     let parked = try XCTUnwrap(reading.estimate(backlog: 1, running: false, firstHead: 1, schedules: schedules))
-    XCTAssertEqual(parked.runningShare, 0)
-    XCTAssertEqual(parked.fraction, 4.0 / 15, accuracy: 1e-9)
+    XCTAssertEqual(parked.runningWeight, 0)
+    XCTAssertEqual(parked.fraction, 90.0 / 420, accuracy: 1e-9)
   }
 
   func testAWaitThatBeganMidHeadNeverDropsThatHeadsEarlierSubProofs() throws {
@@ -98,6 +114,82 @@ final class KagemushaWalletFoldProgressV1Tests: XCTestCase {
     XCTAssertEqual(estimate.remaining, 40)
     XCTAssertEqual(estimate.fraction, 5.0 / 45, accuracy: 1e-9)
     XCTAssertEqual(estimate.remainingMicros, 400 * second)
+  }
+
+  func testAnOperationTheCallerNamesSizesAndWeighsAHeadBeforeItsFirstTurn() throws {
+    // This phone's earlier folds: a Load is three sub-proofs of 24, 48 and 49 s, a Receive twelve.
+    let schedules = ["load": 3, "receive": 12]
+    let costs: [String: [UInt32: UInt64]] = ["load": [0: 24 * second, 1: 48 * second, 2: 49 * second],
+                                             "receive": [0: 30 * second]]
+    // A new process: the app's Load released head 3 and its first reading at 5 s finds no turn yet.
+    let operations: [UInt64: String] = [3: "load"]
+    let first = try XCTUnwrap(try progress(5, []).estimate(backlog: 1, running: true, firstHead: 3, schedules: schedules,
+                                                           costs: costs, operations: operations, since: 5 * second))
+    XCTAssertEqual(first.proved, 0)
+    XCTAssertEqual(first.remaining, 3)
+    XCTAssertEqual(first.fraction, 0)
+    XCTAssertEqual(first.remainingMicros, 121 * second)
+    // Twelve seconds into the first sub-proof the share moves by time.
+    let running = try XCTUnwrap(try progress(17, []).estimate(backlog: 1, running: true, firstHead: 3, schedules: schedules,
+                                                              costs: costs, operations: operations, since: 5 * second))
+    XCTAssertEqual(running.fraction, 12.0 / 121, accuracy: 1e-9)
+    XCTAssertEqual(running.remainingMicros, 109 * second)
+    // Native records the first sub-proof: the share goes on from it.
+    let recorded = try XCTUnwrap(try progress(30, [row(5, 29, 3, "load", "q", 0, 3, "checkpoint")]).estimate(
+      backlog: 1, running: true, firstHead: 3, schedules: schedules, costs: costs, operations: operations, since: 5 * second))
+    XCTAssertEqual(recorded.proved, 1)
+    XCTAssertEqual(recorded.fraction, 25.0 / 121, accuracy: 1e-9)
+    // Unnamed, the head counts at the largest schedule and the mean cost.
+    let unnamed = try XCTUnwrap(try progress(5, []).estimate(backlog: 1, running: true, firstHead: 3, schedules: schedules,
+                                                             costs: costs, since: 5 * second))
+    XCTAssertEqual(unnamed.remaining, 12)
+    XCTAssertEqual(unnamed.remainingWeight, 12 * micros(37.75), accuracy: 1e-3)
+    // Before this phone proved anything the weights count sub-proofs, with no time.
+    let untimed = try XCTUnwrap(try progress(5, []).estimate(backlog: 1, running: true, firstHead: 3, schedules: schedules,
+                                                             operations: operations))
+    XCTAssertFalse(untimed.timed)
+    XCTAssertEqual(untimed.remainingWeight, 3)
+    XCTAssertNil(untimed.remainingMicros)
+  }
+
+  func testTheRunningSubProofIsTimedFromTheLaterOfTheLastTurnAndSince() throws {
+    // The last fold ended at 60 s; the caller's wait for a new Load head began with its reading at 990 s.
+    let reading = try progress(1000, [
+      row(0, 20, 1, "load", "q", 0, 3, "checkpoint"),
+      row(20, 40, 1, "load", "a", 1, 3, "checkpoint"),
+      row(40, 60, 1, "load", "omega", 2, 3, "folded")])
+    let operations: [UInt64: String] = [2: "load"]
+    let timed = try XCTUnwrap(reading.estimate(backlog: 1, running: true, firstHead: 2, operations: operations,
+                                               since: 990 * second))
+    XCTAssertEqual(timed.runningWeight, micros(10), accuracy: 1e-3)
+    XCTAssertEqual(timed.fraction, 10.0 / 60, accuracy: 1e-9)
+    // Without it, the running sub-proof would seem to have run since 60 s, capped at nine tenths of its cost.
+    let unbounded = try XCTUnwrap(reading.estimate(backlog: 1, running: true, firstHead: 2, operations: operations))
+    XCTAssertEqual(unbounded.runningWeight, micros(18), accuracy: 1e-3)
+  }
+
+  func testAReadingsOwnCostsWinOverTheCallersAndTheCallersFillTheRest() throws {
+    let costs: [String: [UInt32: UInt64]] = ["load": [0: 24 * second, 1: 48 * second, 2: 49 * second]]
+    let reading = try progress(50, [row(0, 30, 1, "load", "q", 0, 3, "checkpoint")])
+    let estimate = try XCTUnwrap(reading.estimate(backlog: 1, running: true, firstHead: 1, costs: costs))
+    XCTAssertEqual(estimate.provedWeight, micros(30), accuracy: 1e-3)
+    XCTAssertEqual(estimate.remainingWeight, micros(97), accuracy: 1e-3)
+    XCTAssertEqual(estimate.runningWeight, micros(20), accuracy: 1e-3)
+    XCTAssertEqual(estimate.fraction, 50.0 / 127, accuracy: 1e-9)
+    XCTAssertEqual(estimate.remainingMicros, 77 * second)
+  }
+
+  func testLaterHeadsCountByTheOperationTheCallerNamed() throws {
+    let reading = try progress(30, [row(0, 20, 1, "load", "q", 0, 3, "checkpoint")])
+    let schedules = ["load": 3, "send": 5, "receive": 12]
+    // Head 2 is a Send the app made; head 3 is unknown and counts at the largest schedule.
+    let estimate = try XCTUnwrap(reading.estimate(backlog: 3, running: false, firstHead: 1, schedules: schedules,
+                                                  operations: [2: "send"]))
+    XCTAssertEqual(estimate.remaining, 2 + 5 + 12)
+    // Heads at or below the current one, or past the backlog, are not later heads.
+    let ignored = try XCTUnwrap(reading.estimate(backlog: 2, running: false, firstHead: 1, schedules: schedules,
+                                                 operations: [1: "receive", 3: "send"]))
+    XCTAssertEqual(ignored.remaining, 2 + 12)
   }
 
   func testAHeadsOwnScheduleIsExactWhenItsOperationRanLongerBefore() throws {
@@ -134,7 +226,7 @@ final class KagemushaWalletFoldProgressV1Tests: XCTestCase {
   func testOnlyTheSnapshotCompletesAWait() throws {
     let reading = try progress(1000, [row(0, 10, 3, "x", "a", 998, 1000, "checkpoint")])
     let estimate = try XCTUnwrap(reading.estimate(backlog: 1, running: true, firstHead: 3, schedules: [:]))
-    XCTAssertEqual(estimate.runningShare, KagemushaWalletFoldProgressV1.runningShareMaximum)
+    XCTAssertEqual(estimate.runningWeight, KagemushaWalletFoldProgressV1.runningShareMaximum * micros(10), accuracy: 1e-3)
     XCTAssertEqual(estimate.fraction, KagemushaWalletFoldProgressV1.fractionMaximum)
   }
 
@@ -143,25 +235,32 @@ final class KagemushaWalletFoldProgressV1Tests: XCTestCase {
       row(0, 1, 4, "load", nil, 0, 3, "adopted"),
       row(1, 2, 4, "load", "omega", 2, 3, "adopted"),
       row(2, 3, 5, "unload", nil, 1, 3, "adopted")])
-    // Adopted bytes were never proved here: they set no pace.
-    XCTAssertNil(reading.subProofMicros)
+    // Adopted bytes were never proved here: they cost nothing known.
+    XCTAssertEqual(reading.costs, [:])
     XCTAssertEqual(reading.schedules, ["load": 3, "unload": 3])
     let estimate = try XCTUnwrap(reading.estimate(backlog: 1, running: true, firstHead: 4, schedules: [:]))
-    XCTAssertEqual(estimate.runningShare, 0)
+    XCTAssertFalse(estimate.timed)
+    XCTAssertEqual(estimate.runningWeight, 0)
     XCTAssertNil(estimate.remainingMicros)
     XCTAssertEqual(estimate.proved, 5) // load's three sub-proofs, from its Ω, and unload's first two
     XCTAssertEqual(estimate.remaining, 1)
   }
 
   func testNothingKnownIsNoEstimate() throws {
-    XCTAssertNil(try progress(10, []).estimate(backlog: 1, running: true, firstHead: 1, schedules: ["load": 3]))
+    XCTAssertNil(try progress(10, []).estimate(backlog: 1, running: true, firstHead: 1, schedules: [:]))
+    XCTAssertNil(try progress(10, []).estimate(backlog: 0, running: true, firstHead: 1, schedules: ["load": 3]))
     // Cancelled after its step was read but before its schedule: no size for the head.
     let unsized = try progress(30, [row(0, 20, 1, "load", nil, 0, nil, "cancelled")])
     XCTAssertNil(unsized.estimate(backlog: 1, running: true, firstHead: 1, schedules: [:]))
     XCTAssertNil(unsized.estimate(backlog: 1, running: true, firstHead: 1, schedules: ["load": 0]))
-    // A sized head says nothing about the heads behind it.
+    // No turn yet: the wait's first head counts from its first sub-proof at the schedule the caller knows.
+    let unstarted = try XCTUnwrap(try progress(10, []).estimate(backlog: 1, running: true, firstHead: 1, schedules: ["load": 3]))
+    XCTAssertEqual(unstarted.proved, 0)
+    XCTAssertEqual(unstarted.remaining, 3)
+    XCTAssertEqual(unstarted.fraction, 0)
+    // A later head counts at the largest schedule this reading or the caller knows.
     let sized = try progress(30, [row(0, 20, 1, "load", "q", 0, 3, "checkpoint")])
-    XCTAssertNil(sized.estimate(backlog: 2, running: true, firstHead: 1, schedules: [:]))
+    XCTAssertEqual(try XCTUnwrap(sized.estimate(backlog: 2, running: true, firstHead: 1, schedules: [:])).remaining, 2 + 3)
     XCTAssertNil(sized.estimate(backlog: 0, running: true, firstHead: 1, schedules: ["load": 3]))
   }
 
@@ -170,6 +269,7 @@ final class KagemushaWalletFoldProgressV1Tests: XCTestCase {
     let estimate = try XCTUnwrap(reading.estimate(backlog: .max, running: false, firstHead: 1, schedules: ["receive": 12]))
     XCTAssertGreaterThan(estimate.remaining, 0)
     XCTAssertTrue((0...KagemushaWalletFoldProgressV1.fractionMaximum).contains(estimate.fraction))
+    XCTAssertEqual(estimate.remainingMicros, .max)
   }
 
   func testRefusesMalformedOrForeignTelemetry() {

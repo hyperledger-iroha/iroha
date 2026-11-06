@@ -40,33 +40,50 @@ class KagemushaWalletFoldProgressV1Test {
 
     private fun head(value: Long) = BigInteger.valueOf(value)
 
-    @Test fun learnsTheHeadSchedulesAndPaceFromItsTurns() {
+    private fun micros(seconds: Double) = seconds * second
+
+    @Test fun learnsTheHeadSchedulesAndCostsFromItsTurns() {
         val reading = progress(100, *loadThenReceive)
         assertEquals(100 * second, reading.sampledNativeMicros)
         assertEquals(head(2), reading.head)
         assertEquals(mapOf("load" to 3, "receive" to 12), reading.schedules)
-        assertEquals(22_500_000L, reading.subProofMicros)
+        assertEquals(mapOf("load" to mapOf(0L to 20 * second, 1L to 20 * second, 2L to 20 * second),
+            "receive" to mapOf(0L to 30 * second)), reading.costs)
         assertNull(progress(10).head)
+        assertEquals(emptyMap(), progress(10).costs)
+        // An ordinal proved twice costs its mean; adopted, cancelled and instant turns proved nothing here.
+        val sends = progress(100,
+            row(0, 10, 1, "send", "q", 0, 5, "checkpoint"),
+            row(10, 30, 2, "send", "q", 0, 5, "checkpoint"),
+            row(30, 31, 3, "send", "q", 0, 5, "adopted"),
+            row(31, 40, 3, "send", "a", 1, 5, "cancelled"),
+            row(40, 40, 3, "send", "a", 1, 5, "checkpoint"))
+        assertEquals(mapOf("send" to mapOf(0L to 15 * second)), sends.costs)
     }
 
-    @Test fun countsTheCurrentHeadAndEveryHeadFoldedSinceTheWaitBegan() {
+    @Test fun weighsTheCurrentHeadAndEveryHeadFoldedSinceTheWaitBeganByTime() {
         val reading = progress(100, *loadThenReceive)
         // The Receive head's own turn says it needs twelve; no schedule passed in names receive.
         val schedules = mapOf("load" to 3)
         val whole = assertNotNull(reading.estimate(backlog = 1, running = true, firstHead = head(1), schedules = schedules))
         assertEquals(4L, whole.proved)
         assertEquals(11L, whole.remaining)
-        assertEquals(4.0 / 9.0, whole.runningShare, 1e-9)
-        assertEquals((4 + 4.0 / 9.0) / 15, whole.fraction, 1e-9)
-        assertEquals(237_500_000L, whole.remainingMicros)
+        assertTrue(whole.timed)
+        // The Load's three at 20 s and the Receive's first at 30 s are done; its other eleven at its 30 s mean remain.
+        assertEquals(micros(90.0), whole.provedWeight, 1e-3)
+        assertEquals(micros(330.0), whole.remainingWeight, 1e-3)
+        // The running sub-proof began when the last turn ended, 10 s before this reading.
+        assertEquals(micros(10.0), whole.runningWeight, 1e-3)
+        assertEquals(100.0 / 420, whole.fraction, 1e-9)
+        assertEquals(320 * second, whole.remainingMicros)
         // A wait that began after the Load folded counts the Receive head alone.
         val later = assertNotNull(reading.estimate(backlog = 1, running = true, firstHead = head(2), schedules = schedules))
         assertEquals(1L, later.proved)
-        assertEquals((1 + 4.0 / 9.0) / 12, later.fraction, 1e-9)
+        assertEquals(40.0 / 360, later.fraction, 1e-9)
         // A parked worker spends nothing on a sub-proof.
         val parked = assertNotNull(reading.estimate(backlog = 1, running = false, firstHead = head(1), schedules = schedules))
-        assertEquals(0.0, parked.runningShare)
-        assertEquals(4.0 / 15, parked.fraction, 1e-9)
+        assertEquals(0.0, parked.runningWeight)
+        assertEquals(90.0 / 420, parked.fraction, 1e-9)
     }
 
     @Test fun aWaitThatBeganMidHeadNeverDropsThatHeadsEarlierSubProofs() {
@@ -96,6 +113,76 @@ class KagemushaWalletFoldProgressV1Test {
         assertEquals(40L, estimate.remaining)
         assertEquals(5.0 / 45, estimate.fraction, 1e-9)
         assertEquals(400 * second, estimate.remainingMicros)
+    }
+
+    @Test fun anOperationTheCallerNamesSizesAndWeighsAHeadBeforeItsFirstTurn() {
+        // This phone's earlier folds: a Load is three sub-proofs of 24, 48 and 49 s, a Receive twelve.
+        val schedules = mapOf("load" to 3, "receive" to 12)
+        val costs = mapOf("load" to mapOf(0L to 24 * second, 1L to 48 * second, 2L to 49 * second),
+            "receive" to mapOf(0L to 30 * second))
+        // A new process: the app's Load released head 3 and its first reading at 5 s finds no turn yet.
+        val operations = mapOf(head(3) to "load")
+        val first = assertNotNull(progress(5).estimate(1, true, head(3), schedules, costs, operations, since = 5 * second))
+        assertEquals(0L, first.proved)
+        assertEquals(3L, first.remaining)
+        assertEquals(0.0, first.fraction)
+        assertEquals(121 * second, first.remainingMicros)
+        // Twelve seconds into the first sub-proof the share moves by time.
+        val running = assertNotNull(progress(17).estimate(1, true, head(3), schedules, costs, operations, since = 5 * second))
+        assertEquals(12.0 / 121, running.fraction, 1e-9)
+        assertEquals(109 * second, running.remainingMicros)
+        // Native records the first sub-proof: the share goes on from it.
+        val recorded = assertNotNull(progress(30, row(5, 29, 3, "load", "q", 0, 3, "checkpoint"))
+            .estimate(1, true, head(3), schedules, costs, operations, since = 5 * second))
+        assertEquals(1L, recorded.proved)
+        assertEquals(25.0 / 121, recorded.fraction, 1e-9)
+        // Unnamed, the head counts at the largest schedule and the mean cost.
+        val unnamed = assertNotNull(progress(5).estimate(1, true, head(3), schedules, costs, since = 5 * second))
+        assertEquals(12L, unnamed.remaining)
+        assertEquals(12 * 37.75 * second, unnamed.remainingWeight, 1e-3)
+        // Before this phone proved anything the weights count sub-proofs, with no time.
+        val untimed = assertNotNull(progress(5).estimate(1, true, head(3), schedules, operations = operations))
+        assertFalse(untimed.timed)
+        assertEquals(3.0, untimed.remainingWeight)
+        assertNull(untimed.remainingMicros)
+    }
+
+    @Test fun theRunningSubProofIsTimedFromTheLaterOfTheLastTurnAndSince() {
+        // The last fold ended at 60 s; the caller's wait for a new Load head began with its reading at 990 s.
+        val reading = progress(1000,
+            row(0, 20, 1, "load", "q", 0, 3, "checkpoint"),
+            row(20, 40, 1, "load", "a", 1, 3, "checkpoint"),
+            row(40, 60, 1, "load", "omega", 2, 3, "folded"))
+        val operations = mapOf(head(2) to "load")
+        val timed = assertNotNull(reading.estimate(1, true, head(2), operations = operations, since = 990 * second))
+        assertEquals(micros(10.0), timed.runningWeight, 1e-3)
+        assertEquals(10.0 / 60, timed.fraction, 1e-9)
+        // Without it, the running sub-proof would seem to have run since 60 s, capped at nine tenths of its cost.
+        val unbounded = assertNotNull(reading.estimate(1, true, head(2), operations = operations))
+        assertEquals(micros(18.0), unbounded.runningWeight, 1e-3)
+    }
+
+    @Test fun aReadingsOwnCostsWinOverTheCallersAndTheCallersFillTheRest() {
+        val costs = mapOf("load" to mapOf(0L to 24 * second, 1L to 48 * second, 2L to 49 * second))
+        val reading = progress(50, row(0, 30, 1, "load", "q", 0, 3, "checkpoint"))
+        val estimate = assertNotNull(reading.estimate(1, true, head(1), costs = costs))
+        assertEquals(micros(30.0), estimate.provedWeight, 1e-3)
+        assertEquals(micros(97.0), estimate.remainingWeight, 1e-3)
+        assertEquals(micros(20.0), estimate.runningWeight, 1e-3)
+        assertEquals(50.0 / 127, estimate.fraction, 1e-9)
+        assertEquals(77 * second, estimate.remainingMicros)
+    }
+
+    @Test fun laterHeadsCountByTheOperationTheCallerNamed() {
+        val reading = progress(30, row(0, 20, 1, "load", "q", 0, 3, "checkpoint"))
+        val schedules = mapOf("load" to 3, "send" to 5, "receive" to 12)
+        // Head 2 is a Send the app made; head 3 is unknown and counts at the largest schedule.
+        val estimate = assertNotNull(reading.estimate(3, false, head(1), schedules, operations = mapOf(head(2) to "send")))
+        assertEquals(2L + 5 + 12, estimate.remaining)
+        // Heads at or below the current one, or past the backlog, are not later heads.
+        val ignored = assertNotNull(reading.estimate(2, false, head(1), schedules,
+            operations = mapOf(head(1) to "receive", head(3) to "send")))
+        assertEquals(2L + 12, ignored.remaining)
     }
 
     @Test fun aHeadsOwnScheduleIsExactWhenItsOperationRanLongerBefore() {
@@ -132,7 +219,7 @@ class KagemushaWalletFoldProgressV1Test {
     @Test fun onlyTheSnapshotCompletesAWait() {
         val reading = progress(1000, row(0, 10, 3, "x", "a", 998, 1000, "checkpoint"))
         val estimate = assertNotNull(reading.estimate(1, true, head(3), emptyMap()))
-        assertEquals(KagemushaWalletFoldProgressV1.RUNNING_SHARE_MAX, estimate.runningShare)
+        assertEquals(KagemushaWalletFoldProgressV1.RUNNING_SHARE_MAX * 10 * second, estimate.runningWeight, 1e-3)
         assertEquals(KagemushaWalletFoldProgressV1.FRACTION_MAX, estimate.fraction)
     }
 
@@ -141,25 +228,32 @@ class KagemushaWalletFoldProgressV1Test {
             row(0, 1, 4, "load", null, 0, 3, "adopted"),
             row(1, 2, 4, "load", "omega", 2, 3, "adopted"),
             row(2, 3, 5, "unload", null, 1, 3, "adopted"))
-        // Adopted bytes were never proved here: they set no pace.
-        assertNull(reading.subProofMicros)
+        // Adopted bytes were never proved here: they cost nothing known.
+        assertEquals(emptyMap(), reading.costs)
         assertEquals(mapOf("load" to 3, "unload" to 3), reading.schedules)
         val estimate = assertNotNull(reading.estimate(1, true, head(4), emptyMap()))
-        assertEquals(0.0, estimate.runningShare)
+        assertFalse(estimate.timed)
+        assertEquals(0.0, estimate.runningWeight)
         assertNull(estimate.remainingMicros)
         assertEquals(5L, estimate.proved) // load's three sub-proofs, from its Ω, and unload's first two
         assertEquals(1L, estimate.remaining)
     }
 
     @Test fun nothingKnownIsNoEstimate() {
-        assertNull(progress(10).estimate(1, true, head(1), mapOf("load" to 3)))
+        assertNull(progress(10).estimate(1, true, head(1), emptyMap()))
+        assertNull(progress(10).estimate(0, true, head(1), mapOf("load" to 3)))
         // Cancelled after its step was read but before its schedule: no size for the head.
         val unsized = progress(30, row(0, 20, 1, "load", null, 0, null, "cancelled"))
         assertNull(unsized.estimate(1, true, head(1), emptyMap()))
         assertNull(unsized.estimate(1, true, head(1), mapOf("load" to 0)))
-        // A sized head says nothing about the heads behind it.
+        // No turn yet: the wait's first head counts from its first sub-proof at the schedule the caller knows.
+        val unstarted = assertNotNull(progress(10).estimate(1, true, head(1), mapOf("load" to 3)))
+        assertEquals(0L, unstarted.proved)
+        assertEquals(3L, unstarted.remaining)
+        assertEquals(0.0, unstarted.fraction)
+        // A later head counts at the largest schedule this reading or the caller knows.
         val sized = progress(30, row(0, 20, 1, "load", "q", 0, 3, "checkpoint"))
-        assertNull(sized.estimate(2, true, head(1), emptyMap()))
+        assertEquals(2L + 3, assertNotNull(sized.estimate(2, true, head(1), emptyMap())).remaining)
         assertNull(sized.estimate(0, true, head(1), mapOf("load" to 3)))
     }
 
@@ -168,6 +262,7 @@ class KagemushaWalletFoldProgressV1Test {
         val estimate = assertNotNull(reading.estimate(Long.MAX_VALUE, false, head(1), mapOf("receive" to 12)))
         assertTrue(estimate.remaining > 0)
         assertTrue(estimate.fraction in 0.0..KagemushaWalletFoldProgressV1.FRACTION_MAX)
+        assertEquals(Long.MAX_VALUE, estimate.remainingMicros)
     }
 
     @Test fun refusesMalformedOrForeignTelemetry() {
