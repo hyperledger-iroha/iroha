@@ -83,6 +83,10 @@ pub struct SorafsPublicationProofV1 {
 
 /// Opaque successful verification of the client's original challenged assertion.
 #[derive(Debug)]
+#[expect(
+    missing_copy_implementations,
+    reason = "verifier-issued publication evidence retains explicit ownership"
+)]
 pub struct VerifiedSorafsPublicationV1 {
     height: u64,
     completed: bool,
