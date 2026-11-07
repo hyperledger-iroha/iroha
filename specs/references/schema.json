@@ -14545,6 +14545,21 @@
         "discriminant": 10,
         "tag": "retain_request",
         "type": "Vec<u8>"
+      },
+      {
+        "discriminant": 11,
+        "tag": "suffix_unload_begin",
+        "type": "KagemushaWalletLedgerActionV1::SuffixUnloadBegin"
+      },
+      {
+        "discriminant": 12,
+        "tag": "suffix_unload_append",
+        "type": "KagemushaWalletLedgerActionV1::SuffixUnloadAppend"
+      },
+      {
+        "discriminant": 13,
+        "tag": "suffix_unload_finalize",
+        "type": "KagemushaWalletLedgerActionV1::SuffixUnloadFinalize"
       }
     ]
   },
@@ -14632,6 +14647,82 @@
       },
       {
         "name": "certificates",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
+  "KagemushaWalletLedgerActionV1::SuffixUnloadAppend": {
+    "Struct": [
+      {
+        "name": "wallet",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "authority",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "account",
+        "type": "AccountId"
+      },
+      {
+        "name": "ordinal",
+        "type": "u128"
+      },
+      {
+        "name": "chunk",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
+  "KagemushaWalletLedgerActionV1::SuffixUnloadBegin": {
+    "Struct": [
+      {
+        "name": "wallet",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "authority",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "account",
+        "type": "AccountId"
+      },
+      {
+        "name": "ordinal",
+        "type": "u128"
+      },
+      {
+        "name": "header",
+        "type": "Vec<u8>"
+      },
+      {
+        "name": "anchor",
+        "type": "Vec<u8>"
+      }
+    ]
+  },
+  "KagemushaWalletLedgerActionV1::SuffixUnloadFinalize": {
+    "Struct": [
+      {
+        "name": "wallet",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "authority",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "account",
+        "type": "AccountId"
+      },
+      {
+        "name": "ordinal",
+        "type": "u128"
+      },
+      {
+        "name": "unload",
         "type": "Vec<u8>"
       }
     ]
@@ -23692,58 +23783,6 @@
       }
     ]
   },
-  "PrivacyProtocolIdV1": {
-    "Enum": [
-      {
-        "discriminant": 0,
-        "tag": "zk-ace-pq-authorization-v1"
-      },
-      {
-        "discriminant": 1,
-        "tag": "anonymous-pgc-k-out-of-n-v1"
-      },
-      {
-        "discriminant": 2,
-        "tag": "verange-transparent-range-v1"
-      },
-      {
-        "discriminant": 3,
-        "tag": "iroha-zk-ams-v1"
-      },
-      {
-        "discriminant": 4,
-        "tag": "vega-existing-credential-zk-v1"
-      },
-      {
-        "discriminant": 5,
-        "tag": "iroha-zk-x509-stark-p256-v1"
-      },
-      {
-        "discriminant": 6,
-        "tag": "iroha-jindo-polynomial-commitment-v1"
-      },
-      {
-        "discriminant": 7,
-        "tag": "iroha-bootle-lantern-anoncred-v1"
-      },
-      {
-        "discriminant": 8,
-        "tag": "orchard-halo2-actions-v1"
-      },
-      {
-        "discriminant": 9,
-        "tag": "monero-fcmp-plus-plus-v1"
-      },
-      {
-        "discriminant": 10,
-        "tag": "iroha-ivm-private-note-stark-v1"
-      },
-      {
-        "discriminant": 11,
-        "tag": "pq-masp-stark-v1"
-      }
-    ]
-  },
   "PrivacyProtocolLimitsUpdateV1": {
     "Struct": [
       {
@@ -23756,67 +23795,7 @@
       },
       {
         "name": "next_limits",
-        "type": "PrivacyProtocolLimitsV1"
-      }
-    ]
-  },
-  "PrivacyProtocolLimitsV1": {
-    "Enum": [
-      {
-        "discriminant": 0,
-        "tag": "zk-ace-pq-authorization-v1"
-      },
-      {
-        "discriminant": 1,
-        "tag": "anonymous-pgc-k-out-of-n-v1",
-        "type": "AnonymousPgcLimitsV1"
-      },
-      {
-        "discriminant": 2,
-        "tag": "verange-transparent-range-v1",
-        "type": "VeRangeLimitsV1"
-      },
-      {
-        "discriminant": 3,
-        "tag": "iroha-zk-ams-v1",
-        "type": "ZkAmsLimitsV1"
-      },
-      {
-        "discriminant": 4,
-        "tag": "vega-existing-credential-zk-v1"
-      },
-      {
-        "discriminant": 5,
-        "tag": "iroha-zk-x509-stark-p256-v1"
-      },
-      {
-        "discriminant": 6,
-        "tag": "iroha-jindo-polynomial-commitment-v1",
-        "type": "JindoLimitsV1"
-      },
-      {
-        "discriminant": 7,
-        "tag": "iroha-bootle-lantern-anoncred-v1"
-      },
-      {
-        "discriminant": 8,
-        "tag": "orchard-halo2-actions-v1",
-        "type": "OrchardLimitsV1"
-      },
-      {
-        "discriminant": 9,
-        "tag": "monero-fcmp-plus-plus-v1",
-        "type": "FcmpLimitsV1"
-      },
-      {
-        "discriminant": 10,
-        "tag": "iroha-ivm-private-note-stark-v1",
-        "type": "IvmPrivateNoteLimitsV1"
-      },
-      {
-        "discriminant": 11,
-        "tag": "pq-masp-stark-v1",
-        "type": "PqMaspLimitsV1"
+        "type": "PrivacyRuntimeProtocolLimitsV1"
       }
     ]
   },
@@ -23824,7 +23803,7 @@
     "Struct": [
       {
         "name": "protocol_id",
-        "type": "PrivacyProtocolIdV1"
+        "type": "PrivacyRuntimeProtocolIdV1"
       }
     ]
   },
@@ -23832,11 +23811,11 @@
     "Struct": [
       {
         "name": "protocol_id",
-        "type": "PrivacyProtocolIdV1"
+        "type": "PrivacyRuntimeProtocolIdV1"
       },
       {
         "name": "current_limits",
-        "type": "PrivacyProtocolLimitsV1"
+        "type": "PrivacyRuntimeProtocolLimitsV1"
       },
       {
         "name": "pending_update",
@@ -23993,7 +23972,7 @@
     "Struct": [
       {
         "name": "protocol_id",
-        "type": "PrivacyProtocolIdV1"
+        "type": "PrivacyRuntimeProtocolIdV1"
       },
       {
         "name": "stage",
@@ -24033,7 +24012,7 @@
     "Struct": [
       {
         "name": "protocol_id",
-        "type": "PrivacyProtocolIdV1"
+        "type": "PrivacyRuntimeProtocolIdV1"
       },
       {
         "name": "proof_system_id",
@@ -24217,7 +24196,7 @@
       },
       {
         "name": "protocol_id",
-        "type": "PrivacyProtocolIdV1"
+        "type": "PrivacyRuntimeProtocolIdV1"
       },
       {
         "name": "stage",
@@ -24266,6 +24245,127 @@
     ]
   },
   "PrivacyRootV1": "Array<u8, 32>",
+  "PrivacyRuntimeProtocolIdV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "zk-ace-pq-authorization-v1"
+      },
+      {
+        "discriminant": 1,
+        "tag": "anonymous-pgc-k-out-of-n-v1"
+      },
+      {
+        "discriminant": 2,
+        "tag": "verange-transparent-range-v1"
+      },
+      {
+        "discriminant": 3,
+        "tag": "iroha-zk-ams-v1"
+      },
+      {
+        "discriminant": 4,
+        "tag": "vega-existing-credential-zk-v1"
+      },
+      {
+        "discriminant": 5,
+        "tag": "iroha-zk-x509-stark-p256-v1"
+      },
+      {
+        "discriminant": 6,
+        "tag": "iroha-jindo-polynomial-commitment-v1"
+      },
+      {
+        "discriminant": 7,
+        "tag": "iroha-bootle-lantern-anoncred-v1"
+      },
+      {
+        "discriminant": 8,
+        "tag": "orchard-halo2-actions-v1"
+      },
+      {
+        "discriminant": 9,
+        "tag": "monero-fcmp-plus-plus-v1"
+      },
+      {
+        "discriminant": 10,
+        "tag": "iroha-ivm-private-note-stark-v1"
+      },
+      {
+        "discriminant": 11,
+        "tag": "pq-masp-stark-v1"
+      },
+      {
+        "discriminant": 12,
+        "tag": "ironwood-halo2-actions-v1"
+      }
+    ]
+  },
+  "PrivacyRuntimeProtocolLimitsV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "zk-ace-pq-authorization-v1"
+      },
+      {
+        "discriminant": 1,
+        "tag": "anonymous-pgc-k-out-of-n-v1",
+        "type": "AnonymousPgcLimitsV1"
+      },
+      {
+        "discriminant": 2,
+        "tag": "verange-transparent-range-v1",
+        "type": "VeRangeLimitsV1"
+      },
+      {
+        "discriminant": 3,
+        "tag": "iroha-zk-ams-v1",
+        "type": "ZkAmsLimitsV1"
+      },
+      {
+        "discriminant": 4,
+        "tag": "vega-existing-credential-zk-v1"
+      },
+      {
+        "discriminant": 5,
+        "tag": "iroha-zk-x509-stark-p256-v1"
+      },
+      {
+        "discriminant": 6,
+        "tag": "iroha-jindo-polynomial-commitment-v1",
+        "type": "JindoLimitsV1"
+      },
+      {
+        "discriminant": 7,
+        "tag": "iroha-bootle-lantern-anoncred-v1"
+      },
+      {
+        "discriminant": 8,
+        "tag": "orchard-halo2-actions-v1",
+        "type": "OrchardLimitsV1"
+      },
+      {
+        "discriminant": 9,
+        "tag": "monero-fcmp-plus-plus-v1",
+        "type": "FcmpLimitsV1"
+      },
+      {
+        "discriminant": 10,
+        "tag": "iroha-ivm-private-note-stark-v1",
+        "type": "IvmPrivateNoteLimitsV1"
+      },
+      {
+        "discriminant": 11,
+        "tag": "pq-masp-stark-v1",
+        "type": "PqMaspLimitsV1"
+      },
+      {
+        "discriminant": 12,
+        "tag": "ironwood-halo2-actions-v1",
+        "type": "OrchardLimitsV1"
+      }
+    ]
+  },
   "PrivacySecurityClaimDigestV1": "Array<u8, 32>",
   "PrivacySecurityClaimV1": {
     "Struct": [
@@ -24275,7 +24375,7 @@
       },
       {
         "name": "protocol_id",
-        "type": "PrivacyProtocolIdV1"
+        "type": "PrivacyRuntimeProtocolIdV1"
       },
       {
         "name": "security_model",
@@ -24782,7 +24882,7 @@
     "Struct": [
       {
         "name": "protocol_id",
-        "type": "PrivacyProtocolIdV1"
+        "type": "PrivacyRuntimeProtocolIdV1"
       },
       {
         "name": "scheduled_at_height",
@@ -37456,6 +37556,10 @@
       {
         "discriminant": 5,
         "tag": "quarantine_pipeline"
+      },
+      {
+        "discriminant": 6,
+        "tag": "consume_time_progress"
       }
     ]
   },
