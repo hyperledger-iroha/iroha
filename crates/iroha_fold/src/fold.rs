@@ -31,7 +31,7 @@ use crate::{
     logup::{self, compress},
     program::{MAX_POINTS, Point},
     relation::FoldedRelation,
-    transcript::{TAG_ACCUMULATOR, TAG_FOLD, TAG_INSTANCE, Transcript},
+    transcript::{TAG_ACCUMULATOR, TAG_ACCUMULATOR_DIGEST, TAG_FOLD, TAG_INSTANCE, Transcript},
 };
 
 /// A folding instance: commitments to every witness column and the folded public
@@ -93,17 +93,7 @@ impl<'a, F> View<'a, F> {
     }
 }
 
-fn absorb_instance<C: PastaCurve>(transcript: &mut Transcript<C::ScalarExt>, instance: &Instance<C>) {
-    transcript.absorb_u64(instance.commitments.len() as u64);
-    for point in &instance.commitments {
-        transcript.absorb_point(point);
-    }
-    absorb_public::<C>(transcript, &instance.public);
-    transcript.absorb_scalars(&instance.theta);
-    transcript.absorb_scalars(&instance.r);
-}
-
-fn absorb_public<C: PastaCurve>(transcript: &mut Transcript<C::ScalarExt>, public: &[Vec<C::ScalarExt>]) {
+fn absorb_public<C: PastaCurve>(transcript: &mut Transcript<C>, public: &[Vec<C::ScalarExt>]) {
     transcript.absorb_u64(public.len() as u64);
     for column in public {
         transcript.absorb_u64(column.len() as u64);
@@ -111,15 +101,16 @@ fn absorb_public<C: PastaCurve>(transcript: &mut Transcript<C::ScalarExt>, publi
     }
 }
 
-/// The round-one challenges of a fresh instance: `theta` powers and one `r` per
-/// group, from the public columns and the advice and multiplicity commitments.
-fn round_one_challenges<C: PastaCurve>(
+/// Round one of a fresh instance's transcript: the public columns and the advice
+/// and multiplicity commitments, then the `theta` powers and one `r` per group.
+/// The returned transcript continues with the round-two commitments.
+fn round_one<C: PastaCurve>(
     relation: &FoldedRelation<C::ScalarExt>,
     domain: &[u8; 32],
     public: &[Vec<C::ScalarExt>],
     commitments: &[C::AffineExt],
-) -> (Vec<C::ScalarExt>, Vec<C::ScalarExt>) {
-    let mut transcript = Transcript::<C::ScalarExt>::new(TAG_INSTANCE, domain);
+) -> (Transcript<C>, Vec<C::ScalarExt>, Vec<C::ScalarExt>) {
+    let mut transcript = Transcript::<C>::new(TAG_INSTANCE, domain);
     absorb_public::<C>(&mut transcript, public);
     for point in &commitments[..relation.advice_columns] {
         transcript.absorb_point(point);
@@ -135,19 +126,53 @@ fn round_one_challenges<C: PastaCurve>(
         power *= theta;
     }
     let r = relation.groups.iter().map(|_| transcript.challenge()).collect();
-    (powers, r)
+    (transcript, powers, r)
+}
+
+/// Round two: every group's reciprocal and table commitments, then the digest.
+fn round_two_digest<C: PastaCurve>(
+    relation: &FoldedRelation<C::ScalarExt>,
+    mut transcript: Transcript<C>,
+    commitments: &[C::AffineExt],
+) -> C::Base {
+    for group in &relation.groups {
+        for c in (group.m_column() + 1)..=group.g_column() {
+            transcript.absorb_point(&commitments[c]);
+        }
+    }
+    transcript.digest()
 }
 
 impl<C: PastaCurve> Instance<C> {
+    /// The `LogUp` challenges and the digest of this instance's transcript, or
+    /// `None` for a wrong commitment count.
+    #[must_use]
+    pub fn transcript(
+        &self,
+        relation: &FoldedRelation<C::ScalarExt>,
+        domain: &[u8; 32],
+    ) -> Option<(Vec<C::ScalarExt>, Vec<C::ScalarExt>, C::Base)> {
+        if self.commitments.len() != relation.columns() {
+            return None;
+        }
+        let (transcript, theta, r) = round_one::<C>(relation, domain, &self.public, &self.commitments);
+        let digest = round_two_digest::<C>(relation, transcript, &self.commitments);
+        Some((theta, r, digest))
+    }
+
+    /// The digest of a fresh instance whose `LogUp` challenges are its own, or
+    /// `None` when they are not (required of every fresh instance before use).
+    #[must_use]
+    pub fn fresh_digest(&self, relation: &FoldedRelation<C::ScalarExt>, domain: &[u8; 32]) -> Option<C::Base> {
+        let (theta, r, digest) = self.transcript(relation, domain)?;
+        (theta == self.theta && r == self.r).then_some(digest)
+    }
+
     /// Whether the `LogUp` challenges are the transcript's for this instance's
-    /// round-one data (required of every fresh instance before it is used).
+    /// round-one data.
     #[must_use]
     pub fn has_fresh_challenges(&self, relation: &FoldedRelation<C::ScalarExt>, domain: &[u8; 32]) -> bool {
-        if self.commitments.len() != relation.columns() {
-            return false;
-        }
-        let (theta, r) = round_one_challenges::<C>(relation, domain, &self.public, &self.commitments);
-        theta == self.theta && r == self.r
+        self.fresh_digest(relation, domain).is_some()
     }
 
     fn same_shape(&self, other: &Self) -> bool {
@@ -205,7 +230,7 @@ pub fn fresh_instance<C: PastaCurve, R: Rng + CryptoRng>(
         let c = group.m_column();
         commitments[c] = key.commit(&columns[c], &blinds[c])?;
     }
-    let (theta, r) = round_one_challenges::<C>(relation, domain, &public, &commitments);
+    let (_, theta, r) = round_one::<C>(relation, domain, &public, &commitments);
     for (group, rg) in relation.groups.iter().zip(&r) {
         let point = Point { advice: &columns[..relation.advice_columns], instance: &public };
         let (h, g) = logup::reciprocals(group, &tables, point, &columns[group.m_column()], &theta, *rg)?;
@@ -220,9 +245,17 @@ pub fn fresh_instance<C: PastaCurve, R: Rng + CryptoRng>(
     Ok((Instance { commitments, public, theta, r }, Witness { columns, blinds }))
 }
 
+/// The `beta` challenges of an accumulator started from the fresh instance with
+/// digest `digest`.
+fn fresh_beta<C: PastaCurve>(domain: &[u8; 32], digest: C::Base, bits: usize) -> Vec<C::ScalarExt> {
+    let mut transcript = Transcript::<C>::new(TAG_ACCUMULATOR, domain);
+    transcript.absorb_base(&[digest]);
+    (0..bits).map(|_| transcript.challenge()).collect()
+}
+
 impl<C: PastaCurve> Accumulator<C> {
-    /// Starts an accumulator from a fresh instance: `beta` from the transcript after
-    /// the instance, `e = 0`. The instance's own challenges are checked.
+    /// Starts an accumulator from a fresh instance: `beta` from the transcript of
+    /// the instance's digest, `e = 0`. The instance's own challenges are checked.
     ///
     /// # Errors
     /// [`Error::Rejected`] when the instance's `LogUp` challenges are not its own.
@@ -231,13 +264,27 @@ impl<C: PastaCurve> Accumulator<C> {
         domain: &[u8; 32],
         instance: Instance<C>,
     ) -> Result<Self, Error> {
-        if !instance.has_fresh_challenges(relation, domain) {
-            return Err(Error::Rejected("fresh instance challenges"));
-        }
-        let mut transcript = Transcript::<C::ScalarExt>::new(TAG_ACCUMULATOR, domain);
-        absorb_instance(&mut transcript, &instance);
-        let beta = (0..relation.index_bits()).map(|_| transcript.challenge()).collect();
+        let digest = instance
+            .fresh_digest(relation, domain)
+            .ok_or(Error::Rejected("fresh instance challenges"))?;
+        let beta = fresh_beta::<C>(domain, digest, relation.index_bits());
         Ok(Self { instance, beta, e: <C::ScalarExt as Field>::ZERO })
+    }
+
+    /// The accumulator digest: every commitment, public variable, `beta` and `e`.
+    #[must_use]
+    pub fn digest(&self, domain: &[u8; 32]) -> C::Base {
+        let mut transcript = Transcript::<C>::new(TAG_ACCUMULATOR_DIGEST, domain);
+        transcript.absorb_u64(self.instance.commitments.len() as u64);
+        for point in &self.instance.commitments {
+            transcript.absorb_point(point);
+        }
+        absorb_public::<C>(&mut transcript, &self.instance.public);
+        transcript.absorb_scalars(&self.instance.theta);
+        transcript.absorb_scalars(&self.instance.r);
+        transcript.absorb_scalars(&self.beta);
+        transcript.absorb_scalars(&[self.e]);
+        transcript.digest()
     }
 }
 
@@ -498,16 +545,9 @@ struct Challenges<F> {
     gamma: F,
 }
 
-fn fold_transcript<C: PastaCurve>(
-    domain: &[u8; 32],
-    acc: &Accumulator<C>,
-    fresh: &Instance<C>,
-) -> Transcript<C::ScalarExt> {
-    let mut transcript = Transcript::<C::ScalarExt>::new(TAG_FOLD, domain);
-    absorb_instance(&mut transcript, &acc.instance);
-    transcript.absorb_scalars(&acc.beta);
-    transcript.absorb_scalars(&[acc.e]);
-    absorb_instance(&mut transcript, fresh);
+fn fold_transcript<C: PastaCurve>(domain: &[u8; 32], acc: &Accumulator<C>, fresh_digest: C::Base) -> Transcript<C> {
+    let mut transcript = Transcript::<C>::new(TAG_FOLD, domain);
+    transcript.absorb_base(&[acc.digest(domain), fresh_digest]);
     transcript
 }
 
@@ -564,10 +604,10 @@ pub fn fold<C: PastaCurve>(
     if acc.beta.len() != relation.index_bits() {
         return Err(Error::Shape("accumulator beta"));
     }
-    if !fresh.has_fresh_challenges(relation, domain) {
-        return Err(Error::Rejected("fresh instance challenges"));
-    }
-    let mut transcript = fold_transcript(domain, acc, fresh);
+    let fresh_digest = fresh
+        .fresh_digest(relation, domain)
+        .ok_or(Error::Rejected("fresh instance challenges"))?;
+    let mut transcript = fold_transcript(domain, acc, fresh_digest);
     let t = relation.index_bits();
     let delta = delta_powers(transcript.challenge(), t);
     let acc_view = View::of(acc_witness, &acc.instance.public, &acc.instance.theta, &acc.instance.r);
@@ -648,10 +688,10 @@ pub fn verify_fold<C: PastaCurve>(
     if proof.f.len() != t || proof.k.len() != relation.degree - 1 {
         return Err(Error::Shape("fold proof"));
     }
-    if !fresh.has_fresh_challenges(relation, domain) {
-        return Err(Error::Rejected("fresh instance challenges"));
-    }
-    let mut transcript = fold_transcript(domain, acc, fresh);
+    let fresh_digest = fresh
+        .fresh_digest(relation, domain)
+        .ok_or(Error::Rejected("fresh instance challenges"))?;
+    let mut transcript = fold_transcript(domain, acc, fresh_digest);
     let delta = delta_powers(transcript.challenge(), t);
     transcript.absorb_scalars(&proof.f);
     let alpha = transcript.challenge();

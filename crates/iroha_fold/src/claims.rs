@@ -103,7 +103,7 @@ pub fn claim_for<C: PastaCurve>(generators: &[C::AffineExt], u: [C::ScalarExt; R
     Ok(Claim { g: g.to_affine(), u })
 }
 
-fn absorb_claim<C: PastaCurve>(transcript: &mut Transcript<C::ScalarExt>, g: &C::AffineExt, u: &[C::ScalarExt]) {
+fn absorb_claim<C: PastaCurve>(transcript: &mut Transcript<C>, g: &C::AffineExt, u: &[C::ScalarExt]) {
     transcript.absorb_point(g);
     transcript.absorb_scalars(u);
 }
@@ -114,7 +114,7 @@ impl<C: PastaCurve> ClaimAccumulator<C> {
     /// accumulator that [`decide_claims`] rejects.
     #[must_use]
     pub fn from_claim(domain: &[u8; 32], claim: &Claim<C>) -> (Self, Vec<C::ScalarExt>) {
-        let mut transcript = Transcript::<C::ScalarExt>::new(TAG_CLAIM_ACCUMULATOR, domain);
+        let mut transcript = Transcript::<C>::new(TAG_CLAIM_ACCUMULATOR, domain);
         absorb_claim::<C>(&mut transcript, &claim.g, &claim.u);
         let beta = core::array::from_fn(|_| transcript.challenge());
         (
@@ -133,8 +133,8 @@ fn mul_linear<F: Field>(poly: &[F], a: F, b: F) -> Vec<F> {
     out
 }
 
-fn fold_transcript<C: PastaCurve>(domain: &[u8; 32], acc: &ClaimAccumulator<C>, claim: &Claim<C>) -> Transcript<C::ScalarExt> {
-    let mut transcript = Transcript::<C::ScalarExt>::new(TAG_CLAIM_FOLD, domain);
+fn fold_transcript<C: PastaCurve>(domain: &[u8; 32], acc: &ClaimAccumulator<C>, claim: &Claim<C>) -> Transcript<C> {
+    let mut transcript = Transcript::<C>::new(TAG_CLAIM_FOLD, domain);
     absorb_claim::<C>(&mut transcript, &acc.g, &acc.u);
     transcript.absorb_scalars(&acc.beta);
     transcript.absorb_scalars(&[acc.e]);

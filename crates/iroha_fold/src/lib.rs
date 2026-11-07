@@ -19,11 +19,18 @@
 //! test oracle. [`claims`] folds IPA generator claims `(G, u)` as committed tensor
 //! vectors.
 //!
+//! Every transcript of instances committed on a curve runs over that curve's base
+//! field ([`transcript`]), the field of the circuit that folds them in the
+//! two-curve IVC (output `IVC.md`): A circuits over `Fp` fold Q instances
+//! committed on Pallas, Q circuits over `Fq` fold A instances committed on Vesta.
+//! [`circuit`] verifies a fold in such a circuit, bit for bit [`fold::verify_fold`].
+//!
 //! Nothing in this crate is a succinct proof or a zero-knowledge argument: folds
 //! are local to the wallet and leave it only through a compression proof.
 
 #![forbid(unsafe_code)]
 
+pub mod circuit;
 pub mod claims;
 pub mod commit;
 pub mod decide;

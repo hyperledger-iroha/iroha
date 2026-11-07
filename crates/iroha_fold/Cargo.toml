@@ -17,11 +17,11 @@ workspace = true
 [dependencies]
 iroha_pasta = { workspace = true }
 iroha_plonk = { workspace = true }
+iroha_plonk_gadgets = { workspace = true }
 ff = "0.14.0"
 rand_core = { workspace = true }
 
 [dev-dependencies]
 iroha_kagemusha_proof = { workspace = true }
-iroha_plonk_gadgets = { workspace = true }
 group = "0.14.0"
 rand_chacha = "0.10.0"
