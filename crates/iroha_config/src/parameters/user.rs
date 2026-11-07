@@ -29762,12 +29762,26 @@ impl SorafsRepair {
                 defaults::sorafs::repair::WORKER_CONCURRENCY_LIMIT
             )));
         }
-        let source = self.source.map(|source| {
+        let source = self.source.and_then(|source| {
             if !self.enabled || !(100..=120_000).contains(&source.timeout_ms) || !source.credential.is_absolute()
                 || source.origins.is_empty() || source.origins.len() > 16 {
                 emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach("sorafs.repair.source requires enabled repair, an absolute credential path and timeout_ms within 100..=120000"));
             }
-            actual::SorafsRepairSource { authority: source.authority, credential: source.credential, origins: source.origins, timeout_ms: source.timeout_ms }
+            let authority = match AccountId::parse_encoded(&source.authority) {
+                Ok(authority) if authority.to_string() == source.authority => authority,
+                Ok(_) | Err(_) => {
+                    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                        "sorafs.repair.source.authority must be one canonical I105 account literal for the configured chain discriminant",
+                    ));
+                    return None;
+                }
+            };
+            Some(actual::SorafsRepairSource {
+                authority,
+                credential: source.credential,
+                origins: source.origins,
+                timeout_ms: source.timeout_ms,
+            })
         });
         actual::SorafsRepair {
             source,
@@ -29785,8 +29799,9 @@ pub struct SorafsRepairSource {
     /// Provider-id hex to origin allowlist, matched against live signed adverts.
     /// HTTPS is required except for explicitly configured numeric loopback HTTP origins.
     pub origins: std::collections::BTreeMap<String, String>,
-    /// Exact account owning the finalized lease; registered permissions remain authoritative.
-    pub authority: AccountId,
+    /// Canonical I105 account owning the finalized lease, parsed under the node's chain context.
+    /// Registered permissions remain authoritative.
+    pub authority: String,
     /// Absolute path to the owner-only Ed25519 or ML-DSA runtime credential.
     pub credential: PathBuf,
     /// Maximum duration of the complete remote repair operation.
@@ -29858,7 +29873,8 @@ mod sorafs_repair_gc_tests {
             enabled: true,
             source: Some(SorafsRepairSource {
                 origins: [(hex::encode([0x64; 32]), "https://provider.example".into())].into(),
-                authority: iroha_data_model::account::AccountId::new(key.public_key().clone()),
+                authority: iroha_data_model::account::AccountId::new(key.public_key().clone())
+                    .to_string(),
                 credential: PathBuf::from("/private/runtime/repair-credential"),
                 timeout_ms: 60_000,
             }),

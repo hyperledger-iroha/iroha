@@ -638,3 +638,81 @@ fn native_credentials_refuse_windows_relative_unc_device_and_traversal_paths() {
         );
     }
 }
+
+#[test]
+fn native_repair_source_and_all_signers_use_configured_account_context() {
+    use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discriminant};
+    let _caller = ChainDiscriminantGuard::enter(777);
+    for discriminant in [369, 753] {
+        let mut fixtures = complete_role_fixtures();
+        for binding in &mut fixtures {
+            binding.authority = AccountId::new(binding.public_key.clone())
+                .to_i105_for_discriminant(discriminant)
+                .expect("configured account literal");
+        }
+        let source = format!("chain_discriminant = {discriminant}\n")
+            + &complete_source(&fixtures)
+            + &format!(
+                "\n[sorafs.repair.source]\nauthority = {:?}\ncredential = \"/private/runtime/repair-source\"\ntimeout_ms = 60000\n[sorafs.repair.source.origins]\n\"{}\" = \"https://provider.example\"\n",
+                fixtures[1].authority,
+                hex::encode([0x64; 32]),
+            );
+        let actual = parse_overlay(&source).expect("node context applies after config decoding");
+        assert_eq!(chain_discriminant(), 777, "caller context must be restored");
+        assert_eq!(actual.common.chain_discriminant.value(), &discriminant);
+        assert_eq!(
+            actual.torii.sorafs_repair.source.unwrap().authority,
+            AccountId::new(fixtures[1].public_key.clone()),
+        );
+        let bindings = actual.torii.sorafs_storage.native_transaction_signers;
+        for (binding, expected) in [
+            bindings.proof_outcome,
+            bindings.repair,
+            bindings.reserve,
+            bindings.orderbook,
+        ]
+        .into_iter()
+        .zip(&fixtures)
+        {
+            assert_eq!(
+                binding.unwrap().authority,
+                AccountId::new(expected.public_key.clone())
+            );
+        }
+    }
+}
+
+#[test]
+fn native_repair_source_rejects_foreign_and_noncanonical_account_literals() {
+    use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discriminant};
+    let _caller = ChainDiscriminantGuard::enter(777);
+    let mut fixtures = complete_role_fixtures();
+    for binding in &mut fixtures {
+        binding.authority = AccountId::new(binding.public_key.clone())
+            .to_i105_for_discriminant(369)
+            .expect("Taira account literal");
+    }
+    let foreign = AccountId::new(fixtures[1].public_key.clone())
+        .to_i105_for_discriminant(753)
+        .expect("foreign account literal");
+    for authority in [
+        foreign,
+        format!(" {}", fixtures[1].authority),
+        "invalid-account".to_owned(),
+    ] {
+        let source = "chain_discriminant = 369\n".to_owned()
+            + &complete_source(&fixtures)
+            + &format!(
+                "\n[sorafs.repair.source]\nauthority = {authority:?}\ncredential = \"/private/runtime/repair-source\"\ntimeout_ms = 60000\n[sorafs.repair.source.origins]\n\"{}\" = \"https://provider.example\"\n",
+                hex::encode([0x64; 32]),
+            );
+        let error =
+            parse_overlay(&source).expect_err("foreign or noncanonical authority must fail");
+        assert!(error.contains("sorafs.repair.source.authority"), "{error}");
+        assert_eq!(
+            chain_discriminant(),
+            777,
+            "failure must restore caller context"
+        );
+    }
+}
