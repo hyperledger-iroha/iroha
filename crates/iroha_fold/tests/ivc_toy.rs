@@ -14,205 +14,24 @@
 
 use ff::Field;
 use iroha_fold::{
-    Accumulator, CommitKey, FoldedRelation, Instance, Witness,
-    circuit::{
-        FoldVerifierChips, FoldVerifierConfig,
-        ivc::{assert_equal_unless, assert_hash_unless, foreign_bounded_word, foreign_hash_word, ivc_hash},
-        verify::{accumulator_digest, assign_accumulator, assign_instance, assign_proof, verify_fold_or_start},
-    },
+    CommitKey, FoldedRelation,
     decide::{decide, decide_fresh},
-    fold::{FoldProof, fresh_instance},
-    ivc::{self, embed, fold_or_start, placeholder_accumulator, placeholder_instance},
+    fold::fresh_instance,
+    ivc::{self, Fresh, Kept, embed, prepare_step, step_public},
     relation::FoldShape,
 };
-use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve, PastaField};
+use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve};
 use iroha_plonk::{
     check::{CheckMode, check_circuit},
-    cs::{Column, ConstraintSystem, Instance as InstanceColumn},
-    frontend::{Circuit, Error, Layouter, Region, SimpleFloorPlanner, Value, synthesize},
+    frontend::synthesize,
     pcs::ipa::PinnedParams,
 };
-use iroha_plonk_gadgets::Word;
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
 
-const K: u32 = 16;
-/// Fold-transcript domains of the two relations.
-const DOMAIN_Q: [u8; 32] = *b"toy ivc Q relation fold domain!!";
-const DOMAIN_A: [u8; 32] = *b"toy ivc A relation fold domain!!";
-/// IVC-hash domains of the two sides.
-const IVC_Q: [u8; 32] = *b"toy ivc Q side hash domain......";
-const IVC_A: [u8; 32] = *b"toy ivc A side hash domain......";
-/// The segment base (both sides' first state).
-const BASE: u64 = 0x5eed;
+mod common;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Side {
-    Q,
-    A,
-}
-
-impl Side {
-    /// Fold domain of the instances this side folds (the other side's relation).
-    fn fold_domain(self) -> &'static [u8; 32] {
-        match self {
-            Self::Q => &DOMAIN_A,
-            Self::A => &DOMAIN_Q,
-        }
-    }
-    fn ivc_domain(self) -> &'static [u8; 32] {
-        match self {
-            Self::Q => &IVC_Q,
-            Self::A => &IVC_A,
-        }
-    }
-    /// Step index of the side's first instance.
-    fn first(self) -> u64 {
-        match self {
-            Self::Q => 1,
-            Self::A => 2,
-        }
-    }
-}
-
-/// The witness of one step over `C::Base` that folds instances committed on `C`.
-struct StepWitness<C: PastaCurve> {
-    step: u64,
-    state: C::Base,
-    stored: C::Base,
-    acc: Accumulator<C>,
-    fresh: Instance<C>,
-    proof: FoldProof<C::ScalarExt>,
-    passthrough: C::Base,
-}
-
-impl<C: PastaCurve> Clone for StepWitness<C> {
-    fn clone(&self) -> Self {
-        Self {
-            step: self.step,
-            state: self.state,
-            stored: self.stored,
-            acc: self.acc.clone(),
-            fresh: self.fresh.clone(),
-            proof: self.proof.clone(),
-            passthrough: self.passthrough,
-        }
-    }
-}
-
-struct Step<C: PastaCurve> {
-    side: Side,
-    shape: FoldShape,
-    witness: Option<StepWitness<C>>,
-}
-
-#[derive(Clone, Debug)]
-struct Config<C: PastaCurve> {
-    fold: FoldVerifierConfig<C>,
-    instance: Column<InstanceColumn>,
-}
-
-impl<C: PastaCurve> Circuit<C::Base> for Step<C> {
-    type Config = Config<C>;
-    type FloorPlanner = SimpleFloorPlanner;
-    type Params = ();
-
-    fn without_witnesses(&self) -> Self {
-        Self { side: self.side, shape: self.shape.clone(), witness: None }
-    }
-
-    fn configure(meta: &mut ConstraintSystem<C::Base>) -> Config<C> {
-        let fold = FoldVerifierConfig::configure(meta);
-        let instance = meta.instance_column(3);
-        meta.enable_equality(instance);
-        Config { fold, instance }
-    }
-
-    fn synthesize(&self, config: Config<C>, mut layouter: impl Layouter<C::Base>) -> Result<(), Error> {
-        let mut chips = FoldVerifierChips::new(&config.fold);
-        chips.load_tables(&mut layouter)?;
-        let outputs = layouter.assign_region(|| "step", |mut region| self.layout(&mut chips, &mut region))?;
-        for (row, word) in outputs.iter().enumerate() {
-            layouter.constrain_instance(word.cell(), config.instance, row)?;
-        }
-        Ok(())
-    }
-}
-
-impl<C: PastaCurve> Step<C> {
-    fn known<T>(&self, f: impl Fn(&StepWitness<C>) -> T) -> Value<T> {
-        self.witness.as_ref().map_or_else(Value::unknown, |w| Value::known(f(w)))
-    }
-
-    fn layout(&self, chips: &mut FoldVerifierChips<C>, region: &mut Region<'_, C::Base>) -> Result<Vec<Word<C::Base>>, Error> {
-        let one = <C::Base as Field>::ONE;
-        let w = self.witness.as_ref();
-        let step = chips.glue.witness(region, self.known(|w| C::Base::from(w.step)))?;
-        let base = chips.glue.constant(region, C::Base::from(BASE))?;
-        let state = chips.glue.witness(region, self.known(|w| w.state))?;
-        let stored = chips.glue.witness(region, self.known(|w| w.stored))?;
-        let pass_witness = chips.glue.witness(region, self.known(|w| w.passthrough))?;
-        let acc = assign_accumulator(chips, region, &self.shape, w.map(|w| &w.acc))?;
-        let fresh = assign_instance(chips, region, &self.shape, w.map(|w| &w.fresh))?;
-        let proof = assign_proof(chips, region, &self.shape, w.map(|w| &w.proof))?;
-
-        // Flags: the side's first instance, an absent accumulator, and (Q only)
-        // no predecessor at all.
-        let shifted = chips.glue.add_constant(region, &step, -C::Base::from(self.side.first()))?;
-        let first = chips.glue.is_zero(region, &shifted)?;
-        let absent = chips.glue.is_zero(region, &stored)?;
-        let no_predecessor = (self.side == Side::Q).then_some(&first);
-
-        // The first instance starts from the base state.
-        let later = chips.glue.not(region, &first)?;
-        assert_equal_unless(chips, region, &state, &base, Some(&later))?;
-        // The passthrough is this side's previous hash.
-        let previous = chips.glue.add_constant(region, &step, -C::Base::from(2))?;
-        let expected = ivc_hash(chips, region, self.side.ivc_domain(), &previous, &base, &[state.clone()], &stored)?;
-        assert_hash_unless(chips, region, &fresh.public[0][0], &expected, no_predecessor)?;
-        // The kept accumulator is the stored one.
-        let digest = accumulator_digest(chips, region, self.side.fold_domain(), &acc)?;
-        assert_equal_unless(chips, region, &digest, &stored, Some(&absent))?;
-        // Fold the other side's previous instance, or start from it.
-        let folded = verify_fold_or_start(chips, region, &self.shape, self.side.fold_domain(), &acc, &fresh, &proof, &absent)?;
-        let new_digest = accumulator_digest(chips, region, self.side.fold_domain(), &folded)?;
-        let from_fresh = foreign_hash_word(chips, region, &fresh.public[0][1])?;
-        let bridge = foreign_bounded_word(chips, region, &fresh.public[0][2])?;
-        let (out_digest, passthrough) = match no_predecessor {
-            Some(bit) => {
-                let zero = chips.glue.constant(region, <C::Base as Field>::ZERO)?;
-                (
-                    chips.glue.select(region, bit, &zero, &new_digest)?,
-                    chips.glue.select(region, bit, &pass_witness, &from_fresh)?,
-                )
-            }
-            None => (new_digest, from_fresh),
-        };
-        // Toy business: Q doubles and adds one; A adds the square of Q's bridge.
-        let next = match self.side {
-            Side::Q => chips.glue.linear(region, &[(C::Base::from(2), &state)], one)?,
-            Side::A => {
-                let square = chips.glue.mul(region, &bridge, &bridge)?;
-                chips.glue.add(region, &state, &square)?
-            }
-        };
-        let h = ivc_hash(chips, region, self.side.ivc_domain(), &step, &base, &[next], &out_digest)?;
-        Ok(vec![passthrough, h.word, step])
-    }
-}
-
-/// The toy business, natively.
-fn business<F: PastaField>(side: Side, state: F, bridge: F) -> F {
-    match side {
-        Side::Q => state.double() + F::ONE,
-        Side::A => state + bridge.square(),
-    }
-}
-
-/// A fresh instance and its witness.
-type Fresh<C> = (Instance<C>, Witness<<C as PastaCurve>::ScalarExt>);
-/// A kept accumulator and its witness.
-type Kept<C> = (Accumulator<C>, Witness<<C as PastaCurve>::ScalarExt>);
+use common::step::{BASE, DOMAIN_A, DOMAIN_Q, IVC_A, K, Side, Step, business};
 
 /// The two relations: Q steps (over `Fq`, instances committed on Pallas) and A
 /// steps (over `Fp`, instances committed on Vesta).
@@ -275,7 +94,7 @@ struct Chain {
 
 /// Runs one step of side `side` over `C::Base` folding the other side's last
 /// instance (committed on `C`), and returns the step's fresh instance (committed
-/// on `K`).
+/// on `K`) and whether its circuit was satisfied.
 #[allow(clippy::too_many_arguments)]
 fn run_step<C: PastaCurve, K: PastaCurve<ScalarExt = C::Base>>(
     side: Side,
@@ -289,47 +108,21 @@ fn run_step<C: PastaCurve, K: PastaCurve<ScalarExt = C::Base>>(
     lie: bool,
     rng: &mut ChaCha20Rng,
 ) -> (Fresh<K>, bool) {
+    let chain = side.chain();
     let base = C::Base::from(BASE);
-    let stored = me.kept.as_ref().map_or(<C::Base as Field>::ZERO, |(acc, _)| acc.digest(side.fold_domain()));
-    let state = if j == side.first() { base } else { me.state };
+    let state = if j == chain.first_step { base } else { me.state };
     let state = if lie { state + <C::Base as Field>::ONE } else { state };
-    let (fresh, fresh_witness) = match their_last {
-        Some((instance, witness)) => (instance.clone(), witness.clone()),
-        None => (placeholder_instance::<C>(other), Witness { columns: Vec::new(), blinds: Vec::new() }),
-    };
-    let (acc, folded, proof) = if their_last.is_some() {
-        let (acc, witness, proof) =
-            fold_or_start(other, side.fold_domain(), me.kept.as_ref().map(|(a, w)| (a, w)), &fresh, &fresh_witness)
-                .expect("fold");
-        let input = me.kept.as_ref().map_or_else(|| placeholder_accumulator::<C>(other), |(a, _)| a.clone());
-        (input, Some((acc, witness)), proof)
-    } else {
-        let zero = <C::ScalarExt as Field>::ZERO;
-        let proof = FoldProof { f: vec![zero; other.index_bits()], k: vec![zero; other.degree() - 1] };
-        (placeholder_accumulator::<C>(other), None, proof)
-    };
-    let out_digest = folded.as_ref().map_or(<C::Base as Field>::ZERO, |(acc, _)| acc.digest(side.fold_domain()));
     // Q's first instance has no predecessor: its passthrough is A's base hash.
-    let passthrough = match their_last {
-        Some((instance, _)) => embed::<C::ScalarExt, C::Base>(&instance.public[0][1]),
-        None => embed(&ivc::ivc_hash::<Fp>(&IVC_A, 0, Fp::from(BASE), &[Fp::from(BASE)], Fp::ZERO)),
-    };
-    let bridge = their_last.map_or(<C::Base as Field>::ZERO, |(instance, _)| embed(&instance.public[0][2]));
-    let next = business(side, state, bridge);
-    let h = ivc::ivc_hash(side.ivc_domain(), j, base, &[next], out_digest);
-    let public = vec![vec![passthrough, h, C::Base::from(j)]];
-    let circuit = Step::<C> {
-        side,
-        shape: other.shape(),
-        witness: Some(StepWitness { step: j, state, stored, acc, fresh, proof, passthrough }),
-    };
+    let start = embed(&ivc::ivc_hash::<Fp>(&IVC_A, 0, Fp::from(BASE), &[Fp::from(BASE)], Fp::ZERO));
+    let prepared = prepare_step(&chain, j, other, me.kept.as_ref(), their_last, vec![state], start).expect("prepare");
+    let next = business(side, state, prepared.bridge[0]);
+    let public = vec![step_public(&chain, j, base, prepared.passthrough, &[next], prepared.digest, &[C::Base::from(j)])];
+    let circuit = Step::<C> { side, shape: other.shape(), witness: Some(prepared.witness) };
     let satisfied = check_circuit(&circuit, K, &public, CheckMode::Strict).expect("synthesis").is_satisfied();
     let synthesized = synthesize(&circuit, K, Some(&public)).expect("witness");
     let (advice, public) = own.stage_witness(&synthesized).expect("stage witness");
     let instance = fresh_instance(own, own_key, own_domain, advice, public, rng).expect("fresh instance");
-    if let Some(kept) = folded {
-        me.kept = Some(kept);
-    }
+    me.kept = prepared.kept;
     me.state = next;
     (instance, satisfied)
 }

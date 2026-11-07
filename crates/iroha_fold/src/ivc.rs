@@ -118,6 +118,127 @@ pub fn placeholder_accumulator<C: PastaCurve>(relation: &FoldedRelation<C::Scala
     }
 }
 
+/// A fresh instance and its witness.
+pub type Fresh<C> = (Instance<C>, Witness<<C as PastaCurve>::ScalarExt>);
+/// An accumulator and its witness.
+pub type Kept<C> = (Accumulator<C>, Witness<<C as PastaCurve>::ScalarExt>);
+
+/// One side of the chain as its circuits see it (`IVC.md` section 4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChainSide {
+    /// Domain of the IVC hash this side outputs.
+    pub ivc_domain: [u8; 32],
+    /// Fold domain of the other side's relation, whose instances this side folds.
+    pub fold_domain: [u8; 32],
+    /// Step of this side's first instance; the side with `1` starts the chain and
+    /// its first instance has no predecessor.
+    pub first_step: u64,
+}
+
+/// The witness of a step's fold frame
+/// ([`crate::circuit::ivc::fold_frame`]).
+#[derive(Clone, Debug)]
+pub struct FrameWitness<C: PastaCurve> {
+    /// The step index.
+    pub step: u64,
+    /// This side's previous state.
+    pub state: Vec<C::Base>,
+    /// Digest of the accumulator this side keeps, zero while absent.
+    pub stored: C::Base,
+    /// That accumulator (a placeholder while absent).
+    pub acc: Accumulator<C>,
+    /// The other side's previous instance (a placeholder without predecessor).
+    pub fresh: Instance<C>,
+    /// The fold messages (zero when starting or without predecessor).
+    pub proof: FoldProof<C::ScalarExt>,
+    /// The passthrough of an instance without predecessor (otherwise ignored).
+    pub passthrough: C::Base,
+}
+
+/// A step's fold done natively: the frame witness, the accumulator the side
+/// keeps after the step, and the frame's outputs.
+#[derive(Clone, Debug)]
+pub struct PreparedStep<C: PastaCurve> {
+    /// The frame witness of the step circuit.
+    pub witness: FrameWitness<C>,
+    /// The kept accumulator after the step.
+    pub kept: Option<Kept<C>>,
+    /// The other side's bridge values.
+    pub bridge: Vec<C::Base>,
+    /// The passthrough the step outputs.
+    pub passthrough: C::Base,
+    /// The kept accumulator's digest after the step (zero without predecessor).
+    pub digest: C::Base,
+}
+
+/// Prepares the fold frame of step `step` of `side`: folds the other side's last
+/// instance into the kept accumulator (or starts it), as the circuit will.
+/// `start_passthrough` is the passthrough of an instance without predecessor.
+///
+/// # Errors
+/// As [`fold_or_start`]; [`Error::Shape`] for an instance of another shape.
+pub fn prepare_step<C: PastaCurve>(
+    side: &ChainSide,
+    step: u64,
+    other: &FoldedRelation<C::ScalarExt>,
+    kept: Option<&Kept<C>>,
+    their_last: Option<&Fresh<C>>,
+    state: Vec<C::Base>,
+    start_passthrough: C::Base,
+) -> Result<PreparedStep<C>, Error> {
+    let zero_base = <C::Base as Field>::ZERO;
+    let stored = kept.map_or(zero_base, |(acc, _)| acc.digest(&side.fold_domain));
+    let acc = kept.map_or_else(|| placeholder_accumulator::<C>(other), |(acc, _)| acc.clone());
+    let Some((fresh, fresh_witness)) = their_last else {
+        let zero = <C::ScalarExt as Field>::ZERO;
+        let proof = FoldProof { f: vec![zero; other.index_bits()], k: vec![zero; other.degree() - 1] };
+        let witness = FrameWitness {
+            step,
+            state,
+            stored,
+            acc,
+            fresh: placeholder_instance::<C>(other),
+            proof,
+            passthrough: start_passthrough,
+        };
+        return Ok(PreparedStep {
+            witness,
+            kept: kept.cloned(),
+            bridge: vec![zero_base; other.instance_lengths()[0].saturating_sub(2)],
+            passthrough: start_passthrough,
+            digest: zero_base,
+        });
+    };
+    let public = fresh.public.first().ok_or(Error::Shape("passthrough column"))?;
+    if public.len() < 2 {
+        return Err(Error::Shape("passthrough column"));
+    }
+    let (folded, folded_witness, proof) =
+        fold_or_start(other, &side.fold_domain, kept.map(|(a, w)| (a, w)), fresh, fresh_witness)?;
+    let digest = folded.digest(&side.fold_domain);
+    let passthrough = embed(&public[1]);
+    let bridge = public[2..].iter().map(embed).collect();
+    let witness = FrameWitness { step, state, stored, acc, fresh: fresh.clone(), proof, passthrough: start_passthrough };
+    Ok(PreparedStep { witness, kept: Some((folded, folded_witness)), bridge, passthrough, digest })
+}
+
+/// The public inputs a step outputs: `[passthrough, h_out, bridge...]` with
+/// `h_out = ivc_hash(step, base, next, digest)`.
+#[must_use]
+pub fn step_public<F: PastaField + iroha_pasta::poseidon::PoseidonField>(
+    side: &ChainSide,
+    step: u64,
+    base: F,
+    passthrough: F,
+    next: &[F],
+    digest: F,
+    bridge: &[F],
+) -> Vec<F> {
+    let mut out = vec![passthrough, ivc_hash(&side.ivc_domain, step, base, next, digest)];
+    out.extend_from_slice(bridge);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

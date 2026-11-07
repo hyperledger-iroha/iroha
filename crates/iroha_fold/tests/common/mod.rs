@@ -5,6 +5,8 @@
 
 #![allow(dead_code)]
 
+pub mod step;
+
 use iroha_pasta::PastaField;
 use iroha_plonk::{
     cs::{Advice, Column, ConstraintSystem, Expression, Fixed, Instance, Rotation, Selector, TableColumn},

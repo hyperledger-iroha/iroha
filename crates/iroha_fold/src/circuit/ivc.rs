@@ -9,11 +9,17 @@
 
 use ff::{Field, PrimeField};
 use iroha_pasta::PastaCurve;
-use iroha_plonk::frontend::{Error, Region};
+use iroha_plonk::frontend::{Error, Region, Value};
 use iroha_plonk_gadgets::{Bit, GlueChip, U128, Uint, Word, ff::CanonicalS6};
 
-use super::{FoldVerifierChips, ScalarCell, transcript as t};
-use crate::ivc::{HASH_BITS, TAG_IVC};
+use super::{
+    FoldVerifierChips, ScalarCell, transcript as t,
+    verify::{accumulator_digest, assign_accumulator, assign_instance, assign_proof, verify_fold_or_start},
+};
+use crate::{
+    ivc::{ChainSide, FrameWitness, HASH_BITS, TAG_IVC},
+    relation::FoldShape,
+};
 
 /// Bits of the high limb of a truncated hash.
 const HIGH_BITS: usize = HASH_BITS as usize - 128;
@@ -140,4 +146,109 @@ pub fn foreign_bounded_word<C: PastaCurve>(
 ) -> Result<Word<C::Base>, Error> {
     chips.glue.enforce_constant(region, value.s6.hi().word(), C::Base::ZERO)?;
     Ok(value.s6.lo().word().clone())
+}
+
+/// The constrained fold frame of one step: the step index, the base, whether
+/// this is the side's first instance, the side's previous state, the other
+/// side's bridge, the passthrough to output and the kept accumulator's digest.
+#[derive(Clone, Debug)]
+pub struct Frame<F: iroha_pasta::PastaField> {
+    /// The step index.
+    pub step: Word<F>,
+    /// The segment base (a circuit constant).
+    pub base: Word<F>,
+    /// One on the side's first instance; the business checks its base rule there.
+    pub first: Bit<F>,
+    /// The side's previous state, authenticated by the passthrough check.
+    pub state: Vec<Word<F>>,
+    /// The other side's bridge values as native words.
+    pub bridge: Vec<Word<F>>,
+    /// The passthrough this step outputs.
+    pub passthrough: Word<F>,
+    /// The kept accumulator's digest after the step.
+    pub digest: Word<F>,
+}
+
+/// The fold frame of a step of `side` (`IVC.md` section 4): checks that the
+/// other side's previous instance passes through this side's previous hash
+/// (`H(step - 2, base, state, stored)`), that the kept accumulator is the stored
+/// one, folds the instance into it (or starts it), and reads the instance's
+/// `h_out` (the passthrough to output) and bridge. The other side's frame
+/// column is its relation's first instance column, `[passthrough, h_out,
+/// bridge...]`. On the first instance of the side that starts the chain there is
+/// no predecessor: the checks are skipped, the digest is zero and the
+/// passthrough is the witness's.
+///
+/// # Errors
+/// Layout errors, or a witness of another shape.
+pub fn fold_frame<C: PastaCurve>(
+    chips: &mut FoldVerifierChips<C>,
+    region: &mut Region<'_, C::Base>,
+    side: &ChainSide,
+    shape: &FoldShape,
+    base: C::Base,
+    state_len: usize,
+    witness: Option<&FrameWitness<C>>,
+) -> Result<Frame<C::Base>, Error> {
+    if witness.is_some_and(|w| w.state.len() != state_len) || shape.instance_lengths.first().is_none_or(|len| *len < 2) {
+        return Err(Error::Synthesis);
+    }
+    let known = |f: &dyn Fn(&FrameWitness<C>) -> C::Base| witness.map_or_else(Value::unknown, |w| Value::known(f(w)));
+    let step = chips.glue.witness(region, known(&|w| C::Base::from(w.step)))?;
+    let base = chips.glue.constant(region, base)?;
+    let mut state = Vec::with_capacity(state_len);
+    for i in 0..state_len {
+        state.push(chips.glue.witness(region, known(&|w| w.state[i]))?);
+    }
+    let stored = chips.glue.witness(region, known(&|w| w.stored))?;
+    let pass_witness = chips.glue.witness(region, known(&|w| w.passthrough))?;
+    let acc = assign_accumulator(chips, region, shape, witness.map(|w| &w.acc))?;
+    let fresh = assign_instance(chips, region, shape, witness.map(|w| &w.fresh))?;
+    let proof = assign_proof(chips, region, shape, witness.map(|w| &w.proof))?;
+
+    let shifted = chips.glue.add_constant(region, &step, -C::Base::from(side.first_step))?;
+    let first = chips.glue.is_zero(region, &shifted)?;
+    let absent = chips.glue.is_zero(region, &stored)?;
+    let no_predecessor = (side.first_step == 1).then(|| first.clone());
+
+    let previous = chips.glue.add_constant(region, &step, -C::Base::from(2))?;
+    let expected = ivc_hash(chips, region, &side.ivc_domain, &previous, &base, &state, &stored)?;
+    let frame_column = &fresh.public[0];
+    assert_hash_unless(chips, region, &frame_column[0], &expected, no_predecessor.as_ref())?;
+    let digest = accumulator_digest(chips, region, &side.fold_domain, &acc)?;
+    assert_equal_unless(chips, region, &digest, &stored, Some(&absent))?;
+    let folded = verify_fold_or_start(chips, region, shape, &side.fold_domain, &acc, &fresh, &proof, &absent)?;
+    let new_digest = accumulator_digest(chips, region, &side.fold_domain, &folded)?;
+    let from_fresh = foreign_hash_word(chips, region, &frame_column[1])?;
+    let mut bridge = Vec::with_capacity(frame_column.len() - 2);
+    for value in &frame_column[2..] {
+        bridge.push(foreign_bounded_word(chips, region, value)?);
+    }
+    let (digest, passthrough) = match &no_predecessor {
+        Some(bit) => {
+            let zero = chips.glue.constant(region, <C::Base as Field>::ZERO)?;
+            (chips.glue.select(region, bit, &zero, &new_digest)?, chips.glue.select(region, bit, &pass_witness, &from_fresh)?)
+        }
+        None => (new_digest, from_fresh),
+    };
+    Ok(Frame { step, base, first, state, bridge, passthrough, digest })
+}
+
+/// The frame column a step outputs: `[passthrough, h_out, bridge...]` with
+/// `h_out = H(step, base, next, digest)`, as [`crate::ivc::step_public`].
+///
+/// # Errors
+/// Layout errors.
+pub fn frame_outputs<C: PastaCurve>(
+    chips: &mut FoldVerifierChips<C>,
+    region: &mut Region<'_, C::Base>,
+    side: &ChainSide,
+    frame: &Frame<C::Base>,
+    next: &[Word<C::Base>],
+    bridge: &[Word<C::Base>],
+) -> Result<Vec<Word<C::Base>>, Error> {
+    let h = ivc_hash(chips, region, &side.ivc_domain, &frame.step, &frame.base, next, &frame.digest)?;
+    let mut out = vec![frame.passthrough.clone(), h.word];
+    out.extend(bridge.iter().cloned());
+    Ok(out)
 }
