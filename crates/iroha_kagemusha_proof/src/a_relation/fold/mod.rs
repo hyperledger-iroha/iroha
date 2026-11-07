@@ -18,7 +18,7 @@ use core::fmt;
 use ff::PrimeField;
 use iroha_pasta::{Ep, Eq, Fp, Fq};
 use iroha_plonk::{
-    cs::{Column, ConstraintSystem, Instance, InstanceType},
+    cs::{Column, ConstraintSystem, Instance},
     frontend::{Error as SynthesisError, Region, Value},
 };
 use iroha_plonk_gadgets::{
@@ -123,24 +123,6 @@ impl Assign {
         let low = chip.uint().assign::<128>(region, self.value(low))?;
         let high = chip.uint().assign::<127>(region, self.value(high))?;
         ScalarCells::from_limbs(&mut chip.uint(), region, &low, &high)
-    }
-
-    /// A Q instance value of the declared type, as today's stages assign it: a
-    /// bounded or narrow value keeps its injective native word.
-    pub(crate) fn q_instance(
-        self,
-        chip: &mut VerifierChip<Ep>,
-        region: &mut Region<'_, Fp>,
-        value: Fq,
-        ty: InstanceType,
-    ) -> Result<ScalarCells<Ep>, SynthesisError> {
-        if matches!(ty, InstanceType::Bounded | InstanceType::Bits(0..=253)) {
-            let native = Option::<Fp>::from(Fp::from_repr(value.to_repr())).ok_or(SynthesisError::Synthesis)?;
-            let word = chip.uint().glue().witness(region, self.value(native))?;
-            ScalarCells::from_native_word(&mut chip.uint(), region, &word)
-        } else {
-            self.scalar(chip, region, value)
-        }
     }
 
     /// A full-k16 Pallas claim.

@@ -548,9 +548,10 @@ struct TapedProof {
 }
 
 /// The incoming slot of the folded lineage's Q step (`crate::fold_lineage`):
-/// Q0's public columns with the selected claim where today's folded part is,
-/// and the selected claim itself, which the step folds into its claim
-/// accumulator.
+/// Q0's public columns and the selected claim, which the step folds into its
+/// own claim accumulator. It forwards no claim to A, so the part columns
+/// (today's locally folded Vesta part) carry the pinned trivial k16 claim,
+/// which A's owners shape-check as they do today's part.
 pub(crate) struct FoldIncomingCells {
     pub(crate) columns: [Vec<Word<Fq>>; 5],
     pub(crate) selected: FoldInputCells<Eq>,
@@ -591,26 +592,19 @@ impl QSigmaCircuit {
         let selected = FoldInputCells::select_incoming(chip, region, &slot.claim, &corrected, &mode)?;
         let mut statements = vec![slot.statement];
         statements.extend(slot.chunks);
-        for challenge in selected.challenges() {
-            let word = match challenge.native_word() {
-                Some(word) => word.clone(),
-                None => chip.uint().glue().linear(
-                    region,
-                    &[(Fq::ONE, challenge.lo().word()), (Fq::from(2).pow_vartime([128]), challenge.hi().word())],
-                    Fq::ZERO,
-                )?,
-            };
-            statements.push(word);
-        }
+        let one = chip.uint().glue().constant(region, Fq::ONE)?;
+        statements.extend(core::iter::repeat_n(one, K));
+        let trivial = chip.constant_generator(region, &self.plan.trivial)?;
+        let source_k = chip.uint().glue().constant(region, Fq::from(16))?;
         let mut verdicts = vec![slot.valid];
         verdicts.extend(modes);
         Ok(FoldIncomingCells {
             columns: [
                 statements,
-                vec![selected.g().x().clone(), selected.g().y().clone()],
+                vec![trivial.x().clone(), trivial.y().clone()],
                 vec![slot.index],
                 verdicts,
-                vec![selected.source_k().clone()],
+                vec![source_k],
             ],
             selected,
         })

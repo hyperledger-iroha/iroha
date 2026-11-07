@@ -511,8 +511,10 @@ impl QSigmaPlan {
 }
 
 /// The incoming slot prepared for the folded lineage's Q step
-/// (`crate::fold_lineage`): Q0's circuit and witness, its public columns with
-/// the selected claim where today's folded part is, and that claim.
+/// (`crate::fold_lineage`): Q0's circuit and witness, its public columns (the
+/// part columns carry the pinned trivial k16 claim, since the step forwards no
+/// claim to A) and the selected claim the step folds into its own claim
+/// accumulator.
 #[derive(Clone, Debug)]
 pub struct FoldedQSigma {
     /// The leaf circuit (its local fold witness is unused).
@@ -569,8 +571,8 @@ impl QSigmaPlan {
         };
         let mut statements = vec![scalar(input.sigma.statement)];
         statements.extend(chunks(&input.sigma));
-        statements.extend(selected.challenges().iter().copied().map(scalar));
-        let (x, y) = iroha_plonk::transcript::generator_coordinates::<Eq>(selected.g());
+        statements.extend(trivial.challenges().iter().copied().map(scalar));
+        let (x, y) = iroha_plonk::transcript::generator_coordinates::<Eq>(trivial.g());
         let mut verdicts = vec![Fq::from(u64::from(valid))];
         verdicts.extend(input.mode.bits().map(|bit| Fq::from(u64::from(bit))));
         let instances = vec![
@@ -578,7 +580,7 @@ impl QSigmaPlan {
             vec![x, y],
             vec![Fq::from(u64::from(index))],
             verdicts,
-            vec![Fq::from(u64::from(selected.source_k()))],
+            vec![Fq::from(u64::from(trivial.as_input().source_k()))],
         ];
         let witness = QSigmaWitness {
             own: None,

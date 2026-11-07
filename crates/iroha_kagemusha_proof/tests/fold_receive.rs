@@ -100,7 +100,7 @@ const K: u32 = 16;
 /// A circuit whose only content is public columns of the given lengths: its key
 /// is a descriptor of a Q leaf or Omega program for the plan's schema.
 #[derive(Clone)]
-struct Export(Vec<usize>);
+struct Export(Vec<usize>, Option<Vec<Fq>>);
 
 impl Circuit<Fq> for Export {
     type Config = (GlueConfig, Vec<Column<Instance>>);
@@ -133,7 +133,11 @@ impl Circuit<Fq> for Export {
         let mut glue = GlueChip::new(config);
         let words = layouter.assign_region(
             || "descriptor export",
-            |mut region| (0..self.0.iter().sum::<usize>()).map(|_| glue.witness(&mut region, Value::unknown())).collect::<Result<Vec<_>, _>>(),
+            |mut region| {
+                (0..self.0.iter().sum::<usize>())
+                    .map(|i| glue.witness(&mut region, self.1.as_ref().map_or_else(Value::unknown, |v| Value::known(v[i]))))
+                    .collect::<Result<Vec<_>, _>>()
+            },
         )?;
         let mut offset = 0;
         for (column, len) in public.into_iter().zip(&self.0) {
@@ -148,7 +152,7 @@ impl Circuit<Fq> for Export {
 
 fn export_plan(params: &PinnedParams<Ep>, lengths: Vec<usize>, types: Vec<InstanceType>) -> (VerifierPlan<Ep>, iroha_plonk::VerifyingKey<Ep>) {
     let (binding, key) =
-        keygen_vk_with_binding_v2(params, &Export(lengths), &KeygenConfigV2::pipa_r(types)).expect("descriptor key");
+        keygen_vk_with_binding_v2(params, &Export(lengths, None), &KeygenConfigV2::pipa_r(types)).expect("descriptor key");
     (VerifierPlan::new(binding, params.clone()).expect("verifier plan"), key)
 }
 
@@ -183,24 +187,29 @@ fn sigma_plan() -> QSigmaPlan {
 /// Today's Receive schedule over descriptor keys, pinned for folding.
 fn plan() -> Arc<ReceiveFoldPlan> {
     let params = PinnedParams::<Ep>::derive(16).expect("params");
+    let (omega, omega_key) = export_plan(
+        &params,
+        vec![1, 2, 16],
+        vec![InstanceType::Bounded, InstanceType::Field, InstanceType::Bounded],
+    );
+    plan_with(sigma_plan(), omega, omega_key)
+}
+
+/// The Receive schedule over `sigma` and the Omega program `omega`.
+fn plan_with(sigma: QSigmaPlan, omega: VerifierPlan<Ep>, omega_key: iroha_plonk::VerifyingKey<Ep>) -> Arc<ReceiveFoldPlan> {
+    let params = PinnedParams::<Ep>::derive(16).expect("params");
     let policy = OwnPolicy::new([31, 32], bootstrap_objects::key(23)).expect("policy");
-    let sigma = sigma_plan();
     let (verifier, key) = export_plan(&params, sigma.instance_lengths().to_vec(), QSigmaPlan::instance_types().to_vec());
     let q0 = QProofPlan::new(verifier, key).expect("Q0 plan");
     let schema = ReceiveStagePlan::signature_schema_for(Variant::Receive, policy).expect("schema");
     let (verifier, key) = export_plan(&params, vec![schema.instance_length()], QSignaturePlan::instance_types().to_vec());
     let q1 = QProofPlan::new(verifier, key).expect("Q1 plan");
-    let (omega, _) = export_plan(
-        &params,
-        vec![1, 2, 16],
-        vec![InstanceType::Bounded, InstanceType::Field, InstanceType::Bounded],
-    );
     let operation = AProofPlan::inline_with_incoming(Variant::Receive, sigma, vec![q0, q1], Some(omega), &params)
         .expect("operation");
     let specs = ReceiveStagePlan::context_specs(Variant::Receive, MAX_OMEGA_RAW_BYTES, MAX_SIGMA_RAW_BYTES).expect("specs");
     let context = OperationSchedule::for_variant(Variant::Receive).bind(operation, specs).expect("schedule");
     let stage = ReceiveStagePlan::new(context, policy).expect("stage plan");
-    Arc::new(ReceiveFoldPlan::new(stage, policy).expect("fold plan"))
+    Arc::new(ReceiveFoldPlan::new(stage, policy, omega_key).expect("fold plan"))
 }
 
 /// The genuine Receive transition of today's map component test.
@@ -282,19 +291,6 @@ fn source(plan: &ReceiveFoldPlan, valid: bool, insert: bool) -> ReceiveFoldSourc
             }
         })
         .collect();
-    let q = core::array::from_fn(|index| {
-        context
-            .operation()
-            .q(index)
-            .expect("Q plan")
-            .verifier()
-            .binding()
-            .descriptor()
-            .instance_lengths
-            .iter()
-            .map(|n| vec![Fq::ZERO; *n as usize])
-            .collect()
-    });
     ReceiveFoldSource::new(
         plan,
         Transition {
@@ -309,7 +305,6 @@ fn source(plan: &ReceiveFoldPlan, valid: bool, insert: bool) -> ReceiveFoldSourc
         fixture.step,
         objects,
         commitments,
-        q,
         incoming(valid, send.before.lineage),
     )
     .expect("genuine source")
@@ -1007,8 +1002,6 @@ fn signed_source(plan: &ReceiveFoldPlan, valid: bool, insert: bool) -> (ReceiveF
         signed.signature
     };
     let signatures = vec![own_receipt.signature, send_receipt.signature, request_signature];
-    let schema = plan.stage().signature_schema(ReceiveStagePlan::SIGNATURE_Q).expect("schema");
-    let [q1] = schema.native_instances(&signatures).expect("Q1 columns");
     let objects: [Vec<u8>; 9] = [
         request,
         payer_credential,
@@ -1043,17 +1036,6 @@ fn signed_source(plan: &ReceiveFoldPlan, valid: bool, insert: bool) -> (ReceiveF
             _ => unreachable!("nine fixed slots"),
         })
         .collect();
-    let q0 = context
-        .operation()
-        .q(0)
-        .expect("Q0 plan")
-        .verifier()
-        .binding()
-        .descriptor()
-        .instance_lengths
-        .iter()
-        .map(|n| vec![Fq::ZERO; *n as usize])
-        .collect();
     let source = ReceiveFoldSource::new(
         plan,
         Transition {
@@ -1068,7 +1050,6 @@ fn signed_source(plan: &ReceiveFoldPlan, valid: bool, insert: bool) -> (ReceiveF
         fixture.step,
         objects,
         commitments,
-        [q0, vec![q1]],
         incoming(valid, send.before.lineage),
     )
     .expect("genuine signed source");
@@ -1122,18 +1103,20 @@ fn folded_a4_authorizes_the_own_receipt_and_checks_incoming_signatures() {
         let segment = signature_segment(&rel, &plan, &genuine, &signatures, &base);
         assert!(satisfied(&segment.circuit, &segment.public), "valid={valid} insert={insert}");
         // Another own receipt byte, Request byte or Send receipt byte breaks a
-        // signed digest the context or Q1 holds; a context Q1 column other than
-        // the folded instance's, or another program counter, is refused.
+        // signed digest the context or Q1 holds, and another program counter
+        // is refused.
         for (case, index, offset) in [("own receipt", 6, 40), ("Request", 0, 10), ("Send receipt", 2, 40)] {
             let mut source = genuine.clone();
             source.objects[index][offset] ^= 1;
             let segment = signature_segment(&rel, &plan, &source, &signatures, &base);
             assert!(!satisfied(&segment.circuit, &segment.public), "valid={valid}: A4 accepted another {case}");
         }
-        let mut source = genuine.clone();
-        source.q[1][0][9] = Fq::ZERO;
-        let segment = signature_segment(&rel, &plan, &source, &signatures, &base);
-        assert!(!satisfied(&segment.circuit, &segment.public), "valid={valid}: A4 accepted Q1 columns the Q step did not fold");
+        // Signatures over other messages: the Q step exports them, and A4's
+        // owners refuse slots that do not sign the context's objects.
+        let mut other = signatures.clone();
+        other[0] = p256_signature(0x7777, 43, 0x99);
+        let segment = signature_segment(&rel, &plan, &genuine, &other, &base);
+        assert!(!satisfied(&segment.circuit, &segment.public), "valid={valid}: A4 accepted a Q1 that signs other messages");
         let mut wrong = base.clone();
         wrong[A_PC] = Fp::ONE;
         let segment = signature_segment(&rel, &plan, &genuine, &signatures, &wrong);
@@ -1153,4 +1136,258 @@ fn folded_a4_authorizes_the_own_receipt_and_checks_incoming_signatures() {
     let decider = iroha_fold::decider_v2::DeciderV2Plan::new(relation.clone(), &key).expect("decider plan");
     let (_, keys, copy_columns, _) = decider.sizes();
     eprintln!("FOLD_RECEIVE_A4 rows={rows:?} relation={:?} decider_keys={keys} copy_columns={copy_columns}", relation.summary());
+}
+
+/// The 320 public bytes of a lineage's Omega transport.
+fn public_bytes(fields: &[Fp; 18]) -> Vec<u8> {
+    use ff::PrimeField;
+    let mut out = 1u16.to_le_bytes().to_vec();
+    for i in [1, 2, 3, 4] {
+        out.extend(&fields[i].to_repr()[..16]);
+    }
+    out.extend(fields[5].to_repr());
+    for i in [6, 7] {
+        out.extend(&fields[i].to_repr()[..16]);
+    }
+    out.extend(fields[8].to_repr());
+    out.push(4);
+    for i in [10, 9, 12, 11] {
+        out.extend(fields[i].to_repr()[..16].iter().rev());
+    }
+    out.extend(&fields[13].to_repr()[..13]);
+    out.extend(&fields[14].to_repr()[..16]);
+    out.extend(fields[15].to_repr());
+    out.extend(fields[16].to_repr());
+    assert_eq!(out.len(), 320);
+    out
+}
+
+/// A complete genuine Receive for A3: a real Send sigma (and the incoming-only
+/// plan over its verifier), the payer's Omega under a descriptor key (a proof
+/// of the Omega profile's public columns, with D_A over the payer's lineage
+/// and trivial transported claims), today's transport bytes, the Send
+/// receipt, Payment, Request and credentials over those tapes, Q0's folded
+/// columns and Q1's signatures.
+struct FullReceive {
+    plan: Arc<ReceiveFoldPlan>,
+    source: ReceiveFoldSource,
+    sigma: iroha_kagemusha_proof::q_sigma::native::FoldedQSigma,
+}
+
+fn full_receive() -> FullReceive {
+    use ff::PrimeField;
+    use iroha_kagemusha_proof::operation_relation::objects::ObjectKind;
+    let params = PinnedParams::<Ep>::derive(16).expect("params");
+    let vparams = common::vesta_params(16);
+    let (payer, _, _) = bootstrap_objects::enrollment();
+    let (loaded, _, _) = load_objects::funded(&payer);
+    let send = send_objects::from_load(&loaded.successor);
+    // The incoming Send sigma and the plan over its verifier.
+    let prover = SigmaProver::<Eq>::keygen_with_params(
+        common::pinned_shape(common::folded(SigmaRelation::SEND), (12, 1)),
+        common::vesta_params(12),
+    )
+    .expect("sigma key");
+    let proof = prover.prove(&send.step, common::fresh_randomness()).expect("sigma proof");
+    let sigma_plan = QSigmaPlan::incoming_only(
+        SigmaClass::from_verifiers(&[(sigma_selector(3, 0).expect("selector"), &prover.verifier())]).expect("class"),
+        &vparams,
+    )
+    .expect("sigma plan");
+    let sigma_tape = proof.bytes.clone();
+    let sigma_witness = SigmaSlotWitness {
+        key: prover.proving_key().vk().clone(),
+        statement: proof.public.instance()[0],
+        length: sigma_tape.len().try_into().expect("length"),
+        proof: sigma_tape.clone(),
+    };
+    // The Omega program and the payer's Omega proof.
+    let lengths = vec![1, 2, 16];
+    let config = KeygenConfigV2::pipa_r(vec![InstanceType::Bounded, InstanceType::Field, InstanceType::Bounded]);
+    let omega_pk = iroha_plonk::keys::keygen_pk_v2(&params, &Export(lengths.clone(), None), &config).expect("Omega key");
+    let omega_plan = VerifierPlan::new(omega_pk.binding().clone(), params.clone()).expect("Omega plan");
+    let omega_digest = omega_pk.vk().kagemusha_digest(omega_pk.binding()).expect("key digest");
+    let plan = plan_with(sigma_plan.clone(), omega_plan.clone(), omega_pk.vk().clone());
+    let mut payer_lineage = send.before.lineage;
+    payer_lineage[17] = omega_digest;
+    let (p, v) = trivial_claims();
+    let acc_p = AccumulatorT::new(*p.g(), *p.challenges()).expect("claim");
+    let acc_v = v;
+    let mut words = payer_lineage.to_vec();
+    let (x, y) = iroha_plonk::transcript::generator_coordinates::<Ep>(acc_p.g());
+    words.extend([x, y]);
+    for challenge in acc_p.challenges() {
+        words.extend(iroha_plonk_gadgets::statement::foreign_limbs(challenge).map(Fp::from_u128));
+    }
+    let d_a = hash_with_domain(iroha_kagemusha_proof::a_relation::LINEAGE_DOMAIN, &words);
+    let (vx, vy) = iroha_plonk::transcript::generator_coordinates::<Eq>(acc_v.g());
+    let omega_instances = vec![
+        vec![Fq::from_repr(d_a.to_repr()).expect("D_A fits")],
+        vec![vx, vy],
+        acc_v.challenges().iter().map(|c| Fq::from_repr(c.to_repr()).expect("challenge fits")).collect::<Vec<_>>(),
+    ];
+    let values = omega_instances.iter().flatten().copied().collect::<Vec<_>>();
+    let output = iroha_plonk::create_proof_owned_with_claim(
+        &params,
+        &omega_pk,
+        iroha_plonk::Witness::from_circuit(&omega_pk, &Export(lengths, Some(values)), &omega_instances).expect("witness"),
+        common::fresh_randomness(),
+        iroha_plonk::ProverConfig::default(),
+    )
+    .expect("Omega proof");
+    let claim = iroha_plonk::verifier::accumulate_generator(
+        &params,
+        omega_pk.binding(),
+        omega_pk.vk(),
+        &omega_instances,
+        &output.proof,
+        iroha_pasta::msm::MemoryBudget::DEFAULT,
+    )
+    .expect("Omega verifies");
+    let opening = FoldInput::from_opening(*claim.g(), claim.challenges()).expect("opening");
+    let mut omega_tape = public_bytes(&payer_lineage);
+    omega_tape.extend(&output.proof);
+    omega_tape.extend(acc_p.to_bytes());
+    omega_tape.extend(acc_v.to_bytes());
+    // The Send package over both tapes, then the own transition and receipts.
+    let proof_digest = p_bytes_native(u64::from_le_bytes(*b"kgwprf_1"), &[framed(&omega_tape), framed(&sigma_tape)].concat());
+    let send_receipt = receipt(&send.statement, &send.before.lineage[6..8], proof_digest, Fp::ZERO, 29, 71);
+    let request = send.objects[1].clone();
+    let payer_credential = send.objects[0].clone();
+    let payment = payment_transcript(&request, &payer_credential, &send.statement, proof_digest, send_receipt.digest());
+    let payment_digest = p_bytes_native(u64::from_le_bytes(*b"kgwpay_1"), &payment);
+    let (receiver, certificate, credential) = bootstrap_objects::enrollment_for(bootstrap_objects::Identity::Receiver);
+    let before = StateWitness::from(&receiver);
+    let mut fixture = receive_objects::from_send(&send, &before, payment_digest, true, true);
+    fixture.before.lineage[17] = omega_digest;
+    fixture.after.lineage[17] = omega_digest;
+    let own_proof = p_bytes_native(u64::from_le_bytes(*b"kgwstep1"), &framed(b"retained own sigma"));
+    let own_receipt = receipt(&fixture.statement, &before.lineage[6..8], own_proof, payment_digest, 43, 73);
+    let folded = sigma_plan
+        .prepare_folded(IncomingSigma { sigma: sigma_witness, mode: IncomingMode::Accept }, &vparams, &FoldConfig::default())
+        .expect("Q0 columns");
+    let objects: [Vec<u8>; 9] =
+        [request, payer_credential, send_receipt.bytes, payment, omega_tape, sigma_tape, own_receipt.bytes, credential.bytes, certificate.bytes];
+    let kinds = [
+        Some(ObjectKind::Request),
+        Some(ObjectKind::Credential),
+        Some(ObjectKind::Receipt),
+        None,
+        None,
+        None,
+        Some(ObjectKind::Receipt),
+        Some(ObjectKind::Credential),
+        Some(ObjectKind::Certificate),
+    ];
+    let sigma_digest = p_bytes_native(u64::from_le_bytes(*b"kgwstep1"), &framed(&objects[5]));
+    let specs = plan.stage().context().object_specs();
+    let commitments = specs
+        .iter()
+        .enumerate()
+        .map(|(i, spec)| match (i, kinds[i]) {
+            (_, Some(kind)) => exact_commitment(*spec, signed_digest(kind, &objects[i]), &objects[i]),
+            (3, None) => exact_commitment(*spec, payment_digest, &objects[i]),
+            (4, None) => active_commitment(*spec, proof_digest, &objects[i]),
+            (5, None) => active_commitment(*spec, sigma_digest, &objects[i]),
+            _ => unreachable!("nine fixed slots"),
+        })
+        .collect();
+    let incoming = IncomingWitness {
+        public: payer_lineage,
+        public_valid: true,
+        pallas: acc_p,
+        vesta: acc_v.clone(),
+        opening,
+        results: [true; 4],
+        modes: [IncomingMode::Accept; 4],
+        pallas_corrections: [*p.g(); 2],
+        vesta_correction: *acc_v.g(),
+    };
+    let source = ReceiveFoldSource::new(
+        &plan,
+        Transition {
+            before: fixture.before,
+            after: fixture.after,
+            statement: fixture.statement,
+            consumed: fixture.consumed,
+            credit: fixture.credit,
+            insert: fixture.insert,
+        },
+        send.statement,
+        fixture.step,
+        objects,
+        commitments,
+        incoming,
+    )
+    .expect("genuine full source");
+    FullReceive { plan, source, sigma: folded }
+}
+
+/// The segment `Q sigma (step 1), A3 (step 2)` from the A state `base`: the Q
+/// step verifies the real sigma and starts Q's claim accumulator.
+fn sigma_segment(rel: &Relations, full: &FullReceive, source: &ReceiveFoldSource, base: &[Fp]) -> Segment {
+    let mut rng = ChaCha20Rng::seed_from_u64(43);
+    let plan = &full.plan;
+    let start = start_passthrough(base);
+    let q_chain = QKind::Sigma.chain(AKind::Receive1);
+    let prepared =
+        prepare_step(&q_chain, 1, &rel.a1, None, None, vec![], vec![Fq::ZERO; Q_DIGESTS], start).expect("prepare Q");
+    let (claims, _, claim_proof) = fold_selected(None, &full.sigma.selected).expect("claim start");
+    let mut digests = prepared.digests.clone();
+    digests[Q_CLAIM_SLOT] = claims.digest(&CLAIM_Q);
+    let mut public = vec![step_public(&q_chain, 1, Fq::from(BASE), prepared.passthrough, &[], &digests, &[])];
+    public.extend(full.sigma.instances.clone());
+    let step = QSigmaStep {
+        leaf: full.sigma.circuit.clone(),
+        shape: rel.a1.shape(),
+        start,
+        witness: Some(QSigmaStepWitness { frame: prepared.witness, selected: full.sigma.selected.clone(), claims: None, claim_proof }),
+    };
+    let q = FoldedRelation::<Fq>::from_synthesized(&synthesize(&step.without_witnesses(), K, None).expect("Q layout"))
+        .expect("Q sigma relation");
+    assert!(check_circuit(&step, K, &public, CheckMode::Strict).expect("Q synthesis").is_satisfied());
+    let (advice, public) = q.stage_witness(&synthesize(&step, K, Some(&public)).expect("Q witness")).expect("stage");
+    let fresh = fresh_instance(&q, &rel.key_q, &FOLD_Q, advice, public, &mut rng).expect("Q instance");
+    let kind = AKind::Receive3;
+    let a_chain = kind.chain();
+    let prepared = prepare_step(&a_chain, 2, &q, None, Some(&fresh), base.to_vec(), vec![Fp::ZERO; A_DIGESTS], Fp::ZERO)
+        .expect("prepare A3");
+    let next = plan.next_state(kind, source, base).unwrap_or_else(|_| circuit_next(plan, source, kind, base));
+    let public = vec![step_public(&a_chain, 2, Fp::from(BASE), prepared.passthrough, &next, &prepared.digests, &[])];
+    let witness = ReceiveStepWitness { source: Arc::new(source.clone()), frame: prepared.witness };
+    Segment { circuit: a_step(plan, kind, q.shape(), Some(witness)), public, kept: prepared.kept.expect("A starts U_Q"), q }
+}
+
+#[test]
+#[ignore = "k16 folded Receive A3 steps on a genuine incoming Omega and sigma; run optimized"]
+fn folded_a3_verifies_the_incoming_omega_and_the_payment_objects() {
+    let full = full_receive();
+    let rel = relations(&full.plan);
+    let genuine = full.source.clone();
+    let base = full.plan.state_before(AKind::Receive3, &genuine).expect("A3 state");
+    let segment = sigma_segment(&rel, &full, &genuine, &base);
+    assert!(satisfied(&segment.circuit, &segment.public), "genuine incoming Omega, sigma and objects");
+    // Another Omega proof byte, Payment byte or sigma byte breaks the soft
+    // verdicts, the Payment semantics or the sigma binding to Q0's columns,
+    // and another program counter is refused.
+    for (case, index, offset) in [("Omega proof", 4, 330), ("Payment", 3, 40), ("sigma", 5, 40)] {
+        let mut source = genuine.clone();
+        source.objects[index][offset] ^= 1;
+        let segment = sigma_segment(&rel, &full, &source, &base);
+        assert!(!satisfied(&segment.circuit, &segment.public), "A3 accepted another {case}");
+    }
+    let mut wrong = base.clone();
+    wrong[A_PC] = Fp::from(2);
+    let segment = sigma_segment(&rel, &full, &genuine, &wrong);
+    assert!(!satisfied(&segment.circuit, &segment.public), "A3 accepted another program counter");
+    let synthesized = synthesize(&segment.circuit, K, Some(&segment.public)).expect("A3 witness");
+    let rows = synthesized.tables.advice_assigned().iter().map(|c| c.iter().rposition(|v| *v).map_or(0, |r| r + 1)).max();
+    let unknown = synthesize(&segment.circuit.without_witnesses(), K, None).expect("A3 layout");
+    assert_eq!(synthesized.tables.fixed(), unknown.tables.fixed());
+    let relation = FoldedRelation::<Fp>::from_synthesized(&unknown).expect("A3 relation");
+    assert_eq!(relation.shape(), rel.a1.shape(), "every A kind shares one fold shape");
+    let key = CommitKey::<Eq>::monomial(PinnedParams::<Eq>::derive(K).expect("params").params());
+    let decider = iroha_fold::decider_v2::DeciderV2Plan::new(relation.clone(), &key).expect("decider plan");
+    let (_, keys, copy_columns, _) = decider.sizes();
+    eprintln!("FOLD_RECEIVE_A3 rows={rows:?} relation={:?} decider_keys={keys} copy_columns={copy_columns}", relation.summary());
 }
