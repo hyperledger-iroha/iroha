@@ -45,6 +45,9 @@ use iroha_crypto::KeyPair;
 #[cfg(feature = "sm")]
 use iroha_crypto::sm::{Sm2PublicKey, SmIntrinsicPolicy};
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, blake2::Blake2b512};
+use iroha_data_model::account::signing_key::{
+    AccountSigningKeyRecordV1, AccountSigningKeyReservationV1,
+};
 #[cfg(test)]
 use iroha_data_model::events::pipeline::PipelineEventBox;
 use iroha_data_model::execution_proofs::{ExecutionProofProfileV1, ExecutionProofVerificationV1};
@@ -1243,6 +1246,8 @@ macro_rules! with_world_overlay_fields {
             execution_proof_verifications,
             game_sessions,
             game_partitions,
+            account_signing_keys,
+            account_signing_key_reservations,
             nft_sale_offers,
             nft_custody_records,
             nft_custody_by_nft,
@@ -4240,6 +4245,12 @@ pub struct WorldData {
     pub(crate) game_sessions: Storage<Hash, GameSessionRecordV1>,
     /// Independent native game partition records with certified export/import state.
     pub(crate) game_partitions: Storage<Hash, GamePartitionStateV1>,
+    /// Off-chain signing key of each account that registered one
+    /// (`iroha.account.signing_key.v1` addition).
+    pub(crate) account_signing_keys: Storage<AccountId, AccountSigningKeyRecordV1>,
+    /// Every key that is or was an account's off-chain signing key, so none is reused,
+    /// keyed by the single-key `AccountId` the key would control.
+    pub(crate) account_signing_key_reservations: Storage<AccountId, AccountSigningKeyReservationV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: Storage<Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -5260,6 +5271,11 @@ pub struct WorldBlockFields<'world> {
         StorageField<'world, Hash, ExecutionProofVerificationV1>,
     pub(crate) game_sessions: StorageField<'world, Hash, GameSessionRecordV1>,
     pub(crate) game_partitions: StorageField<'world, Hash, GamePartitionStateV1>,
+    /// Off-chain signing key of each account that registered one.
+    pub(crate) account_signing_keys: StorageField<'world, AccountId, AccountSigningKeyRecordV1>,
+    /// Every key that is or was an account's off-chain signing key.
+    pub(crate) account_signing_key_reservations:
+        StorageField<'world, AccountId, AccountSigningKeyReservationV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageField<'world, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -6469,6 +6485,8 @@ impl WorldBlock<'_> {
             execution_proof_verifications,
             game_sessions,
             game_partitions,
+            account_signing_keys,
+            account_signing_key_reservations,
             nft_sale_offers,
             nft_custody_records,
             nft_custody_by_nft,
@@ -7018,6 +7036,12 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, Hash, ExecutionProofVerificationV1>,
     pub(crate) game_sessions: StorageTransaction<'block, Hash, GameSessionRecordV1>,
     pub(crate) game_partitions: StorageTransaction<'block, Hash, GamePartitionStateV1>,
+    /// Off-chain signing key of each account that registered one.
+    pub(crate) account_signing_keys:
+        StorageTransaction<'block, AccountId, AccountSigningKeyRecordV1>,
+    /// Every key that is or was an account's off-chain signing key.
+    pub(crate) account_signing_key_reservations:
+        StorageTransaction<'block, AccountId, AccountSigningKeyReservationV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageTransaction<'block, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -9265,6 +9289,11 @@ pub struct WorldView<'world> {
         StorageView<'world, Hash, ExecutionProofVerificationV1>,
     pub(crate) game_sessions: StorageView<'world, Hash, GameSessionRecordV1>,
     pub(crate) game_partitions: StorageView<'world, Hash, GamePartitionStateV1>,
+    /// Off-chain signing key of each account that registered one.
+    pub(crate) account_signing_keys: StorageView<'world, AccountId, AccountSigningKeyRecordV1>,
+    /// Every key that is or was an account's off-chain signing key.
+    pub(crate) account_signing_key_reservations:
+        StorageView<'world, AccountId, AccountSigningKeyReservationV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageView<'world, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -21349,6 +21378,10 @@ macro_rules! world_ro_accessors {
             storage game_sessions: Hash => GameSessionRecordV1;
             /// Independent native game partitions and durable transfer receipts.
             storage game_partitions: Hash => GamePartitionStateV1;
+            /// Off-chain signing key of each account that registered one.
+            storage account_signing_keys: AccountId => AccountSigningKeyRecordV1;
+            /// Every key that is or was an account's off-chain signing key.
+            storage account_signing_key_reservations: AccountId => AccountSigningKeyReservationV1;
             /// Immutable native NFT sale terms and permanent terminal decisions.
             storage nft_sale_offers: Hash => NftSaleRecordV1;
             /// Permanent non-signing custody records shared by native NFT protocols.
@@ -25141,6 +25174,8 @@ impl WorldTransaction<'_, '_> {
             execution_proof_verifications: _,
             game_sessions: _,
             game_partitions: _,
+            account_signing_keys: _,
+            account_signing_key_reservations: _,
             nft_sale_offers: _,
             nft_custody_records: _,
             nft_custody_by_nft: _,
@@ -25595,6 +25630,8 @@ impl WorldTransaction<'_, '_> {
         self.execution_proof_verifications.apply();
         self.game_sessions.apply();
         self.game_partitions.apply();
+        self.account_signing_keys.apply();
+        self.account_signing_key_reservations.apply();
         self.nft_sale_offers.apply();
         self.nft_custody_records.apply();
         self.nft_custody_by_nft.apply();

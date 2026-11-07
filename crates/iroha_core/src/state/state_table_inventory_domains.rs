@@ -113,6 +113,16 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Name,
+        reason: "Exact wire identity of the native off-chain signing key instruction, including its built-in dispatch entry. It selects the instruction layout; neither the identifier nor its registration computes a digest or grants the instruction authority",
+        literals: &[r"iroha.account.signing_key.set.v1"],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Signing preimage domain and Torii canonical-request tag of an account's off-chain signatures (specs/account_signing_keys.md): the envelope its signing key signs for one Iroha Connect raw request or one Torii canonical request. Each frames one off-chain message for a signature; none hashes or commits to State content",
+        literals: &[r"iroha:offchain:v1\0", r"iroha:torii:canonical-request:v1"],
+    },
+    OtherDomains {
+        usage: Use::Name,
         reason: "Exact wire identities of the native game-partition instructions, including their built-in dispatch entries. They select instruction layouts; neither the identifiers nor their registration compute a digest or grant the instruction authority",
         literals: &[
             r"iroha.game_partition.advance.v1",
@@ -1462,6 +1472,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
         usage: Use::Record,
         reason: "Content-addressed identities of live-upgrade definitions and root selections (specs/live_runtime_upgrades.md §3), the fixed labels of the reference closures and statements of the baseline and of each release addition after it, and the names of baseline definitions and release-addition modules, which are hashed only inside their canonical descriptors. Each hashes one canonical descriptor, selection record or baseline or addition subject; none commits to State content, and the State commitment remains the World root",
         literals: &[
+            r"iroha.account.signing_key.v1",
             r"iroha.events.data.ironwood.v1",
             r"iroha.events.data.v1",
             r"iroha.game_partition.v1",

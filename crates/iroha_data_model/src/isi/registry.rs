@@ -495,9 +495,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        // The 410 baseline instructions and the eight this release adds after them.
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 418;
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 418;
+        // The 410 baseline instructions and the eleven this release adds after them: six game
+        // partition, three Ironwood, the endorsed runtime-upgrade proposal and the account signing
+        // key instructions.
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 421;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 421;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -634,6 +636,7 @@ mod tests {
         assert_eq!(
             added,
             [
+                crate::isi::account_signing_key::SetAccountSigningKeyV1::WIRE_ID,
                 "iroha.game_partition.advance.v1",
                 "iroha.game_partition.export.v1",
                 "iroha.game_partition.import.v1",

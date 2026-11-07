@@ -1,0 +1,41 @@
+{
+  "note": "Off-chain signing envelope vectors (specs/account_signing_keys.md). message_hex = \"iroha:offchain:v1\\0\" || purpose u8 || network_id || u32 LE account length || canonical account-address bytes || generation u32 LE || u32 LE tag length || UTF-8 tag || u64 LE bytes length || bytes. The account is addr-single-treasury-ed25519 of fixtures/account/address_vectors.json. Rust (iroha_data_model) and JavaScript (iroha_js) both rebuild every message from its inputs.",
+  "cases": [
+    {
+      "case_id": "connect-raw",
+      "purpose": 1,
+      "network_id_hex": "A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5",
+      "account_i105": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+      "account_canonical_hex": "0x020001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "account_public_key_multihash": "ed01208A88E3DD7409F195FD52DB2D3CBA5D72CA6709BF1D94121BF3748801B40F6F5C",
+      "generation": 3,
+      "domain_tag": "iroha-connect/v1/login",
+      "bytes_hex": "6368616c6c656e67652d30303031",
+      "message_hex": "69726f68613a6f6666636861696e3a76310001a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a524000000020001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c030000001600000069726f68612d636f6e6e6563742f76312f6c6f67696e0e000000000000006368616c6c656e67652d30303031"
+    },
+    {
+      "case_id": "torii-canonical-request",
+      "purpose": 2,
+      "network_id_hex": "A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5",
+      "account_i105": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+      "account_canonical_hex": "0x020001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "account_public_key_multihash": "ed01208A88E3DD7409F195FD52DB2D3CBA5D72CA6709BF1D94121BF3748801B40F6F5C",
+      "generation": 1,
+      "domain_tag": "iroha:torii:canonical-request:v1",
+      "bytes_hex": "69726f68612e6170702e726571756573742e6e6574776f726b2e763100a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a54745540a2f76312f6163636f756e74730a0a653362306334343239386663316331343961666266346338393936666239323432376165343165343634396239333463613439353939316237383532623835350a313730303030303030303030300a6e6f6e63652d30303031",
+      "message_hex": "69726f68613a6f6666636861696e3a76310002a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a524000000020001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c010000002000000069726f68613a746f7269693a63616e6f6e6963616c2d726571756573743a7631a80000000000000069726f68612e6170702e726571756573742e6e6574776f726b2e763100a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a54745540a2f76312f6163636f756e74730a0a653362306334343239386663316331343961666266346338393936666239323432376165343165343634396239333463613439353939316237383532623835350a313730303030303030303030300a6e6f6e63652d30303031"
+    },
+    {
+      "case_id": "empty-bytes",
+      "purpose": 1,
+      "network_id_hex": "A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5",
+      "account_i105": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+      "account_canonical_hex": "0x020001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "account_public_key_multihash": "ed01208A88E3DD7409F195FD52DB2D3CBA5D72CA6709BF1D94121BF3748801B40F6F5C",
+      "generation": 4294967295,
+      "domain_tag": "t",
+      "bytes_hex": "",
+      "message_hex": "69726f68613a6f6666636861696e3a76310001a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a524000000020001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5cffffffff01000000740000000000000000"
+    }
+  ]
+}

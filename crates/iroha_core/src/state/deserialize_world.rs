@@ -7982,6 +7982,76 @@ fn validate_game_partition_persistence(world: &World) -> Result<(), json::Error>
 #[path = "deserialize_world_game_partition_tests.rs"]
 mod game_partition_persistence_tests;
 
+/// Validate that the off-chain signing keys and their reservations agree at one cut: every
+/// active key is reserved for its account at its generation, and every active reservation is
+/// that account's active key.
+fn validate_account_signing_key_persistence_cut(
+    keys: &impl mv::storage::StorageReadOnly<
+        AccountId,
+        iroha_data_model::account::signing_key::AccountSigningKeyRecordV1,
+    >,
+    reservations: &impl mv::storage::StorageReadOnly<
+        AccountId,
+        iroha_data_model::account::signing_key::AccountSigningKeyReservationV1,
+    >,
+    cut: &'static str,
+) -> Result<(), json::Error> {
+    let invalid = |field: &str, reason: &str| json::Error::InvalidField {
+        field: field.to_owned(),
+        message: format!("invalid {cut} account signing key projection: {reason}"),
+    };
+    for (account, record) in keys.iter() {
+        let Some(public_key) = record.public_key.as_ref() else {
+            continue;
+        };
+        let reserved = reservations
+            .get(&AccountId::new(public_key.clone()))
+            .ok_or_else(|| {
+                invalid(
+                    "world.account_signing_keys",
+                    "an active key is not reserved",
+                )
+            })?;
+        if reserved.account != *account
+            || reserved.generation != record.generation
+            || !reserved.active
+        {
+            return Err(invalid(
+                "world.account_signing_keys",
+                "an active key's reservation names another account, generation or state",
+            ));
+        }
+    }
+    for (reserved_key, reservation) in reservations.iter() {
+        if !reservation.active {
+            continue;
+        }
+        let active = keys
+            .get(&reservation.account)
+            .and_then(|record| record.public_key.as_ref())
+            .map(|public_key| AccountId::new(public_key.clone()));
+        if active.as_ref() != Some(reserved_key) {
+            return Err(invalid(
+                "world.account_signing_key_reservations",
+                "an active reservation is not its account's signing key",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_account_signing_key_persistence(world: &World) -> Result<(), json::Error> {
+    validate_account_signing_key_persistence_cut(
+        &world.account_signing_keys.view(),
+        &world.account_signing_key_reservations.view(),
+        "current",
+    )?;
+    // Observing the real MV predecessor never commits or consumes its undo map.
+    let keys = world.account_signing_keys.block_and_revert();
+    let reservations = world.account_signing_key_reservations.block_and_revert();
+    validate_account_signing_key_persistence_cut(&keys, &reservations, "predecessor")
+}
+
 fn validate_domain_endorsement_index_cut(
     endorsements: &impl StorageReadOnly<HashOf<DomainEndorsement>, DomainEndorsementRecord>,
     by_domain: &impl StorageReadOnly<DomainId, Vec<HashOf<DomainEndorsement>>>,
@@ -9000,6 +9070,14 @@ fn decode_world_fields(
     let game_sessions = take_optional(&mut map, "game_sessions")?.unwrap_or_default();
     let game_partitions: Storage<Hash, iroha_data_model::game_partition::GamePartitionStateV1> =
         take_required(&mut map, "game_partitions")?;
+    let account_signing_keys: Storage<
+        AccountId,
+        iroha_data_model::account::signing_key::AccountSigningKeyRecordV1,
+    > = take_required(&mut map, "account_signing_keys")?;
+    let account_signing_key_reservations: Storage<
+        AccountId,
+        iroha_data_model::account::signing_key::AccountSigningKeyReservationV1,
+    > = take_required(&mut map, "account_signing_key_reservations")?;
     let nft_sale_offers = take_optional(&mut map, "nft_sale_offers")?.unwrap_or_default();
     let nft_custody_records = take_optional(&mut map, "nft_custody_records")?.unwrap_or_default();
 
@@ -9093,6 +9171,8 @@ fn decode_world_fields(
         execution_proof_verifications,
         game_sessions,
         game_partitions,
+        account_signing_keys,
+        account_signing_key_reservations,
         nft_sale_offers,
         nft_custody_records,
         nft_custody_by_nft: Storage::default(),
@@ -9393,6 +9473,7 @@ fn parse_world(
     validate_domain_endorsement_index(&world)?;
     validate_da_pin_persistence(&world)?;
     validate_game_partition_persistence(&world)?;
+    validate_account_signing_key_persistence(&world)?;
     validator_committee::validate_persisted_progress(&world.view()).map_err(|message| {
         json::Error::InvalidField {
             field: "world.validator_committee".to_owned(),
