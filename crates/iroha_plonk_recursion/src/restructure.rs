@@ -69,7 +69,7 @@ use crate::{
 pub const RESTRUCTURE_TAG: [u8; 8] = *b"rstrclm1";
 
 /// Domain of the restructuring input digest.
-const DIGEST_DOMAIN: [u8; 8] = *b"pipa-rs1";
+pub(crate) const DIGEST_DOMAIN: [u8; 8] = *b"pipa-rs1";
 
 /// The opened statement: a relaxed claim accumulator's commitment and the
 /// value of its tensor vector's multilinear extension at the restructuring
@@ -295,7 +295,7 @@ where
 
 /// The public context words: two parameter-digest limbs, the tag and the
 /// count of opened claims (one).
-fn context<C: PastaCurve>(params: &PinnedParams<C>) -> [C::Base; 4] {
+pub(crate) fn context<C: PastaCurve>(params: &PinnedParams<C>) -> [C::Base; 4] {
     let d = params.digest();
     let (low, high) = d.split_at(16);
     [

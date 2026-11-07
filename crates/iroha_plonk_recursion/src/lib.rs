@@ -24,6 +24,7 @@ pub mod obligation;
 mod private;
 mod purpose;
 pub mod restructure;
+pub mod restructure_circuit;
 pub mod terminal;
 pub mod transcript;
 pub mod verifier;
