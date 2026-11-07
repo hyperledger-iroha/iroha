@@ -5,7 +5,7 @@ use ff::Field;
 use iroha_pasta::PastaCurve;
 use iroha_plonk::frontend::{Error, Region, Value};
 use iroha_plonk_gadgets::{
-    Word,
+    Bit, Word,
     ecc::{AssignedPoint, EccChip, ScalarLimbs},
     ff::FfValue,
 };
@@ -13,8 +13,8 @@ use iroha_plonk_gadgets::{
 use super::{FoldVerifierChips, ScalarCell, transcript as t};
 use crate::{
     fold::{Accumulator, FoldProof, Instance},
-    relation::FoldedRelation,
-    transcript::{TAG_ACCUMULATOR_DIGEST, TAG_FOLD, TAG_INSTANCE},
+    relation::FoldShape,
+    transcript::{TAG_ACCUMULATOR, TAG_ACCUMULATOR_DIGEST, TAG_FOLD, TAG_INSTANCE},
 };
 
 /// The commitments and public columns of an instance. A fresh instance's
@@ -81,64 +81,64 @@ fn assign_scalars<C: PastaCurve>(
         .collect()
 }
 
-/// Assigns the commitments and public columns of an instance of `relation`.
+/// Assigns the commitments and public columns of an instance of the relation.
 ///
 /// # Errors
 /// Layout errors, or a value of another shape.
 pub fn assign_instance<C: PastaCurve>(
     chips: &mut FoldVerifierChips<C>,
     region: &mut Region<'_, C::Base>,
-    relation: &FoldedRelation<C::ScalarExt>,
+    shape: &FoldShape,
     value: Option<&Instance<C>>,
 ) -> Result<InstanceCells<C>, Error> {
     if let Some(v) = value
-        && (v.commitments.len() != relation.columns()
-            || v.public.iter().map(Vec::len).ne(relation.instance_lengths().iter().copied()))
+        && (v.commitments.len() != shape.columns
+            || v.public.iter().map(Vec::len).ne(shape.instance_lengths.iter().copied()))
     {
         return Err(Error::Synthesis);
     }
-    let mut commitments = Vec::with_capacity(relation.columns());
-    for c in 0..relation.columns() {
+    let mut commitments = Vec::with_capacity(shape.columns);
+    for c in 0..shape.columns {
         let point = value.map(|v| C::from(v.commitments[c]));
         commitments.push(chips.assign_point(region, value_of(point.as_ref()))?);
     }
-    let mut public = Vec::with_capacity(relation.instance_lengths().len());
-    for (column, len) in relation.instance_lengths().iter().enumerate() {
+    let mut public = Vec::with_capacity(shape.instance_lengths.len());
+    for (column, len) in shape.instance_lengths.iter().enumerate() {
         public.push(assign_scalars(chips, region, value.map(|v| v.public[column].as_slice()), *len)?);
     }
     Ok(InstanceCells { commitments, public })
 }
 
-/// Assigns an accumulator of `relation`.
+/// Assigns an accumulator of the relation.
 ///
 /// # Errors
 /// Layout errors, or a value of another shape.
 pub fn assign_accumulator<C: PastaCurve>(
     chips: &mut FoldVerifierChips<C>,
     region: &mut Region<'_, C::Base>,
-    relation: &FoldedRelation<C::ScalarExt>,
+    shape: &FoldShape,
     value: Option<&Accumulator<C>>,
 ) -> Result<AccumulatorCells<C>, Error> {
-    let instance = assign_instance(chips, region, relation, value.map(|v| &v.instance))?;
-    let theta = assign_scalars(chips, region, value.map(|v| v.instance.theta.as_slice()), relation.theta_len())?;
-    let r = assign_scalars(chips, region, value.map(|v| v.instance.r.as_slice()), relation.groups())?;
-    let beta = assign_scalars(chips, region, value.map(|v| v.beta.as_slice()), relation.index_bits())?;
+    let instance = assign_instance(chips, region, shape, value.map(|v| &v.instance))?;
+    let theta = assign_scalars(chips, region, value.map(|v| v.instance.theta.as_slice()), shape.theta_len)?;
+    let r = assign_scalars(chips, region, value.map(|v| v.instance.r.as_slice()), shape.groups.len())?;
+    let beta = assign_scalars(chips, region, value.map(|v| v.beta.as_slice()), shape.index_bits)?;
     let e = chips.assign_scalar(region, value_of(value.map(|v| &v.e)))?;
     Ok(AccumulatorCells { instance, theta, r, beta, e })
 }
 
-/// Assigns the messages of a fold of `relation`.
+/// Assigns the messages of a fold of the relation.
 ///
 /// # Errors
 /// Layout errors, or messages of another length.
 pub fn assign_proof<C: PastaCurve>(
     chips: &mut FoldVerifierChips<C>,
     region: &mut Region<'_, C::Base>,
-    relation: &FoldedRelation<C::ScalarExt>,
+    shape: &FoldShape,
     value: Option<&FoldProof<C::ScalarExt>>,
 ) -> Result<FoldProofCells<C>, Error> {
-    let f = assign_scalars(chips, region, value.map(|v| v.f.as_slice()), relation.index_bits())?;
-    let k = assign_scalars(chips, region, value.map(|v| v.k.as_slice()), relation.degree() - 1)?;
+    let f = assign_scalars(chips, region, value.map(|v| v.f.as_slice()), shape.index_bits)?;
+    let k = assign_scalars(chips, region, value.map(|v| v.k.as_slice()), shape.degree - 1)?;
     Ok(FoldProofCells { f, k })
 }
 
@@ -162,34 +162,34 @@ fn absorb_public<C: PastaCurve>(
 pub fn fresh_transcript<C: PastaCurve>(
     chips: &mut FoldVerifierChips<C>,
     region: &mut Region<'_, C::Base>,
-    relation: &FoldedRelation<C::ScalarExt>,
+    shape: &FoldShape,
     domain: &[u8; 32],
     instance: &InstanceCells<C>,
 ) -> Result<FreshTranscript<C>, Error> {
-    if instance.commitments.len() != relation.columns() {
+    if instance.commitments.len() != shape.columns {
         return Err(Error::Synthesis);
     }
     t::start(chips, TAG_INSTANCE, domain)?;
     absorb_public(chips, region, &instance.public)?;
-    for point in &instance.commitments[..relation.advice_columns] {
+    for point in &instance.commitments[..shape.advice_columns] {
         t::absorb_point(chips, point);
     }
-    for group in &relation.groups {
-        t::absorb_point(chips, &instance.commitments[group.m_column()]);
+    for group in &shape.groups {
+        t::absorb_point(chips, &instance.commitments[group.m_column]);
     }
     let theta = t::challenge(chips, region)?;
-    let mut powers = Vec::with_capacity(relation.theta_len());
+    let mut powers = Vec::with_capacity(shape.theta_len);
     let mut power = theta.ff.clone();
-    for _ in 0..relation.theta_len() {
+    for _ in 0..shape.theta_len {
         powers.push(power.clone());
         power = chips.mul(region, &power, &theta.ff)?;
     }
-    let mut r = Vec::with_capacity(relation.groups());
-    for _ in &relation.groups {
+    let mut r = Vec::with_capacity(shape.groups.len());
+    for _ in &shape.groups {
         r.push(t::challenge(chips, region)?);
     }
-    for group in &relation.groups {
-        for c in (group.m_column() + 1)..=group.g_column() {
+    for group in &shape.groups {
+        for c in (group.m_column + 1)..=group.g_column {
             t::absorb_point(chips, &instance.commitments[c]);
         }
     }
@@ -264,6 +264,31 @@ fn fold_commitments<C: PastaCurve>(
     Ok(out)
 }
 
+/// The `beta` challenges of an accumulator started from the fresh instance with
+/// digest `digest` (`kgwfacc1`), as [`crate::fold::Accumulator::from_fresh`].
+///
+/// # Errors
+/// Layout errors.
+pub fn fresh_beta<C: PastaCurve>(
+    chips: &mut FoldVerifierChips<C>,
+    region: &mut Region<'_, C::Base>,
+    domain: &[u8; 32],
+    digest: &Word<C::Base>,
+    bits: usize,
+) -> Result<Vec<ScalarCell<C>>, Error> {
+    t::start(chips, TAG_ACCUMULATOR, domain)?;
+    t::absorb_word(chips, digest);
+    if bits == 0 {
+        t::finish(chips, region)?;
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::with_capacity(bits);
+    for j in 0..bits {
+        out.push(if j + 1 == bits { t::challenge_last(chips, region)? } else { t::challenge(chips, region)? });
+    }
+    Ok(out)
+}
+
 /// Verifies one fold of `fresh` into `acc` and returns the folded accumulator,
 /// as [`crate::fold::verify_fold`]: the fresh instance's `LogUp` challenges and
 /// digest, the accumulator digest, `delta`, `alpha`, `gamma`, then every folded
@@ -274,23 +299,64 @@ fn fold_commitments<C: PastaCurve>(
 pub fn verify_fold<C: PastaCurve>(
     chips: &mut FoldVerifierChips<C>,
     region: &mut Region<'_, C::Base>,
-    relation: &FoldedRelation<C::ScalarExt>,
+    shape: &FoldShape,
     domain: &[u8; 32],
     acc: &AccumulatorCells<C>,
     fresh: &InstanceCells<C>,
     proof: &FoldProofCells<C>,
 ) -> Result<AccumulatorCells<C>, Error> {
-    let bits = relation.index_bits();
+    fold_cells(chips, region, shape, domain, acc, fresh, proof, None)
+}
+
+/// [`verify_fold`], or, where `start` is one, the accumulator started from
+/// `fresh` ([`crate::fold::Accumulator::from_fresh`]): the first fold of a kind
+/// (output `IVC.md` section 5). Starting is the fold with `gamma = 1` for every
+/// linear part (commitments, public columns, `theta`, `r`), which makes
+/// `e* = F(alpha) (1 - gamma) + gamma (gamma - 1) K(gamma) = 0`, and with `beta`
+/// from `kgwfacc1`; so one circuit serves both and `acc` is ignored when starting.
+///
+/// # Errors
+/// Layout errors, or inputs of another shape.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_fold_or_start<C: PastaCurve>(
+    chips: &mut FoldVerifierChips<C>,
+    region: &mut Region<'_, C::Base>,
+    shape: &FoldShape,
+    domain: &[u8; 32],
+    acc: &AccumulatorCells<C>,
+    fresh: &InstanceCells<C>,
+    proof: &FoldProofCells<C>,
+    start: &Bit<C::Base>,
+) -> Result<AccumulatorCells<C>, Error> {
+    fold_cells(chips, region, shape, domain, acc, fresh, proof, Some(start))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fold_cells<C: PastaCurve>(
+    chips: &mut FoldVerifierChips<C>,
+    region: &mut Region<'_, C::Base>,
+    shape: &FoldShape,
+    domain: &[u8; 32],
+    acc: &AccumulatorCells<C>,
+    fresh: &InstanceCells<C>,
+    proof: &FoldProofCells<C>,
+    start: Option<&Bit<C::Base>>,
+) -> Result<AccumulatorCells<C>, Error> {
+    let bits = shape.index_bits;
     if proof.f.len() != bits
-        || proof.k.len() != relation.degree() - 1
+        || proof.k.len() != shape.degree - 1
         || acc.beta.len() != bits
-        || acc.instance.commitments.len() != relation.columns()
-        || acc.theta.len() != relation.theta_len()
-        || acc.r.len() != relation.groups()
+        || acc.instance.commitments.len() != shape.columns
+        || acc.theta.len() != shape.theta_len
+        || acc.r.len() != shape.groups.len()
     {
         return Err(Error::Synthesis);
     }
-    let fresh_t = fresh_transcript(chips, region, relation, domain, fresh)?;
+    let fresh_t = fresh_transcript(chips, region, shape, domain, fresh)?;
+    let started_beta = match start {
+        Some(_) => Some(fresh_beta(chips, region, domain, &fresh_t.digest, bits)?),
+        None => None,
+    };
     let acc_digest = accumulator_digest(chips, region, domain, acc)?;
     t::start(chips, TAG_FOLD, domain)?;
     t::absorb_word(chips, &acc_digest);
@@ -300,12 +366,23 @@ pub fn verify_fold<C: PastaCurve>(
     let alpha = t::challenge(chips, region)?;
     t::absorb_scalars(chips, region, &proof.k)?;
     let (gamma_limb, gamma) = t::challenge_128_last(chips, region)?;
+    let one = chips.constant(region, <C::ScalarExt as Field>::ONE)?;
+    let (gamma_limb, gamma) = match start {
+        None => (gamma_limb, gamma.ff),
+        Some(bit) => {
+            let one_word = chips.glue.constant(region, <C::Base as Field>::ONE)?;
+            let selected = chips.glue.select(region, bit, &one_word, gamma_limb.word())?;
+            let limb = chips.uint().range_check::<128>(region, &selected)?;
+            let scalar = chips.ff.select(&mut chips.glue, region, bit, &one, &gamma.ff)?;
+            (limb, scalar)
+        }
+    };
 
     // F(alpha) over (e, F_1, .., F_t).
     let mut f_coefficients = vec![&acc.e.ff];
     f_coefficients.extend(proof.f.iter().map(|c| &c.ff));
     let f_alpha = horner(chips, region, &f_coefficients, &alpha.ff)?;
-    // beta*_j = beta_j + alpha delta^(2^j).
+    // beta*_j = beta_j + alpha delta^(2^j), or the started beta.
     let mut beta = Vec::with_capacity(bits);
     let mut power = delta.ff.clone();
     for (j, b) in acc.beta.iter().enumerate() {
@@ -313,17 +390,19 @@ pub fn verify_fold<C: PastaCurve>(
             power = chips.mul(region, &power, &power)?;
         }
         let scaled = chips.mul(region, &alpha.ff, &power)?;
-        let folded = chips.add(region, &b.ff, &scaled)?;
+        let mut folded = chips.add(region, &b.ff, &scaled)?;
+        if let (Some(bit), Some(started)) = (start, &started_beta) {
+            folded = chips.ff.select(&mut chips.glue, region, bit, &started[j].ff, &folded)?;
+        }
         beta.push(chips.export(region, folded)?);
     }
     // e* = F(alpha) (1 - gamma) + gamma (gamma - 1) K(gamma).
     let k_coefficients: Vec<_> = proof.k.iter().map(|c| &c.ff).collect();
-    let k_gamma = horner(chips, region, &k_coefficients, &gamma.ff)?;
-    let one = chips.constant(region, <C::ScalarExt as Field>::ONE)?;
-    let one_minus_gamma = chips.sub(region, &one, &gamma.ff)?;
+    let k_gamma = horner(chips, region, &k_coefficients, &gamma)?;
+    let one_minus_gamma = chips.sub(region, &one, &gamma)?;
     let left = chips.mul(region, &f_alpha, &one_minus_gamma)?;
-    let gamma_minus_one = chips.sub(region, &gamma.ff, &one)?;
-    let z = chips.mul(region, &gamma.ff, &gamma_minus_one)?;
+    let gamma_minus_one = chips.sub(region, &gamma, &one)?;
+    let z = chips.mul(region, &gamma, &gamma_minus_one)?;
     let right = chips.mul(region, &z, &k_gamma)?;
     let e = chips.add(region, &left, &right)?;
     let e = chips.export(region, e)?;
@@ -335,19 +414,19 @@ pub fn verify_fold<C: PastaCurve>(
         }
         let mut column = Vec::with_capacity(a_column.len());
         for (a, b) in a_column.iter().zip(b_column) {
-            let folded = chips.lerp(region, &a.ff, &b.ff, &gamma.ff)?;
+            let folded = chips.lerp(region, &a.ff, &b.ff, &gamma)?;
             column.push(chips.export(region, folded)?);
         }
         public.push(column);
     }
     let mut theta = Vec::with_capacity(acc.theta.len());
     for (a, b) in acc.theta.iter().zip(&fresh_t.theta) {
-        let folded = chips.lerp(region, &a.ff, b, &gamma.ff)?;
+        let folded = chips.lerp(region, &a.ff, b, &gamma)?;
         theta.push(chips.export(region, folded)?);
     }
     let mut r = Vec::with_capacity(acc.r.len());
     for (a, b) in acc.r.iter().zip(&fresh_t.r) {
-        let folded = chips.lerp(region, &a.ff, &b.ff, &gamma.ff)?;
+        let folded = chips.lerp(region, &a.ff, &b.ff, &gamma)?;
         r.push(chips.export(region, folded)?);
     }
     let commitments = fold_commitments(chips, region, &acc.instance.commitments, &fresh.commitments, &gamma_limb)?;

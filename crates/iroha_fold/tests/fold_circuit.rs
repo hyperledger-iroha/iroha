@@ -7,6 +7,7 @@
 use ff::Field;
 use iroha_fold::{
     Accumulator, CommitKey, FoldedRelation, Instance, Witness,
+    relation::FoldShape,
     circuit::{
         FoldVerifierChips, FoldVerifierConfig,
         verify::{accumulator_digest, assign_accumulator, assign_instance, assign_proof, fresh_transcript, verify_fold},
@@ -45,7 +46,7 @@ impl<C: PastaCurve> Clone for Inputs<C> {
 /// Verifies one fold in circuit; public: `[digest of the folded accumulator,
 /// digest of the fresh instance]`.
 struct FoldCircuit<C: PastaCurve> {
-    relation: FoldedRelation<C::ScalarExt>,
+    shape: FoldShape,
     inputs: Option<Inputs<C>>,
 }
 
@@ -61,7 +62,7 @@ impl<C: PastaCurve> Circuit<C::Base> for FoldCircuit<C> {
     type Params = ();
 
     fn without_witnesses(&self) -> Self {
-        Self { relation: self.relation.clone(), inputs: None }
+        Self { shape: self.shape.clone(), inputs: None }
     }
 
     fn configure(meta: &mut ConstraintSystem<C::Base>) -> Config<C> {
@@ -78,11 +79,11 @@ impl<C: PastaCurve> Circuit<C::Base> for FoldCircuit<C> {
         let (folded, fresh) = layouter.assign_region(
             || "fold",
             |mut region| {
-                let acc = assign_accumulator(&mut chips, &mut region, &self.relation, inputs.map(|i| &i.acc))?;
-                let fresh = assign_instance(&mut chips, &mut region, &self.relation, inputs.map(|i| &i.fresh))?;
-                let proof = assign_proof(&mut chips, &mut region, &self.relation, inputs.map(|i| &i.proof))?;
-                let fresh_digest = fresh_transcript(&mut chips, &mut region, &self.relation, &DOMAIN, &fresh)?.digest;
-                let folded = verify_fold(&mut chips, &mut region, &self.relation, &DOMAIN, &acc, &fresh, &proof)?;
+                let acc = assign_accumulator(&mut chips, &mut region, &self.shape, inputs.map(|i| &i.acc))?;
+                let fresh = assign_instance(&mut chips, &mut region, &self.shape, inputs.map(|i| &i.fresh))?;
+                let proof = assign_proof(&mut chips, &mut region, &self.shape, inputs.map(|i| &i.proof))?;
+                let fresh_digest = fresh_transcript(&mut chips, &mut region, &self.shape, &DOMAIN, &fresh)?.digest;
+                let folded = verify_fold(&mut chips, &mut region, &self.shape, &DOMAIN, &acc, &fresh, &proof)?;
                 let digest = accumulator_digest(&mut chips, &mut region, &DOMAIN, &folded)?;
                 Ok((digest, fresh_digest))
             },
@@ -129,7 +130,7 @@ fn public_of<C: PastaCurve>(s: &Setup<C>, inputs: &Inputs<C>, folded: &Accumulat
 }
 
 fn satisfied<C: PastaCurve>(s: &Setup<C>, inputs: &Inputs<C>, public: &[Vec<C::Base>]) -> bool {
-    let circuit = FoldCircuit { relation: s.relation.clone(), inputs: Some(inputs.clone()) };
+    let circuit = FoldCircuit { shape: s.relation.shape(), inputs: Some(inputs.clone()) };
     check_circuit(&circuit, CIRCUIT_K, public, CheckMode::Strict).expect("synthesis").is_satisfied()
 }
 

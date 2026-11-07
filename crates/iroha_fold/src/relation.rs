@@ -61,6 +61,38 @@ pub struct RelationSummary {
     pub degree: usize,
 }
 
+/// The column layout of one `LogUp` group: its multiplicity column, then its
+/// reciprocal columns, then its table column `g_column`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GroupShape {
+    /// Witness column of the multiplicities (committed in round one).
+    pub m_column: usize,
+    /// Witness column of the table-side reciprocals; the slot columns lie between.
+    pub g_column: usize,
+}
+
+/// What a fold verifier needs to know of a relation: the committed columns and
+/// their rounds, the public column lengths, the challenge counts and the degree.
+/// Relations with equal shapes fold through the same verifier circuit, and a
+/// circuit's shape does not depend on how many rows its layout uses.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FoldShape {
+    /// Committed witness columns.
+    pub columns: usize,
+    /// Advice columns, committed first in round one.
+    pub advice_columns: usize,
+    /// The `LogUp` groups in relation order.
+    pub groups: Vec<GroupShape>,
+    /// Declared instance column lengths.
+    pub instance_lengths: Vec<usize>,
+    /// `theta` powers of an instance.
+    pub theta_len: usize,
+    /// Constraint-index bits: the `beta` length and the degree of `F(X)`.
+    pub index_bits: usize,
+    /// Largest folded degree of any constraint (`K(X)` has `degree - 1` coefficients).
+    pub degree: usize,
+}
+
 /// The folded relation of one circuit (one side and operation kind).
 #[derive(Clone, Debug)]
 pub struct FoldedRelation<F> {
@@ -208,6 +240,24 @@ impl<F: PastaField> FoldedRelation<F> {
             reciprocal_cells: self.groups.iter().flat_map(|g| g.slots.iter()).map(Vec::len).sum(),
             copies: self.copies.len(),
             columns: self.columns(),
+            degree: self.degree,
+        }
+    }
+
+    /// The shape a fold verifier of this relation needs.
+    #[must_use]
+    pub fn shape(&self) -> FoldShape {
+        FoldShape {
+            columns: self.columns(),
+            advice_columns: self.advice_columns,
+            groups: self
+                .groups
+                .iter()
+                .map(|g| GroupShape { m_column: g.m_column(), g_column: g.g_column() })
+                .collect(),
+            instance_lengths: self.instance_lengths.clone(),
+            theta_len: self.theta_len,
+            index_bits: self.index_bits(),
             degree: self.degree,
         }
     }
