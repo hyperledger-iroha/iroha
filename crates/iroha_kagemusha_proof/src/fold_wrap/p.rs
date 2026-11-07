@@ -17,7 +17,7 @@ use iroha_fold::{
             claim_accumulator_digest, verify_restructure_field,
         },
         decider_v2::{
-            assign_accumulator_field, assign_decider_v2_field_proof, claim_commitments,
+            assign_accumulator_field_terms, assign_decider_v2_field_proof, claim_commitments,
             helper_digest, opening_scalars, opening_transcript, verify_decider_v2_field,
         },
         field::FieldLanes,
@@ -55,9 +55,9 @@ use iroha_plonk_recursion::{
 };
 
 use super::{
-    K_U32, WrapError, WrapSpec,
+    K_U32, WrapError, WrapSpec, copy_terms_cells,
     crossing::{
-        ACrossing, AMember, AccumulatorData, PLayout, PPublic, Pair, PallasClaimCrossing,
+        ACrossing, AMember, AccumulatorTerms, PLayout, PPublic, Pair, PallasClaimCrossing,
         QCrossing, QMember, VestaClaimCrossing,
     },
 };
@@ -76,6 +76,8 @@ pub struct QGroupWitness {
     pub opening: BatchOpening<Ep>,
     /// `d_F`, `v*`, `b'` (scalars of the Q relations, `Fq`).
     pub imports: [Fq; 3],
+    /// The batch's copy challenges `gamma`, `eta` (Omega's field transcript).
+    pub copy_challenges: [Fq; 2],
 }
 
 /// The A-side decider's field-side witness in P: the A accumulators after
@@ -89,6 +91,8 @@ pub struct AFieldWitness {
     pub proof: DeciderV2Proof<Eq>,
     /// `D_H` of the proof's helpers (a Vesta base-field value).
     pub helper_digest: Fq,
+    /// Each member's instance copy term `I` (Omega computes them).
+    pub copy_terms: Vec<Fp>,
     /// The opening's batching challenge (the endoscalar).
     pub alpha: Fp,
     /// The opening's round challenges.
@@ -116,17 +120,20 @@ pub fn a_field_side(
     let spec = &*plan.spec;
     let plans: Vec<&DeciderV2Plan<Eq>> = plan.a_plans.iter().map(|p| &**p).collect();
     let mu = plans.first().ok_or(Error::Synthesis)?.mu();
-    if witness.is_some_and(|w| w.rounds.len() != mu || w.accs.len() != plans.len()) {
+    if witness.is_some_and(|w| {
+        w.rounds.len() != mu || w.accs.len() != plans.len() || w.copy_terms.len() != plans.len()
+    }) {
         return Err(Error::Synthesis);
     }
     let mut members = Vec::with_capacity(plans.len());
     for (index, relation) in spec.a.iter().enumerate() {
-        members.push(assign_accumulator_field::<Eq>(
+        members.push(assign_accumulator_field_terms::<Eq>(
             lanes,
             region,
             &spec.domains.a_fold,
             &relation.shape(),
             witness.map(|w| &w.accs[index]),
+            witness.map(|w| w.copy_terms[index]),
         )?);
     }
     let proof = assign_decider_v2_field_proof(lanes, region, &plans, witness.map(|w| &w.proof))?;
@@ -166,21 +173,25 @@ pub fn a_field_side(
         &alpha,
         &rounds,
     )?;
-    Ok(ACrossing {
-        members: members
-            .into_iter()
-            .map(|acc| AMember {
+    let members = members
+        .into_iter()
+        .map(|acc| {
+            Ok(AMember {
                 acc_digest: acc.digest.clone(),
-                data: AccumulatorData {
-                    public: acc.public.concat(),
+                terms: AccumulatorTerms {
+                    copy_terms: acc.copy_terms.ok_or(Error::Synthesis)?,
                     theta: acc.theta,
                     r: acc.r,
                     beta: acc.beta,
                     e: acc.e,
                 },
             })
-            .collect(),
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    Ok(ACrossing {
+        members,
         helper_digest,
+        copy_challenges: output.copy_challenges.clone(),
         field_digest: output.field_digest,
         value,
         folded,
@@ -214,10 +225,15 @@ pub fn q_commitment_side(
     if witness.is_some_and(|w| w.helpers.len() != helper_count || w.accs.len() != plans.len()) {
         return Err(Error::Synthesis);
     }
+    let challenge = |index: usize| {
+        witness.map_or_else(Value::unknown, |w| Value::known(w.copy_challenges[index]))
+    };
+    let gamma = lanes.assign_scalar(region, challenge(0))?;
+    let eta = lanes.assign_scalar(region, challenge(1))?;
     let mut accs = Vec::with_capacity(plans.len());
     let mut members = Vec::with_capacity(plans.len());
     let domain = &spec.domains.q_fold;
-    for (index, relation) in spec.q.iter().enumerate() {
+    for (index, (relation, member_plan)) in spec.q.iter().zip(&plans).enumerate() {
         let acc = assign_accumulator(
             lanes,
             region,
@@ -225,14 +241,22 @@ pub fn q_commitment_side(
             witness.map(|w| &w.accs[index]),
         )?;
         let acc_digest = accumulator_digest(lanes, region, domain, &acc)?;
+        let copy_terms = copy_terms_cells(
+            lanes,
+            region,
+            member_plan,
+            &acc.instance.public,
+            &gamma,
+            &eta,
+        )?;
         members.push(QMember {
             acc_digest,
-            data: AccumulatorData {
-                public: acc.instance.public.iter().flatten().map(pair).collect(),
+            terms: AccumulatorTerms {
                 theta: acc.theta.iter().map(pair).collect(),
                 r: acc.r.iter().map(pair).collect(),
                 beta: acc.beta.iter().map(pair).collect(),
                 e: pair(&acc.e),
+                copy_terms: pair(&copy_terms),
             },
         });
         accs.push(acc);
@@ -268,6 +292,7 @@ pub fn q_commitment_side(
     let crossing = QCrossing {
         members,
         helper_digest: helper,
+        copy_challenges: [pair(&gamma), pair(&eta)],
         field_digest: pair(&field_digest),
         value: pair(&value),
         folded: pair(&folded),
@@ -427,11 +452,16 @@ impl PPlan {
             .map(|r| DeciderV2Plan::new(r.clone(), &spec.key_a).map(Arc::new))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| WrapError::Input)?;
+        // Every member's public columns stay with its digest: the field side
+        // imports the copy term, so no relation may read public values beyond
+        // its copies.
         if q_plans
             .iter()
             .map(|p| p.mu())
             .chain(a_plans.iter().map(|p| p.mu()))
             .any(|mu| u32::try_from(mu) != Ok(K_U32))
+            || q_plans.iter().any(|p| p.reads_public_beyond_copies())
+            || a_plans.iter().any(|p| p.reads_public_beyond_copies())
         {
             return Err(WrapError::Input);
         }

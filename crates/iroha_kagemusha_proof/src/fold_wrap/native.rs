@@ -39,7 +39,7 @@ use iroha_plonk_recursion::{
 use super::{
     WrapError, WrapSpec,
     crossing::{
-        ACrossing, AMember, AccumulatorData, PPublic, Pair, PallasClaimCrossing, QCrossing,
+        ACrossing, AMember, AccumulatorTerms, PPublic, Pair, PallasClaimCrossing, QCrossing,
         QMember, VestaClaimCrossing,
     },
     omega::{
@@ -229,24 +229,39 @@ fn pair<F: PastaField>(value: &F) -> Pair<Fp> {
     s6_limbs(value).map(Fp::from_u128)
 }
 
-fn data_pairs(acc: &Accumulator<Ep>) -> AccumulatorData<Pair<Fp>> {
-    AccumulatorData {
-        public: acc.instance.public.iter().flatten().map(pair).collect(),
+fn terms_pairs(acc: &Accumulator<Ep>, copy_terms: Fq) -> AccumulatorTerms<Pair<Fp>> {
+    AccumulatorTerms {
         theta: acc.instance.theta.iter().map(pair).collect(),
         r: acc.instance.r.iter().map(pair).collect(),
         beta: acc.beta.iter().map(pair).collect(),
         e: pair(&acc.e),
+        copy_terms: pair(&copy_terms),
     }
 }
 
-fn data(acc: &Accumulator<Eq>) -> AccumulatorData<Fp> {
-    AccumulatorData {
-        public: acc.instance.public.iter().flatten().copied().collect(),
+fn terms(acc: &Accumulator<Eq>, copy_terms: Fp) -> AccumulatorTerms<Fp> {
+    AccumulatorTerms {
         theta: acc.instance.theta.clone(),
         r: acc.instance.r.clone(),
         beta: acc.beta.clone(),
         e: acc.e,
+        copy_terms,
     }
+}
+
+/// Each member's instance copy term under its batch's copy challenges.
+fn copy_terms<C: PastaCurve>(
+    plans: &[Arc<DeciderV2Plan<C>>],
+    accs: &[&Accumulator<C>],
+    [gamma, eta]: [C::ScalarExt; 2],
+) -> Result<Vec<C::ScalarExt>, WrapError> {
+    plans
+        .iter()
+        .zip(accs)
+        .map(|(plan, acc)| {
+            decider_v2::instance_copy_terms(plan, acc, gamma, eta).map_err(|_| WrapError::Fold)
+        })
+        .collect()
 }
 
 /// `D_A` natively: the lineage fields of `z_A`, then `acc_P`'s generator and
@@ -392,6 +407,11 @@ pub fn prepare(
     }
     let a_members: Vec<_> = decided.iter().map(|(acc, w)| (acc, w)).collect();
     let a = decide(&p_plan.a_plans, &spec.params_a, &domains.a_fold, &a_members)?;
+    // The instance copy terms each field side imports.
+    let q_accs: Vec<&Accumulator<Ep>> = chain.u_q.iter().map(|(acc, _)| acc).collect();
+    let a_accs: Vec<&Accumulator<Eq>> = decided.iter().map(|(acc, _)| acc).collect();
+    let q_terms = copy_terms(&p_plan.q_plans, &q_accs, q.proved.copy_challenges)?;
+    let a_terms = copy_terms(&p_plan.a_plans, &a_accs, a.proved.copy_challenges)?;
     // The claim accumulators' restructurings.
     let (pallas_acc, pallas_s) = &chain.pallas_claims;
     let (pallas_proof, pallas_statement, pallas_opening, pallas_claim) = restructure(
@@ -427,15 +447,16 @@ pub fn prepare(
         a_public: a_public.clone(),
         d_a,
         q: QCrossing {
-            members: chain
-                .u_q
+            members: q_accs
                 .iter()
-                .map(|(acc, _)| QMember {
+                .zip(&q_terms)
+                .map(|(acc, copy)| QMember {
                     acc_digest: acc.digest(&domains.q_fold),
-                    data: data_pairs(acc),
+                    terms: terms_pairs(acc, *copy),
                 })
                 .collect(),
             helper_digest: q_helper,
+            copy_challenges: q.proved.copy_challenges.map(|c| pair(&c)),
             field_digest: pair(&q.proved.field_digest),
             value: pair(&q.value),
             folded: pair(&q.folded),
@@ -443,14 +464,16 @@ pub fn prepare(
             rounds: q.claim.challenges().iter().map(pair).collect(),
         },
         a: ACrossing {
-            members: decided
+            members: a_accs
                 .iter()
-                .map(|(acc, _)| AMember {
+                .zip(&a_terms)
+                .map(|(acc, copy)| AMember {
                     acc_digest: pair(&acc.digest(&domains.a_fold)),
-                    data: data(acc),
+                    terms: terms(acc, *copy),
                 })
                 .collect(),
             helper_digest: pair(&a_helper),
+            copy_challenges: a.proved.copy_challenges,
             field_digest: a.proved.field_digest,
             value: a.value,
             folded: a.folded,
@@ -487,11 +510,13 @@ pub fn prepare(
             helpers: q.proved.proof.helpers.clone(),
             opening: q.opening.clone(),
             imports: [q.proved.field_digest, q.value, q.folded],
+            copy_challenges: q.proved.copy_challenges,
         },
         a: AFieldWitness {
             accs: decided.iter().map(|(acc, _)| acc.clone()).collect(),
             proof: a.proved.proof.clone(),
             helper_digest: a_helper,
+            copy_terms: a_terms.clone(),
             alpha: a.alpha,
             rounds: a.claim.challenges().to_vec(),
         },
@@ -512,6 +537,7 @@ pub fn prepare(
         state: chain.q_state.clone(),
         q: QFieldWitness {
             accs: chain.u_q.iter().map(|(acc, _)| acc.clone()).collect(),
+            copy_terms: q_terms,
             proof: q.proved.proof,
         },
         pallas: PallasFieldWitness {

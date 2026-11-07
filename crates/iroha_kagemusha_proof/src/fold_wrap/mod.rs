@@ -36,7 +36,12 @@ pub mod native;
 pub mod omega;
 pub mod p;
 
-use iroha_fold::{CommitKey, FoldedRelation};
+use ff::Field;
+use iroha_fold::{
+    CommitKey, FoldedRelation,
+    circuit::{FoldLanes, ScalarCell},
+    decider_v2::DeciderV2Plan,
+};
 use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve};
 use iroha_plonk::{
     frontend::{Error, Region, Value},
@@ -138,6 +143,41 @@ pub struct WrapSpec {
     /// The positions in `z_A` that are zero between operations (the step
     /// context and the program counter): P accepts only such a state.
     pub boundary: Vec<usize>,
+}
+
+/// The instance copy term `I` of an accumulator on its commitment side, in
+/// foreign arithmetic, as `decider_v2::instance_copy_terms`: the sum over
+/// the plan's instance copy cells of
+/// `1 / (gamma + v + eta id) - 1 / (gamma + v + eta sigma)`, where `v` is the
+/// public cell (the field side imports `I` instead of the public columns).
+pub(crate) fn copy_terms_cells<C: PastaCurve>(
+    lanes: &mut FoldLanes<'_, C>,
+    region: &mut Region<'_, C::Base>,
+    plan: &DeciderV2Plan<C>,
+    public: &[Vec<ScalarCell<C>>],
+    gamma: &ScalarCell<C>,
+    eta: &ScalarCell<C>,
+) -> Result<ScalarCell<C>, Error> {
+    let mut total = lanes.constant(region, C::ScalarExt::ZERO)?;
+    let zero = total.clone();
+    for &(column, row, id, sigma) in plan.instance_copy_cells() {
+        let value = public
+            .get(column)
+            .and_then(|c| c.get(row))
+            .map_or_else(|| zero.clone(), |cell| cell.ff.clone());
+        let base = lanes.add(region, &gamma.ff, &value)?;
+        let id = lanes.constant(region, C::ScalarExt::from(id))?;
+        let sigma = lanes.constant(region, C::ScalarExt::from(sigma))?;
+        let id_term = lanes.mul(region, &eta.ff, &id)?;
+        let sigma_term = lanes.mul(region, &eta.ff, &sigma)?;
+        let left = lanes.add(region, &base, &id_term)?;
+        let right = lanes.add(region, &base, &sigma_term)?;
+        let left = lanes.ff.inverse(region, &left)?;
+        let right = lanes.ff.inverse(region, &right)?;
+        let difference = lanes.sub(region, &left, &right)?;
+        total = lanes.add(region, &total, &difference)?;
+    }
+    lanes.export(region, total)
 }
 
 /// Lays out byte strings as one tape and decodes their 32-byte little-endian

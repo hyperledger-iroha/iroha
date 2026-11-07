@@ -1,7 +1,9 @@
 //! The values that cross between the wraps, in the order of P's instance.
 //!
 //! P's single public column carries every value one wrap computes and the
-//! other consumes. A value of `Fp` (P's native field, a canonical scalar in
+//! other consumes. Public columns of the decided accumulators do not cross:
+//! the field transcript binds them through each digest, and the side that
+//! hashes them computes the instance copy term `I` the field side needs. A value of `Fp` (P's native field, a canonical scalar in
 //! Omega) is one row. A value of `Fq` is two rows, its canonical S6 limbs
 //! `(lo, hi)` (`lo < 2^128`, `hi < 2^127`), because an `Fq` integer need not be
 //! below `p`. The side that computes a value range-checks its limbs. The
@@ -18,12 +20,10 @@ use iroha_plonk::frontend::Error;
 /// Two rows: a value's canonical limbs `(lo, hi)`.
 pub type Pair<X> = [X; 2];
 
-/// An accumulator's field data: its public columns (concatenated), `theta`,
-/// `r`, `beta` and `e`.
+/// An accumulator's field terms: `theta`, `r`, `beta`, `e`, and its instance
+/// copy term `I` (the public columns stay with the digest).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AccumulatorData<T> {
-    /// The folded public columns, column after column.
-    pub public: Vec<T>,
+pub struct AccumulatorTerms<T> {
     /// `theta` powers.
     pub theta: Vec<T>,
     /// One `LogUp` challenge per group.
@@ -32,16 +32,18 @@ pub struct AccumulatorData<T> {
     pub beta: Vec<T>,
     /// The accumulated error.
     pub e: T,
+    /// The instance copy term `I`.
+    pub copy_terms: T,
 }
 
-/// One decided Q accumulator's crossing values: its digest (P) and field
-/// data (P), both computed or assigned in P.
+/// One decided Q accumulator's crossing values: its digest and field terms,
+/// computed in P (`I` from the public columns P hashes).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QMember<X> {
     /// `kgwfacd1(U_Q[k])`.
     pub acc_digest: X,
-    /// `U_Q[k]`'s field data.
-    pub data: AccumulatorData<Pair<X>>,
+    /// `U_Q[k]`'s field terms.
+    pub terms: AccumulatorTerms<Pair<X>>,
 }
 
 /// The Q-side decider's crossing values: one batch over every Q kind. Its
@@ -55,6 +57,8 @@ pub struct QCrossing<X> {
     pub members: Vec<QMember<X>>,
     /// `D_H` of the batch's helpers (P).
     pub helper_digest: X,
+    /// The copy challenges `gamma`, `eta` (Omega).
+    pub copy_challenges: [Pair<X>; 2],
     /// `d_F` (Omega).
     pub field_digest: Pair<X>,
     /// `v* = sum_c alpha^c v_c` (Omega).
@@ -68,13 +72,13 @@ pub struct QCrossing<X> {
 }
 
 /// One decided A accumulator's crossing values, computed in Omega (the last
-/// kind after the fold of `A_n`).
+/// kind after the fold of `A_n`; `I` from the public columns Omega hashes).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AMember<X> {
     /// `kgwfacd1(U_A[k])`.
     pub acc_digest: Pair<X>,
-    /// `U_A[k]`'s field data.
-    pub data: AccumulatorData<X>,
+    /// `U_A[k]`'s field terms.
+    pub terms: AccumulatorTerms<X>,
 }
 
 /// The A-side decider's crossing values: one batch over every A kind. Its
@@ -87,6 +91,8 @@ pub struct ACrossing<X> {
     pub members: Vec<AMember<X>>,
     /// `D_H` of the batch's helpers (Omega).
     pub helper_digest: Pair<X>,
+    /// The copy challenges `gamma`, `eta` (P).
+    pub copy_challenges: [X; 2],
     /// `d_F` (P).
     pub field_digest: X,
     /// `v*` (P).
@@ -154,11 +160,9 @@ pub struct PPublic<X> {
     pub vesta: VestaClaimCrossing<X>,
 }
 
-/// The field-data counts of one relation.
+/// The field-term counts of one relation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DataShape {
-    /// Public values over every instance column.
-    pub public: usize,
     /// `theta` powers.
     pub theta: usize,
     /// `LogUp` groups.
@@ -172,15 +176,15 @@ impl DataShape {
     #[must_use]
     pub fn of(shape: &FoldShape) -> Self {
         Self {
-            public: shape.instance_lengths.iter().sum(),
             theta: shape.theta_len,
             r: shape.groups.len(),
             beta: shape.index_bits,
         }
     }
 
+    /// Values: the counted ones, `e` and `I`.
     fn values(&self) -> usize {
-        self.public + self.theta + self.r + self.beta + 1
+        self.theta + self.r + self.beta + 2
     }
 }
 
@@ -218,8 +222,8 @@ impl PLayout {
     pub fn rows(&self) -> usize {
         let q_members: usize = self.q_data.iter().map(|d| 1 + 2 * d.values()).sum();
         let a_members: usize = self.a_data.iter().map(|d| 2 + d.values()).sum();
-        let q = q_members + 1 + 2 * 4 + 2 * self.rounds;
-        let a = a_members + 2 + 4 + self.rounds;
+        let q = q_members + 1 + 2 * 2 + 2 * 4 + 2 * self.rounds;
+        let a = a_members + 2 + 2 + 4 + self.rounds;
         let pallas = 1 + 2 * (3 * self.claim_rounds + 2);
         let vesta = 2 + 3 * self.claim_rounds + 2;
         self.a_public + 1 + q + a + pallas + vesta
@@ -243,10 +247,11 @@ impl PLayout {
                 .iter()
                 .map(|shape| QMember {
                     acc_digest: cursor.one(),
-                    data: cursor.data_pairs(shape),
+                    terms: cursor.terms_pairs(shape),
                 })
                 .collect(),
             helper_digest: cursor.one(),
+            copy_challenges: [cursor.pair(), cursor.pair()],
             field_digest: cursor.pair(),
             value: cursor.pair(),
             folded: cursor.pair(),
@@ -259,10 +264,11 @@ impl PLayout {
                 .iter()
                 .map(|shape| AMember {
                     acc_digest: cursor.pair(),
-                    data: cursor.data(shape),
+                    terms: cursor.terms(shape),
                 })
                 .collect(),
             helper_digest: cursor.pair(),
+            copy_challenges: [cursor.one(), cursor.one()],
             field_digest: cursor.one(),
             value: cursor.one(),
             folded: cursor.one(),
@@ -318,31 +324,31 @@ impl<X: Clone> Cursor<'_, X> {
     fn pairs(&mut self, count: usize) -> Vec<Pair<X>> {
         (0..count).map(|_| self.pair()).collect()
     }
-    fn data(&mut self, shape: &DataShape) -> AccumulatorData<X> {
-        AccumulatorData {
-            public: self.many(shape.public),
+    fn terms(&mut self, shape: &DataShape) -> AccumulatorTerms<X> {
+        AccumulatorTerms {
             theta: self.many(shape.theta),
             r: self.many(shape.r),
             beta: self.many(shape.beta),
             e: self.one(),
+            copy_terms: self.one(),
         }
     }
-    fn data_pairs(&mut self, shape: &DataShape) -> AccumulatorData<Pair<X>> {
-        AccumulatorData {
-            public: self.pairs(shape.public),
+    fn terms_pairs(&mut self, shape: &DataShape) -> AccumulatorTerms<Pair<X>> {
+        AccumulatorTerms {
             theta: self.pairs(shape.theta),
             r: self.pairs(shape.r),
             beta: self.pairs(shape.beta),
             e: self.pair(),
+            copy_terms: self.pair(),
         }
     }
 }
 
-fn push_data<X: Clone>(out: &mut Vec<X>, data: &AccumulatorData<X>) {
-    for list in [&data.public, &data.theta, &data.r, &data.beta] {
+fn push_terms<X: Clone>(out: &mut Vec<X>, terms: &AccumulatorTerms<X>) {
+    for list in [&terms.theta, &terms.r, &terms.beta] {
         out.extend(list.iter().cloned());
     }
-    out.push(data.e.clone());
+    out.extend([terms.e.clone(), terms.copy_terms.clone()]);
 }
 
 fn push_pairs<X: Clone>(out: &mut Vec<X>, pairs: &[Pair<X>]) {
@@ -351,11 +357,11 @@ fn push_pairs<X: Clone>(out: &mut Vec<X>, pairs: &[Pair<X>]) {
     }
 }
 
-fn push_data_pairs<X: Clone>(out: &mut Vec<X>, data: &AccumulatorData<Pair<X>>) {
-    for list in [&data.public, &data.theta, &data.r, &data.beta] {
+fn push_terms_pairs<X: Clone>(out: &mut Vec<X>, terms: &AccumulatorTerms<Pair<X>>) {
+    for list in [&terms.theta, &terms.r, &terms.beta] {
         push_pairs(out, list);
     }
-    out.extend(data.e.iter().cloned());
+    push_pairs(out, &[terms.e.clone(), terms.copy_terms.clone()]);
 }
 
 impl<X: Clone> PPublic<X> {
@@ -367,9 +373,10 @@ impl<X: Clone> PPublic<X> {
         let q = &self.q;
         for member in &q.members {
             out.push(member.acc_digest.clone());
-            push_data_pairs(&mut out, &member.data);
+            push_terms_pairs(&mut out, &member.terms);
         }
         out.push(q.helper_digest.clone());
+        push_pairs(&mut out, &q.copy_challenges);
         push_pairs(
             &mut out,
             &[
@@ -383,9 +390,10 @@ impl<X: Clone> PPublic<X> {
         let a = &self.a;
         for member in &a.members {
             out.extend(member.acc_digest.iter().cloned());
-            push_data(&mut out, &member.data);
+            push_terms(&mut out, &member.terms);
         }
         out.extend(a.helper_digest.iter().cloned());
+        out.extend(a.copy_challenges.iter().cloned());
         out.extend([
             a.field_digest.clone(),
             a.value.clone(),
@@ -417,16 +425,11 @@ mod tests {
 
     #[test]
     fn rows_and_parse_are_inverse() {
-        let shape = |public, theta, r, beta| DataShape {
-            public,
-            theta,
-            r,
-            beta,
-        };
+        let shape = |theta, r, beta| DataShape { theta, r, beta };
         let layout = PLayout {
             a_public: 3,
-            q_data: vec![shape(5, 2, 3, 18), shape(2, 0, 0, 18)],
-            a_data: vec![shape(3, 1, 1, 17), shape(4, 0, 2, 17)],
+            q_data: vec![shape(2, 3, 18), shape(0, 0, 18)],
+            a_data: vec![shape(1, 1, 17), shape(0, 2, 17)],
             rounds: 16,
             claim_rounds: 16,
         };
@@ -435,7 +438,11 @@ mod tests {
         assert_eq!(parsed.rows(), rows);
         assert_eq!(parsed.d_a, 3);
         assert_eq!(parsed.q.members.len(), 2);
-        assert_eq!(parsed.a.members[1].data.e, parsed.a.helper_digest[0] - 1);
+        assert_eq!(
+            parsed.a.members[1].terms.copy_terms,
+            parsed.a.helper_digest[0] - 1
+        );
+        assert_eq!(parsed.a.copy_challenges[0], parsed.a.helper_digest[1] + 1);
         assert_eq!(parsed.vesta.value, layout.rows() - 1);
         assert!(layout.parse(&rows[1..]).is_err());
     }

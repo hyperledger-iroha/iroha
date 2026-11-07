@@ -18,7 +18,7 @@ use iroha_fold::{
             assign_restructure_field, claim_accumulator_digest, verify_restructure_field,
         },
         decider_v2::{
-            assign_accumulator_field, assign_decider_v2_field_proof, claim_commitments,
+            assign_accumulator_field_terms, assign_decider_v2_field_proof, claim_commitments,
             helper_digest, opening_scalars, opening_transcript, verify_decider_v2_field,
         },
         field::FieldLanes,
@@ -59,7 +59,7 @@ use iroha_plonk_recursion::{
 };
 
 use super::{
-    K_U32, WrapError, WrapSpec,
+    K_U32, WrapError, WrapSpec, copy_terms_cells,
     crossing::{PPublic, Pair, PallasClaimCrossing, QCrossing},
     p::PPlan,
 };
@@ -126,6 +126,8 @@ impl OmegaPlan {
 pub struct QFieldWitness {
     /// The decided Q accumulators, in kind order.
     pub accs: Vec<Accumulator<Ep>>,
+    /// Each member's instance copy term `I` (P computes them).
+    pub copy_terms: Vec<Fq>,
     /// The batch proof.
     pub proof: DeciderV2Proof<Ep>,
 }
@@ -309,42 +311,41 @@ pub fn q_field_side(
     let spec = &*plan.spec;
     let domain = &spec.domains.q_fold;
     let plans: Vec<&DeciderV2Plan<Ep>> = plan.q_plans.iter().map(|p| &**p).collect();
-    if crossing.members.len() != plans.len() || witness.is_some_and(|w| w.accs.len() != plans.len())
+    if crossing.members.len() != plans.len()
+        || witness.is_some_and(|w| w.accs.len() != plans.len() || w.copy_terms.len() != plans.len())
     {
         return Err(Error::Synthesis);
     }
     let mut members = Vec::with_capacity(plans.len());
     for (index, (relation, member)) in spec.q.iter().zip(&crossing.members).enumerate() {
-        let acc = assign_accumulator_field::<Ep>(
+        let acc = assign_accumulator_field_terms::<Ep>(
             lanes,
             region,
             domain,
             &relation.shape(),
             witness.map(|w| &w.accs[index]),
+            witness.map(|w| w.copy_terms[index]),
         )?;
         bind_digest_limbs(region, &acc.digest, &member.acc_digest)?;
-        let data = &member.data;
-        let public: Vec<&Word<Fq>> = acc.public.iter().flatten().collect();
-        if public.len() != data.public.len()
-            || acc.theta.len() != data.theta.len()
-            || acc.r.len() != data.r.len()
-            || acc.beta.len() != data.beta.len()
+        let terms = &member.terms;
+        if acc.theta.len() != terms.theta.len()
+            || acc.r.len() != terms.r.len()
+            || acc.beta.len() != terms.beta.len()
         {
             return Err(Error::Synthesis);
         }
-        for (word, pair) in public.into_iter().zip(&data.public) {
-            bind_pair(lanes, region, word, pair)?;
-        }
         for (words, pairs) in [
-            (&acc.theta, &data.theta),
-            (&acc.r, &data.r),
-            (&acc.beta, &data.beta),
+            (&acc.theta, &terms.theta),
+            (&acc.r, &terms.r),
+            (&acc.beta, &terms.beta),
         ] {
             for (word, pair) in words.iter().zip(pairs) {
                 bind_pair(lanes, region, word, pair)?;
             }
         }
-        bind_pair(lanes, region, &acc.e, &data.e)?;
+        bind_pair(lanes, region, &acc.e, &terms.e)?;
+        let copy_terms = acc.copy_terms.as_ref().ok_or(Error::Synthesis)?;
+        bind_pair(lanes, region, copy_terms, &terms.copy_terms)?;
         members.push(acc);
     }
     let proof = assign_decider_v2_field_proof(lanes, region, &plans, witness.map(|w| &w.proof))?;
@@ -368,6 +369,9 @@ pub fn q_field_side(
         &alpha,
         &rounds,
     )?;
+    for (word, pair) in output.copy_challenges.iter().zip(&crossing.copy_challenges) {
+        bind_pair(lanes, region, word, pair)?;
+    }
     bind_pair(lanes, region, &output.field_digest, &crossing.field_digest)?;
     bind_pair(lanes, region, &value, &crossing.value)?;
     bind_pair(lanes, region, &folded, &crossing.folded)
@@ -542,39 +546,52 @@ pub fn a_commitment_side(
         }
     }
     bind_scalar(region, &claims.e, &public.vesta.e)?;
-    // The decided accumulators: the kept ones with the last kind folded;
-    // their digests and field data cross to P.
+    // The decided accumulators: the kept ones with the last kind folded.
+    // Their digests and field terms cross to P, with each instance copy term
+    // computed here from the public columns the digest hashes and P's copy
+    // challenges.
     let mut decided = kept;
     decided[last] = folded;
-    for (kind, (acc, member)) in decided.iter().zip(&public.a.members).enumerate() {
+    let gamma = import_row(lanes, region, &public.a.copy_challenges[0])?;
+    let eta = import_row(lanes, region, &public.a.copy_challenges[1])?;
+    for (kind, ((acc, member), member_plan)) in decided
+        .iter()
+        .zip(&public.a.members)
+        .zip(&plans)
+        .enumerate()
+    {
         let digest = if kind == last {
             accumulator_digest(lanes, region, domain, acc)?
         } else {
             kept_digests[kind].clone()
         };
         bind_canonical(lanes, region, &digest, &member.acc_digest)?;
-        let data = &member.data;
-        let acc_public: Vec<&ScalarCell<Eq>> = acc.instance.public.iter().flatten().collect();
-        if acc_public.len() != data.public.len()
-            || acc.theta.len() != data.theta.len()
-            || acc.r.len() != data.r.len()
-            || acc.beta.len() != data.beta.len()
+        let terms = &member.terms;
+        if acc.theta.len() != terms.theta.len()
+            || acc.r.len() != terms.r.len()
+            || acc.beta.len() != terms.beta.len()
         {
             return Err(Error::Synthesis);
         }
-        for (cell, row) in acc_public.into_iter().zip(&data.public) {
-            bind_scalar(region, cell, row)?;
-        }
         for (cells, rows) in [
-            (&acc.theta, &data.theta),
-            (&acc.r, &data.r),
-            (&acc.beta, &data.beta),
+            (&acc.theta, &terms.theta),
+            (&acc.r, &terms.r),
+            (&acc.beta, &terms.beta),
         ] {
             for (cell, row) in cells.iter().zip(rows) {
                 bind_scalar(region, cell, row)?;
             }
         }
-        bind_scalar(region, &acc.e, &data.e)?;
+        bind_scalar(region, &acc.e, &terms.e)?;
+        let copy_terms = copy_terms_cells(
+            lanes,
+            region,
+            member_plan,
+            &acc.instance.public,
+            &gamma,
+            &eta,
+        )?;
+        bind_scalar(region, &copy_terms, &terms.copy_terms)?;
     }
     // The A-side decider's commitment side and its opening.
     let mut helpers = Vec::with_capacity(helper_count);

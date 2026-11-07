@@ -556,7 +556,7 @@ fn wrap(keys: &native::WrapKeys, chain: &FinalChain, seed: u64, mutate: bool) {
             ("h_out_n", 1),
             ("D_A", layout.a_public),
             ("a Q member digest", row_of(&parsed.q.members[1].acc_digest)),
-            ("an A member's e", row_of(&parsed.a.members[1].data.e)),
+            ("an A member's e", row_of(&parsed.a.members[1].terms.e)),
             ("the last row", layout.rows() - 1),
         ] {
             let mut changed = prepared.p_public.clone();
