@@ -25,9 +25,9 @@
 //! - `T_g` per `LogUp` group: the running sum of `sum_s a_s h_s - g`, zero at
 //!   both ends, where the fixed `a_s` marks slot `s`'s cells (the only rows
 //!   where `h_s` is constrained, so no free `h` value enters the sum);
-//! - each public scalar (the weights, the folded `theta` and `r`, `e`) as a
-//!   constant advice column: equal on consecutive rows and copied from its
-//!   instance cell once.
+//! - each public scalar (the weights, the folded `theta` and `r`, `e`) read as
+//!   one instance cell on every row (`Expression::InstanceCell`, degree zero), so
+//!   it adds no column and no constraint degree.
 //!
 //! The public inputs are the folded public columns of the accumulator followed by
 //! one column of scalars ([`DeciderPlan::scalars`]). The decider proves nothing
@@ -99,10 +99,6 @@ impl ScalarLayout {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         false
-    }
-    /// The scalars that are broadcast as constant advice columns (all but the ratios).
-    fn broadcast(&self) -> impl Iterator<Item = usize> + '_ {
-        (0..self.ratio_start()).chain(core::iter::once(self.e()))
     }
 }
 
@@ -251,7 +247,6 @@ pub struct DeciderConfig {
     fixed: Vec<Column<Fixed>>,
     selectors: Vec<Column<Fixed>>,
     witness: Vec<Column<Advice>>,
-    broadcast: Vec<(usize, Column<Advice>)>,
     ratio: Column<Advice>,
     p: Column<Advice>,
     s: Column<Advice>,
@@ -354,122 +349,113 @@ impl<F: PastaField> Circuit<F> for Decider<F> {
                 }
             }
         }
-        let broadcast: Vec<(usize, Column<Advice>)> = layout
-            .broadcast()
-            .map(|index| {
-                let column = meta.advice_column();
-                meta.enable_equality(column);
-                (index, column)
-            })
-            .collect();
         let ratio = meta.advice_column();
         meta.enable_equality(ratio);
-        let p = meta.advice_column();
-        let s = meta.advice_column();
-        let t: Vec<Column<Advice>> = relation.groups.iter().map(|_| meta.advice_column()).collect();
+        let weight_column = meta.advice_column();
+        let error_column = meta.advice_column();
+        let logup_columns: Vec<Column<Advice>> = relation.groups.iter().map(|_| meta.advice_column()).collect();
         let q_main = meta.fixed_column();
         let q_first = meta.fixed_column();
         let q_last = meta.fixed_column();
-        let activity: Vec<Vec<Column<Fixed>>> =
-            relation.groups.iter().map(|g| g.slots.iter().map(|_| meta.fixed_column()).collect()).collect();
+        let activity: Vec<Vec<Column<Fixed>>> = relation
+            .groups
+            .iter()
+            .map(|group| group.slots.iter().map(|_| meta.fixed_column()).collect())
+            .collect();
         let config = DeciderConfig {
             instances,
             scalars,
             fixed,
             selectors,
             witness,
-            broadcast,
             ratio,
-            p,
-            s,
-            t,
+            p: weight_column,
+            s: error_column,
+            t: logup_columns,
             q_main,
             q_first,
             q_last,
             activity,
         };
-        let c = config.clone();
+        let columns = config.clone();
         let plan = Arc::clone(&plan);
         meta.create_gate("relaxed decider", move |cells| {
             let relation = &plan.relation;
             let layout = plan.scalars();
-            let remap = Remap { fixed: &c.fixed, selectors: &c.selectors, witness: &c.witness, instances: &c.instances };
-            let scalar = |cells: &mut VirtualCells<'_, F>, index: usize| {
-                let column = c.broadcast.iter().find(|(i, _)| *i == index).expect("broadcast scalar").1;
-                cells.query_advice(column, Rotation::cur())
+            let remap = Remap {
+                fixed: &columns.fixed,
+                selectors: &columns.selectors,
+                witness: &columns.witness,
+                instances: &columns.instances,
             };
+            // Every public scalar is one instance cell, read on every row.
+            let scalar = |index: usize| Expression::instance_cell(columns.scalars, index);
             let cur = Rotation::cur();
             let next = Rotation::next();
             // Phi = sum over constraint indices of weight * class constraint.
             let mut phi = Expression::Constant(F::ZERO);
             for gate in &relation.gates {
-                let weight = scalar(cells, gate.class);
-                phi = phi + weight * remap.expression(cells, &gate.expression);
+                phi = phi + scalar(gate.class) * remap.expression(cells, &gate.expression);
             }
-            let theta: Vec<Expression<F>> =
-                (0..layout.theta).map(|j| scalar(cells, layout.theta_start() + j)).collect();
+            let theta: Vec<Expression<F>> = (0..layout.theta).map(|j| scalar(layout.theta_start() + j)).collect();
             let compress = |cells: &mut VirtualCells<'_, F>, expressions: &[Expression<F>]| {
                 let mut out = Expression::Constant(F::ZERO);
-                for (j, e) in expressions.iter().enumerate() {
-                    let term = remap.expression(cells, e);
+                for (j, expression) in expressions.iter().enumerate() {
+                    let term = remap.expression(cells, expression);
                     out = out + if j == 0 { term } else { theta[j - 1].clone() * term };
                 }
                 out
             };
             let mut logup_sums = Vec::with_capacity(relation.groups.len());
-            for (g, group) in relation.groups.iter().enumerate() {
-                let r = scalar(cells, layout.r_start() + g);
-                let mut h_sum = Expression::Constant(F::ZERO);
+            for (index, group) in relation.groups.iter().enumerate() {
+                let challenge = scalar(layout.r_start() + index);
+                let mut reciprocal_sum = Expression::Constant(F::ZERO);
                 for (slot, chosen) in group.slot_members.iter().enumerate() {
-                    let h = cells.query_advice(c.witness[group.h_column(slot)], cur);
+                    let reciprocal = cells.query_advice(columns.witness[group.h_column(slot)], cur);
                     // h_s is constrained, hence counted, on its slot's cells only.
-                    let active = cells.query_fixed(c.activity[g][slot], cur);
-                    h_sum = h_sum + active.clone() * h.clone();
+                    let active = cells.query_fixed(columns.activity[index][slot], cur);
+                    reciprocal_sum = reciprocal_sum + active.clone() * reciprocal.clone();
                     let terms: Vec<Expression<F>> = chosen
                         .iter()
-                        .map(|m| r.clone() + compress(cells, &group.members[usize::from(*m)].expressions))
+                        .map(|member| {
+                            challenge.clone() + compress(cells, &group.members[usize::from(*member)].expressions)
+                        })
                         .collect();
-                    let mut cell = h * product(terms.iter().cloned());
+                    let mut cell = reciprocal * product(terms.iter().cloned());
                     for k in 0..terms.len() {
                         cell = cell
-                            - product(terms.iter().enumerate().filter(|(j, _)| *j != k).map(|(_, t)| t.clone()));
+                            - product(terms.iter().enumerate().filter(|(j, _)| *j != k).map(|(_, term)| term.clone()));
                     }
-                    let weight = scalar(cells, group.slot_constraints[slot]);
-                    phi = phi + weight * active * cell;
+                    phi = phi + scalar(group.slot_constraints[slot]) * active * cell;
                 }
-                let m = cells.query_advice(c.witness[group.m_column()], cur);
-                let gg = cells.query_advice(c.witness[group.g_column()], cur);
+                let multiplicity = cells.query_advice(columns.witness[group.m_column()], cur);
+                let table_reciprocal = cells.query_advice(columns.witness[group.g_column()], cur);
                 let table = compress(cells, &group.table_expressions);
-                let weight = scalar(cells, group.table_constraint);
                 // On rows past the usable ones m = g = 0, so the constraint is zero there.
-                phi = phi + weight * (gg.clone() * (r + table) - m);
-                logup_sums.push(h_sum - gg);
+                phi = phi
+                    + scalar(group.table_constraint) * (table_reciprocal.clone() * (challenge + table) - multiplicity);
+                logup_sums.push(reciprocal_sum - table_reciprocal);
             }
-            let q_main = cells.query_fixed(c.q_main, cur);
-            let q_first = cells.query_fixed(c.q_first, cur);
-            let q_last = cells.query_fixed(c.q_last, cur);
-            let p_cur = cells.query_advice(c.p, cur);
-            let p_next = cells.query_advice(c.p, next);
-            let s_cur = cells.query_advice(c.s, cur);
-            let s_next = cells.query_advice(c.s, next);
-            let ratio = cells.query_advice(c.ratio, cur);
-            let e = scalar(cells, layout.e());
+            let q_main = cells.query_fixed(columns.q_main, cur);
+            let q_first = cells.query_fixed(columns.q_first, cur);
+            let q_last = cells.query_fixed(columns.q_last, cur);
+            let p_cur = cells.query_advice(columns.p, cur);
+            let p_next = cells.query_advice(columns.p, next);
+            let s_cur = cells.query_advice(columns.s, cur);
+            let s_next = cells.query_advice(columns.s, next);
+            let ratio = cells.query_advice(columns.ratio, cur);
+            let error = scalar(layout.e());
             let weighted = p_cur.clone() * phi;
             let mut constraints = vec![
                 q_main.clone() * (s_next - s_cur.clone() - weighted.clone()),
-                q_last.clone() * (e - s_cur.clone() - weighted),
+                q_last.clone() * (error - s_cur.clone() - weighted),
                 q_first.clone() * s_cur,
                 q_first.clone() * (p_cur.clone() - Expression::Constant(F::ONE)),
                 q_main.clone() * (p_next - p_cur * ratio),
             ];
-            for (_, column) in &c.broadcast {
-                let now = cells.query_advice(*column, cur);
-                let after = cells.query_advice(*column, next);
-                constraints.push(q_main.clone() * (after - now));
-            }
-            for (g, sum) in logup_sums.into_iter().enumerate() {
-                let t_cur = cells.query_advice(c.t[g], cur);
-                let t_next = cells.query_advice(c.t[g], next);
+            for (index, sum) in logup_sums.into_iter().enumerate() {
+                let t_cur = cells.query_advice(columns.t[index], cur);
+                let t_next = cells.query_advice(columns.t[index], next);
                 constraints.push(q_main.clone() * (t_next - t_cur.clone() - sum.clone()));
                 constraints.push(q_first.clone() * t_cur.clone());
                 constraints.push(q_last.clone() * (t_cur + sum));
@@ -543,14 +529,6 @@ impl<F: PastaField> Circuit<F> for Decider<F> {
                     region.assign_advice(config.s, row, value(&|w| w.s[row]))?;
                     for (g, column) in config.t.iter().enumerate() {
                         region.assign_advice(*column, row, value(&|w| w.t[g][row]))?;
-                    }
-                }
-                // Broadcast scalars: constant columns, row 0 copied from the instance.
-                for (index, column) in &config.broadcast {
-                    let first = region.assign_advice_from_instance(|| "scalar", config.scalars, *index, *column, 0)?;
-                    let v = first.value().copied();
-                    for row in 1..n {
-                        region.assign_advice(*column, row, v)?;
                     }
                 }
                 // Ratios: every row but the last copies the ratio of its trailing ones.
