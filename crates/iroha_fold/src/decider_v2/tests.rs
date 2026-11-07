@@ -32,12 +32,14 @@ use crate::{
     circuit::{
         FoldVerifierChips, FoldVerifierConfig,
         decider_v2::{
-            assign_accumulator_field, assign_decider_v2_field_proof, helper_digest as helper_digest_in_circuit,
-            opening_scalars, opening_transcript, verify_decider_v2_field,
+            assign_accumulator_field, assign_decider_v2_field_proof, claim_commitments,
+            helper_digest as helper_digest_in_circuit, opening_scalars, opening_transcript, verify_decider_v2_field,
         },
         field::{FieldVerifierChips, FieldVerifierConfig},
         transcript as circuit_transcript,
+        verify::assign_accumulator,
     },
+    transcript::Transcript,
     transcript::s6_limbs,
     relation::FoldShape,
 };
@@ -749,4 +751,103 @@ fn decider_claims_enter_a_claim_accumulator_and_restructure() {
     let (proof, statement) = restructure_prove(&DOMAIN, &claims, &s2).expect("restructure");
     assert_eq!(restructure_verify(&DOMAIN, &claims, &proof), Ok(statement));
     assert_eq!(statement.commitment, claims.g);
+}
+
+/// Tag of the test's digest over a commitment list.
+const TAG_TEST_COMMITMENTS: u64 = u64::from_le_bytes(*b"testcmts");
+
+/// The commitment side's claim commitments for a batch, digested in claim order.
+#[derive(Clone)]
+struct CommitmentsCircuit {
+    plan: Arc<DeciderV2Plan<Ep>>,
+    shape: FoldShape,
+    accs: Vec<Option<Accumulator<Ep>>>,
+    helpers: Vec<Option<Ep>>,
+}
+
+#[derive(Clone, Debug)]
+struct CommitmentsConfig {
+    fold: FoldVerifierConfig<Ep>,
+    instance: Column<InstanceColumn>,
+}
+
+impl Circuit<Fp> for CommitmentsCircuit {
+    type Config = CommitmentsConfig;
+    type FloorPlanner = SimpleFloorPlanner;
+    type Params = ();
+
+    fn without_witnesses(&self) -> Self {
+        Self {
+            plan: Arc::clone(&self.plan),
+            shape: self.shape.clone(),
+            accs: vec![None; self.accs.len()],
+            helpers: vec![None; self.helpers.len()],
+        }
+    }
+
+    fn configure(meta: &mut ConstraintSystem<Fp>) -> CommitmentsConfig {
+        let fold = FoldVerifierConfig::configure(meta);
+        let instance = meta.instance_column(1);
+        meta.enable_equality(instance);
+        CommitmentsConfig { fold, instance }
+    }
+
+    fn synthesize(&self, config: CommitmentsConfig, mut layouter: impl Layouter<Fp>) -> Result<(), PlonkError> {
+        let mut chips = FoldVerifierChips::new(&config.fold);
+        chips.load_tables(&mut layouter)?;
+        let digest = layouter.assign_region(
+            || "claim commitments",
+            |mut region| {
+                let mut lanes = chips.lanes();
+                let accs = self
+                    .accs
+                    .iter()
+                    .map(|acc| assign_accumulator(&mut lanes, &mut region, &self.shape, acc.as_ref()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let helpers = self
+                    .helpers
+                    .iter()
+                    .map(|p| lanes.assign_point(&mut region, p.map_or_else(Value::unknown, Value::known)))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let members: Vec<_> = accs.iter().map(|acc| (&*self.plan, acc)).collect();
+                let commitments = claim_commitments(&mut lanes, &mut region, &members, &helpers)?;
+                circuit_transcript::start(&mut lanes, TAG_TEST_COMMITMENTS, &DOMAIN)?;
+                for point in &commitments {
+                    circuit_transcript::absorb_point(&mut lanes, point);
+                }
+                circuit_transcript::finish(&mut lanes, &mut region)
+            },
+        )?;
+        layouter.constrain_instance(digest.cell(), config.instance, 0)
+    }
+}
+
+#[test]
+#[ignore = "k16 claim-commitment circuit; run optimized"]
+fn claim_commitments_follow_the_native_claim_order() {
+    let s = setup();
+    let (acc1, w1) = accumulator(&s);
+    let mut rng = ChaCha20Rng::seed_from_u64(13);
+    let (instance, w2) = fresh(&s, Mini { seed: 7, broken: false }, &mut rng);
+    let acc2 = Accumulator::from_fresh(&s.relation, &DOMAIN, instance).expect("accumulator");
+    let proved = prove_many(&DOMAIN, &[(&s.plan, &acc1, &w1), (&s.plan, &acc2, &w2)]).expect("prove");
+    let verified = verify_many(&DOMAIN, &[(&s.plan, &acc1), (&s.plan, &acc2)], &proved.proof).expect("verify");
+    let mut native = Transcript::<Ep>::new(TAG_TEST_COMMITMENTS, &DOMAIN);
+    for claim in &verified.claims {
+        native.absorb_point(&claim.commitment);
+    }
+    let digest = native.digest();
+    assert_eq!(s.plan.mu(), K as usize);
+    assert_eq!(proved.proof.helpers.len(), 2 * s.plan.helper_count());
+    let plan = Arc::new(DeciderV2Plan::new(s.relation.clone(), &s.key).expect("plan"));
+    let circuit = CommitmentsCircuit {
+        plan,
+        shape: s.relation.shape(),
+        accs: vec![Some(acc1.clone()), Some(acc2.clone())],
+        helpers: proved.proof.helpers.iter().map(|p| Some(Ep::from(*p))).collect(),
+    };
+    assert!(check_circuit(&circuit, 16, &[vec![digest]], CheckMode::Strict).expect("synthesis").is_satisfied());
+    // The members in another order give another claim order.
+    let swapped = CommitmentsCircuit { accs: vec![Some(acc2), Some(acc1)], ..circuit };
+    assert!(!check_circuit(&swapped, 16, &[vec![digest]], CheckMode::Strict).expect("synthesis").is_satisfied());
 }

@@ -24,13 +24,13 @@ use iroha_pasta::{PastaCurve, PastaField, poseidon::PoseidonField};
 use iroha_plonk::frontend::{Error, Region, Value};
 use iroha_plonk_gadgets::{Word, ecc::AssignedPoint};
 
-use super::{FoldLanes, ScalarCell, field::FieldLanes, transcript as t};
+use super::{FoldLanes, ScalarCell, field::FieldLanes, transcript as t, verify::AccumulatorCells};
 use crate::{
     decider_v2::{
         DeciderV2Plan, DeciderV2Proof,
         eval::Op,
         mle,
-        plan::{Source, Weight},
+        plan::{Committed, Source, Weight},
     },
     fold::Accumulator,
     relation::FoldShape,
@@ -652,4 +652,36 @@ pub fn opening_transcript<C: PastaCurve>(
 ) -> Result<(), Error> {
     t::start(lanes, TAG_DECIDER_OPENING, domain)?;
     t::absorb_scalar(lanes, region, field_digest)
+}
+
+/// The commitments of a batch's claims on the commitment side, in claim order,
+/// as [`crate::decider_v2::verify_many`] lists them. Per member come its
+/// committed polynomials: witness columns from the accumulator's commitments,
+/// key polynomials as circuit constants, copy helpers from `helpers` (all
+/// members' helpers in member order, [`DeciderV2Plan::helper_count`] each).
+///
+/// # Errors
+/// Layout errors, or helpers or accumulators of another shape.
+pub fn claim_commitments<C: PastaCurve>(
+    lanes: &mut FoldLanes<'_, C>,
+    region: &mut Region<'_, C::Base>,
+    members: &[(&DeciderV2Plan<C>, &AccumulatorCells<C>)],
+    helpers: &[AssignedPoint<C::Base>],
+) -> Result<Vec<AssignedPoint<C::Base>>, Error> {
+    if helpers.len() != members.iter().map(|(plan, _)| plan.helper_count()).sum::<usize>() {
+        return Err(Error::Synthesis);
+    }
+    let mut commitments = Vec::new();
+    let mut helper_offset = 0;
+    for (plan, acc) in members {
+        for poly in &plan.committed {
+            commitments.push(match *poly {
+                Committed::Witness(c) => acc.instance.commitments.get(c).cloned().ok_or(Error::Synthesis)?,
+                Committed::Key(p) => lanes.ecc.constant_point(region, &C::from(plan.key_commitments[p]))?,
+                Committed::Helper(j) => helpers[helper_offset + j].clone(),
+            });
+        }
+        helper_offset += plan.helper_count();
+    }
+    Ok(commitments)
 }

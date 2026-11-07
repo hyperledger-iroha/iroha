@@ -546,6 +546,20 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
         self.degree
     }
 
+    /// The row bits `mu`: the domain is `2^mu` rows, and the batched opening
+    /// has `mu` rounds.
+    #[must_use]
+    pub const fn mu(&self) -> usize {
+        self.mu
+    }
+
+    /// Copy-helper commitments per proof of this plan (one per column with copy
+    /// cells).
+    #[must_use]
+    pub fn helper_count(&self) -> usize {
+        self.copies.columns.len()
+    }
+
     /// The verifier's work beyond the opening: field multiplications of the
     /// final term evaluation (one per term weight included), scalars absorbed
     /// per proof, and the opened commitments as (witness, key, helper).
