@@ -101,7 +101,7 @@ fn native_prefix_exports_checkpoint_and_ordered_next_roster_without_mutating_sto
     assert_eq!(checkpoint.block_hash(), chain.committed(5).block().hash());
     let mut consumer = SumeragiFinalityVerifier::from_trusted_checkpoint(
         &checkpoint,
-        args.network_id,
+        &args.network_id,
         args.chain_id.as_ref(),
     )
     .unwrap();
