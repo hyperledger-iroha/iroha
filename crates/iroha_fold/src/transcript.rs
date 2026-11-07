@@ -39,6 +39,8 @@ pub const TAG_FOLD: u64 = u64::from_le_bytes(*b"kgwfold1");
 pub const TAG_CLAIM_ACCUMULATOR: u64 = u64::from_le_bytes(*b"kgwfcla1");
 /// Role tag of one claim-accumulator fold.
 pub const TAG_CLAIM_FOLD: u64 = u64::from_le_bytes(*b"kgwfclm1");
+/// Role tag of a claim-accumulator digest.
+pub const TAG_CLAIM_DIGEST: u64 = u64::from_le_bytes(*b"kgwfcld1");
 
 /// Whether a scalar of `C` is absorbed as one base-field word (Vesta: `Fp < Fq`)
 /// rather than as two S6 limbs (Pallas: `Fq > Fp`).

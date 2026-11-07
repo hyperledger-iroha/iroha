@@ -13,6 +13,7 @@
 //! as cells: they constrain the fold, never its acceptance, exactly as the native
 //! verifier ([`crate::fold::verify_fold`]), whose result only a decider accepts.
 
+pub mod claims;
 pub mod ivc;
 pub mod transcript;
 pub mod verify;

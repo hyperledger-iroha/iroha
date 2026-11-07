@@ -221,7 +221,7 @@ pub fn accumulator_digest<C: PastaCurve>(
 }
 
 /// `sum_i c_i x^i` by Horner's rule over FF values (`c_0` first).
-fn horner<C: PastaCurve>(
+pub(crate) fn horner<C: PastaCurve>(
     chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     coefficients: &[&FfValue<C::Base>],
@@ -238,7 +238,7 @@ fn horner<C: PastaCurve>(
 
 /// Folds every commitment: `C* = C_acc + gamma (C_new - C_acc)`, one GLV split
 /// of `gamma` shared by all columns.
-fn fold_commitments<C: PastaCurve>(
+pub(crate) fn fold_commitments<C: PastaCurve>(
     chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     acc: &[AssignedPoint<C::Base>],

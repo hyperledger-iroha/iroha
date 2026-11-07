@@ -21,7 +21,7 @@ use iroha_pasta::{PastaCurve, msm::{MemoryBudget, msm_public}};
 use crate::{
     Error,
     commit::{fold_point, fold_scalar},
-    transcript::{TAG_CLAIM_ACCUMULATOR, TAG_CLAIM_FOLD, Transcript},
+    transcript::{TAG_CLAIM_ACCUMULATOR, TAG_CLAIM_DIGEST, TAG_CLAIM_FOLD, Transcript},
 };
 
 /// Rounds of a claim (`2^16` generators).
@@ -109,6 +109,17 @@ fn absorb_claim<C: PastaCurve>(transcript: &mut Transcript<C>, g: &C::AffineExt,
 }
 
 impl<C: PastaCurve> ClaimAccumulator<C> {
+    /// The digest of the accumulator (`kgwfcld1`: `G`, `u`, `beta`, `e`), which an
+    /// IVC state hash carries.
+    #[must_use]
+    pub fn digest(&self, domain: &[u8; 32]) -> C::Base {
+        let mut transcript = Transcript::<C>::new(TAG_CLAIM_DIGEST, domain);
+        absorb_claim::<C>(&mut transcript, &self.g, &self.u);
+        transcript.absorb_scalars(&self.beta);
+        transcript.absorb_scalars(&[self.e]);
+        transcript.digest()
+    }
+
     /// Starts an accumulator from one claim (`e = 0`, `beta` from the transcript).
     /// Returns the accumulator and its witness `s(u)`; a false claim yields an
     /// accumulator that [`decide_claims`] rejects.
