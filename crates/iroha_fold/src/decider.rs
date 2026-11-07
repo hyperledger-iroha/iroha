@@ -115,13 +115,19 @@ impl<F: PastaField> DeciderPlan<F> {
     pub fn new(relation: FoldedRelation<F>) -> Result<Self, crate::Error> {
         let usable = relation.usable;
         let past = |row: u32| row as usize >= usable;
-        if relation.gates.iter().any(|g| g.rows.iter().any(|r| past(*r)))
-            || relation.groups.iter().any(|g| g.slots.iter().flatten().any(|c| past(c.row)))
-            || relation.fixed.iter().any(|c| c[usable..].iter().any(|v| !bool::from(v.is_zero())))
+        if usable < 2 {
+            return Err(crate::Error::Shape("decider: fewer than two usable rows"));
+        }
+        if relation.gates.iter().any(|g| g.rows.iter().any(|r| past(*r))) {
+            return Err(crate::Error::Shape("decider: a gate constrains rows past the usable ones"));
+        }
+        if relation.groups.iter().any(|g| g.slots.iter().flatten().any(|c| past(c.row))) {
+            return Err(crate::Error::Shape("decider: a LogUp cell lies past the usable rows"));
+        }
+        if relation.fixed.iter().any(|c| c[usable..].iter().any(|v| !bool::from(v.is_zero())))
             || relation.selectors.iter().any(|c| c[usable..].iter().any(|v| *v))
-            || usable < 2
         {
-            return Err(crate::Error::Shape("decider: constraints past the usable rows"));
+            return Err(crate::Error::Shape("decider: fixed values past the usable rows"));
         }
         Ok(Self { relation })
     }

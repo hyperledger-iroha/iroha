@@ -10,7 +10,7 @@ use iroha_plonk_gadgets::{
     ff::FfValue,
 };
 
-use super::{FoldVerifierChips, ScalarCell, transcript as t};
+use super::{FoldLanes, ScalarCell, transcript as t};
 use crate::{
     fold::{Accumulator, FoldProof, Instance},
     relation::FoldShape,
@@ -68,7 +68,7 @@ fn value_of<T: Clone>(value: Option<&T>) -> Value<T> {
 
 /// Assigns private scalars (`None`: key generation, `count` unknown cells).
 fn assign_scalars<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     values: Option<&[C::ScalarExt]>,
     count: usize,
@@ -86,7 +86,7 @@ fn assign_scalars<C: PastaCurve>(
 /// # Errors
 /// Layout errors, or a value of another shape.
 pub fn assign_instance<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     shape: &FoldShape,
     value: Option<&Instance<C>>,
@@ -114,7 +114,7 @@ pub fn assign_instance<C: PastaCurve>(
 /// # Errors
 /// Layout errors, or a value of another shape.
 pub fn assign_accumulator<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     shape: &FoldShape,
     value: Option<&Accumulator<C>>,
@@ -132,7 +132,7 @@ pub fn assign_accumulator<C: PastaCurve>(
 /// # Errors
 /// Layout errors, or messages of another length.
 pub fn assign_proof<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     shape: &FoldShape,
     value: Option<&FoldProof<C::ScalarExt>>,
@@ -143,7 +143,7 @@ pub fn assign_proof<C: PastaCurve>(
 }
 
 fn absorb_public<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     public: &[Vec<ScalarCell<C>>],
 ) -> Result<(), Error> {
@@ -160,7 +160,7 @@ fn absorb_public<C: PastaCurve>(
 /// # Errors
 /// Layout errors, or an instance of another shape.
 pub fn fresh_transcript<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     shape: &FoldShape,
     domain: &[u8; 32],
@@ -202,7 +202,7 @@ pub fn fresh_transcript<C: PastaCurve>(
 /// # Errors
 /// Layout errors.
 pub fn accumulator_digest<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     domain: &[u8; 32],
     acc: &AccumulatorCells<C>,
@@ -222,7 +222,7 @@ pub fn accumulator_digest<C: PastaCurve>(
 
 /// `sum_i c_i x^i` by Horner's rule over FF values (`c_0` first).
 fn horner<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     coefficients: &[&FfValue<C::Base>],
     x: &FfValue<C::Base>,
@@ -239,7 +239,7 @@ fn horner<C: PastaCurve>(
 /// Folds every commitment: `C* = C_acc + gamma (C_new - C_acc)`, one GLV split
 /// of `gamma` shared by all columns.
 fn fold_commitments<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     acc: &[AssignedPoint<C::Base>],
     new: &[AssignedPoint<C::Base>],
@@ -249,12 +249,12 @@ fn fold_commitments<C: PastaCurve>(
     let mut split = None;
     let mut out = Vec::with_capacity(acc.len());
     for (a, b) in acc.iter().zip(new) {
-        let negated = EccChip::<C>::neg(&mut chips.glue, region, a)?;
+        let negated = EccChip::<C>::neg(chips.glue, region, a)?;
         let difference = chips.ecc.add(region, b, &negated)?;
         let scaled = match &split {
             Some(split) => chips.ecc.mul_with(region, split, &difference)?,
             None => {
-                let (scaled, glv) = chips.ecc.mul(region, &mut chips.range, ScalarLimbs::new(gamma, &zero), &difference)?;
+                let (scaled, glv) = chips.ecc.mul(region, chips.range, ScalarLimbs::new(gamma, &zero), &difference)?;
                 split = Some(glv);
                 scaled
             }
@@ -270,7 +270,7 @@ fn fold_commitments<C: PastaCurve>(
 /// # Errors
 /// Layout errors.
 pub fn fresh_beta<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     domain: &[u8; 32],
     digest: &Word<C::Base>,
@@ -297,7 +297,7 @@ pub fn fresh_beta<C: PastaCurve>(
 /// # Errors
 /// Layout errors, or inputs of another shape.
 pub fn verify_fold<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     shape: &FoldShape,
     domain: &[u8; 32],
@@ -319,7 +319,7 @@ pub fn verify_fold<C: PastaCurve>(
 /// Layout errors, or inputs of another shape.
 #[allow(clippy::too_many_arguments)]
 pub fn verify_fold_or_start<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     shape: &FoldShape,
     domain: &[u8; 32],
@@ -333,7 +333,7 @@ pub fn verify_fold_or_start<C: PastaCurve>(
 
 #[allow(clippy::too_many_arguments)]
 fn fold_cells<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     shape: &FoldShape,
     domain: &[u8; 32],
@@ -373,7 +373,7 @@ fn fold_cells<C: PastaCurve>(
             let one_word = chips.glue.constant(region, <C::Base as Field>::ONE)?;
             let selected = chips.glue.select(region, bit, &one_word, gamma_limb.word())?;
             let limb = chips.uint().range_check::<128>(region, &selected)?;
-            let scalar = chips.ff.select(&mut chips.glue, region, bit, &one, &gamma.ff)?;
+            let scalar = chips.ff.select(chips.glue, region, bit, &one, &gamma.ff)?;
             (limb, scalar)
         }
     };
@@ -392,7 +392,7 @@ fn fold_cells<C: PastaCurve>(
         let scaled = chips.mul(region, &alpha.ff, &power)?;
         let mut folded = chips.add(region, &b.ff, &scaled)?;
         if let (Some(bit), Some(started)) = (start, &started_beta) {
-            folded = chips.ff.select(&mut chips.glue, region, bit, &started[j].ff, &folded)?;
+            folded = chips.ff.select(chips.glue, region, bit, &started[j].ff, &folded)?;
         }
         beta.push(chips.export(region, folded)?);
     }

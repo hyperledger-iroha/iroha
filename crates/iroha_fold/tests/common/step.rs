@@ -88,7 +88,7 @@ impl<C: PastaCurve> Step<C> {
     fn layout(&self, chips: &mut FoldVerifierChips<C>, region: &mut Region<'_, C::Base>) -> Result<Vec<Word<C::Base>>, Error> {
         let chain = self.side.chain();
         let frame = fold_frame(
-            chips,
+            &mut chips.lanes(),
             region,
             &chain,
             &self.shape,
@@ -99,7 +99,7 @@ impl<C: PastaCurve> Step<C> {
         )?;
         // The side's first instance starts from the base state.
         let later = chips.glue.not(region, &frame.first)?;
-        assert_equal_unless(chips, region, &frame.state[0], &frame.base, Some(&later))?;
+        assert_equal_unless(&mut chips.lanes(), region, &frame.state[0], &frame.base, Some(&later))?;
         // Toy business: Q doubles and adds one; A adds the square of Q's bridge.
         let next = match self.side {
             Side::Q => chips.glue.linear(region, &[(C::Base::from(2), &frame.state[0])], <C::Base as Field>::ONE)?,
@@ -108,7 +108,7 @@ impl<C: PastaCurve> Step<C> {
                 chips.glue.add(region, &frame.state[0], &square)?
             }
         };
-        frame_outputs(chips, region, &chain, &frame, &[next], &[frame.step.clone()])
+        frame_outputs(&mut chips.lanes(), region, &chain, &frame, &[next], &[frame.step.clone()])
     }
 }
 

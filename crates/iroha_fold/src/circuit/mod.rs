@@ -121,9 +121,41 @@ impl<C: PastaCurve> FoldVerifierChips<C> {
         self.ff.load_table(layouter)
     }
 
+    /// The lanes, borrowed together for the fold gadgets.
+    pub fn lanes(&mut self) -> FoldLanes<'_, C> {
+        FoldLanes {
+            glue: &mut self.glue,
+            range: &mut self.range,
+            ff: &mut self.ff,
+            ecc: &mut self.ecc,
+            duplex: &mut self.duplex,
+        }
+    }
+}
+
+/// The five lanes a fold verifier drives, borrowed together: from
+/// [`FoldVerifierChips::lanes`], or from another chip set that owns the same
+/// kinds of lanes (a PIPA-R verifier's), so that a step circuit that already
+/// verifies a proof does not carry a second set of columns. The FF lane must be
+/// configured for the scalar field of `C`, the duplex lane must be clear.
+#[derive(Debug)]
+pub struct FoldLanes<'a, C: PastaCurve> {
+    /// Glue gate (linear combinations, constants, selections).
+    pub glue: &'a mut GlueChip<C::Base>,
+    /// Running-sum range checks.
+    pub range: &'a mut RunningSumChip<C::Base>,
+    /// Foreign arithmetic modulo the scalar field of `C`.
+    pub ff: &'a mut FfChip<C::Base>,
+    /// Native group operations on `C`.
+    pub ecc: &'a mut EccChip<C>,
+    /// The transcript lane.
+    pub duplex: &'a mut DuplexChip<C::Base>,
+}
+
+impl<C: PastaCurve> FoldLanes<'_, C> {
     /// The integer lane over the glue and running-sum chips.
     pub fn uint(&mut self) -> UintChip<'_, C::Base> {
-        UintChip::new(&mut self.glue, &mut self.range)
+        UintChip::new(self.glue, self.range)
     }
 
     /// A private scalar with its canonical certificate.
@@ -135,7 +167,7 @@ impl<C: PastaCurve> FoldVerifierChips<C> {
         region: &mut Region<'_, C::Base>,
         value: Value<C::ScalarExt>,
     ) -> Result<ScalarCell<C>, Error> {
-        let mut uint = UintChip::new(&mut self.glue, &mut self.range);
+        let mut uint = UintChip::new(self.glue, self.range);
         let s6 = CanonicalS6::assign_value::<C::ScalarExt>(&mut uint, region, value)?;
         self.import(region, s6)
     }
@@ -148,7 +180,7 @@ impl<C: PastaCurve> FoldVerifierChips<C> {
         if s6.modulus() != scalar_modulus::<C>() {
             return Err(Error::Synthesis);
         }
-        let mut uint = UintChip::new(&mut self.glue, &mut self.range);
+        let mut uint = UintChip::new(self.glue, self.range);
         let ff = self.ff.import_s6(&mut uint, region, &s6)?;
         Ok(ScalarCell { s6, ff })
     }
@@ -158,7 +190,7 @@ impl<C: PastaCurve> FoldVerifierChips<C> {
     /// # Errors
     /// Layout errors.
     pub fn export(&mut self, region: &mut Region<'_, C::Base>, ff: FfValue<C::Base>) -> Result<ScalarCell<C>, Error> {
-        let mut uint = UintChip::new(&mut self.glue, &mut self.range);
+        let mut uint = UintChip::new(self.glue, self.range);
         let s6 = self.ff.export_s6(&mut uint, region, &ff)?;
         Ok(ScalarCell { s6, ff })
     }
@@ -169,7 +201,7 @@ impl<C: PastaCurve> FoldVerifierChips<C> {
     /// Layout errors.
     pub fn constant(&mut self, region: &mut Region<'_, C::Base>, value: C::ScalarExt) -> Result<FfValue<C::Base>, Error> {
         self.ff.constant(
-            &mut self.glue,
+            self.glue,
             region,
             scalar_modulus::<C>(),
             &Nat::from_words(value.to_canonical_limbs()),
@@ -181,7 +213,7 @@ impl<C: PastaCurve> FoldVerifierChips<C> {
     /// # Errors
     /// Layout errors.
     pub fn add(&mut self, region: &mut Region<'_, C::Base>, a: &FfValue<C::Base>, b: &FfValue<C::Base>) -> Result<FfValue<C::Base>, Error> {
-        self.ff.add(&mut self.glue, region, a, b)
+        self.ff.add(self.glue, region, a, b)
     }
 
     /// `a - b`.
@@ -189,7 +221,7 @@ impl<C: PastaCurve> FoldVerifierChips<C> {
     /// # Errors
     /// Layout errors.
     pub fn sub(&mut self, region: &mut Region<'_, C::Base>, a: &FfValue<C::Base>, b: &FfValue<C::Base>) -> Result<FfValue<C::Base>, Error> {
-        self.ff.sub(&mut self.glue, region, a, b)
+        self.ff.sub(self.glue, region, a, b)
     }
 
     /// `a b`.
@@ -239,4 +271,3 @@ impl<C: PastaCurve> FoldVerifierChips<C> {
         self.ecc.witness_point(region, value)
     }
 }
-

@@ -166,6 +166,23 @@ fn assign_classes<F>(n: usize, gates: &mut [GateConstraint<F>], groups: &mut [Lo
     classes
 }
 
+/// Pseudo-random advice and instance columns (splitmix64 per cell) for the
+/// polynomial identity test of gate bodies; `seed` picks one of two points.
+fn probe_columns<F: PastaField>(advice: usize, instance_lengths: &[usize], n: usize, seed: u64) -> StageColumns<F> {
+    let mut state = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    let mut next = || {
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    };
+    let mut cell = || F::from_u128((u128::from(next()) << 64) | u128::from(next()));
+    let advice = (0..advice).map(|_| (0..n).map(|_| cell()).collect()).collect();
+    let instance = instance_lengths.iter().map(|len| (0..*len).map(|_| cell()).collect()).collect();
+    (advice, instance)
+}
+
 fn u32_of(value: usize) -> u32 {
     u32::try_from(value).expect("indices and rows fit u32")
 }
@@ -190,6 +207,8 @@ impl<F: PastaField> FoldedRelation<F> {
         let mut stack = Vec::with_capacity(64);
         let mut gates = Vec::new();
         let mut degree = 2;
+        // Pseudo-random witnesses for the identity test of bodies past the usable rows.
+        let mut probes: Option<[StageColumns<F>; 2]> = None;
         for gate in cs.gates() {
             for polynomial in gate.polynomials() {
                 let (guard, body, _) = split_guard(polynomial);
@@ -197,10 +216,26 @@ impl<F: PastaField> FoldedRelation<F> {
                 let mut guards = Vec::new();
                 for row in 0..n {
                     let value = guard.eval(&tables, point, row, &mut stack);
-                    if !bool::from(value.is_zero()) {
-                        rows.push(u32_of(row));
-                        guards.push(value);
+                    if bool::from(value.is_zero()) {
+                        continue;
                     }
+                    // Past the usable rows every advice cell is free in a proof
+                    // (blinding rows) and zero in a synthesized witness; a body that
+                    // vanishes there for every witness constrains nothing.
+                    if row >= usable {
+                        let [first, second] = probes.get_or_insert_with(|| {
+                            [1, 2].map(|seed| probe_columns(cs.num_advice_columns(), cs.instance_lengths(), n, seed))
+                        });
+                        let vanishes = [&*first, &*second].iter().all(|(advice, instance)| {
+                            let probe = Point { advice, instance };
+                            bool::from(body.eval(&tables, probe, row, &mut stack).is_zero())
+                        });
+                        if vanishes {
+                            continue;
+                        }
+                    }
+                    rows.push(u32_of(row));
+                    guards.push(value);
                 }
                 let poly_degree = folded_degree(polynomial);
                 degree = degree.max(poly_degree);

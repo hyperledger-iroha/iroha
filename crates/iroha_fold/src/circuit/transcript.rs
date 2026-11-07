@@ -13,13 +13,13 @@ use iroha_pasta::{Fp, PastaCurve};
 use iroha_plonk::frontend::{Error, Region};
 use iroha_plonk_gadgets::{U128, Word, ecc::AssignedPoint, ff::CanonicalS6};
 
-use super::{FoldVerifierChips, ScalarCell, scalar_modulus};
+use super::{FoldLanes, ScalarCell, scalar_modulus};
 
 /// Starts a transcript for role `tag` under `domain` on a clear lane.
 ///
 /// # Errors
 /// [`Error::Synthesis`] when another transcript is live on the lane.
-pub fn start<C: PastaCurve>(chips: &mut FoldVerifierChips<C>, tag: u64, domain: &[u8; 32]) -> Result<(), Error> {
+pub fn start<C: PastaCurve>(chips: &mut FoldLanes<'_, C>, tag: u64, domain: &[u8; 32]) -> Result<(), Error> {
     if !chips.duplex.is_clear() {
         return Err(Error::Synthesis);
     }
@@ -31,12 +31,12 @@ pub fn start<C: PastaCurve>(chips: &mut FoldVerifierChips<C>, tag: u64, domain: 
 }
 
 /// Absorbs a count or length (a circuit constant).
-pub fn absorb_u64<C: PastaCurve>(chips: &mut FoldVerifierChips<C>, value: u64) {
+pub fn absorb_u64<C: PastaCurve>(chips: &mut FoldLanes<'_, C>, value: u64) {
     chips.duplex.absorb_constant(C::Base::from(value));
 }
 
 /// Absorbs a base-field word (a digest).
-pub fn absorb_word<C: PastaCurve>(chips: &mut FoldVerifierChips<C>, word: &Word<C::Base>) {
+pub fn absorb_word<C: PastaCurve>(chips: &mut FoldLanes<'_, C>, word: &Word<C::Base>) {
     chips.duplex.absorb(word);
 }
 
@@ -45,7 +45,7 @@ pub fn absorb_word<C: PastaCurve>(chips: &mut FoldVerifierChips<C>, word: &Word<
 /// # Errors
 /// Layout errors.
 pub fn absorb_scalar<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     scalar: &ScalarCell<C>,
 ) -> Result<(), Error> {
@@ -59,7 +59,7 @@ pub fn absorb_scalar<C: PastaCurve>(
 /// # Errors
 /// Layout errors.
 pub fn absorb_scalars<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     scalars: &[ScalarCell<C>],
 ) -> Result<(), Error> {
@@ -70,13 +70,13 @@ pub fn absorb_scalars<C: PastaCurve>(
 }
 
 /// Absorbs a point of `C` by its coordinate cells.
-pub fn absorb_point<C: PastaCurve>(chips: &mut FoldVerifierChips<C>, point: &AssignedPoint<C::Base>) {
+pub fn absorb_point<C: PastaCurve>(chips: &mut FoldLanes<'_, C>, point: &AssignedPoint<C::Base>) {
     chips.duplex.absorb(point.x());
     chips.duplex.absorb(point.y());
 }
 
 fn squeeze<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     last: bool,
 ) -> Result<Word<C::Base>, Error> {
@@ -87,13 +87,13 @@ fn squeeze<C: PastaCurve>(
 ///
 /// # Errors
 /// Layout errors.
-pub fn finish<C: PastaCurve>(chips: &mut FoldVerifierChips<C>, region: &mut Region<'_, C::Base>) -> Result<Word<C::Base>, Error> {
+pub fn finish<C: PastaCurve>(chips: &mut FoldLanes<'_, C>, region: &mut Region<'_, C::Base>) -> Result<Word<C::Base>, Error> {
     squeeze(chips, region, true)
 }
 
 /// The canonical S6 decomposition of a squeezed word.
 fn decompose<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     word: &Word<C::Base>,
 ) -> Result<CanonicalS6<C::Base>, Error> {
@@ -102,7 +102,7 @@ fn decompose<C: PastaCurve>(
 }
 
 fn map<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     word: &Word<C::Base>,
 ) -> Result<ScalarCell<C>, Error> {
@@ -118,7 +118,7 @@ fn map<C: PastaCurve>(
 }
 
 fn map_128<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     word: &Word<C::Base>,
 ) -> Result<(U128<C::Base>, ScalarCell<C>), Error> {
@@ -134,7 +134,7 @@ fn map_128<C: PastaCurve>(
 ///
 /// # Errors
 /// Layout errors.
-pub fn challenge<C: PastaCurve>(chips: &mut FoldVerifierChips<C>, region: &mut Region<'_, C::Base>) -> Result<ScalarCell<C>, Error> {
+pub fn challenge<C: PastaCurve>(chips: &mut FoldLanes<'_, C>, region: &mut Region<'_, C::Base>) -> Result<ScalarCell<C>, Error> {
     let word = squeeze(chips, region, false)?;
     map(chips, region, &word)
 }
@@ -143,7 +143,7 @@ pub fn challenge<C: PastaCurve>(chips: &mut FoldVerifierChips<C>, region: &mut R
 ///
 /// # Errors
 /// Layout errors.
-pub fn challenge_last<C: PastaCurve>(chips: &mut FoldVerifierChips<C>, region: &mut Region<'_, C::Base>) -> Result<ScalarCell<C>, Error> {
+pub fn challenge_last<C: PastaCurve>(chips: &mut FoldLanes<'_, C>, region: &mut Region<'_, C::Base>) -> Result<ScalarCell<C>, Error> {
     let word = squeeze(chips, region, true)?;
     map(chips, region, &word)
 }
@@ -154,7 +154,7 @@ pub fn challenge_last<C: PastaCurve>(chips: &mut FoldVerifierChips<C>, region: &
 /// # Errors
 /// Layout errors.
 pub fn challenge_128_last<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
 ) -> Result<(U128<C::Base>, ScalarCell<C>), Error> {
     let word = squeeze(chips, region, true)?;

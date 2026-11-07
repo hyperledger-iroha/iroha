@@ -111,7 +111,7 @@ impl Circuit<Fq> for QStep {
             |mut region| {
                 let chain = Side::Q.chain();
                 let frame = fold_frame(
-                    &mut chips,
+                    &mut chips.lanes(),
                     &mut region,
                     &chain,
                     &self.shape,
@@ -121,9 +121,9 @@ impl Circuit<Fq> for QStep {
                     self.witness.as_ref(),
                 )?;
                 let later = chips.glue.not(&mut region, &frame.first)?;
-                assert_equal_unless(&mut chips, &mut region, &frame.state[0], &frame.base, Some(&later))?;
+                assert_equal_unless(&mut chips.lanes(), &mut region, &frame.state[0], &frame.base, Some(&later))?;
                 let next = chips.glue.linear(&mut region, &[(Fq::from(2), &frame.state[0])], Fq::ONE)?;
-                frame_outputs(&mut chips, &mut region, &chain, &frame, &[next], &[frame.step.clone()])
+                frame_outputs(&mut chips.lanes(), &mut region, &chain, &frame, &[next], &[frame.step.clone()])
             },
         )?;
         for (row, word) in outputs.iter().enumerate() {

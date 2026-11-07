@@ -79,12 +79,13 @@ impl<C: PastaCurve> Circuit<C::Base> for FoldCircuit<C> {
         let (folded, fresh) = layouter.assign_region(
             || "fold",
             |mut region| {
-                let acc = assign_accumulator(&mut chips, &mut region, &self.shape, inputs.map(|i| &i.acc))?;
-                let fresh = assign_instance(&mut chips, &mut region, &self.shape, inputs.map(|i| &i.fresh))?;
-                let proof = assign_proof(&mut chips, &mut region, &self.shape, inputs.map(|i| &i.proof))?;
-                let fresh_digest = fresh_transcript(&mut chips, &mut region, &self.shape, &DOMAIN, &fresh)?.digest;
-                let folded = verify_fold(&mut chips, &mut region, &self.shape, &DOMAIN, &acc, &fresh, &proof)?;
-                let digest = accumulator_digest(&mut chips, &mut region, &DOMAIN, &folded)?;
+                let mut lanes = chips.lanes();
+                let acc = assign_accumulator(&mut lanes, &mut region, &self.shape, inputs.map(|i| &i.acc))?;
+                let fresh = assign_instance(&mut lanes, &mut region, &self.shape, inputs.map(|i| &i.fresh))?;
+                let proof = assign_proof(&mut lanes, &mut region, &self.shape, inputs.map(|i| &i.proof))?;
+                let fresh_digest = fresh_transcript(&mut lanes, &mut region, &self.shape, &DOMAIN, &fresh)?.digest;
+                let folded = verify_fold(&mut lanes, &mut region, &self.shape, &DOMAIN, &acc, &fresh, &proof)?;
+                let digest = accumulator_digest(&mut lanes, &mut region, &DOMAIN, &folded)?;
                 Ok((digest, fresh_digest))
             },
         )?;

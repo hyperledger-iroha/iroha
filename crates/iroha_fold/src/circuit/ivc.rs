@@ -13,7 +13,7 @@ use iroha_plonk::frontend::{Error, Region, Value};
 use iroha_plonk_gadgets::{Bit, GlueChip, U128, Uint, Word, ff::CanonicalS6};
 
 use super::{
-    FoldVerifierChips, ScalarCell, transcript as t,
+    FoldLanes, ScalarCell, transcript as t,
     verify::{accumulator_digest, assign_accumulator, assign_instance, assign_proof, verify_fold_or_start},
 };
 use crate::{
@@ -45,7 +45,7 @@ fn two_pow<F: PrimeField>(bits: u32) -> F {
 /// # Errors
 /// Layout errors, or another transcript live on the lane.
 pub fn ivc_hash<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     domain: &[u8; 32],
     step: &Word<C::Base>,
@@ -84,7 +84,7 @@ pub fn ivc_hash<C: PastaCurve>(
 /// # Errors
 /// Layout errors.
 pub fn assert_equal_unless<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     a: &Word<C::Base>,
     b: &Word<C::Base>,
@@ -107,7 +107,7 @@ pub fn assert_equal_unless<C: PastaCurve>(
 /// # Errors
 /// Layout errors.
 pub fn assert_hash_unless<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     value: &ScalarCell<C>,
     hash: &HashCells<C::Base>,
@@ -123,7 +123,7 @@ pub fn assert_hash_unless<C: PastaCurve>(
 /// # Errors
 /// Layout errors; a larger integer is unsatisfiable.
 pub fn foreign_hash_word<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     value: &ScalarCell<C>,
 ) -> Result<Word<C::Base>, Error> {
@@ -140,7 +140,7 @@ pub fn foreign_hash_word<C: PastaCurve>(
 /// # Errors
 /// Layout errors; a larger integer is unsatisfiable.
 pub fn foreign_bounded_word<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     value: &ScalarCell<C>,
 ) -> Result<Word<C::Base>, Error> {
@@ -187,7 +187,7 @@ pub struct Frame<F: iroha_pasta::PastaField> {
 /// Layout errors, or a witness of another shape.
 #[allow(clippy::too_many_arguments)]
 pub fn fold_frame<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     side: &ChainSide,
     shape: &FoldShape,
@@ -246,7 +246,7 @@ pub fn fold_frame<C: PastaCurve>(
 /// # Errors
 /// Layout errors.
 pub fn frame_outputs<C: PastaCurve>(
-    chips: &mut FoldVerifierChips<C>,
+    chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     side: &ChainSide,
     frame: &Frame<C::Base>,
