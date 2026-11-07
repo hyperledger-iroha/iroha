@@ -90,7 +90,11 @@ World fields after it (design §4, "Add an instruction", "Add storage"):
   `ContainmentResolved` bits of `RuntimeUpgradeEventSet`. Both additions are appended, so every
   payload a660d601da wrote still decodes. a660d601da cannot decode a payload that uses them, and
   its peers fail this release's handshake (`ConsensusConfigCaps`), so Taira's validators switch to
-  this release together. A storage descriptor likewise names only its
+  this release together. `iroha.kagemusha.wallet.ledger.v1` likewise gained three appended
+  actions, the native-suffix Unload stages `SuffixUnloadBegin`, `SuffixUnloadAppend` and
+  `SuffixUnloadFinalize` (wire tags 11–13); its earlier actions keep their tags and bytes, and the
+  stages keep their rows in the installed `world.kagemusha_wallet_ledger` table, so they need no
+  addition and no new table. A storage descriptor likewise names only its
   value's nominal type, and World value layouts are not pinned yet (TODO: pin them from the State
   field registry the same way). This release declares two additions, in activation order:
   `iroha.runtime.endorsed_change_set_proposal.v1`, and `iroha.game_partition.v1`, which adds the
@@ -183,9 +187,9 @@ bounds and the containment to name this network and the universal root.
   restriction governance changed in the meantime is no longer held, so ratification, repair or a
   lift through an ordinary change set is never undone.
 
-CLI: `iroha runtime contain list` reads the records; `iroha runtime contain endorse --file
+CLI: `iroha ops runtime contain list` reads the records; `iroha ops runtime contain endorse --file
 <containment.json> --member-key-file <path>
-[--at-ms <ms>]` prints one member's `EndorsementV1`; `iroha runtime contain submit --file
+[--at-ms <ms>]` prints one member's `EndorsementV1`; `iroha ops runtime contain submit --file
 <containment.json> --endorsement <file>...` submits them.
 
 ## Obligations
@@ -320,21 +324,35 @@ the addition and governance restricts the baseline proposal.
 The list, propose and cancel routes back the `iroha.runtime.upgrades.*` MCP tools, beside the
 `iroha.runtime.abi.*` and `iroha.runtime.metrics` tools.
 
+Release, upgrade and containment reads use the operator-signature boundary, as do
+the upgrade draft, proposal, cancellation and attestation endpoints. Anonymous
+reads return `401 operator_signature_missing`; an account permission or API token
+does not replace the dedicated allow-listed operator key. The client signs these
+requests against the exact network, method, target, body, timestamp and nonce.
+The Taira doctor's anonymous runtime probes check only that this boundary is
+mounted, and fail on a missing route. They do not verify a node's selection.
+
 ## CLI
 
-- `iroha runtime abi active|active-query|hash`, `iroha runtime status`, `iroha runtime capabilities`
-- `iroha runtime upgrade list`
-- `iroha runtime upgrade draft --addition <module> --effective-height <height> --qualification <hex>`
+- `iroha ops runtime abi active|active-query|hash`, `iroha ops runtime status`, `iroha ops runtime capabilities`
+- `iroha ops runtime upgrade list`
+- `iroha ops runtime upgrade draft --addition <module> --effective-height <height> --qualification <hex>`
   prints the change set the node drafts to activate one of its release's additions, after checking
   it against the identity the node reported; it is the `--file` input of `endorse` and `propose`.
-- `iroha runtime upgrade endorse --file <change_set.json> --signer-key-file <path>` prints a
+- `iroha ops runtime upgrade endorse --file <change_set.json> --signer-key-file <path>` prints a
   release signer's `ChangeSetEndorsementV1`; the key is read at run time and never printed.
-- `iroha runtime upgrade propose --file <change_set.json> [--endorsement <file>...]` submits the
+- `iroha ops runtime upgrade propose --file <change_set.json> [--endorsement <file>...]` submits the
   `Schedule` proposal with the endorsements.
-- `iroha runtime upgrade cancel --id <hex>` submits the `Cancel` proposal.
-- `iroha runtime upgrade attest --id <hex>` has the node sign its support and submits the
+- `iroha ops runtime upgrade cancel --id <hex>` submits the `Cancel` proposal.
+- `iroha ops runtime upgrade attest --id <hex>` has the node sign its support and submits the
   drafted `AttestRuntimeSupportV1`; the operator never handles the validator key.
-- `iroha runtime release` shows the node's release support.
+- `iroha ops runtime release` shows the node's release support.
+
+For these operator reads, pass `--operator-private-key-file <absolute-runtime-key>`
+and `--config <runtime-client.toml>` before `ops`. Keep both inputs outside source
+control. Use a current client: a deployed client that still sends an unsigned
+runtime request fails with `operator_signature_missing` even when its global
+operator-key option is supplied.
 
 ## Handshake
 

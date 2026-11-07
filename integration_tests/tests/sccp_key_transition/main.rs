@@ -22,6 +22,12 @@ use iroha_sccp::{
     },
 };
 
+#[path = "../sccp_lanes/native_read.rs"]
+mod native_read;
+
+#[cfg(test)]
+mod committee_read_tests;
+
 const SCENARIO: &str = "sccp_native_four_to_seven_key_change";
 const CADENCE_MS: u64 = SCCP_MIN_EPOCH_MS_V1 / EPOCH;
 const DRIFT_MS: u64 = 1_000;
@@ -94,6 +100,14 @@ struct SccpObservations {
     generations: Vec<SccpGenerationV1>,
 }
 
+fn read_sccp_committee(client: &Client, generation: u64) -> Result<SccpGenerationV1> {
+    native_read::read(
+        client,
+        iroha_torii_shared::route_catalog::sccp::COMMITTEE.stable_route_id(),
+        |bounded| bounded.sccp().committee(generation),
+    )
+}
+
 fn original_sccp_observations(
     clients: &[Client],
     instance: &[u8; 32],
@@ -152,8 +166,8 @@ fn original_sccp_observations(
         }
         certificates.push(first.ok_or_else(|| eyre!("missing original peer certificate"))?);
     }
-    let original = clients[0].sccp().committee(1)?;
-    let next = clients[0].sccp().committee(2)?;
+    let original = read_sccp_committee(&clients[0], 1)?;
+    let next = read_sccp_committee(&clients[0], 2)?;
     ensure!(original.keys == old_keys && original.liable);
     ensure!(original.members.len() == 4 && original.members.iter().all(Option::is_some));
     ensure!(
@@ -170,7 +184,9 @@ fn original_sccp_observations(
             == SccpFinalityHeaderV1::parse(&certificates[1].header)?.timestamp_ms()
     );
     for client in &clients[1..] {
-        ensure!(client.sccp().committee(1)? == original && client.sccp().committee(2)? == next);
+        ensure!(
+            read_sccp_committee(client, 1)? == original && read_sccp_committee(client, 2)? == next
+        );
     }
     Ok(SccpObservations {
         certificates,
@@ -441,7 +457,7 @@ async fn run_key_change() -> Result<()> {
         progress("candidate_admission_complete", initial_height)?;
         let initial_generation = read_on_dedicated_thread({
             let admin = admin.clone();
-            move || -> Result<_> { Ok(admin.sccp().committee(1)?) }
+            move || read_sccp_committee(&admin, 1)
         })
         .await?;
         ensure!(initial_generation.end.is_none() && initial_generation.keys.len() == 4);
@@ -626,6 +642,7 @@ async fn run_key_change() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn actual_native_key_change_rotates_sccp_four_to_seven() -> Result<()> {
+    let _descriptor_slots = iroha_test_network::reserve_disposable_ceremony_descriptors()?;
     const STACK: usize = 32 * 1024 * 1024;
     let worker = std::thread::Builder::new()
         .name(SCENARIO.to_owned())

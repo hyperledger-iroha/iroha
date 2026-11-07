@@ -787,11 +787,13 @@ paid pin, exact automatic assignment revision and canonical order digest, with
 an independently selected historical block floor and fresh challenge. Its
 completion phase additionally requires every assigned provider's accepted native
 completion. The publisher verifies the exact signed assertion's successful
-execution with `SumeragiFinalityVerifier` and a contiguous lineage of canonical
-`SumeragiFinalityProof` frames carrying embedded commit certificates. The shared
-verifier authenticates exact execution, parent hash/result and lag-2 committee
-selection. Genesis carries a result-only certificate; it has no fabricated quorum
-certificate. A returned height, hash or HTTP success alone is insufficient.
+execution with `verify_sorafs_publication_v1`. The canonical
+`SorafsPublicationProofV1` carries epoch-boundary certificates, the executing
+block's commit certificate and Merkle paths for the exact signed assertion and
+its joined execution output. `SumeragiCommitVerifierV1` starts from the client's
+independently selected checkpoint and authenticates each epoch boundary under
+the incumbent quorum before accepting successor authority. The proof contains
+no block bodies. A returned height, hash or HTTP success alone is insufficient.
 
 `sorafs_cli deploy` requires `--finality-checkpoint=PATH`, an independently trusted
 canonical `SumeragiFinalityCheckpoint` for the independently configured
@@ -800,17 +802,19 @@ genesis, selected initial roster, certified tip and at most two predecessor
 decisions required by the shared verifier. It is an explicitly selected trust
 root, never material selected from the response being verified. Input is capped
 at `MAX_FINALITY_CHECKPOINT_BYTES` (68 MiB) before bounded canonical decoding.
-The checkpoint must be within 1,023 blocks of each assertion. The proof route
-retains `CanReadAllLedgerData` because the existing authenticated carrier includes
-a full executed block. Discovery supplies candidate provider Torii origins;
+The checkpoint must precede each assertion's executing block, with at most 256
+epoch-boundary certificates between them. The proof route authenticates the
+requesting account and returns only its own assertion's inclusion; it requires
+no ledger-wide read permission. Discovery supplies candidate provider Torii origins;
 repeatable `--provider-url=HTTPS_ORIGIN` arguments add explicit candidates.
 Publication has a ten-minute monotonic deadline and a 32 MiB proof-response bound.
-Assignment/completion proof files and the verified next checkpoint are retained
-in the deploy output directory. Only successful authenticated execution advances
-the checkpoint, using a private same-directory temporary file, file sync, atomic
-replacement and directory sync. The four-validator harness derives its initial
-trust from its independently constructed and validated signed genesis and roster,
-then verifies the current genesis proof and contiguous certified successors.
+Assignment and completion proof files are retained in the deploy output directory.
+Both assertions bind the same independently selected checkpoint; publication
+evidence does not replace it. Verified publication evidence retains explicit
+ownership and exposes only the certified height and completion phase. The
+four-validator harness derives its initial trust from its independently
+constructed and validated signed genesis and roster, then verifies each compact
+publication proof under that checkpoint.
 Success requires both native finalized completion
 and digest/length verification of every packaged gateway asset. The default
 retention deadline is UTC packaging time plus one day.

@@ -4859,6 +4859,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_fold"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "ff 0.14.0",
+ "group 0.14.0",
+ "iroha_kagemusha_proof",
+ "iroha_pasta",
+ "iroha_plonk",
+ "iroha_plonk_gadgets",
+ "rand_chacha 0.10.0",
+ "rand_core 0.10.1",
+]
+
+[[package]]
 name = "iroha_fs"
 version = "2.0.0-rc.2.0"
 dependencies = [

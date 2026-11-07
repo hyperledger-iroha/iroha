@@ -87,6 +87,130 @@ fn operator_endpoint_requires_a_signing_key_before_dispatch() {
     );
 }
 #[test]
+fn runtime_reads_require_exact_network_and_path_bound_operator_signatures() {
+    use base64::Engine as _;
+
+    for release in [false, true] {
+        let path = if release {
+            "/v1/runtime/release"
+        } else {
+            "/v1/runtime/upgrades"
+        };
+        for with_signer in [false, true] {
+            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let mut client = client_with_base_url(base_url());
+            let operator = checked_random_keypair();
+            client.operator_key_pair = with_signer.then(|| operator.clone());
+            let network = client.network_id;
+            let result = with_mock_http(
+                respond_with(
+                    &snapshots,
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .body(b"{}".to_vec())
+                        .expect("runtime response"),
+                ),
+                |mock_transport| {
+                    let client = client
+                        .clone()
+                        .with_test_http_transport(mock_transport.clone());
+                    if release {
+                        client.get_runtime_release_json()
+                    } else {
+                        client.get_runtime_upgrades_json()
+                    }
+                },
+            );
+            let snapshots = snapshots.lock().expect("lock runtime snapshots");
+            if !with_signer {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("operator signing key")
+                );
+                assert!(
+                    snapshots.is_empty(),
+                    "{path} requires a signer before dispatch"
+                );
+                continue;
+            }
+            result.expect("signed runtime read");
+            assert_eq!(snapshots.len(), 1, "runtime reads are one-shot");
+            let request = &snapshots[0];
+            let header = |name: &str| {
+                let values = request
+                    .headers
+                    .iter()
+                    .filter(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+                    .collect::<Vec<_>>();
+                assert_eq!(values.len(), 1, "one fresh {name}");
+                values[0].1.as_str()
+            };
+            assert_eq!(request.method, HttpMethod::GET);
+            assert_eq!(request.url.path(), path);
+            assert!(request.url.query().is_none());
+            assert!(request.body.is_empty());
+            assert_eq!(header("accept"), "application/json");
+            assert_eq!(
+                header(HEADER_OPERATOR_PUBLIC_KEY)
+                    .parse::<PublicKey>()
+                    .unwrap(),
+                *operator.public_key()
+            );
+            let timestamp = header(HEADER_OPERATOR_TIMESTAMP_MS).parse().unwrap();
+            let nonce = header(HEADER_OPERATOR_NONCE);
+            let signature = Signature::from_bytes(
+                &base64::engine::general_purpose::STANDARD
+                    .decode(header(HEADER_OPERATOR_SIGNATURE))
+                    .unwrap(),
+            );
+            let message = super::Client::operator_network_request_message(
+                &network,
+                &request.method,
+                &request.url,
+                &request.body,
+                timestamp,
+                nonce,
+            )
+            .unwrap();
+            signature.verify(operator.public_key(), &message).unwrap();
+            let mut other_path = request.url.clone();
+            other_path.set_path(if release {
+                "/v1/runtime/upgrades"
+            } else {
+                "/v1/runtime/release"
+            });
+            let changed = super::Client::operator_network_request_message(
+                &network,
+                &request.method,
+                &other_path,
+                &request.body,
+                timestamp,
+                nonce,
+            )
+            .unwrap();
+            assert!(signature.verify(operator.public_key(), &changed).is_err());
+            let other_network = iroha_data_model::id::NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                    b"other runtime operator network",
+                )),
+            );
+            assert_ne!(network, other_network);
+            let changed = super::Client::operator_network_request_message(
+                &other_network,
+                &request.method,
+                &request.url,
+                &request.body,
+                timestamp,
+                nonce,
+            )
+            .unwrap();
+            assert!(signature.verify(operator.public_key(), &changed).is_err());
+        }
+    }
+}
+#[test]
 fn operator_context_is_independent_of_account_authority() {
     let mut client = client_with_base_url(base_url());
     client.account =

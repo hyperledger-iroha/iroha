@@ -1952,6 +1952,10 @@ pub use sealed_batch::{FlatBatchCreation, FlatBatchFile, seal_flat_batch};
 mod inherited_descriptors;
 pub use inherited_descriptors::inherit_descriptors;
 
+#[path = "unix/reserved_descriptors.rs"]
+mod reserved_descriptors;
+pub use reserved_descriptors::{ReservedProcessDescriptors, SharedProcessDescriptorReservations};
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[path = "unix/build_input_command.rs"]
 mod build_input_command;

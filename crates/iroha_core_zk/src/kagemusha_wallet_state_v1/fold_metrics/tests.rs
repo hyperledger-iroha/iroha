@@ -25,16 +25,16 @@ fn record(ordinal: u32, outcome: FoldOutcomeV1, prove: Duration) -> FoldSubProof
 #[test]
 fn only_a_selected_turn_reports_and_its_phases_stay_on_its_thread() {
     // An idle or caught-up wake reports nothing, selected or not.
-    let turn = FoldTurnV1::start();
+    let turn = FoldTurnV1::start(None);
     enter(FoldPhaseV1::ReadFold);
     assert_eq!(turn.finish(Ok(FoldStatus::CaughtUp), None), None);
-    let mut turn = FoldTurnV1::start();
+    let mut turn = FoldTurnV1::start(None);
     turn.select(4, 2);
     assert_eq!(turn.finish(Ok(FoldStatus::Idle), None), None);
     // Outside a turn nothing is kept, so it cannot leak into the next turn.
     enter(FoldPhaseV1::Prove);
     stage(FoldStageV1::W);
-    let mut turn = FoldTurnV1::start();
+    let mut turn = FoldTurnV1::start(None);
     turn.select(4, 2);
     let quiet = turn
         .finish(
@@ -48,7 +48,7 @@ fn only_a_selected_turn_reports_and_its_phases_stay_on_its_thread() {
     assert_eq!((quiet.stage, quiet.stages), (None, None));
     assert_eq!(quiet.phase(FoldPhaseV1::Prove), Duration::ZERO);
 
-    let mut turn = FoldTurnV1::start();
+    let mut turn = FoldTurnV1::start(None);
     turn.select(4, 2);
     turn.operation(KagemushaWalletOperationKindV1::Load);
     turn.stages(3);
@@ -106,13 +106,13 @@ fn only_a_selected_turn_reports_and_its_phases_stay_on_its_thread() {
 
 #[test]
 fn a_dropped_turn_closes_its_thread_state() {
-    let mut turn = FoldTurnV1::start();
+    let mut turn = FoldTurnV1::start(None);
     turn.select(1, 0);
     turn.stages(1);
     stage(FoldStageV1::Q);
     drop(turn);
     stage(FoldStageV1::A);
-    let mut turn = FoldTurnV1::start();
+    let mut turn = FoldTurnV1::start(None);
     turn.select(1, 0);
     let record = turn.finish(Ok(FoldStatus::Folded(1)), None).unwrap();
     assert_eq!((record.stage, record.stages), (None, None));
@@ -121,7 +121,7 @@ fn a_dropped_turn_closes_its_thread_state() {
 #[test]
 fn stages_are_the_selected_heads_whole_schedule_or_nothing() {
     let total = |stages: Option<usize>| {
-        let mut turn = FoldTurnV1::start();
+        let mut turn = FoldTurnV1::start(None);
         turn.select(2, 1);
         if let Some(stages) = stages {
             turn.stages(stages);
@@ -146,7 +146,7 @@ fn stages_are_the_selected_heads_whole_schedule_or_nothing() {
 #[test]
 fn only_this_schedulers_signal_makes_a_cancellation() {
     let outcome = |result: Result<FoldStatus, Error>, adopted: bool, cause| {
-        let mut turn = FoldTurnV1::start();
+        let mut turn = FoldTurnV1::start(None);
         turn.select(1, 0);
         if adopted {
             turn.adopting();
@@ -193,7 +193,7 @@ fn only_this_schedulers_signal_makes_a_cancellation() {
     // A proof discarded at its publication is neither a cancellation nor a failure; a
     // discarding turn that failed otherwise is a failure.
     let discarded = |result: Result<FoldStatus, Error>| {
-        let mut turn = FoldTurnV1::start();
+        let mut turn = FoldTurnV1::start(None);
         turn.select(1, 0);
         turn.discarding();
         turn.finish(result.as_ref().copied(), None)
@@ -347,7 +347,7 @@ fn log_line_carries_only_fixed_names_whole_microseconds_counts_and_bytes() {
             )
         },
         concat!(
-            r#"{"schema":"iroha.kagemusha.fold-metrics.v3","sampledNativeMicros":0,"counts":{"subProofs":3,"#,
+            r#"{"schema":"iroha.kagemusha.fold-metrics.v4","sampledNativeMicros":0,"running":null,"counts":{"subProofs":3,"#,
             r#""checkpoints":0,"folded":0,"adopted":0,"failed":1,"discarded":1,"#,
             r#""cancelledByPayment":0,"cancelledBySetupIngest":1,"cancelledByStatusRead":0,"#,
             r#""cancelledByActivity":0,"cancelledByClose":0,"discardedProveMicros":9,"#,
@@ -446,7 +446,7 @@ fn verification_deltas_exclude_other_threads_and_earlier_turns() {
     use iroha_plonk::verification_counters::{record_decide, record_generator_msm};
 
     record_decide();
-    let mut turn = FoldTurnV1::start();
+    let mut turn = FoldTurnV1::start(None);
     turn.select(1, 0);
     record_decide();
     record_generator_msm(8);
@@ -461,7 +461,7 @@ fn verification_deltas_exclude_other_threads_and_earlier_turns() {
     assert_eq!(record.verification.proofs.decides, 1);
     assert_eq!(record.verification.proofs.generator_msms, 1);
     assert_eq!(record.verification.proofs.generator_msm_bases, 8);
-    let mut next = FoldTurnV1::start();
+    let mut next = FoldTurnV1::start(None);
     next.select(2, 0);
     assert_eq!(
         next.finish(Ok(FoldStatus::Folded(2)), None)
@@ -570,6 +570,13 @@ fn maximal_public_records_fit_the_mobile_diagnostic_bound() {
         discarded_prove: Duration::MAX,
         overlapped_ingests: u64::MAX,
     };
+    metrics.set_running(&FoldRunningV1 {
+        started_native_micros: u64::MAX,
+        sequence: u128::MAX,
+        operation: Some(KagemushaWalletOperationKindV1::RefreshPolicy),
+        ordinal: u32::MAX,
+        stages: Some(u32::MAX),
+    });
     let json = metrics.to_json();
     // Clock and process scratch widths can grow after this test; reserve their full u64 widths.
     let bound = json.len() + 4 * 20;
@@ -581,6 +588,9 @@ fn maximal_public_records_fit_the_mobile_diagnostic_bound() {
     assert!(scratch["inUseBytes"].as_u64().unwrap() <= scratch["peakBytes"].as_u64().unwrap());
     assert!(scratch["peakBytes"].as_u64().unwrap() <= scratch["limitBytes"].as_u64().unwrap());
     assert_eq!(object["processPeakRssBytes"].as_u64(), Some(u64::MAX));
+    let running = object["running"].as_object().unwrap();
+    assert_eq!(running["ordinal"].as_u64(), Some(u64::from(u32::MAX)));
+    assert_eq!(running["operation"].as_str(), Some("refresh_policy"));
     let work = object["nativeWork"].as_array().unwrap()[0]
         .as_object()
         .unwrap();
@@ -636,7 +646,7 @@ fn native_work_records_are_observation_only_and_count_the_calling_thread() {
 fn native_and_fold_marks_share_the_observation_clock_and_precede_sampling() {
     let (_, before) = native_mark();
     let native = NativeWorkTurnV1::start(NativeWorkKindV1::Execute);
-    let mut fold = FoldTurnV1::start();
+    let mut fold = FoldTurnV1::start(None);
     fold.select(1, 0);
     let fold = fold.finish(Err(&Error::Proof("test")), None).unwrap();
     let native = native.finish(false);
@@ -671,6 +681,137 @@ fn native_and_fold_marks_share_the_observation_clock_and_precede_sampling() {
         work_json.as_object().unwrap()["endedNativeMicros"].as_u64(),
         Some(native.ended_native_micros)
     );
+}
+
+/// Keeps what an owner's observer keeps: the records and the running turn.
+#[derive(Default)]
+struct Kept(std::sync::Mutex<FoldMetricsV1>);
+impl FoldObserverV1 for Kept {
+    fn sub_proof(&self, record: &FoldSubProofV1) {
+        self.0.lock().unwrap().record(record);
+    }
+    fn running(&self, running: &FoldRunningV1) {
+        self.0.lock().unwrap().set_running(running);
+    }
+    fn ended(&self, running: &FoldRunningV1) {
+        self.0.lock().unwrap().end_running(running);
+    }
+}
+impl Kept {
+    fn metrics(&self) -> FoldMetricsV1 {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+#[test]
+fn a_selected_turn_reports_what_it_has_read_until_its_record() {
+    let kept = Arc::new(Kept::default());
+    let observer: Arc<dyn FoldObserverV1> = kept.clone();
+    // A wake that selects nothing runs nothing a host could show.
+    let idle = FoldTurnV1::start(Some(observer.clone()));
+    enter(FoldPhaseV1::ReadFold);
+    assert_eq!(idle.finish(Ok(FoldStatus::CaughtUp), None), None);
+    assert_eq!(kept.metrics().running(), None);
+
+    let mut turn = FoldTurnV1::start(Some(observer.clone()));
+    turn.select(4, 2);
+    let selected = kept.metrics().running().unwrap();
+    assert_eq!(
+        (
+            selected.sequence,
+            selected.operation,
+            selected.ordinal,
+            selected.stages
+        ),
+        (4, None, 2, None)
+    );
+    assert!(kept.metrics().to_json().contains(&format!(
+        r#","running":{{"startedNativeMicros":{},"sequence":4,"operation":null,"ordinal":2,"stages":null}},"counts":"#,
+        selected.started_native_micros
+    )));
+    turn.operation(KagemushaWalletOperationKindV1::Load);
+    turn.stages(3);
+    let read = FoldRunningV1 {
+        operation: Some(KagemushaWalletOperationKindV1::Load),
+        stages: Some(3),
+        ..selected
+    };
+    assert_eq!(kept.metrics().running(), Some(read));
+    assert!(kept.metrics().to_json().contains(&format!(
+        r#","running":{{"startedNativeMicros":{},"sequence":4,"operation":"load","ordinal":2,"stages":3}},"counts":"#,
+        read.started_native_micros
+    )));
+    // Its record carries the same start and ends it once the observer records it.
+    let record = turn
+        .finish(
+            Ok(FoldStatus::Checkpoint {
+                sequence: 4,
+                ordinal: 2,
+            }),
+            None,
+        )
+        .unwrap();
+    assert_eq!(record.started_native_micros, read.started_native_micros);
+    assert_eq!(kept.metrics().running(), Some(read));
+    observer.sub_proof(&record);
+    assert_eq!(kept.metrics().running(), None);
+    assert!(
+        kept.metrics()
+            .to_json()
+            .contains(r#","running":null,"counts":"#)
+    );
+}
+
+#[test]
+fn a_selected_turn_without_a_record_ends_what_it_reported() {
+    let kept = Arc::new(Kept::default());
+    let observer: Arc<dyn FoldObserverV1> = kept.clone();
+    // Dropped after selecting, like a prepared job or a proof that is never published.
+    let mut dropped = FoldTurnV1::start(Some(observer.clone()));
+    dropped.select(1, 0);
+    dropped.operation(KagemushaWalletOperationKindV1::Send);
+    assert!(kept.metrics().running().is_some());
+    drop(dropped);
+    assert_eq!(kept.metrics().running(), None);
+    // Finished without a record after selecting.
+    let mut idle = FoldTurnV1::start(Some(observer));
+    idle.select(1, 0);
+    assert!(kept.metrics().running().is_some());
+    assert_eq!(idle.finish(Ok(FoldStatus::Idle), None), None);
+    assert_eq!(kept.metrics().running(), None);
+    assert_eq!(kept.metrics().counts().sub_proofs, 0);
+}
+
+#[test]
+fn only_its_own_record_or_end_clears_a_running_turn() {
+    let mut metrics = FoldMetricsV1::default();
+    let earlier = FoldRunningV1 {
+        started_native_micros: 10,
+        sequence: 3,
+        operation: Some(KagemushaWalletOperationKindV1::Receive),
+        ordinal: 1,
+        stages: Some(3),
+    };
+    // A second turn of the same sub-proof, started after the first one's proof released the
+    // background slot and before its publication.
+    let later = FoldRunningV1 {
+        started_native_micros: 20,
+        ..earlier
+    };
+    metrics.set_running(&earlier);
+    metrics.set_running(&later);
+    let mut published = record(1, FoldOutcomeV1::Checkpoint, Duration::ZERO);
+    published.started_native_micros = earlier.started_native_micros;
+    metrics.record(&published);
+    metrics.end_running(&earlier);
+    assert_eq!(metrics.running(), Some(later));
+    metrics.end_running(&later);
+    assert_eq!(metrics.running(), None);
+    metrics.set_running(&later);
+    published.started_native_micros = later.started_native_micros;
+    metrics.record(&published);
+    assert_eq!(metrics.running(), None);
+    assert_eq!(metrics.counts().sub_proofs, 2);
 }
 
 #[test]

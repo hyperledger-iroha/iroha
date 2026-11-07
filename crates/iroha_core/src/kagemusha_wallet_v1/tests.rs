@@ -49,6 +49,39 @@ impl NativePackageVerifier for Verifier {
         }
     }
 }
+// The package double never verifies a suffix stage.
+impl SuffixUnloadVerifier for Verifier {
+    fn verify_begin(
+        &self,
+        _: &KagemushaWalletSchemeV1,
+        _: &kagemusha_wallet_suffix_unload_v1::KagemushaWalletSuffixHeaderV1,
+        _: &kagemusha_wallet_suffix_unload_v1::KagemushaWalletSuffixAnchorV1,
+    ) -> Result<()> {
+        Err(Error::Proof)
+    }
+    fn verify_chunk(
+        &self,
+        _: &KagemushaWalletSchemeV1,
+        _: &kagemusha_wallet_suffix_unload_v1::KagemushaWalletSuffixHeaderV1,
+        _: &kagemusha_wallet_suffix_unload_v1::KagemushaWalletSuffixAnchorV1,
+        _: &KagemushaWalletLineagePublicV1,
+        _: &[kagemusha_wallet_suffix_unload_v1::KagemushaWalletSuffixStepV1],
+    ) -> Result<SuffixChunkVerdict> {
+        Err(Error::Proof)
+    }
+    fn verify_finalize(
+        &self,
+        _: &KagemushaWalletSchemeV1,
+        _: &kagemusha_wallet_suffix_unload_v1::KagemushaWalletSuffixHeaderV1,
+        _: &Digest,
+        _: &kagemusha_wallet_suffix_unload_v1::KagemushaWalletSuffixAnchorV1,
+        _: &[Vec<u8>],
+        _: &KagemushaWalletStateV1,
+        _: &kagemusha_wallet_suffix_unload_v1::KagemushaWalletSuffixUnloadV1,
+    ) -> Result<()> {
+        Err(Error::Proof)
+    }
+}
 #[derive(Clone)]
 pub(super) struct Memory {
     pub(super) registration: Registration,
@@ -658,4 +691,5 @@ fn uncommitted_world_row_cannot_supply_receipt_recovery() {
 }
 
 mod home_scope_tests;
+mod suffix_tests;
 mod wsv_tests;

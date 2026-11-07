@@ -1,8 +1,22 @@
 //! Publisher-authenticated initial source staging under exact native finalized assignments.
 
 use crate::SharedAppState;
+use axum::{
+    body::Bytes,
+    extract::{Extension, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 use iroha_allocation::{AllocationBudget, AllocationReservation};
+use iroha_core::query::provider_ingest_source::{
+    PublisherSourceBindingV1, authorize_publisher_source_v1,
+};
+use iroha_core::state::WorldReadOnly;
 use iroha_crypto::HashOf;
+use iroha_data_model::sorafs::{
+    capacity::ProviderId,
+    pin_registry::{ManifestDigest, ReplicationOrderId},
+};
 use iroha_data_model::{
     account::AccountId,
     sumeragi_finality::{
@@ -10,23 +24,9 @@ use iroha_data_model::{
     },
     transaction::TransactionEntrypoint,
 };
-use std::{num::NonZeroU64, time::Instant};
-use axum::{
-    body::Bytes,
-    extract::{Extension, State},
-    http::StatusCode,
-    response::{IntoResponse, Response},
-};
-use iroha_core::query::provider_ingest_source::{
-    PublisherSourceBindingV1, authorize_publisher_source_v1,
-};
-use iroha_core::state::WorldReadOnly;
-use iroha_data_model::sorafs::{
-    capacity::ProviderId,
-    pin_registry::{ManifestDigest, ReplicationOrderId},
-};
 use mv::storage::StorageReadOnly;
 use sorafs_car::publisher::PublisherSourceRequestV1;
+use std::{num::NonZeroU64, time::Instant};
 
 fn publication_now() -> Result<u64, StatusCode> {
     std::time::SystemTime::now()

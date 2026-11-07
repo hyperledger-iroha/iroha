@@ -352,6 +352,33 @@ impl VerifiedMovements {
         )
     }
 }
+impl super::SuffixTransaction for WsvLedger<'_, '_, '_> {
+    fn suffix_row(&self, key: &KagemushaWalletLedgerKeyV1) -> Result<Option<Vec<u8>>> {
+        self.state
+            .world
+            .kagemusha_wallet_ledger
+            .get(key)
+            .map(|bytes| {
+                validate_row(key, bytes)?;
+                Ok(bytes.clone())
+            })
+            .transpose()
+    }
+    fn suffix_installation(&self, scheme: &Digest) -> Result<(Digest, Digest)> {
+        super::artifacts::installed_identity(&*self.state, *scheme)
+    }
+    fn reserve_suffix_proofs(&mut self, proof_bytes: usize, verify_calls: u32) -> Result<()> {
+        self.state
+            .register_kagemusha_suffix_proofs(proof_bytes, verify_calls)?;
+        Ok(())
+    }
+    fn insert_suffix(&mut self, rows: Vec<(KagemushaWalletLedgerKeyV1, Vec<u8>)>) -> Result<()> {
+        for (key, bytes) in &rows {
+            validate_row(key, bytes)?;
+        }
+        self.insert_immutable(rows)
+    }
+}
 impl Transaction for WsvLedger<'_, '_, '_> {
     fn authority(&self) -> &AccountId {
         &self.authority

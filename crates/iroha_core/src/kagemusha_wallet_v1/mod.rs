@@ -21,10 +21,13 @@ pub use event_evidence::KagemushaLoadEventPathV1;
 mod ledger;
 pub(crate) mod routing;
 mod storage;
+/// Native-suffix Unload stages: Begin, order-independent Appends and Finalize.
+pub mod suffix;
 pub(crate) mod wsv;
 pub use ledger::{abandon, activate, close_loads, issue_load, pay_fee, pay_unload};
 pub(crate) use storage::validate_snapshot;
 pub use storage::{CredentialRecord, validate_row};
+pub use suffix::{SuffixChunkVerdict, SuffixTransaction, SuffixUnloadVerifier};
 #[cfg(test)]
 mod tests;
 

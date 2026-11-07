@@ -1601,7 +1601,9 @@ fn load_dataset_streaming<T: Default>(
 fn take_entry_object(entry: Value, dataset: &str) -> eyre::Result<json::Map> {
     match entry {
         Value::Object(obj) => Ok(obj),
-        _ => eyre::bail!("{dataset} entry must be an object"),
+        _ => {
+            eyre::bail!("{dataset} entry must be an object");
+        }
     }
 }
 fn take_required_string(
@@ -1633,7 +1635,9 @@ fn take_optional_string(
             let trimmed = value.trim();
             Ok((!trimmed.is_empty()).then(|| trimmed.to_owned()))
         }
-        _ => eyre::bail!("{dataset} entry `{field}` must be a string or null"),
+        _ => {
+            eyre::bail!("{dataset} entry `{field}` must be a string or null");
+        }
     }
 }
 fn validate_string_bytes(kind: DatasetKind, field: &'static str, value: &str) -> eyre::Result<()> {

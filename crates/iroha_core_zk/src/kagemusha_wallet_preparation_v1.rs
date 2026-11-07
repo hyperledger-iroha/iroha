@@ -31,7 +31,9 @@ mod incoming_statement;
 #[path = "kagemusha_wallet_preparation_v1/monetary.rs"]
 mod monetary;
 pub use monetary::{MonetaryStepV1, ReceiveMapsV1, SendControlsV1, SendFeeMapV1, SendMapsV1};
-pub(crate) use monetary::{ReceiveFoldFieldsV1, SendFoldFieldsV1};
+pub(crate) use monetary::{
+    ReceiveAdmissionFieldsV1, ReceiveFoldFieldsV1, SendFoldFieldsV1, suffix_receive_successor_v1,
+};
 
 #[path = "kagemusha_wallet_preparation_v1/native_inputs.rs"]
 mod native_inputs;
@@ -58,6 +60,7 @@ pub use load::LoadStepV1;
 
 #[path = "kagemusha_wallet_preparation_v1/consuming.rs"]
 mod consuming;
+pub(crate) use consuming::suffix_unload_successor_v1;
 pub use consuming::{ConsumingActionV1, ConsumingStepV1, UnloadChargeOriginalsV1};
 
 #[path = "kagemusha_wallet_preparation_v1/unfolded.rs"]

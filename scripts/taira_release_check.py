@@ -178,6 +178,7 @@ STAGES = (
     )),
     ("public doctor producer and deployment contract", (
         "taira::tests::doctor_basic_scope_accepts_unsynchronized_time_and_excludes_advanced_routes",
+        "taira::tests::doctor_runtime_routes_require_exact_operator_challenges_in_both_scopes",
         "taira::tests::doctor_faucet_policy_checks_both_scopes_without_authentication",
         "taira::tests::doctor_tools_list_consumes_pages_and_rejects_invalid_cursors",
         "taira::tests::doctor_reports_bounded_mcp_application_error_codes",
@@ -577,6 +578,10 @@ CLIENT_STAGES += (("strict native parameters response", (
     "client::tests::decode_parameters_response_parses_json_payload",
 )),)
 
+CLIENT_STAGES += (("signed runtime metadata reads", (
+    "client::operator_auth_tests::runtime_reads_require_exact_network_and_path_bound_operator_signatures",
+)),)
+
 CLIENT_STAGES += (("canonical executed block execution commitments", (
     "client::evidence_http_tests::canonical_executed_block_reader_binds_route_wire_and_committed_evidence",
     "client::evidence_http_tests::canonical_executed_block_reader_retries_with_fresh_account_signature",
@@ -653,6 +658,7 @@ TORII_STARTUP_STAGES += (("onboarding DPN grant authority", (
 )),)
 TORII_UNIT_STAGES = TORII_STARTUP_STAGES + (("public node capabilities and exact route authentication", (
     "tests_runtime_handlers::node_capabilities_http_bootstraps_without_registered_account",
+    "tests_runtime_handlers::runtime_governance_http_routes_require_operator_signatures",
     "openapi::tests::catalog_and_contracts::account_capabilities_document_exact_public_bootstrap_policy",
     "mcp::tests::target_policy_requires_inner_canonical_proof_only_for_canonical_route",
 )), ("public contract retained payload and certified ingress", (

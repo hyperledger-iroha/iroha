@@ -279,11 +279,7 @@ fn original_source_and_profile_exit_refuse_after_native_publication_without_sign
         Corruption::Namespace,
         Corruption::ImmutableAndProfile,
     ] {
-        let fixture = Fixture::enrolled_with_renewal_validity(4_000, 30_000);
-        wait_until(
-            fixture.initial.issued_at_unix_ms + 2_000,
-            Duration::from_secs(4),
-        );
+        let fixture = shared_snapshot_tests::ready_fixture(30_000);
         let restoration = Rc::new(RefCell::new(
             Vec::<(std::path::PathBuf, Option<Vec<u8>>)>::new(),
         ));

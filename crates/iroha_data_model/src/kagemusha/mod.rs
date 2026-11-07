@@ -6,6 +6,10 @@
 pub mod kagemusha_wallet_v1;
 pub use kagemusha_wallet_v1::*;
 
+/// Native-suffix Unload stage carriage: the Begin/Append/Finalize frames of an Unload whose
+/// latest head is not folded. Imported by path; nothing is glob-reexported.
+pub mod kagemusha_wallet_suffix_unload_v1;
+
 /// Issuer-authenticated pre-key authorization, separate from monetary wallet objects.
 pub mod kagemusha_enrollment_permit_v1;
 pub use kagemusha_enrollment_permit_v1::*;

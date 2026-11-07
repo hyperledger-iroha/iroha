@@ -33,7 +33,7 @@ mod doctor_account_tests {
     #[test]
     fn doctor_wallet_discovery_is_unsigned_and_mandatory_in_both_scopes() {
         for scope in [DoctorScope::Basic, DoctorScope::Full] {
-            let server = spawn_mock_http(16, |request| doctor_mock_response(request, None));
+            let server = spawn_mock_http(18, |request| doctor_mock_response(request, None));
             let report = run_doctor(&server.base_url, scope).unwrap();
             let requests = finish_mock(server);
             assert_eq!(report_status(&report), Some("ok"));

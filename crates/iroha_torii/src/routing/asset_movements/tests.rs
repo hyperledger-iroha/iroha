@@ -865,6 +865,182 @@ fn unloads_and_fees_pay_once_from_the_transaction_their_record_names() {
 }
 
 #[test]
+fn suffix_finalize_pays_once_and_begin_and_append_move_nothing() {
+    use iroha_core::kagemusha_wallet_v1::suffix::SuffixCharge;
+    use iroha_data_model::kagemusha::kagemusha_wallet_suffix_unload_v1::{
+        KagemushaWalletSuffixDigestRoleV1, kagemusha_wallet_suffix_digest_v1,
+        kagemusha_wallet_suffix_payout_source_v1,
+    };
+    let mut ledger = LedgerFixture::new();
+    let holder = account(0x63);
+    let beneficiary = account(0x64);
+    let authority = [0x77; 32];
+    let unload = kagemusha_wallet_suffix_digest_v1(KagemushaWalletSuffixDigestRoleV1::Unload, &[1]);
+    let paying = [0x83; 32];
+    let payout = KagemushaWalletPayoutRecordV1 {
+        key: KagemushaWalletPayoutKeyV1::Unload([0x54; 32]),
+        source: kagemusha_wallet_suffix_payout_source_v1(&authority, &unload),
+        amount: 2_000,
+        transaction: paying,
+    };
+    ledger.insert(payout.key.ledger_key(ledger.scheme), &payout);
+    ledger.insert(
+        final_key(ledger.scheme, authority),
+        &SuffixFinal {
+            version: 1,
+            wallet: WALLET,
+            asset: ledger.asset,
+            ordinal: 3,
+            unload,
+            payout,
+            account: holder.clone(),
+            account_payout: 1_950,
+            charge: Some(SuffixCharge {
+                beneficiary: beneficiary.clone(),
+                amount: 50,
+            }),
+        },
+    );
+    let stage = |action| KagemushaWalletLedgerV1::new(ledger.scheme, action);
+    let finalize = stage(KagemushaWalletLedgerActionV1::SuffixUnloadFinalize {
+        wallet: WALLET,
+        authority,
+        account: holder.clone(),
+        ordinal: 3,
+        unload: vec![1],
+    });
+    let mut out = Vec::new();
+    let mut credited = BTreeSet::new();
+    offline_instruction_movements(
+        &finalize,
+        (paying, 9),
+        &ledger.rows,
+        &mut credited,
+        &mut out,
+    )
+    .unwrap();
+    // The same Finalize twice in one transaction is paid once.
+    offline_instruction_movements(
+        &finalize,
+        (paying, 9),
+        &ledger.rows,
+        &mut credited,
+        &mut out,
+    )
+    .unwrap();
+    assert_eq!(
+        offline_rows(&out),
+        [
+            (
+                Kind::OfflineUnload,
+                Some(ledger.reserve.to_string()),
+                Some(holder.to_string()),
+                "19.5".to_owned()
+            ),
+            (
+                Kind::OfflineCharge,
+                Some(ledger.reserve.to_string()),
+                Some(beneficiary.to_string()),
+                "0.5".to_owned()
+            ),
+        ]
+    );
+    // An exact retry in a later transaction finds the original payout and moves nothing.
+    let mut retry = Vec::new();
+    offline_instruction_movements(
+        &finalize,
+        ([0x84; 32], 10),
+        &ledger.rows,
+        &mut BTreeSet::new(),
+        &mut retry,
+    )
+    .unwrap();
+    assert!(retry.is_empty());
+    // Begin and Append move nothing, even in the paying transaction.
+    for action in [
+        KagemushaWalletLedgerActionV1::SuffixUnloadBegin {
+            wallet: WALLET,
+            authority,
+            account: holder.clone(),
+            ordinal: 0,
+            header: vec![1],
+            anchor: vec![2],
+        },
+        KagemushaWalletLedgerActionV1::SuffixUnloadAppend {
+            wallet: WALLET,
+            authority,
+            account: holder.clone(),
+            ordinal: 1,
+            chunk: vec![3],
+        },
+    ] {
+        let mut rows = Vec::new();
+        offline_instruction_movements(
+            &stage(action),
+            (paying, 9),
+            &ledger.rows,
+            &mut BTreeSet::new(),
+            &mut rows,
+        )
+        .unwrap();
+        assert!(rows.is_empty());
+    }
+    // A different frame or ordinal cannot borrow a retained payout's movement.
+    for (ordinal, unload) in [(2, vec![1]), (3, vec![2])] {
+        assert!(
+            offline_instruction_movements(
+                &stage(KagemushaWalletLedgerActionV1::SuffixUnloadFinalize {
+                    wallet: WALLET,
+                    authority,
+                    account: holder.clone(),
+                    ordinal,
+                    unload,
+                }),
+                (paying, 9),
+                &ledger.rows,
+                &mut BTreeSet::new(),
+                &mut Vec::new(),
+            )
+            .is_err()
+        );
+    }
+    // A Finalize with no Final row paid nothing; one naming another account than its row is
+    // an inconsistent block.
+    let mut rows = Vec::new();
+    offline_instruction_movements(
+        &stage(KagemushaWalletLedgerActionV1::SuffixUnloadFinalize {
+            wallet: WALLET,
+            authority: [0x79; 32],
+            account: holder.clone(),
+            ordinal: 3,
+            unload: vec![1],
+        }),
+        (paying, 9),
+        &ledger.rows,
+        &mut BTreeSet::new(),
+        &mut rows,
+    )
+    .unwrap();
+    assert!(rows.is_empty());
+    assert!(
+        offline_instruction_movements(
+            &stage(KagemushaWalletLedgerActionV1::SuffixUnloadFinalize {
+                wallet: WALLET,
+                authority,
+                account: beneficiary.clone(),
+                ordinal: 3,
+                unload: vec![1],
+            }),
+            (paying, 9),
+            &ledger.rows,
+            &mut BTreeSet::new(),
+            &mut Vec::new(),
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn offline_rows_render_the_contract_json() {
     let mut ledger = LedgerFixture::new();
     let payer = account(0x41);

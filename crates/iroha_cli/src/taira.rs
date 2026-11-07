@@ -67,6 +67,9 @@ const PREPARED_ENVELOPE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const PREPARED_TRANSACTION_MAX_BYTES: usize = 1024 * 1024;
 const PREPARED_TRANSACTION_CLOCK_SKEW_MS: u64 = 30_000;
 const READINESS_RESPONSE_MAX_BYTES: u64 = 4 * 1024;
+const OPERATOR_CHALLENGE_RESPONSE_MAX_BYTES: u64 = 4 * 1024;
+const RUNTIME_ROUTE_DETAIL: &str =
+    "operator signature required; route posture only, deployed release and selection not verified";
 const INROU_CANARY_HEALTH_RESPONSE_MAX_BYTES: u64 = 4 * 1024;
 const INROU_PUBLIC_DISCOVERY_RESPONSE_MAX_BYTES: u64 = 64 * 1024;
 const INROU_PUBLIC_DISCOVERY_CONTENT_TYPE: &str = "application/json";
@@ -95,6 +98,7 @@ const FULL_MCP_TOOLS: &[&str] = &[
 enum RouteCheckMethod {
     Get,
     GetReadiness,
+    GetOperatorChallenge,
     PostEmptyObject,
 }
 const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
@@ -106,6 +110,18 @@ const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
     ),
     ("status", RouteCheckMethod::Get, "/status", &[200]),
     ("time_now", RouteCheckMethod::Get, "/v1/time/now", &[200]),
+    (
+        "runtime_release_route",
+        RouteCheckMethod::GetOperatorChallenge,
+        "/v1/runtime/release",
+        &[401],
+    ),
+    (
+        "runtime_upgrades_route",
+        RouteCheckMethod::GetOperatorChallenge,
+        "/v1/runtime/upgrades",
+        &[401],
+    ),
     (
         "sumeragi_status",
         RouteCheckMethod::Get,
@@ -236,6 +252,8 @@ impl DoctorScope {
                 "readiness"
                     | "status"
                     | "time_now"
+                    | "runtime_release_route"
+                    | "runtime_upgrades_route"
                     | "sumeragi_status"
                     | "pipeline_transaction_status"
                     | "public_lane_validators"
@@ -2677,6 +2695,7 @@ fn run_doctor_with_parliament(
         let result = match method {
             RouteCheckMethod::Get => http_json(&http, reqwest::Method::GET, url.as_str(), None)?,
             RouteCheckMethod::GetReadiness => http_readiness(&http, url.as_str())?,
+            RouteCheckMethod::GetOperatorChallenge => http_operator_challenge(&http, url.as_str())?,
             RouteCheckMethod::PostEmptyObject => http_json(
                 &http,
                 reqwest::Method::POST,
@@ -2693,6 +2712,13 @@ fn run_doctor_with_parliament(
                     }),
                 "status" => validate_public_status(result.body.as_ref()).err(),
                 "time_now" => validate_time_snapshot(result.body.as_ref(), scope).err(),
+                "runtime_release_route" | "runtime_upgrades_route" => {
+                    result.body.is_none().then(|| {
+                        format!(
+                            "{name} did not return the exact Torii operator-signature challenge"
+                        )
+                    })
+                }
                 _ => None,
             }
         } else {
@@ -2714,6 +2740,10 @@ fn run_doctor_with_parliament(
             semantic_error
                 .clone()
                 .or_else(|| readiness_failure.clone())
+                .or_else(|| {
+                    (status_ok && matches!(method, RouteCheckMethod::GetOperatorChallenge))
+                        .then(|| RUNTIME_ROUTE_DETAIL.to_owned())
+                })
                 .or_else(|| route_check_detail(expected_statuses)),
         );
         if !status_ok {
@@ -2847,7 +2877,14 @@ pub fn doctor_expected_checks(scope: DoctorScope) -> Vec<(&'static str, u64, Opt
     let mut checks = ROUTE_CHECKS
         .iter()
         .filter(|(name, _, _, _)| scope.includes_route(name))
-        .map(|(name, _, _, statuses)| (*name, u64::from(statuses[0]), route_check_detail(statuses)))
+        .map(|(name, method, _, statuses)| {
+            let detail = if matches!(method, RouteCheckMethod::GetOperatorChallenge) {
+                Some(RUNTIME_ROUTE_DETAIL.to_owned())
+            } else {
+                route_check_detail(statuses)
+            };
+            (*name, u64::from(statuses[0]), detail)
+        })
         .collect::<Vec<_>>();
     checks.extend(doctor_accounts::expected());
     checks.extend([
@@ -6198,6 +6235,54 @@ fn http_readiness(http: &HttpClient, url: &str) -> Result<HttpJson> {
     } else {
         json::from_slice(&bytes).ok()
     };
+    Ok(HttpJson { status, body })
+}
+fn http_operator_challenge(http: &HttpClient, url: &str) -> Result<HttpJson> {
+    // These reads expose operator-only state. An unsigned probe checks their
+    // mounted authentication boundary without claiming to observe that state.
+    let response = http
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .wrap_err_with(|| format!("runtime route request failed for {url}"))?;
+    let status = response.status().as_u16();
+    let challenge = response
+        .headers()
+        .get_all(reqwest::header::WWW_AUTHENTICATE)
+        .iter()
+        .collect::<Vec<_>>();
+    let json_content = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(';')
+                .next()
+                .is_some_and(|mime| mime.trim() == "application/json")
+        });
+    if challenge.len() != 1
+        || challenge[0] != "IrohaOperatorSignature realm=\"torii\""
+        || !json_content
+        || response
+            .content_length()
+            .is_some_and(|length| length > OPERATOR_CHALLENGE_RESPONSE_MAX_BYTES)
+    {
+        return Ok(HttpJson { status, body: None });
+    }
+    let mut bytes = Vec::new();
+    response
+        .take(OPERATOR_CHALLENGE_RESPONSE_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .wrap_err("failed to read bounded Torii operator challenge")?;
+    let body = (bytes.len() as u64 <= OPERATOR_CHALLENGE_RESPONSE_MAX_BYTES)
+        .then(|| json::from_slice::<Value>(&bytes).ok())
+        .flatten()
+        .filter(|body| {
+            body.as_object().is_some_and(|object| object.len() == 2)
+                && body.get("code").and_then(Value::as_str) == Some("operator_signature_missing")
+                && body.get("message").is_some_and(Value::is_string)
+        });
     Ok(HttpJson { status, body })
 }
 fn readiness_error_code(body: Option<&Value>) -> &str {
@@ -10344,6 +10429,20 @@ mod tests {
                     }
                 }),
             ),
+            ("GET", "/v1/runtime/release" | "/v1/runtime/upgrades") => {
+                let mut response = MockResponse::json(
+                    401,
+                    &norito::json!({
+                        "code": "operator_signature_missing",
+                        "message": "missing required operator signature header `x-iroha-operator-public-key`"
+                    }),
+                );
+                response.headers.push((
+                    "WWW-Authenticate",
+                    "IrohaOperatorSignature realm=\"torii\"".to_owned(),
+                ));
+                response
+            }
             ("GET", "/v1/sumeragi/status" | "/v1/soracloud/status")
             | ("POST", "/v1/musubi/queries/ordered-prefix") => MockResponse::json(
                 401,
@@ -12755,6 +12854,120 @@ mod tests {
         }
     }
     #[test]
+    fn doctor_runtime_routes_require_exact_operator_challenges_in_both_scopes() {
+        for scope in [DoctorScope::Basic, DoctorScope::Full] {
+            for (name, path) in [
+                ("runtime_release_route", "/v1/runtime/release"),
+                ("runtime_upgrades_route", "/v1/runtime/upgrades"),
+            ] {
+                for case in [
+                    "mounted",
+                    "missing",
+                    "unprotected",
+                    "wrong code",
+                    "missing challenge",
+                    "wrong challenge",
+                    "duplicate challenge",
+                    "wrong content type",
+                    "invalid JSON",
+                    "oversized",
+                    "unexpected field",
+                ] {
+                    let server = spawn_mock_http(18, move |request| {
+                        let mut response = doctor_mock_response(request, None);
+                        if path_only(&request.path) != path {
+                            return response;
+                        }
+                        match case {
+                            "mounted" => {}
+                            "missing" => response.status = 404,
+                            "unprotected" => response.status = 200,
+                            "wrong code" => {
+                                response.body = json::to_vec(&norito::json!({
+                                    "code": "canonical_authentication_required",
+                                    "message": "do-not-forward-server-message"
+                                }))
+                                .unwrap();
+                            }
+                            "missing challenge" => response.headers.clear(),
+                            "wrong challenge" => response.headers[0].1 = "Bearer".to_owned(),
+                            "duplicate challenge" => {
+                                response.headers.push(response.headers[0].clone());
+                            }
+                            "wrong content type" => response.content_type = "text/plain",
+                            "invalid JSON" => response.body = b"not JSON".to_vec(),
+                            "oversized" => {
+                                response.body =
+                                    vec![
+                                        b'x';
+                                        usize::try_from(OPERATOR_CHALLENGE_RESPONSE_MAX_BYTES + 1)
+                                            .unwrap()
+                                    ];
+                            }
+                            "unexpected field" => {
+                                let mut body: Value = json::from_slice(&response.body).unwrap();
+                                body.as_object_mut()
+                                    .unwrap()
+                                    .insert("unexpected".to_owned(), Value::Bool(true));
+                                response.body = json::to_vec(&body).unwrap();
+                            }
+                            _ => unreachable!("closed runtime probe cases"),
+                        }
+                        response
+                    });
+                    let report = run_doctor(&server.base_url, scope).expect("doctor report");
+                    let requests = finish_mock(server);
+                    let accepted = case == "mounted";
+                    assert_eq!(
+                        report_status(&report),
+                        Some(if accepted { "ok" } else { "fail" }),
+                        "{scope:?}: {path}: {case}"
+                    );
+                    let check = report["checks"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|check| check["name"].as_str() == Some(name))
+                        .expect("mandatory runtime route check");
+                    assert_eq!(check["ok"].as_bool(), Some(accepted));
+                    if accepted {
+                        assert_eq!(check["detail"].as_str(), Some(RUNTIME_ROUTE_DETAIL));
+                    }
+                    assert_eq!(
+                        report["failures"].as_array().unwrap().len(),
+                        usize::from(!accepted)
+                    );
+                    assert!(!json::to_json(&report).unwrap().contains("do-not-forward"));
+                    let reads = requests
+                        .iter()
+                        .filter(|request| path_only(&request.path) == path)
+                        .collect::<Vec<_>>();
+                    assert_eq!(reads.len(), 1);
+                    assert_eq!(reads[0].method, "GET");
+                    assert!(reads[0].body.is_empty());
+                    for header in [
+                        "authorization",
+                        "x-api-token",
+                        "x-iroha-operator-public-key",
+                        "x-iroha-operator-signature",
+                    ] {
+                        assert!(reads[0].header_values(header).is_empty());
+                    }
+                }
+                assert!(
+                    doctor_expected_checks(scope)
+                        .iter()
+                        .any(|(check, status, detail)| {
+                            *check == name
+                                && *status == 401
+                                && detail.as_deref() == Some(RUNTIME_ROUTE_DETAIL)
+                        })
+                );
+            }
+        }
+    }
+
+    #[test]
     fn doctor_faucet_policy_checks_both_scopes_without_authentication() {
         let policy: Value =
             json::from_slice(&doctor_account_tests::faucet_response().body).unwrap();
@@ -12805,7 +13018,7 @@ mod tests {
             for (label, status, body, accepted) in &cases {
                 let status = *status;
                 let body = body.clone();
-                let server = spawn_mock_http(16, move |request| {
+                let server = spawn_mock_http(18, move |request| {
                     if path_only(&request.path) == "/v1/accounts/faucet/policy" {
                         body.as_ref().map_or_else(
                             || MockResponse::text(status, "not JSON"),
@@ -12882,7 +13095,7 @@ mod tests {
 
     #[test]
     fn doctor_mock_healthy_flow_reports_ok() {
-        let server = spawn_mock_http(16, |request| doctor_mock_response(request, None));
+        let server = spawn_mock_http(18, |request| doctor_mock_response(request, None));
         let report = run_doctor(&server.base_url, DoctorScope::Full).expect("doctor report");
         let requests = finish_mock(server);
         assert_eq!(report_status(&report), Some("ok"));
@@ -12948,7 +13161,7 @@ mod tests {
                     false,
                 ),
             ] {
-                let server = spawn_mock_http(16, move |request| {
+                let server = spawn_mock_http(18, move |request| {
                     if path_only(&request.path) == "/readyz" {
                         MockResponse {
                             status: 200,
@@ -13015,7 +13228,7 @@ mod tests {
                 (Value::from("x".repeat(65)), "unspecified"),
                 (Value::Bool(false), "unspecified"),
             ] {
-                let server = spawn_mock_http(16, move |request| {
+                let server = spawn_mock_http(18, move |request| {
                     if path_only(&request.path) == "/readyz" {
                         MockResponse::json(
                             503,
@@ -13271,7 +13484,7 @@ mod tests {
         assert!(
             TestTairaCli::try_parse_from(["taira-test", "doctor", "--scope", "unknown"]).is_err()
         );
-        let server = spawn_mock_http(16, |request| {
+        let server = spawn_mock_http(18, |request| {
             let mut response = doctor_mock_response(request, None);
             if path_only(&request.path) == "/v1/time/now" {
                 let mut body: Value = json::from_slice(&response.body).unwrap();
@@ -13337,7 +13550,7 @@ mod tests {
     #[test]
     fn doctor_tools_list_consumes_pages_and_rejects_invalid_cursors() {
         for invalid_cursor in [false, true] {
-            let server = spawn_mock_http(16, move |request| {
+            let server = spawn_mock_http(18, move |request| {
                 let mut response = doctor_mock_response(request, None);
                 if request.method == "POST" && request.body.contains("tools/list") {
                     let request_body: Value = json::from_str(&request.body).unwrap();
@@ -13643,7 +13856,7 @@ mod tests {
     #[test]
     fn doctor_mock_required_tool_missing_reports_failure() {
         let missing_tool = REQUIRED_MCP_TOOLS[0];
-        let server = spawn_mock_http(16, move |request| {
+        let server = spawn_mock_http(18, move |request| {
             doctor_mock_response(request, Some(missing_tool))
         });
         let report = run_doctor(&server.base_url, DoctorScope::Full).expect("doctor report");
@@ -13663,7 +13876,7 @@ mod tests {
     }
     #[test]
     fn doctor_rejects_substituted_mcp_protocol_version() {
-        let server = spawn_mock_http(16, |request| {
+        let server = spawn_mock_http(18, |request| {
             if request.method == "POST"
                 && path_only(&request.path) == "/v1/mcp"
                 && request.body.contains("server/discover")
@@ -13696,7 +13909,7 @@ mod tests {
     #[test]
     fn doctor_rejects_noncanonical_mcp_discovery_response() {
         for noncanonical_response in ["wrong_status", "legacy_result", "mixed_versions"] {
-            let server = spawn_mock_http(16, move |request| {
+            let server = spawn_mock_http(18, move |request| {
                 if request.method == "POST"
                     && path_only(&request.path) == "/v1/mcp"
                     && request.body.contains("server/discover")
@@ -13761,7 +13974,7 @@ mod tests {
     }
     #[test]
     fn doctor_rejects_retired_mcp_get_capability_document() {
-        let server = spawn_mock_http(16, |request| {
+        let server = spawn_mock_http(18, |request| {
             if request.method == "GET" && path_only(&request.path) == "/v1/mcp" {
                 MockResponse::json(
                     200,
@@ -13816,7 +14029,7 @@ mod tests {
             norito::json!({"description": "missing name"}),
             norito::json!({"name": (REQUIRED_MCP_TOOLS[0]), "description": "duplicate"}),
         ] {
-            let server = spawn_mock_http(16, move |request| {
+            let server = spawn_mock_http(18, move |request| {
                 if request.method == "POST"
                     && path_only(&request.path) == "/v1/mcp"
                     && request.body.contains("tools/list")

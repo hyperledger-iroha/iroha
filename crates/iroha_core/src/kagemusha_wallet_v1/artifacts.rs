@@ -6,12 +6,25 @@ use iroha_core_zk::{
     kagemusha_wallet_artifacts_v1::{
         InstallationV1, InstalledVerifierPackV1, VERIFIER_PACK_MAX_BYTES_V1, VerifierPackV1,
     },
-    kagemusha_wallet_proofs_v1::ArtifactSet,
+    kagemusha_wallet_proofs_v1::{ArtifactSet, Error as ArtifactError},
 };
 use mv::storage::StorageReadOnly as _;
 
 pub(super) const KIND: u8 = 14;
 pub(super) const CAP: usize = VERIFIER_PACK_MAX_BYTES_V1 + 1024;
+
+/// Local mounting failures never become a deterministic invalid-proof verdict.
+fn artifact_error(error: ArtifactError) -> Error {
+    match error {
+        ArtifactError::DecodeResource(_)
+        | ArtifactError::Unavailable
+        | ArtifactError::Entropy
+        | ArtifactError::Cancelled
+        | ArtifactError::Verification(_)
+        | ArtifactError::Recursion(_) => Error::ArtifactsUnavailable,
+        _ => Error::Proof,
+    }
+}
 
 /// Exact original install retained after reserve consent, asset governance permission
 /// and complete native authentication. Construction alone confers no ledger authority.
@@ -61,7 +74,7 @@ impl VerifierInstallation {
         {
             return Err(Error::Binding);
         }
-        let pack = VerifierPackV1::decode_canonical(&self.original).map_err(|_| Error::Proof)?;
+        let pack = VerifierPackV1::decode_canonical(&self.original).map_err(artifact_error)?;
         let scheme = KagemushaWalletSchemeV1::decode_canonical(&pack.scheme, &self.scheme)?;
         let signer = KagemushaWalletSignerCertificateV1::decode_canonical(
             &pack.signer_certificate,
@@ -87,12 +100,12 @@ impl VerifierInstallation {
                 manifest_digest: self.manifest,
             },
         )
-        .map_err(|_| Error::Proof)
+        .map_err(artifact_error)
     }
 
     pub(super) fn require_registration(&self, registration: &Registration) -> Result<()> {
         registration.require(&self.scheme, &self.authorizing_asset)?;
-        let pack = VerifierPackV1::decode_canonical(&self.original).map_err(|_| Error::Proof)?;
+        let pack = VerifierPackV1::decode_canonical(&self.original).map_err(artifact_error)?;
         if KagemushaWalletSchemeV1::decode_canonical(&pack.scheme, &self.scheme)?
             != registration.scheme
         {
@@ -100,6 +113,28 @@ impl VerifierInstallation {
         }
         Ok(())
     }
+}
+
+/// Installed verifier identity of `scheme`: its signed manifest digest and the
+/// verifier-definition digest of the exact installed pack original.
+pub(super) fn installed_identity(
+    state: &StateTransaction<'_, '_>,
+    scheme: Digest,
+) -> Result<(Digest, Digest)> {
+    let row = key(scheme);
+    let bytes = state
+        .world
+        .kagemusha_wallet_ledger
+        .get(&row)
+        .ok_or(Error::ArtifactsUnavailable)?;
+    let value: VerifierInstallation = storage::decode(bytes, CAP)?;
+    value.validate(&row)?;
+    Ok((
+        value.manifest,
+        iroha_data_model::kagemusha::kagemusha_wallet_suffix_unload_v1::kagemusha_wallet_suffix_verifier_definition_v1(
+            &value.original,
+        ),
+    ))
 }
 
 /// Same-overlay original snapshot, captured before the instruction mutably borrows WSV.
@@ -126,6 +161,31 @@ impl LedgerVerifier {
         }
     }
 }
+impl LedgerVerifier {
+    /// Mount the exact installed artifact set of this scheme.
+    fn mounted(&self, scheme: &KagemushaWalletSchemeV1) -> Result<ArtifactSet> {
+        if scheme.scheme_id() != self.scheme {
+            return Err(Error::Binding);
+        }
+        let original = self
+            .original
+            .as_ref()
+            .ok_or(Error::ArtifactsUnavailable)?
+            .as_ref()
+            .map_err(|_| Error::Proof)?;
+        let value: VerifierInstallation = storage::decode(original, CAP)?;
+        value.validate(&key(self.scheme))?;
+        let verifier = value.mount()?;
+        if verifier.scheme() != scheme {
+            return Err(Error::Binding);
+        }
+        Ok(verifier)
+    }
+}
+
+#[path = "artifacts_suffix.rs"]
+mod suffix;
+
 impl NativePackageVerifier for LedgerVerifier {
     fn verify(
         &self,

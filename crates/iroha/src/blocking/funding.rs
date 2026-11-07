@@ -96,7 +96,9 @@ impl Client {
     fn exact_holding(&self, id: &AssetId) -> Result<Quantity> {
         match self.client().query_single(FindAssetById::new(id.clone())) {
             Ok(asset) if &asset.id == id => Ok(asset.value),
-            Ok(_) => eyre::bail!("balance query returned a substituted asset identity"),
+            Ok(_) => {
+                eyre::bail!("balance query returned a substituted asset identity");
+            }
             Err(crate::query::QueryError::Validation(
                 iroha_data_model::ValidationFail::QueryFailed(QueryExecutionFail::Find(
                     FindError::Asset(missing),

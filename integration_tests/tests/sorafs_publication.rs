@@ -34,9 +34,7 @@ use iroha_data_model::{
             ReserveMovementKindV1, ReservePolicyV1, ReserveProviderTermsV1, ReserveTier,
         },
     },
-    sumeragi_finality::{
-        MAX_FINALITY_CHECKPOINT_BYTES, SumeragiFinalityCheckpoint, SumeragiFinalityVerifier,
-    },
+    sumeragi_finality::SumeragiFinalityCheckpoint,
 };
 use iroha_executor_data_model::permission::sorafs::{
     CanOperateSorafsRepair, CanSetSorafsReservePolicy, CanUpsertSorafsProviderCredit,
@@ -64,7 +62,7 @@ use std::{
     borrow::Cow,
     fs,
     io::{Read as _, Write as _},
-    os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
+    os::unix::fs::OpenOptionsExt as _,
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -955,21 +953,25 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
     let governor = client(&published.network, 0, &ALICE_KEYPAIR);
     let reader = governor.clone();
     let reader_id = publisher_id.clone();
-    let granted = read_on_dedicated_thread(move || {
-        Ok(reader
-            .client()
-            .query(FindPermissionsByAccountId::new(reader_id))
-            .execute_all()?)
+    let (granted, roles) = read_on_dedicated_thread(move || {
+        let client = reader.client();
+        Ok((
+            client
+                .query(FindPermissionsByAccountId::new(reader_id.clone()))
+                .execute_all()?,
+            client
+                .query(FindRolesByAccountId { id: reader_id })
+                .execute_all()?,
+        ))
     })
     .await?;
     ensure!(
-        granted.is_empty(),
-        "the CLI publisher must hold no granted permission"
+        granted.is_empty() && roles.is_empty(),
+        "the CLI publisher must hold no granted permission or role"
     );
     // Ordinary transaction fees only; the pin fee was minted in genesis.
     let native_fee_asset =
-        iroha_genesis::signed_genesis_root_fee_policy(&published.network.genesis().0)?
-            .fee_asset_id;
+        iroha_genesis::signed_genesis_root_fee_policy(&published.network.genesis().0)?.fee_asset_id;
     submit_instruction(
         &governor,
         Transfer::asset_quantity(

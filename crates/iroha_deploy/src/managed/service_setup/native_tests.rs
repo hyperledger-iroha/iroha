@@ -834,20 +834,23 @@ fn genuine_unprepared_service_intents_expire_without_http_or_wallet_even_after_r
         .inner
         .validate_original(&recorder_original)
         .unwrap();
-    // Give each independent original the same 500 ms interval only after its native proof
-    // and helper prelude are complete; the first journal must not spend the second's window.
+    // Retention authenticates and writes a real request before this expiry control begins.
+    // Select each original's finite interval after its own prelude, allowing loaded debug
+    // builds to complete retention without spending the other request's signing window.
+    let retention_interval = Duration::from_secs(10);
+    let retention_interval_ms = u64::try_from(retention_interval.as_millis()).unwrap();
     let gateway_original = super::tests::retain_explicit_request(
         &gateway.inner,
         &gateway_dir,
         &gateway_original,
-        || now_ms().unwrap() + 500,
+        || now_ms().unwrap() + retention_interval_ms,
         &opts,
     );
     let recorder_original = super::tests::retain_explicit_request(
         &recorder.inner,
         &recorder_dir,
         &recorder_original,
-        || now_ms().unwrap() + 500,
+        || now_ms().unwrap() + retention_interval_ms,
         &opts,
     );
     let gateway_bytes = std::fs::read(gateway_dir.path().join("original.nrt")).unwrap();
@@ -873,7 +876,7 @@ fn genuine_unprepared_service_intents_expire_without_http_or_wallet_even_after_r
         .terms
         .requested_deadline_unix_ms
         .max(recorder_original.terms.requested_deadline_unix_ms);
-    let limit = Instant::now() + Duration::from_secs(2);
+    let limit = Instant::now() + retention_interval + Duration::from_secs(2);
     while now_ms().unwrap() < utc {
         assert!(Instant::now() < limit);
         std::thread::sleep(Duration::from_millis(5));

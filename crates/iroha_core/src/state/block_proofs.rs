@@ -531,6 +531,29 @@ pub enum KagemushaLedgerAttemptKindV1 {
         /// Paid account named by the claim frame (`KagemushaWalletUnloadClaimV1::account`).
         account: AccountId,
     },
+    /// One native-suffix Unload stage. Any signer may relay a stage, so the account the
+    /// stage names owns it as well as the input's signer. Only a certified Finalize pays.
+    SuffixUnload {
+        /// Paid account named by the stage's outer fields.
+        account: AccountId,
+        /// Suffix authority digest of the Begin header.
+        authority: [u8; 32],
+        /// Stage ordinal: 0 Begin, `1..=chunk_count` Append, `chunk_count + 1` Finalize.
+        ordinal: u128,
+        /// Which stage.
+        stage: KagemushaLedgerSuffixStageV1,
+    },
+}
+
+/// Stage of a native-suffix Unload attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KagemushaLedgerSuffixStageV1 {
+    /// Header and anchor; no value moves.
+    Begin,
+    /// One chunk of complete steps; no value moves.
+    Append,
+    /// The Unload receipt; its certified success is the payout.
+    Finalize,
 }
 
 /// One explicit KAGEMUSHA Activate or Unload instruction, the wallet its frame names and, for
@@ -558,6 +581,70 @@ impl KagemushaLedgerAttemptV1 {
     fn from_instruction(
         instruction: &KagemushaWalletLedgerV1,
     ) -> Result<Option<Self>, BlockProofError> {
+        // Suffix stages carry their wallet, account, authority and ordinal outside the
+        // (possibly multi-megabyte) stage frame: no frame is decoded to project them.
+        let suffix = match &instruction.action {
+            KagemushaWalletLedgerActionV1::SuffixUnloadBegin {
+                wallet,
+                authority,
+                account,
+                ordinal,
+                ..
+            } => Some((
+                wallet,
+                authority,
+                account,
+                *ordinal,
+                KagemushaLedgerSuffixStageV1::Begin,
+            )),
+            KagemushaWalletLedgerActionV1::SuffixUnloadAppend {
+                wallet,
+                authority,
+                account,
+                ordinal,
+                ..
+            } => Some((
+                wallet,
+                authority,
+                account,
+                *ordinal,
+                KagemushaLedgerSuffixStageV1::Append,
+            )),
+            KagemushaWalletLedgerActionV1::SuffixUnloadFinalize {
+                wallet,
+                authority,
+                account,
+                ordinal,
+                ..
+            } => Some((
+                wallet,
+                authority,
+                account,
+                *ordinal,
+                KagemushaLedgerSuffixStageV1::Finalize,
+            )),
+            _ => None,
+        };
+        if let Some((wallet, authority, account, ordinal, stage)) = suffix {
+            let shaped = match stage {
+                KagemushaLedgerSuffixStageV1::Begin => ordinal == 0,
+                KagemushaLedgerSuffixStageV1::Append => ordinal >= 1,
+                KagemushaLedgerSuffixStageV1::Finalize => ordinal >= 2,
+            };
+            if !shaped || *wallet == [0; 32] || *authority == [0; 32] {
+                return Ok(None);
+            }
+            return Ok(Some(Self {
+                scheme: instruction.scheme,
+                kind: KagemushaLedgerAttemptKindV1::SuffixUnload {
+                    account: account.clone(),
+                    authority: *authority,
+                    ordinal,
+                    stage,
+                },
+                wallet: *wallet,
+            }));
+        }
         let decoded = match &instruction.action {
             KagemushaWalletLedgerActionV1::Activate(frame) => {
                 shape_decode::<KagemushaWalletActivationV1>(
@@ -602,7 +689,8 @@ impl KagemushaLedgerAttemptV1 {
     fn is_owned_by(&self, signer: &AccountId, caller: &AccountId) -> bool {
         signer == caller
             || matches!(&self.kind,
-                KagemushaLedgerAttemptKindV1::Unload { account } if account == caller)
+                KagemushaLedgerAttemptKindV1::Unload { account }
+                | KagemushaLedgerAttemptKindV1::SuffixUnload { account, .. } if account == caller)
     }
 }
 

@@ -293,6 +293,21 @@ impl ProcessCommand {
         crate::inherit_descriptors(&mut self.inner, mappings)
     }
 
+    /// Install inputs at exact slots held by a parent reservation. Original inputs may
+    /// be released once this command retains its own duplicates.
+    ///
+    /// # Errors
+    /// Rejects unreserved or duplicate targets and failed source duplication. Launch
+    /// fails if a reserved child slot no longer has its close-on-exec placeholder.
+    #[cfg(unix)]
+    pub fn inherit_reserved_descriptors(
+        &mut self,
+        reserved: &Arc<crate::ReservedProcessDescriptors>,
+        mappings: &[(std::os::fd::BorrowedFd<'_>, std::os::fd::RawFd)],
+    ) -> io::Result<()> {
+        reserved.configure(&mut self.inner, mappings)
+    }
+
     /// Consume the request and retain the original process until terminal observation.
     ///
     /// # Errors

@@ -2235,10 +2235,12 @@ int32_t connect_norito_kagemusha_wallet_setup_v1(uint64_t handle, uint64_t excha
 // Selector3 exact prepared Load request: KWLPV1\0\0 frame <=65756 bytes, or exactly
 // KWLNV1\0\0 (8 bytes) for absent selected plan only. Selectors1..3 use nonzero32.
 // Selector4 fold metrics (empty identity): UTF-8 JSON <=131072 bytes with schema
-// iroha.kagemusha.fold-metrics.v3. In-memory public counts/timings only, no custody
+// iroha.kagemusha.fold-metrics.v4. In-memory public counts/timings only, no custody
 // acquisition, fold cancellation or authority; unknown/closing handles fail closed.
 // startedNativeMicros/endedNativeMicros and sampledNativeMicros share a process-local
 // monotonic origin. They are observation-only, not wall time or completion authority.
+// running is the selected fold turn running now, or null: its start, head, ordinal, and
+// once read its operation and schedule; its record ends it.
 // Domain-specific frames are never general result kinds or monetary/custody verdicts.
 // Unload claims use canonical setup45/status48; an attempt's certified rejection is status61.
 int32_t connect_norito_kagemusha_wallet_observe_v1(uint64_t handle, uint32_t selector, const uint8_t* identity, size_t identity_length, connect_norito_kagemusha_wallet_result_v1* out);
@@ -2300,7 +2302,10 @@ int32_t connect_norito_kagemusha_wallet_credit_status_v1(uint64_t handle, const 
  * request_id32 is required/nonzero and becomes private capability state at issuance.
  * expectation0 Fresh requires empty expected_projection; expectation1 OriginalUnstarted
  * requires the exact prior KWORV1 projection495..4591, plus unchanged original action inputs.
- * Native authenticates request absence/current source; projection DATA grants no authority.
+ * expectation2 RetainedPreparing requires empty expected_projection and an exact retained
+ * unselected preparation; absence refuses, selected outcomes remain observations. Native
+ * authenticates the whole source and selected Entry before renewed hardware approval.
+ * Projection DATA grants no authority; retained plan choices and source never change.
  * Send: amount0, first signed Request1..10034, second canonical AccountId1..4096.
  * Native authenticates the complete Request, then canonical-decodes the singleEd25519
  * account original and binds its Role::Account digest to that signed destination.
@@ -2342,8 +2347,10 @@ int32_t connect_norito_kagemusha_wallet_review_v1(uint64_t handle, uint64_t exch
     connect_norito_kagemusha_wallet_result_v1 *out);
 /** Consume actual review after fresh hardware approval; current source and ordinary proofs
  * remain mandatory before Advance. The privately bound request ID cannot be replaced.
- * Exact existing binding returns66, never new planning. Only authenticated absence can
- * return65 with the same live token for typed maintenance. Ordinary execution returns
+ * Fresh reviews observe existing binding as66. A retained-preparation review may continue
+ * only the exact Entry authenticated at issuance, never bind a new request or replan an
+ * existing Send/Unload. Authenticated absence or the same retained Entry can return65
+ * with the same live token for typed maintenance. Ordinary execution returns
  * Completion1/2/3/4/5/10; execution never returns18/67. No projection reconstructs authority. */
 int32_t connect_norito_kagemusha_wallet_execute_reviewed_v1(uint64_t handle, uint64_t exchange_id,
     uint64_t token, connect_norito_kagemusha_wallet_result_v1 *out);
