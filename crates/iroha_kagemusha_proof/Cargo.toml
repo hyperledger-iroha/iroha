@@ -28,6 +28,9 @@ iroha_plonk = { workspace = true }
 iroha_plonk_gadgets = { workspace = true }
 # Descriptor-fixed recursive verifier and local accumulation lanes for Q_sigma.
 iroha_plonk_recursion = { workspace = true }
+# Folding accumulators, multilinear deciders and their in-circuit verifiers
+# for the compression wraps (`fold_wrap`).
+iroha_fold = { workspace = true }
 # Canonical source-bound native checkpoint payloads and shared fixture codecs.
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 # `Field`/`PrimeField` traits of the iroha_pasta field types.
@@ -36,6 +39,8 @@ ff = "0.14.0"
 group = "0.14.0"
 
 [dev-dependencies]
+# Deterministic fold randomness for the fold_wrap tests (already in the lockfile).
+rand_chacha = "0.10.0"
 # Test-only fallible process CPU and kernel lifetime peak RSS probes.
 iroha_measurement = { workspace = true }
 sha2 = "0.11.1"

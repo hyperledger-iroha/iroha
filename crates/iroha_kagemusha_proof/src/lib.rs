@@ -88,6 +88,7 @@ pub mod circuit;
 pub mod consumer;
 mod control_circuit;
 pub mod controls;
+pub mod fold_wrap;
 pub mod omega;
 pub mod operation_relation;
 mod original_admission;

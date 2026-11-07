@@ -85,6 +85,8 @@ iroha_pasta = { path = "crates/iroha_pasta" }
 iroha_plonk = { path = "crates/iroha_plonk" }
 iroha_plonk_gadgets = { path = "crates/iroha_plonk_gadgets" }
 iroha_plonk_recursion = { path = "crates/iroha_plonk_recursion" }
+# KAGEMUSHA-Fold: folding accumulators, deciders and their in-circuit verifiers.
+iroha_fold = { path = "crates/iroha_fold" }
 iroha_kagemusha_proof = { path = "crates/iroha_kagemusha_proof" }
 iroha_i18n = { path = "crates/iroha_i18n" }
 
