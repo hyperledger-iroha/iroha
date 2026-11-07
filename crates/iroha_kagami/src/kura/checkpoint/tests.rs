@@ -99,7 +99,7 @@ fn native_prefix_exports_checkpoint_and_ordered_next_roster_without_mutating_sto
     assert_eq!(checkpoint.height(), 5);
     assert_eq!(checkpoint.network_id(), chain.network_id());
     assert_eq!(checkpoint.block_hash(), chain.committed(5).block().hash());
-    let mut consumer = SumeragiFinalityVerifier::from_trusted_checkpoint(
+    let consumer = SumeragiFinalityVerifier::from_trusted_checkpoint(
         &checkpoint,
         &args.network_id,
         args.chain_id.as_ref(),
@@ -124,7 +124,7 @@ fn native_prefix_exports_checkpoint_and_ordered_next_roster_without_mutating_sto
     let report: norito::json::Value =
         norito::json::from_slice(&fs::read(args.output_dir.join(REPORT_FILE)).unwrap()).unwrap();
     assert_eq!(report["live_freshness_established"].as_bool(), Some(false));
-    let verified_tip = consumer.verify(checkpoint.tip()).unwrap();
+    let verified_tip = consumer.verify_retained_decision(checkpoint.tip()).unwrap();
     assert_eq!(
         report["parent_core_hash_hex"].as_str(),
         Some(hex::encode(verified_tip.core_hash().0).as_str())
