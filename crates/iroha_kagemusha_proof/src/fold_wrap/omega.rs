@@ -10,40 +10,27 @@ use std::sync::Arc;
 
 use ff::Field;
 use iroha_fold::{
-    Accumulator, Instance,
+    Accumulator,
     circuit::{
         FoldLanes, ScalarCell,
         claims::{
-            ClaimAccumulatorCells, assign_claim_accumulator, assign_claim_accumulator_field,
-            assign_restructure_field, claim_accumulator_digest, verify_restructure_field,
+            assign_claim_accumulator, assign_claim_accumulator_field, assign_restructure_field,
+            claim_accumulator_digest, verify_restructure_field,
         },
         decider_v2::{
-            assign_accumulator_field_terms, assign_decider_v2_field_proof, claim_commitments,
-            helper_digest, opening_scalars, opening_transcript, verify_decider_v2_field,
+            assign_accumulator_field_terms, assign_decider_v2_field_proof, opening_scalars,
+            verify_decider_v2_field,
         },
         field::FieldLanes,
-        ivc::ivc_hash,
-        mle::{
-            EndoAlpha, OpeningClaimCells, OpeningKey, assign_batch_opening,
-            verify_batch_bound_group,
-        },
-        transcript as t,
-        verify::{
-            InstanceCells, accumulator_digest, assign_accumulator, assign_proof,
-            verify_fold_or_start,
-        },
     },
     claims::{ClaimAccumulator, RestructureProof},
     decider_v2::{DeciderV2Plan, DeciderV2Proof},
-    fold::FoldProof,
-    ivc::placeholder_accumulator,
 };
-use iroha_pasta::{Ep, Eq, EqAffine, Fp, Fq};
+use iroha_pasta::{Ep, Eq, Fp, Fq};
 use iroha_plonk::{
     DescriptorBinding, VerifyingKey,
     cs::{Column, ConstraintSystem, Instance as InstanceColumn, InstanceType},
     frontend::{Circuit, Error, Layouter, Region, SimpleFloorPlanner, Value},
-    pcs::mle::BatchOpening,
 };
 use iroha_plonk_gadgets::{
     GlueChip, Word,
@@ -59,8 +46,8 @@ use iroha_plonk_recursion::{
 };
 
 use super::{
-    K_U32, WrapError, WrapSpec, copy_terms_cells,
-    crossing::{PPublic, Pair, PallasClaimCrossing, QCrossing},
+    K_U32, WrapError,
+    crossing::{Pair, PallasClaimCrossing, QCrossing},
     p::PPlan,
 };
 
@@ -75,8 +62,8 @@ pub const INSTANCE_LENGTHS: [usize; 3] = [1, 2, K];
 /// Range buses of Omega's verifier lanes.
 pub const OMEGA_RANGE_BUSES: usize = 2;
 
-/// Omega's fixed program: P's program and pinned key, the A opening's
-/// generators, the Vesta claim restructuring's points and `acc_V`'s fold.
+/// Omega's fixed program: P's program and pinned key, the Vesta claim
+/// restructuring's points and `acc_V`'s fold.
 #[derive(Clone, Debug)]
 pub struct OmegaPlan {
     /// P's program (shapes, domains, crossing layout).
@@ -85,8 +72,6 @@ pub struct OmegaPlan {
     pub verifier: VerifierPlan<Eq>,
     /// P's key, a circuit constant.
     pub key: VerifyingKey<Eq>,
-    /// The A opening's fixed generators.
-    pub opening: OpeningKey<Eq>,
     /// The Vesta claim restructuring's pinned points and context.
     pub restructure: RestructurePlan<Eq>,
     /// `acc_V`'s fold: P's claim, the A decider's claim, the restructured claim.
@@ -109,7 +94,6 @@ impl OmegaPlan {
             return Err(WrapError::Input);
         }
         Ok(Self {
-            opening: OpeningKey::new(params.params()),
             restructure: RestructurePlan::new(&params).map_err(|_| WrapError::Input)?,
             fold: FoldPlan::new(&params, vec![K_U32; 3], FoldPurpose::FoldWrapVesta)
                 .map_err(|_| WrapError::Input)?,
@@ -141,28 +125,8 @@ pub struct PallasFieldWitness {
     pub proof: RestructureProof<Fq>,
 }
 
-/// The last A fold and the A-side decider's commitment side in Omega.
-#[derive(Clone, Debug)]
-pub struct AGroupWitness {
-    /// The A accumulators `Q_{n-1}` keeps, in kind order; only the last
-    /// kind's may be absent (`A_n` then starts it).
-    pub accs: Vec<Option<Accumulator<Eq>>>,
-    /// `A_n`'s instance (its public columns are P's rows).
-    pub fresh: Instance<Eq>,
-    /// The fold's messages (zero when `A_n` starts its accumulator).
-    pub fold: FoldProof<Fp>,
-    /// The decider proof's helper commitments.
-    pub helpers: Vec<EqAffine>,
-    /// The decider's bound opening.
-    pub opening: BatchOpening<Eq>,
-}
-
 /// Every input of Omega besides its plan; private to the wallet.
 pub struct OmegaWitness {
-    /// `Q_{n-1}`'s step index.
-    pub step: u64,
-    /// `z_Q`, the Q state after `Q_{n-1}`.
-    pub state: Vec<Fq>,
     /// P's public column.
     pub p_public: Vec<Fp>,
     /// P's proof.
@@ -171,8 +135,6 @@ pub struct OmegaWitness {
     pub q: QFieldWitness,
     /// The Pallas claims' sumcheck.
     pub pallas: PallasFieldWitness,
-    /// The last A fold and the A-side decider's commitment side.
-    pub a: AGroupWitness,
     /// The claim accumulator Q keeps.
     pub vesta: ClaimAccumulator<Eq>,
     /// The Vesta claim accumulator's committed-mask opening.
@@ -276,22 +238,6 @@ fn bind_canonical(
     let hi = limb(lanes.glue, region, &pair[1])?;
     GlueChip::assert_equal(region, limbs.lo().word(), &lo)?;
     GlueChip::assert_equal(region, limbs.hi().word(), &hi)
-}
-
-/// A P row as a foreign `Fp` scalar on Omega's fold lanes.
-fn import_row(
-    lanes: &mut FoldLanes<'_, Eq>,
-    region: &mut Region<'_, Fq>,
-    row: &ScalarCells<Eq>,
-) -> Result<ScalarCell<Eq>, Error> {
-    let s6 = CanonicalS6::from_limbs(
-        &mut lanes.uint(),
-        region,
-        CanonicalS6::<Fq>::field_modulus::<Fp>(),
-        row.lo(),
-        row.hi(),
-    )?;
-    lanes.import(region, s6)
 }
 
 /// The Q-side decider's field side over every Q kind (native `Fq`): each
@@ -409,228 +355,6 @@ pub fn pallas_field_side(
     bind_pair(lanes, region, &value, &crossing.value)
 }
 
-/// The last A fold: `A_n` (public columns from P's rows) folds into its
-/// kind's accumulator, or starts it when `Q_{n-1}` kept none of that kind.
-/// `A_n`'s passthrough is recomputed as `Q_{n-1}`'s `h_out` over every kept A
-/// digest (zero for the absent kind) and the Vesta claim accumulator's. The
-/// A-side decider's commitment side and opening then run over every A kind
-/// after the fold. Returns the opening's undecided Vesta claim and the claim
-/// accumulator.
-///
-/// # Errors
-/// Layout errors or a witness of another shape; a false fold or opening is
-/// unsatisfiable.
-#[allow(clippy::too_many_lines)]
-pub fn a_commitment_side(
-    lanes: &mut FoldLanes<'_, Eq>,
-    region: &mut Region<'_, Fq>,
-    plan: &OmegaPlan,
-    public: &PPublic<ScalarCells<Eq>>,
-    witness: Option<&OmegaWitness>,
-) -> Result<(OpeningClaimCells<Eq>, ClaimAccumulatorCells<Eq>), Error> {
-    let spec: &WrapSpec = &plan.p.spec;
-    let plans: Vec<&DeciderV2Plan<Eq>> = plan.p.a_plans.iter().map(|p| &**p).collect();
-    let domain = &spec.domains.a_fold;
-    let last = spec.last;
-    let last_shape = spec.a[last].shape();
-    let helper_count: usize = plans.iter().map(|p| p.helper_count()).sum();
-    if public.a.members.len() != spec.a.len()
-        || witness.is_some_and(|w| {
-            w.state.len() != spec.q_state
-                || w.a.accs.len() != spec.a.len()
-                || w.a
-                    .accs
-                    .iter()
-                    .enumerate()
-                    .any(|(k, acc)| acc.is_none() && k != last)
-                || w.a.fresh.commitments.len() != last_shape.columns
-                || w.a.helpers.len() != helper_count
-        })
-    {
-        return Err(Error::Synthesis);
-    }
-    // The kept accumulators and their digests; an absent last kind is a
-    // placeholder that the start ignores.
-    let mut kept = Vec::with_capacity(spec.a.len());
-    let mut kept_digests = Vec::with_capacity(spec.a.len());
-    for (kind, relation) in spec.a.iter().enumerate() {
-        let value = witness.map(|w| {
-            w.a.accs[kind]
-                .clone()
-                .unwrap_or_else(|| placeholder_accumulator::<Eq>(relation))
-        });
-        let acc = assign_accumulator(lanes, region, &relation.shape(), value.as_ref())?;
-        kept_digests.push(accumulator_digest(lanes, region, domain, &acc)?);
-        kept.push(acc);
-    }
-    let start = lanes.glue.boolean(
-        region,
-        known(witness.map(|w| w.a.accs[last].is_none()).as_ref()),
-    )?;
-    // A_n folds into (or starts) its kind's accumulator.
-    let mut commitments = Vec::with_capacity(last_shape.columns);
-    for column in 0..last_shape.columns {
-        let point = witness.map(|w| Eq::from(w.a.fresh.commitments[column]));
-        commitments.push(lanes.assign_point(region, known(point.as_ref()))?);
-    }
-    let mut rows = public.a_public.iter();
-    let mut columns = Vec::with_capacity(last_shape.instance_lengths.len());
-    for length in &last_shape.instance_lengths {
-        let mut column = Vec::with_capacity(*length);
-        for _ in 0..*length {
-            let row = rows.next().ok_or(Error::Synthesis)?;
-            column.push(import_row(lanes, region, row)?);
-        }
-        columns.push(column);
-    }
-    let fresh = InstanceCells {
-        commitments,
-        public: columns,
-    };
-    let proof = assign_proof(lanes, region, &last_shape, witness.map(|w| &w.a.fold))?;
-    let folded = verify_fold_or_start(
-        lanes,
-        region,
-        &last_shape,
-        domain,
-        &kept[last],
-        &fresh,
-        &proof,
-        &start,
-    )?;
-    // A_n's passthrough is Q_{n-1}'s h_out over the kept digests (zero for an
-    // absent kind) and the Vesta claim accumulator's kgwfcld1.
-    let claims = assign_claim_accumulator(lanes, region, witness.map(|w| &w.vesta))?;
-    let claim_digest =
-        claim_accumulator_digest(lanes, region, &spec.domains.vesta_claims, &claims)?;
-    let zero = lanes.glue.constant(region, Fq::ZERO)?;
-    let mut digests = kept_digests.clone();
-    digests[last] = lanes
-        .glue
-        .select(region, &start, &zero, &kept_digests[last])?;
-    digests.push(claim_digest.clone());
-    let state = (0..spec.q_state)
-        .map(|i| {
-            lanes
-                .glue
-                .witness(region, known(witness.map(|w| &w.state[i])))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let step = lanes
-        .glue
-        .witness(region, known(witness.map(|w| Fq::from(w.step)).as_ref()))?;
-    let base = lanes.glue.constant(region, spec.base_q)?;
-    let hash = ivc_hash(
-        lanes,
-        region,
-        &spec.domains.q_ivc,
-        &step,
-        &base,
-        &state,
-        &digests,
-    )?;
-    let passthrough = public.a_public.first().ok_or(Error::Synthesis)?;
-    GlueChip::assert_equal(region, passthrough.lo().word(), hash.lo.word())?;
-    GlueChip::assert_equal(region, passthrough.hi().word(), hash.hi.word())?;
-    // The Vesta claim accumulator's crossing values.
-    bind_canonical(lanes, region, &claim_digest, &public.vesta.digest)?;
-    for (cells, rows) in [
-        (&claims.u, &public.vesta.u),
-        (&claims.beta, &public.vesta.beta),
-    ] {
-        if cells.len() != rows.len() {
-            return Err(Error::Synthesis);
-        }
-        for (cell, row) in cells.iter().zip(rows) {
-            bind_scalar(region, cell, row)?;
-        }
-    }
-    bind_scalar(region, &claims.e, &public.vesta.e)?;
-    // The decided accumulators: the kept ones with the last kind folded.
-    // Their digests and field terms cross to P, with each instance copy term
-    // computed here from the public columns the digest hashes and P's copy
-    // challenges.
-    let mut decided = kept;
-    decided[last] = folded;
-    let gamma = import_row(lanes, region, &public.a.copy_challenges[0])?;
-    let eta = import_row(lanes, region, &public.a.copy_challenges[1])?;
-    for (kind, ((acc, member), member_plan)) in decided
-        .iter()
-        .zip(&public.a.members)
-        .zip(&plans)
-        .enumerate()
-    {
-        let digest = if kind == last {
-            accumulator_digest(lanes, region, domain, acc)?
-        } else {
-            kept_digests[kind].clone()
-        };
-        bind_canonical(lanes, region, &digest, &member.acc_digest)?;
-        let terms = &member.terms;
-        if acc.theta.len() != terms.theta.len()
-            || acc.r.len() != terms.r.len()
-            || acc.beta.len() != terms.beta.len()
-        {
-            return Err(Error::Synthesis);
-        }
-        for (cells, rows) in [
-            (&acc.theta, &terms.theta),
-            (&acc.r, &terms.r),
-            (&acc.beta, &terms.beta),
-        ] {
-            for (cell, row) in cells.iter().zip(rows) {
-                bind_scalar(region, cell, row)?;
-            }
-        }
-        bind_scalar(region, &acc.e, &terms.e)?;
-        let copy_terms = copy_terms_cells(
-            lanes,
-            region,
-            member_plan,
-            &acc.instance.public,
-            &gamma,
-            &eta,
-        )?;
-        bind_scalar(region, &copy_terms, &terms.copy_terms)?;
-    }
-    // The A-side decider's commitment side and its opening.
-    let mut helpers = Vec::with_capacity(helper_count);
-    for index in 0..helper_count {
-        let point = witness.map(|w| Eq::from(w.a.helpers[index]));
-        helpers.push(lanes.assign_point(region, known(point.as_ref()))?);
-    }
-    let helper = helper_digest(lanes, region, domain, &helpers)?;
-    bind_canonical(lanes, region, &helper, &public.a.helper_digest)?;
-    let field_digest = import_row(lanes, region, &public.a.field_digest)?;
-    let value = import_row(lanes, region, &public.a.value)?;
-    let folded_eq = import_row(lanes, region, &public.a.folded)?;
-    let mu = plans.first().ok_or(Error::Synthesis)?.mu();
-    let opening = assign_batch_opening(lanes, region, mu, witness.map(|w| &w.a.opening))?;
-    let batch: Vec<_> = plans.iter().copied().zip(decided.iter()).collect();
-    let opened = claim_commitments(lanes, region, &batch, &helpers)?;
-    opening_transcript(lanes, region, domain, &field_digest)?;
-    let group = verify_batch_bound_group(
-        lanes,
-        region,
-        &plan.opening,
-        mu,
-        &opened,
-        &value,
-        &folded_eq,
-        &opening,
-    )?;
-    t::finish(lanes, region)?;
-    let EndoAlpha { scalar: alpha, .. } = group.alpha.ok_or(Error::Synthesis)?;
-    bind_scalar(region, &alpha, &public.a.alpha)?;
-    if group.claim.challenges.len() != public.a.rounds.len() {
-        return Err(Error::Synthesis);
-    }
-    for (cell, row) in group.claim.challenges.iter().zip(&public.a.rounds) {
-        bind_scalar(region, cell, row)?;
-    }
-    Ok((group.claim, claims))
-}
-
 impl Circuit<Fq> for OmegaCircuit {
     type Config = OmegaConfig;
     type FloorPlanner = SimpleFloorPlanner;
@@ -745,9 +469,9 @@ impl Circuit<Fq> for OmegaCircuit {
                         witness.map(|w| &w.pallas),
                     )?;
                 }
-                // The last A fold, the passthrough, the A-side decider's
-                // commitment side and the Vesta claim accumulator.
-                let (a_claim, claims) = {
+                // The Vesta claim accumulator: its digest is the one R hashed
+                // into the passthrough (P forwards it), its field data P's.
+                let (claims, a_claim_g) = {
                     let refs = chip.fold_lanes()?;
                     let mut lanes = FoldLanes {
                         glue: refs.glue,
@@ -756,7 +480,35 @@ impl Circuit<Fq> for OmegaCircuit {
                         ecc: refs.ecc,
                         duplex: refs.hash,
                     };
-                    a_commitment_side(&mut lanes, region, plan, &public, witness)?
+                    let claims =
+                        assign_claim_accumulator(&mut lanes, region, witness.map(|w| &w.vesta))?;
+                    let claim_digest = claim_accumulator_digest(
+                        &mut lanes,
+                        region,
+                        &plan.p.spec.domains.vesta_claims,
+                        &claims,
+                    )?;
+                    bind_canonical(&mut lanes, region, &claim_digest, &public.vesta.digest)?;
+                    for (cells, rows) in [
+                        (&claims.u, &public.vesta.u),
+                        (&claims.beta, &public.vesta.beta),
+                    ] {
+                        if cells.len() != rows.len() {
+                            return Err(Error::Synthesis);
+                        }
+                        for (cell, row) in cells.iter().zip(rows) {
+                            bind_scalar(region, cell, row)?;
+                        }
+                    }
+                    bind_scalar(region, &claims.e, &public.vesta.e)?;
+                    let mut field = FieldLanes {
+                        glue: lanes.glue,
+                        range: lanes.range,
+                        duplex: lanes.duplex,
+                    };
+                    let x = pair_word(&mut field, region, &public.a_claim.g[0])?;
+                    let y = pair_word(&mut field, region, &public.a_claim.g[1])?;
+                    (claims, [x, y])
                 };
                 // The Vesta claims' group side at P's rho and v.
                 let statement = RestructureStatementCells {
@@ -771,21 +523,18 @@ impl Circuit<Fq> for OmegaCircuit {
                     restructure_messages,
                     &restructure_length,
                 )?;
-                // acc_V = fold(P's claim, the A decider's claim, the restructured claim).
+                // acc_V = fold(P's claim, the A decider's claim from R, the
+                // restructured claim).
                 let p_input = FoldInputCells::from_claim(&mut chip, region, &verified.claim)?;
-                let g = chip.constrain_generator(
-                    region,
-                    a_claim.folded_generator.x(),
-                    a_claim.folded_generator.y(),
-                )?;
+                let g = chip.constrain_generator(region, &a_claim_g[0], &a_claim_g[1])?;
                 let a_input = FoldInputCells::from_normalized(
                     &mut chip,
                     region,
                     K_U32,
                     g,
                     public
-                        .a
-                        .rounds
+                        .a_claim
+                        .u
                         .clone()
                         .try_into()
                         .map_err(|_| Error::Synthesis)?,

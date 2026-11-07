@@ -9,10 +9,11 @@
 //! A chain of four ends with `A_b` while `Q_b` kept no `A_b`, so Omega starts
 //! that accumulator. A chain of eight ends with `A_b` folding into the kept
 //! one. For both chains:
-//! - the native producer's P and Omega are satisfied;
-//! - a changed crossing row, public value or boundary word is rejected;
-//! - both proofs are made, Omega verifies natively, and its opening, `acc_V`
-//!   and `acc_P` decide.
+//! - the native producer's R, P and Omega are satisfied;
+//! - a changed crossing row or public value is rejected, including an R row
+//!   P's copy of R's public column changes;
+//! - all three proofs are made, Omega verifies natively, and its opening,
+//!   `acc_V` and `acc_P` decide.
 //!
 //! The test prints each wrap's rows and each stage's time.
 
@@ -490,26 +491,17 @@ fn copy_fold(witness: &FoldWitness<Ep>) -> FoldWitness<Ep> {
     FoldWitness::from_private_bytes(&witness.to_private_bytes()).expect("canonical witness")
 }
 
-/// P with one boundary word of `z_A` set to one and `A_n`'s `h_out` recomputed
-/// over that state, so only the boundary rule can reject it.
-fn off_boundary(keys: &native::WrapKeys, prepared: &native::Prepared) -> (PCircuit, Vec<Fp>) {
-    let spec = &keys.p_plan.spec;
-    let original: &PWitness = &prepared.p_witness;
-    let mut state = original.state.clone();
-    state[spec.boundary[0]] = Fp::ONE;
-    let layout = &keys.p_plan.layout;
-    let parsed = layout.parse(&prepared.p_public).expect("layout");
-    let mut digests: Vec<Fp> = parsed.q.members.iter().map(|m| m.acc_digest).collect();
-    digests.push(parsed.pallas.digest);
-    let h_out = ivc_hash::<Fp>(&IVC_A, original.step, Fp::from(BASE), &state, &digests);
-    let mut a_public = original.a_public.clone();
-    a_public[1] = h_out;
-    let mut public = prepared.p_public.clone();
-    public[1] = h_out;
+/// P whose copy of R's public column has one row changed, so R's proof no
+/// longer verifies inside P.
+fn with_r_row_changed(keys: &native::WrapKeys, stage: &native::PStage, row: usize) -> PCircuit {
+    let original: &PWitness = &stage.p_witness;
+    let mut r_public = original.r_public.clone();
+    r_public[row] += Fq::ONE;
     let witness = PWitness {
         step: original.step,
-        state,
-        a_public,
+        state: original.state.clone(),
+        r_public,
+        r_proof: original.r_proof.clone(),
         q: original.q.clone(),
         a: original.a.clone(),
         pallas: original.pallas.clone(),
@@ -517,16 +509,13 @@ fn off_boundary(keys: &native::WrapKeys, prepared: &native::Prepared) -> (PCircu
         restructure: copy_fold(&original.restructure),
         fold: copy_fold(&original.fold),
     };
-    (
-        PCircuit {
-            plan: Arc::clone(&keys.p_plan),
-            witness: Some(Arc::new(witness)),
-        },
-        public,
-    )
+    PCircuit {
+        plan: Arc::clone(&keys.p_plan),
+        witness: Some(Arc::new(witness)),
+    }
 }
 
-/// Wraps one chain: P and Omega checked (with mutations when `mutate`),
+/// Wraps one chain: R, P and Omega checked (with mutations when `mutate`),
 /// proved, Omega verified natively and every carried accumulator decided.
 fn wrap(keys: &native::WrapKeys, chain: &FinalChain, seed: u64, mutate: bool) {
     let spec = &keys.p_plan.spec;
@@ -538,44 +527,63 @@ fn wrap(keys: &native::WrapKeys, chain: &FinalChain, seed: u64, mutate: bool) {
         "native deciders, folds and restructurings: {:.1?}",
         now.elapsed()
     );
-    let p = native::p_circuit(keys, &prepared);
-    let report = check_circuit(&p, K, &[prepared.p_public.clone()], CheckMode::Strict).expect("P");
+    // R.
+    let r = native::r_circuit(keys, &prepared);
+    let report = check_circuit(&r, K, &[prepared.r_public.clone()], CheckMode::Strict).expect("R");
+    usage("R");
+    assert!(report.is_satisfied(), "R: {:?}", report.failures().first());
+    if mutate {
+        let layout = &keys.r_plan.layout;
+        for (label, row) in [
+            ("passthrough", 0),
+            ("an A member digest", layout.a_public),
+            ("the claim digest", layout.rows() - 1),
+        ] {
+            let mut changed = prepared.r_public.clone();
+            changed[row] += Fq::ONE;
+            let report = check_circuit(&r, K, &[changed], CheckMode::Strict).expect("R");
+            let _ = diagnostic_take_usage();
+            assert!(!report.is_satisfied(), "R accepts another {label}");
+        }
+    }
+    let now = Instant::now();
+    let (r_proof, r_opening) = native::prove_r(keys, &prepared).expect("R proof");
+    println!("R proof ({} bytes): {:.1?}", r_proof.len(), now.elapsed());
+    let stage = native::p_stage(keys, prepared, r_proof, &r_opening, &config).expect("P stage");
+    // P.
+    let p = native::p_circuit(keys, &stage);
+    let report = check_circuit(&p, K, &[stage.p_public.clone()], CheckMode::Strict).expect("P");
     usage("P");
     assert!(report.is_satisfied(), "P: {:?}", report.failures().first());
     if mutate {
         let layout = &keys.p_plan.layout;
-        let parsed = layout.parse(&prepared.p_public).expect("layout");
-        let row_of = |value: &Fp| {
-            prepared
-                .p_public
-                .iter()
-                .position(|v| v == value)
-                .expect("row")
-        };
+        let parsed = layout.parse(&stage.p_public).expect("layout");
+        let row_of = |value: &Fp| stage.p_public.iter().position(|v| v == value).expect("row");
         for (label, row) in [
-            ("h_out_n", 1),
-            ("D_A", layout.a_public),
+            ("D_A", 0),
             ("a Q member digest", row_of(&parsed.q.members[1].acc_digest)),
-            ("an A member's e", row_of(&parsed.a.members[1].terms.e)),
+            ("an A claim challenge", row_of(&parsed.a_claim.u[3])),
             ("the last row", layout.rows() - 1),
         ] {
-            let mut changed = prepared.p_public.clone();
+            let mut changed = stage.p_public.clone();
             changed[row] += Fp::ONE;
             let report = check_circuit(&p, K, &[changed], CheckMode::Strict).expect("P");
             let _ = diagnostic_take_usage();
             assert!(!report.is_satisfied(), "P accepts another {label}");
         }
-        let (circuit, public) = off_boundary(keys, &prepared);
-        let report = check_circuit(&circuit, K, &[public], CheckMode::Strict).expect("P");
+        // A_n's h_out as R hands it to P.
+        let circuit = with_r_row_changed(keys, &stage, 1);
+        let report =
+            check_circuit(&circuit, K, &[stage.p_public.clone()], CheckMode::Strict).expect("P");
         let _ = diagnostic_take_usage();
-        assert!(!report.is_satisfied(), "P accepts a state off the boundary");
+        assert!(!report.is_satisfied(), "P accepts another R row");
     }
     let now = Instant::now();
-    let (p_proof, p_opening) = native::prove_p(keys, &prepared).expect("P proof");
+    let (p_proof, p_opening) = native::prove_p(keys, &stage).expect("P proof");
     println!("P proof ({} bytes): {:.1?}", p_proof.len(), now.elapsed());
-    let acc_p = prepared.acc_p.clone();
+    let acc_p = stage.acc_p.clone();
     let (omega, instances, acc_v) =
-        native::omega_circuit(keys, prepared, p_proof, &p_opening, &config).expect("Omega");
+        native::omega_circuit(keys, stage, p_proof, &p_opening, &config).expect("Omega");
     let _ = diagnostic_take_usage();
     let report = check_circuit(&omega, K, &instances, CheckMode::Strict).expect("Omega");
     usage("Omega");
@@ -661,8 +669,9 @@ fn the_wraps_finish_two_kind_chains_into_omegas_that_decide() {
     let now = Instant::now();
     let keys = native::keygen(Arc::clone(&spec)).expect("keys");
     println!(
-        "keygen P and Omega: {:.1?}; P has {} public rows",
+        "keygen R, P and Omega: {:.1?}; R has {} public rows, P {}",
         now.elapsed(),
+        keys.r_plan.layout.rows(),
         keys.p_plan.layout.rows()
     );
     // Four half-steps: Q_b kept no A_b, so Omega starts it from A_4.

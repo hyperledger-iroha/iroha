@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use ff::{Field, PrimeField};
+use ff::Field;
 use iroha_fold::{
     Accumulator,
     circuit::{
@@ -31,10 +31,10 @@ use iroha_fold::{
     },
     claims::{ClaimAccumulator, ROUNDS, RestructureProof},
     decider_v2::{DeciderV2Plan, DeciderV2Proof},
-    transcript::s6_limbs,
 };
 use iroha_pasta::{Ep, EpAffine, Eq, Fp, Fq};
 use iroha_plonk::{
+    DescriptorBinding, VerifyingKey,
     cs::{Column, ConstraintSystem, Instance},
     frontend::{Circuit, Error, Layouter, Region, SimpleFloorPlanner, Value},
     pcs::mle::BatchOpening,
@@ -51,15 +51,16 @@ use iroha_plonk_recursion::{
     accumulation_circuit::{FoldInputCells, FoldPlan},
     codec::ScalarCells,
     restructure_circuit::{RestructurePlan, RestructureStatementCells},
-    verifier::{GeneratorClaimCells, VerificationMode, VerifierChip, VerifierConfig},
+    verifier::{GeneratorClaimCells, VerificationMode, VerifierChip, VerifierConfig, VerifierPlan},
 };
 
 use super::{
     K_U32, WrapError, WrapSpec, copy_terms_cells,
     crossing::{
-        ACrossing, AMember, AccumulatorTerms, PLayout, PPublic, Pair, PallasClaimCrossing,
-        QCrossing, QMember, VestaClaimCrossing,
+        AClaimCrossing, AccumulatorTerms, PLayout, PPublic, Pair, PallasClaimCrossing, QCrossing,
+        QMember, RPublic, VestaClaimCrossing,
     },
+    r::RPlan,
 };
 use crate::a_relation::LINEAGE_DOMAIN;
 
@@ -81,32 +82,47 @@ pub struct QGroupWitness {
 }
 
 /// The A-side decider's field-side witness in P: the A accumulators after
-/// Omega's last A fold, the batch proof's field messages, and the values
-/// Omega's commitment side computes (`D_H`, the opening's `alpha` and `u`).
+/// R's last A fold, the batch proof's field messages, and the copy terms R
+/// computes.
 #[derive(Clone, Debug)]
 pub struct AFieldWitness {
     /// The decided A accumulators, in kind order.
     pub accs: Vec<Accumulator<Eq>>,
     /// The batch proof.
     pub proof: DeciderV2Proof<Eq>,
-    /// `D_H` of the proof's helpers (a Vesta base-field value).
-    pub helper_digest: Fq,
-    /// Each member's instance copy term `I` (Omega computes them).
+    /// Each member's instance copy term `I` (R computes them).
     pub copy_terms: Vec<Fp>,
-    /// The opening's batching challenge (the endoscalar).
-    pub alpha: Fp,
-    /// The opening's round challenges.
-    pub rounds: Vec<Fp>,
 }
 
 fn known<T: Clone>(value: Option<&T>) -> Value<T> {
     value.map_or_else(Value::unknown, |v| Value::known(v.clone()))
 }
 
-/// The A-side decider's field side over every A kind, with its crossing
-/// values as cells: each member's field data and digest limbs
-/// (`assign_accumulator_field` witnesses them), the imported `D_H`, `alpha`
-/// and `u`, and the exported `d_F`, `v*`, `b'`.
+/// The integer of one of R's rows that holds an `Fp` value, as a native word.
+fn recompose_row(
+    lanes: &mut FieldLanes<'_, Fp>,
+    region: &mut Region<'_, Fp>,
+    row: &ScalarCells<Ep>,
+) -> Result<Word<Fp>, Error> {
+    lanes.recompose(region, row.lo().word(), row.hi().word())
+}
+
+/// Constrains `word` to one of R's rows that holds an `Fp` value.
+fn bind_row(
+    lanes: &mut FieldLanes<'_, Fp>,
+    region: &mut Region<'_, Fp>,
+    word: &Word<Fp>,
+    row: &ScalarCells<Ep>,
+) -> Result<(), Error> {
+    let value = recompose_row(lanes, region, row)?;
+    FieldLanes::assert_equal(region, word, &value)
+}
+
+/// The A-side decider's field side over every A kind (native `Fp`), against
+/// R's public column. Each member's digest limbs and field terms are R's
+/// rows, as are `D_H`, `alpha` and `u`. The copy challenges, `d_F`, `v*` and
+/// `b'` it computes are forced onto R's rows (R imported them). Returns the
+/// round challenges' words, which P forwards to Omega's `acc_V`.
 ///
 /// # Errors
 /// Layout errors or a witness of another shape; a false proof is
@@ -115,36 +131,53 @@ pub fn a_field_side(
     lanes: &mut FieldLanes<'_, Fp>,
     region: &mut Region<'_, Fp>,
     plan: &PPlan,
+    rows: &RPublic<ScalarCells<Ep>>,
     witness: Option<&AFieldWitness>,
-) -> Result<ACrossing<Word<Fp>>, Error> {
+) -> Result<Vec<Word<Fp>>, Error> {
     let spec = &*plan.spec;
-    let plans: Vec<&DeciderV2Plan<Eq>> = plan.a_plans.iter().map(|p| &**p).collect();
-    let mu = plans.first().ok_or(Error::Synthesis)?.mu();
-    if witness.is_some_and(|w| {
-        w.rounds.len() != mu || w.accs.len() != plans.len() || w.copy_terms.len() != plans.len()
-    }) {
+    let plans: Vec<&DeciderV2Plan<Eq>> = plan.r.a_plans.iter().map(|p| &**p).collect();
+    if rows.members.len() != plans.len()
+        || witness.is_some_and(|w| w.accs.len() != plans.len() || w.copy_terms.len() != plans.len())
+    {
         return Err(Error::Synthesis);
     }
     let mut members = Vec::with_capacity(plans.len());
-    for (index, relation) in spec.a.iter().enumerate() {
-        members.push(assign_accumulator_field_terms::<Eq>(
+    for (index, (relation, member)) in spec.a.iter().zip(&rows.members).enumerate() {
+        let acc = assign_accumulator_field_terms::<Eq>(
             lanes,
             region,
             &spec.domains.a_fold,
             &relation.shape(),
             witness.map(|w| &w.accs[index]),
             witness.map(|w| w.copy_terms[index]),
-        )?);
+        )?;
+        FieldLanes::assert_equal(region, &acc.digest[0], member.acc_digest.lo().word())?;
+        FieldLanes::assert_equal(region, &acc.digest[1], member.acc_digest.hi().word())?;
+        let terms = &member.terms;
+        if acc.theta.len() != terms.theta.len()
+            || acc.r.len() != terms.r.len()
+            || acc.beta.len() != terms.beta.len()
+        {
+            return Err(Error::Synthesis);
+        }
+        for (words, rows) in [
+            (&acc.theta, &terms.theta),
+            (&acc.r, &terms.r),
+            (&acc.beta, &terms.beta),
+        ] {
+            for (word, row) in words.iter().zip(rows) {
+                bind_row(lanes, region, word, row)?;
+            }
+        }
+        bind_row(lanes, region, &acc.e, &terms.e)?;
+        let copy_terms = acc.copy_terms.as_ref().ok_or(Error::Synthesis)?;
+        bind_row(lanes, region, copy_terms, &terms.copy_terms)?;
+        members.push(acc);
     }
     let proof = assign_decider_v2_field_proof(lanes, region, &plans, witness.map(|w| &w.proof))?;
-    let limbs = witness.map(|w| s6_limbs(&w.helper_digest).map(Fp::from_u128));
     let helper_digest = [
-        lanes
-            .glue
-            .witness(region, known(limbs.as_ref().map(|l| &l[0])))?,
-        lanes
-            .glue
-            .witness(region, known(limbs.as_ref().map(|l| &l[1])))?,
+        rows.helper_digest.lo().word().clone(),
+        rows.helper_digest.hi().word().clone(),
     ];
     let batch: Vec<_> = plans.iter().copied().zip(members.iter()).collect();
     let output = verify_decider_v2_field(
@@ -155,15 +188,11 @@ pub fn a_field_side(
         &helper_digest,
         &proof,
     )?;
-    let alpha = lanes
-        .glue
-        .witness(region, known(witness.map(|w| &w.alpha)))?;
-    let rounds = (0..mu)
-        .map(|j| {
-            lanes
-                .glue
-                .witness(region, known(witness.map(|w| &w.rounds[j])))
-        })
+    let alpha = recompose_row(lanes, region, &rows.alpha)?;
+    let rounds = rows
+        .rounds
+        .iter()
+        .map(|row| recompose_row(lanes, region, row))
         .collect::<Result<Vec<_>, _>>()?;
     let (value, folded) = opening_scalars(
         lanes,
@@ -173,31 +202,13 @@ pub fn a_field_side(
         &alpha,
         &rounds,
     )?;
-    let members = members
-        .into_iter()
-        .map(|acc| {
-            Ok(AMember {
-                acc_digest: acc.digest.clone(),
-                terms: AccumulatorTerms {
-                    copy_terms: acc.copy_terms.ok_or(Error::Synthesis)?,
-                    theta: acc.theta,
-                    r: acc.r,
-                    beta: acc.beta,
-                    e: acc.e,
-                },
-            })
-        })
-        .collect::<Result<Vec<_>, Error>>()?;
-    Ok(ACrossing {
-        members,
-        helper_digest,
-        copy_challenges: output.copy_challenges.clone(),
-        field_digest: output.field_digest,
-        value,
-        folded,
-        alpha,
-        rounds,
-    })
+    for (word, row) in output.copy_challenges.iter().zip(&rows.copy_challenges) {
+        bind_row(lanes, region, word, row)?;
+    }
+    bind_row(lanes, region, &output.field_digest, &rows.field_digest)?;
+    bind_row(lanes, region, &value, &rows.value)?;
+    bind_row(lanes, region, &folded, &rows.folded)?;
+    Ok(rounds)
 }
 
 fn pair<C: iroha_pasta::PastaCurve>(cell: &ScalarCell<C>) -> Pair<Word<C::Base>> {
@@ -410,33 +421,43 @@ pub struct PPlan {
     pub spec: Arc<WrapSpec>,
     /// Each Q kind's decider plan, in kind order.
     pub q_plans: Vec<Arc<DeciderV2Plan<Ep>>>,
-    /// Each A kind's decider plan, in kind order.
-    pub a_plans: Vec<Arc<DeciderV2Plan<Eq>>>,
+    /// R's program (the A kinds' plans and R's public column).
+    pub r: Arc<RPlan>,
+    /// R's verifier program.
+    pub r_verifier: VerifierPlan<Ep>,
+    /// R's key, a circuit constant.
+    pub r_key: VerifyingKey<Ep>,
     /// The Q opening's fixed generators.
     pub opening: OpeningKey<Ep>,
     /// The Pallas claim restructuring's pinned points and context.
     pub restructure: RestructurePlan<Ep>,
-    /// `acc_P`'s fold: the Q decider's claim, then the restructured claim.
+    /// `acc_P`'s fold: the Q decider's claim, the restructured claim, R's.
     pub fold: FoldPlan<Ep>,
     /// P's public column.
     pub layout: PLayout,
 }
 
 impl PPlan {
-    /// P's program for `spec`.
+    /// P's program for `spec`, over R's program and key.
     ///
     /// # Errors
-    /// [`WrapError::Input`] for a spec without kinds, a last kind or
-    /// boundary or lineage position out of range, or relations the decider
-    /// or the k16 recursion do not admit.
-    pub fn new(spec: Arc<WrapSpec>) -> Result<Self, WrapError> {
+    /// [`WrapError::Input`] for a spec without Q kinds, a boundary or
+    /// lineage position out of range, Q relations the decider does not admit
+    /// at k16 or that read public values beyond their copies, or a key of
+    /// another descriptor.
+    pub fn new(
+        r: Arc<RPlan>,
+        binding: DescriptorBinding,
+        key: VerifyingKey<Ep>,
+    ) -> Result<Self, WrapError> {
+        let spec = Arc::clone(&r.spec);
         if spec.q.is_empty()
-            || spec.last >= spec.a.len()
             || spec
                 .boundary
                 .iter()
                 .chain(&spec.lineage)
                 .any(|&i| i >= spec.a_state)
+            || key.descriptor_digest() != binding.digest()
         {
             return Err(WrapError::Input);
         }
@@ -446,39 +467,30 @@ impl PPlan {
             .map(|r| DeciderV2Plan::new(r.clone(), &spec.key_q).map(Arc::new))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| WrapError::Input)?;
-        let a_plans = spec
-            .a
-            .iter()
-            .map(|r| DeciderV2Plan::new(r.clone(), &spec.key_a).map(Arc::new))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| WrapError::Input)?;
         // Every member's public columns stay with its digest: the field side
         // imports the copy term, so no relation may read public values beyond
         // its copies.
         if q_plans
             .iter()
-            .map(|p| p.mu())
-            .chain(a_plans.iter().map(|p| p.mu()))
-            .any(|mu| u32::try_from(mu) != Ok(K_U32))
-            || q_plans.iter().any(|p| p.reads_public_beyond_copies())
-            || a_plans.iter().any(|p| p.reads_public_beyond_copies())
+            .any(|p| u32::try_from(p.mu()) != Ok(K_U32) || p.reads_public_beyond_copies())
         {
             return Err(WrapError::Input);
         }
         let layout = PLayout::new(
-            &spec.a[spec.last].shape(),
-            &spec.a.iter().map(|r| r.shape()).collect::<Vec<_>>(),
             &spec.q.iter().map(|r| r.shape()).collect::<Vec<_>>(),
             K_U32 as usize,
         );
         Ok(Self {
             opening: OpeningKey::new(spec.params_q.params()),
             restructure: RestructurePlan::new(&spec.params_q).map_err(|_| WrapError::Input)?,
-            fold: FoldPlan::new(&spec.params_q, vec![K_U32; 2], FoldPurpose::FoldWrapPallas)
+            fold: FoldPlan::new(&spec.params_q, vec![K_U32; 3], FoldPurpose::FoldWrapPallas)
                 .map_err(|_| WrapError::Input)?,
+            r_verifier: VerifierPlan::new(binding, spec.params_q.clone())
+                .map_err(|_| WrapError::Input)?,
+            r_key: key,
             layout,
             q_plans,
-            a_plans,
+            r,
             spec,
         })
     }
@@ -490,8 +502,10 @@ pub struct PWitness {
     pub step: u64,
     /// `z_A`, the A state after `A_n`.
     pub state: Vec<Fp>,
-    /// `A_n`'s public columns, concatenated.
-    pub a_public: Vec<Fp>,
+    /// R's public column.
+    pub r_public: Vec<Fq>,
+    /// R's proof.
+    pub r_proof: Vec<u8>,
     /// The Q-side decider's commitment side.
     pub q: QGroupWitness,
     /// The A-side decider's field side.
@@ -513,10 +527,7 @@ impl core::fmt::Debug for PWitness {
 }
 
 /// Range buses of P's verifier lanes.
-pub const P_RANGE_BUSES: usize = 1;
-/// P's byte tape: the Pallas restructuring witness, then `acc_P`'s fold
-/// witness.
-pub const P_TAPE_BYTES: usize = 2 * FOLD_WITNESS_BYTES;
+pub const P_RANGE_BUSES: usize = 2;
 
 /// The Fp wrap P.
 #[derive(Clone, Debug)]
@@ -556,12 +567,13 @@ impl Circuit<Fp> for PCircuit {
     }
 
     fn configure_with_params(meta: &mut ConstraintSystem<Fp>, rows: usize) -> PConfig {
-        // The byte tape shares the curve lane's first rows (all tape bytes
-        // are laid out before any curve operation), and the foreign-field
-        // kernel shares the glue ports, so Omega verifies fewer columns.
-        let (verifier, bytes) =
-            VerifierConfig::configure_serialized_with_byte_tape(meta, P_RANGE_BUSES, P_TAPE_BYTES)
-                .expect("fixed bus count");
+        // P verifies R, so its foreign-field kernel keeps its own columns;
+        // range checks spread over a bank of buses.
+        let verifier =
+            VerifierConfig::configure_banked(meta, P_RANGE_BUSES).expect("fixed bus count");
+        let primary = meta.advice_column();
+        let secondary = meta.advice_column();
+        let bytes = BytesConfig::configure(meta, primary, secondary);
         let instance = meta.instance_column(rows);
         meta.enable_equality(instance);
         PConfig {
@@ -571,12 +583,17 @@ impl Circuit<Fp> for PCircuit {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn synthesize(&self, config: PConfig, mut layouter: impl Layouter<Fp>) -> Result<(), Error> {
         let plan = &*self.plan;
         let spec = &*plan.spec;
         let witness = self.witness.as_deref();
+        let r_layout = &plan.r.layout;
+        let r_proof_length = plan.r_verifier.proof_length();
         if witness.is_some_and(|w| {
-            w.state.len() != spec.a_state || w.a_public.len() != plan.layout.a_public
+            w.state.len() != spec.a_state
+                || w.r_public.len() != r_layout.rows()
+                || w.r_proof.len() != r_proof_length
         }) {
             return Err(Error::Synthesis);
         }
@@ -595,29 +612,73 @@ impl Circuit<Fp> for PCircuit {
                     &mut chip,
                     region,
                     &[
+                        (witness.map(|w| w.r_proof.as_slice()), r_proof_length),
                         (restructure_bytes.as_deref(), FOLD_WITNESS_BYTES),
                         (fold_bytes.as_deref(), FOLD_WITNESS_BYTES),
                     ],
                 )?;
-                let (restructure_messages, fold_messages) = tape.split_at(FOLD_WITNESS_BYTES / 32);
+                let (proof_messages, rest) = tape.split_at(r_proof_length / 32);
+                let (restructure_messages, fold_messages) = rest.split_at(FOLD_WITNESS_BYTES / 32);
+                let r_length = chip
+                    .uint()
+                    .assign::<32>(region, Value::known(r_proof_length as u128))?;
                 let restructure_length = super::witness_length(&mut chip, region)?;
                 let fold_length = super::witness_length(&mut chip, region)?;
-                // The A-side decider's and the Vesta claims' field sides (native Fp).
-                let (a, vesta) = {
+                // R's public column as canonical Fq scalars, and R verified hard.
+                let r_rows = (0..r_layout.rows())
+                    .map(|i| {
+                        ScalarCells::<Ep>::assign_value(
+                            &mut chip.uint(),
+                            region,
+                            known(witness.map(|w| &w.r_public[i])),
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let key = chip.constant_key(region, &plan.r_verifier, &plan.r_key)?;
+                let verified = chip.verify(
+                    region,
+                    &plan.r_verifier,
+                    &key,
+                    core::slice::from_ref(&r_rows),
+                    proof_messages,
+                    &r_length,
+                    VerificationMode::Hard,
+                )?;
+                let r_public = r_layout.parse(&r_rows)?;
+                // Field sides (native Fp): the A-side decider against R's
+                // values, and the Vesta claims, whose digest is R's (Omega's,
+                // forwarded).
+                let (a_public, rounds, vesta) = {
                     let refs = chip.fold_lanes()?;
                     let mut lanes = FieldLanes {
                         glue: refs.glue,
                         range: refs.range,
                         duplex: refs.hash,
                     };
-                    let a = a_field_side(&mut lanes, region, plan, witness.map(|w| &w.a))?;
+                    let rounds =
+                        a_field_side(&mut lanes, region, plan, &r_public, witness.map(|w| &w.a))?;
                     let vesta = vesta_claim_side(
                         &mut lanes,
                         region,
                         &spec.domains.vesta_claims,
                         witness.map(|w| &w.vesta),
                     )?;
-                    (a, vesta)
+                    FieldLanes::assert_equal(
+                        region,
+                        &vesta.digest[0],
+                        r_public.claim_digest.lo().word(),
+                    )?;
+                    FieldLanes::assert_equal(
+                        region,
+                        &vesta.digest[1],
+                        r_public.claim_digest.hi().word(),
+                    )?;
+                    let a_public = r_public
+                        .a_public
+                        .iter()
+                        .map(|row| recompose_row(&mut lanes, region, row))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    (a_public, rounds, vesta)
                 };
                 // The Q-side decider's commitment side and opening (Pallas).
                 let (q, q_claim) = {
@@ -641,7 +702,7 @@ impl Circuit<Fp> for PCircuit {
                     &restructure_length,
                     witness.map(|w| &w.pallas),
                 )?;
-                // acc_P = fold(Q decider claim, restructured claim).
+                // acc_P = fold(Q decider claim, restructured claim, R's claim).
                 let g = chip.constrain_generator(
                     region,
                     q_claim.folded_generator.x(),
@@ -662,16 +723,18 @@ impl Circuit<Fp> for PCircuit {
                     challenges.try_into().map_err(|_| Error::Synthesis)?,
                 )?;
                 let restructured = FoldInputCells::from_claim(&mut chip, region, &restructured)?;
+                let r_input = FoldInputCells::from_claim(&mut chip, region, &verified.claim)?;
                 let acc_p = chip.verify_fold(
                     region,
                     &plan.fold,
-                    &[q_input, restructured],
+                    &[q_input, restructured, r_input],
                     fold_messages,
                     &fold_length,
                     VerificationMode::Hard,
                 )?;
-                // The frame: A_n's public column, z_A, and h_out_n.
-                let (a_public, state) = {
+                // The frame: z_A at an operation boundary, and h_out_n against
+                // A_n's public column (from R).
+                let state = {
                     let refs = chip.fold_lanes()?;
                     let mut lanes = FoldLanes {
                         glue: refs.glue,
@@ -680,13 +743,6 @@ impl Circuit<Fp> for PCircuit {
                         ecc: refs.ecc,
                         duplex: refs.hash,
                     };
-                    let a_public = (0..plan.layout.a_public)
-                        .map(|i| {
-                            lanes
-                                .glue
-                                .witness(region, known(witness.map(|w| &w.a_public[i])))
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
                     let state = (0..spec.a_state)
                         .map(|i| {
                             lanes
@@ -719,7 +775,7 @@ impl Circuit<Fp> for PCircuit {
                     )?;
                     let h_out_n = a_public.get(1).ok_or(Error::Synthesis)?;
                     GlueChip::assert_equal(region, &h_out.word, h_out_n)?;
-                    (a_public, state)
+                    state
                 };
                 // D_A over the lineage fields of z_A and acc_P.
                 let mut words: Vec<Word<Fp>> = spec
@@ -732,11 +788,15 @@ impl Circuit<Fp> for PCircuit {
                     words.extend([scalar.lo().word().clone(), scalar.hi().word().clone()]);
                 }
                 let d_a = chip.hash_words(region, LINEAGE_DOMAIN, &words)?;
+                let limbs =
+                    |row: &ScalarCells<Ep>| [row.lo().word().clone(), row.hi().word().clone()];
                 let public = PPublic {
-                    a_public,
                     d_a,
                     q,
-                    a,
+                    a_claim: AClaimCrossing {
+                        g: [limbs(&r_public.claim[0]), limbs(&r_public.claim[1])],
+                        u: rounds,
+                    },
                     pallas,
                     vesta,
                 };

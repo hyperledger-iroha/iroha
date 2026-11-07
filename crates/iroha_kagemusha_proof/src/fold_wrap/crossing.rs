@@ -71,40 +71,6 @@ pub struct QCrossing<X> {
     pub rounds: Vec<Pair<X>>,
 }
 
-/// One decided A accumulator's crossing values, computed in Omega (the last
-/// kind after the fold of `A_n`; `I` from the public columns Omega hashes).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AMember<X> {
-    /// `kgwfacd1(U_A[k])`.
-    pub acc_digest: Pair<X>,
-    /// `U_A[k]`'s field terms.
-    pub terms: AccumulatorTerms<X>,
-}
-
-/// The A-side decider's crossing values: one batch over every A kind. Its
-/// commitments are Vesta points (base `Fq`), its scalars `Fp`. The commitment
-/// side (the last A fold, the digests and the opening's group part) is in
-/// Omega; the field side is in P.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ACrossing<X> {
-    /// The batch's members, in kind order.
-    pub members: Vec<AMember<X>>,
-    /// `D_H` of the batch's helpers (Omega).
-    pub helper_digest: Pair<X>,
-    /// The copy challenges `gamma`, `eta` (P).
-    pub copy_challenges: [X; 2],
-    /// `d_F` (P).
-    pub field_digest: X,
-    /// `v*` (P).
-    pub value: X,
-    /// `b'` (P).
-    pub folded: X,
-    /// The opening's batching challenge (Omega).
-    pub alpha: X,
-    /// The opening's round challenges (Omega).
-    pub rounds: Vec<X>,
-}
-
 /// The Pallas claim accumulator's crossing values (kept by A; scalars `Fq`).
 /// The group side, with the digest and the committed-mask opening, is in P.
 /// The restructuring sumcheck is in Omega.
@@ -142,18 +108,16 @@ pub struct VestaClaimCrossing<X> {
     pub value: X,
 }
 
-/// P's whole public column.
+/// P's whole public column: what Omega uses (the A side's crossing lives in
+/// R's public column, which P verifies).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PPublic<X> {
-    /// `A_n`'s public columns (`[passthrough, h_out, bridge...]` first),
-    /// native in P and folded by Omega.
-    pub a_public: Vec<X>,
     /// `D_A`, which Omega publishes.
     pub d_a: X,
     /// The Q-side decider.
     pub q: QCrossing<X>,
-    /// The A-side decider.
-    pub a: ACrossing<X>,
+    /// The A-side decider's claim (from R) for Omega's `acc_V`.
+    pub a_claim: AClaimCrossing<X>,
     /// The Pallas claim accumulator.
     pub pallas: PallasClaimCrossing<X>,
     /// The Vesta claim accumulator.
@@ -191,12 +155,8 @@ impl DataShape {
 /// The counts that fix P's instance layout.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PLayout {
-    /// `A_n`'s public values.
-    pub a_public: usize,
-    /// Each Q kind's field data, in kind order.
+    /// Each Q kind's field terms, in kind order.
     pub q_data: Vec<DataShape>,
-    /// Each A kind's field data, in kind order.
-    pub a_data: Vec<DataShape>,
     /// Opening rounds of either decider (`mu`).
     pub rounds: usize,
     /// Claim rounds (`iroha_fold::claims::ROUNDS`).
@@ -204,14 +164,11 @@ pub struct PLayout {
 }
 
 impl PLayout {
-    /// The layout for the Q kinds `q`, the A kinds `a` and the last A kind's
-    /// public columns `a_public`.
+    /// The layout for the Q kinds `q`.
     #[must_use]
-    pub fn new(a_public: &FoldShape, a: &[FoldShape], q: &[FoldShape], rounds: usize) -> Self {
+    pub fn new(q: &[FoldShape], rounds: usize) -> Self {
         Self {
-            a_public: a_public.instance_lengths.iter().sum(),
             q_data: q.iter().map(DataShape::of).collect(),
-            a_data: a.iter().map(DataShape::of).collect(),
             rounds,
             claim_rounds: iroha_fold::claims::ROUNDS,
         }
@@ -221,12 +178,11 @@ impl PLayout {
     #[must_use]
     pub fn rows(&self) -> usize {
         let q_members: usize = self.q_data.iter().map(|d| 1 + 2 * d.values()).sum();
-        let a_members: usize = self.a_data.iter().map(|d| 2 + d.values()).sum();
         let q = q_members + 1 + 2 * 2 + 2 * 4 + 2 * self.rounds;
-        let a = a_members + 2 + 2 + 4 + self.rounds;
+        let a_claim = 2 * 2 + self.rounds;
         let pallas = 1 + 2 * (3 * self.claim_rounds + 2);
         let vesta = 2 + 3 * self.claim_rounds + 2;
-        self.a_public + 1 + q + a + pallas + vesta
+        1 + q + a_claim + pallas + vesta
     }
 
     /// Splits P's public rows into their values; the inverse of
@@ -239,7 +195,6 @@ impl PLayout {
             return Err(Error::Synthesis);
         }
         let mut cursor = Cursor { rows, at: 0 };
-        let a_public = cursor.many(self.a_public);
         let d_a = cursor.one();
         let q = QCrossing {
             members: self
@@ -258,22 +213,9 @@ impl PLayout {
             alpha: cursor.pair(),
             rounds: cursor.pairs(self.rounds),
         };
-        let a = ACrossing {
-            members: self
-                .a_data
-                .iter()
-                .map(|shape| AMember {
-                    acc_digest: cursor.pair(),
-                    terms: cursor.terms(shape),
-                })
-                .collect(),
-            helper_digest: cursor.pair(),
-            copy_challenges: [cursor.one(), cursor.one()],
-            field_digest: cursor.one(),
-            value: cursor.one(),
-            folded: cursor.one(),
-            alpha: cursor.one(),
-            rounds: cursor.many(self.rounds),
+        let a_claim = AClaimCrossing {
+            g: [cursor.pair(), cursor.pair()],
+            u: cursor.many(self.rounds),
         };
         let pallas = PallasClaimCrossing {
             digest: cursor.one(),
@@ -295,10 +237,9 @@ impl PLayout {
             return Err(Error::Synthesis);
         }
         Ok(PPublic {
-            a_public,
             d_a,
             q,
-            a,
+            a_claim,
             pallas,
             vesta,
         })
@@ -368,8 +309,7 @@ impl<X: Clone> PPublic<X> {
     /// The rows in instance order.
     #[must_use]
     pub fn rows(&self) -> Vec<X> {
-        let mut out = self.a_public.clone();
-        out.push(self.d_a.clone());
+        let mut out = vec![self.d_a.clone()];
         let q = &self.q;
         for member in &q.members {
             out.push(member.acc_digest.clone());
@@ -387,20 +327,8 @@ impl<X: Clone> PPublic<X> {
             ],
         );
         push_pairs(&mut out, &q.rounds);
-        let a = &self.a;
-        for member in &a.members {
-            out.extend(member.acc_digest.iter().cloned());
-            push_terms(&mut out, &member.terms);
-        }
-        out.extend(a.helper_digest.iter().cloned());
-        out.extend(a.copy_challenges.iter().cloned());
-        out.extend([
-            a.field_digest.clone(),
-            a.value.clone(),
-            a.folded.clone(),
-            a.alpha.clone(),
-        ]);
-        out.extend(a.rounds.iter().cloned());
+        push_pairs(&mut out, &self.a_claim.g);
+        out.extend(self.a_claim.u.iter().cloned());
         let p = &self.pallas;
         out.push(p.digest.clone());
         push_pairs(&mut out, &p.u);
@@ -419,6 +347,138 @@ impl<X: Clone> PPublic<X> {
     }
 }
 
+/// One decided A accumulator's values in R's public column, computed in R
+/// (the last kind after the fold of `A_n`; `I` from the public columns R
+/// hashes).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RMember<X> {
+    /// `kgwfacd1(U_A[k])` (an `Fq` value, native in R).
+    pub acc_digest: X,
+    /// `U_A[k]`'s field terms (`Fp` values).
+    pub terms: AccumulatorTerms<X>,
+}
+
+/// R's whole public column: everything R exchanges with P, which verifies
+/// R. R is an `Fq` circuit, so every value is one row: `Fq` values natively,
+/// `Fp` values as the same integer. The A-side decider's crossing lives here
+/// (its field side is in P), together with `A_n`'s public columns (P checks
+/// `h_out`), the A decider's claim (P forwards it to Omega's `acc_V`) and the
+/// Vesta claim digest (Omega computes it; P forwards it).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RPublic<X> {
+    /// `A_n`'s public columns (`[passthrough, h_out, ...]` first).
+    pub a_public: Vec<X>,
+    /// The decided A accumulators, in kind order (R).
+    pub members: Vec<RMember<X>>,
+    /// `D_H` of the batch's helpers (R).
+    pub helper_digest: X,
+    /// The copy challenges `gamma`, `eta` (P).
+    pub copy_challenges: [X; 2],
+    /// `d_F` (P).
+    pub field_digest: X,
+    /// `v*` (P).
+    pub value: X,
+    /// `b'` (P).
+    pub folded: X,
+    /// The opening's batching challenge (R).
+    pub alpha: X,
+    /// The opening's round challenges (R).
+    pub rounds: Vec<X>,
+    /// The opening's undecided claim `G'_0` (R).
+    pub claim: [X; 2],
+    /// `kgwfcld1` of the Vesta claim accumulator (Omega, through P).
+    pub claim_digest: X,
+}
+
+/// The counts that fix R's public column.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RLayout {
+    /// `A_n`'s public values.
+    pub a_public: usize,
+    /// Each A kind's field terms, in kind order.
+    pub a_data: Vec<DataShape>,
+    /// Opening rounds (`mu`).
+    pub rounds: usize,
+}
+
+impl RLayout {
+    /// Rows of R's public column.
+    #[must_use]
+    pub fn rows(&self) -> usize {
+        let members: usize = self.a_data.iter().map(|d| 1 + d.values()).sum();
+        self.a_public + members + 1 + 2 + 3 + 1 + self.rounds + 2 + 1
+    }
+
+    /// Splits R's public rows; the inverse of [`RPublic::rows`].
+    ///
+    /// # Errors
+    /// [`Error::Synthesis`] for another number of rows.
+    pub fn parse<X: Clone>(&self, rows: &[X]) -> Result<RPublic<X>, Error> {
+        if rows.len() != self.rows() {
+            return Err(Error::Synthesis);
+        }
+        let mut cursor = Cursor { rows, at: 0 };
+        let public = RPublic {
+            a_public: cursor.many(self.a_public),
+            members: self
+                .a_data
+                .iter()
+                .map(|shape| RMember {
+                    acc_digest: cursor.one(),
+                    terms: cursor.terms(shape),
+                })
+                .collect(),
+            helper_digest: cursor.one(),
+            copy_challenges: [cursor.one(), cursor.one()],
+            field_digest: cursor.one(),
+            value: cursor.one(),
+            folded: cursor.one(),
+            alpha: cursor.one(),
+            rounds: cursor.many(self.rounds),
+            claim: [cursor.one(), cursor.one()],
+            claim_digest: cursor.one(),
+        };
+        if cursor.at != rows.len() {
+            return Err(Error::Synthesis);
+        }
+        Ok(public)
+    }
+}
+
+impl<X: Clone> RPublic<X> {
+    /// The rows in instance order.
+    #[must_use]
+    pub fn rows(&self) -> Vec<X> {
+        let mut out = self.a_public.clone();
+        for member in &self.members {
+            out.push(member.acc_digest.clone());
+            push_terms(&mut out, &member.terms);
+        }
+        out.push(self.helper_digest.clone());
+        out.extend(self.copy_challenges.iter().cloned());
+        out.extend([
+            self.field_digest.clone(),
+            self.value.clone(),
+            self.folded.clone(),
+            self.alpha.clone(),
+        ]);
+        out.extend(self.rounds.iter().cloned());
+        out.extend(self.claim.iter().cloned());
+        out.push(self.claim_digest.clone());
+        out
+    }
+}
+
+/// The A-side decider's claim as P forwards it to Omega's `acc_V`: `G'_0`'s
+/// coordinates (`Fq`, canonical limbs) and the round challenges (`Fp`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AClaimCrossing<X> {
+    /// `G'_0`'s coordinates.
+    pub g: [Pair<X>; 2],
+    /// The round challenges.
+    pub u: Vec<X>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,23 +487,31 @@ mod tests {
     fn rows_and_parse_are_inverse() {
         let shape = |theta, r, beta| DataShape { theta, r, beta };
         let layout = PLayout {
-            a_public: 3,
             q_data: vec![shape(2, 3, 18), shape(0, 0, 18)],
-            a_data: vec![shape(1, 1, 17), shape(0, 2, 17)],
             rounds: 16,
             claim_rounds: 16,
         };
         let rows: Vec<usize> = (0..layout.rows()).collect();
         let parsed = layout.parse(&rows).expect("exact rows");
         assert_eq!(parsed.rows(), rows);
-        assert_eq!(parsed.d_a, 3);
+        assert_eq!(parsed.d_a, 0);
         assert_eq!(parsed.q.members.len(), 2);
-        assert_eq!(
-            parsed.a.members[1].terms.copy_terms,
-            parsed.a.helper_digest[0] - 1
-        );
-        assert_eq!(parsed.a.copy_challenges[0], parsed.a.helper_digest[1] + 1);
         assert_eq!(parsed.vesta.value, layout.rows() - 1);
+        assert!(layout.parse(&rows[1..]).is_err());
+    }
+
+    #[test]
+    fn r_rows_and_parse_are_inverse() {
+        let shape = |theta, r, beta| DataShape { theta, r, beta };
+        let layout = RLayout {
+            a_public: 2,
+            a_data: vec![shape(1, 1, 17), shape(0, 2, 17)],
+            rounds: 16,
+        };
+        let rows: Vec<usize> = (0..layout.rows()).collect();
+        let parsed = layout.parse(&rows).expect("exact rows");
+        assert_eq!(parsed.rows(), rows);
+        assert_eq!(parsed.claim_digest, layout.rows() - 1);
         assert!(layout.parse(&rows[1..]).is_err());
     }
 }
