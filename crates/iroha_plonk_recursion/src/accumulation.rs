@@ -217,7 +217,8 @@ where
     sponge.squeeze()
 }
 
-fn opening<C: PastaCurve>(params: &PinnedParams<C>, h: C::Base, rho: C::ScalarExt) -> C {
+/// `D = h_0 g_0 + h_1 g_1 + rho W` for the digest limbs `h_0`, `h_1`.
+pub(crate) fn opening<C: PastaCurve>(params: &PinnedParams<C>, h: C::Base, rho: C::ScalarExt) -> C {
     let h = FieldGuard(h);
     let rho = FieldGuard(rho);
     let limbs = FieldArray(digest_limbs::<C>(h.0));

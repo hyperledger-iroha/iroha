@@ -23,6 +23,7 @@ mod fold_tape;
 pub mod obligation;
 mod private;
 mod purpose;
+pub mod restructure;
 pub mod terminal;
 pub mod transcript;
 pub mod verifier;
@@ -32,6 +33,7 @@ pub use claim::{AccumulatorT, CorrectedInput, FoldInput};
 pub use fold_tape::FoldTape;
 pub use private::PrivateWitnessBytes;
 pub use purpose::FoldPurpose;
+pub use restructure::{RestructureStatement, create_restructure, verify_restructure};
 
 use core::fmt;
 
