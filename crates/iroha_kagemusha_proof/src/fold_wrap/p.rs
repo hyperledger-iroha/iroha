@@ -420,6 +420,12 @@ impl core::fmt::Debug for PWitness {
     }
 }
 
+/// Range buses of P's verifier lanes.
+pub const P_RANGE_BUSES: usize = 1;
+/// P's byte tape: the Pallas restructuring witness, then `acc_P`'s fold
+/// witness.
+pub const P_TAPE_BYTES: usize = 2 * FOLD_WITNESS_BYTES;
+
 /// The Fp wrap P.
 #[derive(Clone, Debug)]
 pub struct PCircuit {
@@ -458,10 +464,12 @@ impl Circuit<Fp> for PCircuit {
     }
 
     fn configure_with_params(meta: &mut ConstraintSystem<Fp>, rows: usize) -> PConfig {
-        let verifier = VerifierConfig::configure(meta);
-        let primary = meta.advice_column();
-        let secondary = meta.advice_column();
-        let bytes = BytesConfig::configure(meta, primary, secondary);
+        // The byte tape shares the curve lane's first rows (all tape bytes
+        // are laid out before any curve operation), and the foreign-field
+        // kernel shares the glue ports, so Omega verifies fewer columns.
+        let (verifier, bytes) =
+            VerifierConfig::configure_serialized_with_byte_tape(meta, P_RANGE_BUSES, P_TAPE_BYTES)
+                .expect("fixed bus count");
         let instance = meta.instance_column(rows);
         meta.enable_equality(instance);
         PConfig {

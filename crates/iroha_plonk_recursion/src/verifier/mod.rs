@@ -210,6 +210,10 @@ enum ArithmeticLayout {
         ranges: Vec<RunningSumConfig>,
         kernel: RotatedFfConfig,
     },
+    FusedBanked {
+        ff: FfConfig,
+        ranges: Vec<RunningSumConfig>,
+    },
 }
 
 /// Columns for one interpreter lane. Consumers may schedule multiple proofs
@@ -285,6 +289,52 @@ impl<C: PastaCurve> VerifierConfig<C> {
         let (config, bytes) =
             Self::configure_serialized_lanes(meta, range_buses, Some(byte_rows), false)?;
         Ok((config, bytes.expect("requested byte tape is configured")))
+    }
+
+    /// Keeps every lane parallel, as [`Self::configure`], with the integer
+    /// range checks spread over a bank of `range_buses` independently
+    /// constrained buses that share one table. Each check takes the least
+    /// occupied bus. The foreign-field kernel keeps its own columns, so only
+    /// range capacity grows. This is an explicit artifact profile for
+    /// circuits whose range lane is their bottleneck.
+    ///
+    /// # Errors
+    /// The fixed bus count is outside `1..=8`.
+    pub fn configure_banked(
+        meta: &mut ConstraintSystem<C::Base>,
+        range_buses: usize,
+    ) -> Result<Self, Error> {
+        if !(1..=8).contains(&range_buses) {
+            return Err(Error::Synthesis);
+        }
+        let glue_cols = core::array::from_fn(|_| meta.advice_column());
+        let constant = meta.fixed_column();
+        let glue = GlueConfig::configure(meta, glue_cols, constant);
+        let bus_columns: Vec<_> = (0..range_buses).map(|_| meta.advice_column()).collect();
+        let ranges = RunningSumConfig::configure_bank(
+            meta,
+            &bus_columns,
+            LimbBits::new(15).expect("fixed limb width"),
+        );
+        let range = ranges[0];
+        let ff_cols = core::array::from_fn(|_| meta.advice_column());
+        let ff = FfConfig::configure(meta, ff_cols, &[Arithmetic::<C>::modulus()]);
+        let ecc_cols = core::array::from_fn(|_| meta.advice_column());
+        let ecc = EccConfig::configure(meta, ecc_cols);
+        let columns = Pow5Columns {
+            state: core::array::from_fn(|_| meta.advice_column()),
+            aux: meta.advice_column(),
+        };
+        let constants = RoundConstantColumns::allocate(meta);
+        let duplex = DuplexConfig::configure(meta, columns, constants, &[]);
+        Ok(Self {
+            glue,
+            range,
+            ff: ArithmeticLayout::FusedBanked { ff, ranges },
+            ecc,
+            ecc_start_row: 0,
+            duplex,
+        })
     }
 
     fn configure_serialized_lanes(
@@ -421,6 +471,14 @@ impl<C: PastaCurve> VerifierChip<C> {
             ArithmeticLayout::Fused(ff) => Self {
                 glue: GlueChip::new(config.glue),
                 range: RunningSumChip::new(config.range),
+                arithmetic: Arithmetic::new(FfChip::new(ff)),
+                ecc: EccChip::starting_at(&config.ecc, config.ecc_start_row),
+                duplex: Some(DuplexChip::new(config.duplex)),
+                scalar_splits: std::collections::BTreeMap::new(),
+            },
+            ArithmeticLayout::FusedBanked { ff, ranges } => Self {
+                glue: GlueChip::new(config.glue),
+                range: RunningSumChip::banked(ranges).expect("validated fixed range-bank metadata"),
                 arithmetic: Arithmetic::new(FfChip::new(ff)),
                 ecc: EccChip::starting_at(&config.ecc, config.ecc_start_row),
                 duplex: Some(DuplexChip::new(config.duplex)),

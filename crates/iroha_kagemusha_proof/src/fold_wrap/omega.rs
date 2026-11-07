@@ -70,6 +70,8 @@ pub const INSTANCE_TYPES: [InstanceType; 3] = [
 ];
 /// Omega's public column lengths.
 pub const INSTANCE_LENGTHS: [usize; 3] = [1, 2, K];
+/// Range buses of Omega's verifier lanes.
+pub const OMEGA_RANGE_BUSES: usize = 2;
 
 /// Omega's fixed program: P's program and pinned key, the A opening's
 /// generators, the Vesta claim restructuring's points and `acc_V`'s fold.
@@ -565,7 +567,9 @@ impl Circuit<Fq> for OmegaCircuit {
     }
 
     fn configure(meta: &mut ConstraintSystem<Fq>) -> OmegaConfig {
-        let verifier = VerifierConfig::configure(meta);
+        // Range checks spread over a bank of buses sharing one table.
+        let verifier =
+            VerifierConfig::configure_banked(meta, OMEGA_RANGE_BUSES).expect("fixed bus count");
         let primary = meta.advice_column();
         let secondary = meta.advice_column();
         let bytes = BytesConfig::configure(meta, primary, secondary);
