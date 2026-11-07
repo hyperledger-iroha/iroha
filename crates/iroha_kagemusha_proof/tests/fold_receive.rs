@@ -45,7 +45,7 @@ use iroha_kagemusha_proof::{
         transition::TransitionInputs,
     },
     admin_sigma::StateWitness,
-    fold_lineage::{A_CONTEXT, A_DIGESTS, A_PC, AKind, BASE, Q_DIGESTS, QFrameStep, QKind, start_passthrough},
+    fold_lineage::{A_CONTEXT, A_DIGESTS, A_PC, AKind, BASE, FOLD_A, FOLD_Q, Q_DIGESTS, QFrameStep, QKind, start_passthrough},
     operation_relation::{
         map_effects::{CONSUMED_DOMAIN, InsertCells, MapEffectsChip, MapState, MapTransition, ReceiveMapWitness},
         state::StateCells,
@@ -270,7 +270,7 @@ fn source(plan: &ReceiveFoldPlan, valid: bool, insert: bool) -> ReceiveFoldSourc
     .expect("genuine source")
 }
 
-/// The fold relations: the A1 step's and the opening Q step's (whose start
+/// The fold relations: the A1 step's and the frame Q step's (whose start
 /// passthrough fixes the A state the test segment starts from).
 struct Relations {
     a1: FoldedRelation<Fp>,
@@ -301,7 +301,7 @@ fn relations(plan: &Arc<ReceiveFoldPlan>) -> Relations {
     let a1 = a_relation(q.shape());
     assert_eq!(a1.shape(), first.shape(), "an A step's shape does not depend on the shape it folds");
     eprintln!("FOLD_RECEIVE A1 relation {:?}", a1.summary());
-    eprintln!("FOLD_RECEIVE Qopen relation {:?}", q.summary());
+    eprintln!("FOLD_RECEIVE Qframe relation {:?}", q.summary());
     Relations {
         a1,
         key_a: CommitKey::lagrange(PinnedParams::<Eq>::derive(K).expect("params").params()),
@@ -310,11 +310,11 @@ fn relations(plan: &Arc<ReceiveFoldPlan>) -> Relations {
 }
 
 fn q_relation(a_shape: FoldShape, start: Fq) -> FoldedRelation<Fq> {
-    let step = QFrameStep { kind: QKind::Open, shape: a_shape, start, witness: None };
+    let step = QFrameStep { shape: a_shape, start, witness: None };
     FoldedRelation::<Fq>::from_synthesized(&synthesize(&step, K, None).expect("Q layout")).expect("Q relation")
 }
 
-/// The segment `Q_open (step 1), A1 (step 2)` from the A state `base`: the A1
+/// The segment `Q frame (step 1), A1 (step 2)` from the A state `base`: the A1
 /// circuit and its public column, plus the Q accumulator A keeps after it.
 struct Segment {
     circuit: ReceiveFoldStep,
@@ -327,14 +327,15 @@ fn build_segment(rel: &Relations, plan: &Arc<ReceiveFoldPlan>, source: &ReceiveF
     let mut rng = ChaCha20Rng::seed_from_u64(29);
     let start = start_passthrough(base);
     let q = q_relation(rel.a1.shape(), start);
-    let q_chain = QKind::Open.chain();
+    // The segment's first step has no predecessor (its slot is unused).
+    let q_chain = QKind::Frame.chain(AKind::Receive5);
     let prepared =
         prepare_step(&q_chain, 1, &rel.a1, None, None, vec![], vec![Fq::ZERO; Q_DIGESTS], start).expect("prepare Q");
     let public = vec![step_public(&q_chain, 1, Fq::from(BASE), prepared.passthrough, &[], &prepared.digests, &[])];
-    let step = QFrameStep { kind: QKind::Open, shape: rel.a1.shape(), start, witness: Some(prepared.witness) };
+    let step = QFrameStep { shape: rel.a1.shape(), start, witness: Some(prepared.witness) };
     assert!(check_circuit(&step, K, &public, CheckMode::Strict).expect("Q synthesis").is_satisfied());
     let (advice, public) = q.stage_witness(&synthesize(&step, K, Some(&public)).expect("Q witness")).expect("stage");
-    let fresh = fresh_instance(&q, &rel.key_q, &QKind::Open.domain(), advice, public, &mut rng).expect("Q instance");
+    let fresh = fresh_instance(&q, &rel.key_q, &FOLD_Q, advice, public, &mut rng).expect("Q instance");
 
     let a_chain = AKind::Receive1.chain();
     let prepared = prepare_step(&a_chain, 2, &q, None, Some(&fresh), base.to_vec(), vec![Fp::ZERO; A_DIGESTS], Fp::ZERO)
@@ -587,8 +588,8 @@ fn folded_a1_binds_the_a_state_and_decides() {
     let mut rng = ChaCha20Rng::seed_from_u64(31);
     let (advice, public) = rel.a1.stage_witness(&synthesized).expect("stage");
     let (instance, witness) =
-        fresh_instance(&rel.a1, &rel.key_a, &AKind::Receive1.domain(), advice, public, &mut rng).expect("A1 instance");
-    decide_fresh(&rel.a1, &rel.key_a, &AKind::Receive1.domain(), &instance, &witness).expect("A1 decides");
+        fresh_instance(&rel.a1, &rel.key_a, &FOLD_A, advice, public, &mut rng).expect("A1 instance");
+    decide_fresh(&rel.a1, &rel.key_a, &FOLD_A, &instance, &witness).expect("A1 decides");
     let (acc, acc_witness) = &segment.kept;
     decide(&segment.q, &rel.key_q, acc, acc_witness).expect("the Q accumulator decides");
     // A1 opens the Receive: the A state must carry the predecessor's lineage, no

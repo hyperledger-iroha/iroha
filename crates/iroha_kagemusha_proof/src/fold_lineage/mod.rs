@@ -10,23 +10,26 @@
 //!
 //! | half-step | side | kind | folds | work |
 //! |---|---|---|---|---|
-//! | 1 | Q | [`QKind::Open`] | the previous operation's last A | frame only |
-//! | 2 | A | [`AKind::Receive1`] | `Open` | stage A1: consumed and credit effects, transition |
+//! | 1 | Q | [`QKind::Frame`] | the previous operation's last A | frame only |
+//! | 2 | A | [`AKind::Receive1`] | `Frame` | stage A1: consumed and credit effects, transition |
 //! | 3 | Q | [`QKind::Sigma`] | `Receive1` | today's Q0: the `σ_send` soft verifier |
 //! | 4 | A | [`AKind::Receive3`] | `Sigma` | stage A3: proofs, objects; binds Q0's columns |
 //! | 5 | Q | [`QKind::Signature`] | `Receive3` | today's Q1: the merged signature leaf |
 //! | 6 | A | [`AKind::Receive4`] | `Signature` | stage A4: signatures, authorization; binds Q1's columns |
-//! | 7 | Q | [`QKind::Close`] | `Receive4` | frame only |
-//! | 8 | A | [`AKind::Receive5`] | `Close` | stage A5: nonmembership, effects, proof digest |
+//! | 7 | Q | [`QKind::Frame`] | `Receive4` | frame only |
+//! | 8 | A | [`AKind::Receive5`] | `Frame` | stage A5: nonmembership, effects, proof digest |
 //!
 //! Today's stage A2 only verifies Q0; the folded A3 binds Q0's columns where
 //! its owners read them, so A2 has no folded counterpart.
 //!
-//! Every relation kind is fixed per circuit, and so is the kind it folds
-//! (`ChainSide::slot`): a step can only fold an instance of the kind its
-//! schedule names, because that kind's accumulator decides against that
-//! kind's relation. A side keeps one accumulator per kind of the other side,
-//! then its own claim accumulator ([`A_DIGESTS`], [`Q_DIGESTS`]).
+//! Every relation kind is fixed per circuit, and so are the kinds it may fold
+//! (`ChainSide::choices`): the frame-only Q step follows A4 inside a Receive and
+//! the last A of the previous operation, so its witness chooses that slot. A
+//! side keeps one accumulator per kind of the other side, then its own claim
+//! accumulator ([`A_DIGESTS`], [`Q_DIGESTS`]). All relations of a side fold
+//! under one domain ([`FOLD_A`], [`FOLD_Q`]): kinds are kept apart by their
+//! slots, because each slot's accumulator is decided against its own relation,
+//! so an instance folded into another kind's slot leaves that slot undecidable.
 //!
 //! The A state ([`A_STATE`] words) is the lineage public fields (as `D_A`
 //! hashes them), the digest of the current operation's step context (zero
@@ -53,6 +56,11 @@ use crate::a_relation::LINEAGE_FIELDS;
 pub const IVC_A: [u8; 32] = *b"kagemusha-fold lineage A side v1";
 /// IVC-hash domain of the Q side.
 pub const IVC_Q: [u8; 32] = *b"kagemusha-fold lineage Q side v1";
+/// Fold domain of every A relation (their instances' and accumulators'
+/// transcripts, and the deciders of `U_A`).
+pub const FOLD_A: [u8; 32] = *b"kagemusha-fold Receive A rel v1.";
+/// Fold domain of every Q relation.
+pub const FOLD_Q: [u8; 32] = *b"kagemusha-fold Receive Q rel v1.";
 /// Claim-accumulator domain of the A side (Pallas claims).
 pub const CLAIM_A: [u8; 32] = *b"kagemusha-fold A claim acc v1...";
 /// Claim-accumulator domain of the Q side (Vesta claims).
@@ -91,98 +99,79 @@ pub enum AKind {
 /// Q relations of the folded lineage, in the order of A's digest list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QKind {
-    /// Frame only, opening an operation.
-    Open,
+    /// Frame only: opens an operation, and precedes a Receive's last A
+    /// sub-step.
+    Frame,
     /// The `σ_send` soft verifier (today's Q0).
     Sigma,
     /// The merged signature leaf (today's Q1).
     Signature,
-    /// Frame only, before a Receive's last A sub-step.
-    Close,
 }
 
 /// A's digest list: one accumulator per Q kind, then its claim accumulator.
-pub const A_DIGESTS: usize = 4 + 1;
+pub const A_DIGESTS: usize = 3 + 1;
 /// Q's digest list: one accumulator per A kind, then its claim accumulator.
 pub const Q_DIGESTS: usize = 4 + 1;
-/// Position of a side's claim-accumulator digest in its list.
-pub const CLAIM_SLOT: usize = 4;
+/// Position of A's claim-accumulator digest in its list.
+pub const A_CLAIM_SLOT: usize = 3;
+/// Position of Q's claim-accumulator digest in its list.
+pub const Q_CLAIM_SLOT: usize = 4;
 
 impl AKind {
     /// Every A kind, in digest order.
     pub const ALL: [Self; 4] = [Self::Receive1, Self::Receive3, Self::Receive4, Self::Receive5];
 
-    /// The fold domain of this relation (the domain of its instances' and
-    /// accumulators' transcripts).
-    #[must_use]
-    pub const fn domain(self) -> [u8; 32] {
-        match self {
-            Self::Receive1 => *b"kagemusha-fold Receive A1 rel v1",
-            Self::Receive3 => *b"kagemusha-fold Receive A3 rel v1",
-            Self::Receive4 => *b"kagemusha-fold Receive A4 rel v1",
-            Self::Receive5 => *b"kagemusha-fold Receive A5 rel v1",
-        }
-    }
-
     /// The Q kind a step of this kind folds.
     #[must_use]
     pub const fn folds(self) -> QKind {
         match self {
-            Self::Receive1 => QKind::Open,
+            Self::Receive1 | Self::Receive5 => QKind::Frame,
             Self::Receive3 => QKind::Sigma,
             Self::Receive4 => QKind::Signature,
-            Self::Receive5 => QKind::Close,
         }
     }
 
     /// The frame of a step of this kind.
     #[must_use]
     pub const fn chain(self) -> ChainSide {
-        ChainSide {
-            ivc_domain: IVC_A,
-            fold_domain: self.folds().domain(),
-            first_step: 2,
-            slot: self.folds() as usize,
-            digests: A_DIGESTS,
-        }
+        let slot = self.folds() as usize;
+        ChainSide { ivc_domain: IVC_A, fold_domain: FOLD_Q, first_step: 2, slot, digests: A_DIGESTS, choices: 1 << slot }
     }
 }
 
 impl QKind {
     /// Every Q kind, in digest order.
-    pub const ALL: [Self; 4] = [Self::Open, Self::Sigma, Self::Signature, Self::Close];
+    pub const ALL: [Self; 3] = [Self::Frame, Self::Sigma, Self::Signature];
 
-    /// The fold domain of this relation.
+    /// The A kinds a step of this kind may fold, as a slot bit set: the frame
+    /// step follows A4 inside a Receive, or the previous operation's last A
+    /// (A5 of a Receive).
     #[must_use]
-    pub const fn domain(self) -> [u8; 32] {
+    pub const fn choices(self) -> u64 {
         match self {
-            Self::Open => *b"kagemusha-fold Receive Qopen v1.",
-            Self::Sigma => *b"kagemusha-fold Receive Qsigma v1",
-            Self::Signature => *b"kagemusha-fold Receive Qsig v1..",
-            Self::Close => *b"kagemusha-fold Receive Qclose v1",
+            Self::Frame => (1 << AKind::Receive4 as usize) | (1 << AKind::Receive5 as usize),
+            Self::Sigma => 1 << AKind::Receive1 as usize,
+            Self::Signature => 1 << AKind::Receive3 as usize,
         }
     }
 
-    /// The A kind a step of this kind folds.
+    /// Whether a step of this kind may fold an instance of `kind`.
     #[must_use]
-    pub const fn folds(self) -> AKind {
-        match self {
-            Self::Open => AKind::Receive5,
-            Self::Sigma => AKind::Receive1,
-            Self::Signature => AKind::Receive3,
-            Self::Close => AKind::Receive4,
-        }
+    pub const fn folds(self, kind: AKind) -> bool {
+        (self.choices() >> kind as usize) & 1 == 1
     }
 
-    /// The frame of a step of this kind.
+    /// The frame of a step of this kind folding an instance of `kind` (the
+    /// circuit lays out the same frame for every kind it may fold).
     #[must_use]
-    pub const fn chain(self) -> ChainSide {
+    pub const fn chain(self, kind: AKind) -> ChainSide {
         ChainSide {
             ivc_domain: IVC_Q,
-            fold_domain: self.folds().domain(),
+            fold_domain: FOLD_A,
             first_step: 1,
-            slot: self.folds() as usize,
+            slot: kind as usize,
             digests: Q_DIGESTS,
+            choices: self.choices(),
         }
     }
 }
@@ -196,13 +185,12 @@ pub fn start_passthrough(a_base: &[Fp]) -> Fq {
     embed(&ivc_hash::<Fp>(&IVC_A, 0, Fp::from(BASE), a_base, &[Fp::ZERO; A_DIGESTS]))
 }
 
-/// A Q step without business ([`QKind::Open`], [`QKind::Close`]): it folds the
-/// preceding A instance and passes its digests through.
+/// The Q step without business ([`QKind::Frame`]): it folds the preceding A
+/// instance (A4 or the previous operation's last A, as its witness chooses)
+/// and passes its digests through.
 #[derive(Clone, Debug)]
 pub struct QFrameStep {
-    /// The kind of this step.
-    pub kind: QKind,
-    /// The shape of the A relation it folds.
+    /// The shape of the A relations it folds.
     pub shape: FoldShape,
     /// The passthrough of a segment's first instance ([`start_passthrough`]).
     pub start: Fq,
@@ -234,12 +222,9 @@ impl Circuit<Fq> for QFrameStep {
     }
 
     fn synthesize(&self, config: QFrameConfig, mut layouter: impl Layouter<Fq>) -> Result<(), Error> {
-        if !matches!(self.kind, QKind::Open | QKind::Close) {
-            return Err(Error::Synthesis);
-        }
         let mut chips = FoldVerifierChips::new(&config.fold);
         chips.load_tables(&mut layouter)?;
-        let chain = self.kind.chain();
+        let chain = QKind::Frame.chain(AKind::Receive5);
         let outputs = layouter.assign_region(
             || "folded lineage Q frame step",
             |mut region| {
@@ -272,25 +257,33 @@ mod tests {
     fn every_kind_folds_the_kind_before_it_in_its_own_slot() {
         for kind in AKind::ALL {
             let chain = kind.chain();
-            assert!(chain.is_valid() && chain.slot < CLAIM_SLOT);
+            assert!(chain.is_valid() && !chain.is_selected() && chain.slot < A_CLAIM_SLOT);
             assert_eq!(QKind::ALL[chain.slot], kind.folds());
-            assert_eq!(chain.fold_domain, kind.folds().domain());
         }
-        for kind in QKind::ALL {
-            let chain = kind.chain();
-            assert!(chain.is_valid() && chain.slot < CLAIM_SLOT);
-            assert_eq!(AKind::ALL[chain.slot], kind.folds());
+        for q in QKind::ALL {
+            for kind in AKind::ALL.into_iter().filter(|kind| q.folds(*kind)) {
+                let chain = q.chain(kind);
+                assert!(chain.is_valid() && chain.slot < Q_CLAIM_SLOT);
+                assert_eq!(AKind::ALL[chain.slot], kind);
+                assert_eq!(chain.is_selected(), q == QKind::Frame);
+            }
         }
-        // The Receive's half-steps alternate Open, A1, Sigma, A3, Signature, A4,
-        // Close, A5, and the next operation opens by folding A5.
-        let mut q = QKind::Open;
-        for a in AKind::ALL {
+        // The Receive's half-steps alternate Frame, A1, Sigma, A3, Signature, A4,
+        // Frame, A5, and the next operation opens with a Frame folding A5.
+        let schedule = [
+            (QKind::Frame, AKind::Receive1),
+            (QKind::Sigma, AKind::Receive3),
+            (QKind::Signature, AKind::Receive4),
+            (QKind::Frame, AKind::Receive5),
+        ];
+        let mut previous = AKind::Receive5;
+        for (q, a) in schedule {
+            assert!(q.folds(previous), "{q:?} folds {previous:?}");
             assert_eq!(a.folds(), q);
-            q = QKind::ALL.into_iter().find(|next| next.folds() == a).expect("a Q kind folds every A kind");
+            previous = a;
         }
-        assert_eq!(q, QKind::Open);
-        let mut domains: Vec<_> = AKind::ALL.iter().map(|k| k.domain()).chain(QKind::ALL.iter().map(|k| k.domain())).collect();
-        domains.extend([IVC_A, IVC_Q, CLAIM_A, CLAIM_Q]);
+        assert!(QKind::Frame.folds(previous));
+        let mut domains = vec![IVC_A, IVC_Q, CLAIM_A, CLAIM_Q, FOLD_A, FOLD_Q];
         let count = domains.len();
         domains.sort_unstable();
         domains.dedup();
