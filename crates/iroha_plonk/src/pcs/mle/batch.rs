@@ -6,9 +6,14 @@
 //!
 //! 1. absorb [`TAG_BATCH_OPENING`], `k`, the claim count, `sigma` and every
 //!    `(C_c, v_c)`;
-//! 2. draw 128-bit batching coefficients `alpha_c` (`alpha_0 = 1`), so the
-//!    batch opens `a* = sum_c alpha_c a_c` against `C* = sum_c alpha_c C_c`
-//!    to `v* = sum_c alpha_c v_c`;
+//! 2. draw one 128-bit challenge `alpha` (none for a single claim) and batch
+//!    with its powers `alpha_c = alpha^c`, so the batch opens
+//!    `a* = sum_c alpha_c a_c` against `C* = sum_c alpha_c C_c` to
+//!    `v* = sum_c alpha_c v_c`. A false claim survives only if `alpha` is a
+//!    root of the nonzero error polynomial `sum_c alpha^c e_c` of degree at
+//!    most `m - 1`: probability at most `(m - 1) / 2^128`, next to the 128-bit
+//!    fold challenges. A circuit evaluates both sums by Horner's rule with one
+//!    128-bit multiplier;
 //! 3. reveal and absorb the combined blind `rho* = sum_c alpha_c rho_c`, so
 //!    the verifier removes the blinds with one term `-rho* W`;
 //! 4. squeeze `z`, then run `k` rounds of the BGH19 argument with the public
@@ -506,8 +511,8 @@ fn check_shape<C: PastaCurve>(
 }
 
 /// Absorbs the statement (all of it, or only the tag, `k` and the count for a
-/// caller that bound the rest) and draws the batching coefficients
-/// (`alpha_0 = 1`).
+/// caller that bound the rest) and returns the batching coefficients: the
+/// powers of one 128-bit challenge (none drawn for a single claim).
 fn absorb_statement<C, T>(
     transcript: &mut T,
     binding: Binding,
@@ -529,9 +534,17 @@ where
             transcript.absorb_scalars(&[claim.value]);
         }
     }
+    let alpha = if claims.len() > 1 {
+        transcript.challenge_128()
+    } else {
+        C::ScalarExt::ONE
+    };
     let mut alphas = Vec::with_capacity(claims.len());
-    alphas.push(C::ScalarExt::ONE);
-    alphas.extend((1..claims.len()).map(|_| transcript.challenge_128()));
+    let mut power = C::ScalarExt::ONE;
+    for _ in claims {
+        alphas.push(power);
+        power *= alpha;
+    }
     alphas
 }
 

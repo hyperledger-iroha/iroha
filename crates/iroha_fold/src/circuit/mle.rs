@@ -4,8 +4,9 @@
 //!
 //! The caller (the decider v2 verifier) has already bound the point `sigma` and
 //! every claim `(C_c, v_c)` in its transcript. This circuit absorbs the tag,
-//! `k` and the claim count, squeezes the 128-bit batching coefficients
-//! (`alpha_0 = 1`), absorbs `rho*`, squeezes `z`, absorbs each round's `L_j`,
+//! `k` and the claim count, squeezes the 128-bit batching challenge `alpha`
+//! (two or more claims; `alpha_c = alpha^c`), absorbs `rho*`, squeezes `z`,
+//! absorbs each round's `L_j`,
 //! `R_j` before squeezing `u_j`, absorbs `G'_0` and `c`, and constrains the
 //! complete group equation
 //!
@@ -14,9 +15,10 @@
 //! v* = sum_c alpha_c v_c,   b' = prod_j (1 + sigma_{k-1-j} (u_j - 1)).
 //! ```
 //!
-//! The group operations on `C` are native; `alpha_c` multiply as 128-bit
-//! scalars, the other scalars are foreign FF values exported to canonical
-//! limbs. Zero `z` or `u_j` make the circuit unsatisfiable (their inverses),
+//! The group operations on `C` are native: `C*` is one Horner chain in the
+//! 128-bit `alpha` sharing a single GLV split ([`EccChip::horner`]) and `v*`
+//! the same Horner rule in FF arithmetic; the other scalars are foreign FF
+//! values exported to canonical limbs. Zero `z` or `u_j` make the circuit unsatisfiable (their inverses),
 //! as the native verifier refuses them. The result is the undecided claim
 //! `G'_0 = <s(u), g>` with its challenges; the lane stays live for the caller
 //! to finish its transcript.
@@ -151,7 +153,7 @@ pub fn verify_batch_bound<C: PastaCurve>(
     opening: &BatchOpeningCells<C>,
 ) -> Result<OpeningClaimCells<C>, Error> {
     let k = point.len();
-    let (first, rest) = claims.split_first().ok_or(Error::Synthesis)?;
+    let (last, init) = claims.split_last().ok_or(Error::Synthesis)?;
     if opening.rounds.len() != k {
         return Err(Error::Synthesis);
     }
@@ -160,10 +162,11 @@ pub fn verify_batch_bound<C: PastaCurve>(
     t::absorb_u64(lanes, TAG_BATCH_OPENING);
     t::absorb_u64(lanes, k as u64);
     t::absorb_u64(lanes, claims.len() as u64);
-    let mut alphas = Vec::with_capacity(rest.len());
-    for _ in rest {
-        alphas.push(t::challenge_128(lanes, region)?);
-    }
+    let alpha = if init.is_empty() {
+        None
+    } else {
+        Some(t::challenge_128(lanes, region)?)
+    };
     t::absorb_scalar(lanes, region, &opening.blind)?;
     let z = t::challenge(lanes, region)?;
     let mut challenges = Vec::with_capacity(k);
@@ -177,10 +180,13 @@ pub fn verify_batch_bound<C: PastaCurve>(
 
     // The field part: v*, b' and the U coefficient. z has an inverse.
     let _nonzero = lanes.ff.inverse(region, &z.ff)?;
-    let mut value = first.1.ff.clone();
-    for ((_, claim_value), (_, alpha)) in rest.iter().zip(&alphas) {
-        let term = lanes.mul(region, &alpha.ff, &claim_value.ff)?;
-        value = lanes.add(region, &value, &term)?;
+    // v* = sum_c alpha^c v_c by Horner's rule, the last claim first.
+    let mut value = last.1.ff.clone();
+    if let Some((_, alpha)) = &alpha {
+        for (_, claim_value) in init.iter().rev() {
+            let scaled = lanes.mul(region, &value, &alpha.ff)?;
+            value = lanes.add(region, &scaled, &claim_value.ff)?;
+        }
     }
     let one = lanes.constant(region, C::ScalarExt::ONE)?;
     let mut folded = one.clone();
@@ -194,20 +200,24 @@ pub fn verify_batch_bound<C: PastaCurve>(
     let difference = lanes.sub(region, &value, &opened)?;
     let auxiliary_coefficient = lanes.mul(region, &difference, &z.ff)?;
 
-    // The group part, with complete additions.
-    let mut equation = first.0.clone();
-    if !rest.is_empty() {
-        let zero = lanes.uint().constant::<127>(region, 0)?;
-        for ((commitment, _), (alpha_lo, _)) in rest.iter().zip(&alphas) {
-            let (scaled, _) = lanes.ecc.mul(
+    // The group part, with complete additions: C* = sum_c alpha^c C_c as one
+    // Horner chain sharing one GLV split of the 128-bit alpha.
+    let mut equation = match &alpha {
+        Some((alpha_lo, _)) => {
+            let zero = lanes.uint().constant::<127>(region, 0)?;
+            let commitments: Vec<AssignedPoint<C::Base>> = claims
+                .iter()
+                .map(|(commitment, _)| commitment.clone())
+                .collect();
+            lanes.ecc.horner(
                 region,
                 lanes.range,
                 ScalarLimbs::new(alpha_lo, &zero),
-                commitment,
-            )?;
-            equation = lanes.ecc.add(region, &equation, &scaled)?;
+                &commitments,
+            )?
         }
-    }
+        None => last.0.clone(),
+    };
     let w = lanes.ecc.constant_point(region, &C::from(key.w))?;
     let zero = lanes.constant(region, C::ScalarExt::ZERO)?;
     let negative_blind = lanes.sub(region, &zero, &opening.blind.ff)?;

@@ -600,7 +600,7 @@ fn prover_and_verifier_follow_one_transcript_schedule() {
     for _ in 0..m {
         expected.extend([Call::Point, Call::Scalars(1)]);
     }
-    expected.extend([Call::Challenge128; 3]);
+    expected.push(Call::Challenge128);
     expected.extend([Call::Scalars(1), Call::Challenge]);
     for _ in 0..k {
         expected.extend([Call::Point, Call::Point, Call::Challenge]);
@@ -675,7 +675,7 @@ fn bound_openings_verify_and_follow_the_short_schedule_when_the_caller_binds() {
     )
     .expect("opening");
     let mut expected = vec![Call::U64(TAG_BATCH_OPENING), Call::U64(4), Call::U64(3)];
-    expected.extend([Call::Challenge128; 2]);
+    expected.push(Call::Challenge128);
     expected.extend([Call::Scalars(1), Call::Challenge]);
     for _ in 0..k {
         expected.extend([Call::Point, Call::Point, Call::Challenge]);
