@@ -22,8 +22,9 @@
 //! - `S`: `S(0) = 0`, `S(r + 1) = S(r) + P(r) Phi(r)`, `e = S(u-1) + P(u-1) Phi(u-1)`
 //!   over the `u` usable rows: a relation whose constraints all lie on usable rows
 //!   ([`DeciderPlan::new`] checks it) has `Phi = 0` past them;
-//! - `T_g` per `LogUp` group: the running sum of `sum_s h_s - g`, zero at both
-//!   ends;
+//! - `T_g` per `LogUp` group: the running sum of `sum_s a_s h_s - g`, zero at
+//!   both ends, where the fixed `a_s` marks slot `s`'s cells (the only rows
+//!   where `h_s` is constrained, so no free `h` value enters the sum);
 //! - each public scalar (the weights, the folded `theta` and `r`, `e`) as a
 //!   constant advice column: equal on consecutive rows and copied from its
 //!   instance cell once.
@@ -221,15 +222,20 @@ pub fn decider_witness<C: PastaCurve>(
         .groups
         .iter()
         .map(|group| {
+            // Reciprocal cells count on their slot's cells only, as natively.
+            let mut reciprocals = vec![S::<C>::ZERO; usable];
+            for (slot, cells) in group.slots.iter().enumerate() {
+                let column = &witness.columns[group.h_column(slot)];
+                for cell in cells {
+                    reciprocals[cell.row as usize] += column[cell.row as usize];
+                }
+            }
+            let table = &witness.columns[group.g_column()];
             let mut running = Vec::with_capacity(usable);
             let mut sum = S::<C>::ZERO;
             for row in 0..usable {
                 running.push(sum);
-                let mut h = S::<C>::ZERO;
-                for slot in 0..group.slots.len() {
-                    h += witness.columns[group.h_column(slot)][row];
-                }
-                sum += h - witness.columns[group.g_column()][row];
+                sum += reciprocals[row] - table[row];
             }
             running
         })
@@ -415,7 +421,9 @@ impl<F: PastaField> Circuit<F> for Decider<F> {
                 let mut h_sum = Expression::Constant(F::ZERO);
                 for (slot, chosen) in group.slot_members.iter().enumerate() {
                     let h = cells.query_advice(c.witness[group.h_column(slot)], cur);
-                    h_sum = h_sum + h.clone();
+                    // h_s is constrained, hence counted, on its slot's cells only.
+                    let active = cells.query_fixed(c.activity[g][slot], cur);
+                    h_sum = h_sum + active.clone() * h.clone();
                     let terms: Vec<Expression<F>> = chosen
                         .iter()
                         .map(|m| r.clone() + compress(cells, &group.members[usize::from(*m)].expressions))
@@ -425,7 +433,6 @@ impl<F: PastaField> Circuit<F> for Decider<F> {
                         cell = cell
                             - product(terms.iter().enumerate().filter(|(j, _)| *j != k).map(|(_, t)| t.clone()));
                     }
-                    let active = cells.query_fixed(c.activity[g][slot], cur);
                     let weight = scalar(cells, group.slot_constraints[slot]);
                     phi = phi + weight * active * cell;
                 }

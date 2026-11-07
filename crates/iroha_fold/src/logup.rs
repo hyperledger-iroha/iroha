@@ -16,6 +16,12 @@
 //! other usable row each term vanishes, so its tuple is exactly zero whatever the
 //! witness; one such row stays active so that the zero tuple's membership, which
 //! the original lookup asserts there, is checked too.
+//!
+//! The linear `LogUp` sum `sum h - sum g = 0` runs over exactly the constrained
+//! cells: each `h_s` on its slot's cells (fixed relation data), `g` on the usable
+//! rows. Any other `h` or `g` value is free, and counting it would let one free
+//! cell balance the reciprocal of an input outside its table; over fixed supports
+//! the sum stays linear, so every fold preserves it.
 
 use std::collections::HashMap;
 

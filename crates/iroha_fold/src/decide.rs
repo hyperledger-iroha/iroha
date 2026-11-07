@@ -6,6 +6,10 @@
 //! are its own, its witness opens every commitment and satisfies every
 //! constraint, copy and `LogUp` sum. Neither is a proof: compression replaces them
 //! with succinct deciders.
+//!
+//! A `LogUp` sum counts each reciprocal column `h_s` on its slot's cells and the
+//! table column `g` on the usable rows: exactly the cells the relation
+//! constrains ([`crate::logup`]).
 
 use ff::Field;
 use iroha_pasta::{PastaCurve, PastaField};
@@ -64,13 +68,18 @@ fn check_copies<F: PastaField>(
     Ok(())
 }
 
+/// Each group's `LogUp` sum over exactly the cells its constraints cover: every
+/// `h_s` on its slot's cells, `g` on the usable rows. No constraint touches the
+/// other `h` and `g` values, so they count nowhere; counting them would let one
+/// such cell balance the reciprocal of an input outside its table.
 fn check_logup_sums<F: PastaField>(relation: &FoldedRelation<F>, witness: &Witness<F>) -> Result<(), Error> {
     for group in &relation.groups {
         let mut sum = F::ZERO;
-        for slot in 0..group.slots.len() {
-            sum += witness.columns[group.h_column(slot)].iter().fold(F::ZERO, |acc, v| acc + v);
+        for (slot, cells) in group.slots.iter().enumerate() {
+            let h = &witness.columns[group.h_column(slot)];
+            sum += cells.iter().fold(F::ZERO, |acc, cell| acc + h[cell.row as usize]);
         }
-        let table = witness.columns[group.g_column()].iter().fold(F::ZERO, |acc, v| acc + v);
+        let table = witness.columns[group.g_column()][..group.usable].iter().fold(F::ZERO, |acc, v| acc + v);
         if sum != table {
             return Err(Error::Rejected("LogUp sum"));
         }
@@ -141,3 +150,6 @@ pub fn decide_fresh<C: PastaCurve>(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;
