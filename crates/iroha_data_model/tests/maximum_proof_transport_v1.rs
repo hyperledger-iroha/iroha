@@ -45,7 +45,7 @@ use iroha_data_model::{
         },
     },
     privacy::{
-        IrohaZkAmsProofV1, PrivacyConsensusLimitsV1, PrivacyProofBytesV1,
+        IrohaZkAmsProofV1, PrivacyConsensusLimitsV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
         PrivacyRuntimeProofEnvelopeV1, PrivacyRuntimeProofV1, PrivacyRuntimeStatementV1,
         PrivacyStatementValidationError, TAIRA_PRIVACY_MAX_ACTION_BYTES_V1,
         TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,
@@ -281,7 +281,9 @@ fn full_statement_envelope(limits: &PrivacyConsensusLimitsV1) -> PrivacyRuntimeP
         .iter()
         .find_map(|row| {
             let envelope: PrivacyRuntimeProofEnvelopeV1 =
-                norito::decode_canonical(&row.envelope_norito).expect("fixture envelope");
+                norito::decode_canonical::<PrivacyProofEnvelopeV1>(&row.envelope_norito)
+                    .expect("fixture envelope")
+                    .into();
             matches!(
                 envelope.statement,
                 PrivacyRuntimeStatementV1::PqMaspStarkV1(_)
@@ -374,7 +376,9 @@ fn ceiling_proof_complete_envelopes_fit_the_fixed_transaction_cap() {
         let authority = AccountId::new_multisig(policy);
         for row in &fixtures.rows {
             let mut envelope: PrivacyRuntimeProofEnvelopeV1 =
-                norito::decode_canonical(&row.envelope_norito).expect("fixture envelope");
+                norito::decode_canonical::<PrivacyProofEnvelopeV1>(&row.envelope_norito)
+                    .expect("fixture envelope")
+                    .into();
             if let PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement) =
                 &mut envelope.statement
             {
@@ -503,7 +507,9 @@ fn maximum_statement_and_proof_fit_with_sixteen_mldsa_signatures() {
         .iter()
         .find_map(|row| {
             let envelope: PrivacyRuntimeProofEnvelopeV1 =
-                norito::decode_canonical(&row.envelope_norito).expect("fixture envelope");
+                norito::decode_canonical::<PrivacyProofEnvelopeV1>(&row.envelope_norito)
+                    .expect("fixture envelope")
+                    .into();
             matches!(
                 envelope.statement,
                 PrivacyRuntimeStatementV1::PqMaspStarkV1(_)
