@@ -63,6 +63,10 @@ mod batch_cap_experiment;
 #[path = "finite_rhs_tests.rs"]
 mod finite_rhs_tests;
 
+#[cfg(test)]
+#[path = "inversion_lanes_tests.rs"]
+mod inversion_lanes_tests;
+
 #[cfg(all(
     test,
     target_os = "macos",
@@ -330,7 +334,6 @@ impl<'a, C: PastaCurve, const SECRET: bool> Buckets<'a, C, SECRET> {
         if m == 0 {
             return;
         }
-        let mut acc = C::Base::ONE;
         for k in 0..m {
             let b = self.queue_bucket[k] as usize;
             let base = &self.bases[self.queue_point[k] as usize];
@@ -353,18 +356,10 @@ impl<'a, C: PastaCurve, const SECRET: bool> Buckets<'a, C, SECRET> {
                 self.kind[k] = Kind::Add;
             }
             self.den[k] = d;
-            self.prefix[k] = acc;
-            acc *= d;
         }
-        // Every denominator is nonzero, so `acc` is invertible.
-        let mut inv = if SECRET {
-            acc.invert().unwrap_or(C::Base::ZERO)
-        } else {
-            acc.invert_vartime().unwrap_or(C::Base::ZERO)
-        };
+        invert_queued::<C::Base, SECRET>(&mut self.den[..m], &mut self.prefix[..m]);
         for k in (0..m).rev() {
-            let dinv = inv * self.prefix[k];
-            inv *= self.den[k];
+            let dinv = self.den[k];
             let b = self.queue_bucket[k] as usize;
             let base = &self.bases[self.queue_point[k] as usize];
             match self.kind[k] {
@@ -472,6 +467,47 @@ impl<'a, C: PastaCurve, const SECRET: bool> Buckets<'a, C, SECRET> {
             self.kind.iter_mut().zeroize();
             self.den.iter_mut().zeroize();
             self.prefix.iter_mut().zeroize();
+        }
+    }
+}
+
+/// Inverts the nonzero queued denominators using the existing scratch.
+/// Four independent prefix chains expose field-multiplication parallelism;
+/// their product still uses exactly one inversion. Separating this phase from
+/// the affine updates keeps the four chain states out of those formulas.
+fn invert_queued<F: PastaField, const SECRET: bool>(den: &mut [F], prefix: &mut [F]) {
+    debug_assert_eq!(den.len(), prefix.len());
+    let mut acc = Zeroizing::new([F::ONE; 4]);
+    for (ds, ps) in den.chunks(4).zip(prefix.chunks_mut(4)) {
+        for j in 0..ds.len() {
+            ps[j] = acc[j];
+            acc[j] *= ds[j];
+        }
+    }
+    // Every denominator is nonzero, including unused lanes' unit products.
+    // Every new secret-derived temporary buffer is wiped also on unwind.
+    let mut split = Zeroizing::new([F::ZERO; 5]);
+    split[0] = acc[0] * acc[1];
+    split[1] = acc[2] * acc[3];
+    split[2] = split[0] * split[1];
+    split[2] = if SECRET {
+        split[2].invert().unwrap_or(F::ZERO)
+    } else {
+        split[2].invert_vartime().unwrap_or(F::ZERO)
+    };
+    split[3] = split[2] * split[1];
+    split[4] = split[2] * split[0];
+    let mut inv = Zeroizing::new([
+        split[3] * acc[1],
+        split[3] * acc[0],
+        split[4] * acc[3],
+        split[4] * acc[2],
+    ]);
+    for (ds, ps) in den.chunks_mut(4).zip(prefix.chunks(4)).rev() {
+        for j in 0..ds.len() {
+            let value = inv[j] * ps[j];
+            inv[j] *= ds[j];
+            ds[j] = value;
         }
     }
 }
