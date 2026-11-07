@@ -52,7 +52,7 @@ use iroha_data_model::kagemusha::kagemusha_wallet_v1::*;
 use iroha_pasta::{CancellationToken, msm::MemoryBudget};
 
 mod deferred_batch;
-use deferred_batch::DeferredBatchTransition;
+use deferred_batch::{DeferredBatchTransition, settlement_due};
 
 use crate::{
     kagemusha_wallet_artifacts_v1::{
@@ -1209,8 +1209,8 @@ impl SuffixVerificationCursorV1 {
         }
         if self.deferred.is_none() {
             self.settled = self.snapshot();
-        } else {
-            self.settle_batch(verifier, cancellation, false)?;
+        } else if settlement_due(self.completed, self.settled.completed) {
+            self.settle(verifier, cancellation)?;
         }
         Ok(())
     }
@@ -1238,15 +1238,6 @@ impl SuffixVerificationCursorV1 {
         verifier: &SuffixVerifierV1<'_>,
         cancellation: Option<&CancellationToken>,
     ) -> Result<(), SuffixErrorV1> {
-        self.settle_batch(verifier, cancellation, true)
-    }
-
-    fn settle_batch(
-        &mut self,
-        verifier: &SuffixVerifierV1<'_>,
-        cancellation: Option<&CancellationToken>,
-        force: bool,
-    ) -> Result<(), SuffixErrorV1> {
         let mut current = self.snapshot();
         let credential = &self.credential;
         let native = self.native;
@@ -1257,7 +1248,7 @@ impl SuffixVerificationCursorV1 {
             pending: &mut self.deferred,
         }
         .settle(
-            force,
+            true,
             |snapshot| snapshot.completed,
             || {
                 verifier.require_credential(credential)?;

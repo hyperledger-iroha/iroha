@@ -2,6 +2,11 @@
 
 use super::SUFFIX_UNLOAD_DEFERRED_STEPS_V1;
 
+/// Whether the retained unsettled steps have reached their local batch ceiling.
+pub(super) const fn settlement_due(completed: u32, settled: u32) -> bool {
+    completed - settled >= SUFFIX_UNLOAD_DEFERRED_STEPS_V1
+}
+
 /// The current provisional snapshot, last settled snapshot and retained claims.
 pub(super) struct DeferredBatchTransition<'a, S, P> {
     /// Snapshot of the current provisional cursor state.
@@ -24,9 +29,7 @@ impl<S: Copy, P> DeferredBatchTransition<'_, S, P> {
         is_empty: impl FnOnce(&P) -> bool,
         decide: impl FnOnce(P) -> Result<(), E>,
     ) -> Result<(), E> {
-        if !force
-            && completed(self.current) - completed(self.settled) < SUFFIX_UNLOAD_DEFERRED_STEPS_V1
-        {
+        if !force && !settlement_due(completed(self.current), completed(self.settled)) {
             return Ok(());
         }
         // A foreign verifier must leave the original pending owner untouched.
@@ -113,6 +116,7 @@ mod tests {
             drops: original_drops.clone(),
         });
         let original_allocation = pending.as_ref().unwrap().claims.as_ptr();
+        assert!(!settlement_due(current.completed, settled.completed));
         DeferredBatchTransition {
             current: &mut current,
             settled: &mut settled,
@@ -139,6 +143,7 @@ mod tests {
 
         current.completed += 1;
         current.receives += 1;
+        assert!(settlement_due(current.completed, settled.completed));
         pending.as_mut().unwrap().claims.extend([126, 127]);
         let decisions = AtomicUsize::new(0);
         let error = DeferredBatchTransition {

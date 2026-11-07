@@ -12490,7 +12490,7 @@
         {
           "stage": "follower",
           "path": "crates/iroha_core_zk/src/kagemusha_wallet_suffix_unload_v1/deferred_batch.rs",
-          "contains": "completed(self.current) - completed(self.settled) < SUFFIX_UNLOAD_DEFERRED_STEPS_V1"
+          "contains": "completed - settled >= SUFFIX_UNLOAD_DEFERRED_STEPS_V1"
         }
       ],
       "validity": false,
