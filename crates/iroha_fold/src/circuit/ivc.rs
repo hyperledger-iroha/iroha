@@ -177,12 +177,15 @@ pub struct Frame<C: PastaCurve> {
 
 /// The fold frame of a step of `side` (`IVC.md` section 4): checks that the
 /// other side's previous instance passes through this side's previous hash
-/// (`H(step - 2, base, state, digests)`), that the accumulator in `side.slot` is
-/// the one its digest names, folds the instance into it (or starts it while the
-/// digest is zero), and reads the instance's `h_out` (the passthrough to
-/// output), bridge and public columns. The other side's frame column is its
+/// (`H(step - 2, base, state, digests)`), that the accumulator in the folded
+/// slot is the one its digest names, folds the instance into it (or starts it
+/// while the digest is zero), and reads the instance's `h_out` (the passthrough
+/// to output), bridge and public columns. The other side's frame column is its
 /// relation's first instance column, `[passthrough, h_out, bridge...]`. Every
-/// digest outside the slot passes through unchanged.
+/// digest outside the slot passes through unchanged. The slot is `side.slot`,
+/// or, when `side.choices` holds several slots, the one the witness chooses
+/// (one-hot bits over the choices; the folded digest replaces exactly that
+/// entry).
 ///
 /// On the first instance of the side that starts the chain there is no
 /// predecessor: the checks are skipped, every output digest is zero and the
@@ -206,7 +209,12 @@ pub fn fold_frame<C: PastaCurve>(
     witness: Option<&FrameWitness<C>>,
 ) -> Result<Frame<C>, Error> {
     if !side.is_valid()
-        || witness.is_some_and(|w| w.state.len() != state_len || w.digests.len() != side.digests)
+        || witness.is_some_and(|w| {
+            w.state.len() != state_len
+                || w.digests.len() != side.digests
+                || w.slot >= side.digests
+                || (side.choices >> w.slot) & 1 == 0
+        })
         || shape.instance_lengths.first().is_none_or(|len| *len < 2)
     {
         return Err(Error::Synthesis);
@@ -228,7 +236,25 @@ pub fn fold_frame<C: PastaCurve>(
 
     let shifted = chips.glue.add_constant(region, &step, -C::Base::from(side.first_step))?;
     let first = chips.glue.is_zero(region, &shifted)?;
-    let stored = digests[side.slot].clone();
+    // The folded slot: fixed, or one-hot over the choices.
+    let selection = if side.is_selected() {
+        let mut bits = Vec::new();
+        let mut count = chips.glue.constant(region, <C::Base as Field>::ZERO)?;
+        let mut stored = count.clone();
+        for slot in (0..side.digests).filter(|slot| (side.choices >> slot) & 1 == 1) {
+            let chosen = witness.map_or_else(Value::unknown, |w| Value::known(w.slot == slot));
+            let bit = chips.glue.boolean(region, chosen)?;
+            count = chips.glue.add(region, &count, bit.word())?;
+            let part = chips.glue.mul(region, bit.word(), &digests[slot])?;
+            stored = chips.glue.add(region, &stored, &part)?;
+            bits.push((slot, bit));
+        }
+        chips.glue.enforce_constant(region, &count, <C::Base as Field>::ONE)?;
+        Some((bits, stored))
+    } else {
+        None
+    };
+    let stored = selection.as_ref().map_or_else(|| digests[side.slot].clone(), |(_, stored)| stored.clone());
     let absent = chips.glue.is_zero(region, &stored)?;
     let no_predecessor = (side.first_step == 1).then(|| first.clone());
 
@@ -239,7 +265,15 @@ pub fn fold_frame<C: PastaCurve>(
     let digest = accumulator_digest(chips, region, &side.fold_domain, &acc)?;
     assert_equal_unless(chips, region, &digest, &stored, Some(&absent))?;
     let folded = verify_fold_or_start(chips, region, shape, &side.fold_domain, &acc, &fresh, &proof, &absent)?;
-    digests[side.slot] = accumulator_digest(chips, region, &side.fold_domain, &folded)?;
+    let new_digest = accumulator_digest(chips, region, &side.fold_domain, &folded)?;
+    match &selection {
+        None => digests[side.slot] = new_digest,
+        Some((bits, _)) => {
+            for (slot, bit) in bits {
+                digests[*slot] = chips.glue.select(region, bit, &new_digest, &digests[*slot])?;
+            }
+        }
+    }
     let from_fresh = foreign_hash_word(chips, region, &frame_column[1])?;
     let mut bridge = Vec::with_capacity(frame_column.len() - 2);
     for value in &frame_column[2..] {

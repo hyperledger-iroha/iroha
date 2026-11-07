@@ -11,8 +11,11 @@
 //! kind of the other side's relations (non-uniform IVC, `IVC.md` section 4),
 //! then the side's own claim accumulator (section 6), each zero while absent.
 //! A step circuit folds the other side's previous instance into the one slot
-//! its schedule fixes ([`ChainSide::slot`]) and passes the others through; its
-//! business may replace the claim digest.
+//! its schedule fixes ([`ChainSide::slot`]), or into one of a fixed set of
+//! slots its witness chooses ([`ChainSide::choices`], for a step that follows
+//! several kinds), and passes the others through; its business may replace
+//! the claim digest. A wrong choice is never accepted in the end: each slot's
+//! accumulator is decided against its own relation.
 
 use ff::Field;
 use iroha_pasta::{PastaCurve, PastaField, poseidon::Sponge};
@@ -132,30 +135,51 @@ pub type Fresh<C> = (Instance<C>, Witness<<C as PastaCurve>::ScalarExt>);
 pub type Kept<C> = (Accumulator<C>, Witness<<C as PastaCurve>::ScalarExt>);
 
 /// The frame of one step circuit (`IVC.md` section 4): its side's hash
-/// domain, chain start and digest list, and the kind of the other side's
-/// relation it folds, which the schedule fixes per circuit.
+/// domain, chain start and digest list, and the kinds of the other side's
+/// relations it may fold, which the schedule fixes per circuit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChainSide {
     /// Domain of the IVC hash this side outputs.
     pub ivc_domain: [u8; 32],
-    /// Fold domain of the kind of the other side's relation this circuit folds.
+    /// Fold domain of the other side's relations this circuit folds (every
+    /// kind in [`Self::choices`] folds under it).
     pub fold_domain: [u8; 32],
     /// Step of this side's first instance; the side with `1` starts the chain and
     /// its first instance has no predecessor.
     pub first_step: u64,
-    /// Position, in the side's digest list, of the accumulator this circuit
-    /// folds into.
+    /// Position, in the side's digest list, of the accumulator this fold uses:
+    /// the circuit's fixed slot, or the slot a witness chooses among
+    /// [`Self::choices`].
     pub slot: usize,
     /// Length of the side's digest list (kept accumulators, then the claim
     /// accumulator).
     pub digests: usize,
+    /// The slots this circuit may fold into, as a bit set (bit `i` for slot `i`).
+    /// One bit fixes the slot; several make the witness choose one.
+    pub choices: u64,
 }
 
 impl ChainSide {
-    /// Whether the slot lies in the digest list.
+    /// Whether the slot lies in the digest list and among the choices, every
+    /// choice lies in the list, and the list fits the bit set.
     #[must_use]
     pub const fn is_valid(&self) -> bool {
         self.slot < self.digests
+            && self.digests < 64
+            && self.choices >> self.digests == 0
+            && (self.choices >> self.slot) & 1 == 1
+    }
+
+    /// Whether the witness chooses the slot among several.
+    #[must_use]
+    pub const fn is_selected(&self) -> bool {
+        self.choices.count_ones() > 1
+    }
+
+    /// The same frame folding into `slot` (one of the choices) instead.
+    #[must_use]
+    pub const fn folding_into(self, slot: usize) -> Self {
+        Self { slot, ..self }
     }
 }
 
@@ -169,7 +193,9 @@ pub struct FrameWitness<C: PastaCurve> {
     pub state: Vec<C::Base>,
     /// This side's previous digest list ([`ChainSide::digests`] entries).
     pub digests: Vec<C::Base>,
-    /// The accumulator in [`ChainSide::slot`] (a placeholder while absent).
+    /// The slot this step folds into ([`ChainSide::slot`] when prepared).
+    pub slot: usize,
+    /// The accumulator in that slot (a placeholder while absent).
     pub acc: Accumulator<C>,
     /// The other side's previous instance (a placeholder without predecessor).
     pub fresh: Instance<C>,
@@ -228,7 +254,8 @@ pub fn prepare_step<C: PastaCurve>(
     let Some((fresh, fresh_witness)) = their_last else {
         let zero = <C::ScalarExt as Field>::ZERO;
         let proof = FoldProof { f: vec![zero; other.index_bits()], k: vec![zero; other.degree() - 1] };
-        let witness = FrameWitness { step, state, digests, acc, fresh: placeholder_instance::<C>(other), proof };
+        let witness =
+            FrameWitness { step, state, digests, slot: side.slot, acc, fresh: placeholder_instance::<C>(other), proof };
         return Ok(PreparedStep {
             witness,
             kept: kept.cloned(),
@@ -247,7 +274,7 @@ pub fn prepare_step<C: PastaCurve>(
     next[side.slot] = folded.digest(&side.fold_domain);
     let passthrough = embed(&public[1]);
     let bridge = public[2..].iter().map(embed).collect();
-    let witness = FrameWitness { step, state, digests, acc, fresh: fresh.clone(), proof };
+    let witness = FrameWitness { step, state, digests, slot: side.slot, acc, fresh: fresh.clone(), proof };
     Ok(PreparedStep { witness, kept: Some((folded, folded_witness)), bridge, passthrough, digests: next })
 }
 

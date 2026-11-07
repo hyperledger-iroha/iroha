@@ -94,8 +94,8 @@ pub enum Side {
 impl Side {
     pub fn chain(self) -> ChainSide {
         match self {
-            Self::Q => ChainSide { ivc_domain: IVC_Q, fold_domain: DOMAIN_A, first_step: 1, slot: 0, digests: DIGESTS },
-            Self::A => ChainSide { ivc_domain: IVC_A, fold_domain: DOMAIN_Q, first_step: 2, slot: 0, digests: DIGESTS },
+            Self::Q => ChainSide { ivc_domain: IVC_Q, fold_domain: DOMAIN_A, first_step: 1, slot: 0, digests: DIGESTS, choices: 1 },
+            Self::A => ChainSide { ivc_domain: IVC_A, fold_domain: DOMAIN_Q, first_step: 2, slot: 0, digests: DIGESTS, choices: 1 },
         }
     }
 }

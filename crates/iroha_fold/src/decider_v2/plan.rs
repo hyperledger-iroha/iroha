@@ -560,6 +560,23 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
         self.copies.columns.len()
     }
 
+    /// The instance cells in copies, as (column, row, id, `sigma(id)`): the
+    /// cells the instance copy term `I` sums over
+    /// ([`super::instance_copy_terms`]).
+    #[must_use]
+    pub fn instance_copy_cells(&self) -> &[(usize, usize, u64, u64)] {
+        &self.copies.instance_cells
+    }
+
+    /// Whether the relation reads public values beyond copies (instance
+    /// columns queried by gates, or instance cells read as scalars). A
+    /// field-side decider whose public columns stay on the commitment side
+    /// (an imported `I`) requires that it does not.
+    #[must_use]
+    pub fn reads_public_beyond_copies(&self) -> bool {
+        !self.cells.is_empty() || self.sources.iter().any(|source| matches!(source, Source::Instance(..)))
+    }
+
     /// The verifier's work beyond the opening: field multiplications of the
     /// final term evaluation (one per term weight included), scalars absorbed
     /// per proof, and the opened commitments as (witness, key, helper).

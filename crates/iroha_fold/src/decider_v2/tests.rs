@@ -26,13 +26,14 @@ use iroha_pasta::Fp;
 use iroha_plonk::check::{CheckMode, check_circuit};
 
 use super::{
-    DeciderV2Plan, DeciderV2Proof, helper_digest, mle, open, prove, prove_many, sumcheck, verify, verify_many, verify_opening,
+    DeciderV2Plan, DeciderV2Proof, helper_digest, instance_copy_terms, mle, open, prove, prove_many, sumcheck, verify,
+    verify_many, verify_opening,
 };
 use crate::{
     circuit::{
         FoldVerifierChips, FoldVerifierConfig,
         decider_v2::{
-            assign_accumulator_field, assign_decider_v2_field_proof, claim_commitments,
+            assign_accumulator_field, assign_accumulator_field_terms, assign_decider_v2_field_proof, claim_commitments,
             helper_digest as helper_digest_in_circuit, opening_scalars, opening_transcript, verify_decider_v2_field,
         },
         field::{FieldVerifierChips, FieldVerifierConfig},
@@ -536,6 +537,11 @@ struct FieldDeciderCircuit {
     plan: Arc<DeciderV2Plan<Ep>>,
     shape: FoldShape,
     acc: Option<Accumulator<Ep>>,
+    /// Whether the public columns stay out and the instance copy term is
+    /// imported.
+    import_terms: bool,
+    /// The imported copy term (`None` at key generation).
+    copy_terms: Option<Fq>,
     proof: Option<DeciderV2Proof<Ep>>,
     helpers: Option<Fp>,
     alpha: Option<Fq>,
@@ -558,6 +564,8 @@ impl Circuit<Fq> for FieldDeciderCircuit {
             plan: Arc::clone(&self.plan),
             shape: self.shape.clone(),
             acc: None,
+            import_terms: self.import_terms,
+            copy_terms: None,
             proof: None,
             helpers: None,
             alpha: None,
@@ -580,7 +588,11 @@ impl Circuit<Fq> for FieldDeciderCircuit {
             || "decider v2 field side",
             |mut region| {
                 let mut lanes = chips.lanes();
-                let acc = assign_accumulator_field(&mut lanes, &mut region, &DOMAIN, &self.shape, self.acc.as_ref())?;
+                let acc = if self.import_terms {
+                    assign_accumulator_field_terms(&mut lanes, &mut region, &DOMAIN, &self.shape, self.acc.as_ref(), self.copy_terms)?
+                } else {
+                    assign_accumulator_field(&mut lanes, &mut region, &DOMAIN, &self.shape, self.acc.as_ref())?
+                };
                 let limbs = self.helpers.map(|d| s6_limbs(&d).map(Fq::from_u128));
                 let witness = |lanes: &mut crate::circuit::field::FieldLanes<'_, Fq>, region: &mut _, v: Option<Fq>| {
                     lanes.glue.witness(region, v.map_or_else(Value::unknown, Value::known))
@@ -623,11 +635,13 @@ fn the_field_side_decider_circuit_verifies_exactly_as_the_native_verifier() {
     let public = vec![verified.field_digest, value, folded];
     let plan = Arc::new(DeciderV2Plan::new(s.relation.clone(), &s.key).expect("plan"));
     let shape = s.relation.shape();
-    let satisfied = |proof: &DeciderV2Proof<Ep>, helpers: Fp, public: &[Fq]| {
+    let with_terms = |proof: &DeciderV2Proof<Ep>, helpers: Fp, public: &[Fq], copy_terms: Option<Fq>| {
         let circuit = FieldDeciderCircuit {
             plan: Arc::clone(&plan),
             shape: shape.clone(),
             acc: Some(acc.clone()),
+            import_terms: copy_terms.is_some(),
+            copy_terms,
             proof: Some(proof.clone()),
             helpers: Some(helpers),
             alpha: Some(alpha),
@@ -635,7 +649,16 @@ fn the_field_side_decider_circuit_verifies_exactly_as_the_native_verifier() {
         };
         check_circuit(&circuit, 16, &[public.to_vec()], CheckMode::Strict).expect("synthesis").is_satisfied()
     };
+    let satisfied = |proof: &DeciderV2Proof<Ep>, helpers: Fp, public: &[Fq]| with_terms(proof, helpers, public, None);
     assert!(satisfied(&proved.proof, helpers, &public));
+    // The public columns can stay on the commitment side: the transcript binds
+    // them through the digest, and the instance copy term is imported.
+    assert!(!plan.reads_public_beyond_copies() && !plan.instance_copy_cells().is_empty());
+    let [gamma, eta] = verified.copy_challenges;
+    assert_eq!(proved.copy_challenges, verified.copy_challenges);
+    let terms = instance_copy_terms(&plan, &acc, gamma, eta).expect("copy terms");
+    assert!(with_terms(&proved.proof, helpers, &public, Some(terms)));
+    assert!(!with_terms(&proved.proof, helpers, &public, Some(terms + Fq::ONE)));
     let mut other = public.clone();
     other[0] += Fq::ONE;
     assert!(!satisfied(&proved.proof, helpers, &other));

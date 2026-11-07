@@ -13,6 +13,14 @@
 //! arrive as S6 limbs. Values leaving (`sigma`, `d_F`, `v*`, `b'`) leave as S6
 //! limbs ([`FieldLanes::limbs`]).
 //!
+//! The transcript absorbs only each member's digest, which commits to its field
+//! data. A member's public columns are needed only for the instance copy term
+//! `I`: either the field side holds them and computes `I`
+//! ([`assign_accumulator_field`]), or `I` is computed where they are hashed,
+//! with the copy challenges this side exports, and imported
+//! ([`assign_accumulator_field_terms`]; the plan must read public values only
+//! through copies).
+//!
 //! **Commitment side** (a circuit over the commitment curve's base field, on
 //! [`FoldLanes`]): [`helper_digest`] computes the copy helpers' digest, and
 //! [`opening_transcript`] starts the opening transcript from `d_F`. The
@@ -43,14 +51,17 @@ use crate::{
 type W<C> = Word<<C as PastaCurve>::ScalarExt>;
 
 /// One accumulator's field data in a field-side circuit: its digest
-/// `kgwfacd1` as limbs (from the commitment side) and its public columns,
-/// `theta`, `r`, `beta` and `e` as native words.
+/// `kgwfacd1` as limbs (from the commitment side), its public columns or its
+/// imported instance copy term, and `theta`, `r`, `beta` and `e` as native
+/// words.
 #[derive(Clone, Debug)]
 pub struct AccumulatorFieldCells<C: PastaCurve> {
     /// `kgwfacd1` as `(lo, hi)` limbs.
     pub digest: [W<C>; 2],
-    /// The folded public columns.
+    /// The folded public columns, when this side holds them (empty otherwise).
     pub public: Vec<Vec<W<C>>>,
+    /// The instance copy term `I`, when imported instead of the public columns.
+    pub copy_terms: Option<W<C>>,
     /// `theta` powers.
     pub theta: Vec<W<C>>,
     /// One `LogUp` challenge per group.
@@ -74,9 +85,13 @@ pub struct DeciderV2FieldProofCells<C: PastaCurve> {
     pub at_sigma: Vec<W<C>>,
 }
 
-/// What the field side hands on: `sigma`, the claim values and `d_F`.
+/// What the field side hands on: `sigma`, the claim values, `d_F` and the copy
+/// challenges.
 #[derive(Clone, Debug)]
 pub struct DeciderV2FieldOutput<C: PastaCurve> {
+    /// The copy challenges `gamma` and `eta` (exported to the circuit that
+    /// computes an imported instance copy term).
+    pub copy_challenges: [W<C>; 2],
     /// The opening point `sigma`.
     pub point: Vec<W<C>>,
     /// The claim values, in claim order.
@@ -127,7 +142,45 @@ pub fn assign_accumulator_field<C: PastaCurve>(
     let r = witnesses::<C>(lanes, region, acc.map(|a| a.instance.r.as_slice()), shape.groups.len())?;
     let beta = witnesses::<C>(lanes, region, acc.map(|a| a.beta.as_slice()), shape.index_bits)?;
     let e = witnesses::<C>(lanes, region, acc.map(|a| core::slice::from_ref(&a.e)), 1)?.remove(0);
-    Ok(AccumulatorFieldCells { digest: [digest[0].clone(), digest[1].clone()], public, theta, r, beta, e })
+    Ok(AccumulatorFieldCells { digest: [digest[0].clone(), digest[1].clone()], public, copy_terms: None, theta, r, beta, e })
+}
+
+/// Assigns an accumulator's field data without its public columns: the digest
+/// limbs, `theta`, `r`, `beta`, `e`, and the instance copy term `I`
+/// ([`crate::decider_v2::instance_copy_terms`]), which the circuit hashing the
+/// public columns computes with the exported copy challenges (`None`: key
+/// generation). The wrap constrains every cell to the values crossing from the
+/// commitment side.
+///
+/// # Errors
+/// Layout errors, or an accumulator of another shape.
+pub fn assign_accumulator_field_terms<C: PastaCurve>(
+    lanes: &mut FieldLanes<'_, C::ScalarExt>,
+    region: &mut Region<'_, C::ScalarExt>,
+    domain: &[u8; 32],
+    shape: &FoldShape,
+    acc: Option<&Accumulator<C>>,
+    copy_terms: Option<C::ScalarExt>,
+) -> Result<AccumulatorFieldCells<C>, Error> {
+    let limbs = acc.map(|a| {
+        let [lo, hi] = s6_limbs(&a.digest(domain));
+        [C::ScalarExt::from_u128(lo), C::ScalarExt::from_u128(hi)]
+    });
+    let digest = witnesses::<C>(lanes, region, limbs.as_ref().map(<[_; 2]>::as_slice), 2)?;
+    let theta = witnesses::<C>(lanes, region, acc.map(|a| a.instance.theta.as_slice()), shape.theta_len)?;
+    let r = witnesses::<C>(lanes, region, acc.map(|a| a.instance.r.as_slice()), shape.groups.len())?;
+    let beta = witnesses::<C>(lanes, region, acc.map(|a| a.beta.as_slice()), shape.index_bits)?;
+    let e = witnesses::<C>(lanes, region, acc.map(|a| core::slice::from_ref(&a.e)), 1)?.remove(0);
+    let terms = witnesses::<C>(lanes, region, copy_terms.as_ref().map(core::slice::from_ref), 1)?.remove(0);
+    Ok(AccumulatorFieldCells {
+        digest: [digest[0].clone(), digest[1].clone()],
+        public: Vec::new(),
+        copy_terms: Some(terms),
+        theta,
+        r,
+        beta,
+        e,
+    })
 }
 
 /// The shape of a batch: rounds, round degree, reads, claims.
@@ -321,19 +374,17 @@ pub fn verify_decider_v2_field<C: PastaCurve>(
     {
         return Err(Error::Synthesis);
     }
+    // A member without public columns brings its copy term, and its relation
+    // must read public values only through copies.
+    if members.iter().any(|(plan, acc)| {
+        acc.copy_terms.is_some() && (plan.reads_public_beyond_copies() || !acc.public.is_empty())
+    }) {
+        return Err(Error::Synthesis);
+    }
     lanes.start(TAG_DECIDER_FIELD, domain)?;
     lanes.absorb_u64(members.len() as u64);
     for (_, acc) in members {
         lanes.absorb(&acc.digest);
-        lanes.absorb_u64(acc.public.len() as u64);
-        for column in &acc.public {
-            lanes.absorb_u64(column.len() as u64);
-            lanes.absorb(column);
-        }
-        lanes.absorb(&acc.theta);
-        lanes.absorb(&acc.r);
-        lanes.absorb(&acc.beta);
-        lanes.absorb(core::slice::from_ref(&acc.e));
     }
     lanes.absorb_u64(TAG_DECIDER_PERMUTATION);
     let gamma = lanes.challenge(region)?;
@@ -366,19 +417,26 @@ pub fn verify_decider_v2_field<C: PastaCurve>(
     let mut scale = ar.one.clone();
     let mut scales = Vec::with_capacity(members.len());
     for (plan, acc) in members {
-        let mut instance_terms = ar.zero.clone();
-        for (column, row, id, sigma) in &plan.copies.instance_cells {
-            let value = acc.public.get(*column).and_then(|c| c.get(*row)).cloned().unwrap_or_else(|| ar.zero.clone());
-            let base = ar.add(region, &gamma, &value)?;
-            let id_term = ar.scale(region, &eta, S::<C>::from(*id))?;
-            let sigma_term = ar.scale(region, &eta, S::<C>::from(*sigma))?;
-            let left = ar.add(region, &base, &id_term)?;
-            let right = ar.add(region, &base, &sigma_term)?;
-            let left = ar.inverse(region, &left)?;
-            let right = ar.inverse(region, &right)?;
-            let difference = ar.sub(region, &left, &right)?;
-            instance_terms = ar.add(region, &instance_terms, &difference)?;
-        }
+        let instance_terms = match &acc.copy_terms {
+            Some(terms) => terms.clone(),
+            None => {
+                let mut sum = ar.zero.clone();
+                for (column, row, id, sigma) in &plan.copies.instance_cells {
+                    let value =
+                        acc.public.get(*column).and_then(|c| c.get(*row)).cloned().unwrap_or_else(|| ar.zero.clone());
+                    let base = ar.add(region, &gamma, &value)?;
+                    let id_term = ar.scale(region, &eta, S::<C>::from(*id))?;
+                    let sigma_term = ar.scale(region, &eta, S::<C>::from(*sigma))?;
+                    let left = ar.add(region, &base, &id_term)?;
+                    let right = ar.add(region, &base, &sigma_term)?;
+                    let left = ar.inverse(region, &left)?;
+                    let right = ar.inverse(region, &right)?;
+                    let difference = ar.sub(region, &left, &right)?;
+                    sum = ar.add(region, &sum, &difference)?;
+                }
+                sum
+            }
+        };
         let weighted = ar.mul(region, &alpha_powers[plan.relation.groups.len() + 2], &instance_terms)?;
         let member = ar.sub(region, &acc.e, &weighted)?;
         let scaled = ar.mul(region, &scale, &member)?;
@@ -582,7 +640,7 @@ pub fn verify_decider_v2_field<C: PastaCurve>(
     FieldLanes::assert_equal(region, &expected, &claim)?;
     ar.lanes.absorb(&proof.at_sigma);
     let field_digest = ar.lanes.finish(region)?;
-    Ok(DeciderV2FieldOutput { point: sigma, at_sigma: proof.at_sigma.clone(), field_digest })
+    Ok(DeciderV2FieldOutput { copy_challenges: [gamma, eta], point: sigma, at_sigma: proof.at_sigma.clone(), field_digest })
 }
 
 /// The batched opening's field scalars: `v* = sum_c alpha^c v_c` (Horner) and

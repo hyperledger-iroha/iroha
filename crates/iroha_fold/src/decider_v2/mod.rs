@@ -36,10 +36,15 @@
 //! runs natively over the decider's scalar field ([`FieldTranscript`]) and
 //! carries every field message, so that its circuit (over that field) checks
 //! the sumchecks natively. Values computed on the commitment side enter it as
-//! S6 limbs: each accumulator's digest `kgwfacd1`, which binds its commitments,
-//! and [`helper_digest`] of the copy helpers. Its final digest `d_F` seeds the
-//! *opening transcript* over the commitment curve's base field, where the
-//! batched opening runs. Deciders are not zero-knowledge.
+//! S6 limbs: each accumulator's digest `kgwfacd1`, which binds its commitments
+//! and every field datum (public columns, `theta`, `r`, `beta`, `e`), and
+//! [`helper_digest`] of the copy helpers. The field data itself is not absorbed
+//! again: the digest commits to it before any challenge, so a field-side
+//! circuit needs only the values its checks read, and the public columns only
+//! through the instance copy term `I` ([`instance_copy_terms`]), which a
+//! circuit that hashes them can compute and hand over. Its final digest `d_F`
+//! seeds the *opening transcript* over the commitment curve's base field,
+//! where the batched opening runs. Deciders are not zero-knowledge.
 
 pub(crate) mod eval;
 pub(crate) mod mle;
@@ -100,6 +105,8 @@ pub struct Proved<C: PastaCurve> {
     pub blinds: Vec<C::ScalarExt>,
     /// The field transcript's final digest `d_F`, which seeds the opening.
     pub field_digest: C::ScalarExt,
+    /// The copy challenges `gamma` and `eta`, drawn once for the batch.
+    pub copy_challenges: [C::ScalarExt; 2],
     /// The opening transcript (over the commitment base field, seeded with
     /// `d_F`), for the batched opening to continue.
     pub transcript: Transcript<C>,
@@ -114,6 +121,8 @@ pub struct Verified<C: PastaCurve> {
     pub claims: Vec<MleClaim<C>>,
     /// The field transcript's final digest `d_F`, which seeds the opening.
     pub field_digest: C::ScalarExt,
+    /// The copy challenges `gamma` and `eta`, drawn once for the batch.
+    pub copy_challenges: [C::ScalarExt; 2],
     /// The opening transcript (over the commitment base field, seeded with
     /// `d_F`), for the batched opening to continue.
     pub transcript: Transcript<C>,
@@ -178,8 +187,17 @@ fn weights<C: PastaCurve>(
         .collect()
 }
 
-/// The public copy terms of the instance cells.
-fn instance_copy_terms<C: PastaCurve>(plan: &DeciderV2Plan<C>, acc: &Accumulator<C>, gamma: C::ScalarExt, eta: C::ScalarExt) -> Result<C::ScalarExt, Error> {
+/// The instance copy term `I` of an accumulator: the sum over the instance
+/// cells in copies of `1 / (gamma + v + eta id) - 1 / (gamma + v + eta sigma)`.
+///
+/// # Errors
+/// [`Error::Rejected`] for a vanishing denominator.
+pub fn instance_copy_terms<C: PastaCurve>(
+    plan: &DeciderV2Plan<C>,
+    acc: &Accumulator<C>,
+    gamma: C::ScalarExt,
+    eta: C::ScalarExt,
+) -> Result<C::ScalarExt, Error> {
     let mut total = <C::ScalarExt as Field>::ZERO;
     for (column, row, id, sigma) in &plan.copies.instance_cells {
         let value = public_cell::<C>(&acc.instance.public, *column, *row);
@@ -195,9 +213,8 @@ fn instance_copy_terms<C: PastaCurve>(plan: &DeciderV2Plan<C>, acc: &Accumulator
 }
 
 /// The shared start of a decider's field transcript: the batch size, then per
-/// member its digest (`kgwfacd1`, as limbs) and its field data natively
-/// (public columns, `theta`, `r`, `beta`, `e`), then the copy challenges
-/// `gamma` and `eta`.
+/// member its digest (`kgwfacd1`, as limbs), which commits to its commitments
+/// and its field data, then the copy challenges `gamma` and `eta`.
 fn start<'a, C: PastaCurve + 'a>(
     domain: &[u8; 32],
     accs: impl ExactSizeIterator<Item = &'a Accumulator<C>>,
@@ -206,15 +223,6 @@ fn start<'a, C: PastaCurve + 'a>(
     transcript.absorb_u64(accs.len() as u64);
     for acc in accs {
         transcript.absorb_foreign(&acc.digest(domain));
-        transcript.absorb_u64(acc.instance.public.len() as u64);
-        for column in &acc.instance.public {
-            transcript.absorb_u64(column.len() as u64);
-            transcript.absorb(column);
-        }
-        transcript.absorb(&acc.instance.theta);
-        transcript.absorb(&acc.instance.r);
-        transcript.absorb(&acc.beta);
-        transcript.absorb(&[acc.e]);
     }
     transcript.absorb_u64(TAG_DECIDER_PERMUTATION);
     let gamma = transcript.challenge();
@@ -565,7 +573,7 @@ pub fn prove_many<C: PastaCurve>(
     let claims = commitments.into_iter().zip(&at_sigma).map(|(commitment, value)| MleClaim { commitment, value: *value }).collect();
     let proof = DeciderV2Proof { helpers, zero_check, at_rho, shift, at_sigma };
     let transcript = opening_transcript::<C>(domain, field_digest);
-    Ok(Proved { proof, point: sigma, claims, polys, blinds, field_digest, transcript })
+    Ok(Proved { proof, point: sigma, claims, polys, blinds, field_digest, copy_challenges: [gamma, eta], transcript })
 }
 
 /// The `eq(point, row)` weight of one hypercube row.
@@ -733,7 +741,7 @@ pub fn verify_many<C: PastaCurve>(
         helper_offset += plan.copies.columns.len();
     }
     let transcript = opening_transcript::<C>(domain, field_digest);
-    Ok(Verified { point: sigma, claims, field_digest, transcript })
+    Ok(Verified { point: sigma, claims, field_digest, copy_challenges: [gamma, eta], transcript })
 }
 
 /// Opens the decider's claims with one batched IPA opening, continuing the
