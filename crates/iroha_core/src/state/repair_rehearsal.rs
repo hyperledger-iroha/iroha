@@ -423,7 +423,10 @@ impl State {
         {
             return Err("discarded repair changed committed State or durable history".into());
         }
-        let (output, attempted_world, block_start, network_delta) = attempted?;
+        // Retain the charged canonical output bytes through report construction,
+        // after the discarded overlay and unchanged committed State are checked.
+        let ((output, _retained_output_bytes), attempted_world, block_start, network_delta) =
+            attempted?;
         Ok(SorafsRepairRehearsalReport {
             scope: "signed_repair_transaction_discarded_overlay".into(),
             parent_height: tip.height(),

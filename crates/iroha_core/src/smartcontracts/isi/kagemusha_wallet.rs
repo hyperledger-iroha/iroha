@@ -56,6 +56,23 @@ pub(crate) fn execute_with_verifier(
     state: &mut StateTransaction<'_, '_>,
     verifier: &(impl NativePackageVerifier + SuffixUnloadVerifier),
 ) -> wallet::Result<()> {
+    // The active ledger implementation admits the original proof-first actions only.
+    // Retain the suffix implementation for review, but do not activate its distinct
+    // payout semantics merely by installing this executable or the SoraFS repair.
+    if matches!(
+        &instruction.action,
+        Action::SuffixUnloadBegin { .. }
+            | Action::SuffixUnloadAppend { .. }
+            | Action::SuffixUnloadFinalize { .. }
+    ) {
+        return Err(Error::InvalidParameter(
+            iroha_data_model::isi::error::InvalidParameterError::SmartContract(
+                "KAGEMUSHA suffix Unload is not admitted by the active ledger implementation"
+                    .into(),
+            ),
+        )
+        .into());
+    }
     let scheme_id = instruction.scheme;
     if scheme_id == [0; 32] {
         return Err(wallet::Error::Binding);

@@ -106,6 +106,7 @@ fn check_replay_reports_a_missing_store_as_nothing_to_replay() {
             outcome: OUTCOME_EMPTY.to_owned(),
             divergence: None,
             missing_height: None,
+            kagemusha_suffix_rows: None,
         }
     );
     assert!(
@@ -210,6 +211,7 @@ fn reports_project_the_core_verdict_and_roundtrip_through_norito_json() {
                 differing_components: vec!["world_state_root".to_owned(), "schedule".to_owned()],
             }),
             missing_height: None,
+            kagemusha_suffix_rows: None,
         }
     );
     assert!(!diverged.is_ok());

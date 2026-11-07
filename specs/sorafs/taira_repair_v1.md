@@ -69,9 +69,13 @@ except the declared SoraFS and normal fee delta; deterministic failure/rollback/
 tests; copied-State execution without consensus voting; and native client decoding and
 proof verification of the exact new instruction on a synthetic network. Production
 validator keys must not sign a divergent rehearsal fork.
-Older f31/v85 phone native decoders reject this new wire ID. A qualified current mobile
-release must be available before activation. No simulation or old-history replay alone
-proves compatibility across the actual repair block. After activation, verify the actual
+The older native checkpoint walker rejects this new wire ID; BPNG Core needs a qualified
+checkpoint decoder and its matching finality pins before activation. Validator kernel and
+handler support also require the matching executable. Pin changes alone add no decoder or
+execution support. Phones use direct finality of their own entrypoint and output; these
+checkpoint tests do not establish a phone Load/Unload failure or a mobile-distribution
+prerequisite. No simulation or old-history replay alone proves compatibility across the
+actual repair block. After activation, verify the actual
 committed repair block and its successor with the qualified clients before publication.
 
 Only after native provider ingestion, finalized receipts, verified retrieval and public

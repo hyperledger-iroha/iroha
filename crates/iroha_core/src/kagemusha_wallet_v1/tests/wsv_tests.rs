@@ -829,6 +829,121 @@ fn unavailable_production_artifacts_retain_local_deferral_and_no_activation() {
 }
 
 #[test]
+fn production_suffix_actions_are_refused_without_wallet_effects_or_proof_work() {
+    use iroha_data_model::isi::{
+        error::{InstructionExecutionError, InvalidParameterError},
+        kagemusha_wallet::{KagemushaWalletLedgerActionV1 as Action, KagemushaWalletLedgerV1},
+    };
+    let memory = Memory::new();
+    let mut state = world_state(&memory, true);
+    register(&mut state, &memory, 1).unwrap();
+    let actions = [
+        Action::SuffixUnloadBegin {
+            wallet: [2; 32],
+            authority: [3; 32],
+            account: memory.authority.clone(),
+            ordinal: 0,
+            header: vec![0xff],
+            anchor: vec![0xff],
+        },
+        Action::SuffixUnloadAppend {
+            wallet: [2; 32],
+            authority: [3; 32],
+            account: memory.authority.clone(),
+            ordinal: 1,
+            chunk: vec![0xff],
+        },
+        Action::SuffixUnloadFinalize {
+            wallet: [2; 32],
+            authority: [3; 32],
+            account: memory.authority.clone(),
+            ordinal: 2,
+            unload: vec![0xff],
+        },
+    ];
+    for (index, action) in actions.into_iter().enumerate() {
+        let instruction =
+            KagemushaWalletLedgerV1::new(memory.registration.scheme.scheme_id(), action);
+        transact(&mut state, index as u64 + 2, |tx| {
+            let rows: Vec<_> = tx
+                .world
+                .kagemusha_wallet_ledger
+                .iter()
+                .map(|(key, value)| (*key, value.clone()))
+                .collect();
+            let assets: Vec<_> = tx
+                .world
+                .assets
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect();
+            let failure = instruction
+                .execute(&memory.authority, tx)
+                .expect_err("held suffix action must not enter its proof or payout handler");
+            assert!(matches!(
+                failure,
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(ref message))
+                    if message == "KAGEMUSHA suffix Unload is not admitted by the active ledger implementation"
+            ));
+            assert!(tx.borrow_execution_deferral().is_none());
+            assert_eq!(tx.zk_confidential_ops_in_tx, 0);
+            assert_eq!(tx.zk_verify_calls_in_tx, 0);
+            assert_eq!(tx.zk_proof_bytes_in_tx, 0);
+            assert_eq!(
+                tx.world
+                    .kagemusha_wallet_ledger
+                    .iter()
+                    .map(|(key, value)| (*key, value.clone()))
+                    .collect::<Vec<_>>(),
+                rows
+            );
+            assert_eq!(
+                tx.world
+                    .assets
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<Vec<_>>(),
+                assets
+            );
+            // Commit this otherwise successful test overlay so rollback cannot hide
+            // any accidental side effect produced before the deterministic refusal.
+            Ok(())
+        })
+        .unwrap();
+    }
+}
+
+#[test]
+fn ordinary_unload_still_requires_native_proof_artifacts() {
+    use iroha_data_model::isi::kagemusha_wallet::{
+        KagemushaWalletLedgerActionV1 as Action, KagemushaWalletLedgerV1,
+    };
+    let memory = Memory::new();
+    let mut state = world_state(&memory, true);
+    register(&mut state, &memory, 1).unwrap();
+    let claim: KagemushaWalletUnloadClaimV1 = fixture("KagemushaWalletUnloadClaimV1");
+    claim.verify(&memory.registration.scheme).unwrap();
+    let instruction = KagemushaWalletLedgerV1::new(
+        memory.registration.scheme.scheme_id(),
+        Action::Unload(claim.to_canonical_bytes().unwrap()),
+    );
+    let before = balance(&state, &memory, &memory.registration.reserve);
+    let result: Result<()> = transact(&mut state, 2, |tx| {
+        assert!(instruction.execute(&memory.authority, tx).is_err());
+        assert_eq!(
+            tx.borrow_execution_deferral().unwrap().reason(),
+            ivm::error::ExecutionDeferral::VerifierArtifactsUnavailable
+        );
+        Err(Error::ArtifactsUnavailable)
+    });
+    assert!(matches!(result, Err(Error::ArtifactsUnavailable)));
+    assert_eq!(
+        balance(&state, &memory, &memory.registration.reserve),
+        before
+    );
+}
+
+#[test]
 fn verifier_install_requires_actual_reserve_owner_before_artifact_parsing() {
     let memory = Memory::new();
     let mut state = world_state(&memory, true);
@@ -2037,7 +2152,12 @@ impl Transaction for InstalledWsv<'_, '_, '_> {
     fn wallet(&self, scheme: &Digest, wallet: &Digest) -> Result<Option<WalletRecord>> {
         self.0.wallet(scheme, wallet)
     }
-    fn issuance(&self, scheme: &Digest, wallet: &Digest, request: &Digest) -> Result<Option<Issuance>> {
+    fn issuance(
+        &self,
+        scheme: &Digest,
+        wallet: &Digest,
+        request: &Digest,
+    ) -> Result<Option<Issuance>> {
         self.0.issuance(scheme, wallet, request)
     }
     fn payout(
@@ -2047,7 +2167,11 @@ impl Transaction for InstalledWsv<'_, '_, '_> {
     ) -> Result<Option<KagemushaWalletPayoutRecordV1>> {
         self.0.payout(scheme, key)
     }
-    fn certificate(&self, scheme: &Digest, digest: &Digest) -> Result<KagemushaWalletSignerCertificateV1> {
+    fn certificate(
+        &self,
+        scheme: &Digest,
+        digest: &Digest,
+    ) -> Result<KagemushaWalletSignerCertificateV1> {
         self.0.certificate(scheme, digest)
     }
     fn fee_inputs(&self, claim: &KagemushaWalletFeeClaimV1) -> Result<FeeInputs> {
@@ -2140,29 +2264,55 @@ fn suffix_unload_stages_route_stage_and_pay_once_through_the_real_reserve() {
     }
     let relayer = memory.authority.clone();
     transact(&mut state, 3, |tx| {
-        suffix::begin(&mut installed(tx, &relayer)?, &double, &suffix.stage(0), &suffix.header, &suffix.anchor)
+        suffix::begin(
+            &mut installed(tx, &relayer)?,
+            &double,
+            &suffix.stage(0),
+            &suffix.header,
+            &suffix.anchor,
+        )
     })
     .unwrap();
     // Appends commit in reverse order, each in its own block.
     transact(&mut state, 4, |tx| {
-        suffix::append(&mut installed(tx, &relayer)?, &double, &suffix.stage(2), &suffix.chunks[1])
+        suffix::append(
+            &mut installed(tx, &relayer)?,
+            &double,
+            &suffix.stage(2),
+            &suffix.chunks[1],
+        )
     })
     .unwrap();
     // A Finalize before every Append is refused and leaves the reserve untouched.
     assert!(matches!(
         transact(&mut state, 5, |tx| {
-            suffix::finalize(&mut installed(tx, &relayer)?, &double, &suffix.stage(3), &suffix.unload)
+            suffix::finalize(
+                &mut installed(tx, &relayer)?,
+                &double,
+                &suffix.stage(3),
+                &suffix.unload,
+            )
         }),
         Err(Error::Unavailable)
     ));
     transact(&mut state, 5, |tx| {
-        suffix::append(&mut installed(tx, &relayer)?, &double, &suffix.stage(1), &suffix.chunks[0])
+        suffix::append(
+            &mut installed(tx, &relayer)?,
+            &double,
+            &suffix.stage(1),
+            &suffix.chunks[0],
+        )
     })
     .unwrap();
     let reserve_before = balance(&state, &memory, &memory.registration.reserve);
     let account_before = balance(&state, &memory, &suffix.account);
     let payout = transact(&mut state, 6, |tx| {
-        suffix::finalize(&mut installed(tx, &relayer)?, &double, &suffix.stage(3), &suffix.unload)
+        suffix::finalize(
+            &mut installed(tx, &relayer)?,
+            &double,
+            &suffix.stage(3),
+            &suffix.unload,
+        )
     })
     .unwrap();
     let scale = memory.registration.asset.scale;
@@ -2170,7 +2320,9 @@ fn suffix_unload_stages_route_stage_and_pay_once_through_the_real_reserve() {
         |value: u128| Quantity::from_canonical_numeric(Numeric::new(value, scale)).unwrap();
     assert_eq!(
         balance(&state, &memory, &memory.registration.reserve),
-        reserve_before.checked_sub(&quantity(suffix.terms.amount)).unwrap()
+        reserve_before
+            .checked_sub(&quantity(suffix.terms.amount))
+            .unwrap()
     );
     assert_eq!(
         balance(&state, &memory, &suffix.account),
@@ -2185,7 +2337,12 @@ fn suffix_unload_stages_route_stage_and_pay_once_through_the_real_reserve() {
     // An exact retry in a later transaction returns the original payout and moves nothing.
     assert_eq!(
         transact(&mut state, 7, |tx| {
-            suffix::finalize(&mut installed(tx, &relayer)?, &double, &suffix.stage(3), &suffix.unload)
+            suffix::finalize(
+                &mut installed(tx, &relayer)?,
+                &double,
+                &suffix.stage(3),
+                &suffix.unload,
+            )
         })
         .unwrap(),
         payout

@@ -24,6 +24,9 @@ use iroha_core::{
 use norito::derive::{JsonDeserialize, JsonSerialize};
 use std::num::NonZeroUsize;
 
+mod suffix_inventory;
+pub use suffix_inventory::KagemushaSuffixRowInventoryV1;
+
 /// `start.source` of a replay that re-executed signed genesis first.
 pub const START_GENESIS: &str = "genesis";
 /// `start.source` of a replay that started from an authenticated snapshot.
@@ -88,6 +91,9 @@ pub struct ReplayCheckReportV1 {
     pub divergence: Option<ReplayDivergenceV1>,
     /// The first height without a stored body, when `outcome` is [`OUTCOME_MISSING_HISTORY`].
     pub missing_height: Option<u64>,
+    /// Count/hash-only held-suffix inventory of the fully authenticated final State.
+    /// Absent unless every retained block was reproduced through the durable tip.
+    pub kagemusha_suffix_rows: Option<KagemushaSuffixRowInventoryV1>,
 }
 
 impl ReplayCheckReportV1 {
@@ -115,6 +121,7 @@ impl ReplayCheckReportV1 {
             .to_owned(),
             divergence: None,
             missing_height,
+            kagemusha_suffix_rows: None,
         }
     }
 
@@ -155,6 +162,7 @@ impl ReplayCheckReportV1 {
             outcome: outcome.to_owned(),
             divergence,
             missing_height,
+            kagemusha_suffix_rows: None,
         }
     }
 
@@ -342,8 +350,9 @@ fn check_replay_then(
         },
     )
     .map_err(|error| Report::new(error).change_context(MainError::CheckReplay))?;
-    let report = ReplayCheckReportV1::from_core(tip_height, &report);
+    let mut report = ReplayCheckReportV1::from_core(tip_height, &report);
     if report.is_ok() && report.replayed_to == tip_height {
+        report.kagemusha_suffix_rows = Some(suffix_inventory::capture(&state, tip_height)?);
         on_matched(&state)?;
     }
     Ok(report)
