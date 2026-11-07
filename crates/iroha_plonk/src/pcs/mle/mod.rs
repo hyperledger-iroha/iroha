@@ -23,8 +23,8 @@
 //!   many columns at one point (the `batch` module); [`open_batch_bound`] and
 //!   [`verify_batch_bound`] for claims the caller's transcript already bound.
 
-use ff::Field;
-use iroha_pasta::PastaCurve;
+use ff::{Field, WithSmallOrderMulGroup};
+use iroha_pasta::{PastaCurve, PastaField};
 
 mod batch;
 
@@ -56,6 +56,22 @@ pub trait MleTranscript<C: PastaCurve> {
     fn challenge(&mut self) -> C::ScalarExt;
     /// A challenge below `2^128`, used as a scalar on commitments.
     fn challenge_128(&mut self) -> C::ScalarExt;
+}
+
+/// The endoscalar of a 128-bit challenge limb `lo = B1 + 2^64 B2`:
+/// `(2^64 + 2 B1 + 1) + zeta (2^64 + 2 B2 + 1)` with `zeta` the cube root of
+/// unity of the endomorphism `(x, y) -> (beta x, y)`. A circuit multiplies a
+/// point by it with a 64-iteration GLV chain on the digit words
+/// (`iroha_plonk_gadgets` `EccChip::mul_endo`); distinct limbs give distinct
+/// scalars, because the GLV lattice has no nonzero vector of sup-norm below
+/// `2^65`.
+#[must_use]
+pub fn endoscalar<F: PastaField>(lo: u128) -> F {
+    #[allow(clippy::cast_possible_truncation)]
+    let (b1, b2) = (lo as u64, (lo >> 64) as u64);
+    let base = F::from(1_u64 << 32).square() + F::ONE;
+    let half = |b: u64| base + F::from(b).double();
+    half(b1) + <F as WithSmallOrderMulGroup<3>>::ZETA * half(b2)
 }
 
 /// `eq(x, j)` for every row `j < 2^k`, `k = x.len()`.

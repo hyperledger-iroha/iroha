@@ -4,8 +4,9 @@
 //!
 //! The caller (the decider v2 verifier) has already bound the point `sigma` and
 //! every claim `(C_c, v_c)` in its transcript. This circuit absorbs the tag,
-//! `k` and the claim count, squeezes the 128-bit batching challenge `alpha`
-//! (two or more claims; `alpha_c = alpha^c`), absorbs `rho*`, squeezes `z`,
+//! `k` and the claim count, squeezes the 128-bit batching challenge limb
+//! (two or more claims) whose endoscalar is `alpha` (`alpha_c = alpha^c`,
+//! [`iroha_plonk::pcs::mle::endoscalar`]), absorbs `rho*`, squeezes `z`,
 //! absorbs each round's `L_j`,
 //! `R_j` before squeezing `u_j`, absorbs `G'_0` and `c`, and constrains the
 //! complete group equation
@@ -15,15 +16,16 @@
 //! v* = sum_c alpha_c v_c,   b' = prod_j (1 + sigma_{k-1-j} (u_j - 1)).
 //! ```
 //!
-//! The group operations on `C` are native: `C*` is one Horner chain in the
-//! 128-bit `alpha` sharing a single GLV split ([`EccChip::horner`]) and `v*`
-//! the same Horner rule in FF arithmetic; the other scalars are foreign FF
-//! values exported to canonical limbs. Zero `z` or `u_j` make the circuit unsatisfiable (their inverses),
+//! The group operations on `C` are native: `C*` is one Horner chain of
+//! 64-iteration endoscalar multiplications on the limb's digit words
+//! ([`EccChip::horner_endo`]) and `v*` the same Horner rule in FF arithmetic
+//! on `alpha`'s scalar; the other scalars are foreign FF values exported to
+//! canonical limbs. Zero `z` or `u_j` make the circuit unsatisfiable (their inverses),
 //! as the native verifier refuses them. The result is the undecided claim
 //! `G'_0 = <s(u), g>` with its challenges; the lane stays live for the caller
 //! to finish its transcript.
 
-use ff::Field;
+use ff::{Field, PrimeField, WithSmallOrderMulGroup};
 use iroha_pasta::{PastaCurve, params::ParamsIpa};
 use iroha_plonk::{
     frontend::{Error, Region, Value},
@@ -32,10 +34,10 @@ use iroha_plonk::{
 use iroha_plonk_gadgets::{
     U128,
     ecc::{AssignedPoint, EccChip, ScalarLimbs},
-    ff::FfValue,
+    ff::{CanonicalS6, FfValue},
 };
 
-use super::{FoldLanes, ScalarCell, transcript as t};
+use super::{FoldLanes, ScalarCell, scalar_modulus, transcript as t};
 
 /// The fixed generators an opening uses besides the column commitments.
 #[derive(Clone, Debug)]
@@ -158,9 +160,9 @@ pub fn verify_batch_bound<C: PastaCurve>(
     let challenges = opening_transcript(lanes, region, k, claims.len(), opening)?;
     // v* = sum_c alpha^c v_c by Horner's rule, the last claim first.
     let mut value = last.1.ff.clone();
-    if let Some((_, alpha)) = &challenges.alpha {
+    if let Some(alpha) = &challenges.alpha {
         for (_, claim_value) in init.iter().rev() {
-            let scaled = lanes.mul(region, &value, &alpha.ff)?;
+            let scaled = lanes.mul(region, &value, &alpha.scalar.ff)?;
             value = lanes.add(region, &scaled, &claim_value.ff)?;
         }
     }
@@ -199,9 +201,20 @@ pub fn verify_batch_bound<C: PastaCurve>(
 pub struct GroupOpeningCells<C: PastaCurve> {
     /// The undecided claim `(G'_0, u)`; its `u_j` go to the field side.
     pub claim: OpeningClaimCells<C>,
-    /// The 128-bit batching challenge (its low limb and its scalar) for the
-    /// field side's `v*`; `None` for a single claim.
-    pub alpha: Option<(U128<C::Base>, ScalarCell<C>)>,
+    /// The batching challenge (its digit words and its scalar, whose S6 limbs
+    /// go to the field side's `v*`); `None` for a single claim.
+    pub alpha: Option<EndoAlpha<C>>,
+}
+
+/// The batching challenge as an endoscalar: the digit words of the squeezed
+/// 128-bit limb `lo = B1 + 2^64 B2` and its scalar
+/// `alpha = (2^64 + 2 B1 + 1) + zeta (2^64 + 2 B2 + 1)`.
+#[derive(Clone, Debug)]
+pub struct EndoAlpha<C: PastaCurve> {
+    /// `[B1, B2]`, below `2^64` (bounded by every chain that copies them).
+    pub digits: [U128<C::Base>; 2],
+    /// `alpha`, canonical.
+    pub scalar: ScalarCell<C>,
 }
 
 /// The group side of [`verify_batch_bound`] for a decider whose field part
@@ -251,7 +264,7 @@ pub fn verify_batch_bound_group<C: PastaCurve>(
 
 /// The opening's challenges, squeezed exactly as the native bound verifier.
 struct OpeningChallenges<C: PastaCurve> {
-    alpha: Option<(U128<C::Base>, ScalarCell<C>)>,
+    alpha: Option<EndoAlpha<C>>,
     z: ScalarCell<C>,
     rounds: Vec<ScalarCell<C>>,
 }
@@ -273,7 +286,8 @@ fn opening_transcript<C: PastaCurve>(
     t::absorb_u64(lanes, k as u64);
     t::absorb_u64(lanes, claims as u64);
     let alpha = if claims > 1 {
-        Some(t::challenge_128(lanes, region)?)
+        let (lo, _) = t::challenge_128(lanes, region)?;
+        Some(endo_alpha(lanes, region, &lo)?)
     } else {
         None
     };
@@ -288,6 +302,61 @@ fn opening_transcript<C: PastaCurve>(
     t::absorb_point(lanes, &opening.folded_generator);
     t::absorb_scalar(lanes, region, &opening.scalar)?;
     Ok(OpeningChallenges { alpha, z, rounds })
+}
+
+/// Splits the squeezed limb `lo` into its digit words (`lo = B1 + 2^64 B2`;
+/// the endoscalar chains copy and so bound them below `2^64`) and computes
+/// `alpha = (2^64 + 1)(1 + zeta) + 2 B1 + 2 zeta B2` in FF arithmetic.
+fn endo_alpha<C: PastaCurve>(
+    lanes: &mut FoldLanes<'_, C>,
+    region: &mut Region<'_, C::Base>,
+    lo: &U128<C::Base>,
+) -> Result<EndoAlpha<C>, Error> {
+    let value = lo.value();
+    let low = lanes
+        .uint()
+        .assign::<128>(region, value.map(|lo| lo & u128::from(u64::MAX)))?;
+    let high = lanes
+        .uint()
+        .assign::<128>(region, value.map(|lo| lo >> 64))?;
+    let combined = lanes.glue.linear(
+        region,
+        &[
+            (C::Base::ONE, low.word()),
+            (C::Base::from_u128(1 << 64), high.word()),
+        ],
+        C::Base::ZERO,
+    )?;
+    region.constrain_equal(combined.cell(), lo.word().cell())?;
+    let zero = lanes.uint().constant::<127>(region, 0)?;
+    let mut import = |lanes: &mut FoldLanes<'_, C>, digit: &U128<C::Base>| {
+        let s6 = CanonicalS6::from_limbs(
+            &mut lanes.uint(),
+            region,
+            scalar_modulus::<C>(),
+            digit,
+            &zero,
+        )?;
+        lanes.import(region, s6).map(|cell| cell.ff)
+    };
+    let low_ff = import(lanes, &low)?;
+    let high_ff = import(lanes, &high)?;
+    let zeta = <C::ScalarExt as WithSmallOrderMulGroup<3>>::ZETA;
+    let two_64 = C::ScalarExt::from(1_u64 << 32).square();
+    let offset = lanes.constant(
+        region,
+        (two_64 + C::ScalarExt::ONE) * (C::ScalarExt::ONE + zeta),
+    )?;
+    let two = lanes.constant(region, C::ScalarExt::from(2))?;
+    let two_zeta = lanes.constant(region, zeta.double())?;
+    let low_term = lanes.mul(region, &low_ff, &two)?;
+    let high_term = lanes.mul(region, &high_ff, &two_zeta)?;
+    let partial = lanes.add(region, &offset, &low_term)?;
+    let alpha = lanes.add(region, &partial, &high_term)?;
+    Ok(EndoAlpha {
+        digits: [low, high],
+        scalar: lanes.export(region, alpha)?,
+    })
 }
 
 /// Constrains the opening equation with complete additions,
@@ -312,18 +381,14 @@ fn group_equation<C: PastaCurve>(
     let opened = lanes.mul(region, &opening.scalar.ff, folded)?;
     let difference = lanes.sub(region, value, &opened)?;
     let auxiliary_coefficient = lanes.mul(region, &difference, &challenges.z.ff)?;
-    // C* = sum_c alpha^c C_c as one Horner chain sharing one GLV split of the
-    // 128-bit alpha.
+    // C* = sum_c alpha^c C_c as one Horner chain of endoscalar
+    // multiplications on alpha's digit words.
     let mut equation = match (&challenges.alpha, commitments) {
-        (Some((alpha_lo, _)), _) => {
-            let zero = lanes.uint().constant::<127>(region, 0)?;
-            lanes.ecc.horner(
-                region,
-                lanes.range,
-                ScalarLimbs::new(alpha_lo, &zero),
-                commitments,
-            )?
-        }
+        (Some(alpha), _) => lanes.ecc.horner_endo(
+            region,
+            [alpha.digits[0].word(), alpha.digits[1].word()],
+            commitments,
+        )?,
         (None, [only]) => only.clone(),
         (None, _) => return Err(Error::Synthesis),
     };

@@ -330,7 +330,7 @@ impl<C: PastaCurve> Circuit<C::Base> for GroupCircuit<C> {
 
     fn configure(meta: &mut ConstraintSystem<C::Base>) -> Config<C> {
         let fold = FoldVerifierConfig::configure(meta);
-        let instance = meta.instance_column(4);
+        let instance = meta.instance_column(5);
         meta.enable_equality(instance);
         Config { fold, instance }
     }
@@ -401,7 +401,8 @@ impl<C: PastaCurve> Circuit<C::Base> for GroupCircuit<C> {
                     group.claim.folded_generator.x().cell(),
                     group.claim.folded_generator.y().cell(),
                     digest.cell(),
-                    alpha.0.word().cell(),
+                    alpha.scalar.s6.lo().word().cell(),
+                    alpha.scalar.s6.hi().word().cell(),
                 ])
             },
         )?;
@@ -422,7 +423,10 @@ fn field_side<C: PastaCurve>(
     replay.absorb_u64(mle::TAG_BATCH_OPENING);
     replay.absorb_u64(inputs.point.len() as u64);
     replay.absorb_u64(inputs.claims.len() as u64);
-    let alpha = replay.challenge_128();
+    let limbs =
+        <C::ScalarExt as iroha_pasta::PastaField>::to_canonical_limbs(&replay.challenge_128());
+    let alpha =
+        mle::endoscalar::<C::ScalarExt>(u128::from(limbs[0]) | (u128::from(limbs[1]) << 64));
     let value = inputs
         .claims
         .iter()
@@ -447,11 +451,12 @@ fn field_side<C: PastaCurve>(
 fn group_side_verifies_as_the_native_verifier<C: PastaCurve>(seed: u64) {
     let (params, inputs, mut expected) = honest::<C>(seed, 3, 3);
     let (alpha, value, folded) = field_side(&params, &inputs);
-    expected.push(<C::Base as ff::PrimeField>::from_u128(u128::from_le_bytes(
-        <C::ScalarExt as ff::PrimeField>::to_repr(&alpha).as_ref()[..16]
-            .try_into()
-            .expect("16 bytes"),
-    )));
+    let alpha_limbs = <C::ScalarExt as iroha_pasta::PastaField>::to_canonical_limbs(&alpha);
+    for pair in alpha_limbs.chunks(2) {
+        expected.push(<C::Base as ff::PrimeField>::from_u128(
+            u128::from(pair[0]) | (u128::from(pair[1]) << 64),
+        ));
+    }
     let satisfied = |value: C::ScalarExt, folded: C::ScalarExt, public: &[C::Base]| {
         let circuit = GroupCircuit {
             key: OpeningKey::new(params.params()),

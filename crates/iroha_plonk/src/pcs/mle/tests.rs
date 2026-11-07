@@ -8,7 +8,7 @@ use core::marker::PhantomData;
 use ff::{Field, PrimeField};
 use group::{Curve, CurveAffine, Group};
 use iroha_pasta::{
-    Ep, Eq, Fq, PastaAffine, PastaCurve, PastaField,
+    Ep, Eq, Fp, Fq, PastaAffine, PastaCurve, PastaField,
     msm::{MemoryBudget, msm_naive},
     poseidon::Sponge,
 };
@@ -436,7 +436,7 @@ fn a_false_value_passes_the_equation_only_with_an_undecidable_generator_claim() 
         transcript.absorb_point(&claim.commitment);
         transcript.absorb_scalars(&[claim.value]);
     }
-    let alpha = transcript.challenge_128();
+    let alpha = endo_of(transcript.challenge_128());
     let blind = batch.blinds[0] + batch.blinds[1] * alpha;
     transcript.absorb_scalars(&[blind]);
     let z = transcript.challenge();
@@ -733,7 +733,7 @@ fn bound_openings_are_forgeable_when_the_caller_does_not_bind() {
     predicted.absorb_u64(TAG_BATCH_OPENING);
     predicted.absorb_u64(3);
     predicted.absorb_u64(2);
-    let alpha = predicted.challenge_128();
+    let alpha = endo_of(predicted.challenge_128());
     let mut claims = batch.claims.clone();
     claims[1].value += Fq::ONE;
     claims[0].value -= alpha;
@@ -771,4 +771,35 @@ fn bound_openings_are_forgeable_when_the_caller_does_not_bind() {
         .map(|_| ()),
         Err(IpaError::OpeningFailed)
     );
+}
+
+/// The batching coefficient base of a squeezed 128-bit challenge.
+fn endo_of<F: PastaField>(raw: F) -> F {
+    let limbs = raw.to_canonical_limbs();
+    endoscalar(u128::from(limbs[0]) | (u128::from(limbs[1]) << 64))
+}
+
+#[test]
+fn endoscalars_follow_their_digit_words() {
+    let zeta = <Fq as ff::WithSmallOrderMulGroup<3>>::ZETA;
+    let two64 = Fq::from(1_u64 << 32).square();
+    assert_eq!(endoscalar::<Fq>(0), (two64 + Fq::ONE) * (Fq::ONE + zeta));
+    for lo in [
+        1_u128,
+        u128::MAX,
+        1 << 64,
+        (1 << 64) - 1,
+        0x0123_4567_89ab_cdef_fedc_ba98_7654_3210,
+    ] {
+        let (b1, b2) = (lo & u128::from(u64::MAX), lo >> 64);
+        let half = |b: u128| two64 + Fq::from_u128(b).double() + Fq::ONE;
+        assert_eq!(endoscalar::<Fq>(lo), half(b1) + zeta * half(b2), "{lo:#x}");
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for lo in (0..64)
+        .map(|i| 1_u128 << i)
+        .chain((64..128).map(|i| 1_u128 << i))
+    {
+        assert!(seen.insert(endoscalar::<Fp>(lo).to_repr()), "{lo:#x}");
+    }
 }

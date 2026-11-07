@@ -6,14 +6,17 @@
 //!
 //! 1. absorb [`TAG_BATCH_OPENING`], `k`, the claim count, `sigma` and every
 //!    `(C_c, v_c)`;
-//! 2. draw one 128-bit challenge `alpha` (none for a single claim) and batch
-//!    with its powers `alpha_c = alpha^c`, so the batch opens
-//!    `a* = sum_c alpha_c a_c` against `C* = sum_c alpha_c C_c` to
-//!    `v* = sum_c alpha_c v_c`. A false claim survives only if `alpha` is a
-//!    root of the nonzero error polynomial `sum_c alpha^c e_c` of degree at
-//!    most `m - 1`: probability at most `(m - 1) / 2^128`, next to the 128-bit
-//!    fold challenges. A circuit evaluates both sums by Horner's rule with one
-//!    128-bit multiplier;
+//! 2. draw one 128-bit challenge limb `lo` (none for a single claim), take
+//!    its endoscalar `alpha = (2^64 + 2 B1 + 1) + zeta (2^64 + 2 B2 + 1)` for
+//!    `lo = B1 + 2^64 B2` ([`super::endoscalar`]) and batch with its powers
+//!    `alpha_c = alpha^c`, so the batch opens `a* = sum_c alpha_c a_c`
+//!    against `C* = sum_c alpha_c C_c` to `v* = sum_c alpha_c v_c`. Distinct
+//!    limbs give distinct endoscalars, so `alpha` is uniform on a set of
+//!    `2^128`, and a false claim survives only if `alpha` is a root of the
+//!    nonzero error polynomial `sum_c alpha^c e_c` of degree at most `m - 1`:
+//!    probability at most `(m - 1) / 2^128`, next to the 128-bit fold
+//!    challenges. A circuit evaluates both sums by Horner's rule, the group
+//!    one with a 64-iteration endoscalar chain per step;
 //! 3. reveal and absorb the combined blind `rho* = sum_c alpha_c rho_c`, so
 //!    the verifier removes the blinds with one term `-rho* W`;
 //! 4. squeeze `z`, then run `k` rounds of the BGH19 argument with the public
@@ -54,13 +57,13 @@
 use ff::{BatchInvert, Field};
 use group::CurveAffine;
 use iroha_pasta::{
-    CancellationToken, PastaCurve,
+    CancellationToken, PastaCurve, PastaField,
     fold::fold_generators_cancellable,
     msm::{MemoryBudget, SharedMemoryBudget, msm_secret_cancellable},
     params::ParamsIpa,
 };
 
-use super::{MleTranscript, TAG_BATCH_OPENING, eq_table, folded_eq};
+use super::{MleTranscript, TAG_BATCH_OPENING, endoscalar, eq_table, folded_eq};
 use crate::{
     pcs::ipa::{GeneratorClaim, IpaError, commit::Msm},
     secret::SecretPolynomial,
@@ -535,7 +538,8 @@ where
         }
     }
     let alpha = if claims.len() > 1 {
-        transcript.challenge_128()
+        let limbs = transcript.challenge_128().to_canonical_limbs();
+        endoscalar::<C::ScalarExt>(u128::from(limbs[0]) | (u128::from(limbs[1]) << 64))
     } else {
         C::ScalarExt::ONE
     };
