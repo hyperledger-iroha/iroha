@@ -673,6 +673,8 @@ pub struct Size {
     pub fits: bool,
     /// Its verifier lanes' rows.
     pub usage: VerifierUsage,
+    /// Rows of its public column, which the next wrap reads and verifies.
+    pub public_rows: usize,
 }
 
 /// The rows R, P and Omega use for `spec`, without a chain or proofs: each
@@ -691,7 +693,7 @@ pub fn sizes(spec: &Arc<WrapSpec>) -> Vec<Size> {
         plan: Arc::clone(&r_plan),
         witness: None,
     };
-    sizes.push(size("R", &r));
+    sizes.push(size("R", &r, r_plan.layout.rows()));
     if !sizes[0].fits {
         return sizes;
     }
@@ -702,7 +704,7 @@ pub fn sizes(spec: &Arc<WrapSpec>) -> Vec<Size> {
         plan: Arc::clone(&p_plan),
         witness: None,
     };
-    sizes.push(size("P", &p));
+    sizes.push(size("P", &p, p_plan.layout.rows()));
     if !sizes[1].fits {
         return sizes;
     }
@@ -713,11 +715,14 @@ pub fn sizes(spec: &Arc<WrapSpec>) -> Vec<Size> {
         plan: Arc::new(omega_plan),
         witness: None,
     };
-    sizes.push(size("Omega", &omega));
+    sizes.push(size("Omega", &omega, OMEGA_PUBLIC_ROWS));
     sizes
 }
 
-fn size<F: PastaField, C: Circuit<F>>(wrap: &'static str, circuit: &C) -> Size {
+/// Omega's public values: `[D_A]`, `acc_V.G`, `acc_V.u`.
+const OMEGA_PUBLIC_ROWS: usize = 1 + 2 + 16;
+
+fn size<F: PastaField, C: Circuit<F>>(wrap: &'static str, circuit: &C, public_rows: usize) -> Size {
     let _ = diagnostic_take_usage();
     let fits = synthesize(circuit, K, None).is_ok();
     if !fits {
@@ -727,7 +732,12 @@ fn size<F: PastaField, C: Circuit<F>>(wrap: &'static str, circuit: &C) -> Size {
     let usage = diagnostic_take_usage()
         .pop()
         .expect("the wrap's verifier lanes report their rows");
-    Size { wrap, fits, usage }
+    Size {
+        wrap,
+        fits,
+        usage,
+        public_rows,
+    }
 }
 
 /// An Omega over the toy chain of eight half-steps whose last `A_b` writes
