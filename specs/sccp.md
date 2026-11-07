@@ -5087,6 +5087,11 @@ sccp_not_found`, `410 sccp_pruned` (the data existed but retention removed it,
 §4.11, §4.13.1) and `410 sccp_rotation_pruned` (below). A node that cannot acquire or verify its
 original native certificate custody returns `503 sccp_unavailable`; it never
 substitutes an attestation or reports a local resource refusal as a bad query.
+Only a temporarily busy original State-view owner returns the canonical
+`503 sccp_state_busy` envelope, with ordinary `Retry-After` metadata. A caller
+may retry that exact observation within its original request deadline; changed
+or poisoned state, unavailable original data and capacity failures do not acquire
+that classification. No retry changes certificate, anchor or finality checks.
 A message or control
 proof is available as soon as its record height commits; there is no
 attestation wait. Immutable responses (proof bundles of an explicit height,

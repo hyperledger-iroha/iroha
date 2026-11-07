@@ -104,7 +104,7 @@ fn native_aux_cache_rejects_missing_extra_reordered_and_noncanonical_rows() {
             for index in 0..3 {
                 let mut values = row(index);
                 if index == 2 {
-                    values[77] = F(GOLDILOCKS_MODULUS_V1);
+                    values[ZK_X509_SHA_BATCH_AUX_WIDTH_V1 - 1] = F(GOLDILOCKS_MODULUS_V1);
                 }
                 visitor(index, values);
             }
@@ -143,19 +143,20 @@ fn native_aux_cache_rejects_wrong_missing_duplicate_and_mutated_terminals() {
 #[test]
 fn native_aux_cache_late_invalid_column_clears_the_entire_batch() {
     let mut cache = cache(3, 2);
-    cache.rows[2][77] = F(GOLDILOCKS_MODULUS_V1);
+    let last_column = ZK_X509_SHA_BATCH_AUX_WIDTH_V1 - 1;
+    cache.rows[2][last_column] = F(GOLDILOCKS_MODULUS_V1);
     let mut columns = vec![vec![F(99); 3]; 2];
     let mut targets = columns
         .iter_mut()
         .map(Vec::as_mut_slice)
         .collect::<Vec<_>>();
     let mut fills = sha_column_fill_batch_v1(&mut targets).unwrap();
-    cache.fill_columns_v1(76, &mut fills).unwrap();
+    cache.fill_columns_v1(last_column - 1, &mut fills).unwrap();
     assert!(finish_sha_column_fill_batch_v1(fills).is_err());
     assert!(columns.iter().flatten().all(|value| *value == F::ZERO));
     for (first, count, rows) in [
         (ZK_X509_SHA_BATCH_AUX_WIDTH_V1, 1, 3),
-        (77, 2, 3),
+        (last_column, 2, 3),
         (usize::MAX, 1, 3),
         (0, 9, 3),
         (0, 1, 2),

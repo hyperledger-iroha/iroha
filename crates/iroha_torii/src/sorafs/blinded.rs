@@ -7,6 +7,7 @@ use hex::FromHex;
 use iroha_crypto::soranet::blinding::canonical_cache_key;
 use sorafs_node::store::StoredManifest;
 use std::{
+    borrow::Borrow,
     collections::BTreeMap,
     fs::{self, File},
     io::{self, Read as _},
@@ -885,9 +886,9 @@ impl BlindedCidResolver {
     ///
     /// Returns [`ResolveError::UnknownEpoch`] when the requested epoch is not
     /// present in the local schedule.
-    pub fn resolve_manifest_id(
+    pub fn resolve_manifest_id<M: Borrow<StoredManifest>>(
         &self,
-        manifests: &[StoredManifest],
+        manifests: &[M],
         epoch: u32,
         blinded: &[u8; BLINDED_CID_LEN],
     ) -> Result<Option<String>, ResolveError> {
@@ -898,10 +899,15 @@ impl BlindedCidResolver {
         let cache_key = (epoch, *blinded);
         let cached_manifest_id = self.state().cached_manifest_id(&cache_key);
         if let Some(manifest_id) = cached_manifest_id {
-            let is_current = manifests.iter().any(|manifest| {
-                manifest.manifest_id() == manifest_id.as_str()
-                    && canonical_cache_key(&salt, manifest.manifest_cid()).as_bytes() == blinded
-            });
+            let is_current =
+                manifests
+                    .iter()
+                    .map(Borrow::<StoredManifest>::borrow)
+                    .any(|manifest| {
+                        manifest.manifest_id() == manifest_id.as_str()
+                            && canonical_cache_key(&salt, manifest.manifest_cid()).as_bytes()
+                                == blinded
+                    });
             if is_current {
                 self.state().touch_cache_entry(&cache_key, &manifest_id);
                 return Ok(Some(manifest_id));
@@ -922,7 +928,7 @@ impl BlindedCidResolver {
             .is_none()
             .then(|| EpochBloom::new(manifests.len()));
         let mut matched_id: Option<String> = None;
-        for manifest in manifests {
+        for manifest in manifests.iter().map(Borrow::<StoredManifest>::borrow) {
             let derived = canonical_cache_key(&salt, manifest.manifest_cid());
             let derived_bytes = derived.as_bytes();
             if let Some(filter) = rebuilt_filter.as_mut() {
@@ -957,7 +963,7 @@ fn update_length_prefixed(hasher: &mut blake3::Hasher, bytes: &[u8]) {
     hasher.update(bytes);
 }
 
-fn manifest_set_generation(manifests: &[StoredManifest]) -> [u8; 32] {
+fn manifest_set_generation<M: Borrow<StoredManifest>>(manifests: &[M]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(MANIFEST_SET_GENERATION_DOMAIN_V1);
     hasher.update(
@@ -965,7 +971,7 @@ fn manifest_set_generation(manifests: &[StoredManifest]) -> [u8; 32] {
             .unwrap_or(u64::MAX)
             .to_le_bytes(),
     );
-    for manifest in manifests {
+    for manifest in manifests.iter().map(Borrow::<StoredManifest>::borrow) {
         update_length_prefixed(&mut hasher, manifest.manifest_id().as_bytes());
         update_length_prefixed(&mut hasher, manifest.manifest_cid());
         hasher.update(manifest.manifest_digest());
@@ -1167,7 +1173,7 @@ mod tests {
         )
         .expect("open canonical test storage")
     }
-    fn ingest_test_manifest(backend: &StorageBackend, payload: &[u8]) -> StoredManifest {
+    fn ingest_test_manifest(backend: &StorageBackend, payload: &[u8]) -> Arc<StoredManifest> {
         let plan = CarBuildPlan::single_file(payload).expect("build canonical manifest plan");
         let car_stats = CarWriter::new(&plan, payload)
             .expect("construct canonical CAR writer")
@@ -1410,7 +1416,7 @@ mod tests {
         assert_eq!(hit.as_deref(), Some(expected_manifest_id.as_str()));
 
         let removed = resolver
-            .resolve_manifest_id(&[], 42, &blinded)
+            .resolve_manifest_id::<Arc<StoredManifest>>(&[], 42, &blinded)
             .expect("resolution after removal");
         assert_eq!(removed, None, "a cache hit must remain provider-backed");
         assert!(resolver.state().cache.is_empty());

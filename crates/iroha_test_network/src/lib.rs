@@ -505,8 +505,10 @@ const LOCALNET_BLOCK_CADENCE: Duration = Duration::from_millis(333);
 // Sumeragi default, used only when the builder is explicitly told to keep it.
 const DEFAULT_BLOCK_CADENCE: Duration =
     Duration::from_millis(iroha_config::parameters::defaults::sumeragi::BLOCK_CADENCE_MS);
-// Allow generous shutdowns in multi-peer tests; peers may need to flush logs and close streams.
+// Leave time inside the outer join deadline to reap the child and finish its log tasks.
 const PEER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+const PEER_GRACEFUL_EXIT_TIMEOUT: Duration = Duration::from_secs(18);
+const PEER_FORCED_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 const LOG_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
 const STORAGE_LISTING_LIMIT: usize = 8;
 const SNAPSHOT_MESSAGE_SNIPPET_MAX_CHARS: usize = 512;
@@ -8008,7 +8010,7 @@ pub enum PeerLifecycleEvent {
     ServerStarted,
     /// Process terminated
     Terminated { status: ExitStatus },
-    /// Process was killed
+    /// Forced termination was requested successfully on the original child.
     Killed,
     /// Caught a related pipeline event
     BlockApplied { height: u64 },
@@ -8881,24 +8883,8 @@ impl NetworkPeer {
         };
         if timeout(PEER_SHUTDOWN_TIMEOUT, join_all).await.is_err() {
             warn!("timed out waiting for peer tasks; aborting remaining tasks");
-            if let Some(pid) = run.pid.filter(|pid| *pid > 0) {
-                #[cfg(target_family = "unix")]
-                {
-                    use nix::{sys::signal, unistd::Pid};
-                    if let Err(err) =
-                        signal::kill(Pid::from_raw(pid as i32), signal::Signal::SIGKILL)
-                    {
-                        warn!(pid, error = %err, "failed to force-kill hung peer process");
-                    }
-                }
-                #[cfg(not(target_family = "unix"))]
-                {
-                    warn!(
-                        pid,
-                        "unable to force-kill hung peer process on this platform"
-                    );
-                }
-            }
+            // A log task can outlive a reaped child. Aborting the monitor drops the
+            // original kill-on-drop child and leaves any subsequently reused PID alone.
             run.tasks.abort_all();
             let drain_aborted = async {
                 while let Some(res) = run.tasks.join_next().await {
@@ -10154,9 +10140,6 @@ impl PeerExit {
     async fn shutdown_or_kill(&mut self) -> Result<ExitStatus> {
         #[cfg(unix)]
         use nix::{sys::signal, unistd::Pid};
-        const TIMEOUT: Duration = Duration::from_secs(5);
-        #[cfg(unix)]
-        const QUIT_GRACE: Duration = Duration::from_secs(1);
         self.is_normal_shutdown_started
             .store(true, Ordering::Relaxed);
         if let Some(status) = self
@@ -10178,11 +10161,16 @@ impl PeerExit {
         #[cfg(unix)]
         {
             self.span.in_scope(|| info!("sending SIGTERM"));
-            signal::kill(
+            let sent = signal::kill(
                 Pid::from_raw(self.child.id().expect("checked child id above") as i32),
                 signal::Signal::SIGTERM,
-            )
-            .wrap_err("failed to send SIGTERM")?;
+            );
+            if let Some(status) = self
+                .observe_term_race(sent, PEER_GRACEFUL_EXIT_TIMEOUT)
+                .await?
+            {
+                return Ok(status);
+            }
         }
         #[cfg(windows)]
         {
@@ -10194,36 +10182,65 @@ impl PeerExit {
                 .in_scope(|| info!("closing original peer input for graceful shutdown"));
             drop(input);
         }
-        if let Ok(status) = timeout(TIMEOUT, self.child.wait()).await {
+        if let Ok(status) = timeout(PEER_GRACEFUL_EXIT_TIMEOUT, self.child.wait()).await {
             self.span.in_scope(|| info!("exited gracefully"));
             return status.wrap_err("wait failure");
         };
-        // If graceful shutdown stalls, attempt to capture a backtrace (where supported).
-        #[cfg(target_family = "unix")]
-        if let Some(pid) = self.child.id() {
-            if let Err(err) = signal::kill(Pid::from_raw(pid as i32), signal::Signal::SIGQUIT)
-                .map_err(Report::from)
-            {
-                self.span
-                    .in_scope(|| warn!(?err, pid, "failed to send SIGQUIT before killing"));
-            } else {
-                self.span
-                    .in_scope(|| debug!(pid, "sent SIGQUIT to peer for diagnostics"));
-                if let Ok(status) = timeout(QUIT_GRACE, self.child.wait()).await {
-                    self.span.in_scope(|| info!("exited after SIGQUIT"));
-                    return status.wrap_err("wait failure");
-                }
-            }
+        // A validator may hold signing material. Escalate on the original handle
+        // without requesting a diagnostic core dump.
+        if let Some(status) = self
+            .child
+            .try_wait()
+            .wrap_err("poll before forced shutdown")?
+        {
+            return Ok(status);
         }
         self.span
-            .in_scope(|| warn!("process didn't terminate after {TIMEOUT:?}, killing"));
-        timeout(TIMEOUT, async move {
-            self.child.kill().await.expect("not a recoverable failure");
-            self.child.wait().await
-        })
-        .await
-        .wrap_err("child did not terminate after forced shutdown")?
-        .wrap_err("wait failure")
+            .in_scope(|| warn!("peer exceeded its graceful shutdown deadline, killing"));
+        let sent = self.child.start_kill();
+        self.observe_forced_shutdown(sent).await
+    }
+
+    #[cfg(unix)]
+    async fn observe_term_race(
+        &mut self,
+        sent: nix::Result<()>,
+        deadline: Duration,
+    ) -> Result<Option<ExitStatus>> {
+        match sent {
+            // The original can exit between try_wait and TERM. Only its own
+            // bounded wait (including release revalidation) can supply a status.
+            Err(nix::errno::Errno::ESRCH) => timeout(deadline, self.child.wait())
+                .await
+                .wrap_err("original peer was not observed terminal after SIGTERM returned ESRCH")?
+                .wrap_err("wait after SIGTERM returned ESRCH")
+                .map(Some),
+            other => other.wrap_err("failed to send SIGTERM").map(|()| None),
+        }
+    }
+
+    async fn observe_forced_shutdown(&mut self, sent: std::io::Result<()>) -> Result<ExitStatus> {
+        match sent {
+            Ok(()) => {
+                // On Windows the root may already have exited successfully while
+                // another member of its Job needed forced termination.
+                let _ = self.events.send(PeerLifecycleEvent::Killed);
+            }
+            #[cfg(unix)]
+            Err(error) if error.raw_os_error() == Some(nix::libc::ESRCH) => {}
+            Err(error) => {
+                if let Some(status) = self.child.try_wait().wrap_err_with(|| {
+                    format!("failed to observe original peer after termination failed: {error}")
+                })? {
+                    return Ok(status);
+                }
+                return Err(error).wrap_err("failed to terminate original peer");
+            }
+        }
+        timeout(PEER_FORCED_EXIT_TIMEOUT, self.child.wait())
+            .await
+            .wrap_err("child did not terminate after forced shutdown")?
+            .wrap_err("wait failure")
     }
     fn dump_last_stderr(&self) {
         let guard = self

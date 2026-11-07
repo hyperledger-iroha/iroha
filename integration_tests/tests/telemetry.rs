@@ -138,7 +138,13 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
         metrics.get("accounts{domain=\"garden_of_live_flowers\"}"),
         0.0
     );
-    // fetch_online_peers
+    // Genesis readiness does not imply that every P2P handshake has completed.
+    // Share the existing network sync budget across all four signed observations.
+    let peer_deadline = tokio::time::Instant::now() + network.sync_timeout();
+    let http_client = reqwest::Client::builder()
+        .timeout(integration_tests::http::request_timeout())
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
     for peer in network.peers() {
         let others: HashSet<_> = network
             .peers()
@@ -152,32 +158,49 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
             .operator_key_pair()
             .expect("test-network clients carry the peer operator key");
         let peers_uri: iroha_torii::Uri = "/v1/peers".parse().expect("static peers URI");
-        let operator_headers = iroha_torii::operator_signed_request_headers(
-            operator_key_pair,
-            peer_client.client().network_id(),
-            &iroha_torii::Method::GET,
-            &peers_uri,
-            &[],
-        )?;
-        let http_client = reqwest::Client::builder()
-            .timeout(integration_tests::http::request_timeout())
-            .redirect(reqwest::redirect::Policy::none())
-            .build()?;
-        let response = http_client
-            .get(peer_client.client().endpoint().join("/v1/peers").unwrap())
-            .headers(operator_headers)
-            .header("Accept", "application/json")
-            .send()
-            .await?;
-        ensure!(
-            response.status().is_success(),
-            "signed /v1/peers returned {}",
-            response.status()
-        );
-        let response_body = response.text().await?;
-        let response: HashSet<Peer> = norito::json::from_str(&response_body)
-            .map_err(|err| eyre::Report::msg(format!("decode peers response: {err}")))?;
-        assert_eq!(response, others);
+        loop {
+            ensure!(
+                tokio::time::Instant::now() < peer_deadline,
+                "peer discovery deadline elapsed"
+            );
+            // Every observation has a fresh signed nonce; do not replay auth headers.
+            let operator_headers = iroha_torii::operator_signed_request_headers(
+                operator_key_pair,
+                peer_client.client().network_id(),
+                &iroha_torii::Method::GET,
+                &peers_uri,
+                &[],
+            )?;
+            let response = tokio::time::timeout_at(peer_deadline, async {
+                let response = http_client
+                    .get(peer_client.client().endpoint().join("/v1/peers")?)
+                    .headers(operator_headers)
+                    .header("Accept", "application/json")
+                    .send()
+                    .await?;
+                ensure!(
+                    response.status().is_success(),
+                    "signed /v1/peers returned {}",
+                    response.status()
+                );
+                let response_body = response.text().await?;
+                norito::json::from_str::<Vec<Peer>>(&response_body)
+                    .map_err(|err| eyre::eyre!("decode peers response: {err}"))
+            })
+            .await??;
+            ensure!(
+                tokio::time::Instant::now() < peer_deadline,
+                "peer discovery deadline elapsed"
+            );
+            if online_peer_set_is_complete(&response, &others)? {
+                break;
+            }
+            tokio::time::sleep_until(
+                peer_deadline
+                    .min(tokio::time::Instant::now() + std::time::Duration::from_millis(100)),
+            )
+            .await;
+        }
     }
     // Submit outside the Tokio runtime, retaining the SDK's fee quote and finality checks.
     let client = network.client();
@@ -234,5 +257,52 @@ fn status_reports_npos_mode_tag_on_start() -> eyre::Result<()> {
         "expected /status mode_tag to be npos, got {}",
         sumeragi.mode_tag
     );
+    Ok(())
+}
+
+/// A partial known set may still be handshaking; duplicates and foreign endpoints
+/// are protocol failures, not reasons to retry until the timeout.
+fn online_peer_set_is_complete(observed: &[Peer], expected: &HashSet<Peer>) -> eyre::Result<bool> {
+    let mut identities = HashSet::new();
+    for peer in observed {
+        ensure!(
+            identities.insert(peer.id()),
+            "duplicate online peer {}",
+            peer.id()
+        );
+        let registered = expected
+            .get(peer)
+            .ok_or_else(|| eyre::eyre!("unexpected online peer {}", peer.id()))?;
+        ensure!(
+            peer.address() == registered.address(),
+            "online peer endpoint changed for {}",
+            peer.id()
+        );
+    }
+    Ok(identities.len() == expected.len())
+}
+
+#[test]
+fn online_peer_readiness_requires_all_unique_expected_identities_and_endpoints() -> eyre::Result<()>
+{
+    let peer = |seed: u8| {
+        let key =
+            iroha_crypto::KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519);
+        Peer::new("127.0.0.1:1337".parse().unwrap(), key.public_key().clone())
+    };
+    let a = peer(1);
+    let b = peer(2);
+    let foreign = peer(3);
+    let expected = HashSet::from([a.clone(), b.clone()]);
+    assert!(!online_peer_set_is_complete(&[], &expected)?);
+    assert!(!online_peer_set_is_complete(&[a.clone()], &expected)?);
+    assert!(online_peer_set_is_complete(
+        &[b.clone(), a.clone()],
+        &expected
+    )?);
+    assert!(online_peer_set_is_complete(&[a.clone(), a.clone()], &expected).is_err());
+    assert!(online_peer_set_is_complete(&[a.clone(), foreign], &expected).is_err());
+    let moved = Peer::new("127.0.0.1:1338".parse()?, b.id().clone());
+    assert!(online_peer_set_is_complete(&[a, moved], &expected).is_err());
     Ok(())
 }

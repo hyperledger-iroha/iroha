@@ -53,6 +53,7 @@ fn assert_release_fixture_rfc_column_preflight_v1(maximum: bool) {
         .expect("release DER complete native trace");
     let der_terminals =
         zk_x509_der_stark_terminal_claims_v1(&der_trace).expect("DER terminal claims");
+    drop(der_trace);
     let claims = provider
         .terminal_claims_v1()
         .expect("valid RFC fixture private products");
@@ -98,8 +99,7 @@ fn assert_release_fixture_rfc_column_preflight_v1(maximum: bool) {
         "maximum={maximum} base row/residue failures={base_failures:?}"
     );
 
-    // Keep only boundary rows while visiting every full native column. This
-    // avoids retaining a 264-column auxiliary matrix merely for a preflight.
+    // Keep only boundary rows while visiting every full native column.
     let last = ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 - 1;
     let mut checkpoints = vec![0, last];
     for family in 0..FAMILY_COUNT_V1 {
@@ -138,37 +138,31 @@ fn assert_release_fixture_rfc_column_preflight_v1(maximum: bool) {
         vec![[F::ZERO; ZK_X509_RFC5280_STARK_AUX_WIDTH_V1]; checkpoints.len()],
         zeroize_field_rows_v1,
     );
-    for column in 0..ZK_X509_RFC5280_STARK_BASE_WIDTH_V1 {
-        let values = PrivateTableV1::new(
-            provider
-                .build_base_column_v1(column)
-                .unwrap_or_else(|error| {
-                    panic!("maximum={maximum} base column {column}: {error:?}")
-                }),
-            zeroize_fields_v1,
-        );
-        assert_eq!(values.len(), ZK_X509_RFC5280_STARK_TRACE_SIZE_V1);
-        assert!(values.iter().all(|value| F::canonical(value.0).is_some()));
-        for &row in &checkpoints {
-            assert_eq!(values[row], material.base_row(row).unwrap()[column]);
-        }
-    }
-    for column in 0..ZK_X509_RFC5280_STARK_AUX_WIDTH_V1 {
-        let values = PrivateTableV1::new(
-            provider
-                .build_aux_column_v1(column)
-                .unwrap_or_else(|error| {
-                    panic!("maximum={maximum} auxiliary column {column}: {error:?}")
-                }),
-            zeroize_fields_v1,
-        );
-        assert_eq!(values.len(), ZK_X509_RFC5280_STARK_TRACE_SIZE_V1);
-        assert!(values.iter().all(|value| F::canonical(value.0).is_some()));
-        for (index, &row) in checkpoints.iter().enumerate() {
-            current_aux[index][column] = values[row];
-            next_aux[index][column] = values[(row + 1) % ZK_X509_RFC5280_STARK_TRACE_SIZE_V1];
-        }
-    }
+    check_release_native_columns_v1(
+        maximum,
+        "base",
+        ZK_X509_RFC5280_STARK_BASE_WIDTH_V1,
+        |first, targets| provider.fill_base_columns_v1(first, targets),
+        |column| provider.build_base_column_v1(column),
+        |column, values| {
+            for &row in &checkpoints {
+                assert_eq!(values[row], material.base_row(row).unwrap()[column]);
+            }
+        },
+    );
+    check_release_native_columns_v1(
+        maximum,
+        "auxiliary",
+        ZK_X509_RFC5280_STARK_AUX_WIDTH_V1,
+        |first, targets| provider.fill_aux_columns_v1(first, targets),
+        |column| provider.build_aux_column_v1(column),
+        |column, values| {
+            for (index, &row) in checkpoints.iter().enumerate() {
+                current_aux[index][column] = values[row];
+                next_aux[index][column] = values[(row + 1) % ZK_X509_RFC5280_STARK_TRACE_SIZE_V1];
+            }
+        },
+    );
     for (index, &row) in checkpoints.iter().enumerate() {
         let residues = PrivateTableV1::new(
             evaluate_zk_x509_rfc5280_stark_residues_v1(
@@ -243,6 +237,65 @@ fn assert_release_fixture_rfc_column_preflight_v1(maximum: bool) {
         "changing the private DER endpoint still violates the unchanged local AIR"
     );
     zeroize_fields_v1(&mut wrong_terminal_aux);
+}
+
+fn check_release_native_columns_v1(
+    maximum: bool,
+    family: &str,
+    width: usize,
+    fill_batch: impl Fn(usize, &mut [&mut [F]]) -> Result<(), ZkX509Rfc5280StarkErrorV1>,
+    build_scalar: impl Fn(usize) -> Result<Vec<F>, ZkX509Rfc5280StarkErrorV1>,
+    mut check_column: impl FnMut(usize, &[F]),
+) {
+    use crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1 as BATCH;
+    use std::time::{Duration, Instant};
+
+    // Keep one slot free in the first batch to compare the original single-column API
+    // on the same fixture and rows. All later batches use the full replay allowance.
+    let comparison_width = BATCH - 1;
+    for first in std::iter::once(0).chain((comparison_width..width).step_by(BATCH)) {
+        let count = if first == 0 { comparison_width } else { BATCH }.min(width - first);
+        let start = Instant::now();
+        let mut columns: Vec<_> = (0..count)
+            .map(|_| {
+                PrivateTableV1::new(
+                    vec![F::ZERO; ZK_X509_RFC5280_STARK_TRACE_SIZE_V1],
+                    zeroize_fields_v1,
+                )
+            })
+            .collect();
+        let mut targets: Vec<_> = columns
+            .iter_mut()
+            .map(|column| column.as_mut_slice())
+            .collect();
+        fill_batch(first, &mut targets)
+            .unwrap_or_else(|error| panic!("maximum={maximum} {family} batch {first}: {error:?}"));
+        let batch_elapsed = start.elapsed();
+        let mut scalar_elapsed = Duration::ZERO;
+        for (offset, values) in columns.iter().enumerate() {
+            let column = first + offset;
+            assert_eq!(values.len(), ZK_X509_RFC5280_STARK_TRACE_SIZE_V1);
+            assert!(values.iter().all(|value| F::canonical(value.0).is_some()));
+            check_column(column, values);
+            if first == 0 {
+                let start = Instant::now();
+                let scalar = PrivateTableV1::new(build_scalar(column).unwrap(), zeroize_fields_v1);
+                scalar_elapsed += start.elapsed();
+                assert!(
+                    scalar.as_slice() == values.as_slice(),
+                    "maximum={maximum} {family} column {column}"
+                );
+            }
+        }
+        if first == 0 {
+            eprintln!(
+                "RFC native preflight maximum={maximum} family={family} columns={count} rows={} batch_ns={} scalar_ns={}",
+                ZK_X509_RFC5280_STARK_TRACE_SIZE_V1,
+                batch_elapsed.as_nanos(),
+                scalar_elapsed.as_nanos()
+            );
+        }
+    }
 }
 
 #[test]

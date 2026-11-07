@@ -178,6 +178,8 @@ maintenance = { status = "actively-developed" }
 arrayvec = "0.7.6"
 iroha_core_privacy = { workspace = true, default-features = false }
 iroha_core_timed_ovn = { workspace = true }
+# Private E2 registration preparation; no executable ballot selection is enabled.
+iroha_parliament_ballot = { workspace = true }
 iroha_allocation = { workspace = true }
 iroha_model_base = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }

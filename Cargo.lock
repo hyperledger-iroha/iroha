@@ -4461,6 +4461,7 @@ dependencies = [
  "iroha_model_base",
  "iroha_p2p",
  "iroha_panic_hook",
+ "iroha_parliament_ballot",
  "iroha_pasta",
  "iroha_plonk",
  "iroha_primitives",

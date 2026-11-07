@@ -63,7 +63,7 @@ use sorafs_manifest::{
 use std::{
     borrow::Cow,
     fs,
-    io::Write as _,
+    io::{Read as _, Write as _},
     os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
@@ -71,6 +71,15 @@ use std::{
 use tokio::time::{Duration, Instant, timeout, timeout_at};
 
 const TICKET: &str = "REP-PUBLICATION-NATIVE-1";
+
+/// Key of the CLI publisher, an ordinary account holding no granted permission.
+fn cli_publisher() -> KeyPair {
+    KeyPair::from_seed(vec![0x9B; 32], iroha_crypto::Algorithm::Ed25519)
+}
+
+fn cli_publisher_id() -> AccountId {
+    AccountId::new(cli_publisher().public_key().clone())
+}
 
 pub struct PublishedNetwork {
     pub network: sandbox::SerializedNetwork,
@@ -396,10 +405,18 @@ pub async fn create_and_publish(
                 ALICE_ID.clone(),
             ));
     }
-    builder = builder.with_genesis_instruction(Mint::asset_quantity(
-        1000_u32,
-        AssetId::of(asset.clone(), ALICE_ID.clone()),
-    ));
+    builder = builder
+        .with_genesis_instruction(Mint::asset_quantity(
+            1000_u32,
+            AssetId::of(asset.clone(), ALICE_ID.clone()),
+        ))
+        // The CLI publishes from an ordinary account: registered and funded for the pin
+        // fee, with no granted permission. Publication must not need ledger-wide reads.
+        .with_genesis_instruction(Register::account(Account::new(cli_publisher_id())))
+        .with_genesis_instruction(Mint::asset_quantity(
+            1000_u32,
+            AssetId::of(asset.clone(), cli_publisher_id()),
+        ));
     for instruction in authority.genesis_instructions()?.into_iter().chain(
         PublicationComplianceFixture::genesis_instructions(&ALICE_ID)?,
     ) {
@@ -513,7 +530,7 @@ pub async fn create_and_publish(
         false,
     )
     .await?;
-    let assigned_floor = wire::prove(
+    let assigned_height = wire::prove(
         &http,
         &publisher,
         &base,
@@ -523,6 +540,10 @@ pub async fn create_and_publish(
         false,
     )
     .await?;
+    // Compact publication evidence authenticates execution but never replaces the trust root.
+    // Advance it separately so later requests bind the assertion's committed block.
+    let assigned_floor =
+        wire::advance_checkpoint(&http, &network, &checkpoint, assigned_height).await?;
     let source_request = iroha_data_model::sorafs::publication::SorafsAssignedSourceRequestV1 {
         target_provider: *providers[1].id.as_bytes(),
         source_provider: *providers[0].id.as_bytes(),
@@ -602,7 +623,7 @@ pub async fn create_and_publish(
             "full completion authority must bind the signer"
         );
     }
-    let floor = wire::prove(
+    let completed_height = wire::prove(
         &http,
         &publisher,
         &base,
@@ -612,6 +633,8 @@ pub async fn create_and_publish(
         true,
     )
     .await?;
+    let floor =
+        wire::advance_checkpoint(&http, &network, &assigned_floor, completed_height).await?;
     Ok(PublishedNetwork {
         network,
         authority,
@@ -764,11 +787,12 @@ pub async fn qualify_storage_lifecycle(published: &PublishedNetwork) -> Result<(
         "corrupt payload must remain unavailable after restart, got {}",
         unavailable.status()
     );
-    let unavailable_body = wire::bytes(unavailable, 65536).await?;
+    let unavailable_body = String::from_utf8(wire::bytes(unavailable, 65536).await?)?;
     ensure!(
-        String::from_utf8(unavailable_body)?
-            .contains("manifest payload is quarantined pending verified repair"),
-        "an unrelated restart or finality error cannot establish payload quarantine"
+        unavailable_body.contains("manifest payload is quarantined pending verified repair"),
+        "an unrelated restart or finality error cannot establish payload quarantine; response body ({} bytes, at most 4096-byte UTF8 prefix): {:?}",
+        unavailable_body.len(),
+        &unavailable_body[..unavailable_body.floor_char_boundary(4096)],
     );
     // An unaffected replica remains available before any repair task can be claimed.
     check_payload(published, 1).await?;
@@ -873,6 +897,50 @@ pub async fn qualify_storage_lifecycle(published: &PublishedNetwork) -> Result<(
     Ok(())
 }
 
+// Read only the child-owned stdout/stderr log, before the private runtime
+// directory is removed. Never copy the adjacent client config or checkpoint.
+fn bounded_cli_failure_log(log: &std::path::Path) -> String {
+    let read = || -> std::io::Result<(u64, Vec<u8>)> {
+        let file = fs::File::open(log)?;
+        let total = file.metadata()?.len();
+        let mut bytes = Vec::new();
+        file.take(4096).read_to_end(&mut bytes)?;
+        Ok((total, bytes))
+    };
+    match read() {
+        Ok((total, bytes)) => format!(
+            "CLI log {total} bytes, first {} bytes: {}",
+            bytes.len(),
+            bytes.escape_ascii()
+        ),
+        Err(error) => format!("CLI log unavailable: {:?}", error.kind()),
+    }
+}
+
+#[test]
+fn cli_failure_log_is_bounded_escaped_and_survives_runtime_cleanup() {
+    let directory = tempfile::tempdir().unwrap();
+    let log = directory.path().join("cli.log");
+    let mut bytes = b"pin registration rejected\n\xff\x1b".to_vec();
+    bytes.resize(4096, b'x');
+    bytes.extend_from_slice(b"unread trailing content");
+    fs::write(&log, &bytes).unwrap();
+    let diagnostic = bounded_cli_failure_log(&log);
+    assert!(diagnostic.starts_with(&format!(
+        "CLI log {} bytes, first 4096 bytes: ",
+        bytes.len()
+    )));
+    assert!(diagnostic.contains(r"pin registration rejected\n\xff\x1b"));
+    assert!(!diagnostic.contains("unread trailing content"));
+    assert!(!diagnostic.contains('\n'));
+    directory.close().unwrap();
+    assert!(diagnostic.contains("pin registration rejected"));
+    assert_eq!(
+        bounded_cli_failure_log(&log),
+        "CLI log unavailable: NotFound"
+    );
+}
+
 async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
     let root = published.runtime_directory.path().join("cli");
     fs::create_dir(&root)?;
@@ -882,7 +950,36 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
         payload.join("hello.txt"),
         b"actual same-source SoraFS CLI publication\n",
     )?;
-    let deploy_client = client(&published.network, 0, &ALICE_KEYPAIR);
+    let publisher = cli_publisher();
+    let publisher_id = cli_publisher_id();
+    let governor = client(&published.network, 0, &ALICE_KEYPAIR);
+    let reader = governor.clone();
+    let reader_id = publisher_id.clone();
+    let granted = read_on_dedicated_thread(move || {
+        Ok(reader
+            .client()
+            .query(FindPermissionsByAccountId::new(reader_id))
+            .execute_all()?)
+    })
+    .await?;
+    ensure!(
+        granted.is_empty(),
+        "the CLI publisher must hold no granted permission"
+    );
+    // Ordinary transaction fees only; the pin fee was minted in genesis.
+    let native_fee_asset =
+        iroha_genesis::signed_genesis_root_fee_policy(&published.network.genesis().0)?
+            .fee_asset_id;
+    submit_instruction(
+        &governor,
+        Transfer::asset_quantity(
+            AssetId::of(native_fee_asset, ALICE_ID.clone()),
+            10_000_u32,
+            publisher_id,
+        ),
+    )
+    .await?;
+    let deploy_client = client(&published.network, 0, &publisher);
     let mut config = toml::Table::new();
     set(
         &mut config,
@@ -902,12 +999,12 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
     set(
         &mut config,
         &["account", "public_key"],
-        ALICE_KEYPAIR.public_key().to_string(),
+        publisher.public_key().to_string(),
     );
     set(
         &mut config,
         &["account", "private_key"],
-        iroha_crypto::ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone())
+        iroha_crypto::ExposedPrivateKey(publisher.private_key().clone())
             .try_to_multihash_string()?,
     );
     set(
@@ -962,13 +1059,16 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
                 .kill()
                 .await
                 .wrap_err("terminate and reap timed-out publication CLI")?;
-            return Err(error).wrap_err("same-source publication CLI exceeded its deadline");
+            return Err(error).wrap_err(format!(
+                "same-source publication CLI exceeded its deadline; {}",
+                bounded_cli_failure_log(&log)
+            ));
         }
     };
     ensure!(
         status.success(),
-        "same-source sorafs_cli deploy failed; runtime log: {}",
-        log.display()
+        "same-source sorafs_cli deploy failed ({status}); {}",
+        bounded_cli_failure_log(&log)
     );
     ensure!(
         fs::metadata(&receipt)?.len() <= 1024 * 1024,
@@ -981,25 +1081,11 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
             && receipt["gateway_verification"]["success"].as_bool() == Some(true),
         "CLI failed native finality or asset verification"
     );
-    let successor_path = out_dir.join("publication.finality.to");
-    let successor_metadata = fs::metadata(&successor_path)?;
     ensure!(
-        successor_metadata.len() <= MAX_FINALITY_CHECKPOINT_BYTES as u64,
-        "CLI finality checkpoint exceeded bound"
-    );
-    ensure!(
-        successor_metadata.permissions().mode() & 0o777 == 0o600,
-        "CLI finality checkpoint must be owner-only"
-    );
-    let successor = SumeragiFinalityCheckpoint::decode_canonical(&fs::read(successor_path)?)?;
-    SumeragiFinalityVerifier::from_trusted_checkpoint(
-        &successor,
-        &published.network.network_id(),
-        published.network.chain_id().as_ref(),
-    )?;
-    ensure!(
-        successor.height() > published.floor.height(),
-        "CLI did not persist authenticated publication progress"
+        receipt["provider_ingest"]["finalized_height"]
+            .as_u64()
+            .is_some_and(|height| height > published.floor.height()),
+        "CLI did not authenticate completion after its trusted checkpoint"
     );
     ensure!(fs::metadata(out_dir.join("native-cli.manifest.to"))?.len() <= 4 * 1024 * 1024);
     let manifest: ManifestV1 = wire::decode(
@@ -1010,7 +1096,7 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
         &published.http,
         &published.network.network_id(),
         &published.network.peers()[0].torii_url(),
-        &ALICE_KEYPAIR,
+        &publisher,
         ManifestDigest::from_manifest(&manifest)?,
         true,
     )
@@ -1019,7 +1105,7 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
         &published.http,
         &deploy_client,
         &published.network.peers()[0].torii_url(),
-        &ALICE_KEYPAIR,
+        &publisher,
         &row,
         &published.floor,
         true,

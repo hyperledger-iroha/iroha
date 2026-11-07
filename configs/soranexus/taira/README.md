@@ -999,6 +999,26 @@ inventory and never from a prepared response.
 Do not persist signing keys, onboarding tokens, bearer tokens, or forwarded
 authorization headers in this repository.
 
+## SoraFS on Taira
+
+Taira validators do not run the embedded SoraFS storage provider. The
+`iroha3d_taira` launcher refuses `sorafs.storage.enabled = true`, and Inrou V1
+hosting, which every Taira validator runs, requires the provider to stay
+disabled. The SoraFS routes are present, but the storage-backed ones (for
+example `/v1/sorafs/capacity/state`) answer `feature_disabled` with HTTP 404.
+
+Serving SoraFS content on Taira therefore needs separate provider nodes and:
+
+- provider admission in finalized chain state, either the genesis
+  `InitializeSorafsProviderAdmissionV1` instruction or Parliament
+  `ConfigureCouncil` and `Admit` effects;
+- holders for the SoraFS reserve-policy, provider-credit and
+  replication-completion permissions and for the gateway-compliance operator
+  role, none of which the current Taira genesis grants;
+- DNS and a TLS certificate for the CID host suffix. Use a dedicated
+  registrable domain on the Public Suffix List rather than a `sora.org`
+  subdomain, so hosted content cannot set cookies for other `sora.org` sites.
+
 ## Retained source-coupled assets
 
 - `config.toml` and `genesis.template.json` are canonical profile sources

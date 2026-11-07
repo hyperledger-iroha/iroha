@@ -4908,6 +4908,30 @@ enum DirectoryEntryKind {
     Directory,
 }
 impl CarLayout {
+    /// Total archive length: the CARv1 data offset plus payload length, plus any index.
+    fn archive_size(&self) -> Result<u64, CarWriteError> {
+        let header_field = |range: std::ops::Range<usize>| {
+            self.header_bytes
+                .get(range)
+                .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+                .map(u64::from_le_bytes)
+                .ok_or(CarWriteError::DagInvariant {
+                    context: "CARv2 header geometry",
+                })
+        };
+        let index_len =
+            u64::try_from(self.index_bytes.as_ref().map_or(0, Vec::len)).map_err(|_| {
+                CarWriteError::ArithmeticOverflow {
+                    context: "CAR index length",
+                }
+            })?;
+        header_field(16..24)?
+            .checked_add(header_field(24..32)?)
+            .and_then(|size| size.checked_add(index_len))
+            .ok_or(CarWriteError::ArithmeticOverflow {
+                context: "CAR archive size",
+            })
+    }
     fn new(plan: &CarBuildPlan) -> Result<Self, CarWriteError> {
         plan.validate()?;
         let mut chunk_cids = Vec::new();
@@ -6251,25 +6275,22 @@ impl CarBuildPlan {
         {
             return Err(CarWriteError::RootMismatch);
         }
-        let data_offset = u64::from_le_bytes(
-            layout.header_bytes[16..24]
-                .try_into()
-                .map_err(|_| mismatch("car_size"))?,
-        );
-        let payload_len = u64::from_le_bytes(
-            layout.header_bytes[24..32]
-                .try_into()
-                .map_err(|_| mismatch("car_size"))?,
-        );
-        let index_len = layout.index_bytes.as_ref().map_or(0, Vec::len) as u64;
-        let car_size = data_offset
-            .checked_add(payload_len)
-            .and_then(|size| size.checked_add(index_len))
-            .ok_or_else(|| mismatch("car_size"))?;
+        let car_size = layout.archive_size().map_err(|_| mismatch("car_size"))?;
         if manifest.car_size != car_size {
             return Err(mismatch("car_size"));
         }
         Ok(())
+    }
+    /// Exact byte length of the CARv2 archive this plan encodes to.
+    ///
+    /// Derived from the canonical layout alone: no payload bytes are read and no payload is
+    /// hashed, so a caller can bound and reserve a response before encoding it once.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CarWriteError`] when the plan is invalid or its layout exceeds host limits.
+    pub fn car_size(&self) -> Result<u64, CarWriteError> {
+        CarLayout::new(self)?.archive_size()
     }
     /// Validate the complete chunk/file plan and return checked allocation geometry.
     ///
@@ -8991,6 +9012,48 @@ mod tests {
         ));
         assert!(store.chunks().is_empty());
         assert_eq!(store.payload_len(), 0);
+    }
+    #[test]
+    fn plan_car_size_matches_the_encoded_archive_without_reading_payload() {
+        use std::io::Cursor;
+        let input = sample_input();
+        let single = CarBuildPlan::single_file(&input).expect("single-file plan");
+        let (sparse, sparse_payload) = CarBuildPlan::from_files(vec![
+            FileEntry {
+                path: vec!["a.empty".into()],
+                data: Vec::new(),
+            },
+            FileEntry {
+                path: vec!["b.bin".into()],
+                data: b"payload".to_vec(),
+            },
+        ])
+        .expect("plan with an empty file");
+        let (directory, directory_payload) = CarBuildPlan::from_files(vec![
+            FileEntry {
+                path: vec!["index.html".into()],
+                data: b"<html>root</html>".to_vec(),
+            },
+            FileEntry {
+                path: vec!["assets".into(), "app.js".into()],
+                data: input[..input.len() / 3].to_vec(),
+            },
+        ])
+        .expect("directory plan");
+        for (plan, payload) in [
+            (&single, input.as_slice()),
+            (&sparse, sparse_payload.as_slice()),
+            (&directory, directory_payload.as_slice()),
+        ] {
+            let expected = plan.car_size().expect("plan-derived CAR size");
+            let mut buffer = Cursor::new(Vec::new());
+            let stats = CarWriter::new(plan, payload)
+                .expect("writer")
+                .write_to(&mut buffer)
+                .expect("write carv2");
+            assert_eq!(stats.car_size, expected);
+            assert_eq!(buffer.into_inner().len() as u64, expected);
+        }
     }
     #[test]
     fn writer_emits_spec_compliant_carv2() {

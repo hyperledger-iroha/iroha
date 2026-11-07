@@ -454,15 +454,18 @@ fn resume_and_repeated_submit_make_only_a_status_read_and_do_not_change_the_jour
             ),
             output: None,
         };
-        assert!(
-            run_retained(
-                &JournalArgs {
-                    journal: path.clone()
-                },
-                &mut context,
-                may_submit
-            )
-            .is_err()
+        let error = run_retained(
+            &JournalArgs {
+                journal: path.clone(),
+            },
+            &mut context,
+            may_submit,
+        )
+        .expect_err("cache-only status must remain pending");
+        assert_eq!(
+            error.to_string(),
+            "transaction is Pending; recover the same journal",
+            "unexpected read-only recovery failure: {error:?}"
         );
         assert_eq!(transport.requests.lock().unwrap().len(), 1);
         let report = context.output.unwrap();

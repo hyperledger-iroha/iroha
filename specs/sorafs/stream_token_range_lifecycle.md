@@ -11,6 +11,11 @@ through the configured query/heavy physical worker. Cancellation of the awaiting
 request retains those permits until the physical call ends. Before an Accepted
 external admission, Torii reserves one cleanup ticket. Static rejections have no
 lease and need no ticket; external quota rejections return the unused ticket.
+A static rejection (a missing, malformed, wrongly signed or wrong-key-version
+token) is answered locally: it identifies no token holder, owns no reputation
+append and creates no native admission, so anonymous requests cannot make the
+gateway sign or wait on transactions. Violations by an authenticated token are
+still admitted natively.
 A returned Accepted record is owned before fallible window checks or telemetry.
 
 `admission_max_pending` additionally bounds local reserved/queued cleanup tickets

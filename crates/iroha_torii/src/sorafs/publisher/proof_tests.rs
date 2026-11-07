@@ -1,86 +1,106 @@
-//! Exact native lineage, range and refusal controls for publication proof production.
+//! Compact publication evidence: signer-only inclusion, exact floor and body-free certificates.
 
-use super::publication_lineage;
+use super::publication_evidence;
 use axum::http::StatusCode;
+use iroha_allocation::AllocationBudget;
 use iroha_core::{
     state::{StateReadOnly, World},
-    sumeragi::{
-        finality::build_proof,
-        test_chain::{CertifiedTestChain, Signers, TestChainConfig},
-    },
+    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
-use iroha_data_model::sorafs::publication::PUBLICATION_PROOF_MAX_BLOCKS_V1;
+use iroha_crypto::{Algorithm, KeyPair};
+use iroha_data_model::{
+    account::AccountId,
+    isi::{InstructionBox, Log},
+    level::Level,
+    sorafs::publication::SorafsPublicationProofRequestV1,
+};
+use std::{
+    num::NonZeroU64,
+    time::{Duration, Instant},
+};
+
+/// Seed of the test chain's genesis-registered clock account.
+const CLOCK_SEED: u8 = 0xCC;
 
 #[test]
-fn publication_lineage_preserves_every_original_proof_and_releases_native_owners() {
+fn publication_evidence_serves_only_the_signer_with_certificates_and_one_inclusion() {
     let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 10_000)).unwrap();
-    while chain.height() < 5 {
-        chain.commit(Vec::new());
-    }
-    let view = chain.state().view();
-    let floor = *view.block_hashes().get(1).unwrap().as_ref();
-    let budget = view.execution_budget();
-    let reserved = budget.reserved_bytes();
-    let proof = publication_lineage(&view, 2, floor, 4).unwrap();
-    assert_eq!(budget.reserved_bytes(), reserved);
-    assert_eq!(proof.lineage.len(), 3);
-    for (height, actual) in (2..=4).zip(&proof.lineage) {
-        let expected = build_proof(&view, height).unwrap();
-        assert_eq!(actual, &expected);
-        assert_eq!(
-            norito::encode_canonical(actual).unwrap(),
-            norito::encode_canonical(&expected).unwrap()
-        );
-        actual.decode_checked(chain.root_scope().into()).unwrap();
-    }
-    assert_eq!(budget.reserved_bytes(), reserved);
-    assert_eq!(proof.lineage.last().unwrap().block_header.height().get(), 4);
-    assert_eq!(
-        view.height(),
-        5,
-        "the requested target must not expand to the tip"
-    );
+    let signer = KeyPair::from_seed(vec![CLOCK_SEED; 32], Algorithm::Ed25519);
+    let account = AccountId::new(signer.public_key().clone());
+    let log: InstructionBox = Log::new(Level::INFO, "publication evidence fixture".into()).into();
+    let signed = chain.sign(&signer, [log], 10_001);
+    assert_eq!(chain.commit(vec![signed.clone()]), vec![true]);
+    chain.commit(Vec::new());
+    let entry_hash = signed.hash_as_entrypoint();
+    let height = NonZeroU64::new(chain.height() - 1).unwrap();
+    let (genesis, executed) = {
+        let view = chain.state().view();
+        let hashes = view.block_hashes();
+        (
+            *hashes.first().unwrap().as_ref(),
+            *hashes
+                .get(usize::try_from(height.get()).unwrap() - 1)
+                .unwrap()
+                .as_ref(),
+        )
+    };
+    let request = SorafsPublicationProofRequestV1 {
+        entry_hash: *entry_hash.as_ref(),
+        floor_height: 1,
+        floor_block_hash: genesis,
+    };
+    let budget = AllocationBudget::new(64 * 1024 * 1024);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let evidence = |requester: &AccountId, request: &SorafsPublicationProofRequestV1| {
+        publication_evidence(
+            chain.state(),
+            requester,
+            request,
+            entry_hash,
+            height,
+            &budget,
+            deadline,
+        )
+    };
 
+    let (proof, charges) = evidence(&account, &request).unwrap();
+    assert!(
+        proof.epoch_boundaries.is_empty(),
+        "one epoch needs no boundary"
+    );
+    assert_eq!(proof.certificate.height().unwrap(), height.get());
+    assert!(proof.inclusion.joined_network_output().is_ok());
+    assert!(!charges.is_empty(), "certificate reads stay charged");
+    // A header, a quorum certificate, a result and two Merkle paths: no block body.
+    assert!(norito::canonical_frame_len(&proof).unwrap() < 256 * 1024);
+    drop(charges);
+
+    let stranger = AccountId::new(
+        KeyPair::from_seed(vec![0x5A; 32], Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    );
     assert_eq!(
-        publication_lineage(&view, 2, [0x55; 32], 4).unwrap_err(),
+        evidence(&stranger, &request).unwrap_err(),
+        StatusCode::FORBIDDEN,
+        "only the assertion's signer receives its inclusion"
+    );
+    let substituted_floor = SorafsPublicationProofRequestV1 {
+        floor_block_hash: [0x55; 32],
+        ..request
+    };
+    assert_eq!(
+        evidence(&account, &substituted_floor).unwrap_err(),
         StatusCode::CONFLICT
     );
+    let floor_at_execution = SorafsPublicationProofRequestV1 {
+        floor_height: height.get(),
+        floor_block_hash: executed,
+        ..request
+    };
     assert_eq!(
-        publication_lineage(&view, 4, floor, 3).unwrap_err(),
-        StatusCode::CONFLICT
+        evidence(&account, &floor_at_execution).unwrap_err(),
+        StatusCode::CONFLICT,
+        "the assertion must execute after the client's floor"
     );
-    assert_eq!(
-        publication_lineage(&view, 2, floor, 2).unwrap_err(),
-        StatusCode::PAYLOAD_TOO_LARGE
-    );
-    assert_eq!(
-        publication_lineage(&view, 2, floor, 2 + PUBLICATION_PROOF_MAX_BLOCKS_V1 as u64)
-            .unwrap_err(),
-        StatusCode::PAYLOAD_TOO_LARGE
-    );
-    assert_eq!(
-        publication_lineage(&view, 2, floor, 6).unwrap_err(),
-        StatusCode::SERVICE_UNAVAILABLE,
-        "a missing target must not produce a successful partial lineage"
-    );
-    assert_eq!(budget.reserved_bytes(), reserved);
-}
-
-#[test]
-fn publication_lineage_rejects_an_invalid_native_quorum_with_no_partial_response() {
-    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 10_000)).unwrap();
-    while chain.height() < 4 {
-        chain.commit(Vec::new());
-    }
-    chain.corrupt_local_quorum_for_test(3, Signers::BelowQuorum);
-    let view = chain.state().view();
-    let floor = *view.block_hashes().get(1).unwrap().as_ref();
-    assert!(build_proof(&view, 3).is_err());
-    let budget = view.execution_budget();
-    let reserved = budget.reserved_bytes();
-    assert_eq!(
-        publication_lineage(&view, 2, floor, 4).unwrap_err(),
-        StatusCode::SERVICE_UNAVAILABLE
-    );
-    assert_eq!(budget.reserved_bytes(), reserved);
 }

@@ -3645,7 +3645,7 @@ pub mod sorafs {
             .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
             .with_effect(RouteEffect::ExpensiveCompute)
             .with_admission(AdmissionPolicy::AuthenticatedAccount);
-    /// Return native publication execution evidence to an authorized full-ledger reader.
+    /// Return compact native publication execution evidence to the assertion's own signer.
     pub const PUBLISH_PROOF: RouteDescriptor =
         documented_post("sorafs.publication.proof", "/v1/sorafs/publish/proof")
             .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)

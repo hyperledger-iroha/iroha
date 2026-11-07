@@ -358,6 +358,7 @@ fn publication_qualify_rejects_provider_bounds_before_network_or_proof_output() 
             &base,
             &config,
             &mut artifacts,
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new([4])),
             checkpoint.clone(),
             &providers,
             &root,
@@ -614,4 +615,48 @@ fn gateway_expectations_use_verified_payload_without_rereading_changed_source_fi
     let mut invalid = files.expect("directory files");
     invalid.reverse();
     assert!(build_gateway_expectations(Some(&invalid), &payload).is_err());
+}
+
+#[test]
+fn deploy_artifacts_encode_the_explicit_checked_retention() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().expect("canonical root");
+    let payload = root.join("payload.txt");
+    fs::write(&payload, b"native deploy retention").unwrap();
+    let manifest_path = root.join("manifest.to");
+    let before = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let policy = PinPolicy {
+        min_replicas: 3,
+        storage_class: StorageClass::Hot,
+        retention_epoch: deploy_publication::default_deploy_retention_epoch(before).unwrap(),
+    };
+    let artifacts = build_deploy_artifacts(
+        &payload,
+        &root.join("payload.car"),
+        &root.join("plan.json"),
+        &root.join("pack.json"),
+        &manifest_path,
+        &root.join("manifest.json"),
+        policy,
+        None,
+    )
+    .unwrap();
+    let after = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let encoded = decode_manifest_v1_canonical(&fs::read(manifest_path).unwrap()).unwrap();
+    assert_eq!(encoded, artifacts.manifest);
+    assert_eq!(encoded.pin_policy, policy);
+    assert!(
+        encoded.pin_policy.retention_epoch
+            >= deploy_publication::default_deploy_retention_epoch(before).unwrap()
+    );
+    assert!(
+        encoded.pin_policy.retention_epoch
+            <= deploy_publication::default_deploy_retention_epoch(after).unwrap()
+    );
 }

@@ -1857,7 +1857,7 @@ fn verify_anonymous_pgc_payment_v1(
     ))
 }
 fn native_pgc_error(source: impl Into<AnonymousPgcReadError>) -> PrivacyVerificationErrorV1 {
-    PrivacyVerificationErrorV1::NativeAnonymousPgc(Box::new(source.into()))
+    PrivacyVerificationErrorV1::NativeAnonymousPgc(source.into())
 }
 fn pgc_state_error(code: PrivacyAnonymousPgcStateFailureCodeV1) -> PrivacyVerificationErrorV1 {
     PrivacyVerificationErrorV1::AnonymousPgcState(Box::new(PrivacyAnonymousPgcStateFailureV1 {
@@ -1871,10 +1871,6 @@ fn pgc_state_error(code: PrivacyAnonymousPgcStateFailureCodeV1) -> PrivacyVerifi
 /// allocation.
 #[derive(Debug, Error)]
 #[doc(hidden)]
-#[expect(
-    variant_size_differences,
-    reason = "retain original root/codec refusal without allocating on failure"
-)]
 pub enum PrivacyVerificationErrorV1 {
     /// The execution context differs from the statement or is incomplete.
     #[error(transparent)]
@@ -1960,7 +1956,7 @@ pub enum PrivacyVerificationErrorV1 {
     },
     /// Native Anonymous-PGC decoding or verification failed.
     #[error("native Anonymous-PGC verification failed: {0}")]
-    NativeAnonymousPgc(#[source] Box<AnonymousPgcReadError>),
+    NativeAnonymousPgc(#[source] AnonymousPgcReadError),
     /// Trusted Bootle/Lantern issuer policy was absent, invalid, or revoked.
     #[error(transparent)]
     BootleLanternState(Box<PrivacyBootleLanternStateFailureV1>),
@@ -3801,7 +3797,7 @@ mod tests {
         let PrivacyVerificationErrorV1::NativeAnonymousPgc(read) = refusal else {
             panic!("quota permits current root but refuses the actual native payment decoder");
         };
-        let AnonymousPgcReadError::Codec(original) = *read else {
+        let AnonymousPgcReadError::Codec(original) = read else {
             panic!("original decoder")
         };
         let owner = original

@@ -2990,33 +2990,43 @@ mod tests {
         }
     }
     #[test]
-    fn maximum_lsag_requires_the_first_release_decode_allocation_budget() {
-        const RETIRED_UNDERSIZED_BUDGET_BYTES_V1: usize = 4 * 4_205;
+    fn maximum_lsag_respects_the_first_release_decode_allocation_budget() {
         let size = ZK_AMS_MAX_RING_SIZE_V1;
         let (_ring, _key_image, proof) = sign_fixture(size, size / 2);
-        assert_eq!(RETIRED_UNDERSIZED_BUDGET_BYTES_V1, 16_820);
-        assert_eq!(ZK_AMS_LSAG_DECODE_ALLOCATION_BYTES_V1, 32 * 1024);
-        let decoded = norito::codec::decode_exact_from_slice_with_limits::<ZkAmsLsagProofWireV1>(
-            &proof,
-            zk_ams_lsag_decode_limits(size, proof.len()),
-        )
-        .expect("maximum-ring LSAG must decode under the governed budget");
-        assert_eq!(decoded.responses.len(), size);
-        let retired_limits = norito::DecodeLimits::new(
-            size,
-            proof.len(),
-            size,
-            RETIRED_UNDERSIZED_BUDGET_BYTES_V1,
-            8,
-        );
-        assert!(
+        assert_eq!(size, 64);
+        assert_eq!(proof.len(), MAX_ZK_AMS_LSAG_PROOF_BYTES_V1);
+        let limits = zk_ams_lsag_decode_limits(size, proof.len());
+        assert_eq!(limits.max_total_allocated_bytes(), 32 * 1024);
+        let decode = |limits| {
             norito::codec::decode_exact_from_slice_with_limits::<ZkAmsLsagProofWireV1>(
-                &proof,
-                retired_limits,
+                &proof, limits,
             )
-            .is_err(),
-            "the retired allocation budget unexpectedly admits the maximum canonical LSAG"
+        };
+        let (decoded, usage) = norito::core::with_decode_limits_measured(limits, || decode(limits));
+        let decoded = decoded.expect("maximum-ring LSAG must decode under the governed budget");
+        assert_eq!(decoded.responses.len(), size);
+        let charged = usage.total_allocated_bytes();
+        // The owned response vector is unavoidable; decoder scratch may vary by platform.
+        assert!(
+            (size_of_val(decoded.responses.as_slice())..=limits.max_total_allocated_bytes())
+                .contains(&charged)
         );
+        let with_allocation = |bytes| {
+            norito::DecodeLimits::new(
+                limits.max_sequence_elements(),
+                limits.max_field_bytes(),
+                limits.max_total_elements(),
+                bytes,
+                limits.max_nesting_depth(),
+            )
+        };
+        assert_eq!(decode(with_allocation(charged)).unwrap(), decoded);
+        let bytes = u64::try_from(charged).unwrap();
+        assert!(matches!(
+            decode(with_allocation(charged - 1)),
+            Err(norito::core::Error::TotalAllocationExceeded { attempted, limit })
+                if attempted == bytes && limit == bytes - 1
+        ));
     }
     #[test]
     fn lsag_decoder_preflights_oversized_and_forged_response_counts() {
