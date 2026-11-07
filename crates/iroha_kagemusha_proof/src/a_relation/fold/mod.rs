@@ -39,7 +39,9 @@ use iroha_plonk_recursion::{
 
 use super::{LINEAGE_FIELDS, LineagePublicCells, VestaClaimCells, native::receive::INTERNAL_RANGE_BUSES};
 use crate::{
-    admin_sigma::StateWitness, fold_lineage::A_FRAME, operation_relation::{map_effects::InsertCells, state::StateCells},
+    admin_sigma::StateWitness,
+    fold_lineage::{A_EXPORT, A_FRAME},
+    operation_relation::{map_effects::InsertCells, state::StateCells},
     tree::IndexedInsert,
 };
 
@@ -61,12 +63,14 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// Columns of an A step: today's internal-stage verifier (tagged four-bus
-/// range layout), the byte tape lanes and the frame column.
+/// range layout), the byte tape lanes, the frame column and the export column
+/// ([`A_EXPORT`]).
 #[derive(Clone, Debug)]
 pub struct AStepConfig {
     pub(crate) verifier: VerifierConfig<Ep>,
     pub(crate) bytes: BytesConfig,
     pub(crate) frame: Column<Instance>,
+    pub(crate) export: Column<Instance>,
 }
 
 impl AStepConfig {
@@ -83,7 +87,9 @@ impl AStepConfig {
         let bytes = BytesConfig::configure(meta, a, b);
         let frame = meta.instance_column(A_FRAME);
         meta.enable_equality(frame);
-        Self { verifier, bytes, frame }
+        let export = meta.instance_column(A_EXPORT);
+        meta.enable_equality(export);
+        Self { verifier, bytes, frame, export }
     }
 }
 

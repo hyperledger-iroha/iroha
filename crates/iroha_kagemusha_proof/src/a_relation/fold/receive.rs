@@ -18,6 +18,15 @@
 //! pinned trivial claims. The tasks run through today's
 //! [`ReceiveStagePlan::constrain_stage`] with today's stage index, so every
 //! result keeps its owner.
+//!
+//! The incoming Omega's deferred claims leave through the claim accumulators
+//! instead of today's terminal folds. A5 selects the transported `acc_P` and
+//! the proof opening with today's selector (modes 0 and 1, the context's
+//! corrections) and folds both into A's claim accumulator. A1 exports the
+//! transported `acc_V`, its mode and its correction in today's A-frame order
+//! ([`A_EXPORT`]), and the Q Sigma step folds the selection into Q's. Today's
+//! map owners in A1 bind the modes to the results (`bind_modes`), so a claim
+//! the honest prover could not decide enters Corrected and forces the burn.
 
 use std::sync::Arc;
 
@@ -30,7 +39,7 @@ use iroha_fold::{
     ivc::FrameWitness,
     relation::FoldShape,
 };
-use iroha_pasta::{Ep, Eq, Fp, Fq, poseidon::hash_with_domain};
+use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve, poseidon::hash_with_domain};
 use iroha_plonk::{
     VerifyingKey,
     cs::ConstraintSystem,
@@ -67,7 +76,7 @@ use crate::{
         transition::TransitionInputs,
     },
     circuit::{PrefixMode, RelationShape},
-    fold_lineage::{A_STATE, AKind, BASE},
+    fold_lineage::{A_CLAIM_SLOT, A_EXPORT, A_STATE, AKind, BASE, CLAIM_A, ClaimFolds, claim_cells, fold_claims_cells},
     operation_relation::{
         incoming_statement::{IncomingStatementCells, StatementView},
         map_effects::{CONSUMED_DOMAIN, ReceiveMapWitness},
@@ -241,6 +250,69 @@ impl ReceiveFoldPlan {
             _ => state.extend([self.context_digest(source)?, Fp::from(pc_before(kind))]),
         }
         Ok(state)
+    }
+
+    /// The export column of a sub-step of `kind` ([`A_EXPORT`]): for A1,
+    /// today's A-frame incoming Vesta words (the transported `acc_V`'s
+    /// coordinate limbs and challenges, its mode, the correction's coordinate
+    /// limbs); zeros otherwise.
+    #[must_use]
+    pub fn export(&self, kind: AKind, source: &ReceiveFoldSource) -> Vec<Fp> {
+        if kind != AKind::Receive1 {
+            return vec![Fp::ZERO; A_EXPORT];
+        }
+        let incoming = &source.incoming;
+        let mut words = vesta_words(&incoming.vesta.as_input());
+        words.extend(mode_words(incoming.modes[2]));
+        let (x, y) = generator_coordinates::<Eq>(&incoming.vesta_correction);
+        for v in [x, y] {
+            words.extend(foreign_limbs(&v).map(Fp::from_u128));
+        }
+        words
+    }
+
+    /// The incoming Omega's Pallas claims as A5 selects them (today's
+    /// selector): the transported `acc_P` by mode 0 with the first correction,
+    /// then the proof opening by mode 1 with the second.
+    ///
+    /// # Errors
+    /// [`Error::Input`] for a Corrected claim whose correction is its own
+    /// generator (the circuit refuses it).
+    pub fn incoming_pallas_claims(&self, source: &ReceiveFoldSource) -> Result<[FoldInput<Ep>; 2], Error> {
+        let incoming = &source.incoming;
+        Ok([
+            select_incoming(incoming.pallas.as_input(), &incoming.pallas_corrections[0], incoming.modes[0], &self.trivial_pallas)?,
+            select_incoming(incoming.opening.clone(), &incoming.pallas_corrections[1], incoming.modes[1], &self.trivial_pallas)?,
+        ])
+    }
+
+    /// The incoming Omega's transported `acc_V` as the Q Sigma step selects it
+    /// from A1's export (mode 2, the Vesta correction).
+    ///
+    /// # Errors
+    /// As [`Self::incoming_pallas_claims`].
+    pub fn incoming_vesta_claim(&self, source: &ReceiveFoldSource) -> Result<FoldInput<Eq>, Error> {
+        let incoming = &source.incoming;
+        select_incoming(incoming.vesta.as_input(), &incoming.vesta_correction, incoming.modes[2], &self.trivial_vesta.as_input())
+    }
+}
+
+/// Today's incoming selector, natively: Accept keeps the claim, Trivial takes
+/// the pinned trivial claim, Corrected replaces the generator by a different
+/// correction and keeps the challenges.
+fn select_incoming<C: PastaCurve>(
+    original: FoldInput<C>,
+    correction: &C::AffineExt,
+    mode: IncomingMode,
+    trivial: &FoldInput<C>,
+) -> Result<FoldInput<C>, Error> {
+    match mode {
+        IncomingMode::Accept => Ok(original),
+        IncomingMode::Trivial => Ok(trivial.clone()),
+        IncomingMode::Corrected if correction == original.g() => Err(Error::Input),
+        IncomingMode::Corrected => {
+            FoldInput::from_normalized(*correction, 16, *original.challenges()).map_err(|_| Error::Input)
+        }
     }
 }
 
@@ -609,6 +681,9 @@ pub struct ReceiveStepWitness {
     /// The frame: the preceding Q instance, the accumulator it folds into and
     /// the A state before this sub-step.
     pub frame: FrameWitness<Ep>,
+    /// A5's folds of the incoming Pallas claims into A's claim accumulator
+    /// (required for A5, unused otherwise).
+    pub claims: Option<ClaimFolds<Ep>>,
 }
 
 /// A folded Receive A step of one kind.
@@ -640,7 +715,7 @@ impl ReceiveFoldStep {
         chip: &mut VerifierChip<Ep>,
         bytes: &mut BytesChip<Fp>,
         region: &mut Region<'_, Fp>,
-    ) -> Result<Vec<Word<Fp>>, SynthesisError> {
+    ) -> Result<(Vec<Word<Fp>>, Vec<Word<Fp>>), SynthesisError> {
         let assign = Assign { known: self.witness.is_some() };
         let blank;
         let source = match &self.witness {
@@ -709,9 +784,74 @@ impl ReceiveFoldStep {
             next.extend([digest, pc]);
             next
         };
+        let export = self.export(chip, region, &context)?;
+        let selected = if self.kind == AKind::Receive5 { Some(self.incoming_pallas(chip, region, &context)?) } else { None };
         let refs = chip.fold_lanes()?;
         let mut lanes = FoldLanes { glue: refs.glue, range: refs.range, ff: refs.ff, ecc: refs.ecc, duplex: refs.hash };
-        frame_outputs(&mut lanes, region, &chain, &frame, &next, &frame.digests, &[])
+        let digests = match &selected {
+            // A5 folds the incoming Pallas claims into A's claim accumulator.
+            Some(selected) => {
+                let (values, folds) = match &self.witness {
+                    Some(witness) => {
+                        let values = self.plan.incoming_pallas_claims(source).map_err(|_| SynthesisError::Synthesis)?;
+                        (Some(values), Some(witness.claims.as_ref().ok_or(SynthesisError::Synthesis)?))
+                    }
+                    None => (None, None),
+                };
+                let mut claims = Vec::with_capacity(2);
+                for (i, cells) in selected.iter().enumerate() {
+                    claims.push(claim_cells(&mut lanes, region, cells, values.as_ref().map(|v| &v[i]))?);
+                }
+                fold_claims_cells(&mut lanes, region, (&CLAIM_A, A_CLAIM_SLOT), &frame.digests, &claims, folds)?
+            }
+            None => frame.digests.clone(),
+        };
+        let outputs = frame_outputs(&mut lanes, region, &chain, &frame, &next, &digests, &[])?;
+        Ok((outputs, export))
+    }
+
+    /// The export column ([`A_EXPORT`]): A1 hands the incoming `acc_V`, its
+    /// mode (the third, after the two Pallas modes) and its correction to the
+    /// Q Sigma step, in today's A-frame order; every other kind exports zeros.
+    fn export(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        context: &ContextCells,
+    ) -> Result<Vec<Word<Fp>>, SynthesisError> {
+        let words = if self.kind == AKind::Receive1 {
+            let mut words = context.incoming_vesta.words();
+            let mode = context.modes.get(2).ok_or(SynthesisError::Synthesis)?;
+            words.extend([mode.accept().word().clone(), mode.trivial().word().clone(), mode.corrected().word().clone()]);
+            for coordinate in context.vesta_corrections.first().ok_or(SynthesisError::Synthesis)? {
+                words.extend([coordinate.lo().word().clone(), coordinate.hi().word().clone()]);
+            }
+            words
+        } else {
+            vec![chip.uint().glue().constant(region, Fp::ZERO)?; A_EXPORT]
+        };
+        if words.len() == A_EXPORT { Ok(words) } else { Err(SynthesisError::Synthesis) }
+    }
+
+    /// The incoming Omega's Pallas claims selected with today's selector: the
+    /// transported `acc_P` by the first mode and correction, the proof opening
+    /// (which A3's Proofs owner equated to the soft verifier's output in this
+    /// same context) by the second.
+    fn incoming_pallas(
+        &self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        context: &ContextCells,
+    ) -> Result<[FoldInputCells<Ep>; 2], SynthesisError> {
+        let (modes, corrections) = (&context.modes, &context.corrections);
+        if modes.len() < 2 || corrections.len() != 2 {
+            return Err(SynthesisError::Synthesis);
+        }
+        let opening = context.results.opening()?;
+        Ok([
+            FoldInputCells::select_incoming(chip, region, &context.incoming_pallas, &corrections[0], &modes[0])?,
+            FoldInputCells::select_incoming(chip, region, opening, &corrections[1], &modes[1])?,
+        ])
     }
 
     /// Stage A3's tasks: the incoming Omega's soft verifier and decoders
@@ -990,10 +1130,13 @@ impl Circuit<Fp> for ReceiveFoldStep {
         let mut bytes = BytesChip::new(config.bytes);
         chip.load_tables(&mut layouter)?;
         bytes.load_table(&mut layouter)?;
-        let out =
+        let (out, export) =
             layouter.assign_region(|| "folded Receive A step", |mut region| self.layout(&mut chip, &mut bytes, &mut region))?;
         for (row, word) in out.iter().enumerate() {
             layouter.constrain_instance(word.cell(), config.frame, row)?;
+        }
+        for (row, word) in export.iter().enumerate() {
+            layouter.constrain_instance(word.cell(), config.export, row)?;
         }
         Ok(())
     }

@@ -1,59 +1,61 @@
 //! The folded Receive's Q Sigma step (half-step 3, [`QKind::Sigma`]): today's
 //! Q0 incoming slot (the `σ_send` soft verifier, the one-hot mode and the
-//! selected claim) without its local fold, the selected claim folded into Q's
-//! Vesta claim accumulator instead, and the frame folding the A1 instance, all
-//! on one PIPA-R verifier's lanes. Its public columns are the frame column,
-//! then Q0's five columns (the selected claim where today's folded part is),
-//! which the A3 step reads from the instance it folds.
+//! selected claim) without its local fold, and the frame folding the A1
+//! instance, all on one PIPA-R verifier's lanes. Its public columns are the
+//! frame column, then Q0's five columns, which the A3 step reads from the
+//! instance it folds.
+//!
+//! Two Vesta claims fold into Q's claim accumulator here: the selected
+//! `σ_send` opening, then the incoming Omega's transported `acc_V`, which A1
+//! exports with its mode and correction ([`super::A_EXPORT`], today's A-frame
+//! words). The step selects `acc_V` with today's selector, as today's Omega
+//! does from the A frame.
 
+use ff::Field;
 use iroha_fold::{
     circuit::{
         FoldLanes,
-        claims::{
-            ClaimCells, assign_claim_accumulator, assign_claim_proof, claim_accumulator_digest,
-            verify_claim_fold_or_start,
-        },
-        ivc::{assert_equal_unless, fold_frame, frame_outputs},
+        ivc::{fold_frame, foreign_bounded_word, frame_outputs},
     },
-    claims::{Claim, ClaimAccumulator, ClaimFoldOutput, ClaimProof, fold_or_start_claim, placeholder_claim_accumulator},
+    claims::ClaimAccumulator,
     ivc::FrameWitness,
     relation::FoldShape,
 };
 use iroha_pasta::{Eq, Fp, Fq};
 use iroha_plonk::{
     cs::{Column, ConstraintSystem, Instance},
-    frontend::{Circuit, Error, Layouter, Region, SimpleFloorPlanner, Value},
+    frontend::{Circuit, Error, Layouter, Region, SimpleFloorPlanner},
 };
 use iroha_plonk_gadgets::{
-    GlueChip, Word,
+    Word,
     bytes::tape::{BytesChip, BytesConfig},
 };
 use iroha_plonk_recursion::{
     FoldInput,
     accumulation_circuit::FoldInputCells,
+    codec::ScalarCells,
+    obligation::ModeCells,
     verifier::{VerifierChip, VerifierConfig},
 };
 
-use super::{AKind, BASE, CLAIM_Q, Q_CLAIM_SLOT, Q_FRAME, Q_STATE, QKind};
+use super::{
+    A_EXPORT, AKind, BASE, CLAIM_Q, ClaimFolds, Q_CLAIM_SLOT, Q_FRAME, Q_STATE, QKind, claim_cells, claim_of, fold_claims,
+    fold_claims_cells,
+};
 use crate::q_sigma::QSigmaCircuit;
 
-/// The claim a selected incoming opening defers: its generator and its sixteen
-/// challenges (zero-padded to k16).
-#[must_use]
-pub fn selected_claim(selected: &FoldInput<Eq>) -> Claim<Eq> {
-    Claim { g: *selected.g(), u: *selected.challenges() }
-}
-
-/// The Q Sigma step's claim business natively: folds the selected claim into
-/// the claim accumulator Q keeps, or starts it while absent.
+/// The Q Sigma step's claim business natively: folds the selected `σ_send`
+/// claim, then the selected incoming `acc_V` claim, into the claim accumulator
+/// Q keeps (starting it while absent).
 ///
 /// # Errors
-/// As [`fold_or_start_claim`].
+/// As [`fold_claims`].
 pub fn fold_selected(
     kept: Option<(&ClaimAccumulator<Eq>, &[Fp])>,
     selected: &FoldInput<Eq>,
-) -> Result<ClaimFoldOutput<Eq>, iroha_fold::Error> {
-    fold_or_start_claim(&CLAIM_Q, kept, &selected_claim(selected))
+    incoming: &FoldInput<Eq>,
+) -> Result<(ClaimAccumulator<Eq>, Vec<Fp>, ClaimFolds<Eq>), iroha_fold::Error> {
+    fold_claims(&CLAIM_Q, kept, &[claim_of(selected), claim_of(incoming)])
 }
 
 /// The witness of a Q Sigma step besides its leaf.
@@ -61,12 +63,12 @@ pub fn fold_selected(
 pub struct QSigmaStepWitness {
     /// The frame: the preceding A1 instance and the accumulator it folds into.
     pub frame: FrameWitness<Eq>,
-    /// The selected claim (the leaf's output, natively).
+    /// The selected `σ_send` claim (the leaf's output, natively).
     pub selected: FoldInput<Eq>,
-    /// The claim accumulator Q keeps before this step (`None` while absent).
-    pub claims: Option<ClaimAccumulator<Eq>>,
-    /// The claim fold's messages (zero when starting).
-    pub claim_proof: ClaimProof<Fp>,
+    /// The selected incoming `acc_V` claim (from A1's export, natively).
+    pub incoming: FoldInput<Eq>,
+    /// The claim accumulator Q keeps before this step and both folds' messages.
+    pub claims: ClaimFolds<Eq>,
 }
 
 /// The Q Sigma step.
@@ -94,27 +96,41 @@ pub struct QSigmaStepConfig {
     output: [Column<Instance>; 5],
 }
 
-/// The claim cells of the leaf's selected claim on the fold lanes: a point and
-/// sixteen scalars copy-bound to the leaf's generator coordinates and challenge
-/// limbs.
-fn claim_cells(
-    lanes: &mut FoldLanes<'_, Eq>,
+/// A native `Fq` coordinate from its two exported limbs (each below `2^128`).
+fn coordinate(chip: &mut VerifierChip<Eq>, region: &mut Region<'_, Fq>, lo: &Word<Fq>, hi: &Word<Fq>) -> Result<Word<Fq>, Error> {
+    chip.uint().glue().linear(region, &[(Fq::ONE, lo), (Fq::from(2).pow_vartime([128]), hi)], Fq::ZERO)
+}
+
+/// The incoming `acc_V` claim, mode and correction of A1's export column (the
+/// folded A1 instance's second public column), selected with today's
+/// selector: Accept keeps the claim, Trivial takes the pinned trivial claim,
+/// Corrected replaces its generator by a different correction.
+fn incoming_vesta(
+    chip: &mut VerifierChip<Eq>,
     region: &mut Region<'_, Fq>,
-    selected: &FoldInputCells<Eq>,
-    value: Option<&FoldInput<Eq>>,
-) -> Result<ClaimCells<Eq>, Error> {
-    let point = value.map_or_else(Value::unknown, |v| Value::known(Eq::from(*v.g())));
-    let g = lanes.assign_point(region, point)?;
-    GlueChip::assert_equal(region, g.x(), selected.g().x())?;
-    GlueChip::assert_equal(region, g.y(), selected.g().y())?;
-    let mut u = Vec::with_capacity(selected.challenges().len());
-    for (i, cell) in selected.challenges().iter().enumerate() {
-        let scalar = lanes.assign_scalar(region, value.map_or_else(Value::unknown, |v| Value::known(v.challenges()[i])))?;
-        GlueChip::assert_equal(region, scalar.s6.lo().word(), cell.lo().word())?;
-        GlueChip::assert_equal(region, scalar.s6.hi().word(), cell.hi().word())?;
-        u.push(scalar);
-    }
-    Ok(ClaimCells { g, u })
+    column: &[iroha_fold::circuit::ScalarCell<Eq>],
+    small: &[Word<Fq>],
+) -> Result<FoldInputCells<Eq>, Error> {
+    let [x_lo, x_hi, y_lo, y_hi, accept, trivial, corrected, cx_lo, cx_hi, cy_lo, cy_hi] = small else {
+        return Err(Error::Synthesis);
+    };
+    let x = coordinate(chip, region, x_lo, x_hi)?;
+    let y = coordinate(chip, region, y_lo, y_hi)?;
+    let g = chip.constrain_generator(region, &x, &y)?;
+    let challenges = column
+        .get(4..20)
+        .ok_or(Error::Synthesis)?
+        .iter()
+        .map(|value| ScalarCells::from_limbs(&mut chip.uint(), region, value.s6.lo(), value.s6.hi()))
+        .collect::<Result<Vec<_>, _>>()?
+        .try_into()
+        .map_err(|_| Error::Synthesis)?;
+    let original = FoldInputCells::from_normalized(chip, region, 16, g, challenges)?;
+    let mode = ModeCells::constrain(chip.uint().glue(), region, &[accept.clone(), trivial.clone(), corrected.clone()])?;
+    let cx = coordinate(chip, region, cx_lo, cx_hi)?;
+    let cy = coordinate(chip, region, cy_lo, cy_hi)?;
+    let correction = chip.constrain_generator(region, &cx, &cy)?;
+    FoldInputCells::select_incoming(chip, region, &original, &correction, &mode)
 }
 
 impl QSigmaStep {
@@ -125,36 +141,42 @@ impl QSigmaStep {
         region: &mut Region<'_, Fq>,
     ) -> Result<(Vec<Word<Fq>>, [Vec<Word<Fq>>; 5]), Error> {
         // The leaf first: its byte rows precede every curve-lane row.
-        let incoming = self.leaf.fold_incoming(chip, bytes, region)?;
-        let refs = chip.fold_lanes()?;
-        let mut lanes = FoldLanes { glue: refs.glue, range: refs.range, ff: refs.ff, ecc: refs.ecc, duplex: refs.hash };
+        let slot = self.leaf.fold_incoming(chip, bytes, region)?;
         let chain = QKind::Sigma.chain(AKind::Receive1);
         let witness = self.witness.as_ref();
-        let frame = fold_frame(
-            &mut lanes,
-            region,
-            &chain,
-            &self.shape,
-            Fq::from(BASE),
-            self.start,
-            Q_STATE,
-            witness.map(|w| &w.frame),
-        )?;
-        // The selected claim folds into Q's claim accumulator (or starts it).
-        let claim = claim_cells(&mut lanes, region, &incoming.selected, witness.map(|w| &w.selected))?;
-        let placeholder = placeholder_claim_accumulator::<Eq>();
-        let acc_value = witness.map(|w| w.claims.as_ref().unwrap_or(&placeholder));
-        let acc = assign_claim_accumulator(&mut lanes, region, acc_value)?;
-        let proof = assign_claim_proof(&mut lanes, region, witness.map(|w| &w.claim_proof))?;
-        let stored = frame.digests[Q_CLAIM_SLOT].clone();
-        let absent = lanes.glue.is_zero(region, &stored)?;
-        let opened = claim_accumulator_digest(&mut lanes, region, &CLAIM_Q, &acc)?;
-        assert_equal_unless(&mut lanes, region, &opened, &stored, Some(&absent))?;
-        let folded = verify_claim_fold_or_start(&mut lanes, region, &CLAIM_Q, &acc, &claim, &proof, &absent)?;
-        let mut digests = frame.digests.clone();
-        digests[Q_CLAIM_SLOT] = claim_accumulator_digest(&mut lanes, region, &CLAIM_Q, &folded)?;
+        let (frame, small) = {
+            let refs = chip.fold_lanes()?;
+            let mut lanes = FoldLanes { glue: refs.glue, range: refs.range, ff: refs.ff, ecc: refs.ecc, duplex: refs.hash };
+            let frame = fold_frame(
+                &mut lanes,
+                region,
+                &chain,
+                &self.shape,
+                Fq::from(BASE),
+                self.start,
+                Q_STATE,
+                witness.map(|w| &w.frame),
+            )?;
+            // A1's export: coordinate limbs, mode bits and correction limbs are
+            // small words; the challenges stay foreign scalars.
+            let column = frame.public.get(1).filter(|c| c.len() == A_EXPORT).ok_or(Error::Synthesis)?;
+            let mut small = Vec::with_capacity(11);
+            for value in column[..4].iter().chain(&column[20..]) {
+                small.push(foreign_bounded_word(&mut lanes, region, value)?);
+            }
+            (frame, small)
+        };
+        let incoming = incoming_vesta(chip, region, &frame.public[1], &small)?;
+        let refs = chip.fold_lanes()?;
+        let mut lanes = FoldLanes { glue: refs.glue, range: refs.range, ff: refs.ff, ecc: refs.ecc, duplex: refs.hash };
+        let claims = [
+            claim_cells(&mut lanes, region, &slot.selected, witness.map(|w| &w.selected))?,
+            claim_cells(&mut lanes, region, &incoming, witness.map(|w| &w.incoming))?,
+        ];
+        let digests =
+            fold_claims_cells(&mut lanes, region, (&CLAIM_Q, Q_CLAIM_SLOT), &frame.digests, &claims, witness.map(|w| &w.claims))?;
         let outputs = frame_outputs(&mut lanes, region, &chain, &frame, &[], &digests, &[])?;
-        Ok((outputs, incoming.columns))
+        Ok((outputs, slot.columns))
     }
 }
 

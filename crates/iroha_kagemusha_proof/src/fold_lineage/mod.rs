@@ -37,21 +37,38 @@
 //! A sub-steps done, zero between operations). The Q state is empty: Q steps
 //! export their leaves' public columns, which the following A step reads from
 //! the instance it folds.
+//!
+//! The incoming Omega's deferred IPA claims enter the claim accumulators of
+//! the curves they live on: A5 folds its two Pallas claims (the transported
+//! `acc_P` and the proof opening) into A's, and the Q Sigma step folds the
+//! `σ_send` opening and the transported `acc_V` into Q's. A1 hands `acc_V`,
+//! its mode and its correction to the Q side in its export column
+//! ([`A_EXPORT`]), as today's A frame hands them to Omega.
 
 pub mod sigma;
 pub mod signature;
 
 use ff::Field;
 use iroha_fold::{
-    circuit::{FoldVerifierChips, FoldVerifierConfig, ivc::{fold_frame, frame_outputs}},
+    circuit::{
+        FoldLanes, FoldVerifierChips, FoldVerifierConfig,
+        claims::{
+            ClaimCells, assign_claim_accumulator, assign_claim_proof, claim_accumulator_digest, verify_claim_fold,
+            verify_claim_fold_or_start,
+        },
+        ivc::{assert_equal_unless, fold_frame, frame_outputs},
+    },
+    claims::{Claim, ClaimAccumulator, ClaimProof, fold_claim, fold_or_start_claim, placeholder_claim_accumulator},
     ivc::{ChainSide, FrameWitness, embed, ivc_hash},
     relation::FoldShape,
 };
-use iroha_pasta::{Eq, Fp, Fq};
+use iroha_pasta::{Eq, Fp, Fq, PastaCurve};
 use iroha_plonk::{
     cs::{Column, ConstraintSystem, Instance},
-    frontend::{Circuit, Error, Layouter, SimpleFloorPlanner},
+    frontend::{Circuit, Error, Layouter, Region, SimpleFloorPlanner, Value},
 };
+use iroha_plonk_gadgets::{GlueChip, Word};
+use iroha_plonk_recursion::{FoldInput, accumulation_circuit::FoldInputCells};
 
 use crate::a_relation::LINEAGE_FIELDS;
 
@@ -85,6 +102,11 @@ pub const A_FRAME: usize = 2;
 /// Length of a Q instance's frame column (`[passthrough, h_out]`); a Q leaf's
 /// public columns follow as further instance columns.
 pub const Q_FRAME: usize = 2;
+/// Length of an A instance's export column, its second instance column:
+/// today's A-frame incoming Vesta words (the transported `acc_V`'s coordinate
+/// limbs and challenges, its one-hot mode, the correction's coordinate limbs).
+/// A1 fills it; every other A kind exports zeros.
+pub const A_EXPORT: usize = 27;
 
 /// A relations of the folded lineage, in the order of Q's digest list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -186,6 +208,106 @@ impl QKind {
 #[must_use]
 pub fn start_passthrough(a_base: &[Fp]) -> Fq {
     embed(&ivc_hash::<Fp>(&IVC_A, 0, Fp::from(BASE), a_base, &[Fp::ZERO; A_DIGESTS]))
+}
+
+/// The claim a selected incoming opening defers: its generator and its sixteen
+/// challenges (zero-padded to k16).
+#[must_use]
+pub fn claim_of<C: PastaCurve>(input: &FoldInput<C>) -> Claim<C> {
+    Claim { g: *input.g(), u: *input.challenges() }
+}
+
+/// The claim folds of a step, natively: the claim accumulator its side keeps
+/// before the step (`None` while absent) and each fold's messages, in order
+/// (zero for the fold that starts the accumulator).
+#[derive(Clone, Debug)]
+pub struct ClaimFolds<C: PastaCurve> {
+    /// The claim accumulator before the step.
+    pub kept: Option<ClaimAccumulator<C>>,
+    /// One message set per claim.
+    pub proofs: Vec<ClaimProof<C::ScalarExt>>,
+}
+
+/// Folds `claims`, in order, into the claim accumulator a side keeps, starting
+/// it from the first claim while absent. Returns the new accumulator, its
+/// witness and the step's [`ClaimFolds`].
+///
+/// # Errors
+/// [`iroha_fold::Error::Shape`] without claims; as [`fold_claim`].
+pub fn fold_claims<C: PastaCurve>(
+    domain: &[u8; 32],
+    kept: Option<(&ClaimAccumulator<C>, &[C::ScalarExt])>,
+    claims: &[Claim<C>],
+) -> Result<(ClaimAccumulator<C>, Vec<C::ScalarExt>, ClaimFolds<C>), iroha_fold::Error> {
+    let (first, rest) = claims.split_first().ok_or(iroha_fold::Error::Shape("claim folds"))?;
+    let before = kept.map(|(acc, _)| *acc);
+    let (mut acc, mut s, proof) = fold_or_start_claim(domain, kept, first)?;
+    let mut proofs = vec![proof];
+    for claim in rest {
+        let (next, next_s, proof) = fold_claim(domain, &acc, &s, claim)?;
+        (acc, s) = (next, next_s);
+        proofs.push(proof);
+    }
+    Ok((acc, s, ClaimFolds { kept: before, proofs }))
+}
+
+/// The claim cells of a selected claim on the fold lanes: a point and sixteen
+/// scalars copy-bound to the selection's generator coordinates and challenge
+/// limbs.
+pub(crate) fn claim_cells<C: PastaCurve>(
+    lanes: &mut FoldLanes<'_, C>,
+    region: &mut Region<'_, C::Base>,
+    selected: &FoldInputCells<C>,
+    value: Option<&FoldInput<C>>,
+) -> Result<ClaimCells<C>, Error> {
+    let point = value.map_or_else(Value::unknown, |v| Value::known(C::from(*v.g())));
+    let g = lanes.assign_point(region, point)?;
+    GlueChip::assert_equal(region, g.x(), selected.g().x())?;
+    GlueChip::assert_equal(region, g.y(), selected.g().y())?;
+    let mut u = Vec::with_capacity(selected.challenges().len());
+    for (i, cell) in selected.challenges().iter().enumerate() {
+        let scalar = lanes.assign_scalar(region, value.map_or_else(Value::unknown, |v| Value::known(v.challenges()[i])))?;
+        GlueChip::assert_equal(region, scalar.s6.lo().word(), cell.lo().word())?;
+        GlueChip::assert_equal(region, scalar.s6.hi().word(), cell.hi().word())?;
+        u.push(scalar);
+    }
+    Ok(ClaimCells { g, u })
+}
+
+/// Folds `claims` into the claim accumulator whose digest `digests[slot]`
+/// holds: opens it unless absent (digest zero), folds the first claim into it
+/// or starts it from that claim, folds the rest, and returns the digest list
+/// with the new accumulator's digest. Nothing is accepted here: the claim
+/// decider accepts the accumulator or not.
+pub(crate) fn fold_claims_cells<C: PastaCurve>(
+    lanes: &mut FoldLanes<'_, C>,
+    region: &mut Region<'_, C::Base>,
+    (domain, slot): (&[u8; 32], usize),
+    digests: &[Word<C::Base>],
+    claims: &[ClaimCells<C>],
+    witness: Option<&ClaimFolds<C>>,
+) -> Result<Vec<Word<C::Base>>, Error> {
+    if claims.is_empty() || slot >= digests.len() || witness.is_some_and(|w| w.proofs.len() != claims.len()) {
+        return Err(Error::Synthesis);
+    }
+    let placeholder = placeholder_claim_accumulator::<C>();
+    let acc = assign_claim_accumulator(lanes, region, witness.map(|w| w.kept.as_ref().unwrap_or(&placeholder)))?;
+    let stored = digests[slot].clone();
+    let absent = lanes.glue.is_zero(region, &stored)?;
+    let opened = claim_accumulator_digest(lanes, region, domain, &acc)?;
+    assert_equal_unless(lanes, region, &opened, &stored, Some(&absent))?;
+    let mut folded: Option<_> = None;
+    for (i, claim) in claims.iter().enumerate() {
+        let proof = assign_claim_proof(lanes, region, witness.map(|w| &w.proofs[i]))?;
+        folded = Some(match &folded {
+            None => verify_claim_fold_or_start(lanes, region, domain, &acc, claim, &proof, &absent)?,
+            Some(acc) => verify_claim_fold(lanes, region, domain, acc, claim, &proof)?,
+        });
+    }
+    let folded = folded.ok_or(Error::Synthesis)?;
+    let mut out = digests.to_vec();
+    out[slot] = claim_accumulator_digest(lanes, region, domain, &folded)?;
+    Ok(out)
 }
 
 /// The Q step without business ([`QKind::Frame`]): it folds the preceding A
