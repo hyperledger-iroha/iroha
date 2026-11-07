@@ -1,0 +1,12 @@
+[
+  {
+    "path": ".github/workflows/linux_observer_candidate.yml",
+    "sha256": "679987d206059ea8270074b98998e80b59ff01a3e6dd0cf98cd0bc78a6551b74",
+    "equals_signed_pr_source": true
+  },
+  {
+    "path": "scripts/prepare_linux_observer_candidate.py",
+    "sha256": "3b60112aa17af6f66edec2d6115970705d0abb3c743d8e195326c92b09d207ef",
+    "equals_signed_pr_source": true
+  }
+]

@@ -1,0 +1,11 @@
+{
+  "source_commit": "3743ff550ca3632e92b23e5d60d084b41a069b29",
+  "source_manifest_sha256": "2f67500363802598c16b5cbd0abdd616d0c6e9e05c0b68feea1e236301d3d7b1",
+  "candidate_manifest_sha256": "2f67500363802598c16b5cbd0abdd616d0c6e9e05c0b68feea1e236301d3d7b1",
+  "matches": true,
+  "tracked_files": 30947,
+  "started": "2026-11-07T10:32:30.284755+00:00",
+  "finished": "2026-11-07T10:32:33.166538+00:00",
+  "method": "Read every exact Git blob from fixed clean source, verify its Git object identity, byte-sort paths, apply the reviewed v2 framed path/kind/canonical POSIX mode/content manifest; no build, repository mutation, or artifact execution.",
+  "inventory_sha256": "ac69058706897b83806721f6628feaa4f84770cef005a97e8569e1a629495828"
+}

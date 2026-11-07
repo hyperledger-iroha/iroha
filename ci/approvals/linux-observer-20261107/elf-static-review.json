@@ -1,0 +1,96 @@
+{
+  "method": "Read and decode ZIP member bytes with Python struct only; no shared library extraction, loading, execution, or native build. Compare exact dynamic public symbol set to fixed-source extern C functions.",
+  "module_sha256": "3698086928a179cd80282ccae18063893225caac1c16e16b282a1d321b9ca3ef",
+  "module_bytes": 939920,
+  "elf": {
+    "class": "ELF64",
+    "byte_order": "little",
+    "kind": "ET_DYN",
+    "machine": "EM_X86_64",
+    "entry": 0,
+    "program_headers": 11,
+    "section_headers": 33,
+    "non_executable_stack": true,
+    "no_writable_executable_load_segments": true,
+    "needed": [
+      "libgcc_s.so.1",
+      "libc.so.6",
+      "ld-linux-x86-64.so.2"
+    ],
+    "defined_dynamic_exports": [
+      {
+        "name": "iroha_process_root_observer_bind_v1",
+        "type": 2,
+        "binding": 1,
+        "bytes": 116
+      },
+      {
+        "name": "iroha_process_root_observer_finish_v1",
+        "type": 2,
+        "binding": 1,
+        "bytes": 138
+      },
+      {
+        "name": "iroha_process_root_observer_poll_v1",
+        "type": 2,
+        "binding": 1,
+        "bytes": 138
+      },
+      {
+        "name": "iroha_process_root_observer_prepare_v1",
+        "type": 2,
+        "binding": 1,
+        "bytes": 40
+      },
+      {
+        "name": "iroha_process_spawn_v1",
+        "type": 2,
+        "binding": 1,
+        "bytes": 4260
+      },
+      {
+        "name": "iroha_process_try_wait_v1",
+        "type": 2,
+        "binding": 1,
+        "bytes": 711
+      },
+      {
+        "name": "iroha_process_close_v1",
+        "type": 2,
+        "binding": 1,
+        "bytes": 1670
+      },
+      {
+        "name": "iroha_process_kill_v1",
+        "type": 2,
+        "binding": 1,
+        "bytes": 618
+      },
+      {
+        "name": "iroha_process_read_v1",
+        "type": 2,
+        "binding": 1,
+        "bytes": 776
+      },
+      {
+        "name": "iroha_process_root_observer_close_v1",
+        "type": 2,
+        "binding": 1,
+        "bytes": 116
+      }
+    ]
+  },
+  "source_export_set_matches": true,
+  "expected_exports": [
+    "iroha_process_close_v1",
+    "iroha_process_kill_v1",
+    "iroha_process_read_v1",
+    "iroha_process_root_observer_bind_v1",
+    "iroha_process_root_observer_close_v1",
+    "iroha_process_root_observer_finish_v1",
+    "iroha_process_root_observer_poll_v1",
+    "iroha_process_root_observer_prepare_v1",
+    "iroha_process_spawn_v1",
+    "iroha_process_try_wait_v1"
+  ]
+}

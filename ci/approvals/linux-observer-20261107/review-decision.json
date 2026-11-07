@@ -1,0 +1,148 @@
+{
+  "schema": "iroha.linux-observer-independent-review.v1",
+  "decision": "approved-for-protected-linux-native-harness",
+  "reviewer": "codex-sdk-ci-review",
+  "reviewer_kind": "AI subagent independent of the candidate producer and consumer implementation",
+  "reviewed_at_utc": "2026-11-07T10:38:31Z",
+  "pins": {
+    "repository": "hyperledger-iroha/iroha",
+    "producer_commit": "33879a15c5407376ea2856776f142ba517d3c43d",
+    "producer_head_commit": "4c4268b4f5f2c9fd6a45b1f70b5682897a0f2a3a",
+    "producer_run_id": 42363425911,
+    "producer_run_attempt": 1,
+    "artifact_id": 13570671555,
+    "artifact_name": "linux-observer-candidate-42363425911-1",
+    "artifact_sha256": "1a4bbe42d8b4ee8a0d3b0a9a60be0c7fbe16a89c780fcfd51b2c26bf7d577614",
+    "candidate_sha256": "2751d9d50ef9eb68df36bcf62243d28057b5e19e5f5b00c3319c563b518ae808",
+    "source_commit": "3743ff550ca3632e92b23e5d60d084b41a069b29",
+    "source_manifest_sha256": "2f67500363802598c16b5cbd0abdd616d0c6e9e05c0b68feea1e236301d3d7b1",
+    "native_target": "x86_64-unknown-linux-gnu",
+    "module_sha256": "3698086928a179cd80282ccae18063893225caac1c16e16b282a1d321b9ca3ef",
+    "provenance_sha256": "16a30eeda7f4dad94a07569f40449d4d705bb0e0681eb6cc9f5d25289e5e6b9e"
+  },
+  "artifact_expires_at_utc": "2026-11-14T10:18:59Z",
+  "conclusion": "Approve this exact unexecuted normal-publication Linux observer candidate for the required 20-method native resource-harness CI suite through separately protected approval selection. No discrepancy or review-blocking defect was found in the reviewed evidence.",
+  "independent_work": [
+    "Fetched immutable GitHub artifact, attempt and job metadata; verified success, artifact digest, repository identity, head SHA and actual signed GitHub merge commit with its two parents.",
+    "Fetched the exact merge commit workflow and driver bytes from GitHub; confirmed both match the signed PR source; reviewed pinned actions, fixed observer checkout, fresh hosted Linux environment, toolchain and normal publication steps.",
+    "Independently recomputed the v2 canonical source manifest over all 30,947 exact fixed-commit Git blobs, validating Git blob identities, byte-sorted paths, file kinds, executable modes and framed contents.",
+    "Reviewed the fixed-source Rust normal publisher build-bridge-publish call path: closed bridge package/lib selection; locked offline Cargo metadata and build; retained tools, config, Cargo.lock and original emitted module; source custody retained by caller; canonical publication and bounded acknowledgement; no bridge loading in this path.",
+    "Reviewed the driver retained-source scope through bootstrap build, publication and original artifact copy; bounded unique-field evidence parsing; fixed helper identity; terminal child wait; original publisher identity and no-follow custody; final source and tool checks before candidate receipt.",
+    "Inspected original ZIP bytes, candidate receipt, normal publisher provenance and build/version/publication logs; crosschecked source, lock, policies, config, tools, package, target, module size, acknowledgement and all independent pins.",
+    "Decoded native ELF bytes without extraction or loading: ELF64 little-endian x86_64 ET_DYN, exactly the ten defined public native API exports present in fixed source, expected system dependencies, non-executable stack, no writable-executable load segment.",
+    "Read full GitHub job log: driver merge checkout, fixed observer checkout, pinned Rust installation, 26 passing candidate controls, successful normal publisher and immutable artifact finalization. Preserved original raw log and a separate ANSI-stripped review view."
+  ],
+  "scope_limits": [
+    "This review authorizes only the exact Linux observer artifact for native harness testing; it is not evidence that the 20 actual native tests or any release gate has passed.",
+    "Neither native module nor bridge entry point was extracted, loaded or executed during review; no Cargo, Rust or SDK native build was run, and no source or target directory was modified.",
+    "GitHub hosted execution, pinned setup actions and selected Rust 1.99.1 remain trusted build infrastructure. Compiler and module reproducibility were not independently established; recorded compiler hashes were crosschecked against producer provenance and tool/version logs.",
+    "The receipt publisher hash identifies the normally built bootstrap publisher reported by the reviewed driver. The publisher executable is not present in this artifact and was not independently rehashed by the reviewer.",
+    "Workflow asks for 30 days retention but the immutable artifact metadata gives actual expiry 2026-11-14T10:18:59Z. A replacement reviewed artifact or explicitly approved archival transport is required before then."
+  ],
+  "integration_requirements": [
+    "Commit this independent review evidence permanently using normal signed Git commits, then bind the real repository evidence URL into the exact approval schema with reviewer codex-sdk-ci-review and the timestamp above.",
+    "Keep approval selection outside PR control: a separately signed approval commit selected by the protected LINUX_OBSERVER_APPROVAL_COMMIT repository variable. Do not weaken the consumer when variable update is unavailable.",
+    "Keep metadata, archive, candidate, source and original module/provenance pin checks intact. Do not derive authorization from a candidate observed hash alone.",
+    "Run all 20 actual native methods on hosted Linux with zero skips and an unconditional aggregate gate, followed by the remaining required release checks."
+  ],
+  "permanent_evidence_url": null,
+  "permanent_evidence_url_reason": "Parent will create a signed permanent evidence commit before constructing the consumer approval record; no future URL is fabricated.",
+  "crosscheck_command": "python3 -B verify_review.py",
+  "crosscheck_exit_code": 0,
+  "evidence_files": [
+    {
+      "path": "crosschecks.json",
+      "bytes": 2508,
+      "sha256": "b8bbdcf2adf4dd4c4105638241ce3c2935793ae0a32bf98e0dfd73d1c1153335"
+    },
+    {
+      "path": "approved-pins.json",
+      "bytes": 898,
+      "sha256": "3a9cb4a30d77a76ff83b2c6dc274da318b55efbe8f6af5b24d5e63e72bb870c4"
+    },
+    {
+      "path": "verify_review.py",
+      "bytes": 10948,
+      "sha256": "7319f00d0fddbf3b2ef85aa796e580f656245131c9bbc03d1b7f08691e432dd0"
+    },
+    {
+      "path": "elf-static-review.json",
+      "bytes": 2454,
+      "sha256": "b7088532f2c9511b4dca5fbb7fb83d08a696057a6fd365e4a03142bdf0fe1618"
+    },
+    {
+      "path": "independent-source-manifest.json",
+      "bytes": 742,
+      "sha256": "e13a12d9fb5eac0c1ac549845125a6e93cbf212bc83af382700cd44bc0b281b9"
+    },
+    {
+      "path": "zip-inventory.json",
+      "bytes": 3027,
+      "sha256": "dacb8bd78ebd7fa818624e40ac263907c44fa83670d53705fbcbafef8424e914"
+    },
+    {
+      "path": "artifact.json",
+      "bytes": 748,
+      "sha256": "b63b57cac053283be7bcd012884d4fa57d6f949536cb740b0d1039ed32026cd1"
+    },
+    {
+      "path": "run-attempt.json",
+      "bytes": 13814,
+      "sha256": "b88d9485a9436c65104c965c8dda065fd115e35677ba64f60e8d71b48dd49390"
+    },
+    {
+      "path": "jobs.json",
+      "bytes": 3422,
+      "sha256": "b0aa53e61e8bb449f47ec3d263f38c2c714d08ca5a9d1196900af26370d02de1"
+    },
+    {
+      "path": "producer-commit.json",
+      "bytes": 2871,
+      "sha256": "ae5d7f2e79f64c25c9582832a93592d87e2324057cfc9d0c1ae2249dd277b3e4"
+    },
+    {
+      "path": "producer-source-pins.json",
+      "bytes": 378,
+      "sha256": "850899c3e4f3ec365dfd50e926bbaf81b4945458139bf2eb1d3bf1fb22ae7a9d"
+    },
+    {
+      "path": "job-log-fetch.json",
+      "bytes": 417,
+      "sha256": "f6a406eac18c0809d3d74866bffed979da6dd9a744047c840f66bc6fc576303c"
+    },
+    {
+      "path": "producer-source/.github/workflows/linux_observer_candidate.yml",
+      "bytes": 2906,
+      "sha256": "679987d206059ea8270074b98998e80b59ff01a3e6dd0cf98cd0bc78a6551b74"
+    },
+    {
+      "path": "producer-source/scripts/prepare_linux_observer_candidate.py",
+      "bytes": 15694,
+      "sha256": "3b60112aa17af6f66edec2d6115970705d0abb3c743d8e195326c92b09d207ef"
+    },
+    {
+      "path": "evidence/review/candidate.json",
+      "bytes": 2070,
+      "sha256": "2751d9d50ef9eb68df36bcf62243d28057b5e19e5f5b00c3319c563b518ae808"
+    },
+    {
+      "path": "evidence/review/bridge/publisher-source.json",
+      "bytes": 2858,
+      "sha256": "16a30eeda7f4dad94a07569f40449d4d705bb0e0681eb6cc9f5d25289e5e6b9e"
+    }
+  ],
+  "large_evidence_retained_separately": [
+    {
+      "path": "github-job.raw.log",
+      "sha256": "5d2664631a1b72e98a93f78e0ebd8c6396c39334aed07403412a670e8617b23f"
+    },
+    {
+      "path": "github-job.clean.log",
+      "sha256": "55c7867e5fcfe2b878b128ad2723621b81a9a22d5a94bd02d07092fa6d2477b6"
+    },
+    {
+      "path": "independent-source-inventory.json",
+      "sha256": "ac69058706897b83806721f6628feaa4f84770cef005a97e8569e1a629495828"
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "bridge_executed": false,
+  "driver_revision": "33879a15c5407376ea2856776f142ba517d3c43d",
+  "driver_sha256": "3b60112aa17af6f66edec2d6115970705d0abb3c743d8e195326c92b09d207ef",
+  "kernel": "7.0.0-1017-azure",
+  "module_sha256": "3698086928a179cd80282ccae18063893225caac1c16e16b282a1d321b9ca3ef",
+  "native_target": "x86_64-unknown-linux-gnu",
+  "observer_commit": "3743ff550ca3632e92b23e5d60d084b41a069b29",
+  "provenance_sha256": "16a30eeda7f4dad94a07569f40449d4d705bb0e0681eb6cc9f5d25289e5e6b9e",
+  "publisher_arguments": [
+    "build-bridge-publish",
+    "--repo-root",
+    "/home/runner/work/iroha/iroha/observer-source",
+    "--source-sha256",
+    "2f67500363802598c16b5cbd0abdd616d0c6e9e05c0b68feea1e236301d3d7b1",
+    "--cargo-target-dir",
+    "/home/runner/work/_temp/linux-observer-candidate/cargo",
+    "--artifact-root",
+    "/home/runner/work/_temp/linux-observer-candidate/artifacts",
+    "--cargo-home",
+    "/home/runner/.cargo",
+    "--cargo-bin",
+    "/home/runner/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/cargo",
+    "--rustc-bin",
+    "/home/runner/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc",
+    "--cancel-request",
+    "/home/runner/work/_temp/linux-observer-candidate/controls/cancel.json",
+    "--name",
+    "invocation.SZGYJ6"
+  ],
+  "publisher_sha256": "7abfbc86cc0198a996163cb553252c660b3c49ffedfe795112e07015a60eda4a",
+  "schema": "iroha.linux-observer-candidate.v1",
+  "source_custody": "retained through build, publication and original artifact copy",
+  "source_manifest_sha256": "2f67500363802598c16b5cbd0abdd616d0c6e9e05c0b68feea1e236301d3d7b1",
+  "status": "requires_independent_approval",
+  "tools": {
+    "cargo": {
+      "path": "/home/runner/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/cargo",
+      "sha256": "a670e02cfa39ac2e53f77a2d911ca1fc9e2c479b0603ec956625be1daf24e3af"
+    },
+    "rustc": {
+      "path": "/home/runner/.rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu/bin/rustc",
+      "sha256": "b53b780f77f952062f8ca8a3b70aef2390b1e45ad91939be94afdc9543026853"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "repository": "hyperledger-iroha/iroha",
+  "producer_commit": "33879a15c5407376ea2856776f142ba517d3c43d",
+  "producer_head_commit": "4c4268b4f5f2c9fd6a45b1f70b5682897a0f2a3a",
+  "producer_run_id": 42363425911,
+  "producer_run_attempt": 1,
+  "artifact_id": 13570671555,
+  "artifact_name": "linux-observer-candidate-42363425911-1",
+  "artifact_sha256": "1a4bbe42d8b4ee8a0d3b0a9a60be0c7fbe16a89c780fcfd51b2c26bf7d577614",
+  "candidate_sha256": "2751d9d50ef9eb68df36bcf62243d28057b5e19e5f5b00c3319c563b518ae808",
+  "source_commit": "3743ff550ca3632e92b23e5d60d084b41a069b29",
+  "source_manifest_sha256": "2f67500363802598c16b5cbd0abdd616d0c6e9e05c0b68feea1e236301d3d7b1",
+  "native_target": "x86_64-unknown-linux-gnu",
+  "module_sha256": "3698086928a179cd80282ccae18063893225caac1c16e16b282a1d321b9ca3ef",
+  "provenance_sha256": "16a30eeda7f4dad94a07569f40449d4d705bb0e0681eb6cc9f5d25289e5e6b9e"
+}
