@@ -17,7 +17,10 @@ use crate::{
     relation::{Cell, FoldedRelation},
 };
 
-fn check_shape<F: PastaField>(relation: &FoldedRelation<F>, witness: &Witness<F>) -> Result<(), Error> {
+fn check_shape<F: PastaField>(
+    relation: &FoldedRelation<F>,
+    witness: &Witness<F>,
+) -> Result<(), Error> {
     let columns = relation.columns();
     if witness.columns.len() != columns
         || witness.blinds.len() != columns
@@ -36,7 +39,12 @@ fn check_openings<C: PastaCurve>(
     if instance.commitments.len() != witness.columns.len() {
         return Err(Error::Shape("commitments"));
     }
-    for ((commitment, column), blind) in instance.commitments.iter().zip(&witness.columns).zip(&witness.blinds) {
+    for ((commitment, column), blind) in instance
+        .commitments
+        .iter()
+        .zip(&witness.columns)
+        .zip(&witness.blinds)
+    {
         if key.commit(column, blind)? != *commitment {
             return Err(Error::Rejected("commitment opening"));
         }
@@ -64,13 +72,20 @@ fn check_copies<F: PastaField>(
     Ok(())
 }
 
-fn check_logup_sums<F: PastaField>(relation: &FoldedRelation<F>, witness: &Witness<F>) -> Result<(), Error> {
+fn check_logup_sums<F: PastaField>(
+    relation: &FoldedRelation<F>,
+    witness: &Witness<F>,
+) -> Result<(), Error> {
     for group in &relation.groups {
         let mut sum = F::ZERO;
         for slot in 0..group.slots.len() {
-            sum += witness.columns[group.h_column(slot)].iter().fold(F::ZERO, |acc, v| acc + v);
+            sum += witness.columns[group.h_column(slot)]
+                .iter()
+                .fold(F::ZERO, |acc, v| acc + v);
         }
-        let table = witness.columns[group.g_column()].iter().fold(F::ZERO, |acc, v| acc + v);
+        let table = witness.columns[group.g_column()]
+            .iter()
+            .fold(F::ZERO, |acc, v| acc + v);
         if sum != table {
             return Err(Error::Rejected("LogUp sum"));
         }
@@ -79,7 +94,11 @@ fn check_logup_sums<F: PastaField>(relation: &FoldedRelation<F>, witness: &Witne
 }
 
 /// The error `sum_i pow_i(beta) f_i(w)` of a witness.
-pub(crate) fn error_sum<F: PastaField>(relation: &FoldedRelation<F>, view: View<'_, F>, beta: &[F]) -> F {
+pub(crate) fn error_sum<F: PastaField>(
+    relation: &FoldedRelation<F>,
+    view: View<'_, F>,
+    beta: &[F],
+) -> F {
     let pb = relation.constraint_bits;
     let pow_lo = pow_vector(&beta[..pb]);
     let pow_hi = pow_vector(&beta[pb..]);
@@ -108,7 +127,12 @@ pub fn decide<C: PastaCurve>(
     check_openings(key, &acc.instance, witness)?;
     check_copies(relation, witness, &acc.instance.public)?;
     check_logup_sums(relation, witness)?;
-    let view = View::of(witness, &acc.instance.public, &acc.instance.theta, &acc.instance.r);
+    let view = View::of(
+        witness,
+        &acc.instance.public,
+        &acc.instance.theta,
+        &acc.instance.r,
+    );
     if error_sum(relation, view, &acc.beta) != acc.e {
         return Err(Error::Rejected("accumulated error"));
     }
@@ -135,7 +159,9 @@ pub fn decide_fresh<C: PastaCurve>(
     check_logup_sums(relation, witness)?;
     let view = View::of(witness, &instance.public, &instance.theta, &instance.r);
     let mut failed = false;
-    constraints_at(relation, view, |_, _, value| failed |= !bool::from(value.is_zero()));
+    constraints_at(relation, view, |_, _, value| {
+        failed |= !bool::from(value.is_zero())
+    });
     if failed {
         return Err(Error::Rejected("constraint"));
     }

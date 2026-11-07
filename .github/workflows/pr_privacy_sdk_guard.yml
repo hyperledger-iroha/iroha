@@ -337,7 +337,7 @@ jobs:
         run: ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}"
   privacy_swift_sdk_parse:
     needs: privacy_jvm_sdk_tests
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

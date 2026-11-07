@@ -2,7 +2,9 @@
 
 use ff::Field;
 use group::CurveAffine;
-use iroha_fold::claims::{Claim, ClaimAccumulator, claim_for, decide_claims, fold_claim, verify_claim_fold};
+use iroha_fold::claims::{
+    Claim, ClaimAccumulator, claim_for, decide_claims, fold_claim, verify_claim_fold,
+};
 use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve};
 use iroha_plonk::pcs::ipa::PinnedParams;
 use rand_chacha::ChaCha20Rng;
@@ -15,7 +17,13 @@ fn run<C: PastaCurve>(seed: u64) {
     let g = params.params().g();
     let mut rng = ChaCha20Rng::seed_from_u64(seed);
     let mut challenges = |prefix_zeros: usize| -> [C::ScalarExt; 16] {
-        core::array::from_fn(|i| if i < prefix_zeros { C::ScalarExt::ZERO } else { C::ScalarExt::random(&mut rng) })
+        core::array::from_fn(|i| {
+            if i < prefix_zeros {
+                C::ScalarExt::ZERO
+            } else {
+                C::ScalarExt::random(&mut rng)
+            }
+        })
     };
     // Three full claims and one k12 source with four leading zero challenges.
     let claims: Vec<Claim<C>> = [0, 0, 4, 0]

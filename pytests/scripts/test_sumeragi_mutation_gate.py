@@ -2826,11 +2826,15 @@ def test_ci_sumeragi_sweeps_execute_with_their_declared_seed_environment(
         command = json.loads(command)
     declared = re.search(r'(?m)^          SUMERAGI_SIM_SEEDS: "([0-9]+)"$', step.group(1))
     assert (declared.group(1) if declared else None) == explicit_count
+    declared_jobs = re.search(r'(?m)^          CARGO_BUILD_JOBS: "([0-9]+)"$', step.group(1))
+    compiler_jobs = declared_jobs.group(1) if declared_jobs else None
+    assert compiler_jobs == ("1" if workflow_name == "pr.yml" and step_name.startswith("Node driver,") else None)
     recorder = tmp_path / "cargo"
     recorder.write_text(
         "#!" + sys.executable + "\n"
         "import json, os, sys\n"
-        "print(json.dumps({'argv': sys.argv[1:], 'seeds': {key: os.environ.get(key) "
+        "print(json.dumps({'argv': sys.argv[1:], 'jobs': os.environ.get('CARGO_BUILD_JOBS'), "
+        "'seeds': {key: os.environ.get(key) "
         "for key in ('SUMERAGI_SIM_SEED', 'SUMERAGI_SIM_SEED_BASE', 'SUMERAGI_SIM_SEEDS')}}))\n"
     )
     recorder.chmod(0o700)
@@ -2838,6 +2842,9 @@ def test_ci_sumeragi_sweeps_execute_with_their_declared_seed_environment(
     for key in ("SUMERAGI_SIM_SEED", "SUMERAGI_SIM_SEED_BASE", "SUMERAGI_SIM_SEEDS"):
         environment.pop(key, None)
     environment.update(inherited)
+    environment.pop("CARGO_BUILD_JOBS", None)
+    if compiler_jobs is not None:
+        environment["CARGO_BUILD_JOBS"] = compiler_jobs
     if explicit_count is not None:
         environment["SUMERAGI_SIM_SEEDS"] = explicit_count
     environment["PATH"] = str(tmp_path) + os.pathsep + environment.get("PATH", "")
@@ -2846,6 +2853,7 @@ def test_ci_sumeragi_sweeps_execute_with_their_declared_seed_environment(
     assert result.returncode == 0, result.stderr
     observed = json.loads(result.stdout)
     assert observed["argv"] == expected_argv
+    assert observed["jobs"] == compiler_jobs
     assert observed["seeds"] == {
         "SUMERAGI_SIM_SEED": None,
         "SUMERAGI_SIM_SEED_BASE": None,

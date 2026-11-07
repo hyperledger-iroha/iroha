@@ -6,8 +6,6 @@
 //! to its immutable local network identity for transaction construction.
 use iroha_core_privacy::privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1};
 use iroha_data_model::id::NetworkId;
-#[cfg(test)]
-use iroha_data_model::privacy::{PrivacyProofEnvelopeV1, PrivacyRuntimeProofEnvelopeV1};
 use iroha_data_model::privacy::{
     PrivacyCapabilityReadinessV1, PrivacyCapabilityUnavailableReasonV1,
     PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
@@ -16,6 +14,8 @@ use iroha_data_model::privacy::{
     PrivacyRuntimeProtocolIdV1, PrivacyRuntimeProtocolLimitsV1, PrivacyRuntimeStatementV1,
     validate_privacy_capability_archive_v1,
 };
+#[cfg(test)]
+use iroha_data_model::privacy::{PrivacyProofEnvelopeV1, PrivacyRuntimeProofEnvelopeV1};
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
     prelude::*,
@@ -666,13 +666,21 @@ mod tests {
         let mut action_tightened = limits;
         action_tightened.max_proof_bytes_per_action = 3;
         action_tightened.max_statement_and_encrypted_output_bytes_per_transaction = u32::try_from(
-            envelope.statement.canonical_wire_bytes_v1()
+            envelope
+                .statement
+                .canonical_wire_bytes_v1()
                 .expect("statement bytes")
                 .len(),
         )
         .unwrap();
-        action_tightened.max_action_bytes =
-            u32::try_from(envelope.canonical_wire_bytes_v1().expect("envelope bytes").len() - 1).unwrap();
+        action_tightened.max_action_bytes = u32::try_from(
+            envelope
+                .canonical_wire_bytes_v1()
+                .expect("envelope bytes")
+                .len()
+                - 1,
+        )
+        .unwrap();
         assert!(action_tightened.validate().is_ok());
         assert!(
             require_governed_envelope_v1(

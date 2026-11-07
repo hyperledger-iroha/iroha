@@ -39,6 +39,12 @@ test("JavaScript, Python, and the Rust data model pin one canonical protocol ord
 });
 
 test("native SDK archives expose local compiled profiles without synthesizing readiness", () => {
+  const owner = source("crates/iroha_core_privacy/src/privacy_profiles.rs");
+  assert.match(owner, /pub fn compiled_privacy_profile_catalog_v1\(\)/u);
+  assert.match(owner, /let catalog = compiled_privacy_profile_catalog_cache_v1\(\)\.clone\(\);\s*catalog\.validate\(\)\?;/u);
+  assert.match(owner, /protocols: PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS\s*\.into_iter\(\)\s*\.map\(\|protocol_id\| PrivacyCompiledProfileCatalogRowV1/u);
+  assert.match(source("crates/iroha_data_model/src/privacy.rs"),
+    /const EXACT12_PROTOCOLS: \[Self; Self::EXACT12_COUNT\] = Self::ALL;/u);
   for (const path of [
     "crates/connect_norito_bridge/src/lib.rs",
     "crates/iroha_js_host/src/lib.rs",
@@ -47,8 +53,7 @@ test("native SDK archives expose local compiled profiles without synthesizing re
     const rust = source(path);
     const productionRust = rust.split(/\n#\[cfg\(test\)\]\nmod tests\s*\{/u, 1)[0];
     assert.match(rust, /PrivacyCompiledProfileCatalogV1/);
-    assert.match(rust, /PrivacyProtocolIdV1::ALL/);
-    assert.match(rust, /compiled_privacy_profile_catalog_v1/);
+    assert.match(rust, /^fn privacy_compiled_profile_catalog\(\)[^\n]*\{\n\s*let catalog = compiled_privacy_profile_catalog_v1\(\)\.map_err/mu);
     assert.match(
       rust,
       /validate_local_privacy_compiled_profile_catalog_archive_v1/,

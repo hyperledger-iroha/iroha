@@ -273,7 +273,7 @@ class CSharpNativePackageTests(unittest.TestCase):
                 "libconnect_norito_bridge.dylib",
             ),
             (
-                "macos-14",
+                "macos-15",
                 "aarch64-apple-darwin",
                 "osx-arm64",
                 "libconnect_norito_bridge.dylib",

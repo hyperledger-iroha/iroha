@@ -3,10 +3,7 @@ use super::*;
 use iroha_data_model::{
     isi::sorafs::AssertSorafsPublicationV1,
     sorafs::{
-        pin_registry::{
-            ReplicationOrderStatus, SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1,
-            derive_sorafs_auto_replication_order_id_v1,
-        },
+        pin_registry::{ReplicationOrderStatus, derive_sorafs_auto_replication_order_id_v1},
         publication::{
             PUBLICATION_PROOF_MAX_BYTES_V1, SorafsPublicationPreparationV1,
             SorafsPublicationProofRequestV1, SorafsPublicationProofV1, VerifiedSorafsPublicationV1,
@@ -24,6 +21,7 @@ use sorafs_car::publisher::{
     PublisherSourceUploadV1,
 };
 use sorafs_manifest::capacity::ReplicationOrderV1;
+use std::io::Seek as _;
 use std::time::Instant;
 
 const PUBLICATION_TIMEOUT: Duration = Duration::from_secs(600);
@@ -32,11 +30,11 @@ const PREPARATION_MAX_BYTES: usize = 2 * 1024 * 1024;
 // Public status DTOs are small; retain the SDK's bounded response envelope.
 const REGISTRATION_STATUS_MAX_BYTES: usize = 64 * 1024;
 
-/// Generated deploy manifests retain two canonical ingest windows: one window
-/// of submission headroom followed by the full automatic-replication SLA.
-/// Explicit manifests and the server's strict deadline/retention ceiling remain
-/// unchanged. This default is not permission to extend publication timeouts.
+/// Construct a checked test policy with submission headroom and a full ingest window.
+/// Production deployment uses the operator's explicit retention deadline.
+#[cfg(test)]
 pub(super) fn default_deploy_retention_epoch(created_epoch: u64) -> Result<u64, String> {
+    use iroha_data_model::sorafs::pin_registry::SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1;
     let ingest_window = u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1);
     created_epoch
         .checked_add(ingest_window)
@@ -531,7 +529,7 @@ pub(super) fn qualify(
     client: &HttpClient,
     base: &Url,
     config: &DeployClientConfig,
-    artifacts: &DeployPackArtifacts,
+    artifacts: &mut DeployPackArtifacts,
     registration_hash: iroha_crypto::HashOf<SignedTransaction>,
     checkpoint: SumeragiFinalityCheckpoint,
     provider_urls: &[String],
@@ -577,6 +575,10 @@ pub(super) fn qualify(
         &out_dir.join("publication.assigned.proof.to"),
     )?;
     for assignment in &order.assignments {
+        artifacts
+            .payload
+            .revalidate()
+            .map_err(|error| error.to_string())?;
         if assigned
             .order
             .provider_completions
@@ -620,16 +622,18 @@ pub(super) fn qualify(
         })?;
         for (index, chunk) in artifacts.plan.chunks.iter().enumerate() {
             ensure_live(started)?;
-            let offset = usize::try_from(chunk.offset)
-                .map_err(|_| "source chunk offset overflow".to_owned())?;
-            let end = offset
-                .checked_add(chunk.length as usize)
-                .ok_or_else(|| "source chunk length overflow".to_owned())?;
-            let bytes = artifacts
+            artifacts
                 .payload
-                .get(offset..end)
-                .ok_or_else(|| "source chunk exceeds verified payload".to_owned())?
-                .to_vec();
+                .seek(std::io::SeekFrom::Start(chunk.offset))
+                .map_err(|error| error.to_string())?;
+            let mut bytes = vec![0u8; chunk.length as usize];
+            artifacts
+                .payload
+                .read_exact(&mut bytes)
+                .map_err(|error| error.to_string())?;
+            if blake3::hash(&bytes).as_bytes() != &chunk.digest {
+                return Err("publisher source chunk changed after verification".to_owned());
+            }
             let request = PublisherSourceRequestV1::Chunk(PublisherSourceChunkRequestV1 {
                 provider_id: assignment.provider_id,
                 order_id: order.order_id,
@@ -657,6 +661,10 @@ pub(super) fn qualify(
             }
         }
     }
+    artifacts
+        .payload
+        .revalidate()
+        .map_err(|error| error.to_string())?;
     let complete = preparation(
         client,
         base,
@@ -706,6 +714,7 @@ pub(super) fn qualify(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_data_model::sorafs::pin_registry::SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1;
     fn network(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
             iroha_crypto::Hash::new([seed]),
@@ -768,6 +777,8 @@ mod tests {
                         Err(error) => panic!("test accept: {error}"),
                     }
                 };
+                // Use blocking reads with the bounded timeouts below.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();

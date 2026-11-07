@@ -59,12 +59,15 @@ use reqwest::{
     redirect::Policy as RedirectPolicy,
 };
 use sha3::{Digest, Sha3_256};
+#[cfg(test)]
+use sorafs_car::compute_por_root;
+use sorafs_car::payload_verifier::{por_commitment, verify_car_reader, verify_payload_reader};
 use sorafs_car::set_no_follow_flag;
+use sorafs_car::streaming_input::{NativePayloadReader, PreparedCarInput};
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarStreamingWriter, CarVerifier, CarWriteError, ChunkFetchSpec,
     FileEntry, FilePlan, StoredChunk,
     chunker_registry::{self, ChunkerProfileDescriptor},
-    compute_por_root,
     fetch_plan::{chunk_fetch_plan_from_json, chunk_fetch_plan_to_string},
     gateway::{GatewayFetchConfig, GatewayFetchContext, GatewayProviderInput},
     multi_fetch::{ProviderMetadata, RangeCapability, StreamBudget},
@@ -123,7 +126,7 @@ use std::{
     env,
     fmt::Write as FmtWrite,
     fs::{self, File, Metadata as FsMetadata, OpenOptions},
-    io::{self, BufReader, BufWriter, Cursor, Read, Write},
+    io::{self, BufReader, BufWriter, Cursor, Read, Seek as _, Write},
     net::{IpAddr, SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process,
@@ -548,7 +551,7 @@ struct DeployClientConfig {
 }
 struct DeployPackArtifacts {
     plan: CarBuildPlan,
-    payload: Vec<u8>,
+    payload: NativePayloadReader,
     manifest: ManifestV1,
     manifest_digest_hex: String,
     root_cid_hex: String,
@@ -563,12 +566,7 @@ struct GatewayExpectation {
     bytes: u64,
     blake3_hex: String,
 }
-struct PublishPeerDiscovery {
-    pin_torii_urls: Vec<String>,
-    gateway_base_url: Option<String>,
-    status: Option<u16>,
-    error: Option<String>,
-}
+
 struct ManifestRegisterSubmission {
     endpoint_requested: String,
     endpoint_used: String,
@@ -595,17 +593,27 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     let mut name: Option<String> = None;
     let mut out_dir_override: Option<PathBuf> = None;
     let mut gateway_base_url_override: Option<String> = None;
-    let mut peer_discovery_enabled = true;
+    let mut pin_retention_epoch = None;
+    let mut pin_min_replicas = 3u16;
+    let mut reviewed_manifest: Option<PathBuf> = None;
+    let mut reviewed_car: Option<PathBuf> = None;
     let mut summary_out: Option<PathBuf> = None;
     for arg in raw_args {
         if arg == "--no-peer-discovery" {
-            peer_discovery_enabled = false;
             continue;
         }
         let (key, value) = arg
             .split_once('=')
             .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
         match key {
+            "--pin-retention-epoch" => {
+                pin_retention_epoch = Some(value.parse::<u64>().map_err(|error| error.to_string())?)
+            }
+            "--pin-min-replicas" => {
+                pin_min_replicas = value.parse::<u16>().map_err(|error| error.to_string())?
+            }
+            "--manifest" => reviewed_manifest = Some(PathBuf::from(value)),
+            "--car" => reviewed_car = Some(PathBuf::from(value)),
             "--finality-checkpoint" => finality_checkpoint = Some(PathBuf::from(value)),
             "--provider-url" => provider_urls.push(value.to_owned()),
             "--payload" => payload_path = Some(PathBuf::from(value)),
@@ -624,6 +632,14 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     }
     let payload_path = payload_path
         .ok_or_else(|| "missing required `--payload=PATH` for `sorafs_cli deploy`".to_string())?;
+    let pin_retention_epoch = pin_retention_epoch
+        .ok_or_else(|| "deploy requires --pin-retention-epoch=ABSOLUTE_UNIX_SECONDS".to_owned())?;
+    validate_publication_policy(pin_min_replicas, pin_retention_epoch)?;
+    let reviewed = match (reviewed_manifest.as_deref(), reviewed_car.as_deref()) {
+        (None, None) => None,
+        (Some(manifest), Some(car)) => Some((manifest, car)),
+        _ => return Err("deploy --manifest and --car must be provided together".to_owned()),
+    };
     let client_config_path = client_config_path.ok_or_else(|| {
         "missing required `--client-config=PATH` for `sorafs_cli deploy`".to_string()
     })?;
@@ -643,6 +659,19 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     let torii_base_url =
         Url::parse(&torii_url).map_err(|err| format!("invalid Torii URL `{torii_url}`: {err}"))?;
     deploy_publication::endpoint(&torii_base_url, "v1/sorafs/publish/prepare")?;
+    let gateway_base_url = gateway_base_url_override.unwrap_or_else(|| torii_url.clone());
+    let gateway = Url::parse(&gateway_base_url).map_err(|error| error.to_string())?;
+    deploy_publication::endpoint(&gateway, "sorafs/cid")?;
+    provider_urls.push(torii_url.clone());
+    provider_urls.sort();
+    provider_urls.dedup();
+    if provider_urls.len() > 64 {
+        return Err("publication accepts at most 64 exact provider roots".to_owned());
+    }
+    for provider in &provider_urls {
+        let url = Url::parse(provider).map_err(|error| error.to_string())?;
+        deploy_publication::endpoint(&url, "v1/sorafs/publish/source")?;
+    }
     let deploy_name = sanitize_deploy_name(
         name.as_deref()
             .or_else(|| payload_path.file_name().and_then(|name| name.to_str()))
@@ -650,9 +679,12 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     );
     let out_dir =
         out_dir_override.unwrap_or_else(|| PathBuf::from(".sorafs/deploy").join(&deploy_name));
-    fs::create_dir_all(&out_dir).map_err(|err| {
+    if let Some(parent) = out_dir.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::create_dir(&out_dir).map_err(|error| {
         format!(
-            "failed to create deploy directory `{}`: {err}",
+            "deploy evidence directory must be new: {}: {error}",
             out_dir.display()
         )
     })?;
@@ -685,6 +717,12 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         &pack_summary_path,
         &manifest_path,
         &manifest_json_path,
+        PinPolicy {
+            min_replicas: pin_min_replicas,
+            storage_class: StorageClass::Hot,
+            retention_epoch: pin_retention_epoch,
+        },
+        reviewed,
     );
     let mut receipt = Map::new();
     insert_value!(receipt["name"] = deploy_name.clone());
@@ -693,7 +731,7 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     insert_value!(receipt["torii_url"] = torii_url.clone());
     insert_value!(receipt["out_dir"] = out_dir.display().to_string());
     insert_value!(receipt["receipt_path"] = receipt_path.display().to_string());
-    let artifacts = match artifacts {
+    let mut artifacts = match artifacts {
         Ok(artifacts) => artifacts,
         Err(err) => {
             errors.push(err);
@@ -732,6 +770,11 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         private_key: &client_config.private_key,
         alias_inputs: None,
     };
+    validate_publication_policy(pin_min_replicas, pin_retention_epoch)?;
+    artifacts
+        .payload
+        .revalidate()
+        .map_err(|error| error.to_string())?;
     let registration = submit_pin_register(&submit_request, &artifacts.manifest, None);
     let mut registration_summary = Map::new();
     insert_value!(registration_summary["authority"] = authority_literal);
@@ -770,37 +813,11 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     // Submission HTTP is not a finalized fee receipt. Keep the endpoint's claim explicitly
     // labelled until a native finalized-ledger proof authenticates the exact transaction.
     insert_json!(receipt["reported_pin_fee"] = paid_pin_fee);
-    let discovery = if peer_discovery_enabled {
-        discover_publish_peers(&client, &torii_base_url)
-    } else {
-        PublishPeerDiscovery {
-            pin_torii_urls: Vec::new(),
-            gateway_base_url: None,
-            status: None,
-            error: Some("peer discovery disabled by --no-peer-discovery".to_string()),
-        }
-    };
-    let gateway_base_url = gateway_base_url_override
-        .or(discovery.gateway_base_url.clone())
-        .unwrap_or_else(|| torii_url.clone());
-    provider_urls.extend(discovery.pin_torii_urls.iter().cloned());
-    provider_urls.push(torii_url.clone());
-    provider_urls.sort();
-    provider_urls.dedup();
     let mut discovery_json = Map::new();
-    insert_value!(discovery_json["enabled"] = peer_discovery_enabled);
-    insert_json!(
-        discovery_json["gateway_base_url"] = discovery
-            .gateway_base_url
-            .as_ref()
-            .map_or(Value::Null, |url| Value::from(url.clone()))
+    insert_value!(discovery_json["enabled"] = false);
+    insert_value!(
+        discovery_json["reason"] = "publication uses only operator-selected endpoint roots"
     );
-    if let Some(status) = discovery.status {
-        insert_value!(discovery_json["status"] = status as u64);
-    }
-    if let Some(err) = discovery.error.as_ref() {
-        insert_value!(discovery_json["warning"] = err.clone());
-    }
     insert_json!(receipt["peer_discovery"] = Value::Object(discovery_json));
     let publication =
         if let Some(registration_hash) = registration_hash.filter(|_| errors.is_empty()) {
@@ -808,7 +825,7 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
                 &client,
                 &torii_base_url,
                 &client_config,
-                &artifacts,
+                &mut artifacts,
                 registration_hash,
                 checkpoint,
                 &provider_urls,
@@ -965,6 +982,44 @@ fn resolve_deploy_chain_discriminant(account: &toml::Table) -> Result<u16, Strin
         _ => Ok(profile.chain_discriminant),
     }
 }
+fn validate_publication_policy(replicas: u16, retention_epoch: u64) -> Result<(), String> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "system clock precedes Unix epoch".to_owned())?
+        .as_secs();
+    if replicas == 0 || retention_epoch <= now {
+        return Err(
+            "publication requires positive replicas and a future absolute Unix retention deadline"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+fn verify_retained_car(
+    manifest: &ManifestV1,
+    input: &mut PreparedCarInput,
+    path: &Path,
+) -> Result<sorafs_car::payload_verifier::PayloadVerification, String> {
+    let mut car = iroha_fs::RetainedFile::open_regular(path).map_err(|error| error.to_string())?;
+    let before = car.snapshot().map_err(|error| error.to_string())?;
+    if car
+        .file()
+        .metadata()
+        .map_err(|error| error.to_string())?
+        .len()
+        != manifest.car_size
+    {
+        return Err("CAR length differs from exact manifest commitment".to_owned());
+    }
+    let report = verify_car_reader(manifest, &input.plan, &mut input.payload, car.file_mut())
+        .map_err(|error| error.to_string())?;
+    car.revalidate().map_err(|error| error.to_string())?;
+    if car.snapshot().map_err(|error| error.to_string())? != before {
+        return Err("CAR changed during verification".to_owned());
+    }
+    Ok(report)
+}
+#[allow(clippy::too_many_arguments)]
 fn build_deploy_artifacts(
     payload_path: &Path,
     car_path: &Path,
@@ -972,139 +1027,141 @@ fn build_deploy_artifacts(
     pack_summary_path: &Path,
     manifest_path: &Path,
     manifest_json_path: &Path,
+    pin_policy: PinPolicy,
+    reviewed: Option<(&Path, &Path)>,
 ) -> Result<DeployPackArtifacts, String> {
     let handle = DEFAULT_CHUNKER_HANDLE;
-    let descriptor = chunker_registry::lookup_by_handle(handle).ok_or_else(|| {
-        format!("unknown chunker profile handle `{handle}`; refresh the SoraFS chunker registry")
-    })?;
-    let metadata = fs::metadata(payload_path)
-        .map_err(|err| format!("failed to stat payload `{}`: {err}", payload_path.display()))?;
-    let (input_summary, mut plan, payload_cursor): (InputSummary, CarBuildPlan, Cursor<Vec<u8>>) =
-        if metadata.is_dir() {
-            let (plan, payload) =
-                CarBuildPlan::from_directory_with_profile(payload_path, descriptor.profile)
-                    .map_err(|err| format!("failed to build directory payload plan: {err}"))?;
-            (
-                InputSummary::Directory {
-                    path: payload_path.to_path_buf(),
-                    file_count: plan.files.len() as u64,
-                },
-                plan,
-                Cursor::new(payload),
-            )
-        } else if metadata.is_file() {
-            let payload =
-                read_file_bounded(payload_path, PREPARED_STORAGE_MAX_PAYLOAD_BYTES, "payload")?;
-            let plan = CarBuildPlan::single_file_with_profile(&payload, descriptor.profile)
-                .map_err(|err| format!("failed to chunk payload: {err}"))?;
-            (
-                InputSummary::File {
-                    path: payload_path.to_path_buf(),
-                    bytes: payload.len() as u64,
-                },
-                plan,
-                Cursor::new(payload),
-            )
-        } else {
-            return Err(format!(
-                "payload `{}` is neither a regular file nor directory",
-                payload_path.display()
-            ));
-        };
+    let descriptor = chunker_registry::lookup_by_handle(handle)
+        .ok_or_else(|| "unknown default chunk profile".to_owned())?;
+    let mut input = PreparedCarInput::open(payload_path, descriptor.profile)
+        .map_err(|error| error.to_string())?;
+    let (por_root, _) =
+        por_commitment(&input.plan, &mut input.payload).map_err(|error| error.to_string())?;
+    input.payload.rewind().map_err(|error| error.to_string())?;
     let car_file = open_output_file(car_path)?;
     let mut writer = BufWriter::new(car_file);
-    let mut payload_reader = payload_cursor;
-    let por_root = compute_por_root(payload_reader.get_ref(), &plan)
-        .map_err(|err| format!("failed to derive payload PoR root: {err}"))?;
-    let stats = CarStreamingWriter::new(&plan)
-        .write_from_reader(&mut payload_reader, &mut writer)
+    let stats = CarStreamingWriter::new(&input.plan)
+        .write_from_reader(&mut input.payload, &mut writer)
         .map_err(format_car_error)?;
-    writer
-        .flush()
-        .map_err(|err| format!("failed to flush `{}`: {err}", car_path.display()))?;
-    let plan_specs = plan
-        .try_chunk_fetch_specs()
-        .map_err(|err| format!("failed to derive chunk fetch plan: {err}"))?;
-    let plan_json = chunk_fetch_plan_to_string(&plan)
-        .map_err(|err| format!("failed to render chunk plan JSON: {err}"))?;
-    write_text(plan_path, plan_json.as_bytes())?;
-    let pack_summary = render_summary(
-        &input_summary,
-        descriptor,
-        handle,
-        &plan,
-        &stats,
-        por_root,
-        car_path,
-    )?;
-    let pack_rendered = to_string_pretty(&pack_summary)
-        .map_err(|err| format!("failed to render pack summary JSON: {err}"))?;
-    write_text(pack_summary_path, pack_rendered.as_bytes())?;
+    writer.flush().map_err(|error| error.to_string())?;
+    input.payload.rewind().map_err(|error| error.to_string())?;
     let root_cid = stats
         .root_cids
         .first()
         .cloned()
-        .ok_or_else(|| "CAR build did not emit a root CID".to_string())?;
-    let car_digest: [u8; 32] = *stats.car_archive_digest.as_bytes();
-    let chunk_digest_sha3 = chunk_digest_sha3_from_specs(&plan_specs);
-    let manifest_descriptor =
-        manifest_chunker_registry::lookup_by_handle(handle).ok_or_else(|| {
-            format!("unknown manifest chunker profile handle `{handle}`; refresh the registry")
-        })?;
-    let chunking_profile = ChunkingProfileV1::from_descriptor(manifest_descriptor);
-    let manifest = ManifestBuilder::new()
-        .root_cid(root_cid.clone())
-        .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
-        .chunking_profile(chunking_profile)
-        .chunk_digest_sha3_256(chunk_digest_sha3)
-        .por_root(por_root)
-        .content_length(plan.content_length)
-        .car_digest(car_digest)
-        .car_size(stats.car_size)
-        .pin_policy(PinPolicy {
-            min_replicas: 1,
-            storage_class: StorageClass::Hot,
-            retention_epoch: deploy_publication::default_deploy_retention_epoch(
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map_err(|_| "system clock precedes Unix epoch".to_owned())?
-                    .as_secs(),
-            )?,
-        })
-        .build()
-        .map_err(format_manifest_error)?;
-    let manifest_bytes = manifest
-        .encode()
-        .map_err(|err| format!("failed to encode manifest: {err}"))?;
-    write_bytes(manifest_path, &manifest_bytes)?;
-    let manifest_json = to_string_pretty(
-        &to_value(&manifest).map_err(|err| format!("failed to serialise manifest JSON: {err}"))?,
-    )
-    .map_err(|err| format!("failed to render manifest JSON: {err}"))?;
-    write_text(manifest_json_path, manifest_json.as_bytes())?;
-    let manifest_digest = manifest
-        .digest()
-        .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
-    let (payload_bytes, storage_files, payload_kind) =
-        load_prepared_storage_payload(payload_path, &manifest)?;
-    let gateway_expectations =
-        build_gateway_expectations(storage_files.as_deref(), &payload_bytes)?;
-    let payload_digest_hex = hex_encode(blake3_hash(&payload_bytes).as_bytes());
-    let root_cid_hex = hex_encode(&root_cid);
-    let root_cid_base32 = encode_content_cid_base32(&root_cid);
-    plan.chunks.shrink_to_fit();
+        .ok_or_else(|| "CAR has no root".to_owned())?;
+    let descriptor_manifest = manifest_chunker_registry::lookup_by_handle(handle)
+        .ok_or_else(|| "unknown manifest chunk profile".to_owned())?;
+    let manifest = if let Some((path, reviewed_car)) = reviewed {
+        let bytes =
+            read_file_bounded(path, MAX_MANIFEST_ENCODED_BYTES as u64, "reviewed manifest")?;
+        let manifest = decode_manifest_v1_canonical(&bytes).map_err(|error| error.to_string())?;
+        if manifest.pin_policy != pin_policy || !manifest.alias_claims.is_empty() {
+            return Err(
+                "reviewed manifest must match explicit publication policy and contain no aliases"
+                    .to_owned(),
+            );
+        }
+        verify_retained_car(&manifest, &mut input, reviewed_car)?;
+        manifest
+    } else {
+        ManifestBuilder::new()
+            .root_cid(root_cid.clone())
+            .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
+            .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor_manifest))
+            .chunk_digest_sha3_256(sorafs_car::compute_chunk_plan_digest_sha3(
+                &input.plan.chunks,
+            ))
+            .por_root(por_root)
+            .content_length(input.plan.content_length)
+            .car_digest(*stats.car_archive_digest.as_bytes())
+            .car_size(stats.car_size)
+            .pin_policy(pin_policy)
+            .build()
+            .map_err(format_manifest_error)?
+    };
+    verify_payload_reader(&manifest, &input.plan, &mut input.payload)
+        .map_err(|error| error.to_string())?;
+    let manifest_digest_hex = hex_encode(
+        manifest
+            .digest()
+            .map_err(|error| error.to_string())?
+            .as_bytes(),
+    );
+    write_bytes(
+        manifest_path,
+        &manifest.encode().map_err(|error| error.to_string())?,
+    )?;
+    write_text(
+        manifest_json_path,
+        to_string_pretty(&to_value(&manifest).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?
+            .as_bytes(),
+    )?;
+    write_text(
+        plan_path,
+        chunk_fetch_plan_to_string(&input.plan)
+            .map_err(|error| error.to_string())?
+            .as_bytes(),
+    )?;
+    let source_summary = if input.is_directory {
+        InputSummary::Directory {
+            path: payload_path.to_path_buf(),
+            file_count: input.plan.files.len() as u64,
+        }
+    } else {
+        InputSummary::File {
+            path: payload_path.to_path_buf(),
+            bytes: input.plan.content_length,
+        }
+    };
+    let summary = render_summary(
+        &source_summary,
+        descriptor,
+        handle,
+        &input.plan,
+        &stats,
+        por_root,
+        car_path,
+    )?;
+    write_text(
+        pack_summary_path,
+        to_string_pretty(&summary)
+            .map_err(|error| error.to_string())?
+            .as_bytes(),
+    )?;
+    let mut gateway_expectations = Vec::new();
+    for (file, digest) in input.plan.files.iter().zip(&input.file_digests) {
+        let expected = GatewayExpectation {
+            path: input.is_directory.then(|| file.path.clone()),
+            bytes: file.size,
+            blake3_hex: hex_encode(digest),
+        };
+        if input.is_directory && file.path.as_slice() == ["index.html"] {
+            gateway_expectations.push(GatewayExpectation {
+                path: None,
+                ..expected.clone()
+            });
+        }
+        gateway_expectations.push(expected);
+    }
     Ok(DeployPackArtifacts {
-        plan,
-        payload: payload_bytes,
+        payload_digest_hex: hex_encode(input.plan.payload_digest.as_bytes()),
+        plan: input.plan,
+        payload: input.payload,
         manifest,
-        manifest_digest_hex: hex_encode(manifest_digest.as_bytes()),
-        root_cid_hex,
-        root_cid_base32,
+        manifest_digest_hex,
+        root_cid_hex: hex_encode(&root_cid),
+        root_cid_base32: encode_content_cid_base32(&root_cid),
         gateway_expectations,
-        payload_kind,
-        payload_digest_hex,
+        payload_kind: if input.is_directory {
+            "directory"
+        } else {
+            "file"
+        },
     })
 }
+#[cfg(test)]
 fn build_gateway_expectations(
     files: Option<&[StorageFileEntryOwned]>,
     payload_bytes: &[u8],
@@ -1205,87 +1262,6 @@ fn submit_pin_register(
     Err(format!(
         "Torii pin-register route returned {status}; generic transaction fallback is not supported: {body_text}"
     ))
-}
-fn discover_publish_peers(client: &HttpClient, torii_base_url: &Url) -> PublishPeerDiscovery {
-    let endpoint = match torii_base_url.join("v1/sorafs/storage/peers") {
-        Ok(endpoint) => endpoint,
-        Err(err) => {
-            return PublishPeerDiscovery {
-                pin_torii_urls: Vec::new(),
-                gateway_base_url: None,
-                status: None,
-                error: Some(format!(
-                    "failed to build peer discovery endpoint URL: {err}"
-                )),
-            };
-        }
-    };
-    let response = match client
-        .get(endpoint.as_str())
-        .header("Accept", "application/json")
-        .send()
-    {
-        Ok(response) => response,
-        Err(err) => {
-            return PublishPeerDiscovery {
-                pin_torii_urls: Vec::new(),
-                gateway_base_url: None,
-                status: None,
-                error: Some(format!("peer discovery unavailable: {err}")),
-            };
-        }
-    };
-    let status = response.status();
-    let response_bytes = match read_publish_response_bounded(response, "peer discovery") {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            return PublishPeerDiscovery {
-                pin_torii_urls: Vec::new(),
-                gateway_base_url: None,
-                status: Some(status.as_u16()),
-                error: Some(format!("failed to read peer discovery response: {err}")),
-            };
-        }
-    };
-    if !status.is_success() {
-        return PublishPeerDiscovery {
-            pin_torii_urls: Vec::new(),
-            gateway_base_url: None,
-            status: Some(status.as_u16()),
-            error: Some(format!(
-                "peer discovery returned {status}; falling back to primary Torii URL"
-            )),
-        };
-    }
-    let value: Value = match from_slice(&response_bytes) {
-        Ok(value) => value,
-        Err(err) => {
-            return PublishPeerDiscovery {
-                pin_torii_urls: Vec::new(),
-                gateway_base_url: None,
-                status: Some(status.as_u16()),
-                error: Some(format!("failed to parse peer discovery JSON: {err}")),
-            };
-        }
-    };
-    let gateway_base_url = value
-        .get("gateway_base_url")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    PublishPeerDiscovery {
-        pin_torii_urls: value
-            .get("pin_torii_urls")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .take(64)
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect(),
-        gateway_base_url,
-        status: Some(status.as_u16()),
-        error: None,
-    }
 }
 fn verify_gateway_deploy(
     client: &HttpClient,
@@ -2626,23 +2602,7 @@ fn build_from_file(
     summary_out: Option<&PathBuf>,
     handle: &str,
 ) -> Result<(), String> {
-    let payload = fs::read(input)
-        .map_err(|err| format!("failed to read payload `{}`: {err}", input.display()))?;
-    let plan = CarBuildPlan::single_file_with_profile(&payload, descriptor.profile)
-        .map_err(|err| format!("failed to chunk payload: {err}"))?;
-    emit_car_and_artifacts(
-        InputSummary::File {
-            path: input.to_path_buf(),
-            bytes: payload.len() as u64,
-        },
-        descriptor,
-        handle,
-        plan,
-        Cursor::new(payload),
-        car_out,
-        plan_out,
-        summary_out,
-    )
+    emit_car_and_artifacts(input, descriptor, handle, car_out, plan_out, summary_out)
 }
 fn build_from_directory(
     input: &Path,
@@ -2652,60 +2612,59 @@ fn build_from_directory(
     summary_out: Option<&PathBuf>,
     handle: &str,
 ) -> Result<(), String> {
-    let (plan, payload) = CarBuildPlan::from_directory_with_profile(input, descriptor.profile)
-        .map_err(|err| format!("failed to build directory plan: {err}"))?;
-    emit_car_and_artifacts(
-        InputSummary::Directory {
-            path: input.to_path_buf(),
-            file_count: plan.files.len() as u64,
-        },
-        descriptor,
-        handle,
-        plan,
-        Cursor::new(payload),
-        car_out,
-        plan_out,
-        summary_out,
-    )
+    emit_car_and_artifacts(input, descriptor, handle, car_out, plan_out, summary_out)
 }
-#[allow(clippy::too_many_arguments)]
 fn emit_car_and_artifacts(
-    input: InputSummary,
+    path: &Path,
     descriptor: &ChunkerProfileDescriptor,
     handle: &str,
-    mut plan: CarBuildPlan,
-    mut payload: Cursor<Vec<u8>>,
     car_out: &Path,
     plan_out: Option<&PathBuf>,
     summary_out: Option<&PathBuf>,
 ) -> Result<(), String> {
-    let por_root = compute_por_root(payload.get_ref(), &plan)
-        .map_err(|err| format!("failed to derive payload PoR root: {err}"))?;
-    let car_file = open_output_file(car_out)?;
-    let mut writer = BufWriter::new(car_file);
-    let stats = CarStreamingWriter::new(&plan)
-        .write_from_reader(&mut payload, &mut writer)
+    let mut input =
+        PreparedCarInput::open(path, descriptor.profile).map_err(|error| error.to_string())?;
+    let (por_root, _) =
+        por_commitment(&input.plan, &mut input.payload).map_err(|error| error.to_string())?;
+    input.payload.rewind().map_err(|error| error.to_string())?;
+    let mut writer = BufWriter::new(open_output_file(car_out)?);
+    let stats = CarStreamingWriter::new(&input.plan)
+        .write_from_reader(&mut input.payload, &mut writer)
         .map_err(format_car_error)?;
-    writer
-        .flush()
-        .map_err(|err| format!("failed to flush `{}`: {err}", car_out.display()))?;
-    if stats.chunk_profile != descriptor.profile {
-        return Err("emitted CAR used unexpected chunk profile".to_string());
+    writer.flush().map_err(|error| error.to_string())?;
+    if let Some(path) = plan_out {
+        write_text(
+            path,
+            chunk_fetch_plan_to_string(&input.plan)
+                .map_err(|error| error.to_string())?
+                .as_bytes(),
+        )?;
     }
-    if let Some(plan_path) = plan_out {
-        let spec_json = chunk_fetch_plan_to_string(&plan)
-            .map_err(|err| format!("failed to render chunk plan: {err}"))?;
-        write_text(plan_path, spec_json.as_bytes())?;
-    }
-    let summary = render_summary(&input, descriptor, handle, &plan, &stats, por_root, car_out)?;
-    let rendered =
-        to_string_pretty(&summary).map_err(|err| format!("failed to render summary: {err}"))?;
+    let input_summary = if input.is_directory {
+        InputSummary::Directory {
+            path: path.to_path_buf(),
+            file_count: input.plan.files.len() as u64,
+        }
+    } else {
+        InputSummary::File {
+            path: path.to_path_buf(),
+            bytes: input.plan.content_length,
+        }
+    };
+    let summary = render_summary(
+        &input_summary,
+        descriptor,
+        handle,
+        &input.plan,
+        &stats,
+        por_root,
+        car_out,
+    )?;
+    let rendered = to_string_pretty(&summary).map_err(|error| error.to_string())?;
     println!("{rendered}");
-    if let Some(summary_path) = summary_out {
-        write_text(summary_path, rendered.as_bytes())?;
+    if let Some(path) = summary_out {
+        write_text(path, rendered.as_bytes())?;
     }
-    // Drop payload bytes held in the plan to free memory before returning.
-    plan.chunks.shrink_to_fit();
     Ok(())
 }
 fn render_summary(
@@ -2967,7 +2926,7 @@ fn format_car_error(err: CarWriteError) -> String {
 }
 fn usage() -> String {
     "Usage:
-  sorafs_cli deploy --payload=PATH --client-config=PATH --finality-checkpoint=PATH [--provider-url=URL...] [--torii-url=URL] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--no-peer-discovery] [--summary-out=PATH]
+  sorafs_cli deploy --payload=PATH --client-config=PATH --finality-checkpoint=PATH --pin-retention-epoch=UNIX_SECONDS [--pin-min-replicas=N] [--manifest=PATH --car=PATH] [--provider-url=URL...] [--torii-url=URL] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--no-peer-discovery] [--summary-out=PATH]
   sorafs_cli car pack --input=PATH --car-out=PATH [--chunker-handle=HANDLE] [--plan-out=PATH] [--summary-out=PATH]
   sorafs_cli manifest build --summary=PATH --manifest-out=PATH [--manifest-json-out=PATH] [--pin-min-replicas=N] [--pin-storage-class=hot|warm|cold] [--pin-retention-epoch=EPOCH] [--metadata key=value]
   sorafs_cli manifest submit --manifest=PATH --torii-url=URL --network-id=NETWORK_ID (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
@@ -14307,6 +14266,7 @@ struct StorageFileEntryOwned {
     path: Vec<String>,
     size: u64,
 }
+#[cfg(test)]
 type PreparedStoragePayload = (Vec<u8>, Option<Vec<StorageFileEntryOwned>>, &'static str);
 const PREPARED_STORAGE_MAX_PAYLOAD_BYTES: u64 =
     sorafs_car::DEFAULT_CHUNK_STORE_MAX_ESTIMATED_HEAP_BYTES as u64;
@@ -14415,14 +14375,47 @@ fn storage_prepare(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
     let manifest_digest_hex = hex_encode(manifest_digest.as_bytes());
     let manifest_id_hex = manifest_root_cid_hex(&manifest)?;
-    let (payload_bytes, files, payload_kind) =
-        load_prepared_storage_payload(&payload_path, &manifest)?;
-    let payload_bytes_len = u64::try_from(payload_bytes.len())
-        .map_err(|_| "payload exceeds host limits".to_string())?;
-    let payload_file_count = files.as_ref().map_or(0_u64, |entries| {
-        u64::try_from(entries.len()).unwrap_or(u64::MAX)
+    let mut input = prepared_storage_input(&payload_path, &manifest)?;
+    let payload_kind = if input.is_directory {
+        "directory"
+    } else {
+        "file"
+    };
+    let files = input.is_directory.then(|| {
+        input
+            .plan
+            .files
+            .iter()
+            .map(|file| StorageFileEntryOwned {
+                path: file.path.clone(),
+                size: file.size,
+            })
+            .collect::<Vec<_>>()
     });
-    write_bytes(&payload_out, &payload_bytes)?;
+    let payload_bytes_len = input.plan.content_length;
+    let payload_file_count = files.as_ref().map_or(0, |files| files.len() as u64);
+    let mut output = BufWriter::new(open_output_file(&payload_out)?);
+    let mut copied_digest = blake3::Hasher::new();
+    let mut written = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = input
+            .payload
+            .read(&mut buffer)
+            .map_err(|error| error.to_string())?;
+        if count == 0 {
+            break;
+        }
+        copied_digest.update(&buffer[..count]);
+        output
+            .write_all(&buffer[..count])
+            .map_err(|error| error.to_string())?;
+        written += count as u64;
+    }
+    output.flush().map_err(|error| error.to_string())?;
+    if written != payload_bytes_len || copied_digest.finalize() != input.plan.payload_digest {
+        return Err("prepared payload bytes changed".to_owned());
+    }
     let files_value = storage_files_to_json_value(files.as_deref());
     let files_rendered = to_string_pretty(&files_value)
         .map_err(|err| format!("failed to render storage files JSON: {err}"))?;
@@ -14451,13 +14444,26 @@ fn storage_prepare(raw_args: Vec<String>) -> Result<(), String> {
     }
     Ok(())
 }
+fn prepared_storage_input(path: &Path, manifest: &ManifestV1) -> Result<PreparedCarInput, String> {
+    let mut input = PreparedCarInput::open(path, chunk_profile_from_manifest(manifest)?)
+        .map_err(|error| error.to_string())?;
+    verify_payload_reader(manifest, &input.plan, &mut input.payload)
+        .map_err(|error| error.to_string())?;
+    Ok(input)
+}
+#[cfg(test)]
 fn load_prepared_storage_payload(
     input: &Path,
     manifest: &ManifestV1,
 ) -> Result<PreparedStoragePayload, String> {
-    let (plan, payload, kind) = load_prepared_storage_plan(input, manifest)?;
-    let files = (kind == "directory").then(|| {
-        plan.files
+    if manifest.content_length > PREPARED_STORAGE_MAX_PAYLOAD_BYTES {
+        return Err("test eager payload bound exceeded".to_owned());
+    }
+    let mut input = prepared_storage_input(input, manifest)?;
+    let files = input.is_directory.then(|| {
+        input
+            .plan
+            .files
             .iter()
             .map(|file| StorageFileEntryOwned {
                 path: file.path.clone(),
@@ -14465,74 +14471,20 @@ fn load_prepared_storage_payload(
             })
             .collect()
     });
-    Ok((payload, files, kind))
-}
-fn load_prepared_storage_plan(
-    input: &Path,
-    manifest: &ManifestV1,
-) -> Result<(CarBuildPlan, Vec<u8>, &'static str), String> {
-    if manifest.content_length > PREPARED_STORAGE_MAX_PAYLOAD_BYTES {
-        return Err(format!(
-            "manifest payload exceeds the bounded preparation limit ({PREPARED_STORAGE_MAX_PAYLOAD_BYTES} bytes)"
-        ));
-    }
-    let metadata = fs::symlink_metadata(input)
-        .map_err(|err| format!("failed to access payload `{}`: {err}", input.display()))?;
-    let profile = chunk_profile_from_manifest(manifest)?;
-    if metadata.is_dir() {
-        let (plan, payload) = CarBuildPlan::from_directory_with_profile(input, profile)
-            .map_err(|err| format!("failed to build directory payload plan: {err}"))?;
-        validate_prepared_storage_payload(manifest, &plan, &payload)?;
-        return Ok((plan, payload, "directory"));
-    }
-    if metadata.is_file() {
-        let payload = read_file_bounded(input, manifest.content_length, "payload")?;
-        let plan = CarBuildPlan::single_file_with_profile(&payload, profile)
-            .map_err(|err| format!("failed to build file payload plan: {err}"))?;
-        validate_prepared_storage_payload(manifest, &plan, &payload)?;
-        return Ok((plan, payload, "file"));
-    }
-    Err("payload input must be a file or directory".to_string())
-}
-fn validate_prepared_storage_payload(
-    manifest: &ManifestV1,
-    plan: &CarBuildPlan,
-    payload: &[u8],
-) -> Result<(), String> {
-    if manifest.content_length != plan.content_length
-        || manifest.content_length != payload.len() as u64
-    {
-        return Err("payload length does not match the canonical manifest".to_owned());
-    }
-    let specs = plan
-        .try_chunk_fetch_specs()
-        .map_err(|error| format!("invalid prepared chunk plan: {error}"))?;
-    if chunk_digest_sha3_from_specs(&specs) != manifest.chunk_digest_sha3_256 {
-        return Err(
-            "payload chunk-plan commitment does not match the canonical manifest".to_owned(),
-        );
-    }
-    if compute_por_root(payload, plan)
-        .map_err(|error| format!("failed to reproduce prepared PoR root: {error}"))?
-        != manifest.por_root
-    {
-        return Err("payload PoR root does not match the canonical manifest".to_owned());
-    }
-    let mut reader = payload;
-    let stats = CarStreamingWriter::new(plan)
-        .write_from_reader(&mut reader, &mut io::sink())
-        .map_err(format_car_error)?;
-    if stats.root_cids.as_slice() != [manifest.root_cid.clone()]
-        || stats.dag_codec != manifest.dag_codec.0
-        || stats.car_size != manifest.car_size
-        || stats.car_archive_digest.as_bytes() != &manifest.car_digest
-    {
-        return Err(
-            "payload paths, root CID, or canonical CAR commitment do not match the manifest"
-                .to_owned(),
-        );
-    }
-    Ok(())
+    let mut payload = Vec::new();
+    input
+        .payload
+        .read_to_end(&mut payload)
+        .map_err(|error| error.to_string())?;
+    Ok((
+        payload,
+        files,
+        if input.is_directory {
+            "directory"
+        } else {
+            "file"
+        },
+    ))
 }
 fn storage_files_to_json_value(files: Option<&[StorageFileEntryOwned]>) -> Value {
     match files {
@@ -14707,49 +14659,70 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
     let manifest_digest = manifest
         .digest()
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
-    let car_bytes = read_file_bounded(&car_path, manifest.car_size, "CAR archive")?;
     let mut resolved_plan = if let Some(source) = chunk_plan_source {
         let plan_json = source.read()?;
-        let chunker_handle = chunker_handle_from_profile(&manifest.chunking).to_handle();
-        Some(build_plan_from_specs(&plan_json, Some(&chunker_handle))?)
+        let handle = chunker_handle_from_profile(&manifest.chunking).to_handle();
+        Some(build_plan_from_specs(&plan_json, Some(&handle))?)
     } else {
         None
     };
-    if let Some(path) = payload_path.as_ref() {
-        // Fetch envelopes bind chunks and complete payload bytes, but do not
-        // contain file paths. Reuse native bounded source acquisition to retain
-        // the full layout, then bind its paths, PoR and exact CAR to the manifest.
-        let (plan, _payload, _) = load_prepared_storage_plan(path, &manifest)?;
+    let (stats, payload_digest_hex, chunk_digest_hex, chunk_count, payload_bytes) = if let Some(
+        path,
+    ) =
+        payload_path.as_ref()
+    {
+        let mut input = PreparedCarInput::open(path, chunk_profile_from_manifest(&manifest)?)
+            .map_err(|error| error.to_string())?;
         if let Some(supplied) = resolved_plan.as_ref()
-            && (supplied.plan.payload_digest != plan.payload_digest
-                || supplied.plan.content_length != plan.content_length
-                || supplied.plan.chunks != plan.chunks)
+            && (supplied.plan.payload_digest != input.plan.payload_digest
+                || supplied.plan.content_length != input.plan.content_length
+                || supplied.plan.chunks != input.plan.chunks)
         {
-            return Err("chunk plan does not match the authenticated source payload".to_owned());
+            return Err("chunk plan does not match authenticated source payload".to_owned());
         }
+        let report = verify_retained_car(&manifest, &mut input, &car_path)?;
+        let summary = (
+            report.stats,
+            hex_encode(input.plan.payload_digest.as_bytes()),
+            hex_encode(sorafs_car::compute_chunk_plan_digest_sha3(
+                &input.plan.chunks,
+            )),
+            input.plan.chunks.len(),
+            input.plan.content_length,
+        );
         resolved_plan = Some(PlanWithHandle {
-            plan,
+            plan: input.plan,
             chunker_handle: chunker_handle_from_profile(&manifest.chunking).to_handle(),
         });
-    }
-    let report = if let Some(plan_with_handle) = resolved_plan.as_ref() {
-        CarVerifier::verify_full_car_with_plan(&manifest, &plan_with_handle.plan, &car_bytes)
+        summary
     } else {
-        CarVerifier::verify_full_car(&manifest, &car_bytes)
-    }
-    .map_err(|err| format!("failed to verify CAR archive: {err}"))?;
-    let payload_digest_hex = hex_encode(report.chunk_store.payload_digest().as_bytes());
-    let chunk_digest_sha3 = chunk_digest_sha3_from_chunks(report.chunk_store.chunks());
-    let chunk_digest_hex = hex_encode(chunk_digest_sha3);
-    let car_payload_digest_hex = hex_encode(report.stats.car_payload_digest.as_bytes());
-    let car_digest_hex = hex_encode(report.stats.car_archive_digest.as_bytes());
+        if manifest.car_size > PREPARED_STORAGE_MAX_PAYLOAD_BYTES {
+            return Err("CARs above the eager verification bound require --payload=PATH for native streaming verification".to_owned());
+        }
+        let car_bytes = read_file_bounded(&car_path, manifest.car_size, "CAR archive")?;
+        let report = if let Some(plan) = resolved_plan.as_ref() {
+            CarVerifier::verify_full_car_with_plan(&manifest, &plan.plan, &car_bytes)
+        } else {
+            CarVerifier::verify_full_car(&manifest, &car_bytes)
+        }
+        .map_err(|error| error.to_string())?;
+        (
+            report.stats,
+            hex_encode(report.chunk_store.payload_digest().as_bytes()),
+            hex_encode(chunk_digest_sha3_from_chunks(report.chunk_store.chunks())),
+            report.chunk_store.chunks().len(),
+            report.chunk_store.payload_len(),
+        )
+    };
+    let car_payload_digest_hex = hex_encode(stats.car_payload_digest.as_bytes());
+    let car_digest_hex = hex_encode(stats.car_archive_digest.as_bytes());
     let mut summary = Map::new();
     insert_value!(summary["manifest_path"] = manifest_path.display().to_string());
     insert_value!(summary["car_path"] = car_path.display().to_string());
     if let Some(path) = payload_path {
         insert_value!(summary["payload_path"] = path.display().to_string());
     }
-    insert_value!(summary["chunk_count"] = report.chunk_store.chunks().len() as u64);
+    insert_value!(summary["chunk_count"] = chunk_count as u64);
     if let Some(label) = chunk_plan_label {
         insert_value!(summary["chunk_plan_source"] = label);
     }
@@ -14758,13 +14731,13 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
             summary["chunk_plan_chunk_count"] = plan_with_handle.plan.chunks.len() as u64
         );
     }
-    insert_value!(summary["payload_bytes"] = report.chunk_store.payload_len());
+    insert_value!(summary["payload_bytes"] = payload_bytes);
     insert_value!(summary["payload_digest_hex"] = payload_digest_hex);
     insert_value!(summary["chunk_digest_sha3_hex"] = chunk_digest_hex);
     insert_value!(summary["car_payload_digest_hex"] = car_payload_digest_hex);
     insert_value!(summary["car_digest_hex"] = car_digest_hex.clone());
     insert_value!(summary["manifest_car_digest_hex"] = car_digest_hex);
-    insert_value!(summary["car_size"] = report.stats.car_size);
+    insert_value!(summary["car_size"] = stats.car_size);
     insert_value!(
         summary["chunker_handle"] = format!(
             "{}.{}@{}",
@@ -14775,17 +14748,16 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
     insert_json!(summary["pin_policy"] = Value::Object(pin_policy_json(&manifest.pin_policy)));
     insert_json!(
         summary["root_cids_hex"] = Value::Array(
-            report
-                .stats
+            stats
                 .root_cids
                 .iter()
                 .map(|cid| Value::from(hex_encode(cid)))
                 .collect(),
         )
     );
-    insert_value!(summary["dag_codec"] = report.stats.dag_codec);
+    insert_value!(summary["dag_codec"] = stats.dag_codec);
     insert_value!(summary["chunker_profile_id"] = u64::from(manifest.chunking.profile_id.0));
-    insert_value!(summary["car_payload_bytes"] = report.stats.payload_bytes);
+    insert_value!(summary["car_payload_bytes"] = stats.payload_bytes);
     let summary_value = Value::Object(summary);
     let rendered = to_string_pretty(&summary_value)
         .map_err(|err| format!("failed to render summary: {err}"))?;

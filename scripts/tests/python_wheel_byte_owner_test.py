@@ -269,6 +269,42 @@ def run_byte_controls(original: dict) -> int:
 
     return byte_path_parity_checks
 
+
+def run_fixture_seal_controls(original: dict) -> int:
+    """Independent owner uses fd metadata; verifier still rejects wrong seals."""
+    from dataclasses import replace
+
+    verifier = original["verifier"]
+    path = original["write_wheel"](
+        original["fixture_root"] / "descriptor-seal-owner.whl", original["valid_entries"]()
+    )
+    real_stat = os.stat
+
+    class PathnameStat:
+        def __init__(self, metadata):
+            self._metadata = metadata
+            self.st_ctime_ns = metadata.st_ctime_ns + 1
+
+        def __getattr__(self, name):
+            return getattr(self._metadata, name)
+
+    # Model Windows' pathname/descriptor ctime split in the isolated child.
+    # The old pathname-based fixture fails; no production check is relaxed.
+    os.stat = lambda *args, **kwargs: PathnameStat(real_stat(*args, **kwargs))
+    try:
+        seal = verifier.FileSeal.parse(original["seal"](path))
+        preflight = verifier.preflight_wheel(path, seal.render(), extension_suffixes=(".abi3.so",))
+        assert preflight.seal == seal
+        for changed in (replace(seal, ctime_ns=seal.ctime_ns + 1),
+                        replace(seal, sha256="0" * 64)):
+            original["expect_failure"](
+                "expected shell-provided seal",
+                lambda: verifier.preflight_wheel(path, changed.render(), extension_suffixes=(".abi3.so",)),
+            )
+    finally:
+        os.stat = real_stat
+    return 3
+
 def _identity(path: Path) -> dict[str, object]:
     raw = path.read_bytes()
     return {"sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
@@ -348,9 +384,11 @@ def run_isolated(fixture_root: Path) -> dict:
     body = extract_original_harness(source)
     exec(compile(body, str(SHELL_HARNESS) + ":wheel-verifier-heredoc", "exec"), original)
     pairs = run_byte_controls(original)
+    metadata_controls = run_fixture_seal_controls(original)
     if {name: _identity(path) for name, path in sources.items()} != identities:
         raise AssertionError("source changed during wheel controls")
     return {"scope": "fixture-parser-controls-only", "byte_path_pairs": pairs,
+            "fixture_seal_metadata_controls": metadata_controls,
             "original_harness_sha256": hashlib.sha256(body.encode()).hexdigest(),
             "sources": identities, "python": {"path": str(Path(sys.executable).resolve()),
             "identity": _identity(Path(sys.executable).resolve()), "version": sys.version}}
@@ -372,6 +410,7 @@ def test_original_wheel_harness_and_captured_bytes(tmp_path: Path) -> None:
     assert report["sources"] == {"verifier": _identity(VERIFIER), "harness": _identity(SHELL_HARNESS), "controls": _identity(Path(__file__).resolve())}
     assert report["original_harness_sha256"] == hashlib.sha256(extract_original_harness(SHELL_HARNESS.read_bytes()).encode()).hexdigest()
     assert report["byte_path_pairs"] == 80
+    assert report["fixture_seal_metadata_controls"] == 3
     assert report["python"] == {"path": str(Path(sys.executable).resolve()), "identity": _identity(Path(sys.executable).resolve()), "version": sys.version}
     print(lines[0])
 

@@ -1255,6 +1255,27 @@ def _typed_binding(source: RustSource, function: RustItem, receiver: str) -> Opt
     return match.group(1) if match else None
 
 
+def _self_field_type(source: RustSource, function: RustItem, receiver: str) -> Optional[str]:
+    """Resolve a plain named field only on the exact struct of this local impl."""
+    impl = next((item for item in function.ancestors() if item.kind in ("impl", "trait")), None)
+    if impl is None or impl.kind != "impl":
+        return None
+    structs = [item for item in source.resolve(impl.name) if item.kind == "struct"
+               and item.parent is impl.parent and item.body_start is not None]
+    if len(structs) != 1:
+        return None
+    struct = structs[0]
+    body = source.masked[struct.body_start + 1 : struct.end - 1]
+    # Only a flat list of simple field declarations is evidence here. Qualified,
+    # generic or conditional shapes can be handled by a future explicit rule.
+    field = r"\s*(?:pub(?:\(crate\))?\s+)?([A-Za-z_]\w*)\s*:\s*([A-Za-z_]\w*)\s*"
+    fields = [re.fullmatch(field, row) for row in body.split(",") if row.strip()]
+    if not fields or any(match is None for match in fields):
+        return None
+    types = [match.group(2) for match in fields if match.group(1) == receiver]
+    return types[0] if len(types) == 1 else None
+
+
 def _typed_constant(source: RustSource, receiver: str) -> Optional[str]:
     """Return the type name a file declares for a `const` or `static` item, if any."""
     match = re.search(
@@ -1317,7 +1338,8 @@ def find_callers(tree: Tree, path: str, symbol: str, scope: Iterable[str],
     An occurrence counts only as a call, a path expression or a function value;
     a local variable, field or binding that shares the callee's name does not.
     A method (`Type::name`) is attributed when the receiver is `self` inside an
-    impl of the type, when the receiver is declared with the type, when the
+    impl of the type, when the receiver is declared with the type (including a
+    plain named self field on the exact enclosing struct), when the
     path names the type, or when the calling function names the type and no
     other type in the scope defines the same method. A free function is
     attributed in its own file unless the use is a path through another module,
@@ -1402,8 +1424,17 @@ def find_callers(tree: Tree, path: str, symbol: str, scope: Iterable[str],
                     else:
                         verdict = False
                 else:
-                    declared = _typed_binding(source, function, detail) if detail not in ("?", "self") else None
-                    if declared is None and detail not in ("?", "self"):
+                    prefix = source.masked[max(function.start, offset - 160) : offset]
+                    self_field = detail not in ("?", "self") and re.search(
+                        r"\bself\s*\.\s*" + re.escape(detail) + r"\s*\.\s*$", prefix
+                    )
+                    if self_field:
+                        declared = _self_field_type(source, function, detail)
+                    elif detail not in ("?", "self"):
+                        declared = _typed_binding(source, function, detail)
+                    else:
+                        declared = None
+                    if declared is None and not self_field and detail not in ("?", "self"):
                         declared = _typed_constant(source, detail)
                     if declared == "Self":
                         declared = enclosing_type

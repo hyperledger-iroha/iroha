@@ -64,7 +64,7 @@ jobs:
             target: x86_64-apple-darwin
             rid: osx-x64
             library_name: libconnect_norito_bridge.dylib
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             rid: osx-arm64
             library_name: libconnect_norito_bridge.dylib
@@ -618,7 +618,7 @@ jobs:
             target: x86_64-apple-darwin
             rid: osx-x64
             library_name: libconnect_norito_bridge.dylib
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             rid: osx-arm64
             library_name: libconnect_norito_bridge.dylib

@@ -22,6 +22,7 @@ pub mod t256;
 mod derive;
 
 // Re-export to simplify downstream dependencies.
+pub use arithmetic::CurveEndo;
 pub use curve::{Coordinates, CurveAffine, CurveExt};
 pub use ff;
 pub use group;

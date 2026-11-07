@@ -29,7 +29,7 @@ import { spawnSync } from "node:child_process";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { verifyNativeBinding } from "../src/native.js";
+import { nativeVerificationInvocation, verifyNativeBinding } from "../src/native.js";
 import {
   machOSigningIndependentSHA256,
   peSigningIndependentSHA256,
@@ -66,10 +66,11 @@ const MAX_TRANSACTION_OWNER_BYTES = 16 * 1024;
 const MAX_CLEANUP_MARKER_BYTES = 128 * 1024;
 const MAX_CLEANUP_ENTRIES = 32;
 const MAX_CHECKSUM_MANIFEST_BYTES = 1024 * 1024;
-// A cold debug build derives and validates the complete privacy profile catalog,
-// including the ZK-X509 fixed-algebraic schedules, in this subprocess. Keep the
-// probe bounded while allowing that fail-closed check to finish unoptimized.
 const NATIVE_BINDING_PROBE_TIMEOUT_MS = 120_000;
+// An explicit debug build derives the same complete privacy profile catalog,
+// including ZK-X509 fixed-algebraic schedules, without optimization. Its measured
+// cold probe needs a separate finite bound; optimized publication stays at 2 min.
+const DEBUG_NATIVE_BINDING_PROBE_TIMEOUT_MS = 30 * 60_000;
 const UUID_V4_SOURCE =
   "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const UUID_V4_PATTERN = new RegExp(`^${UUID_V4_SOURCE}$`, "u");
@@ -340,12 +341,30 @@ function defaultSignNative(path, { platform, cwd }) {
   }
 }
 
-/** Load a staged addon in a short-lived process and require its public methods. */
+/** Select a finite probe bound from the explicit, authenticated build profile. */
+export function nativeBindingProbeTimeoutMs(cargoProfile = "release") {
+  if (
+    cargoProfile !== "debug" &&
+    cargoProfile !== "release" &&
+    cargoProfile !== "deploy"
+  ) {
+    throw new TypeError(
+      'cargoProfile must be exactly "debug", "release", or "deploy"',
+    );
+  }
+  return cargoProfile === "debug"
+    ? DEBUG_NATIVE_BINDING_PROBE_TIMEOUT_MS
+    : NATIVE_BINDING_PROBE_TIMEOUT_MS;
+}
+
+/** Load a staged addon in a bounded process and require its public methods. */
 export function probeNativeBindingExports(
   bindingPath,
   requiredExports = REQUIRED_NATIVE_EXPORTS,
   requiredAbiVersion = REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+  cargoProfile = "release",
 ) {
+  const timeout = nativeBindingProbeTimeoutMs(cargoProfile);
   if (
     !Array.isArray(requiredExports) ||
     requiredExports.length === 0 ||
@@ -509,8 +528,7 @@ if (
   }
 }
 `;
-  const probe = spawnSync(
-    process.execPath,
+  const invocation = nativeVerificationInvocation(
     [
       "--eval",
       probeSource,
@@ -518,11 +536,16 @@ if (
       JSON.stringify(requiredExports),
       JSON.stringify(requiredResults),
     ],
+    cargoProfile,
+  );
+  const probe = spawnSync(
+    invocation.file,
+    invocation.args,
     {
       cwd: repoRoot,
       encoding: "utf8",
       env: process.env,
-      timeout: NATIVE_BINDING_PROBE_TIMEOUT_MS,
+      timeout,
       windowsHide: true,
       maxBuffer: 64 * 1024,
     },
@@ -2346,7 +2369,12 @@ export async function publishNativeBinding({
       platformKey,
     });
     if (!staged?.ok) throw verificationError("Staged native binding", staged);
-    probeBinding(stagedNative, requiredExports);
+    probeBinding(
+      stagedNative,
+      requiredExports,
+      REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+      buildProvenance.cargo_profile,
+    );
     const postProbeSource = readSourceState(repoRoot);
     assertBuildSourceMatchesCurrent(buildProvenance, postProbeSource, {
       phase: "staged addon probing",

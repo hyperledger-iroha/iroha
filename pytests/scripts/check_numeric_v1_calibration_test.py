@@ -343,6 +343,7 @@ class NumericV1CalibrationTests(unittest.TestCase):
                 self.assertIn(required, workflow)
         for forbidden in (
             "macos-14",
+            "macos-15",
             "retention-days: 90",
             "push:\n    tags:",
             "job.workflow_",
@@ -385,7 +386,7 @@ class NumericV1CalibrationTests(unittest.TestCase):
             "workflow_call:",
             "ubuntu-latest",
             "ubuntu-24.04-arm",
-            "macos-14",
+            "macos-15",
             "windows-latest",
             "toolchain: 1.99.1",
             "randomized_decimal_arithmetic_matches_independent_rational_reference",

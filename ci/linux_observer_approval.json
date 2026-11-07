@@ -1,0 +1,19 @@
+{
+  "schema": "iroha.linux-observer-approval.v1",
+  "status": "pending-independent-review",
+  "repository": null,
+  "producer_commit": null,
+  "producer_head_commit": null,
+  "producer_run_id": null,
+  "producer_run_attempt": null,
+  "artifact_id": null,
+  "artifact_name": null,
+  "artifact_sha256": null,
+  "candidate_sha256": null,
+  "source_commit": "3743ff550ca3632e92b23e5d60d084b41a069b29",
+  "source_manifest_sha256": null,
+  "native_target": "x86_64-unknown-linux-gnu",
+  "module_sha256": null,
+  "provenance_sha256": null,
+  "review": null
+}

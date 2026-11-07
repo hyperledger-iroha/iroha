@@ -2,6 +2,112 @@
 use super::*;
 
 #[test]
+fn publication_policy_requires_future_absolute_deadline_and_positive_replicas() {
+    assert!(validate_publication_policy(3, 86_400).is_err());
+    assert!(validate_publication_policy(0, 4_000_000_000).is_err());
+    assert!(validate_publication_policy(3, 4_000_000_000).is_ok());
+    assert!(
+        deploy(vec!["--payload=unused".to_owned()])
+            .unwrap_err()
+            .contains("retention")
+    );
+}
+
+#[test]
+fn deploy_preserves_reviewed_three_replica_manifest_and_streamed_source() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let (site, plan, payload, mut manifest) = site_fixture(&root);
+    manifest.pin_policy = PinPolicy {
+        min_replicas: 3,
+        storage_class: StorageClass::Hot,
+        retention_epoch: 4_000_000_000,
+    };
+    let manifest_bytes = manifest.encode().unwrap();
+    let reviewed_manifest = root.join("reviewed.to");
+    let reviewed_car = root.join("reviewed.car");
+    fs::write(&reviewed_manifest, &manifest_bytes).unwrap();
+    let mut car = Vec::new();
+    sorafs_car::CarWriter::new(&plan, &payload)
+        .unwrap()
+        .write_to(&mut car)
+        .unwrap();
+    fs::write(&reviewed_car, &car).unwrap();
+    let out = root.join("out");
+    fs::create_dir(&out).unwrap();
+    let mut artifacts = build_deploy_artifacts(
+        &site,
+        &out.join("site.car"),
+        &out.join("plan.json"),
+        &out.join("pack.json"),
+        &out.join("manifest.to"),
+        &out.join("manifest.json"),
+        manifest.pin_policy,
+        Some((&reviewed_manifest, &reviewed_car)),
+    )
+    .unwrap();
+    assert_eq!(fs::read(out.join("manifest.to")).unwrap(), manifest_bytes);
+    assert_eq!(fs::read(out.join("site.car")).unwrap(), car);
+    assert_eq!(artifacts.plan, plan);
+    let mut actual = Vec::new();
+    artifacts.payload.read_to_end(&mut actual).unwrap();
+    assert_eq!(actual, payload);
+    assert_eq!(artifacts.manifest.pin_policy.min_replicas, 3);
+    assert_eq!(artifacts.manifest.pin_policy.retention_epoch, 4_000_000_000);
+    let mut wrong = manifest.pin_policy;
+    wrong.min_replicas = 1;
+    assert!(
+        build_deploy_artifacts(
+            &site,
+            &out.join("wrong.car"),
+            &out.join("wrong.plan"),
+            &out.join("wrong.pack"),
+            &out.join("wrong.to"),
+            &out.join("wrong.json"),
+            wrong,
+            Some((&reviewed_manifest, &reviewed_car)),
+        )
+        .is_err()
+    );
+    let mut input = prepared_storage_input(&site, &manifest).unwrap();
+    let mut changed_car = car.clone();
+    changed_car[car.len() / 2] ^= 1;
+    fs::write(&reviewed_car, &changed_car).unwrap();
+    assert!(verify_retained_car(&manifest, &mut input, &reviewed_car).is_err());
+    fs::write(&reviewed_car, &car[..car.len() - 1]).unwrap();
+    assert!(verify_retained_car(&manifest, &mut input, &reviewed_car).is_err());
+    fs::write(&reviewed_car, &car).unwrap();
+    for mutation in 0..2 {
+        let mut changed_manifest = manifest.clone();
+        if mutation == 0 {
+            changed_manifest.car_digest[0] ^= 1;
+        } else {
+            changed_manifest
+                .alias_claims
+                .push(sorafs_manifest::AliasClaim {
+                    name: "site".to_owned(),
+                    namespace: "sora".to_owned(),
+                    proof: vec![1, 2, 3],
+                });
+        }
+        fs::write(&reviewed_manifest, changed_manifest.encode().unwrap()).unwrap();
+        assert!(
+            build_deploy_artifacts(
+                &site,
+                &out.join(format!("mutation-{mutation}.car")),
+                &out.join(format!("mutation-{mutation}.plan")),
+                &out.join(format!("mutation-{mutation}.pack")),
+                &out.join(format!("mutation-{mutation}.to")),
+                &out.join(format!("mutation-{mutation}.json")),
+                manifest.pin_policy,
+                Some((&reviewed_manifest, &reviewed_car)),
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn car_pack_directory_emits_exact_archive_plan_and_summary() {
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().canonicalize().expect("canonical root");
@@ -99,6 +205,176 @@ fn site_fixture(root: &Path) -> (PathBuf, CarBuildPlan, Vec<u8>, ManifestV1) {
         .expect("directory plan");
     let manifest = manifest(&plan, &payload);
     (site, plan, payload, manifest)
+}
+
+#[test]
+fn car_pack_native_entry_points_match_canonical_archives() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let (site, plan, payload, _) = site_fixture(&root);
+    let descriptor = chunker_registry::lookup_by_handle(DEFAULT_CHUNKER_HANDLE).unwrap();
+    let mut expected_directory = Vec::new();
+    sorafs_car::CarWriter::new(&plan, &payload)
+        .unwrap()
+        .write_to(&mut expected_directory)
+        .unwrap();
+    let directory_car = root.join("directory.car");
+    build_from_directory(
+        &site,
+        descriptor,
+        &directory_car,
+        None,
+        None,
+        DEFAULT_CHUNKER_HANDLE,
+    )
+    .unwrap();
+    assert_eq!(fs::read(directory_car).unwrap(), expected_directory);
+    let emitted_car = root.join("emitted.car");
+    emit_car_and_artifacts(
+        &site,
+        descriptor,
+        DEFAULT_CHUNKER_HANDLE,
+        &emitted_car,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(fs::read(emitted_car).unwrap(), expected_directory);
+
+    let file = root.join("payload.bin");
+    fs::write(&file, &payload).unwrap();
+    let file_car = root.join("file.car");
+    let summary_path = root.join("file-summary.json");
+    build_from_file(
+        &file,
+        descriptor,
+        &file_car,
+        None,
+        Some(&summary_path),
+        DEFAULT_CHUNKER_HANDLE,
+    )
+    .unwrap();
+    let file_plan = CarBuildPlan::single_file(&payload).unwrap();
+    let mut expected_file = Vec::new();
+    sorafs_car::CarWriter::new(&file_plan, &payload)
+        .unwrap()
+        .write_to(&mut expected_file)
+        .unwrap();
+    assert_eq!(fs::read(file_car).unwrap(), expected_file);
+    let summary: Value = norito::json::from_slice(&fs::read(summary_path).unwrap()).unwrap();
+    assert_eq!(
+        summary.get("input_kind").and_then(Value::as_str),
+        Some("file")
+    );
+    assert_eq!(
+        summary.get("payload_bytes").and_then(Value::as_u64),
+        Some(payload.len() as u64)
+    );
+}
+
+#[test]
+fn proof_verify_streamed_source_binds_car_before_writing_summary() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let (site, plan, payload, manifest) = site_fixture(&root);
+    let manifest_path = root.join("manifest.to");
+    fs::write(&manifest_path, manifest.encode().unwrap()).unwrap();
+    let car_path = root.join("site.car");
+    let mut car = Vec::new();
+    sorafs_car::CarWriter::new(&plan, &payload)
+        .unwrap()
+        .write_to(&mut car)
+        .unwrap();
+    fs::write(&car_path, &car).unwrap();
+    let summary_path = root.join("verified.json");
+    let arguments = |summary: &Path| {
+        vec![
+            format!("--manifest={}", manifest_path.display()),
+            format!("--car={}", car_path.display()),
+            format!("--payload={}", site.display()),
+            format!("--summary-out={}", summary.display()),
+        ]
+    };
+    proof_verify(arguments(&summary_path)).unwrap();
+    let summary: Value = norito::json::from_slice(&fs::read(summary_path).unwrap()).unwrap();
+    assert_eq!(
+        summary.get("payload_bytes").and_then(Value::as_u64),
+        Some(payload.len() as u64)
+    );
+    assert_eq!(
+        summary.get("car_size").and_then(Value::as_u64),
+        Some(car.len() as u64)
+    );
+    car.push(0);
+    fs::write(&car_path, car).unwrap();
+    let rejected_summary = root.join("rejected.json");
+    assert!(proof_verify(arguments(&rejected_summary)).is_err());
+    assert!(!rejected_summary.exists());
+}
+
+#[test]
+fn publication_qualify_rejects_provider_bounds_before_network_or_proof_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let (site, _, _, _) = site_fixture(&root);
+    let mut artifacts = build_deploy_artifacts(
+        &site,
+        &root.join("site.car"),
+        &root.join("plan.json"),
+        &root.join("pack.json"),
+        &root.join("manifest.to"),
+        &root.join("manifest.json"),
+        PinPolicy {
+            min_replicas: 3,
+            storage_class: StorageClass::Hot,
+            retention_epoch: 4_000_000_000,
+        },
+        None,
+    )
+    .unwrap();
+    let checkpoint =
+        iroha_data_model::sumeragi_finality::SumeragiFinalityCheckpoint::decode_canonical(
+            include_bytes!(
+                "../../../../../fixtures/sumeragi/native-finality/genesis-checkpoint.nrt"
+            ),
+        )
+        .unwrap();
+    let key = KeyPair::try_from_seed(vec![4; 32], iroha_crypto::Algorithm::Ed25519).unwrap();
+    let config = DeployClientConfig {
+        torii_url: None,
+        public_key: key.public_key().clone(),
+        private_key: key.private_key().clone(),
+        network_id: checkpoint.network_id(),
+        chain_id: checkpoint.chain_id().parse().unwrap(),
+        chain_discriminant: 777,
+    };
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let base = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+    let client = HttpClient::new();
+    for providers in [Vec::new(), vec![base.to_string(); 65]] {
+        let error = deploy_publication::qualify(
+            &client,
+            &base,
+            &config,
+            &mut artifacts,
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new([4])),
+            checkpoint.clone(),
+            &providers,
+            &root,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("1..=64 provider source endpoints"),
+            "{error}"
+        );
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert!(!root.join("publication.assigned.proof.to").exists());
+        assert!(!root.join("publication.completed.proof.to").exists());
+    }
 }
 
 /// Build a canonical manifest for exactly the supplied test plan and payload.
@@ -342,7 +618,7 @@ fn gateway_expectations_use_verified_payload_without_rereading_changed_source_fi
 }
 
 #[test]
-fn deploy_artifacts_encode_the_checked_default_retention() {
+fn deploy_artifacts_encode_the_explicit_checked_retention() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().expect("canonical root");
     let payload = root.join("payload.txt");
@@ -352,6 +628,11 @@ fn deploy_artifacts_encode_the_checked_default_retention() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
+    let policy = PinPolicy {
+        min_replicas: 3,
+        storage_class: StorageClass::Hot,
+        retention_epoch: deploy_publication::default_deploy_retention_epoch(before).unwrap(),
+    };
     let artifacts = build_deploy_artifacts(
         &payload,
         &root.join("payload.car"),
@@ -359,6 +640,8 @@ fn deploy_artifacts_encode_the_checked_default_retention() {
         &root.join("pack.json"),
         &manifest_path,
         &root.join("manifest.json"),
+        policy,
+        None,
     )
     .unwrap();
     let after = SystemTime::now()
@@ -367,6 +650,7 @@ fn deploy_artifacts_encode_the_checked_default_retention() {
         .as_secs();
     let encoded = decode_manifest_v1_canonical(&fs::read(manifest_path).unwrap()).unwrap();
     assert_eq!(encoded, artifacts.manifest);
+    assert_eq!(encoded.pin_policy, policy);
     assert!(
         encoded.pin_policy.retention_epoch
             >= deploy_publication::default_deploy_retention_epoch(before).unwrap()

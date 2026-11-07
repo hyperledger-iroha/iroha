@@ -327,7 +327,7 @@ def test_swift_lane_rebuilds_external_xcframework_and_requires_native_abi33() ->
     workflow = read(".github/workflows/pr_privacy_sdk_guard.yml")
     job = swift_job(workflow)
     assert "needs: privacy_jvm_sdk_tests" in job
-    assert "runs-on: macos-14" in job
+    assert "runs-on: macos-15" in job
     assert "timeout-minutes: 360" in job
     assert "dtolnay/rust-toolchain" not in job
     assert '"1.99.1-aarch64-apple-darwin"' in job

@@ -231,6 +231,8 @@ impl<T: norito::SerializePayload> norito::SerializePayload for PrivacyWireBorrow
         self.0.encoded_len_exact()
     }
 }
+// Keep the zero-length wire field as an explicit alignment carrier.
+#[repr(C)]
 struct PrivacySelectedFrame<Wire, Payload> {
     payload: Payload,
     _wire_alignment: [Wire; 0],

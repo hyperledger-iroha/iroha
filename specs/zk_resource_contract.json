@@ -6734,13 +6734,17 @@
         {
           "stage": "vm",
           "path": "crates/iroha_core/src/state.rs",
-          "contains": "let result = if self.active_trigger_execution_depth >= max_depth {"
+          "contains": "let result = if tx.active_trigger_execution_depth >= max_depth {"
         },
         {
           "stage": "vm",
           "path": "crates/iroha_core/src/state.rs",
-          "contains": "let max_depth = u16::from(self.world.parameters.smart_contract().execution_depth());",
-          "count": 2
+          "contains": "let max_depth = u16::from(self.world.parameters.smart_contract().execution_depth());"
+        },
+        {
+          "stage": "vm",
+          "path": "crates/iroha_core/src/state.rs",
+          "contains": "let max_depth = u16::from(tx.world.parameters.smart_contract().execution_depth());"
         }
       ],
       "tests": [
@@ -11851,6 +11855,657 @@
           "name": "policy_key_roundtrip_is_bounded_and_canonical"
         }
       ]
+    },
+    {
+      "id": "transaction.parliament_credential_registration_max_bytes",
+      "group": "transaction",
+      "what": "Largest opaque candidate-credential registration frame accepted by the original private Core preparation and read-back owner. This additive input is not an activated executable instruction.",
+      "unit": "bytes",
+      "value": 167936,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/governance/anonymous_ballot/registration_input.rs",
+        "symbol": "MAX_FRAME_BYTES",
+        "kind": "const",
+        "expr": "164 * 1024"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core/src/state/parliament_registration.rs",
+          "contains": "if envelope.frame().len() > RegisterParliamentCredentialV1::MAX_FRAME_BYTES {",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "id": "attachment.kagemusha_suffix_header_max_bytes",
+      "group": "attachment",
+      "what": "Complete canonical suffix header frame, including every selected chunk digest.",
+      "unit": "bytes",
+      "value": 49152,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "KAGEMUSHA_WALLET_SUFFIX_HEADER_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "49_152"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "encode_frame_v1(self, KAGEMUSHA_WALLET_SUFFIX_HEADER_MAX_BYTES_V1)"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "decode_frame_v1(bytes, KAGEMUSHA_WALLET_SUFFIX_HEADER_MAX_BYTES_V1)?"
+        }
+      ]
+    },
+    {
+      "id": "attachment.kagemusha_suffix_anchor_max_bytes",
+      "group": "attachment",
+      "what": "Complete canonical suffix anchor frame retaining the original verified Omega and its opening.",
+      "unit": "bytes",
+      "value": 24576,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "KAGEMUSHA_WALLET_SUFFIX_ANCHOR_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "24_576"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "encode_frame_v1(self, KAGEMUSHA_WALLET_SUFFIX_ANCHOR_MAX_BYTES_V1)"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "decode_frame_v1(bytes, KAGEMUSHA_WALLET_SUFFIX_ANCHOR_MAX_BYTES_V1)?"
+        }
+      ]
+    },
+    {
+      "id": "attachment.kagemusha_suffix_step_max_bytes",
+      "group": "attachment",
+      "what": "Complete canonical semantic suffix step frame; the chunk parser checks each framed entry against this same ceiling.",
+      "unit": "bytes",
+      "value": 65536,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "KAGEMUSHA_WALLET_SUFFIX_STEP_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "65_536"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "encode_frame_v1(self, KAGEMUSHA_WALLET_SUFFIX_STEP_MAX_BYTES_V1)"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "decode_frame_v1(bytes, KAGEMUSHA_WALLET_SUFFIX_STEP_MAX_BYTES_V1)?"
+        }
+      ]
+    },
+    {
+      "id": "attachment.kagemusha_suffix_unload_max_bytes",
+      "group": "attachment",
+      "what": "Complete canonical Finalize frame including the original Unload proof, receipt and charge data.",
+      "unit": "bytes",
+      "value": 16384,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "KAGEMUSHA_WALLET_SUFFIX_UNLOAD_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "16_384"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "encode_frame_v1(self, KAGEMUSHA_WALLET_SUFFIX_UNLOAD_MAX_BYTES_V1)"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "decode_frame_v1(bytes, KAGEMUSHA_WALLET_SUFFIX_UNLOAD_MAX_BYTES_V1)?"
+        }
+      ]
+    },
+    {
+      "id": "work_budget.kagemusha_suffix_chunk_max_steps",
+      "group": "work_budget",
+      "what": "At most eight complete semantic steps in an Append chunk, limiting its deterministic verification work independently of proof-call quota.",
+      "unit": "count",
+      "value": 8,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "KAGEMUSHA_WALLET_SUFFIX_CHUNK_STEPS_MAX_V1",
+        "kind": "const",
+        "expr": "8"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "frames.len() == KAGEMUSHA_WALLET_SUFFIX_CHUNK_STEPS_MAX_V1"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "frames.len() > KAGEMUSHA_WALLET_SUFFIX_CHUNK_STEPS_MAX_V1"
+        }
+      ]
+    },
+    {
+      "id": "attachment.kagemusha_suffix_chunk_data_max_bytes",
+      "group": "attachment",
+      "what": "Total framed step-stream bytes in one chunk: at most eight entries, each with four-byte length prefix and a bounded complete step frame.",
+      "unit": "bytes",
+      "value": 524320,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "KAGEMUSHA_WALLET_SUFFIX_CHUNK_DATA_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "KAGEMUSHA_WALLET_SUFFIX_CHUNK_STEPS_MAX_V1 * (4 + KAGEMUSHA_WALLET_SUFFIX_STEP_MAX_BYTES_V1)"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "refs": {
+        "KAGEMUSHA_WALLET_SUFFIX_CHUNK_STEPS_MAX_V1": "work_budget.kagemusha_suffix_chunk_max_steps",
+        "KAGEMUSHA_WALLET_SUFFIX_STEP_MAX_BYTES_V1": "attachment.kagemusha_suffix_step_max_bytes"
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "self.data.len() > KAGEMUSHA_WALLET_SUFFIX_CHUNK_DATA_MAX_BYTES_V1"
+        }
+      ]
+    },
+    {
+      "id": "attachment.kagemusha_suffix_chunk_max_bytes",
+      "group": "attachment",
+      "what": "Complete canonical Append chunk frame, including its bounded step stream, fixed identities and framing overhead.",
+      "unit": "bytes",
+      "value": 528416,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "KAGEMUSHA_WALLET_SUFFIX_CHUNK_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "KAGEMUSHA_WALLET_SUFFIX_CHUNK_DATA_MAX_BYTES_V1 + 4_096"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "refs": {
+        "KAGEMUSHA_WALLET_SUFFIX_CHUNK_DATA_MAX_BYTES_V1": "attachment.kagemusha_suffix_chunk_data_max_bytes"
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "encode_frame_v1(self, KAGEMUSHA_WALLET_SUFFIX_CHUNK_MAX_BYTES_V1)"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "decode_frame_v1(bytes, KAGEMUSHA_WALLET_SUFFIX_CHUNK_MAX_BYTES_V1)?"
+        }
+      ]
+    },
+    {
+      "id": "work_budget.kagemusha_suffix_max_chunks",
+      "group": "work_budget",
+      "what": "At most 512 committed Append chunks in one suffix header.",
+      "unit": "count",
+      "value": 512,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "KAGEMUSHA_WALLET_SUFFIX_CHUNKS_MAX_V1",
+        "kind": "const",
+        "expr": "512"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "chunks > KAGEMUSHA_WALLET_SUFFIX_CHUNKS_MAX_V1"
+        }
+      ]
+    },
+    {
+      "id": "work_budget.kagemusha_suffix_max_steps",
+      "group": "work_budget",
+      "what": "At most 4096 complete semantic steps selected by one suffix header, also checked against the per-chunk ceiling.",
+      "unit": "count",
+      "value": 4096,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "KAGEMUSHA_WALLET_SUFFIX_STEPS_MAX_V1",
+        "kind": "const",
+        "expr": "4_096"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "steps > KAGEMUSHA_WALLET_SUFFIX_STEPS_MAX_V1"
+        }
+      ]
+    },
+    {
+      "id": "transport.kagemusha_suffix_review_max_bytes",
+      "group": "attachment",
+      "what": "Complete canonical Native financial display projection; decoding this bounded DATA grants no approval or proof authority.",
+      "unit": "bytes",
+      "value": 12288,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+        "symbol": "SUFFIX_UNLOAD_REVIEW_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "12_288"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+          "contains": "encode_frame_v1(self, SUFFIX_UNLOAD_REVIEW_MAX_BYTES_V1)"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+          "contains": "decode_frame_v1(bytes, SUFFIX_UNLOAD_REVIEW_MAX_BYTES_V1)?"
+        }
+      ]
+    },
+    {
+      "id": "transport.kagemusha_suffix_progress_max_bytes",
+      "group": "attachment",
+      "what": "Complete canonical transient Native progress frame; its schema bound does not substitute for proof verification.",
+      "unit": "bytes",
+      "value": 256,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+        "symbol": "SUFFIX_UNLOAD_PROGRESS_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "256"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+          "contains": "encode_frame_v1(self, SUFFIX_UNLOAD_PROGRESS_MAX_BYTES_V1)"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+          "contains": "decode_frame_v1(bytes, SUFFIX_UNLOAD_PROGRESS_MAX_BYTES_V1)?"
+        }
+      ]
+    },
+    {
+      "id": "transport.kagemusha_suffix_status_max_bytes",
+      "group": "attachment",
+      "what": "Complete canonical Native scheduling status or release summary, both sharing the fixed schema byte ceiling.",
+      "unit": "bytes",
+      "value": 512,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+        "symbol": "SUFFIX_UNLOAD_STATUS_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "512"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+          "contains": "encode_frame_v1(self, SUFFIX_UNLOAD_STATUS_MAX_BYTES_V1)",
+          "count": 2
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+          "contains": "decode_frame_v1(bytes, SUFFIX_UNLOAD_STATUS_MAX_BYTES_V1)?",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "id": "transaction.kagemusha_suffix_declared_instruction_max_bytes",
+      "group": "transaction",
+      "what": "Declared intended complete suffix instruction ceiling. No current production consumer enforces this exact outer-frame maximum; do not treat it as an effective admission guarantee.",
+      "unit": "bytes",
+      "value": 544800,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+        "symbol": "SUFFIX_UNLOAD_INSTRUCTION_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "KAGEMUSHA_WALLET_SUFFIX_CHUNK_MAX_BYTES_V1 + 16_384"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "refs": {
+        "KAGEMUSHA_WALLET_SUFFIX_CHUNK_MAX_BYTES_V1": "attachment.kagemusha_suffix_chunk_max_bytes"
+      },
+      "unenforced": {
+        "owner": "F.2",
+        "summary": "This intended complete outer-frame maximum is declared but has no production consumers. Nested suffix frames and the generic signed-transaction envelope have their own bounds; equivalence to this smaller declared maximum is not established. Recording this gap does not repair or qualify the missing enforcement."
+      }
+    },
+    {
+      "id": "transaction.kagemusha_suffix_declared_signed_wire_max_bytes",
+      "group": "transaction",
+      "what": "Declared intended complete suffix signed wire ceiling. No current production consumer enforces this exact outer-frame maximum; do not treat it as an effective admission guarantee.",
+      "unit": "bytes",
+      "value": 593952,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+        "symbol": "SUFFIX_UNLOAD_SIGNED_WIRE_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "KAGEMUSHA_WALLET_SUFFIX_CHUNK_MAX_BYTES_V1 + 65_536"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "refs": {
+        "KAGEMUSHA_WALLET_SUFFIX_CHUNK_MAX_BYTES_V1": "attachment.kagemusha_suffix_chunk_max_bytes"
+      },
+      "unenforced": {
+        "owner": "F.2",
+        "summary": "This intended complete outer-frame maximum is declared but has no production consumers. Nested suffix frames and the generic signed-transaction envelope have their own bounds; equivalence to this smaller declared maximum is not established. Recording this gap does not repair or qualify the missing enforcement."
+      }
+    },
+    {
+      "id": "storage.kagemusha_suffix_segment_record_max_bytes",
+      "group": "storage",
+      "what": "Maximum completely verified segment DATA retained in a committed suffix stage row; both append execution and restored-row validation enforce it.",
+      "unit": "bytes",
+      "value": 8192,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_core/src/kagemusha_wallet_v1/suffix.rs",
+        "symbol": "SUFFIX_SEGMENT_RECORD_MAX_BYTES",
+        "kind": "const",
+        "expr": "8_192"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core/src/kagemusha_wallet_v1/suffix.rs",
+          "contains": "record.len() > SUFFIX_SEGMENT_RECORD_MAX_BYTES",
+          "count": 2
+        },
+        {
+          "stage": "storage",
+          "path": "crates/iroha_core/src/kagemusha_wallet_v1/suffix.rs",
+          "contains": "row.record.len() > SUFFIX_SEGMENT_RECORD_MAX_BYTES"
+        }
+      ]
+    },
+    {
+      "id": "storage.kagemusha_suffix_begin_row_max_bytes",
+      "group": "storage",
+      "what": "Maximum complete canonical persisted suffix begin row decoded during original ledger row validation and reconstruction.",
+      "unit": "bytes",
+      "value": 74752,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_core/src/kagemusha_wallet_v1/suffix.rs",
+        "symbol": "BEGIN_CAP",
+        "kind": "const",
+        "expr": "iroha_data_model::kagemusha::kagemusha_wallet_suffix_unload_v1::KAGEMUSHA_WALLET_SUFFIX_HEADER_MAX_BYTES_V1 + iroha_data_model::kagemusha::kagemusha_wallet_suffix_unload_v1::KAGEMUSHA_WALLET_SUFFIX_ANCHOR_MAX_BYTES_V1 + 1_024"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "refs": {
+        "KAGEMUSHA_WALLET_SUFFIX_HEADER_MAX_BYTES_V1": "attachment.kagemusha_suffix_header_max_bytes",
+        "KAGEMUSHA_WALLET_SUFFIX_ANCHOR_MAX_BYTES_V1": "attachment.kagemusha_suffix_anchor_max_bytes"
+      },
+      "enforcement": [
+        {
+          "stage": "storage",
+          "path": "crates/iroha_core/src/kagemusha_wallet_v1/suffix.rs",
+          "contains": "storage::decode(bytes, BEGIN_CAP)?"
+        }
+      ]
+    },
+    {
+      "id": "storage.kagemusha_suffix_stage_row_max_bytes",
+      "group": "storage",
+      "what": "Maximum complete canonical persisted suffix stage row decoded during original ledger row validation and reconstruction.",
+      "unit": "bytes",
+      "value": 16384,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_core/src/kagemusha_wallet_v1/suffix.rs",
+        "symbol": "STAGE_CAP",
+        "kind": "const",
+        "expr": "SUFFIX_SEGMENT_RECORD_MAX_BYTES + 8_192"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "refs": {
+        "SUFFIX_SEGMENT_RECORD_MAX_BYTES": "storage.kagemusha_suffix_segment_record_max_bytes"
+      },
+      "enforcement": [
+        {
+          "stage": "storage",
+          "path": "crates/iroha_core/src/kagemusha_wallet_v1/suffix.rs",
+          "contains": "storage::decode(bytes, STAGE_CAP)?",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "id": "storage.kagemusha_suffix_final_row_max_bytes",
+      "group": "storage",
+      "what": "Maximum complete canonical persisted suffix final row decoded during original ledger row validation and reconstruction.",
+      "unit": "bytes",
+      "value": 16384,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_core/src/kagemusha_wallet_v1/suffix.rs",
+        "symbol": "FINAL_CAP",
+        "kind": "const",
+        "expr": "16_384"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "storage",
+          "path": "crates/iroha_core/src/kagemusha_wallet_v1/suffix.rs",
+          "contains": "storage::decode(bytes, FINAL_CAP)?",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "id": "work_budget.kagemusha_native_suffix_max_steps",
+      "group": "work_budget",
+      "what": "At most 4096 verified steps across all linked suffix segments. The cursor refuses further steps and linking checks the same cumulative ceiling.",
+      "unit": "count",
+      "value": 4096,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_core_zk/src/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "SUFFIX_UNLOAD_MAX_STEPS_V1",
+        "kind": "const",
+        "expr": "4_096"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "if self.completed >= SUFFIX_UNLOAD_MAX_STEPS_V1 {"
+        },
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": ".filter(|total| *total <= SUFFIX_UNLOAD_MAX_STEPS_V1)"
+        }
+      ]
+    },
+    {
+      "id": "work_budget.kagemusha_suffix_deferred_max_steps",
+      "group": "work_budget",
+      "what": "Retained-claim working-set ceiling of one local batch: after 64 unsettled steps verify_step immediately calls settle and decides every accumulated proof. It replans the same mandatory verification into bounded batches; it does not change the cumulative suffix validity ceiling. A failed settle restores the last settled snapshot.",
+      "unit": "count",
+      "value": 64,
+      "source": "constant",
+      "class": "local_schedule",
+      "owner": {
+        "path": "crates/iroha_core_zk/src/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "SUFFIX_UNLOAD_DEFERRED_STEPS_V1",
+        "kind": "const",
+        "expr": "64"
+      },
+      "inclusive": true,
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_suffix_unload_v1/deferred_batch.rs",
+          "contains": "completed - settled >= SUFFIX_UNLOAD_DEFERRED_STEPS_V1"
+        }
+      ],
+      "validity": false,
+      "on_exceed": "replan",
+      "tests": [
+        {
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_suffix_unload_v1/deferred_batch.rs",
+          "name": "sixty_three_steps_stay_owned_and_sixty_four_failed_decisions_restore_every_field"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_suffix_unload_v1/deferred_batch.rs",
+          "name": "explicit_failed_settle_rolls_back_below_limit_and_foreign_owner_refusal_never_drains"
+        }
+      ],
+      "test_note": "Active tests exercise the same private production transition with multiple retained items per step: 63 steps preserve their original pending allocation, 64 cause one decision, a deliberately failed decision restores all snapshot fields and disposes the rejected batch once. Foreign-verifier refusal does not drain; explicit early failure also rolls back. These are focused local ownership/scheduling tests, not cryptographic admission or genuine-corpus qualification. Production still supplies ArtifactSet::decide_deferred; full crate compilation and execution remain required after installing this source proposal."
     }
   ],
   "relations": [
@@ -13047,7 +13702,7 @@
       "group": "proof",
       "status": "not_implemented",
       "what": "The wire, verifier-work and output bounds of the Parliament anonymous ballot on the node path: the envelope (262,144 bytes) and entrypoint wire (263,168 bytes) of one anonymous input; the verifier input of one verification call (425,984 bytes); the committed per-block ballot verification reservations and verifier-input bytes of parliament_ballot_v1 (default 2 and 851,968, at most 8 and 3,407,872); the registration-proof reservations and verifier-input bytes per block (1 and 425,984); and the governance block-start output partition (1 MiB and 256 rows per block, rows of at most 256 KiB, 1 KiB and 16 KiB).",
-      "today": "The data model defines and validates these values; TransactionEntrypoint now carries the bounded canonical anonymous-ballot envelope, and execution output validation recognizes its permitted outcomes. The standalone iroha_parliament_ballot crate implements candidate protocol checks, but no node executes its verifier budget: Core and Torii defer anonymous-ballot admission and execution because the authenticated State/context adapter is unavailable, and no node crate depends on the typed ballot crate. Core validates parliament_lifecycle_v1 payload admission, but does not yet consume the committed ballot and lifecycle policies in the authenticated State adapter or carry governance block-start rows in ExecutionOutputV1. The compared schema constants remain excluded with pinned values (completeness.excluded, the anonymous-ballot record); full node verifier and output-partition enforcement remains open.",
+      "today": "The data model defines and validates these values; TransactionEntrypoint now carries the bounded canonical anonymous-ballot envelope, and execution output validation recognizes its permitted outcomes. The standalone iroha_parliament_ballot crate implements candidate protocol checks, but no node executes its verifier budget: Core and Torii defer anonymous-ballot admission and execution because the authenticated State/context adapter is unavailable. Core's typed-crate dependency supports private E2 registration preparation without enabling anonymous-ballot admission or execution. Core validates parliament_lifecycle_v1 payload admission, but does not yet consume the committed ballot and lifecycle policies in the authenticated State adapter or carry governance block-start rows in ExecutionOutputV1. The compared schema constants remain excluded with pinned values (completeness.excluded, the anonymous-ballot record); full node verifier and output-partition enforcement remains open.",
       "requires": [
         "Each value is a listed bound with the node site where admission, block validation or the governance block-start pass compares it, and a test at the bound and one over.",
         "The committed per-block budgets are validated when genesis or SetParameter installs parliament_ballot_v1 and are related to block.max_transactions and to the block wire and execution-output bounds they reserve from.",
@@ -19185,13 +19840,13 @@
             "exprs": {
               "MAX_LAYERS": "32",
               "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1": "256 * 1024",
-              "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1": "PrivacyProtocolIdV1::COUNT",
-              "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_TOTAL_ELEMENTS_V1": "PrivacyProtocolIdV1::COUNT",
+              "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1": "PrivacyRuntimeProtocolIdV1::EXACT12_COUNT",
+              "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_TOTAL_ELEMENTS_V1": "PrivacyRuntimeProtocolIdV1::EXACT12_COUNT",
               "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_FIELD_BYTES_V1": "128 * 1024",
               "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_TOTAL_ALLOCATION_BYTES_V1": "256 * 1024",
               "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_NESTING_DEPTH_V1": "32",
               "PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1": "256 * 1024",
-              "PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1": "PrivacyProtocolIdV1::COUNT",
+              "PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1": "PrivacyRuntimeProtocolIdV1::EXACT12_COUNT",
               "PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ELEMENTS_V1": "PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1",
               "PRIVACY_CAPABILITY_ARCHIVE_MAX_FIELD_BYTES_V1": "PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1",
               "PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ALLOCATION_BYTES_V1": "16 * PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1",
@@ -22672,7 +23327,7 @@
             ],
             "exprs": {
               "PRIVACY_RELEASE_PROOF_ARTIFACT_COUNT_V1": "PRIVACY_RELEASE_STAGE_COUNT_V1 + 6",
-              "PRIVACY_RELEASE_STAGE_COUNT_V1": "PrivacyProtocolIdV1::COUNT * PRIVACY_RELEASE_CASE_COUNT_V1",
+              "PRIVACY_RELEASE_STAGE_COUNT_V1": "PrivacyRuntimeProtocolIdV1::EXACT12_COUNT * PRIVACY_RELEASE_CASE_COUNT_V1",
               "PRIVACY_RELEASE_CASE_COUNT_V1": "4"
             },
             "term_of": {
@@ -25530,7 +26185,7 @@
               "canonical_instruction_box_frame_byte_limit_v1"
             ],
             "exprs": {
-              "canonical_frame_byte_limit_v1": "let flags = norito::core::default_encode_flags(); let field = |bytes: usize| norito::core::len_prefix_len_with_flags(bytes, flags) + bytes; let reference_payload = 2 * field(core::mem::size_of::<u32>()); let statement_framing = crate::isi::framed_instruction_payload_len_for::<PrivacyStatementV1>(0) .expect(\"fixed statement framing fits usize\"); let payload = crate::privacy::TAIRA_PRIVACY_MAX_STATEMENT_AND_ENCRYPTED_OUTPUT_BYTES_PER_TRANSACTION_V1 as usize - statement_framing - core::mem::size_of::<u32>() + field(reference_payload); crate::isi::framed_instruction_payload_len_for::<Self>(payload) .expect(\"fixed request ceiling fits usize\")",
+              "canonical_frame_byte_limit_v1": "let flags = norito::core::default_encode_flags(); let field = |bytes: usize| norito::core::len_prefix_len_with_flags(bytes, flags) + bytes; let reference_payload = 2 * field(core::mem::size_of::<u32>()); let statement_framing = crate::isi::framed_instruction_payload_len_for::<PrivacyRuntimeStatementV1>(0) .expect(\"fixed statement framing fits usize\"); let payload = crate::privacy::TAIRA_PRIVACY_MAX_STATEMENT_AND_ENCRYPTED_OUTPUT_BYTES_PER_TRANSACTION_V1 as usize - statement_framing - core::mem::size_of::<u32>() + field(reference_payload); crate::isi::framed_instruction_payload_len_for::<Self>(payload) .expect(\"fixed request ceiling fits usize\")",
               "canonical_instruction_box_frame_byte_limit_v1": "let _canonical = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags()); let tuple = crate::isi::encoded_instruction_tuple_len( Self::WIRE_ID, Self::canonical_frame_byte_limit_v1(), ) .expect(\"fixed registered request tuple fits usize\"); crate::isi::framed_instruction_payload_len_for::<crate::isi::InstructionBox>(tuple) .expect(\"fixed instruction box ceiling fits usize\")"
             }
           }
@@ -25830,6 +26485,104 @@
             }
           }
         ]
+      },
+      {
+        "path": "crates/ivm_abi/src/metadata.rs",
+        "reason": "Fixed 49-byte IVM V1 header geometry (17 metadata bytes plus the authenticated 32-byte ABI descriptor). This is the prefix outside the separately listed guest_memory.max_program_image_bytes body bound; it is not an independent payload allowance.",
+        "symbols": [
+          "HEADER_SIZE"
+        ],
+        "exprs": {
+          "HEADER_SIZE": "49"
+        }
+      },
+      {
+        "path": "crates/iroha_data_model/src/query/parameters.rs",
+        "reason": "The default page size for an omitted read-only query fetch size. The existing MAX_FETCH_SIZE shape ceiling and committed in-VM query budget remain separately enforced; this default grants no transaction or proof budget.",
+        "symbols": [
+          "DEFAULT_FETCH_SIZE"
+        ],
+        "exprs": {
+          "DEFAULT_FETCH_SIZE": "nonzero!(100_u64)"
+        }
+      },
+      {
+        "path": "crates/iroha_torii/src/push/jwt.rs",
+        "reason": "Local push-service signing-key file parsing ceiling, checked before PEM/DER decoding. These FCM/APNs credentials are not transaction, block or proof inputs.",
+        "symbols": [
+          "MAX_PRIVATE_KEY_PEM_BYTES"
+        ],
+        "exprs": {
+          "MAX_PRIVATE_KEY_PEM_BYTES": "64 * 1024"
+        }
+      },
+      {
+        "path": "crates/iroha_core/src/query/native_receipts/lifecycle.rs",
+        "reason": "Read-only native lifecycle witness response shapes: 32 KiB conservatively accounts for a fixed-depth branch; each complete JSON response is capped at 32 MiB and further limited by the original request allocation owner. Both owned production and fixture readers retain these bounds. This transport does not authorize execution or increase the underlying finality decoder limits.",
+        "symbols": [
+          "MAX_RUNTIME_BRANCH_JSON_BYTES",
+          "MAX_BYTES"
+        ],
+        "exprs": {
+          "MAX_RUNTIME_BRANCH_JSON_BYTES": "32 * 1024",
+          "MAX_BYTES": "32 * 1024 * 1024 | 32 * 1024 * 1024"
+        }
+      },
+      {
+        "path": "crates/iroha_core/src/smartcontracts/isi/query/ordinary_iterable/asset_escrow_scope.rs",
+        "reason": "Exact five-pass accounting factor for one original escrow frame (preflight, encoder recount/checksum/write and decode). Its byte demand is prepaid against the existing execution budget; the factor creates no separate resource allowance.",
+        "symbols": [
+          "FRAME_TRAVERSALS"
+        ],
+        "exprs": {
+          "FRAME_TRAVERSALS": "5"
+        }
+      },
+      {
+        "path": "crates/iroha_core/src/smartcontracts/isi/query/ordinary_iterable.rs",
+        "reason": "Composite read-only query row geometry: at most eight source-item units, also clamped to the admitted page item count. Original per-source, retained graph and complete-page budgets remain in force; this multiplier does not create a transaction/proof budget.",
+        "symbols": [
+          "COMPOSITE_ROW_SOURCE_ITEMS"
+        ],
+        "exprs": {
+          "COMPOSITE_ROW_SOURCE_ITEMS": "8"
+        }
+      },
+      {
+        "path": "crates/iroha_core/src/state/tiered.rs",
+        "reason": "Local persistent manifest layout and I/O scheduling: at most three leading hex digits select chunks, average-row hysteresis grows above 256 or shrinks below 8, and at most 16 writers sync them. These affect storage partitioning and concurrency, not committed State values or validity.",
+        "symbols": [
+          "MANIFEST_CHUNK_MAX_DIGITS",
+          "MANIFEST_CHUNK_GROW_ROWS",
+          "MANIFEST_CHUNK_SHRINK_ROWS",
+          "MANIFEST_CHUNK_WRITERS"
+        ],
+        "exprs": {
+          "MANIFEST_CHUNK_MAX_DIGITS": "3",
+          "MANIFEST_CHUNK_GROW_ROWS": "256",
+          "MANIFEST_CHUNK_SHRINK_ROWS": "8",
+          "MANIFEST_CHUNK_WRITERS": "16"
+        }
+      },
+      {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+        "reason": "Minimum lexical shape of one length-prefixed step-stream entry: four bytes of LE32 length plus at least one frame byte. This is representation geometry, not an upper byte, allocation or work allowance.",
+        "symbols": [
+          "STREAM_ENTRY_MIN_BYTES"
+        ],
+        "exprs": {
+          "STREAM_ENTRY_MIN_BYTES": "5"
+        }
+      },
+      {
+        "path": "crates/iroha_zkp_vole/src/crt/codec.rs",
+        "reason": "Exact FAESTCRT format discriminator encoded as little-endian ASCII bytes; equality identifies the table-word format and does not bound bytes, allocation or work.",
+        "symbols": [
+          "MAGIC"
+        ],
+        "exprs": {
+          "MAGIC": "u64::from_le_bytes(*b\"FAESTCRT\")"
+        }
       }
     ],
     "literals": {
@@ -25948,7 +26701,7 @@
             {
               "path": "crates/iroha_core/src/state/world_state_snapshot.rs",
               "sites": {
-                "tip.height() < 2": 2
+                "tip.height() < 2": 1
               }
             },
             {
@@ -29305,51 +30058,6 @@
         {
           "files": [
             {
-              "path": "crates/iroha_data_model/src/block/trigger_action_scanner.rs",
-              "sites": {
-                "text.len() > 255": 1
-              }
-            }
-          ],
-          "reason": "Closed Action-frame scanner field shapes: one metadata Name and one executable entrypoint are limited to 255 bytes. The scanner supports only its documented incomplete canonical subset and is not installed as TriggerLifecycleActionValidatorV1. These per-field checks do not establish a generic transaction/proof ceiling or authorize missing lifecycle coverage."
-        },
-        {
-          "files": [
-            {
-              "path": "crates/iroha_data_model/src/block/trigger_action_scanner.rs",
-              "sites": {
-                "(0x20..=0x7e).contains(byte)": 1,
-                "(0x21..=0x7e).contains(&byte)": 1
-              }
-            }
-          ],
-          "reason": "ASCII code-unit ranges of the deliberately closed Action-frame scanner subset: visible ASCII for a Name and unescaped printable ASCII inside a JSON string. They reject unsupported character spellings while preserving the original frame; they are lexical ranges, not byte-count, allocation or work limits. The scanner remains incomplete and is not a lifecycle validation authority."
-        },
-        {
-          "files": [
-            {
-              "path": "crates/iroha_data_model/src/block/trigger_action_scanner.rs",
-              "sites": {
-                "bytes.len() < 2": 1
-              }
-            }
-          ],
-          "reason": "Minimum lexical shape of an unescaped JSON string in the closed Action-frame scanner: at least two bytes are required for the opening and closing quotes before indexing their positions. This minimum refuses malformed short values and supplies no size or work ceiling."
-        },
-        {
-          "files": [
-            {
-              "path": "crates/iroha_data_model/src/block/trigger_action_scanner.rs",
-              "sites": {
-                "text.len() > 20": 1
-              }
-            }
-          ],
-          "reason": "Canonical decimal spelling of the two original trigger-registration u64 metadata numbers: at most twenty digits can represent u64. The scanner additionally rejects non-digits, leading zeroes and checked-arithmetic overflow, charging the original finite digit pass. This is numeric representation geometry, not a new generic byte or work cap; registration and execution semantics remain separate."
-        },
-        {
-          "files": [
-            {
               "path": "crates/iroha_data_model/src/sumeragi_finality/compact.rs",
               "sites": {
                 "proof.height() >= 2": 2,
@@ -29449,6 +30157,196 @@
                 "proof.block.commit_qc.len() > 128 * 1024": 1,
                 "proof.block.result_preimage.len() > GAME_PARTITION_MAX_PROOF_BYTES - 140 * 1024": 1,
                 "proof.path.siblings.len() > 256": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Closed unavailable-reason tag geometry: lifecycle_unavailable_frame accepts only the five defined discriminants. This checks one canonical enum tag and is not a work or allocation limit.",
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+              "sites": {
+                "(1..=5).contains(&reason)": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Native certified-history boundaries: height two is the first successor of genesis. These predicates require an existing non-genesis original certified cut or activation provenance, and do not bound size, work or proof security.",
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/sumeragi_finality/lifecycle_runtime.rs",
+              "sites": {
+                "height < 2": 1,
+                "self.height < 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_torii/src/ironwood_pool_cut.rs",
+              "sites": {
+                "*h >= 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_torii/src/sns_lease.rs",
+              "sites": {
+                "height < 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/query/native_receipts/lifecycle.rs",
+              "sites": {
+                "start_height < 2": 2
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/runtime/lifecycle_activation.rs",
+              "sites": {
+                "activated_height < 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/state/world_state_snapshot.rs",
+              "sites": {
+                "self.height() >= 2": 2
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/sumeragi/certified_chain/current_cut.rs",
+              "sites": {
+                "original.height() >= 2": 1,
+                "height < 2": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "The ordinary-write sparse Merkle tree has 256 bit positions. A lifecycle branch cannot contain more than 256 nonempty siblings; canonical ascending levels, nonempty hashes and the authenticated root remain mandatory.",
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/sumeragi_finality/lifecycle_runtime.rs",
+              "sites": {
+                "self.siblings.len() > 256": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Ironwood read-only pool selector body is at most 4096 bytes before JSON decoding. The native proof reader assigns two of its original eight request-budget units to journal bytes and clamps to NATIVE_FINALITY_MAX_JOURNAL_BYTES; original graph and frame budgets remain distinct and mandatory.",
+          "files": [
+            {
+              "path": "crates/iroha_torii/src/ironwood_pool_cut.rs",
+              "sites": {
+                "body.len() > 4096": 1,
+                "(unit * 2).min(NATIVE_FINALITY_MAX_JOURNAL_BYTES)": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Offline Ironwood activation preflight accepts one qualification-evidence file up to 16 MiB. The bound limits this diagnostic tool input and does not itself install a runtime definition or authorize a live change.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/bin/ironwood_activation_preflight.rs",
+              "sites": {
+                "evidence.len() > 16 * 1024 * 1024": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Read-only lifecycle witness request/response geometry: one through 4096 consecutive cuts; at most sixteen cuts per short State view; exact header plus conservative 32-KiB branch accounting and 128 framing bytes are clamped to the caller response limit and 32-MiB transport ceiling. Original allocation, deadline, cancellation and finality checks remain required.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/query/native_receipts/lifecycle.rs",
+              "sites": {
+                "end_height - start_height >= 4096": 2,
+                "usize::try_from(end_height - start_height + 1) .ok() .and_then(|cuts| cuts.checked_mul(MAX_RUNTIME_BRANCH_JSON_BYTES)) .and_then(|branches| branches.checked_add(count.length)) .and_then(|bytes| bytes.checked_add(128)) .ok_or(LifecycleWitnessReadError::Invalid( \"lifecycle response demand overflow\", ))? .min(response_limit)": 1,
+                "first.saturating_add(15).min(end_height)": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Read-only lifecycle sizing report: at most 4096 requested witness cuts, the twenty largest Actions retained for display, and an estimated sparse path capped at its fixed 256 levels. These diagnostic bounds never authorize lifecycle selection or establish capture/settlement readiness.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/runtime/lifecycle_preflight.rs",
+              "sites": {
+                "(1..=4096).contains(&witness_cuts)": 1,
+                "index < 20": 1,
+                "largest_actions.truncate(20)": 1,
+                "estimated_levels.min(256)": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "The immutable selected lifecycle service limits total captured Action frame bytes to the smaller of the supplied committed maximum and 16 MiB. This is a deterministic root output bound; the original scratch, cumulative codec work, effect count, physical allocation and failure classifications stay enforced.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_lifecycle_journal.rs",
+              "sites": {
+                ".unwrap_or(usize::MAX) .min(16 * 1024 * 1024)": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Canonical u64 registration-height metadata has at most twenty decimal digits. The owner also rejects empty/non-digit strings, leading zeroes and numeric overflow; this is scalar representation geometry, not a generic resource allowance.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_lifecycle_journal.rs",
+              "sites": {
+                "text.len() > 20": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Closed Native status-code and reason-tag geometry: states zero through six, reasons one through three only for unavailable state, request presence for states three through six and completion for states four through six. These select schema variants; resource counters retain their independent named limits.",
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+              "sites": {
+                "self.state > 6": 1,
+                "(1..=3).contains(&self.reason)": 1,
+                "self.state >= 3": 1,
+                "self.state >= 4": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "A step-stream entry needs four bytes before reading its LE32 length prefix. This is minimum scalar framing, while all step and chunk byte ceilings remain explicitly inventoried.",
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+              "sites": {
+                "rest.len() < 4": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Minimum Finalize stage identity: ordinal zero is Begin and at least one Append occupies ordinal one, so Finalize starts at ordinal two. This is stage ordering, not a resource ceiling.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/kagemusha_wallet_v1/suffix.rs",
+              "sites": {
+                "row.ordinal < 2": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Minimum Finalize stage identity in certified block-proof projection: ordinal zero identifies Begin, Append starts at one and Finalize starts at two. This discriminates a stage and does not supply a byte or work allowance.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/state/block_proofs.rs",
+              "sites": {
+                "ordinal >= 2": 1
               }
             }
           ]

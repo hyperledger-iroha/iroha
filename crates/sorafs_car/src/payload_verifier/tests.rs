@@ -67,6 +67,10 @@ fn logarithmic_por_frontier_matches_complete_trees_and_canonical_car() {
         let mut store = crate::ChunkStore::with_profile(plan.chunk_profile);
         store.ingest_plan(&payload, &plan).unwrap();
         assert_eq!(verification.por_leaf_count, store.por_leaf_count());
+        let (streamed_root, streamed_leaves) =
+            por_commitment(&plan, &mut Cursor::new(&payload)).unwrap();
+        assert_eq!(streamed_root, manifest.por_root, "chunk count {count}");
+        assert_eq!(streamed_leaves, store.por_leaf_count());
     }
 }
 
@@ -93,10 +97,45 @@ fn streamed_verification_rejects_every_altered_commitment_and_inexact_eof() {
     );
     let mut extra = payload.clone();
     extra.push(0);
+    assert!(por_commitment(&plan, &mut Cursor::new(&extra)).is_err());
     assert!(verify_payload_reader(&manifest, &plan, &mut Cursor::new(extra)).is_err());
     let mut corrupted = payload;
     corrupted[0] ^= 1;
     assert!(verify_payload_reader(&manifest, &plan, &mut Cursor::new(corrupted)).is_err());
+}
+
+#[test]
+fn exact_car_reader_rejects_mutation_truncation_and_trailing_bytes() {
+    let (plan, payload, manifest) = fixture(3);
+    let mut car = Vec::new();
+    let expected = CarWriter::new(&plan, &payload)
+        .unwrap()
+        .write_to(&mut car)
+        .unwrap();
+    let mut source = Cursor::new(&payload);
+    let report = verify_car_reader(&manifest, &plan, &mut source, &mut Cursor::new(&car)).unwrap();
+    assert_eq!(report.stats, expected);
+    assert_eq!(source.position(), 0);
+    for index in [0, car.len() / 2, car.len() - 1] {
+        let mut changed = car.clone();
+        changed[index] ^= 1;
+        assert!(
+            verify_car_reader(&manifest, &plan, &mut source, &mut Cursor::new(changed)).is_err()
+        );
+    }
+    for length in [0, 1, car.len() / 2, car.len() - 1] {
+        assert!(
+            verify_car_reader(
+                &manifest,
+                &plan,
+                &mut source,
+                &mut Cursor::new(&car[..length])
+            )
+            .is_err()
+        );
+    }
+    car.push(0);
+    assert!(verify_car_reader(&manifest, &plan, &mut source, &mut Cursor::new(&car)).is_err());
 }
 
 #[test]

@@ -41,13 +41,22 @@ struct Phases {
     enabled: bool,
     start: std::time::Instant,
     last: std::time::Instant,
-    last_cpu: f64,
+    last_cpu: Option<f64>,
 }
 
 #[allow(clippy::cast_precision_loss)] // diagnostics only; seconds and nanoseconds are small
-fn process_cpu_seconds() -> f64 {
-    let t = rustix::time::clock_gettime(rustix::time::ClockId::ProcessCPUTime);
-    (t.tv_nsec as f64).mul_add(1e-9, t.tv_sec as f64)
+fn process_cpu_seconds() -> Option<f64> {
+    #[cfg(unix)]
+    {
+        let t = rustix::time::clock_gettime(rustix::time::ClockId::ProcessCPUTime);
+        Some((t.tv_nsec as f64).mul_add(1e-9, t.tv_sec as f64))
+    }
+    #[cfg(not(unix))]
+    {
+        // The optional diagnostic has no process-CPU backend on this platform.
+        // Wall time remains available; do not present it as CPU consumption.
+        None
+    }
 }
 
 impl Phases {
@@ -58,7 +67,7 @@ impl Phases {
             enabled,
             start: now,
             last: now,
-            last_cpu: if enabled { process_cpu_seconds() } else { 0.0 },
+            last_cpu: if enabled { process_cpu_seconds() } else { None },
         }
     }
 
@@ -66,10 +75,14 @@ impl Phases {
         if self.enabled {
             let now = std::time::Instant::now();
             let cpu = process_cpu_seconds();
+            let elapsed_cpu = cpu
+                .zip(self.last_cpu)
+                .map(|(current, previous)| current - previous);
+            let cpu_display =
+                elapsed_cpu.map_or_else(|| "    n/a".to_owned(), |value| format!("{value:>7.3}"));
             eprintln!(
-                "  {phase:<28} wall {:>7.3} s  cpu {:>7.3} s   (total wall {:>7.3} s)",
+                "  {phase:<28} wall {:>7.3} s  cpu {cpu_display} s   (total wall {:>7.3} s)",
                 (now - self.last).as_secs_f64(),
-                cpu - self.last_cpu,
                 (now - self.start).as_secs_f64()
             );
             self.last = now;
@@ -831,6 +844,46 @@ pub(crate) fn check_main_trace(
 #[cfg(test)]
 mod hash_binding_tests {
     use super::*;
+
+    #[test]
+    fn process_cpu_diagnostics_use_only_the_available_native_clock() {
+        let first = process_cpu_seconds();
+        let second = process_cpu_seconds();
+        #[cfg(unix)]
+        {
+            assert!(first.unwrap().is_finite() && first.unwrap() >= 0.0);
+            assert!(second.unwrap() >= first.unwrap());
+        }
+        #[cfg(not(unix))]
+        {
+            assert_eq!(first, None);
+            assert_eq!(second, None);
+        }
+    }
+
+    #[test]
+    fn phase_diagnostics_preserve_disabled_state_and_accept_missing_cpu_readings() {
+        let initial = Phases::new();
+        let mut phases = Phases {
+            enabled: false,
+            start: initial.start,
+            last: initial.last,
+            last_cpu: None,
+        };
+        phases.mark("disabled");
+        assert_eq!(phases.last, initial.last);
+        assert_eq!(phases.last_cpu, None);
+        phases.enabled = true;
+        phases.mark("without previous CPU sample");
+        assert!(phases.last >= initial.last);
+        assert_eq!(phases.start, initial.start);
+        #[cfg(unix)]
+        assert!(phases.last_cpu.is_some());
+        #[cfg(not(unix))]
+        assert!(phases.last_cpu.is_none());
+        phases.mark("next phase");
+        assert_eq!(phases.start, initial.start);
+    }
 
     #[test]
     fn public_digest_binds_values_and_column_boundaries() {

@@ -51,6 +51,9 @@
 use iroha_data_model::kagemusha::kagemusha_wallet_v1::*;
 use iroha_pasta::{CancellationToken, msm::MemoryBudget};
 
+mod deferred_batch;
+use deferred_batch::{DeferredBatchTransition, settlement_due};
+
 use crate::{
     kagemusha_wallet_artifacts_v1::{
         InstalledVerifierPackV1, producer_inventory::QualifiedWalletSourcesV1,
@@ -1206,7 +1209,7 @@ impl SuffixVerificationCursorV1 {
         }
         if self.deferred.is_none() {
             self.settled = self.snapshot();
-        } else if self.completed - self.settled.completed >= SUFFIX_UNLOAD_DEFERRED_STEPS_V1 {
+        } else if settlement_due(self.completed, self.settled.completed) {
             self.settle(verifier, cancellation)?;
         }
         Ok(())
@@ -1235,43 +1238,39 @@ impl SuffixVerificationCursorV1 {
         verifier: &SuffixVerifierV1<'_>,
         cancellation: Option<&CancellationToken>,
     ) -> Result<(), SuffixErrorV1> {
-        verifier.require_credential(&self.credential)?;
-        require(
-            self.native == verifier.native.is_some(),
-            "cursor verifier mode",
-        )?;
-        require(
-            self.deferred.is_some() == verifier.batched,
-            "cursor batching mode",
-        )?;
-        let Some(pending) = self.deferred.take() else {
-            return Ok(());
-        };
-        self.deferred = Some(verifier.artifacts.deferred_proofs());
-        let decided = if pending.is_empty() {
-            Ok(())
-        } else {
-            verifier
-                .artifacts
-                .decide_deferred(pending, verifier.budget, cancellation)
-                .map_err(proof_error("batched proof decisions"))
-        };
-        match decided {
-            Ok(()) => {
-                self.settled = self.snapshot();
-                Ok(())
-            }
-            Err(error) => {
-                let settled = self.settled;
-                self.state = settled.state;
-                self.adjusted = settled.adjusted;
-                self.completed = settled.completed;
-                self.receives = settled.receives;
-                self.prior_unloads = settled.prior_unloads;
-                self.chain = settled.chain;
-                Err(error)
-            }
+        let mut current = self.snapshot();
+        let credential = &self.credential;
+        let native = self.native;
+        let batched = self.deferred.is_some();
+        let result = DeferredBatchTransition {
+            current: &mut current,
+            settled: &mut self.settled,
+            pending: &mut self.deferred,
         }
+        .settle(
+            true,
+            |snapshot| snapshot.completed,
+            || {
+                verifier.require_credential(credential)?;
+                require(native == verifier.native.is_some(), "cursor verifier mode")?;
+                require(batched == verifier.batched, "cursor batching mode")?;
+                Ok(verifier.artifacts.deferred_proofs())
+            },
+            KagemushaWalletDeferredProofsV1::is_empty,
+            |pending| {
+                verifier
+                    .artifacts
+                    .decide_deferred(pending, verifier.budget, cancellation)
+                    .map_err(proof_error("batched proof decisions"))
+            },
+        );
+        self.state = current.state;
+        self.adjusted = current.adjusted;
+        self.completed = current.completed;
+        self.receives = current.receives;
+        self.prior_unloads = current.prior_unloads;
+        self.chain = current.chain;
+        result
     }
 
     fn require_settled(&self) -> Result<(), SuffixErrorV1> {

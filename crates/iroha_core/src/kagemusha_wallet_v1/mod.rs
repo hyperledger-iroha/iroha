@@ -25,9 +25,9 @@ mod storage;
 pub mod suffix;
 pub(crate) mod wsv;
 pub use ledger::{abandon, activate, close_loads, issue_load, pay_fee, pay_unload};
-pub use suffix::{SuffixChunkVerdict, SuffixTransaction, SuffixUnloadVerifier};
 pub(crate) use storage::validate_snapshot;
 pub use storage::{CredentialRecord, validate_row};
+pub use suffix::{SuffixChunkVerdict, SuffixTransaction, SuffixUnloadVerifier};
 #[cfg(test)]
 mod tests;
 

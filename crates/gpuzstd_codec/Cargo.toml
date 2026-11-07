@@ -8,7 +8,7 @@ description = "Portable deterministic frame coding shared by native GPU Zstd hel
 [features]
 default = []
 # CPU references used by the backend hardware parity tests only.
-test-support = []
+test = []
 
 [dev-dependencies]
 zstd = { workspace = true }

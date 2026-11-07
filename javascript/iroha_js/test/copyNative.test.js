@@ -24,6 +24,7 @@ import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
+  nativeBindingProbeTimeoutMs,
   probeNativeBindingExports,
   publishNativeBinding,
   recoverNativeBindingPublication,
@@ -310,9 +311,11 @@ test("native publication replaces an existing pair repeatably without rename-ove
   const second = Buffer.from("second verified native binding");
   const probes = [];
   const options = publicationOptions(layout, {
-    probeBinding(bindingPath, requiredExports) {
+    probeBinding(bindingPath, requiredExports, requiredAbiVersion, cargoProfile) {
       probes.push({ bindingPath, requiredExports: [...requiredExports] });
       assert.deepEqual(requiredExports, REQUIRED_NATIVE_EXPORTS);
+      assert.equal(requiredAbiVersion, REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
+      assert.equal(cargoProfile, "debug");
     },
   });
 
@@ -341,6 +344,63 @@ test("native publication replaces an existing pair repeatably without rename-ove
   assertVerifiedPair(layout, second);
   assert.equal(probes.length, 2);
   assert.ok(probes.every(({ bindingPath }) => bindingPath.includes(".iroha-js-host-")));
+});
+
+test("probe budgets only extend the explicit debug profile", () => {
+  assert.equal(nativeBindingProbeTimeoutMs(), 120_000);
+  assert.equal(nativeBindingProbeTimeoutMs("release"), 120_000);
+  assert.equal(nativeBindingProbeTimeoutMs("deploy"), 120_000);
+  assert.equal(nativeBindingProbeTimeoutMs("debug"), 1_800_000);
+  for (const profile of ["local-release", "Debug", "", null, 0, {}]) {
+    assert.throws(
+      () => nativeBindingProbeTimeoutMs(profile),
+      /cargoProfile must be exactly/u,
+    );
+    assert.throws(
+      () => probeNativeBindingExports("unused", undefined, undefined, profile),
+      /cargoProfile must be exactly/u,
+    );
+  }
+});
+
+test("debug probe keeps native ABI and catalog rejection through its launcher", (t) => {
+  const layout = createLayout(t);
+  const fixture = path.join(layout.root, "probe.cjs");
+  writeFileSync(fixture, nativeProbeFixtureSource());
+  assert.equal(probeNativeBindingExports(fixture, undefined, undefined, "debug"),
+    REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
+  writeFileSync(fixture, nativeProbeFixtureSource({ abiVersion: REQUIRED_NATIVE_BRIDGE_ABI_VERSION + 1 }));
+  assert.throws(() => probeNativeBindingExports(fixture, undefined, undefined, "debug"),
+    /failed required-export verification/u);
+  writeFileSync(fixture, nativeProbeFixtureSource({ validatorBody: "return 8;" }));
+  assert.throws(() => probeNativeBindingExports(fixture, undefined, undefined, "debug"),
+    /failed required-export verification/u);
+});
+
+test("publication passes only the matched provenance profile to its probe", async (t) => {
+  for (const cargoProfile of ["debug", "release", "deploy"]) {
+    const layout = createLayout(t);
+    writeFileSync(layout.source, Buffer.from(`native ${cargoProfile} binding`));
+    const observed = [];
+    const options = publicationOptions(layout, {
+      cargoProfile,
+      readBuildProvenance(source) {
+        return fixtureBuildProvenance(source, cargoProfile);
+      },
+      probeBinding(_bindingPath, requiredExports, requiredAbiVersion, profile) {
+        assert.deepEqual(requiredExports, REQUIRED_NATIVE_EXPORTS);
+        assert.equal(requiredAbiVersion, REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
+        observed.push(profile);
+      },
+    });
+    await publishNativeBinding(options);
+    assert.deepEqual(observed, [cargoProfile]);
+    await assert.rejects(
+      publishNativeBinding({ ...options, cargoProfile: cargoProfile === "debug" ? "release" : "debug" }),
+      /Cargo profile does not match publication/u,
+    );
+    assert.deepEqual(observed, [cargoProfile], "mismatched provenance must not reach the probe");
+  }
 });
 
 test("same-source publication is idempotent after a fresh probe and returns the exact digest", async (t) => {

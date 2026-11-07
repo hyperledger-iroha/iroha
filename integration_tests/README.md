@@ -385,22 +385,20 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
   controls through a fixed-height challenge, rejects conflicting evidence,
   resolves a withheld reveal with three validators online, and requires the
   restarted fourth validator to recover identical session bytes and dispute
-  commitments. It then proves the actual V2 technical-win transcript with the native
+  commitments. It then proves the actual RaceV1 technical-win transcript with the native
   prover, rejects altered proof bytes, submits the complete proof inside a typed
   `SettleGameSessionV1`, checks the exact proof receipt and settlement height on
   all four peers, and rejects duplicate settlement. The compiled profile stays
-  unqualified; the test only widens its TxGossip topic to the bounded execution
-  transport budget and leaves default transaction and DA limits intact.
-  Every convergence check also queries the same finalized height
-  from each peer and verifies the BLS CommitQC for the witnessed execution post-state
-  root against the locally generated signed genesis committee. This authenticates
-  the committed witnessed writes. A test-only native Kura helper then reads each
-  peer's complete local WSV checkpoint and commit manifest, validates their exact
-  height/block/artifact binding and publication digest, and requires identical
-  full WSV hashes. This is local full-world convergence evidence; the QC does not
-  sign that complete WSV hash, and the public route is not a full-WSV verifier.
+  unqualified; the test sets an explicit 8-MiB TxGossip frame budget and leaves
+  default transaction and DA limits intact.
+  Every convergence check also queries the same finalized height from each peer
+  and authenticates the complete canonical block prefix from the locally generated
+  signed genesis, including exact three-vote CommitQCs and application attestations.
+  Each public ledger-state carrier must match that authenticated block and its
+  witnessed execution post-state root. Complete game records are compared separately
+  across every live peer; the witnessed root commits to the execution's changed rows.
   It uses zero stakes and never bypasses native proof admission.
-  The test reserves 32-MiB stacks for its entry and runtime workers, and sets an explicit 1-GiB Nexus storage budget per validator for the finite local workload.
+  The test reserves 32-MiB stacks for its entry and runtime workers, and sets an explicit 1-GiB SORA Nexus storage budget per validator for the finite local workload.
   Finalized ledger-state observations are retained under each peer's
   `game-finality-evidence/`.
   Run with `IROHA_TEST_REQUIRE_NETWORK=1 cargo iroha-fast -- test -p integration_tests --test core_api native_game_sessions::generic_game_pending_inputs_forfeit_and_restart_four_validators -- --exact --ignored --nocapture`.

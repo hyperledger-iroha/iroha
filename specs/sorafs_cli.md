@@ -65,7 +65,7 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --manifest-json-out artifacts/manifest.json \
   --pin-min-replicas=3 \
   --pin-storage-class=warm \
-  --pin-retention-epoch=42
+  --pin-retention-epoch="$SORAFS_RETENTION_EPOCH"
 
 ```
 
@@ -100,7 +100,8 @@ Key behaviours:
 - `manifest submit` recomputes the chunk SHA3 digest when a plan is provided,
   validates alias inputs, and forwards Ed25519 keys via the Norito
   `ExposedPrivateKey` wrapper just like the Torii Rust client.
-- `proof verify` rebuilds the PoR store, reports the deterministic chunk digest,
+- `proof verify --payload=PATH` streams the canonical CAR comparison and logarithmic PoR
+  reconstruction, reports the deterministic chunk digest,
   and surfaces the payload/CAR digests so CI can gate registry submission.
   Supply `--payload=PATH` with the original source directory for multi-file
   archives. Native bounded acquisition reconstructs the complete file layout;
@@ -185,6 +186,47 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   permission and proof.
 - Non-success HTTP responses bubble up as errors with the original body so CI
   can halt on policy violations.
+
+## Native publication inputs
+
+`car pack`, `storage prepare`, `proof verify --payload`, and `deploy` use bounded native
+file/directory acquisition: at most 4 GiB of source data, the existing portable path,
+entry/chunk and estimated ingest-heap limits, retained no-follow filesystem owners,
+and 64 KiB acquisition buffers. Eager APIs retain their 512 MiB limit. Changed files
+or directory inventories fail; larger source support does not weaken canonical CAR,
+chunk-plan, PoR, alias, or manifest bounds.
+
+`iroha app sorafs toolkit pack` requires `--pin-retention-epoch` as an explicit
+future absolute Unix second and accepts `--pin-min-replicas` (default three).
+Standalone `manifest build` also accepts both policy fields. Select the prepaid
+retention deadline explicitly; `86400` is a historical absolute timestamp, not a
+one-day duration.
+
+The complete native publisher accepts the original source and an optional exact
+reviewed manifest/CAR pair:
+
+```sh
+sorafs_cli deploy --payload="$STATIC_ROOT" \
+  --manifest="$REVIEWED_MANIFEST" --car="$REVIEWED_CAR" \
+  --pin-min-replicas=3 --pin-retention-epoch="$SORAFS_RETENTION_EPOCH" \
+  --client-config="$RUNTIME_CLIENT_CONFIG" --finality-checkpoint="$TRUSTED_CHECKPOINT" \
+  --torii-url="$TORII_ROOT" --provider-url="$PROVIDER_ROOT" \
+  --gateway-base-url="$GATEWAY_ROOT" --no-peer-discovery --out-dir="$NEW_EVIDENCE_DIR"
+```
+
+The manifest/CAR arguments must appear together. The native verifier checks every
+CAR byte, source path, chunk, PoR and explicit pin-policy value before signing; the
+reviewed manifest bytes are preserved. Uploads recheck each streamed source chunk.
+Only operator-selected endpoint roots are used; server-provided peer discovery is
+not a publication authority. Each root must be HTTPS (or explicit loopback HTTP),
+without URL credentials, queries, fragments, or redirects.
+
+The runtime account needs the configured pin and transaction fee balances, and
+`CanReadAllLedgerData` for proof carriers. The independently trusted canonical
+checkpoint must bind the configured network/chain and remain within 1,023 blocks.
+Provider admission, capacity, assignment and completion workers must be available.
+The receipt reports success only after native assignment/completion finality and
+exact gateway file retrieval checks; registration alone is insufficient.
 
 ## Verify CAR responses
 

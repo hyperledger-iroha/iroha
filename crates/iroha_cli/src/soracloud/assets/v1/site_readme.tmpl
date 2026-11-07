@@ -18,6 +18,7 @@ npm run dev
 ```bash
 npm run build
 iroha app sorafs toolkit pack ./dist \
+  --pin-retention-epoch "$SORAFS_RETENTION_EPOCH" --pin-min-replicas 3 \
   --car-out ../sorafs/site_payload.car \
   --manifest-out ../sorafs/site_manifest.to \
   --json-out ../sorafs/site_pack_report.json

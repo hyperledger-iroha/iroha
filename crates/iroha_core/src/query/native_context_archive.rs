@@ -17,8 +17,8 @@ mod windows;
 pub(crate) use windows::ArchiveDirectory;
 #[cfg(windows)]
 use windows::{
-    ArchiveFile, open_archive_directory_named, open_directory, open_named_record,
-    publish_named_record, verify_archive_directory,
+    ArchiveFile, accept_existing, open_archive_directory_named, open_directory, open_named_record,
+    publish_named_record, publish_stored, remove_matching_stage, verify_archive_directory,
 };
 #[cfg(not(windows))]
 pub(crate) type ArchiveDirectory = File;
@@ -708,6 +708,7 @@ impl RecordName {
         name
     }
     /// The offline rewrite's temporary for a context record, which no node release opens.
+    #[cfg(unix)]
     fn rewrite(height: u64, hash: &[u8; 32]) -> Self {
         let mut name = Self::with_digest(height, hash, true);
         let start = name.len - 4;
@@ -775,7 +776,7 @@ fn open_archive_directory_named(root: &File, namespace: &str, create: bool) -> i
     }
     Ok(directory)
 }
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn verify_bytes(mut file: ArchiveFile, expected: &[u8]) -> io::Result<()> {
     if !file.metadata()?.is_file() || file.metadata()?.len() != expected.len() as u64 {
         return Err(io::Error::other(
@@ -836,8 +837,8 @@ fn publish_record(
     )
 }
 /// Publish a content-addressed piece, or recheck one that an earlier record already published.
-#[cfg(unix)]
-fn publish_shared_piece(directory: &File, bytes: &[u8]) -> io::Result<()> {
+#[cfg(any(unix, windows))]
+fn publish_shared_piece(directory: &ArchiveDirectory, bytes: &[u8]) -> io::Result<()> {
     let target = packed::piece_name(bytes, false);
     let staged = packed::piece_name(bytes, true);
     match open_named_record(directory, &target) {
@@ -1012,7 +1013,7 @@ fn replace_record(
         stored.write_to(&mut file)?;
         file.sync_all()?;
         file.rewind()?;
-        packed::verify_original(directory, file.try_clone()?, original, true)?;
+        packed::verify_original(directory, &mut file, original, true)?;
         verify_named_file(directory, temporary.as_str(), &file)?;
         rustix::fs::renameat(directory, temporary.as_str(), directory, target.as_str())?;
         directory.sync_all()
@@ -1072,12 +1073,12 @@ fn publish_named_record(
 #[cfg(unix)]
 fn accept_existing(
     directory: &File,
-    file: File,
+    mut file: File,
     staged: &RecordName,
     original: &[u8],
     context: bool,
 ) -> io::Result<()> {
-    packed::verify_original(directory, file, original, context)?;
+    packed::verify_original(directory, &mut file, original, context)?;
     directory.sync_all()?;
     remove_matching_stage(directory, staged, original, context)
 }
@@ -1113,6 +1114,9 @@ fn publish_stored(
     file.set_len(0)?;
     file.rewind()?;
     stored.write_to(&mut file)?;
+    if file.metadata()?.len() != stored.len() as u64 {
+        return Err(io::Error::other("native context stored length differs"));
+    }
     file.sync_all()?;
     #[cfg(test)]
     process_crash::observe(target, process_crash::Boundary::StageSynced);
@@ -1125,10 +1129,10 @@ fn publish_stored(
         target.as_str(),
         AtFlags::empty(),
     ) {
-        Ok(()) => stored.verify(open_named_record(directory, target)?)?,
+        Ok(()) => stored.verify(&mut open_named_record(directory, target)?)?,
         Err(rustix::io::Errno::EXIST) => packed::verify_original(
             directory,
-            open_named_record(directory, target)?,
+            &mut open_named_record(directory, target)?,
             original,
             context,
         )?,
@@ -1162,6 +1166,7 @@ fn verify_archive_directory(
 ) -> io::Result<()> {
     verify_named_file(root, namespace, directory)
 }
+#[cfg(unix)]
 fn remove_matching_stage(
     directory: &File,
     staged: &RecordName,
@@ -1170,7 +1175,7 @@ fn remove_matching_stage(
 ) -> io::Result<()> {
     use rustix::fs::{AtFlags, Mode, OFlags};
     let name = staged.as_str();
-    let file = match rustix::fs::openat(
+    let mut file = match rustix::fs::openat(
         directory,
         name,
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
@@ -1180,7 +1185,7 @@ fn remove_matching_stage(
         Err(rustix::io::Errno::NOENT) => return Ok(()),
         Err(error) => return Err(error.into()),
     };
-    packed::verify_original(directory, file.try_clone()?, original, context)?;
+    packed::verify_original(directory, &mut file, original, context)?;
     verify_named_file(directory, name, &file)?;
     rustix::fs::unlinkat(directory, name, AtFlags::empty())?;
     directory.sync_all()

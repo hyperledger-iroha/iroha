@@ -808,6 +808,31 @@ class ReachTest(TreeCase):
         tree = CHECKER.Tree(self.root)
         self.assertFalse(CHECKER.find_callers(tree, RING, "ntt_forward", scope, [])[1])
 
+    def test_method_receiver_can_be_a_field_of_the_enclosing_struct(self) -> None:
+        self.append(RING, (
+            "struct Other;\nimpl Other { fn product(&self) -> u64 { 0 } }\n"
+            "struct First { value: RnsChain, operations: u64 }\n"
+            "struct Second { value: Other }\n"
+            "impl First { fn first(&self, value: Other) -> u64 { self.value.product() } }\n"
+            "impl Second { fn second(&self, value: RnsChain) -> u64 { self.value.product() } }\n"
+        ))
+        tree = CHECKER.Tree(self.root)
+        scope = CHECKER.caller_scope(tree, RING, [RING], "pub")
+        self.assertEqual(CHECKER.find_callers(tree, RING, "RnsChain::product", scope, []),
+                         ({RING: ["First::first"]}, True))
+        self.assertEqual(CHECKER.find_callers(tree, RING, "Other::product", scope, []),
+                         ({RING: ["Second::second"]}, True))
+
+    def test_chained_method_receiver_does_not_claim_exhaustive_callers(self) -> None:
+        self.append(RING, (
+            "fn known(chain: RnsChain) -> u64 { chain.product() }\n"
+            "fn unresolved(plan: Plan) -> u64 { plan.fixed().product() }\n"
+        ))
+        tree = CHECKER.Tree(self.root)
+        scope = CHECKER.caller_scope(tree, RING, [RING], "pub")
+        self.assertEqual(CHECKER.find_callers(tree, RING, "RnsChain::product", scope, []),
+                         ({RING: ["known"]}, False))
+
     def test_method_receiver_can_be_a_typed_constant(self) -> None:
         self.append(RING, (
             "/// Other.\npub struct Other;\n"
@@ -1911,7 +1936,11 @@ class RepositoryTest(unittest.TestCase):
         }
         for key, (path, function) in expected.items():
             record = callers[key]
-            self.assertTrue(record["callers_exhaustive"], key)
+            # Chained precision.fixed().canonicalize_i64(...) receivers in
+            # upper_digits cannot be typed lexically. Preserve the explicit
+            # incomplete census while still requiring every named consumer.
+            incomplete = ("constant_time.rs", "FixedModulus::canonicalize_i64")
+            self.assertIs(record["callers_exhaustive"], key != incomplete, key)
             self.assertIn(function, record["callers"].get(path, []), key)
         references = {entry["id"]: entry for entry in self.document["test_only_references"]}
         self.assertNotIn("bootle_lantern.test_gated_adapters", references)

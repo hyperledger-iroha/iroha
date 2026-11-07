@@ -171,8 +171,29 @@ jobs:
           cache-on-failure: "true"
       - name: Core, simulator, specification traceability and quorums (default seeds)
         run: env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS cargo test --locked -p iroha_sumeragi --features sim
+      - name: Record node compiler memory envelope
+        run: |
+          for resource in /proc/meminfo /proc/self/cgroup /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.events; do
+            if [ -r "$resource" ]; then
+              printf '%s\n' "$resource"
+              cat "$resource"
+            fi
+          done
       - name: Node driver, lanes and four-validator node tests
+        # Memory policy: this Core lib-test compile exhausted the hosted
+        # runner at two jobs. Serialize compilation; keep test parallelism.
+        env:
+          CARGO_BUILD_JOBS: "1"
         run: env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS cargo test --locked -p iroha_core --lib -- sumeragi::lanes sumeragi::node sumeragi::driver sumeragi::executor
+      - name: Record node compiler memory result
+        if: always()
+        run: |
+          for resource in /proc/meminfo /proc/self/cgroup /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.events; do
+            if [ -r "$resource" ]; then
+              printf '%s\n' "$resource"
+              cat "$resource"
+            fi
+          done
 
   # The Rust lanes test default features only; this target needs the opt-in
   # `fastpq-replay-measurement` feature. `iroha_measurement` itself is tested by
@@ -194,8 +215,29 @@ jobs:
       # The State commitment candidates of task G.2 are development-only: their
       # conformance adapters and their measurement target compile only under
       # opt-in features that no default lane sets.
+      - name: Record State compiler memory envelope
+        run: |
+          for resource in /proc/meminfo /proc/self/cgroup /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.events; do
+            if [ -r "$resource" ]; then
+              printf '%s\n' "$resource"
+              cat "$resource"
+            fi
+          done
       - name: State commitment candidates satisfy the keyed State contract
+        # Memory policy: serialize this constrained Core lib-test compile,
+        # matching the observed Sumeragi OOM policy without changing conformance.
+        env:
+          CARGO_BUILD_JOBS: "1"
         run: cargo test --locked -p iroha_core --lib --features state-commitment-prototypes -- keyed_commitment::candidates_tests
+      - name: Record State compiler memory result
+        if: always()
+        run: |
+          for resource in /proc/meminfo /proc/self/cgroup /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.events; do
+            if [ -r "$resource" ]; then
+              printf '%s\n' "$resource"
+              cat "$resource"
+            fi
+          done
       - name: State commitment candidate measurement target (smoke run)
         run: cargo test --locked -p iroha_core_privacy --features fastpq-replay-measurement --test state_commitment_candidates_measurement
 
@@ -231,7 +273,19 @@ jobs:
           cargo test --locked -p iroha_sumeragi --lib -- pacemaker:: machine::sync::tests:: message::tests::generic_maximum_frames_fit_every_admissible_transport message::tests::source_complete_maximum_certificate_and_header_fit_declared_frame_allowance
       - name: Daemon startup refuses frame caps below the chain, sync and control bounds
         run: cargo test --locked -p irohad_lib --lib -- block_sync_topic_must_carry_the_local_sync_budget control_topic_must_carry_the_largest_control_frame check_config_and_runtime_enforce_frame_cap_boundary
+      - name: Record X2 node compiler memory envelope
+        run: |
+          for resource in /proc/meminfo /proc/self/cgroup /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.events; do
+            if [ -r "$resource" ]; then
+              printf '%s\n' "$resource"
+              cat "$resource"
+            fi
+          done
       - name: Node admission, gossip, proposer, restore and serving bounds
+        # Memory policy: this default-feature Core lib-test build matches the
+        # Sumeragi compile that OOM-killed at two jobs; serialize compilation.
+        env:
+          CARGO_BUILD_JOBS: "1"
         run: |
           cargo test --locked -p iroha_core --lib -- \
             resource_coherence:: \
@@ -246,6 +300,15 @@ jobs:
             sumeragi::driver::serve::tests::admitted_maximum_frames_fit_frame_overhead_and_the_block_sync_frame \
             sumeragi::driver::serve::tests::generic_maximum_control_frames_fit_the_control_topic \
             privacy::tests::privacy_block_counts_and_actual_aggregate_bytes_are_independent
+      - name: Record X2 node compiler memory result
+        if: always()
+        run: |
+          for resource in /proc/meminfo /proc/self/cgroup /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.events; do
+            if [ -r "$resource" ]; then
+              printf '%s\n' "$resource"
+              cat "$resource"
+            fi
+          done
 
   norito_rpc_verify:
     needs: ci_image
@@ -270,7 +333,7 @@ jobs:
         runner:
           - ubuntu-latest
           - ubuntu-24.04-arm
-          - macos-14
+          - macos-15
           - windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -311,7 +374,7 @@ jobs:
   rust_changes:
     name: Classify affected Rust lanes
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     outputs:
       has_rust: ${{ steps.classify.outputs.has_rust }}
       full: ${{ steps.classify.outputs.full }}
@@ -346,6 +409,54 @@ jobs:
           python3 -I -S scripts/check_build_efficiency_provenance.py
           python3 scripts/rust_ci.py validate
           python3 -m pytest -q pytests/scripts/rust_ci_test.py
+      - name: Classify the PR reverse-dependency closure
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          FULL_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, 'ci/full') }}
+        run: |
+          mkdir -p target/ci
+          scope_args=(--base "$BASE_SHA")
+          if test "$FULL_REQUESTED" = true; then
+            scope_args=(--all)
+          fi
+          python3 scripts/rust_ci.py classify \
+            "${scope_args[@]}" \
+            --json-out target/ci/rust-classification.json \
+            --github-output "$GITHUB_OUTPUT" \
+            > target/ci/rust-classification.log
+      - name: Upload Rust classification evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: rust-classification
+          path: |
+            target/ci/rust-classification.json
+            target/ci/rust-classification.log
+          if-no-files-found: error
+
+  rust_helper_controls:
+    name: Required Rust helper controls
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
+        with:
+          cache: "false"
+          toolchain: 1.99.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.11"
+      - name: Install pinned router-test dependency
+        run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
+      - name: Verify required helper topology and command conservation
+        run: python3 -B -m unittest discover -s scripts/tests -p rust_helper_workflow_test.py -v
+      - name: Exercise the complete original helper test inventory
+        run: |
           python3 -m pytest -q \
             pytests/scripts/check_cargo_feature_hygiene_test.py \
             scripts/tests/panic_recovery_boundaries_test.py \
@@ -385,8 +496,29 @@ jobs:
             scripts/tests/check_zk_primitive_workloads_test.py \
             scripts/tests/check_state_commitment_candidates_test.py \
             scripts/tests/zk_resource_harness_test.py \
+            --deselect=scripts/tests/zk_resource_harness_test.py::NativeRunTests \
             pytests/scripts/iso_xsd_fixture_verify_test.py \
             pytests/scripts/iso_xsd_profile_catalog_include_test.py
+  rust_source_guards:
+    name: Required Rust source guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
+        with:
+          cache: "false"
+          toolchain: 1.99.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.11"
+      - name: Install pinned router-test dependency
+        run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
+      - name: Run the complete original source guards
+        run: |
           python3 scripts/check_cargo_feature_hygiene.py
           python3 -I -S scripts/check_panic_recovery_boundaries.py
           python3 -I -S scripts/check_release_feature_graph.py
@@ -429,32 +561,6 @@ jobs:
           python3 -I -S scripts/check_fhe_ownership_map.py
           python3 -I -S scripts/fhe_bgv_cost_model.py
           python3 -I -S crates/iroha_fhe/tests/vectors/bgv_reference.py --check
-      - name: Classify the PR reverse-dependency closure
-        id: classify
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          FULL_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, 'ci/full') }}
-        run: |
-          mkdir -p target/ci
-          scope_args=(--base "$BASE_SHA")
-          if test "$FULL_REQUESTED" = true; then
-            scope_args=(--all)
-          fi
-          python3 scripts/rust_ci.py classify \
-            "${scope_args[@]}" \
-            --json-out target/ci/rust-classification.json \
-            --github-output "$GITHUB_OUTPUT" \
-            > target/ci/rust-classification.log
-      - name: Upload Rust classification evidence
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: rust-classification
-          path: |
-            target/ci/rust-classification.json
-            target/ci/rust-classification.log
-          if-no-files-found: error
-
   rust_affected:
     name: Rust ${{ matrix.lane }} (${{ matrix.package_count }} packages)
     if: needs.rust_changes.outputs.has_binary_free_rust == 'true'
@@ -558,14 +664,324 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
 
+  linux_resource_harness_inputs:
+    name: Linux native resource harness immutable inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      inputs_json: ${{ steps.inputs.outputs.inputs_json }}
+      approval_commit: ${{ steps.inputs.outputs.approval_commit }}
+      harness_commit: ${{ steps.inputs.outputs.harness_commit }}
+      head_commit: ${{ steps.inputs.outputs.head_commit }}
+      repository: ${{ steps.inputs.outputs.repository }}
+      producer_run_id: ${{ steps.inputs.outputs.producer_run_id }}
+      producer_run_attempt: ${{ steps.inputs.outputs.producer_run_attempt }}
+      artifact_id: ${{ steps.inputs.outputs.artifact_id }}
+      source_commit: ${{ steps.inputs.outputs.source_commit }}
+    steps:
+      - name: Check out current harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: harness
+          persist-credentials: false
+      - name: Capture independently selected immutable approval once
+        id: approval_ref
+        env:
+          APPROVAL_COMMIT: ${{ vars.LINUX_OBSERVER_APPROVAL_COMMIT }}
+        run: |
+          set -euo pipefail
+          [[ "$APPROVAL_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$APPROVAL_COMMIT" != 0000000000000000000000000000000000000000 ]]
+          printf 'approval_commit=%s\n' "$APPROVAL_COMMIT" >> "$GITHUB_OUTPUT"
+      - name: Check out independent approval record
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ steps.approval_ref.outputs.approval_commit }}
+          path: observer-approval
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Install current harness Python dependencies
+        run: python -m pip install --disable-pip-version-check -r harness/scripts/requirements.txt
+      - name: Exercise fail-closed consumer controls
+        run: python -B -m unittest discover -s harness/scripts/tests -p 'required_linux_resource_harness*_test.py' -v
+      - name: Freeze identical consumer and publication inputs for all shards
+        id: inputs
+        env:
+          APPROVAL_COMMIT: ${{ steps.approval_ref.outputs.approval_commit }}
+          HARNESS_COMMIT: ${{ github.sha }}
+          HEAD_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          CONSUMER_RUN_ID: ${{ github.run_id }}
+          CONSUMER_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          python -B harness/scripts/run_required_linux_resource_harness.py inputs \
+            --config observer-approval/ci/linux_observer_approval.json \
+            --harness-root "$GITHUB_WORKSPACE/harness" \
+            --approval-root "$GITHUB_WORKSPACE/observer-approval" \
+            --approval-commit "$APPROVAL_COMMIT" \
+            --harness-commit "$HARNESS_COMMIT" \
+            --head-commit "$HEAD_COMMIT" \
+            --run-id "$CONSUMER_RUN_ID" \
+            --run-attempt "$CONSUMER_RUN_ATTEMPT" \
+            --github-output "$GITHUB_OUTPUT"
+
+  linux_resource_harness_shards:
+    name: Linux native resource harness shard (${{ matrix.shard }})
+    needs: linux_resource_harness_inputs
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        shard: [native-1, native-2, native-3, native-4]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out current harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ needs.linux_resource_harness_inputs.outputs.harness_commit }}
+          path: harness
+          persist-credentials: false
+      - name: Check out independent approval record
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ needs.linux_resource_harness_inputs.outputs.approval_commit }}
+          path: observer-approval
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Validate independent approval and exact pins
+        id: approval
+        run: |
+          set -euo pipefail
+          python -B harness/scripts/run_required_linux_resource_harness.py approval \
+            --config observer-approval/ci/linux_observer_approval.json \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Check out approved clean observer source separately
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ steps.approval.outputs.source_commit }}
+          path: observer-source
+          persist-credentials: false
+      - name: Retain immutable producer metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVED_REPOSITORY: ${{ steps.approval.outputs.repository }}
+          ARTIFACT_ID: ${{ steps.approval.outputs.artifact_id }}
+          RUN_ID: ${{ steps.approval.outputs.producer_run_id }}
+          RUN_ATTEMPT: ${{ steps.approval.outputs.producer_run_attempt }}
+          APPROVAL_COMMIT: ${{ needs.linux_resource_harness_inputs.outputs.approval_commit }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir "$RUNNER_TEMP/native-observer-metadata"
+          git -C observer-approval rev-parse HEAD > "$RUNNER_TEMP/native-observer-metadata/approval-commit.txt"
+          test "$(cat "$RUNNER_TEMP/native-observer-metadata/approval-commit.txt")" = "$APPROVAL_COMMIT"
+          cp observer-approval/ci/linux_observer_approval.json "$RUNNER_TEMP/native-observer-metadata/approval.json"
+          gh api "repos/$APPROVED_REPOSITORY/actions/artifacts/$ARTIFACT_ID" > "$RUNNER_TEMP/native-observer-metadata/artifact.json"
+          gh api "repos/$APPROVED_REPOSITORY/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT" > "$RUNNER_TEMP/native-observer-metadata/run.json"
+      - name: Retain the immutable shard context without shell evaluation
+        env:
+          CONTEXT_JSON: ${{ needs.linux_resource_harness_inputs.outputs.inputs_json }}
+        run: |
+          set -euo pipefail
+          umask 077
+          python - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+
+          value = json.loads(os.environ["CONTEXT_JSON"])
+          destination = Path(os.environ["RUNNER_TEMP"]) / "native-observer-metadata/context.json"
+          destination.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
+          PYTHON
+      - name: Download exact approved artifact without extracting it
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          repository: ${{ steps.approval.outputs.repository }}
+          run-id: ${{ steps.approval.outputs.producer_run_id }}
+          artifact-ids: ${{ steps.approval.outputs.artifact_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/native-observer-download
+          merge-multiple: true
+          skip-decompress: true
+          digest-mismatch: error
+      - name: Install current harness Python dependencies
+        run: python -m pip install --disable-pip-version-check -r harness/scripts/requirements.txt
+      - name: Permit required user-space perf events on the disposable hosted VM
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(id -u)" -ne 0
+          umask 077
+          readonly evidence_dir="$RUNNER_TEMP/native-observer-metadata"
+          uname -a > "$evidence_dir/kernel.txt"
+          id > "$evidence_dir/runner-identity.txt"
+          sysctl -n kernel.perf_event_paranoid > "$evidence_dir/perf-policy-before.txt"
+          sudo -n sysctl -w kernel.perf_event_paranoid=2 \
+            > "$evidence_dir/perf-policy-setup.stdout" 2> "$evidence_dir/perf-policy-setup.stderr"
+          sysctl -n kernel.perf_event_paranoid > "$evidence_dir/perf-policy-after.txt"
+          test "$(cat "$evidence_dir/perf-policy-after.txt")" = 2
+      - name: Run assigned actual native methods with zero skips
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          set -euo pipefail
+          python -B harness/scripts/run_required_linux_resource_harness.py run \
+            --config observer-approval/ci/linux_observer_approval.json \
+            --harness-root "$GITHUB_WORKSPACE/harness" \
+            --source-root "$GITHUB_WORKSPACE/observer-source" \
+            --archive-root "$RUNNER_TEMP/native-observer-download" \
+            --artifact-metadata "$RUNNER_TEMP/native-observer-metadata/artifact.json" \
+            --run-metadata "$RUNNER_TEMP/native-observer-metadata/run.json" \
+            --output-root "$RUNNER_TEMP/native-observer-required" \
+            --shard "$SHARD" \
+            --context "$RUNNER_TEMP/native-observer-metadata/context.json"
+      - name: Preserve native results and original failure evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: linux-resource-harness-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/native-observer-required/
+            ${{ runner.temp }}/native-observer-metadata/
+          if-no-files-found: warn
+          retention-days: 30
+
+  linux_resource_harness:
+    name: Required Linux native resource harness (20 tests)
+    if: always()
+    needs: [linux_resource_harness_inputs, linux_resource_harness_shards]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Require complete immutable inputs for aggregation
+        env:
+          INPUTS_RESULT: ${{ needs.linux_resource_harness_inputs.result }}
+          SHARDS_RESULT: ${{ needs.linux_resource_harness_shards.result }}
+        run: |
+          set -euo pipefail
+          test "$INPUTS_RESULT" = success
+          test "$SHARDS_RESULT" = success
+      - name: Check out the exact frozen harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ needs.linux_resource_harness_inputs.outputs.harness_commit }}
+          path: harness
+          persist-credentials: false
+      - name: Check out the exact frozen approval record
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ needs.linux_resource_harness_inputs.outputs.approval_commit }}
+          path: observer-approval
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Install current harness Python dependencies
+        run: python -m pip install --disable-pip-version-check -r harness/scripts/requirements.txt
+      - name: Retain the immutable aggregate context without shell evaluation
+        env:
+          CONTEXT_JSON: ${{ needs.linux_resource_harness_inputs.outputs.inputs_json }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir "$RUNNER_TEMP/native-observer-aggregate-metadata"
+          python - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+
+          value = json.loads(os.environ["CONTEXT_JSON"])
+          destination = Path(os.environ["RUNNER_TEMP"]) / "native-observer-aggregate-metadata/context.json"
+          destination.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
+          PYTHON
+      - name: Retain original attempt-specific consumer jobs and artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONSUMER_REPOSITORY: ${{ github.repository }}
+          CONSUMER_RUN_ID: ${{ github.run_id }}
+          CONSUMER_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          readonly evidence_dir="$RUNNER_TEMP/native-observer-aggregate-metadata"
+          gh api --paginate --slurp "repos/$CONSUMER_REPOSITORY/actions/runs/$CONSUMER_RUN_ID/attempts/$CONSUMER_RUN_ATTEMPT/jobs?per_page=100" > "$evidence_dir/jobs.json"
+          gh api "repos/$CONSUMER_REPOSITORY/actions/runs/$CONSUMER_RUN_ID/attempts/$CONSUMER_RUN_ATTEMPT" > "$evidence_dir/consumer-run.json"
+          gh api --paginate --slurp "repos/$CONSUMER_REPOSITORY/actions/runs/$CONSUMER_RUN_ID/artifacts?per_page=100" > "$evidence_dir/artifacts.json"
+      - name: Select the exact four original shard artifacts
+        id: select
+        run: |
+          set -euo pipefail
+          python -B harness/scripts/run_required_linux_resource_harness.py select \
+            --config observer-approval/ci/linux_observer_approval.json \
+            --harness-root "$GITHUB_WORKSPACE/harness" \
+            --context "$RUNNER_TEMP/native-observer-aggregate-metadata/context.json" \
+            --artifacts-metadata "$RUNNER_TEMP/native-observer-aggregate-metadata/artifacts.json" \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Download exact shard artifacts without extracting them
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          repository: ${{ github.repository }}
+          run-id: ${{ github.run_id }}
+          artifact-ids: ${{ steps.select.outputs.artifact_ids }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/native-observer-shard-download
+          skip-decompress: true
+          digest-mismatch: error
+      - name: Require all four same-attempt shards and exact 20 passing native methods
+        run: |
+          set -euo pipefail
+          python -B harness/scripts/run_required_linux_resource_harness.py aggregate \
+            --config observer-approval/ci/linux_observer_approval.json \
+            --harness-root "$GITHUB_WORKSPACE/harness" \
+            --context "$RUNNER_TEMP/native-observer-aggregate-metadata/context.json" \
+            --archive-root "$RUNNER_TEMP/native-observer-shard-download" \
+            --artifacts-metadata "$RUNNER_TEMP/native-observer-aggregate-metadata/artifacts.json" \
+            --jobs-metadata "$RUNNER_TEMP/native-observer-aggregate-metadata/jobs.json" \
+            --consumer-run-metadata "$RUNNER_TEMP/native-observer-aggregate-metadata/consumer-run.json" \
+            --output-root "$RUNNER_TEMP/native-observer-aggregate"
+      - name: Preserve exact aggregate and original consumer metadata
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: linux-resource-harness-aggregate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/native-observer-aggregate/
+            ${{ runner.temp }}/native-observer-aggregate-metadata/
+          if-no-files-found: warn
+          retention-days: 30
+
   rust_required:
     name: Required affected Rust validation
     if: always()
-    needs: [rust_changes, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests, sora_parliament_lifecycle]
+    needs: [rust_helper_controls, rust_source_guards, rust_changes, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests, sora_parliament_lifecycle, linux_resource_harness]
     runs-on: ubuntu-latest
     steps:
       - name: Aggregate dynamic Rust lane results
         env:
+          HELPER_CONTROLS_RESULT: ${{ needs.rust_helper_controls.result }}
+          SOURCE_GUARDS_RESULT: ${{ needs.rust_source_guards.result }}
+          NATIVE_HARNESS_RESULT: ${{ needs.linux_resource_harness.result }}
           CLASSIFIER_RESULT: ${{ needs.rust_changes.result }}
           BINARY_FREE_RESULT: ${{ needs.rust_affected.result }}
           BINARY_FREE_SELECTED: ${{ needs.rust_changes.outputs.has_binary_free_rust }}
@@ -584,6 +1000,9 @@ jobs:
         run: |
           set -euo pipefail
           test "$CLASSIFIER_RESULT" = success
+          test "$HELPER_CONTROLS_RESULT" = success
+          test "$SOURCE_GUARDS_RESULT" = success
+          test "$NATIVE_HARNESS_RESULT" = success
           check_result() {
             case "$1:$2" in
               true:success|false:skipped) return 0 ;;

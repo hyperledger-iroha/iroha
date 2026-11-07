@@ -71,6 +71,7 @@ pub mod publisher;
 #[cfg(feature = "manifest")]
 pub mod reference;
 pub mod scoreboard;
+pub mod streaming_input;
 #[cfg(feature = "manifest")]
 pub mod streaming_verifier;
 #[cfg(feature = "cli")]
@@ -882,7 +883,6 @@ pub const CAR_PLAN_MAX_CHUNKS: usize = 4_194_304;
 /// Maximum authentication-path depth for the canonical chunk Merkle tree.
 pub const POR_CHUNK_MERKLE_MAX_DEPTH: usize = 22;
 const CAR_PLAN_MAX_FILES: usize = 1_000_000;
-#[cfg(any(unix, windows))]
 const CAR_DIRECTORY_MAX_ENTRIES: usize = 1_000_000;
 // Directory scanning and canonical DAG materialisation recurse once per logical component. Keep
 // the protocol depth comfortably below platform thread-stack limits before descending into an

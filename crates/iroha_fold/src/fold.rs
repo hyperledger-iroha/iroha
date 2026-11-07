@@ -85,15 +85,31 @@ pub(crate) struct View<'a, F> {
 }
 
 impl<'a, F> View<'a, F> {
-    pub(crate) fn of(witness: &'a Witness<F>, public: &'a [Vec<F>], theta: &'a [F], r: &'a [F]) -> Self {
-        Self { columns: &witness.columns, public, theta, r }
+    pub(crate) fn of(
+        witness: &'a Witness<F>,
+        public: &'a [Vec<F>],
+        theta: &'a [F],
+        r: &'a [F],
+    ) -> Self {
+        Self {
+            columns: &witness.columns,
+            public,
+            theta,
+            r,
+        }
     }
     fn point(&self, advice: usize) -> Point<'a, F> {
-        Point { advice: &self.columns[..advice], instance: self.public }
+        Point {
+            advice: &self.columns[..advice],
+            instance: self.public,
+        }
     }
 }
 
-fn absorb_instance<C: PastaCurve>(transcript: &mut Transcript<C::ScalarExt>, instance: &Instance<C>) {
+fn absorb_instance<C: PastaCurve>(
+    transcript: &mut Transcript<C::ScalarExt>,
+    instance: &Instance<C>,
+) {
     transcript.absorb_u64(instance.commitments.len() as u64);
     for point in &instance.commitments {
         transcript.absorb_point(point);
@@ -103,7 +119,10 @@ fn absorb_instance<C: PastaCurve>(transcript: &mut Transcript<C::ScalarExt>, ins
     transcript.absorb_scalars(&instance.r);
 }
 
-fn absorb_public<C: PastaCurve>(transcript: &mut Transcript<C::ScalarExt>, public: &[Vec<C::ScalarExt>]) {
+fn absorb_public<C: PastaCurve>(
+    transcript: &mut Transcript<C::ScalarExt>,
+    public: &[Vec<C::ScalarExt>],
+) {
     transcript.absorb_u64(public.len() as u64);
     for column in public {
         transcript.absorb_u64(column.len() as u64);
@@ -134,7 +153,11 @@ fn round_one_challenges<C: PastaCurve>(
         powers.push(power);
         power *= theta;
     }
-    let r = relation.groups.iter().map(|_| transcript.challenge()).collect();
+    let r = relation
+        .groups
+        .iter()
+        .map(|_| transcript.challenge())
+        .collect();
     (powers, r)
 }
 
@@ -142,11 +165,16 @@ impl<C: PastaCurve> Instance<C> {
     /// Whether the `LogUp` challenges are the transcript's for this instance's
     /// round-one data (required of every fresh instance before it is used).
     #[must_use]
-    pub fn has_fresh_challenges(&self, relation: &FoldedRelation<C::ScalarExt>, domain: &[u8; 32]) -> bool {
+    pub fn has_fresh_challenges(
+        &self,
+        relation: &FoldedRelation<C::ScalarExt>,
+        domain: &[u8; 32],
+    ) -> bool {
         if self.commitments.len() != relation.columns() {
             return false;
         }
-        let (theta, r) = round_one_challenges::<C>(relation, domain, &self.public, &self.commitments);
+        let (theta, r) =
+            round_one_challenges::<C>(relation, domain, &self.public, &self.commitments);
         theta == self.theta && r == self.r
     }
 
@@ -155,7 +183,11 @@ impl<C: PastaCurve> Instance<C> {
             && self.theta.len() == other.theta.len()
             && self.r.len() == other.r.len()
             && self.public.len() == other.public.len()
-            && self.public.iter().zip(&other.public).all(|(a, b)| a.len() == b.len())
+            && self
+                .public
+                .iter()
+                .zip(&other.public)
+                .all(|(a, b)| a.len() == b.len())
     }
 }
 
@@ -178,7 +210,11 @@ pub fn fresh_instance<C: PastaCurve, R: Rng + CryptoRng>(
     if advice.len() != relation.advice_columns || advice.iter().any(|c| c.len() != relation.n) {
         return Err(Error::Shape("advice columns"));
     }
-    if public.iter().map(Vec::len).ne(relation.instance_lengths.iter().copied()) {
+    if public
+        .iter()
+        .map(Vec::len)
+        .ne(relation.instance_lengths.iter().copied())
+    {
         return Err(Error::Shape("instance columns"));
     }
     if key.len() < relation.n {
@@ -188,7 +224,10 @@ pub fn fresh_instance<C: PastaCurve, R: Rng + CryptoRng>(
     let columns_total = relation.columns();
     let mut columns: Vec<Vec<S<C>>> = advice;
     columns.resize(columns_total, Vec::new());
-    let point = Point { advice: &columns[..relation.advice_columns], instance: &public };
+    let point = Point {
+        advice: &columns[..relation.advice_columns],
+        instance: &public,
+    };
     let mut ms = Vec::with_capacity(relation.groups.len());
     for group in &relation.groups {
         ms.push(logup::multiplicities(group, &tables, point)?);
@@ -196,7 +235,9 @@ pub fn fresh_instance<C: PastaCurve, R: Rng + CryptoRng>(
     for (group, m) in relation.groups.iter().zip(ms) {
         columns[group.m_column()] = m;
     }
-    let blinds: Vec<S<C>> = (0..columns_total).map(|_| S::<C>::random(&mut *rng)).collect();
+    let blinds: Vec<S<C>> = (0..columns_total)
+        .map(|_| S::<C>::random(&mut *rng))
+        .collect();
     let mut commitments = vec![C::AffineExt::default(); columns_total];
     for c in 0..relation.advice_columns {
         commitments[c] = key.commit(&columns[c], &blinds[c])?;
@@ -207,8 +248,18 @@ pub fn fresh_instance<C: PastaCurve, R: Rng + CryptoRng>(
     }
     let (theta, r) = round_one_challenges::<C>(relation, domain, &public, &commitments);
     for (group, rg) in relation.groups.iter().zip(&r) {
-        let point = Point { advice: &columns[..relation.advice_columns], instance: &public };
-        let (h, g) = logup::reciprocals(group, &tables, point, &columns[group.m_column()], &theta, *rg)?;
+        let point = Point {
+            advice: &columns[..relation.advice_columns],
+            instance: &public,
+        };
+        let (h, g) = logup::reciprocals(
+            group,
+            &tables,
+            point,
+            &columns[group.m_column()],
+            &theta,
+            *rg,
+        )?;
         for (slot, column) in h.into_iter().enumerate() {
             columns[group.h_column(slot)] = column;
         }
@@ -217,7 +268,15 @@ pub fn fresh_instance<C: PastaCurve, R: Rng + CryptoRng>(
             commitments[c] = key.commit(&columns[c], &blinds[c])?;
         }
     }
-    Ok((Instance { commitments, public, theta, r }, Witness { columns, blinds }))
+    Ok((
+        Instance {
+            commitments,
+            public,
+            theta,
+            r,
+        },
+        Witness { columns, blinds },
+    ))
 }
 
 impl<C: PastaCurve> Accumulator<C> {
@@ -236,8 +295,14 @@ impl<C: PastaCurve> Accumulator<C> {
         }
         let mut transcript = Transcript::<C::ScalarExt>::new(TAG_ACCUMULATOR, domain);
         absorb_instance(&mut transcript, &instance);
-        let beta = (0..relation.index_bits()).map(|_| transcript.challenge()).collect();
-        Ok(Self { instance, beta, e: <C::ScalarExt as Field>::ZERO })
+        let beta = (0..relation.index_bits())
+            .map(|_| transcript.challenge())
+            .collect();
+        Ok(Self {
+            instance,
+            beta,
+            e: <C::ScalarExt as Field>::ZERO,
+        })
     }
 }
 
@@ -254,7 +319,11 @@ pub(crate) fn constraints_at<F: iroha_pasta::PastaField>(
     for (index, gate) in relation.gates.iter().enumerate() {
         for (row, guard) in gate.rows.iter().zip(&gate.guards) {
             let row = *row as usize;
-            sink(row, index, gate.body.eval(&tables, point, row, &mut stack) * guard);
+            sink(
+                row,
+                index,
+                gate.body.eval(&tables, point, row, &mut stack) * guard,
+            );
         }
     }
     for (gi, group) in relation.groups.iter().enumerate() {
@@ -267,18 +336,30 @@ pub(crate) fn constraints_at<F: iroha_pasta::PastaField>(
                 let members = cell.members();
                 for (term, member) in terms.iter_mut().zip(members) {
                     let member = &group.members[usize::from(*member)];
-                    *term = r + compress(&member.inputs, view.theta, &tables, point, row, &mut stack);
+                    *term =
+                        r + compress(&member.inputs, view.theta, &tables, point, row, &mut stack);
                 }
-                sink(row, group.first_constraint + slot, cell_constraint(h_column[row], &terms[..members.len()]));
+                sink(
+                    row,
+                    group.first_constraint + slot,
+                    cell_constraint(h_column[row], &terms[..members.len()]),
+                );
             }
         }
-        let (m, g) = (&view.columns[group.m_column()], &view.columns[group.g_column()]);
+        let (m, g) = (
+            &view.columns[group.m_column()],
+            &view.columns[group.g_column()],
+        );
         for row in 0..group.usable {
             if bool::from(m[row].is_zero()) && bool::from(g[row].is_zero()) {
                 continue;
             }
             let s = compress(&group.table, view.theta, &tables, point, row, &mut stack);
-            sink(row, group.first_constraint + group.slots.len(), g[row] * (r + s) - m[row]);
+            sink(
+                row,
+                group.first_constraint + group.slots.len(),
+                g[row] * (r + s) - m[row],
+            );
         }
     }
 }
@@ -303,7 +384,10 @@ fn constraints_on_line<F: iroha_pasta::PastaField>(
     mut sink: impl FnMut(usize, usize, &[F; MAX_POINTS]),
 ) {
     let tables = relation.tables();
-    let (pa, pn) = (acc.point(relation.advice_columns), new.point(relation.advice_columns));
+    let (pa, pn) = (
+        acc.point(relation.advice_columns),
+        new.point(relation.advice_columns),
+    );
     let m = xs.len();
     let line = |a: F, b: F| {
         let mut out = [F::ZERO; MAX_POINTS];
@@ -323,17 +407,27 @@ fn constraints_on_line<F: iroha_pasta::PastaField>(
             sink(row, index, &v);
         }
     }
-    let thetas: Vec<[F; MAX_POINTS]> = acc.theta.iter().zip(new.theta).map(|(a, b)| line(*a, *b)).collect();
-    let compress_line = |programs: &[crate::program::Program<F>], row: usize, stack: &mut Vec<[F; MAX_POINTS]>| {
-        let mut out = [F::ZERO; MAX_POINTS];
-        for (j, program) in programs.iter().enumerate() {
-            let v = program.eval_line(&tables, pa, pn, xs, row, stack);
-            for i in 0..m {
-                out[i] += if j == 0 { v[i] } else { thetas[j - 1][i] * v[i] };
+    let thetas: Vec<[F; MAX_POINTS]> = acc
+        .theta
+        .iter()
+        .zip(new.theta)
+        .map(|(a, b)| line(*a, *b))
+        .collect();
+    let compress_line =
+        |programs: &[crate::program::Program<F>], row: usize, stack: &mut Vec<[F; MAX_POINTS]>| {
+            let mut out = [F::ZERO; MAX_POINTS];
+            for (j, program) in programs.iter().enumerate() {
+                let v = program.eval_line(&tables, pa, pn, xs, row, stack);
+                for i in 0..m {
+                    out[i] += if j == 0 {
+                        v[i]
+                    } else {
+                        thetas[j - 1][i] * v[i]
+                    };
+                }
             }
-        }
-        out
-    };
+            out
+        };
     for (gi, group) in relation.groups.iter().enumerate() {
         let r = line(acc.r[gi], new.r[gi]);
         for (slot, cells) in group.slots.iter().enumerate() {
@@ -360,12 +454,18 @@ fn constraints_on_line<F: iroha_pasta::PastaField>(
         }
         let (mc, gc) = (group.m_column(), group.g_column());
         for row in 0..group.usable {
-            let zero = |c: usize| bool::from(acc.columns[c][row].is_zero()) && bool::from(new.columns[c][row].is_zero());
+            let zero = |c: usize| {
+                bool::from(acc.columns[c][row].is_zero())
+                    && bool::from(new.columns[c][row].is_zero())
+            };
             if zero(mc) && zero(gc) {
                 continue;
             }
             let s = compress_line(&group.table, row, &mut stack);
-            let (mv, gv) = (line(acc.columns[mc][row], new.columns[mc][row]), line(acc.columns[gc][row], new.columns[gc][row]));
+            let (mv, gv) = (
+                line(acc.columns[mc][row], new.columns[mc][row]),
+                line(acc.columns[gc][row], new.columns[gc][row]),
+            );
             let mut out = [F::ZERO; MAX_POINTS];
             for i in 0..m {
                 out[i] = gv[i] * (r[i] + s[i]) - mv[i];
@@ -520,7 +620,10 @@ fn fold_instance<C: PastaCurve>(
     let gamma = challenges.gamma;
     let one = <C::ScalarExt as Field>::ONE;
     let fold_vec = |a: &[C::ScalarExt], b: &[C::ScalarExt]| -> Vec<C::ScalarExt> {
-        a.iter().zip(b).map(|(x, y)| fold_scalar(x, y, &gamma)).collect()
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| fold_scalar(x, y, &gamma))
+            .collect()
     };
     let instance = Instance {
         commitments: acc
@@ -530,12 +633,22 @@ fn fold_instance<C: PastaCurve>(
             .zip(&fresh.commitments)
             .map(|(a, b)| fold_point::<C>(a, b, &gamma))
             .collect(),
-        public: acc.instance.public.iter().zip(&fresh.public).map(|(a, b)| fold_vec(a, b)).collect(),
+        public: acc
+            .instance
+            .public
+            .iter()
+            .zip(&fresh.public)
+            .map(|(a, b)| fold_vec(a, b))
+            .collect(),
         theta: fold_vec(&acc.instance.theta, &fresh.theta),
         r: fold_vec(&acc.instance.r, &fresh.r),
     };
     let e = challenges.f_alpha * (one - gamma) + gamma * (gamma - one) * eval_poly(&proof.k, gamma);
-    Accumulator { instance, beta: challenges.beta_star.clone(), e }
+    Accumulator {
+        instance,
+        beta: challenges.beta_star.clone(),
+        e,
+    }
 }
 
 /// Folds `fresh` into `acc`, returning the new accumulator, its witness and the
@@ -557,7 +670,11 @@ pub fn fold<C: PastaCurve>(
 ) -> Result<FoldOutput<C>, Error> {
     type S<C> = <C as PastaCurve>::ScalarExt;
     let columns = relation.columns();
-    let shape = |w: &Witness<S<C>>| w.columns.len() == columns && w.blinds.len() == columns && w.columns.iter().all(|c| c.len() == relation.n);
+    let shape = |w: &Witness<S<C>>| {
+        w.columns.len() == columns
+            && w.blinds.len() == columns
+            && w.columns.iter().all(|c| c.len() == relation.n)
+    };
     if !shape(acc_witness) || !shape(fresh_witness) || !acc.instance.same_shape(fresh) {
         return Err(Error::Shape("fold inputs"));
     }
@@ -570,7 +687,12 @@ pub fn fold<C: PastaCurve>(
     let mut transcript = fold_transcript(domain, acc, fresh);
     let t = relation.index_bits();
     let delta = delta_powers(transcript.challenge(), t);
-    let acc_view = View::of(acc_witness, &acc.instance.public, &acc.instance.theta, &acc.instance.r);
+    let acc_view = View::of(
+        acc_witness,
+        &acc.instance.public,
+        &acc.instance.theta,
+        &acc.instance.r,
+    );
     let new_view = View::of(fresh_witness, &fresh.public, &fresh.theta, &fresh.r);
     let f = f_polynomial(relation, acc_view, &acc.beta, &delta);
     debug_assert_eq!(f[0], acc.e, "the accumulator must satisfy its relation");
@@ -579,7 +701,12 @@ pub fn fold<C: PastaCurve>(
     let mut f_with_e = f.clone();
     f_with_e[0] = acc.e;
     let f_alpha = eval_poly(&f_with_e, alpha);
-    let beta_star: Vec<S<C>> = acc.beta.iter().zip(&delta).map(|(b, d)| *b + alpha * d).collect();
+    let beta_star: Vec<S<C>> = acc
+        .beta
+        .iter()
+        .zip(&delta)
+        .map(|(b, d)| *b + alpha * d)
+        .collect();
     let pb = relation.constraint_bits;
     let pow_lo = pow_vector(&beta_star[..pb]);
     let pow_hi = pow_vector(&beta_star[pb..]);
@@ -608,15 +735,27 @@ pub fn fold<C: PastaCurve>(
     let k = interpolate(&xs, &k_values);
     transcript.absorb_scalars(&k);
     let gamma = transcript.challenge_128();
-    let proof = FoldProof { f: f[1..].to_vec(), k };
-    let challenges = Challenges { beta_star, f_alpha, gamma };
+    let proof = FoldProof {
+        f: f[1..].to_vec(),
+        k,
+    };
+    let challenges = Challenges {
+        beta_star,
+        f_alpha,
+        gamma,
+    };
     let folded = fold_instance(acc, fresh, &proof, &challenges);
     let witness = Witness {
         columns: acc_witness
             .columns
             .iter()
             .zip(&fresh_witness.columns)
-            .map(|(a, b)| a.iter().zip(b).map(|(x, y)| fold_scalar(x, y, &gamma)).collect())
+            .map(|(a, b)| {
+                a.iter()
+                    .zip(b)
+                    .map(|(x, y)| fold_scalar(x, y, &gamma))
+                    .collect()
+            })
             .collect(),
         blinds: acc_witness
             .blinds
@@ -659,9 +798,22 @@ pub fn verify_fold<C: PastaCurve>(
     f.push(acc.e);
     f.extend_from_slice(&proof.f);
     let f_alpha = eval_poly(&f, alpha);
-    let beta_star = acc.beta.iter().zip(&delta).map(|(b, d)| *b + alpha * d).collect();
+    let beta_star = acc
+        .beta
+        .iter()
+        .zip(&delta)
+        .map(|(b, d)| *b + alpha * d)
+        .collect();
     transcript.absorb_scalars(&proof.k);
     let gamma = transcript.challenge_128();
-    Ok(fold_instance(acc, fresh, proof, &Challenges { beta_star, f_alpha, gamma }))
+    Ok(fold_instance(
+        acc,
+        fresh,
+        proof,
+        &Challenges {
+            beta_star,
+            f_alpha,
+            gamma,
+        },
+    ))
 }
-

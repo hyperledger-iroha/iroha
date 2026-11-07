@@ -2,10 +2,12 @@
 
 use super::super::{
     CastingBindingsRef, LaneStateRef, NativeContextArchive, OrdinaryWritesRef,
-    PreparedNativeContext, Projection, open_directory, pack_existing_records,
+    PreparedNativeContext, Projection, accept_existing, open_directory, publish_named_record,
+    publish_shared_piece, publish_stored, remove_matching_stage, verify_bytes,
 };
 use super::*;
-use crate::query::native_context_archive::PackMode;
+#[cfg(unix)]
+use crate::query::native_context_archive::{PackMode, pack_existing_records};
 use iroha_allocation::{AllocationBudget, AllocationRefusal, ChargedBufferError};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
@@ -17,6 +19,8 @@ use iroha_data_model::{
     },
 };
 use iroha_model_base::topology::{DataSpaceId, LaneId};
+#[cfg(unix)]
+use std::fs::File;
 use std::{
     fs,
     num::NonZeroUsize,
@@ -120,6 +124,33 @@ fn record(
 fn record_path(root: &Path, height: u64, staged: bool) -> PathBuf {
     root.join("native-contexts")
         .join(RecordName::new(height, carrier(height), staged).as_str())
+}
+fn write_record_fixture(
+    writer: &NativeContextArchive,
+    root: &Path,
+    height: u64,
+    staged: bool,
+    bytes: &[u8],
+) {
+    #[cfg(not(windows))]
+    {
+        let _ = writer;
+        fs::write(record_path(root, height, staged), bytes).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        let _ = root;
+        let ArchiveDirectory::Owner(owner) = &writer.directory else {
+            panic!("fixture retains the original write owner")
+        };
+        owner
+            .write_atomic(
+                RecordName::new(height, carrier(height), staged).as_str(),
+                bytes,
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .unwrap();
+    }
 }
 fn pieces(root: &Path) -> Vec<PathBuf> {
     let mut pieces = fs::read_dir(root.join("native-contexts"))
@@ -277,8 +308,8 @@ fn canonical_record_and_stage_from_an_earlier_release_are_accepted() {
     let writer = archive(dir.path(), AllocationBudget::new(1 << 20));
     let original = record(&writer, 2, &lanes(3), &delta(ANCHORS));
     let target = record_path(dir.path(), 2, false);
-    fs::write(&target, original.canonical_bytes()).unwrap();
-    fs::write(record_path(dir.path(), 2, true), original.canonical_bytes()).unwrap();
+    write_record_fixture(&writer, dir.path(), 2, false, original.canonical_bytes());
+    write_record_fixture(&writer, dir.path(), 2, true, original.canonical_bytes());
     writer.publish(&original).unwrap();
     assert_eq!(fs::read(&target).unwrap(), original.canonical_bytes());
     assert!(no_stages(dir.path()));
@@ -295,10 +326,10 @@ fn canonical_record_and_stage_from_an_earlier_release_are_accepted() {
     fs::remove_file(&target).unwrap();
     writer.publish(&original).unwrap();
     assert_eq!(fs::read(&target).unwrap()[..4], MAGIC);
-    let directory = File::open(dir.path().join("native-contexts")).unwrap();
+    let (_, directory) = open_directory(dir.path(), false).unwrap();
     verify_original(
         &directory,
-        File::open(&target).unwrap(),
+        &mut open_named_record(&directory, &RecordName::new(2, carrier(2), false)).unwrap(),
         original.canonical_bytes(),
         true,
     )
@@ -306,7 +337,7 @@ fn canonical_record_and_stage_from_an_earlier_release_are_accepted() {
     assert!(
         verify_original(
             &directory,
-            File::open(&target).unwrap(),
+            &mut open_named_record(&directory, &RecordName::new(2, carrier(2), false)).unwrap(),
             original.canonical_bytes(),
             false,
         )
@@ -387,8 +418,16 @@ fn refused_rebuild_keeps_the_selected_record_and_retries_exactly() {
     assert!(read.has_pinned_source());
     // The pinned descriptor survives replacement of the record's path.
     let target = record_path(dir.path(), 2, false);
-    fs::rename(&target, dir.path().join("held-original")).unwrap();
-    fs::write(&target, b"substituted").unwrap();
+    #[cfg(unix)]
+    {
+        fs::rename(&target, dir.path().join("held-original")).unwrap();
+        fs::write(&target, b"substituted").unwrap();
+    }
+    #[cfg(windows)]
+    {
+        assert!(fs::rename(&target, dir.path().join("held-original")).is_err());
+        assert!(fs::write(&target, b"substituted").is_err());
+    }
     drop(blocker);
     let bytes = loop {
         if let Some(bytes) = read.poll().unwrap() {
@@ -398,6 +437,7 @@ fn refused_rebuild_keeps_the_selected_record_and_retries_exactly() {
     assert_eq!(bytes.as_slice(), canonical);
 }
 
+#[cfg(unix)]
 #[test]
 fn existing_canonical_records_are_packed_offline_under_the_store_lock() {
     let dir = tempfile::tempdir().unwrap();
@@ -506,6 +546,7 @@ fn certified_chain_packs_records_once_the_open_anchor_chunk_fills_a_piece() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn offline_rewrite_clears_node_stages_and_its_own_interrupted_temporaries() {
     let dir = tempfile::tempdir().unwrap();
@@ -565,4 +606,119 @@ fn offline_rewrite_clears_node_stages_and_its_own_interrupted_temporaries() {
             original.canonical_bytes()
         );
     }
+}
+
+#[test]
+fn packed_stages_are_verified_before_private_removal() {
+    let dir = tempfile::tempdir().unwrap();
+    let writer = archive(dir.path(), AllocationBudget::new(1 << 20));
+    let original = record(&writer, 2, &lanes(3), &delta(ANCHORS));
+    writer.publish(&original).unwrap();
+    let target = record_path(dir.path(), 2, false);
+    let stored = fs::read(&target).unwrap();
+    assert_eq!(stored[..4], MAGIC);
+    write_record_fixture(&writer, dir.path(), 2, true, &stored);
+    writer.publish(&original).unwrap();
+    assert!(no_stages(dir.path()));
+    let mut changed = stored.clone();
+    let last = changed.len() - 1;
+    changed[last] ^= 1;
+    write_record_fixture(&writer, dir.path(), 2, true, &changed);
+    assert!(writer.publish(&original).is_err());
+    assert_eq!(fs::read(record_path(dir.path(), 2, true)).unwrap(), changed);
+    assert_eq!(fs::read(&target).unwrap(), stored);
+    assert_eq!(
+        writer.read_exact(2, carrier(2)).unwrap().as_slice(),
+        original.canonical_bytes()
+    );
+}
+
+#[test]
+fn stored_content_streams_exact_bytes_and_refuses_changed_or_trailing_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let writer = archive(dir.path(), AllocationBudget::new(1 << 20));
+    let original = record(&writer, 2, &lanes(3), &delta(ANCHORS));
+    let canonical = original.canonical_bytes();
+    let stored = Stored::new(canonical, Layout::of(canonical, 2, carrier(2).as_ref()));
+    let mut encoded = Vec::new();
+    stored.write_to(&mut encoded).unwrap();
+    assert_eq!(StoredContent::len(&stored), encoded.len());
+    stored.verify(&mut encoded.as_slice()).unwrap();
+    let mut changed = encoded.clone();
+    changed[0] ^= 1;
+    assert!(stored.verify(&mut changed.as_slice()).is_err());
+    encoded.push(0);
+    assert!(stored.verify(&mut encoded.as_slice()).is_err());
+    let mut inline = Vec::new();
+    canonical.write_to(&mut inline).unwrap();
+    assert_eq!(StoredContent::len(canonical), inline.len());
+    canonical.verify(&mut inline.as_slice()).unwrap();
+    inline.push(0);
+    assert!(canonical.verify(&mut inline.as_slice()).is_err());
+}
+
+#[test]
+fn packed_headers_and_publication_helpers_preserve_exact_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let writer = archive(dir.path(), AllocationBudget::new(1 << 20));
+    let original = record(&writer, 2, &lanes(3), &delta(ANCHORS));
+    writer.publish(&original).unwrap();
+    let target = RecordName::new(2, carrier(2), false);
+    let staged = RecordName::new(2, carrier(2), true);
+    let mut file = open_named_record(&writer.directory, &target).unwrap();
+    let header = read_header(&mut file).unwrap();
+    assert_eq!(header.length, original.canonical_bytes().len());
+    assert_eq!(
+        header.hash,
+        <[u8; 32]>::from(Hash::new(original.canonical_bytes()))
+    );
+    let stored_len = file.metadata().unwrap().len();
+    let mut offset = HEADER_LEN as u64;
+    let mut length = 0;
+    for _ in 0..header.pieces {
+        let (piece, size) = read_piece(&mut file, offset, stored_len).unwrap();
+        offset = piece.end(offset + size);
+        length += piece.length;
+    }
+    assert_eq!(offset, stored_len);
+    assert_eq!(length, header.length);
+    assert!(read_piece(&mut file, stored_len, stored_len).is_err());
+    accept_existing(
+        &writer.directory,
+        file,
+        &staged,
+        original.canonical_bytes(),
+        true,
+    )
+    .unwrap();
+    // The direct stored publisher must also preserve an already packed canonical record.
+    let stored = Stored::new(
+        original.canonical_bytes(),
+        Layout::of(original.canonical_bytes(), 2, carrier(2).as_ref()),
+    );
+    publish_stored(
+        &writer.directory,
+        &target,
+        &staged,
+        &stored,
+        original.canonical_bytes(),
+    )
+    .unwrap();
+    write_record_fixture(&writer, dir.path(), 2, true, original.canonical_bytes());
+    remove_matching_stage(&writer.directory, &staged, original.canonical_bytes(), true).unwrap();
+    assert!(no_stages(dir.path()));
+
+    let shared = b"private shared bytes";
+    let shared_target = piece_name(shared, false);
+    let shared_stage = piece_name(shared, true);
+    publish_named_record(&writer.directory, &shared_target, &shared_stage, shared).unwrap();
+    publish_shared_piece(&writer.directory, shared).unwrap();
+    assert!(
+        publish_named_record(&writer.directory, &shared_target, &shared_stage, b"changed").is_err()
+    );
+    verify_bytes(
+        open_named_record(&writer.directory, &shared_target).unwrap(),
+        shared,
+    )
+    .unwrap();
 }

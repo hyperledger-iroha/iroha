@@ -8,7 +8,10 @@
 //! injective on both Pasta curves (`(0, 0)` is the identity and is not on either
 //! curve). Scalars are absorbed as field elements.
 
-use iroha_pasta::{PastaAffine, PastaField, poseidon::{PoseidonField, Sponge}};
+use iroha_pasta::{
+    PastaAffine, PastaField,
+    poseidon::{PoseidonField, Sponge},
+};
 
 /// Role tag of a fresh instance's round-one transcript (`theta`, `r`).
 pub const TAG_INSTANCE: u64 = u64::from_le_bytes(*b"kgwfins1");

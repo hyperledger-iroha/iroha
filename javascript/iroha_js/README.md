@@ -222,10 +222,17 @@ resolution; this receipt does not claim an archive of their source bytes.
 
 Loading a debug artifact from a dirty source tree verifies its recorded source
 seal in a separate process before loading native code. This verifier has a
-15-second timeout and does not inherit `NODE_OPTIONS`. In Electron, it runs
+60-second timeout and does not inherit `NODE_OPTIONS`. In Electron, it runs
 with `ELECTRON_RUN_AS_NODE=1` so verification cannot launch another application
 or renderer. Verification failure or timeout prevents the native binding from
 loading.
+
+On macOS, debug source verification and the debug native export/ABI/catalog
+probe launch their own Node processes through the system application scheduling
+policy. The native probe allows thirty minutes for `debug` artifacts and two
+minutes for `release` and `deploy` artifacts. These bounded probes retain their
+source, checksum, ABI and catalog checks; no scheduling or timeout environment
+override is provided.
 
 Native publication also assumes that the configured Cargo target is on a
 single-host local, hard-link-capable filesystem and that cooperating builders

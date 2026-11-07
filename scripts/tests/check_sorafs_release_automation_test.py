@@ -1502,7 +1502,7 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
             ".github/workflows/sorafs-fixtures-nightly.yml",
             "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
         ),
-        (".github/workflows/sorafs-orchestrator-sdk.yml", "runs-on: macos-14"),
+        (".github/workflows/sorafs-orchestrator-sdk.yml", "runs-on: macos-15"),
         (".github/workflows/sorafs-orchestrator-sdk.yml", "bash ci/sdk_sorafs_orchestrator.sh"),
         (".github/workflows/sorafs-orchestrator-sdk.yml", "  mobile-parity:"),
         (".github/workflows/sorafs-orchestrator-sdk.yml", "  csharp-parity:"),
@@ -1659,7 +1659,7 @@ def test_validate_release_automation_requires_both_scans_to_pin_grype(
         (
             "          - os: macos-15-intel\n"
             "            target: x86_64-apple-darwin",
-            "          - os: macos-14\n"
+            "          - os: macos-15\n"
             "            target: x86_64-apple-darwin",
         ),
         (
@@ -1689,7 +1689,7 @@ def test_validate_release_automation_rejects_missing_mandatory_target(
     workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
     source = workflow.read_text(encoding="utf-8")
     entry = (
-        "          - os: macos-14\n"
+        "          - os: macos-15\n"
         "            target: aarch64-apple-darwin\n"
         '            binary_suffix: ""\n'
     )

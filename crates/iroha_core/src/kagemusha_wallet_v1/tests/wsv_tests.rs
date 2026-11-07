@@ -2037,7 +2037,12 @@ impl Transaction for InstalledWsv<'_, '_, '_> {
     fn wallet(&self, scheme: &Digest, wallet: &Digest) -> Result<Option<WalletRecord>> {
         self.0.wallet(scheme, wallet)
     }
-    fn issuance(&self, scheme: &Digest, wallet: &Digest, request: &Digest) -> Result<Option<Issuance>> {
+    fn issuance(
+        &self,
+        scheme: &Digest,
+        wallet: &Digest,
+        request: &Digest,
+    ) -> Result<Option<Issuance>> {
         self.0.issuance(scheme, wallet, request)
     }
     fn payout(
@@ -2047,7 +2052,11 @@ impl Transaction for InstalledWsv<'_, '_, '_> {
     ) -> Result<Option<KagemushaWalletPayoutRecordV1>> {
         self.0.payout(scheme, key)
     }
-    fn certificate(&self, scheme: &Digest, digest: &Digest) -> Result<KagemushaWalletSignerCertificateV1> {
+    fn certificate(
+        &self,
+        scheme: &Digest,
+        digest: &Digest,
+    ) -> Result<KagemushaWalletSignerCertificateV1> {
         self.0.certificate(scheme, digest)
     }
     fn fee_inputs(&self, claim: &KagemushaWalletFeeClaimV1) -> Result<FeeInputs> {
@@ -2140,29 +2149,55 @@ fn suffix_unload_stages_route_stage_and_pay_once_through_the_real_reserve() {
     }
     let relayer = memory.authority.clone();
     transact(&mut state, 3, |tx| {
-        suffix::begin(&mut installed(tx, &relayer)?, &double, &suffix.stage(0), &suffix.header, &suffix.anchor)
+        suffix::begin(
+            &mut installed(tx, &relayer)?,
+            &double,
+            &suffix.stage(0),
+            &suffix.header,
+            &suffix.anchor,
+        )
     })
     .unwrap();
     // Appends commit in reverse order, each in its own block.
     transact(&mut state, 4, |tx| {
-        suffix::append(&mut installed(tx, &relayer)?, &double, &suffix.stage(2), &suffix.chunks[1])
+        suffix::append(
+            &mut installed(tx, &relayer)?,
+            &double,
+            &suffix.stage(2),
+            &suffix.chunks[1],
+        )
     })
     .unwrap();
     // A Finalize before every Append is refused and leaves the reserve untouched.
     assert!(matches!(
         transact(&mut state, 5, |tx| {
-            suffix::finalize(&mut installed(tx, &relayer)?, &double, &suffix.stage(3), &suffix.unload)
+            suffix::finalize(
+                &mut installed(tx, &relayer)?,
+                &double,
+                &suffix.stage(3),
+                &suffix.unload,
+            )
         }),
         Err(Error::Unavailable)
     ));
     transact(&mut state, 5, |tx| {
-        suffix::append(&mut installed(tx, &relayer)?, &double, &suffix.stage(1), &suffix.chunks[0])
+        suffix::append(
+            &mut installed(tx, &relayer)?,
+            &double,
+            &suffix.stage(1),
+            &suffix.chunks[0],
+        )
     })
     .unwrap();
     let reserve_before = balance(&state, &memory, &memory.registration.reserve);
     let account_before = balance(&state, &memory, &suffix.account);
     let payout = transact(&mut state, 6, |tx| {
-        suffix::finalize(&mut installed(tx, &relayer)?, &double, &suffix.stage(3), &suffix.unload)
+        suffix::finalize(
+            &mut installed(tx, &relayer)?,
+            &double,
+            &suffix.stage(3),
+            &suffix.unload,
+        )
     })
     .unwrap();
     let scale = memory.registration.asset.scale;
@@ -2170,7 +2205,9 @@ fn suffix_unload_stages_route_stage_and_pay_once_through_the_real_reserve() {
         |value: u128| Quantity::from_canonical_numeric(Numeric::new(value, scale)).unwrap();
     assert_eq!(
         balance(&state, &memory, &memory.registration.reserve),
-        reserve_before.checked_sub(&quantity(suffix.terms.amount)).unwrap()
+        reserve_before
+            .checked_sub(&quantity(suffix.terms.amount))
+            .unwrap()
     );
     assert_eq!(
         balance(&state, &memory, &suffix.account),
@@ -2185,7 +2222,12 @@ fn suffix_unload_stages_route_stage_and_pay_once_through_the_real_reserve() {
     // An exact retry in a later transaction returns the original payout and moves nothing.
     assert_eq!(
         transact(&mut state, 7, |tx| {
-            suffix::finalize(&mut installed(tx, &relayer)?, &double, &suffix.stage(3), &suffix.unload)
+            suffix::finalize(
+                &mut installed(tx, &relayer)?,
+                &double,
+                &suffix.stage(3),
+                &suffix.unload,
+            )
         })
         .unwrap(),
         payout

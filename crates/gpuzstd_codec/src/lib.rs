@@ -2,13 +2,14 @@
 //!
 //! Backend crates own device execution and their separate plugin C exports. This
 //! crate owns only the shared sequence layout, entropy coding and frame format.
+//! The `test` feature exposes CPU references for backend hardware parity tests.
 
 pub mod bitstream;
 pub mod fse;
 pub mod huffman;
 pub mod zstd_frame;
 
-#[cfg(feature = "test-support")]
+#[cfg(feature = "test")]
 pub mod test_support;
 
 /// Deterministic Zstd sequence emitted by GPU match-finding kernels.

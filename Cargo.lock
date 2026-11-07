@@ -12332,6 +12332,7 @@ dependencies = [
  "blake3",
  "ed25519-dalek",
  "eyre",
+ "fastpq_isi",
  "ff 0.14.0",
  "hex",
  "integration_tests",

@@ -52,10 +52,12 @@ impl<F: Copy> ExpressionEvaluator<F> for Compiler<F> {
         self.ops.push(Op::Selector(index(selector.index())));
     }
     fn fixed(&mut self, query: FixedQuery) {
-        self.ops.push(Op::Fixed(index(query.column_index), query.rotation.0));
+        self.ops
+            .push(Op::Fixed(index(query.column_index), query.rotation.0));
     }
     fn advice(&mut self, query: AdviceQuery) {
-        self.ops.push(Op::Advice(index(query.column_index), query.rotation.0));
+        self.ops
+            .push(Op::Advice(index(query.column_index), query.rotation.0));
     }
     fn instance(&mut self, query: InstanceQuery) {
         self.ops
@@ -109,10 +111,13 @@ fn product<F: Clone>(parts: Vec<Expression<F>>, one: F) -> Expression<F> {
 /// that read only fixed columns, selectors and constants) and the remaining body,
 /// so that `expression = guard * body` and rows where the guard vanishes need no
 /// witness evaluation.
-pub(crate) fn split_guard<F: PastaField>(expression: &Expression<F>) -> (Program<F>, Program<F>, bool) {
+pub(crate) fn split_guard<F: PastaField>(
+    expression: &Expression<F>,
+) -> (Program<F>, Program<F>, bool) {
     let mut parts = Vec::new();
     factors(expression, &mut parts);
-    let (guard, body): (Vec<_>, Vec<_>) = parts.into_iter().partition(|part| folded_degree(part) == 0);
+    let (guard, body): (Vec<_>, Vec<_>) =
+        parts.into_iter().partition(|part| folded_degree(part) == 0);
     let trivial = guard.is_empty();
     (
         Program::compile(&product(guard, F::ONE)),
@@ -235,7 +240,11 @@ impl<F: PastaField> Program<F> {
             match op {
                 Op::Const(value) => stack.push([*value; MAX_POINTS]),
                 Op::Selector(s) => {
-                    let v = if tables.selectors[*s as usize][row] { F::ONE } else { F::ZERO };
+                    let v = if tables.selectors[*s as usize][row] {
+                        F::ONE
+                    } else {
+                        F::ZERO
+                    };
                     stack.push([v; MAX_POINTS]);
                 }
                 Op::Fixed(c, r) => {
@@ -243,7 +252,10 @@ impl<F: PastaField> Program<F> {
                 }
                 Op::Advice(c, r) => {
                     let cell = at(row, *r, tables.n);
-                    stack.push(line(acc.advice[*c as usize][cell], new.advice[*c as usize][cell]));
+                    stack.push(line(
+                        acc.advice[*c as usize][cell],
+                        new.advice[*c as usize][cell],
+                    ));
                 }
                 Op::Instance(c, r) => {
                     let cell = at(row, *r, tables.n);

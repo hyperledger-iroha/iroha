@@ -68,7 +68,11 @@ impl<C: PastaCurve> CommitKey<C> {
     /// # Errors
     /// [`Error::Shape`] for a column longer than the basis; [`Error::Msm`] when the
     /// MSM fails.
-    pub fn commit(&self, column: &[C::ScalarExt], blind: &C::ScalarExt) -> Result<C::AffineExt, Error> {
+    pub fn commit(
+        &self,
+        column: &[C::ScalarExt],
+        blind: &C::ScalarExt,
+    ) -> Result<C::AffineExt, Error> {
         if column.len() > self.bases.len() {
             return Err(Error::Shape("column longer than the commitment basis"));
         }
