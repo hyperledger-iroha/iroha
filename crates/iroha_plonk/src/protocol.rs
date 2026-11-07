@@ -536,13 +536,29 @@ pub fn instance_commitment_cancellable<C: PastaCurve>(
 /// Returns `None` for a malformed expression: an index out of range, a
 /// non-canonical constant, a stack underflow, a stack deeper than
 /// [`MAX_EXPRESSION_STACK`] or a result other than exactly one value.
-/// Validated descriptors never produce `None`.
+/// Validated descriptors without instance cells never produce `None`; an
+/// instance cell needs [`evaluate_expression_with_instances`].
 #[must_use]
 pub fn evaluate_expression<F: PastaField>(
     expression: &[ExprNodeV1],
     fixed: &[F],
     advice: &[F],
     instance: &[F],
+) -> Option<F> {
+    evaluate_expression_with_instances(expression, fixed, advice, instance, &[])
+}
+
+/// [`evaluate_expression`] that also reads instance cells: `instances` are the
+/// declared instance columns (Direct mode), and
+/// [`ExprNodeV1::InstanceCell`]`(column, row)` evaluates to
+/// `instances[column][row]`.
+#[must_use]
+pub fn evaluate_expression_with_instances<F: PastaField>(
+    expression: &[ExprNodeV1],
+    fixed: &[F],
+    advice: &[F],
+    instance: &[F],
+    instances: &[Vec<F>],
 ) -> Option<F> {
     let mut stack: Vec<F> = Vec::new();
     for node in expression {
@@ -552,6 +568,10 @@ pub fn evaluate_expression<F: PastaField>(
             ExprNodeV1::Advice(index) => stack.push(*advice.get(usize::try_from(*index).ok()?)?),
             ExprNodeV1::Instance(index) => {
                 stack.push(*instance.get(usize::try_from(*index).ok()?)?);
+            }
+            ExprNodeV1::InstanceCell(column, row) => {
+                let column = instances.get(usize::try_from(*column).ok()?)?;
+                stack.push(*column.get(usize::try_from(*row).ok()?)?);
             }
             ExprNodeV1::Negated => {
                 let value = stack.pop()?;

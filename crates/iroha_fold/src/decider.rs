@@ -299,6 +299,7 @@ impl Remap<'_> {
             Expression::Fixed(query) => cells.query_fixed(self.fixed[query.column_index], query.rotation),
             Expression::Advice(query) => cells.query_advice(self.witness[query.column_index], query.rotation),
             Expression::Instance(query) => cells.query_instance(self.instances[query.column_index], query.rotation),
+            Expression::InstanceCell(cell) => Expression::instance_cell(self.instances[cell.column_index], cell.row),
             Expression::Negated(inner) => -self.expression(cells, inner),
             Expression::Sum(left, right) => self.expression(cells, left) + self.expression(cells, right),
             Expression::Product(left, right) => self.expression(cells, left) * self.expression(cells, right),

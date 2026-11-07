@@ -27,7 +27,7 @@ pub use descriptor::{
 };
 pub use expression::{
     Advice, AdviceQuery, Any, Column, ColumnType, Expression, ExpressionEvaluator, Fixed,
-    FixedQuery, Instance, InstanceQuery, Rotation, Selector, TableColumn,
+    FixedQuery, Instance, InstanceCellQuery, InstanceQuery, Rotation, Selector, TableColumn,
 };
 pub use gate::{Constraint, Constraints, Gate, VirtualCell};
 pub use lookup::LookupArgument;

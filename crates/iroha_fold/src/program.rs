@@ -9,7 +9,8 @@
 
 use iroha_pasta::PastaField;
 use iroha_plonk::cs::{
-    AdviceQuery, Expression, ExpressionEvaluator, FixedQuery, InstanceQuery, Selector,
+    AdviceQuery, Expression, ExpressionEvaluator, FixedQuery, InstanceCellQuery, InstanceQuery,
+    Selector,
 };
 
 /// Most line points one walk evaluates; the supported folded degree is
@@ -23,6 +24,8 @@ pub(crate) enum Op<F> {
     Fixed(u32, i32),
     Advice(u32, i32),
     Instance(u32, i32),
+    /// An instance cell: column and fixed row, the same on every row.
+    InstanceCell(u32, u32),
     Neg,
     Add,
     Mul,
@@ -61,6 +64,10 @@ impl<F: Copy> ExpressionEvaluator<F> for Compiler<F> {
         self.ops
             .push(Op::Instance(index(query.column_index), query.rotation.0));
     }
+    fn instance_cell(&mut self, query: InstanceCellQuery) {
+        self.ops
+            .push(Op::InstanceCell(index(query.column_index), index(query.row)));
+    }
     fn negated(&mut self, (): ()) {
         self.ops.push(Op::Neg);
     }
@@ -75,13 +82,14 @@ impl<F: Copy> ExpressionEvaluator<F> for Compiler<F> {
     }
 }
 
-/// Degree in the folded variables: advice and instance queries count one;
-/// fixed columns, selectors and constants are constants of the relation.
+/// Degree in the folded variables: advice and instance queries and instance
+/// cells count one (folded public inputs are folded variables); fixed columns,
+/// selectors and constants are constants of the relation.
 #[must_use]
 pub fn folded_degree<F>(expression: &Expression<F>) -> usize {
     match expression {
         Expression::Constant(_) | Expression::Selector(_) | Expression::Fixed(_) => 0,
-        Expression::Advice(_) | Expression::Instance(_) => 1,
+        Expression::Advice(_) | Expression::Instance(_) | Expression::InstanceCell(_) => 1,
         Expression::Negated(inner) | Expression::Scaled(inner, _) => folded_degree(inner),
         Expression::Sum(left, right) => folded_degree(left).max(folded_degree(right)),
         Expression::Product(left, right) => folded_degree(left) + folded_degree(right),
@@ -188,6 +196,9 @@ impl<F: PastaField> Program<F> {
                 Op::Instance(c, r) => {
                     stack.push(instance_cell(point.instance, *c, at(row, *r, tables.n)));
                 }
+                Op::InstanceCell(c, cell) => {
+                    stack.push(instance_cell(point.instance, *c, *cell as usize));
+                }
                 Op::Neg => {
                     let v = stack.pop().expect("operand");
                     stack.push(-v);
@@ -247,6 +258,13 @@ impl<F: PastaField> Program<F> {
                 }
                 Op::Instance(c, r) => {
                     let cell = at(row, *r, tables.n);
+                    stack.push(line(
+                        instance_cell(acc.instance, *c, cell),
+                        instance_cell(new.instance, *c, cell),
+                    ));
+                }
+                Op::InstanceCell(c, cell) => {
+                    let cell = *cell as usize;
                     stack.push(line(
                         instance_cell(acc.instance, *c, cell),
                         instance_cell(new.instance, *c, cell),

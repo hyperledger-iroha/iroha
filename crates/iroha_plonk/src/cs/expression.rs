@@ -406,6 +406,19 @@ pub struct InstanceQuery {
     pub rotation: Rotation,
 }
 
+/// One instance cell, the same value on every row: instance column
+/// `column_index` at row `row` of its declared instances. It is a public
+/// constant of the proof, not a column query: it adds no opening, and the
+/// prover and every verifier read it from the instances. Valid only for
+/// directly absorbed instances (`InstanceModeV1::Direct`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct InstanceCellQuery {
+    /// The instance column.
+    pub column_index: usize,
+    /// The row among the column's declared instances.
+    pub row: usize,
+}
+
 /// A polynomial over column queries, the halo2 `Expression` without
 /// challenges.
 ///
@@ -435,6 +448,8 @@ pub enum Expression<F> {
     Product(Box<Expression<F>>, Box<Expression<F>>),
     /// An expression multiplied by a constant.
     Scaled(Box<Expression<F>>, F),
+    /// One instance cell, constant over the rows ([`InstanceCellQuery`]).
+    InstanceCell(InstanceCellQuery),
 }
 
 /// A fold over an [`Expression`], evaluated bottom-up with the left operand
@@ -453,6 +468,8 @@ pub trait ExpressionEvaluator<F> {
     fn advice(&mut self, query: AdviceQuery) -> Self::Output;
     /// Evaluates an instance query.
     fn instance(&mut self, query: InstanceQuery) -> Self::Output;
+    /// Evaluates an instance cell.
+    fn instance_cell(&mut self, query: InstanceCellQuery) -> Self::Output;
     /// Negates a value.
     fn negated(&mut self, value: Self::Output) -> Self::Output;
     /// Adds two values.
@@ -481,6 +498,7 @@ impl<F> Expression<F> {
             Self::Fixed(query) => evaluator.fixed(*query),
             Self::Advice(query) => evaluator.advice(*query),
             Self::Instance(query) => evaluator.instance(*query),
+            Self::InstanceCell(query) => evaluator.instance_cell(*query),
             Self::Negated(inner) => {
                 let value = inner.evaluate(evaluator);
                 evaluator.negated(value)
@@ -502,12 +520,12 @@ impl<F> Expression<F> {
         }
     }
 
-    /// The degree: 0 for constants, 1 for queries and selectors, the sum over
-    /// a product and the maximum over a sum.
+    /// The degree: 0 for constants and instance cells, 1 for queries and
+    /// selectors, the sum over a product and the maximum over a sum.
     #[must_use]
     pub fn degree(&self) -> usize {
         match self {
-            Self::Constant(_) => 0,
+            Self::Constant(_) | Self::InstanceCell(_) => 0,
             Self::Selector(_) | Self::Fixed(_) | Self::Advice(_) | Self::Instance(_) => 1,
             Self::Negated(inner) | Self::Scaled(inner, _) => inner.degree(),
             Self::Sum(left, right) => left.degree().max(right.degree()),
@@ -523,7 +541,8 @@ impl<F> Expression<F> {
             | Self::Selector(_)
             | Self::Fixed(_)
             | Self::Advice(_)
-            | Self::Instance(_) => 1,
+            | Self::Instance(_)
+            | Self::InstanceCell(_) => 1,
             Self::Negated(inner) | Self::Scaled(inner, _) => inner.node_count().saturating_add(1),
             Self::Sum(left, right) | Self::Product(left, right) => left
                 .node_count()
@@ -537,7 +556,7 @@ impl<F> Expression<F> {
     /// queries of an expression.
     pub fn for_each_query(&self, visit: &mut impl FnMut(QueryRef)) {
         match self {
-            Self::Constant(_) | Self::Selector(_) => {}
+            Self::Constant(_) | Self::Selector(_) | Self::InstanceCell(_) => {}
             Self::Fixed(query) => visit(QueryRef {
                 column: Column::new(query.column_index, Any::Fixed),
                 rotation: query.rotation,
@@ -562,7 +581,11 @@ impl<F> Expression<F> {
     pub fn for_each_selector(&self, visit: &mut impl FnMut(Selector)) {
         match self {
             Self::Selector(selector) => visit(*selector),
-            Self::Constant(_) | Self::Fixed(_) | Self::Advice(_) | Self::Instance(_) => {}
+            Self::Constant(_)
+            | Self::Fixed(_)
+            | Self::Advice(_)
+            | Self::Instance(_)
+            | Self::InstanceCell(_) => {}
             Self::Negated(inner) | Self::Scaled(inner, _) => inner.for_each_selector(visit),
             Self::Sum(left, right) | Self::Product(left, right) => {
                 left.for_each_selector(visit);
@@ -576,7 +599,11 @@ impl<F> Expression<F> {
     pub fn contains_simple_selector(&self) -> bool {
         match self {
             Self::Selector(selector) => selector.is_simple(),
-            Self::Constant(_) | Self::Fixed(_) | Self::Advice(_) | Self::Instance(_) => false,
+            Self::Constant(_)
+            | Self::Fixed(_)
+            | Self::Advice(_)
+            | Self::Instance(_)
+            | Self::InstanceCell(_) => false,
             Self::Negated(inner) | Self::Scaled(inner, _) => inner.contains_simple_selector(),
             Self::Sum(left, right) | Self::Product(left, right) => {
                 left.contains_simple_selector() || right.contains_simple_selector()
@@ -598,7 +625,11 @@ impl<F> Expression<F> {
     pub fn simple_selector(&self) -> Result<Option<Selector>, SimpleSelectorMisuse> {
         match self {
             Self::Selector(selector) => Ok(selector.is_simple().then_some(*selector)),
-            Self::Constant(_) | Self::Fixed(_) | Self::Advice(_) | Self::Instance(_) => Ok(None),
+            Self::Constant(_)
+            | Self::Fixed(_)
+            | Self::Advice(_)
+            | Self::Instance(_)
+            | Self::InstanceCell(_) => Ok(None),
             Self::Negated(inner) | Self::Scaled(inner, _) => inner.simple_selector(),
             Self::Sum(left, right) => {
                 if left.contains_simple_selector() || right.contains_simple_selector() {
@@ -622,6 +653,15 @@ impl<F> Expression<F> {
         Self: Clone,
     {
         Self::Product(Box::new(self.clone()), Box::new(self))
+    }
+
+    /// The instance cell at `row` of `column` ([`InstanceCellQuery`]).
+    #[must_use]
+    pub fn instance_cell(column: Column<Instance>, row: usize) -> Self {
+        Self::InstanceCell(InstanceCellQuery {
+            column_index: column.index(),
+            row,
+        })
     }
 }
 
@@ -649,6 +689,7 @@ impl<F: Clone> Expression<F> {
             Self::Fixed(query) => Self::Fixed(*query),
             Self::Advice(query) => Self::Advice(*query),
             Self::Instance(query) => Self::Instance(*query),
+            Self::InstanceCell(query) => Self::InstanceCell(*query),
             Self::Negated(inner) => Self::Negated(Box::new(inner.replace_selectors(replacements)?)),
             Self::Sum(left, right) => Self::Sum(
                 Box::new(left.replace_selectors(replacements)?),
@@ -965,6 +1006,10 @@ mod tests {
         fn instance(&mut self, _: InstanceQuery) -> Fp {
             self.0[4] += 1;
             Fp::from(5)
+        }
+        fn instance_cell(&mut self, _: InstanceCellQuery) -> Fp {
+            self.0[4] += 1;
+            Fp::from(7)
         }
         fn negated(&mut self, value: Fp) -> Fp {
             self.0[5] += 1;

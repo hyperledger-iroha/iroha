@@ -277,6 +277,11 @@ pub enum ExprNodeV1 {
     Product,
     /// Multiplies the top of the stack by a canonical constant.
     Scaled([u8; 32]),
+    /// The instance cell `(column, row)`: one public value on every row, read
+    /// from the instances rather than opened. Valid only with
+    /// [`InstanceModeV1::Direct`] and `row` below the column's declared length.
+    /// Appended last, so descriptors without it keep their bytes.
+    InstanceCell(u32, u32),
 }
 
 /// An expression in postfix order.
@@ -827,6 +832,10 @@ fn push_postfix<F: PastaField>(
             Column::new(query.column_index, Any::Instance),
             query.rotation,
         )?)),
+        Expression::InstanceCell(cell) => out.push(ExprNodeV1::InstanceCell(
+            bounded_u32(cell.column_index)?,
+            bounded_u32(cell.row)?,
+        )),
         Expression::Negated(inner) => {
             push_postfix(inner, cs, out)?;
             out.push(ExprNodeV1::Negated);
@@ -859,11 +868,15 @@ fn postfix<F: PastaField>(
     Ok(out)
 }
 
-/// Query-table sizes and the scalar modulus an expression is checked against.
+/// Query-table sizes, the declared instance lengths (when instances are
+/// absorbed directly) and the scalar modulus an expression is checked against.
 struct ExpressionContext<'a> {
     fixed: usize,
     advice: usize,
     instance: usize,
+    /// The declared instance lengths in Direct mode; `None` in Committed mode,
+    /// where no instance cell is valid.
+    direct_instance_lengths: Option<&'a [u32]>,
     modulus: &'a [u8; 32],
 }
 
@@ -894,6 +907,15 @@ fn expression_degree(
                     return Err(DescriptorRule::Expression);
                 }
                 stack.push(1);
+            }
+            ExprNodeV1::InstanceCell(column, row) => {
+                let length = context
+                    .direct_instance_lengths
+                    .and_then(|lengths| lengths.get(usize::try_from(*column).ok()?));
+                if length.is_none_or(|length| row >= length) {
+                    return Err(DescriptorRule::Expression);
+                }
+                stack.push(0);
             }
             ExprNodeV1::Negated => {
                 if stack.is_empty() {
@@ -1269,6 +1291,8 @@ impl CircuitDescriptorV1 {
             fixed: self.fixed_queries.len(),
             advice: self.advice_queries.len(),
             instance: self.instance_queries.len(),
+            direct_instance_lengths: (self.instance_mode == InstanceModeV1::Direct)
+                .then_some(self.instance_lengths.as_slice()),
             modulus: &self.scalar_modulus,
         };
         let mut computed = MIN_DEGREE;
@@ -2075,6 +2099,7 @@ mod tests {
             fixed: 1,
             advice: 1,
             instance: 1,
+            direct_instance_lengths: Some(&[2]),
             modulus: &modulus,
         };
         let one = Fp::ONE.to_repr();
@@ -2100,6 +2125,35 @@ mod tests {
         );
         assert_eq!(
             expression_degree(&[ExprNodeV1::Instance(1)], &context),
+            Err(DescriptorRule::Expression)
+        );
+        // An instance cell is a degree-0 public value inside the declared
+        // Direct instances, and nothing else.
+        let cell = [
+            ExprNodeV1::Advice(0),
+            ExprNodeV1::InstanceCell(0, 1),
+            ExprNodeV1::Product,
+        ];
+        assert_eq!(expression_degree(&cell, &context), Ok(1));
+        assert_eq!(
+            expression_degree(&[ExprNodeV1::InstanceCell(0, 1)], &context),
+            Ok(0)
+        );
+        for outside in [
+            ExprNodeV1::InstanceCell(0, 2),
+            ExprNodeV1::InstanceCell(1, 0),
+        ] {
+            assert_eq!(
+                expression_degree(&[outside], &context),
+                Err(DescriptorRule::Expression)
+            );
+        }
+        let committed = ExpressionContext {
+            direct_instance_lengths: None,
+            ..context
+        };
+        assert_eq!(
+            expression_degree(&[ExprNodeV1::InstanceCell(0, 0)], &committed),
             Err(DescriptorRule::Expression)
         );
         let deep = vec![ExprNodeV1::Constant(one); MAX_EXPRESSION_STACK + 1];

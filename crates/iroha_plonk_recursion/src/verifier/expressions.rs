@@ -9,6 +9,19 @@ use iroha_plonk::{
     protocol::{ConstraintTerm, LookupAt, LookupConstraint, PermutationAt},
 };
 
+/// The imported value of instance cell `(column, row)`.
+fn instance_cell<C: PastaCurve>(
+    instance_values: &[Vec<Scalar<C>>],
+    column: u32,
+    row: u32,
+) -> Result<Scalar<C>, Error> {
+    instance_values
+        .get(column as usize)
+        .and_then(|values| values.get(row as usize))
+        .cloned()
+        .ok_or(Error::Synthesis)
+}
+
 // Only unsigned products are deferred. Negation materializes its operand,
 // then uses the ordinary bounded subtraction path; no signed CRT admission
 // or distribution across a product of sums is inferred.
@@ -20,6 +33,8 @@ enum PendingTerm<C: PastaCurve> {
 struct Evaluations<'a, C: PastaCurve> {
     read: &'a Read<C>,
     instances: &'a [Scalar<C>],
+    /// The imported instance values, read by instance cells.
+    instance_values: &'a [Vec<Scalar<C>>],
     first: Scalar<C>,
     last: Scalar<C>,
     active: Scalar<C>,
@@ -36,9 +51,10 @@ impl<C: PastaCurve> VerifierChip<C> {
         expression: &ExprV1,
         read: &Read<C>,
         instances: &[Scalar<C>],
+        instance_values: &[Vec<Scalar<C>>],
     ) -> Result<Scalar<C>, Error> {
         if self.arithmetic.ff.config().is_none() {
-            return self.expression_batched(region, expression, read, instances);
+            return self.expression_batched(region, expression, read, instances, instance_values);
         }
         let mut stack = Vec::new();
         for node in expression {
@@ -57,6 +73,9 @@ impl<C: PastaCurve> VerifierChip<C> {
                     .get(*index as usize)
                     .ok_or(Error::Synthesis)?
                     .clone(),
+                ExprNodeV1::InstanceCell(column, row) => {
+                    instance_cell::<C>(instance_values, *column, *row)?
+                }
                 ExprNodeV1::Negated => {
                     let value = stack.pop().ok_or(Error::Synthesis)?;
                     self.neg(region, &value)?
@@ -120,6 +139,7 @@ impl<C: PastaCurve> VerifierChip<C> {
         expression: &ExprV1,
         read: &Read<C>,
         instances: &[Scalar<C>],
+        instance_values: &[Vec<Scalar<C>>],
     ) -> Result<Scalar<C>, Error> {
         let mut stack: Vec<Vec<PendingTerm<C>>> = Vec::new();
         for node in expression {
@@ -140,6 +160,13 @@ impl<C: PastaCurve> VerifierChip<C> {
                         .ok_or(Error::Synthesis)?
                         .clone(),
                 )],
+                ExprNodeV1::InstanceCell(column, row) => {
+                    vec![PendingTerm::Value(instance_cell::<C>(
+                        instance_values,
+                        *column,
+                        *row,
+                    )?)]
+                }
                 ExprNodeV1::Sum => {
                     let right = stack.pop().ok_or(Error::Synthesis)?;
                     let mut left = stack.pop().ok_or(Error::Synthesis)?;
@@ -184,7 +211,13 @@ impl<C: PastaCurve> VerifierChip<C> {
     ) -> Result<Scalar<C>, Error> {
         let mut out = self.constant(region, C::ScalarExt::ZERO)?;
         for expression in expressions {
-            let value = self.expression(region, expression, evals.read, evals.instances)?;
+            let value = self.expression(
+                region,
+                expression,
+                evals.read,
+                evals.instances,
+                evals.instance_values,
+            )?;
             out = self.mul(region, &out, &evals.theta)?;
             out = self.add(region, &out, &value)?;
         }
@@ -221,7 +254,13 @@ impl<C: PastaCurve> VerifierChip<C> {
                     .flatten()
                     .nth(polynomial)
                     .ok_or(Error::Synthesis)?;
-                self.expression(region, expression, evals.read, evals.instances)
+                self.expression(
+                    region,
+                    expression,
+                    evals.read,
+                    evals.instances,
+                    evals.instance_values,
+                )
             }
             ConstraintTerm::PermutationFirst => {
                 let difference = self.sub(region, &one, &perm(0, PermutationAt::Current)?)?;
@@ -446,6 +485,7 @@ impl<C: PastaCurve> VerifierChip<C> {
         let evals = Evaluations {
             read,
             instances: &instances,
+            instance_values,
             first,
             last,
             active,

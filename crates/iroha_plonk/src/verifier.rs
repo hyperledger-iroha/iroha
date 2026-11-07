@@ -70,7 +70,8 @@ use crate::{
     },
     protocol::{
         AllTerms, ConstraintFilter, ConstraintTerm, LookupConstraint, PermutationColumn, Protocol,
-        ProtocolError, evaluate_expression, instance_evaluation, lagrange_evaluations,
+        ProtocolError, evaluate_expression_with_instances, instance_evaluation,
+        lagrange_evaluations,
     },
     transcript::{
         DescriptorHash, Transcript, TranscriptError, TranscriptRead, TranscriptReader,
@@ -395,6 +396,8 @@ struct ConstraintEvaluations<'a, F> {
     fixed: &'a [F],
     advice: &'a [F],
     instance: &'a [F],
+    /// The declared instance columns, read by instance cells.
+    instances: &'a [Vec<F>],
     sigma: &'a [F],
     sets: &'a [SetEvals<F>],
     lookups: &'a [LookupEvals<F>],
@@ -408,8 +411,14 @@ struct ConstraintEvaluations<'a, F> {
 impl<F: PastaField> ConstraintEvaluations<'_, F> {
     /// A descriptor expression at `x`.
     fn expression(&self, expression: &crate::cs::descriptor::ExprV1) -> Result<F, VerifyError> {
-        evaluate_expression(expression, self.fixed, self.advice, self.instance)
-            .ok_or_else(|| VerifyError::Descriptor(DescriptorRule::Expression.into()))
+        evaluate_expression_with_instances(
+            expression,
+            self.fixed,
+            self.advice,
+            self.instance,
+            self.instances,
+        )
+        .ok_or_else(|| VerifyError::Descriptor(DescriptorRule::Expression.into()))
     }
 
     /// The `theta`-compression of lookup expressions.
@@ -747,6 +756,7 @@ where
         fixed: &fixed_evals,
         advice: &advice_evals,
         instance: &instance_evals,
+        instances,
         sigma: &sigma_evals,
         sets: &set_evals,
         lookups: &lookup_evals,

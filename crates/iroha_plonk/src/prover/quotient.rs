@@ -128,6 +128,8 @@ struct Builder<'a, F> {
     nodes: Vec<Node<F>>,
     index: BTreeMap<Node<F>, u32>,
     descriptor: &'a ProtocolDescriptor,
+    /// The instance columns an instance cell reads (empty: none may appear).
+    instances: &'a [Vec<F>],
 }
 
 /// The descriptor rule-6 error.
@@ -218,6 +220,15 @@ impl<F: PastaField> Builder<'_, F> {
                 ExprNodeV1::Instance(index) => {
                     let table = self.descriptor.instance_queries.len();
                     self.query(index, table, Node::Instance(index))?
+                }
+                ExprNodeV1::InstanceCell(column, row) => {
+                    let value = self
+                        .instances
+                        .get(column as usize)
+                        .and_then(|column| column.get(row as usize))
+                        .copied()
+                        .ok_or_else(malformed)?;
+                    self.intern(Node::Constant(value))?
                 }
                 ExprNodeV1::Negated => {
                     let operand = stack.pop().ok_or_else(malformed)?;
@@ -315,15 +326,31 @@ impl<F: PastaField> CompiledExpressions<F> {
     /// # Errors
     ///
     /// Rule 6 ([`DescriptorRule::Expression`]) for a malformed expression;
-    /// validated descriptors always compile.
+    /// validated descriptors without instance cells always compile.
     pub fn compile(
         descriptor: &ProtocolDescriptor,
         include_gates: bool,
+    ) -> Result<Self, DescriptorError> {
+        Self::compile_with_instances(descriptor, include_gates, &[])
+    }
+
+    /// [`Self::compile`] with the instance columns (`n` rows or the declared
+    /// lengths) that its instance cells read: each becomes the constant
+    /// `instances[column][row]`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::compile`]; an instance cell outside `instances` is malformed.
+    pub fn compile_with_instances(
+        descriptor: &ProtocolDescriptor,
+        include_gates: bool,
+        instances: &[Vec<F>],
     ) -> Result<Self, DescriptorError> {
         let mut builder = Builder {
             nodes: Vec::new(),
             index: BTreeMap::new(),
             descriptor,
+            instances,
         };
         let mut gates = Vec::new();
         if include_gates {
@@ -357,11 +384,13 @@ impl<F: PastaField> CompiledExpressions<F> {
         descriptor: &ProtocolDescriptor,
         gates: core::ops::Range<usize>,
         lookups: core::ops::Range<usize>,
+        instances: &[Vec<F>],
     ) -> Result<Self, DescriptorError> {
         let mut builder = Builder {
             nodes: Vec::new(),
             index: BTreeMap::new(),
             descriptor,
+            instances,
         };
         let mut roots = Vec::with_capacity(gates.len());
         for poly in descriptor

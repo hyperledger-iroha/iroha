@@ -110,7 +110,7 @@ fn range_activity(
             .unwrap();
             rows[rotated]
         }
-        Expression::Advice(_) | Expression::Instance(_) => Fq::ONE,
+        Expression::Advice(_) | Expression::Instance(_) | Expression::InstanceCell(_) => Fq::ONE,
         Expression::Negated(inner) => -range_activity(inner, row, fixed, selectors),
         Expression::Sum(left, right) => {
             range_activity(left, row, fixed, selectors)

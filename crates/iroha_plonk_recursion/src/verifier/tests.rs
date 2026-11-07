@@ -304,6 +304,71 @@ fn actual_pipa_r_proof_matches_native_succinct_on_both_curves() {
     check(&example::<Eq>());
 }
 
+/// [`Square`] plus a gate `s (y - instance[0][0])` that reads its public output
+/// through an instance cell rather than a column query.
+#[derive(Clone)]
+struct SquareCell;
+impl<F: PastaField> Circuit<F> for SquareCell {
+    type Config = (
+        <Square as Circuit<F>>::Config,
+        Column<iroha_plonk::cs::Advice>,
+        iroha_plonk::cs::Selector,
+    );
+    type FloorPlanner = SimpleFloorPlanner;
+    type Params = ();
+    fn without_witnesses(&self) -> Self {
+        self.clone()
+    }
+    fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
+        let square = <Square as Circuit<F>>::configure(meta);
+        let instance = square.2;
+        let y = meta.advice_column();
+        let enabled = meta.selector();
+        meta.create_gate("instance cell", |cells| {
+            let enabled = cells.query_selector(enabled);
+            let y = cells.query_advice(y, iroha_plonk::cs::Rotation::cur());
+            vec![enabled * (y - iroha_plonk::cs::Expression::instance_cell(instance, 0))]
+        });
+        (square, y, enabled)
+    }
+    fn synthesize(
+        &self,
+        (square, y, enabled): Self::Config,
+        mut layouter: impl Layouter<F>,
+    ) -> Result<(), Error> {
+        layouter.assign_region(
+            || "instance cell",
+            |mut region| {
+                enabled.enable(&mut region, 0)?;
+                region.assign_advice(y, 0, Value::known(F::from(9)))?;
+                Ok(())
+            },
+        )?;
+        Square.synthesize(square, layouter)
+    }
+}
+
+#[test]
+fn instance_cell_proof_matches_native_succinct_on_both_curves() {
+    fn cases<C: PastaCurve>() {
+        let honest = example_for::<C>(&SquareCell);
+        assert_eq!(honest.expected()[0], C::Base::ONE);
+        check(&honest);
+        let mut wrong = honest.clone();
+        wrong.instance = C::ScalarExt::from(10);
+        assert_eq!(wrong.expected()[0], C::Base::ZERO);
+        check(&wrong);
+        wrong.hard = true;
+        assert!(
+            !check_circuit(&wrong, 16, &[wrong.expected()], CheckMode::Strict)
+                .expect("hard rejection still synthesizes")
+                .is_satisfied()
+        );
+    }
+    cases::<Ep>();
+    cases::<Eq>();
+}
+
 fn corruptions<C: PastaCurve>() {
     let honest = example::<C>();
     let mut hard = honest.clone();

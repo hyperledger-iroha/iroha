@@ -46,7 +46,7 @@ use iroha_pasta::PastaField;
 use crate::{
     cs::{
         AdviceQuery, Any, Column, ConstraintSystem, Expression, ExpressionEvaluator, FixedQuery,
-        InstanceQuery, Rotation, Selector,
+        InstanceCellQuery, InstanceQuery, Rotation, Selector,
     },
     frontend::{AssignedTables, Circuit, Error, synthesize},
 };
@@ -495,6 +495,18 @@ impl<F: PastaField> ExpressionEvaluator<F> for RowEvaluator<'_, '_, F> {
             Column::new(query.column_index, Any::Instance),
             query.rotation,
         )
+    }
+
+    fn instance_cell(&mut self, query: InstanceCellQuery) -> Val<F> {
+        // The cell's value at its own row, whatever row is being checked.
+        match self.witness.read(
+            Column::new(query.column_index, Any::Instance),
+            Rotation::cur(),
+            query.row,
+        ) {
+            (_, value, None) => Val::Real(value),
+            (_, _, Some(_)) => Val::Poison,
+        }
     }
 
     fn negated(&mut self, value: Val<F>) -> Val<F> {

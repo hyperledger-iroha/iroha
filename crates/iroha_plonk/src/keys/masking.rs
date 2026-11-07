@@ -452,6 +452,12 @@ fn symbolic<F: PastaField>(
             }
             ExprNodeV1::Advice(index) => query(&descriptor.advice_queries, index, false)?,
             ExprNodeV1::Instance(index) => query(&descriptor.instance_queries, index, true)?,
+            // The same public instance variable on every row.
+            ExprNodeV1::InstanceCell(column, cell_row) => Polynomial::variable(Variable {
+                instance: true,
+                column,
+                row: usize::try_from(cell_row).map_err(|_| "instance cell row")?,
+            }),
             ExprNodeV1::Negated | ExprNodeV1::Scaled(_) => {
                 let value = stack.pop().ok_or("unary stack")?;
                 value.scale(match *node {

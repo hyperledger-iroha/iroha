@@ -348,6 +348,7 @@ pub(in crate::prover) fn evaluate_cancellable<C: PastaCurve>(
                 descriptor,
                 pass.gates.clone(),
                 pass.lookups.clone(),
+                instances.map_or(&[][..], |columns| columns.values.as_slice()),
             )
         })
         .collect::<Result<Vec<_>, _>>()?;

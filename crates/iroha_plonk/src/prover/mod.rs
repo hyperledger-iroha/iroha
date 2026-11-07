@@ -90,6 +90,8 @@ mod cancellation_tests;
 #[cfg(test)]
 mod committed_advice_tests;
 #[cfg(test)]
+mod instance_cell_tests;
+#[cfg(test)]
 mod tests;
 mod vanishing;
 
@@ -1241,7 +1243,8 @@ where
     let theta = transcript.squeeze_challenge();
 
     // Row 2.
-    let compiled_lookups = quotient::CompiledExpressions::compile(descriptor, false)?;
+    let compiled_lookups =
+        quotient::CompiledExpressions::compile_with_instances(descriptor, false, &instance.values)?;
     let permuted = lookup::commit_permuted(
         params,
         pk,
@@ -1291,9 +1294,10 @@ where
 
     // Products are the final consumers of evaluations. Reuse the advice
     // allocation for its coefficient form instead of retaining both copies
-    // through the quotient and IPA, and release padded public instances.
+    // through the quotient and IPA, and release the public instances'
+    // padding; the declared values stay for instance cells.
     advice.interpolate_in_place(pk, cancellation)?;
-    instance.values.clear();
+    instance.release_padding();
 
     // Row 5.
     let random = vanishing::commit_random(
@@ -1341,7 +1345,11 @@ where
             cancellation,
         )?
     } else {
-        let compiled = quotient::CompiledExpressions::compile(descriptor, true)?;
+        let compiled = quotient::CompiledExpressions::compile_with_instances(
+            descriptor,
+            true,
+            &instance.values,
+        )?;
         let h = quotient::evaluate_with_bound_instances_cancellable(
             pk,
             &protocol,

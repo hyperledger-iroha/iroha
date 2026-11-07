@@ -444,6 +444,10 @@ impl<F: PastaField> ExpressionEvaluator<F> for RowEvaluator<'_, F> {
         self.read(self.instance, query.column_index, query.rotation.0)
     }
 
+    fn instance_cell(&mut self, _query: crate::cs::InstanceCellQuery) -> F {
+        unreachable!("the reference circuits have no instance cells")
+    }
+
     fn negated(&mut self, value: F) -> F {
         -value
     }
@@ -726,6 +730,7 @@ fn normalized_dag_preserves_field_identities_and_shares_commuted_terms() {
             nodes: Vec::new(),
             index: BTreeMap::new(),
             descriptor,
+            instances: &[],
         };
         let expressions = vec![
             vec![input, constant(F::ZERO), ExprNodeV1::Sum],

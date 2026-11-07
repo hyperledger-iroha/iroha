@@ -173,6 +173,16 @@ impl<F: iroha_pasta::PastaField> InstanceColumns<F> {
         &self.polys
     }
 
+    /// Releases the zero padding of the evaluation form once its last
+    /// consumer is done, keeping each column's declared values (which
+    /// instance cells read).
+    pub(super) fn release_padding(&mut self) {
+        for (column, length) in self.values.iter_mut().zip(&self.lengths) {
+            column.truncate(*length);
+            column.shrink_to_fit();
+        }
+    }
+
     pub(super) fn has_short_prefixes(&self) -> bool {
         !self.short_prefixes.is_empty()
     }
