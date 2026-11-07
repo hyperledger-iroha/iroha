@@ -6,6 +6,10 @@ import copy
 import hashlib
 import importlib.util
 import json
+import os
+import re
+import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -1994,6 +1998,55 @@ class Refresh(unittest.TestCase):
                 self.assertIn(fragment, output.getvalue())
                 self.assertIn("not written", output.getvalue())
             self.assertEqual((REPOSITORY / CHECKER.SUMMARY).read_text(), tracked)
+
+
+class HostedWorkflow(unittest.TestCase):
+    def test_state_compiler_bound_preserves_all_three_native_commands(self) -> None:
+        """Run the actual CI commands with a metadata recorder, never Cargo or Rust."""
+        workflow = (REPOSITORY / ".github/workflows/pr.yml").read_text()
+        job = workflow.split("  zk_phase_tree_measurement:\n", 1)[1].split("\n  x2_maximum_proof_transport:", 1)[0]
+        self.assertIn("    timeout-minutes: 90\n", job)
+        self.assertNotRegex(job, r"(?m)^    (env|if|continue-on-error):")
+        cases = (
+            ("FASTPQ prove and verify under the shared phase and resource recorder",
+             ["test", "--locked", "-p", "iroha_core_privacy", "--features", "fastpq-replay-measurement", "--test", "fastpq_phase_tree_measurement"], None),
+            ("State commitment candidates satisfy the keyed State contract",
+             ["test", "--locked", "-p", "iroha_core", "--lib", "--features", "state-commitment-prototypes", "--", "keyed_commitment::candidates_tests"], "2"),
+            ("State commitment candidate measurement target (smoke run)",
+             ["test", "--locked", "-p", "iroha_core_privacy", "--features", "fastpq-replay-measurement", "--test", "state_commitment_candidates_measurement"], None),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recorder = root / "cargo"
+            recorder.write_text(
+                "#!" + sys.executable + "\nimport json, os, sys\n"
+                "print(json.dumps({'argv': sys.argv[1:], 'jobs': os.environ.get('CARGO_BUILD_JOBS')}))\n"
+            )
+            recorder.chmod(0o700)
+            for name, expected_argv, expected_jobs in cases:
+                with self.subTest(step=name):
+                    step = re.search(r"(?ms)^      - name: " + re.escape(name) + r"\n(.*?)(?=^      - |\Z)", job)
+                    self.assertIsNotNone(step)
+                    self.assertNotRegex(step.group(1), r"(?m)^        (if|continue-on-error):")
+                    command = re.search(r"(?m)^        run: (.+)$", step.group(1))
+                    jobs = re.search(r'(?m)^          CARGO_BUILD_JOBS: "([0-9]+)"$', step.group(1))
+                    self.assertIsNotNone(command)
+                    self.assertEqual(jobs.group(1) if jobs else None, expected_jobs)
+                    environment = dict(os.environ)
+                    environment.pop("CARGO_BUILD_JOBS", None)
+                    if jobs:
+                        environment["CARGO_BUILD_JOBS"] = jobs.group(1)
+                    environment["PATH"] = str(root) + os.pathsep + environment.get("PATH", "")
+                    result = subprocess.run(["/bin/sh", "-c", command.group(1)], cwd=root,
+                                            env=environment, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(json.loads(result.stdout), {"argv": expected_argv, "jobs": expected_jobs})
+        before = job.index("      - name: Record State compiler memory envelope\n")
+        core = job.index("      - name: " + cases[1][0] + "\n")
+        after = job.index("      - name: Record State compiler memory result\n        if: always()\n")
+        self.assertLess(before, core)
+        self.assertLess(core, after)
+        self.assertLess(after, job.index("      - name: " + cases[2][0] + "\n"))
 
 
 if __name__ == "__main__":

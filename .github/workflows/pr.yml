@@ -215,8 +215,29 @@ jobs:
       # The State commitment candidates of task G.2 are development-only: their
       # conformance adapters and their measurement target compile only under
       # opt-in features that no default lane sets.
+      - name: Record State compiler memory envelope
+        run: |
+          for resource in /proc/meminfo /proc/self/cgroup /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.events; do
+            if [ -r "$resource" ]; then
+              printf '%s\n' "$resource"
+              cat "$resource"
+            fi
+          done
       - name: State commitment candidates satisfy the keyed State contract
+        # Use the same compiler concurrency as the Sumeragi Core gate while
+        # retaining the complete opt-in conformance command and test profile.
+        env:
+          CARGO_BUILD_JOBS: "2"
         run: cargo test --locked -p iroha_core --lib --features state-commitment-prototypes -- keyed_commitment::candidates_tests
+      - name: Record State compiler memory result
+        if: always()
+        run: |
+          for resource in /proc/meminfo /proc/self/cgroup /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.events; do
+            if [ -r "$resource" ]; then
+              printf '%s\n' "$resource"
+              cat "$resource"
+            fi
+          done
       - name: State commitment candidate measurement target (smoke run)
         run: cargo test --locked -p iroha_core_privacy --features fastpq-replay-measurement --test state_commitment_candidates_measurement
 
