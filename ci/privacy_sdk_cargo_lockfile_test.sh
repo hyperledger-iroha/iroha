@@ -2559,10 +2559,23 @@ def install_dist_info(wheel):
 
 
 def seal(path):
-    metadata = os.stat(path, follow_symlinks=False)
-    return verifier.FileSeal.from_stat(
-        hashlib.sha256(path.read_bytes()).hexdigest(), metadata
-    ).render()
+    # The real shell owner seals bytes and metadata from one descriptor. Windows
+    # pathname and descriptor ctime can differ; the fixture must use that same
+    # authority boundary without borrowing the verifier's observed seal.
+    with path.open("rb") as source:
+        before = os.fstat(source.fileno())
+        payload = source.read()
+        after = os.fstat(source.fileno())
+    digest = hashlib.sha256(payload).hexdigest()
+    seal = verifier.FileSeal.from_stat(digest, before)
+    if seal != verifier.FileSeal.from_stat(digest, after):
+        raise AssertionError("fixture changed while its owner sealed it")
+    named = path.stat(follow_symlinks=False)
+    if (named.st_dev, named.st_ino) != (before.st_dev, before.st_ino):
+        raise AssertionError("fixture was replaced while its owner sealed it")
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or len(payload) != before.st_size:
+        raise AssertionError("fixture owner requires one stable regular file")
+    return seal.render()
 
 
 def expect_failure(fragment, callback):

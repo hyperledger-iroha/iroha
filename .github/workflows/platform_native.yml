@@ -53,6 +53,7 @@ on:
       - "scripts/workspace_source_keeper.py"
       - "scripts/workspace_source_keeper_windows.py"
       - "pytests/scripts/workspace_source_manifest_test.py"
+      - "pytests/scripts/workspace_source_manifest_portable_test.py"
       - "pytests/scripts/workspace_source_keeper_test.py"
       - "python/iroha_native/src/iroha_native/**"
       - "python/iroha_python/tests/conftest.py"
@@ -322,13 +323,48 @@ jobs:
             python -m pip install --require-hashes --only-binary=:all: -r python/iroha_python/requirements-ci.lock
           fi
           export IROHA_NATIVE_SOURCE_DELIVERY_TEST_HELPER="$(python -c 'import os; from pathlib import Path; print(Path("target/debug/iroha_native_source_delivery" + (".exe" if os.name == "nt" else "")).resolve(), end="")')"
+          # Physical source seals require Unix dir_fd operations. Keep their full
+          # suite on both Unix hosts; every host also runs the clean-index native
+          # artifact verifier controls used by Windows. Retained native custody
+          # tests above/below remain mandatory on all three platforms. Preserve
+          # all 22 previously nonfailing methods on Windows, including the
+          # plain retained-custody variants and their existing POSIX-only marks.
+          source_manifest_tests=(pytests/scripts/workspace_source_manifest_portable_test.py)
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            source_manifest_tests+=(
+              pytests/scripts/workspace_source_manifest_test.py::test_windows_reader_normalizes_only_cross_api_ctime_and_execute_bits
+              pytests/scripts/workspace_source_manifest_test.py::test_native_artifact_manifest_cli_uses_host_portable_entrypoint
+              pytests/scripts/workspace_source_manifest_test.py::test_source_path_list_rejects_unsafe_archive_names
+              pytests/scripts/workspace_source_manifest_test.py::test_source_seal_rejects_non_posix_symlink_targets
+              pytests/scripts/workspace_source_manifest_test.py::test_git_unmerged_paths_are_parsed_and_deduplicated
+              pytests/scripts/workspace_source_manifest_test.py::test_workspace_manifest_rejects_unmerged_index
+              pytests/scripts/workspace_source_manifest_test.py::test_workspace_manifest_rejects_active_git_operations
+              pytests/scripts/workspace_source_manifest_test.py::test_workspace_manifest_rejects_resolved_but_uncommitted_merge
+              pytests/scripts/workspace_source_manifest_test.py::test_release_identity_rejects_staged_source_without_git_mutation
+              pytests/scripts/workspace_source_manifest_test.py::test_release_identity_rejects_unmerged_before_deriving_a_tree
+              pytests/scripts/workspace_source_manifest_test.py::test_manifest_rejects_effective_self_hiding_ignore_policy
+              pytests/scripts/workspace_source_manifest_test.py::test_manifest_local_exclude_cannot_authorize_untracked_policy
+              pytests/scripts/workspace_source_manifest_test.py::test_manifest_untracked_policy_cannot_authorize_nested_policy
+              pytests/scripts/workspace_source_manifest_test.py::test_release_identity_does_not_ignore_staged_gitlink_change
+              pytests/scripts/workspace_source_manifest_test.py::test_ignore_policy_discovery_without_descriptors_keeps_source_and_policy_guards
+              pytests/scripts/workspace_source_manifest_test.py::test_ignore_policy_discovery_does_not_prune_root_policy_from_local_excludes
+              pytests/scripts/workspace_source_manifest_test.py::test_ignore_policy_discovery_does_not_prune_reopened_root_directory
+              pytests/scripts/workspace_source_manifest_test.py::test_ignore_policy_discovery_does_not_trust_untracked_root_policy
+              pytests/scripts/workspace_source_manifest_test.py::test_retained_scanner_success_does_not_forward_ambient_exception
+              pytests/scripts/workspace_source_manifest_test.py::test_retained_scanner_body_failure_keeps_first_exception_and_refuses
+              pytests/scripts/workspace_source_manifest_test.py::test_retained_scanner_metadata_failure_closes_and_refuses
+              pytests/scripts/workspace_source_manifest_test.py::test_retained_scanner_actual_read_failure_closes_and_refuses
+            )
+          else
+            source_manifest_tests+=(pytests/scripts/workspace_source_manifest_test.py)
+          fi
           python -m pytest -q \
             scripts/tests/python_native_source_delivery_test.py \
             scripts/tests/python_native_delivery_gate_contract_test.py \
             scripts/tests/python_wheel_byte_owner_test.py \
             scripts/tests/python_source_owner_admission_test.py \
             scripts/tests/sorafs_python_native_platform_test.py \
-            pytests/scripts/workspace_source_manifest_test.py \
+            "${source_manifest_tests[@]}" \
             pytests/scripts/workspace_source_keeper_test.py \
             2>&1 | tee target/platform-native/source-delivery-python.log
       - name: Exercise producer admission and synchronous original-session supervision
