@@ -33,6 +33,7 @@ on:
       - "scripts/tests/python_source_owner_admission_test.py"
       - "scripts/tests/sorafs_python_native_platform_test.py"
       - "scripts/tests/native_bash_fixture.py"
+      - "scripts/tests/windows_consumer_workflow_test.py"
       - "scripts/release_entry_owner.py"
       - "scripts/release_bridge_admission.py"
       - "scripts/release_process_bridge.py"
@@ -492,8 +493,8 @@ jobs:
           retention-days: 14
 
 
-  windows-consumer-check:
-    name: Native Windows consumer test compilation
+  windows-consumer-compilation:
+    name: Native Windows consumer compilation stage
     runs-on: windows-latest
     timeout-minutes: 90
     defaults:
@@ -534,6 +535,50 @@ jobs:
           set -euo pipefail
           cargo check --locked --tests -p iroha_test_network -p integration_tests -p iroha_cli --features integration_tests/atomic-private-settlement-smoke \
             2>&1 | tee target/platform-consumers/check.log
+      - name: Retain native consumer compilation results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: platform-consumers-x86_64-pc-windows-msvc-${{ github.run_id }}-${{ github.run_attempt }}-compilation
+          path: target/platform-consumers
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-consumer-core:
+    name: Native Windows Core publication stage
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: "1"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          toolchain: 1.99.1
+          rustflags: ""
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Require the native Windows compiler
+        run: |
+          set -euo pipefail
+          mkdir -p target/platform-consumers
+          python - <<'PYTHON' | tee target/platform-consumers/host.log
+          import subprocess
+
+          version = subprocess.check_output(["rustc", "-vV"], text=True)
+          print(version, flush=True)
+          host = next(line[6:] for line in version.splitlines() if line.startswith("host: "))
+          if host != "x86_64-pc-windows-msvc":
+              raise SystemExit("consumer checks require native Windows MSVC")
+          PYTHON
       - name: Exercise packed archive publication and retained readers on Windows
         run: |
           set -euo pipefail
@@ -544,6 +589,50 @@ jobs:
           set -euo pipefail
           cargo test --locked -p iroha_core --lib native_evidence_publication_syncs_and_never_replaces_existing_bytes -- --nocapture \
             2>&1 | tee target/platform-consumers/evidence-publication.log
+      - name: Retain native consumer compilation results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: platform-consumers-x86_64-pc-windows-msvc-${{ github.run_id }}-${{ github.run_attempt }}-core
+          path: target/platform-consumers
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-consumer-torii:
+    name: Native Windows Torii persistence stage
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: "1"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          toolchain: 1.99.1
+          rustflags: ""
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Require the native Windows compiler
+        run: |
+          set -euo pipefail
+          mkdir -p target/platform-consumers
+          python - <<'PYTHON' | tee target/platform-consumers/host.log
+          import subprocess
+
+          version = subprocess.check_output(["rustc", "-vV"], text=True)
+          print(version, flush=True)
+          host = next(line[6:] for line in version.splitlines() if line.startswith("host: "))
+          if host != "x86_64-pc-windows-msvc":
+              raise SystemExit("consumer checks require native Windows MSVC")
+          PYTHON
       - name: Exercise Torii checkpoint custody and webhook persistence on NTFS
         run: |
           set -euo pipefail
@@ -563,7 +652,40 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: platform-consumers-x86_64-pc-windows-msvc-${{ github.run_id }}
+          name: platform-consumers-x86_64-pc-windows-msvc-${{ github.run_id }}-${{ github.run_attempt }}-torii
           path: target/platform-consumers
           if-no-files-found: error
           retention-days: 14
+
+  windows-consumer-check:
+    name: Native Windows consumer test compilation
+    runs-on: windows-latest
+    timeout-minutes: 90
+    if: always()
+    needs:
+      - windows-consumer-compilation
+      - windows-consumer-core
+      - windows-consumer-torii
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Verify Windows consumer stage coverage
+        run: python -m unittest discover -s scripts/tests -p windows_consumer_workflow_test.py -v
+      - name: Require every Windows consumer stage
+        env:
+          COMPILATION_RESULT: ${{ needs.windows-consumer-compilation.result }}
+          CORE_RESULT: ${{ needs.windows-consumer-core.result }}
+          TORII_RESULT: ${{ needs.windows-consumer-torii.result }}
+        run: |
+          set -euo pipefail
+          if [[ "${COMPILATION_RESULT}" != "success" || "${CORE_RESULT}" != "success" || "${TORII_RESULT}" != "success" ]]; then
+            printf 'Windows consumer stages must all succeed: compilation=%s core=%s torii=%s\n' "${COMPILATION_RESULT}" "${CORE_RESULT}" "${TORII_RESULT}"
+            exit 1
+          fi
