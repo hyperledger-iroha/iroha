@@ -14,6 +14,7 @@
 //! verifier ([`crate::fold::verify_fold`]), whose result only a decider accepts.
 
 pub mod claims;
+pub mod decider_v2;
 pub mod ivc;
 pub mod transcript;
 pub mod verify;

@@ -105,6 +105,11 @@ impl<F: PastaField> Poly<F> {
         stack.pop().unwrap_or(0)
     }
 
+    /// The postfix operations.
+    pub(crate) fn ops(&self) -> &[Op<F>] {
+        &self.ops
+    }
+
     /// Multiplications of one evaluation (products and scalings).
     pub(crate) fn multiplications(&self) -> usize {
         self.ops.iter().filter(|op| matches!(op, Op::Mul | Op::Scale(_))).count()

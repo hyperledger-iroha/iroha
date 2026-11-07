@@ -36,10 +36,10 @@
 //! transcripts do ([`crate::transcript`]). It starts with the batch size and
 //! every accumulator's digest. Deciders are not zero-knowledge.
 
-mod eval;
-mod mle;
-mod plan;
-mod sumcheck;
+pub(crate) mod eval;
+pub(crate) mod mle;
+pub(crate) mod plan;
+pub(crate) mod sumcheck;
 #[cfg(test)]
 mod tests;
 

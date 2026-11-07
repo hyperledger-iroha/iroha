@@ -20,7 +20,21 @@ use iroha_plonk::{
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
 
-use super::{DeciderV2Plan, mle, open, prove, prove_many, sumcheck, verify, verify_many, verify_opening};
+use std::sync::Arc;
+
+use iroha_pasta::Fp;
+use iroha_plonk::check::{CheckMode, check_circuit};
+
+use super::{DeciderV2Plan, DeciderV2Proof, mle, open, prove, prove_many, sumcheck, verify, verify_many, verify_opening};
+use crate::{
+    circuit::{
+        FoldVerifierChips, FoldVerifierConfig,
+        decider_v2::{assign_decider_v2_proof, verify_decider_v2},
+        transcript as circuit_transcript,
+        verify::assign_accumulator,
+    },
+    relation::FoldShape,
+};
 use crate::{
     Error,
     commit::{CommitKey, Witness},
@@ -504,4 +518,85 @@ fn a_batch_of_accumulators_of_two_relations_decides_with_one_opening() {
         prove_many(&DOMAIN, &[(&s.plan, &acc1, &w1), (&plan6, &acc6, &w6)]).map(|_| ()),
         Err(Error::Shape("decider batch domains"))
     );
+}
+
+/// The in-circuit decider verifier over one accumulator, exposing the decider
+/// transcript's digest after the claim values (the native verifier's state).
+#[derive(Clone)]
+struct DeciderCircuit {
+    plan: Arc<DeciderV2Plan<Ep>>,
+    shape: FoldShape,
+    acc: Option<Accumulator<Ep>>,
+    proof: Option<DeciderV2Proof<Ep>>,
+}
+
+#[derive(Clone, Debug)]
+struct DeciderCircuitConfig {
+    fold: FoldVerifierConfig<Ep>,
+    instance: Column<InstanceColumn>,
+}
+
+impl Circuit<Fp> for DeciderCircuit {
+    type Config = DeciderCircuitConfig;
+    type FloorPlanner = SimpleFloorPlanner;
+    type Params = ();
+
+    fn without_witnesses(&self) -> Self {
+        Self { plan: Arc::clone(&self.plan), shape: self.shape.clone(), acc: None, proof: None }
+    }
+
+    fn configure(meta: &mut ConstraintSystem<Fp>) -> DeciderCircuitConfig {
+        let fold = FoldVerifierConfig::configure(meta);
+        let instance = meta.instance_column(1);
+        meta.enable_equality(instance);
+        DeciderCircuitConfig { fold, instance }
+    }
+
+    fn synthesize(&self, config: DeciderCircuitConfig, mut layouter: impl Layouter<Fp>) -> Result<(), PlonkError> {
+        let mut chips = FoldVerifierChips::new(&config.fold);
+        chips.load_tables(&mut layouter)?;
+        let digest = layouter.assign_region(
+            || "decider v2",
+            |mut region| {
+                let mut lanes = chips.lanes();
+                let acc = assign_accumulator(&mut lanes, &mut region, &self.shape, self.acc.as_ref())?;
+                let proof = assign_decider_v2_proof(&mut lanes, &mut region, &[&self.plan], self.proof.as_ref())?;
+                verify_decider_v2(&mut lanes, &mut region, &DOMAIN, &[(&self.plan, &acc)], &proof)?;
+                circuit_transcript::finish(&mut lanes, &mut region)
+            },
+        )?;
+        layouter.constrain_instance(digest.cell(), config.instance, 0)
+    }
+}
+
+#[test]
+#[ignore = "k16 decider circuit; run optimized"]
+fn the_decider_circuit_verifies_exactly_as_the_native_verifier() {
+    let s = setup();
+    let (acc, witness) = accumulator(&s);
+    let proved = prove(&s.plan, &DOMAIN, &acc, &witness).expect("prove");
+    let mut verified = verify(&s.plan, &DOMAIN, &acc, &proved.proof).expect("verify");
+    let digest = verified.transcript.digest();
+    let plan = Arc::new(DeciderV2Plan::new(s.relation.clone(), &s.key).expect("plan"));
+    let shape = s.relation.shape();
+    let satisfied = |proof: &DeciderV2Proof<Ep>, digest: Fp| {
+        let circuit = DeciderCircuit { plan: Arc::clone(&plan), shape: shape.clone(), acc: Some(acc.clone()), proof: Some(proof.clone()) };
+        let report = check_circuit(&circuit, 16, &[vec![digest]], CheckMode::Strict).expect("synthesis");
+        report.is_satisfied()
+    };
+    assert!(satisfied(&proved.proof, digest));
+    // Another digest, or any tampered message: unsatisfied.
+    assert!(!satisfied(&proved.proof, digest + Fp::ONE));
+    let mut p = proved.proof.clone();
+    p.zero_check[3][2] += Fq::ONE;
+    assert!(!satisfied(&p, digest));
+    let mut p = proved.proof.clone();
+    p.at_rho[1] += Fq::ONE;
+    assert!(!satisfied(&p, digest));
+    let mut p = proved.proof.clone();
+    p.shift[2][1] += Fq::ONE;
+    assert!(!satisfied(&p, digest));
+    let mut p = proved.proof;
+    p.at_sigma[0] += Fq::ONE;
+    assert!(!satisfied(&p, digest));
 }

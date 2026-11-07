@@ -148,6 +148,19 @@ pub fn challenge_last<C: PastaCurve>(chips: &mut FoldLanes<'_, C>, region: &mut 
     map(chips, region, &word)
 }
 
+/// A 128-bit challenge; the transcript continues. Its low limb (for the group
+/// multiplication) and the scalar, as [`crate::transcript::Transcript::challenge_128`].
+///
+/// # Errors
+/// Layout errors.
+pub fn challenge_128<C: PastaCurve>(
+    chips: &mut FoldLanes<'_, C>,
+    region: &mut Region<'_, C::Base>,
+) -> Result<(U128<C::Base>, ScalarCell<C>), Error> {
+    let word = squeeze(chips, region, false)?;
+    map_128(chips, region, &word)
+}
+
 /// A 128-bit challenge that ends the transcript: its low limb (for the group
 /// multiplication) and the scalar.
 ///
