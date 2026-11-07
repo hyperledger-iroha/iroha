@@ -22,14 +22,18 @@ use rand_core::SeedableRng;
 
 use std::sync::Arc;
 
-use iroha_pasta::Fp;
-use iroha_plonk::check::{CheckMode, check_circuit};
+use iroha_pasta::{Fp, PastaAffine};
+use iroha_plonk::{
+    check::{CheckMode, check_circuit},
+    pcs::mle::BatchOpening,
+};
 
 use super::{DeciderV2Plan, DeciderV2Proof, mle, open, prove, prove_many, sumcheck, verify, verify_many, verify_opening};
 use crate::{
     circuit::{
         FoldVerifierChips, FoldVerifierConfig,
         decider_v2::{assign_decider_v2_proof, verify_decider_v2},
+        mle::{OpeningKey, assign_batch_opening, verify_batch_bound as verify_opening_in_circuit},
         transcript as circuit_transcript,
         verify::assign_accumulator,
     },
@@ -520,14 +524,17 @@ fn a_batch_of_accumulators_of_two_relations_decides_with_one_opening() {
     );
 }
 
-/// The in-circuit decider verifier over one accumulator, exposing the decider
-/// transcript's digest after the claim values (the native verifier's state).
+/// The in-circuit decider verifier over one accumulator, continued by the
+/// in-circuit bound opening (`circuit::mle`). It exposes the finished
+/// transcript's digest and the opening's folded generator `G'_0`.
 #[derive(Clone)]
 struct DeciderCircuit {
     plan: Arc<DeciderV2Plan<Ep>>,
     shape: FoldShape,
+    key: OpeningKey<Ep>,
     acc: Option<Accumulator<Ep>>,
     proof: Option<DeciderV2Proof<Ep>>,
+    opening: Option<BatchOpening<Ep>>,
 }
 
 #[derive(Clone, Debug)]
@@ -542,12 +549,19 @@ impl Circuit<Fp> for DeciderCircuit {
     type Params = ();
 
     fn without_witnesses(&self) -> Self {
-        Self { plan: Arc::clone(&self.plan), shape: self.shape.clone(), acc: None, proof: None }
+        Self {
+            plan: Arc::clone(&self.plan),
+            shape: self.shape.clone(),
+            key: self.key.clone(),
+            acc: None,
+            proof: None,
+            opening: None,
+        }
     }
 
     fn configure(meta: &mut ConstraintSystem<Fp>) -> DeciderCircuitConfig {
         let fold = FoldVerifierConfig::configure(meta);
-        let instance = meta.instance_column(1);
+        let instance = meta.instance_column(3);
         meta.enable_equality(instance);
         DeciderCircuitConfig { fold, instance }
     }
@@ -555,17 +569,23 @@ impl Circuit<Fp> for DeciderCircuit {
     fn synthesize(&self, config: DeciderCircuitConfig, mut layouter: impl Layouter<Fp>) -> Result<(), PlonkError> {
         let mut chips = FoldVerifierChips::new(&config.fold);
         chips.load_tables(&mut layouter)?;
-        let digest = layouter.assign_region(
+        let (digest, generator) = layouter.assign_region(
             || "decider v2",
             |mut region| {
                 let mut lanes = chips.lanes();
                 let acc = assign_accumulator(&mut lanes, &mut region, &self.shape, self.acc.as_ref())?;
                 let proof = assign_decider_v2_proof(&mut lanes, &mut region, &[&self.plan], self.proof.as_ref())?;
-                verify_decider_v2(&mut lanes, &mut region, &DOMAIN, &[(&self.plan, &acc)], &proof)?;
-                circuit_transcript::finish(&mut lanes, &mut region)
+                let claims = verify_decider_v2(&mut lanes, &mut region, &DOMAIN, &[(&self.plan, &acc)], &proof)?;
+                let opening = assign_batch_opening(&mut lanes, &mut region, self.plan.mu, self.opening.as_ref())?;
+                let claim =
+                    verify_opening_in_circuit(&mut lanes, &mut region, &self.key, &claims.point, &claims.claims, &opening)?;
+                let digest = circuit_transcript::finish(&mut lanes, &mut region)?;
+                Ok((digest, claim.folded_generator))
             },
         )?;
-        layouter.constrain_instance(digest.cell(), config.instance, 0)
+        layouter.constrain_instance(digest.cell(), config.instance, 0)?;
+        layouter.constrain_instance(generator.x().cell(), config.instance, 1)?;
+        layouter.constrain_instance(generator.y().cell(), config.instance, 2)
     }
 }
 
@@ -574,31 +594,50 @@ impl Circuit<Fp> for DeciderCircuit {
 fn the_decider_circuit_verifies_exactly_as_the_native_verifier() {
     let s = setup();
     let (acc, witness) = accumulator(&s);
-    let proved = prove(&s.plan, &DOMAIN, &acc, &witness).expect("prove");
+    let mut proved = prove(&s.plan, &DOMAIN, &acc, &witness).expect("prove");
+    let (opening, _) = open(s.params.params(), &mut proved).expect("open");
     let mut verified = verify(&s.plan, &DOMAIN, &acc, &proved.proof).expect("verify");
-    let digest = verified.transcript.digest();
+    let claim = verify_opening(s.params.params(), &mut verified, &opening).expect("opening verifies");
+    let public = vec![verified.transcript.digest(), claim.g().x(), claim.g().y()];
     let plan = Arc::new(DeciderV2Plan::new(s.relation.clone(), &s.key).expect("plan"));
     let shape = s.relation.shape();
-    let satisfied = |proof: &DeciderV2Proof<Ep>, digest: Fp| {
-        let circuit = DeciderCircuit { plan: Arc::clone(&plan), shape: shape.clone(), acc: Some(acc.clone()), proof: Some(proof.clone()) };
-        let report = check_circuit(&circuit, 16, &[vec![digest]], CheckMode::Strict).expect("synthesis");
+    let key = OpeningKey::new(s.params.params());
+    let satisfied = |proof: &DeciderV2Proof<Ep>, opening: &BatchOpening<Ep>, public: &[Fp]| {
+        let circuit = DeciderCircuit {
+            plan: Arc::clone(&plan),
+            shape: shape.clone(),
+            key: key.clone(),
+            acc: Some(acc.clone()),
+            proof: Some(proof.clone()),
+            opening: Some(opening.clone()),
+        };
+        let report = check_circuit(&circuit, 16, &[public.to_vec()], CheckMode::Strict).expect("synthesis");
         report.is_satisfied()
     };
-    assert!(satisfied(&proved.proof, digest));
-    // Another digest, or any tampered message: unsatisfied.
-    assert!(!satisfied(&proved.proof, digest + Fp::ONE));
+    // The circuit reaches the native transcript state and the native G'_0.
+    assert!(satisfied(&proved.proof, &opening, &public));
+    let mut other = public.clone();
+    other[1] += Fp::ONE;
+    assert!(!satisfied(&proved.proof, &opening, &other));
+    // Tampered decider messages or opening: unsatisfied.
     let mut p = proved.proof.clone();
     p.zero_check[3][2] += Fq::ONE;
-    assert!(!satisfied(&p, digest));
+    assert!(!satisfied(&p, &opening, &public));
     let mut p = proved.proof.clone();
     p.at_rho[1] += Fq::ONE;
-    assert!(!satisfied(&p, digest));
+    assert!(!satisfied(&p, &opening, &public));
     let mut p = proved.proof.clone();
     p.shift[2][1] += Fq::ONE;
-    assert!(!satisfied(&p, digest));
-    let mut p = proved.proof;
+    assert!(!satisfied(&p, &opening, &public));
+    let mut p = proved.proof.clone();
     p.at_sigma[0] += Fq::ONE;
-    assert!(!satisfied(&p, digest));
+    assert!(!satisfied(&p, &opening, &public));
+    let mut o = opening.clone();
+    o.scalar += Fq::ONE;
+    assert!(!satisfied(&proved.proof, &o, &public));
+    let mut o = opening;
+    o.rounds.swap(0, 1);
+    assert!(!satisfied(&proved.proof, &o, &public));
 }
 
 #[test]
