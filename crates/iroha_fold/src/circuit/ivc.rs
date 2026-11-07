@@ -177,16 +177,22 @@ pub struct Frame<F: iroha_pasta::PastaField> {
 /// column is its relation's first instance column, `[passthrough, h_out,
 /// bridge...]`. On the first instance of the side that starts the chain there is
 /// no predecessor: the checks are skipped, the digest is zero and the
-/// passthrough is the witness's.
+/// passthrough is `start_passthrough`, a circuit constant: the other side's base
+/// hash `H(0, base, base_state, 0)`. It is never a witness, so a mid-chain
+/// "restart" of this side forces the other side back to its first instance with
+/// its base state and an absent accumulator (`IVC.md` section 5); no folded
+/// instance can be dropped while its effects stay in a state.
 ///
 /// # Errors
 /// Layout errors, or a witness of another shape.
+#[allow(clippy::too_many_arguments)]
 pub fn fold_frame<C: PastaCurve>(
     chips: &mut FoldVerifierChips<C>,
     region: &mut Region<'_, C::Base>,
     side: &ChainSide,
     shape: &FoldShape,
     base: C::Base,
+    start_passthrough: C::Base,
     state_len: usize,
     witness: Option<&FrameWitness<C>>,
 ) -> Result<Frame<C::Base>, Error> {
@@ -201,7 +207,6 @@ pub fn fold_frame<C: PastaCurve>(
         state.push(chips.glue.witness(region, known(&|w| w.state[i]))?);
     }
     let stored = chips.glue.witness(region, known(&|w| w.stored))?;
-    let pass_witness = chips.glue.witness(region, known(&|w| w.passthrough))?;
     let acc = assign_accumulator(chips, region, shape, witness.map(|w| &w.acc))?;
     let fresh = assign_instance(chips, region, shape, witness.map(|w| &w.fresh))?;
     let proof = assign_proof(chips, region, shape, witness.map(|w| &w.proof))?;
@@ -227,7 +232,8 @@ pub fn fold_frame<C: PastaCurve>(
     let (digest, passthrough) = match &no_predecessor {
         Some(bit) => {
             let zero = chips.glue.constant(region, <C::Base as Field>::ZERO)?;
-            (chips.glue.select(region, bit, &zero, &new_digest)?, chips.glue.select(region, bit, &pass_witness, &from_fresh)?)
+            let start = chips.glue.constant(region, start_passthrough)?;
+            (chips.glue.select(region, bit, &zero, &new_digest)?, chips.glue.select(region, bit, &start, &from_fresh)?)
         }
         None => (new_digest, from_fresh),
     };

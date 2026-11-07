@@ -151,8 +151,6 @@ pub struct FrameWitness<C: PastaCurve> {
     pub fresh: Instance<C>,
     /// The fold messages (zero when starting or without predecessor).
     pub proof: FoldProof<C::ScalarExt>,
-    /// The passthrough of an instance without predecessor (otherwise ignored).
-    pub passthrough: C::Base,
 }
 
 /// A step's fold done natively: the frame witness, the accumulator the side
@@ -173,7 +171,8 @@ pub struct PreparedStep<C: PastaCurve> {
 
 /// Prepares the fold frame of step `step` of `side`: folds the other side's last
 /// instance into the kept accumulator (or starts it), as the circuit will.
-/// `start_passthrough` is the passthrough of an instance without predecessor.
+/// `start_passthrough` is the passthrough of an instance without predecessor:
+/// the other side's base hash, the same constant the circuit holds.
 ///
 /// # Errors
 /// As [`fold_or_start`]; [`Error::Shape`] for an instance of another shape.
@@ -192,15 +191,7 @@ pub fn prepare_step<C: PastaCurve>(
     let Some((fresh, fresh_witness)) = their_last else {
         let zero = <C::ScalarExt as Field>::ZERO;
         let proof = FoldProof { f: vec![zero; other.index_bits()], k: vec![zero; other.degree() - 1] };
-        let witness = FrameWitness {
-            step,
-            state,
-            stored,
-            acc,
-            fresh: placeholder_instance::<C>(other),
-            proof,
-            passthrough: start_passthrough,
-        };
+        let witness = FrameWitness { step, state, stored, acc, fresh: placeholder_instance::<C>(other), proof };
         return Ok(PreparedStep {
             witness,
             kept: kept.cloned(),
@@ -218,7 +209,7 @@ pub fn prepare_step<C: PastaCurve>(
     let digest = folded.digest(&side.fold_domain);
     let passthrough = embed(&public[1]);
     let bridge = public[2..].iter().map(embed).collect();
-    let witness = FrameWitness { step, state, stored, acc, fresh: fresh.clone(), proof, passthrough: start_passthrough };
+    let witness = FrameWitness { step, state, stored, acc, fresh: fresh.clone(), proof };
     Ok(PreparedStep { witness, kept: Some((folded, folded_witness)), bridge, passthrough, digest })
 }
 

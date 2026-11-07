@@ -17,7 +17,7 @@ use iroha_fold::{
     CommitKey, FoldedRelation,
     decide::{decide, decide_fresh},
     fold::fresh_instance,
-    ivc::{self, Fresh, Kept, embed, prepare_step, step_public},
+    ivc::{self, Fresh, Kept, prepare_step, step_public},
     relation::FoldShape,
 };
 use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve};
@@ -31,7 +31,7 @@ use rand_core::SeedableRng;
 
 mod common;
 
-use common::step::{BASE, DOMAIN_A, DOMAIN_Q, IVC_A, K, Side, Step, business};
+use common::step::{BASE, DOMAIN_A, DOMAIN_Q, IVC_A, K, Side, Step, business, start_passthrough};
 
 /// The two relations: Q steps (over `Fq`, instances committed on Pallas) and A
 /// steps (over `Fp`, instances committed on Vesta).
@@ -113,7 +113,7 @@ fn run_step<C: PastaCurve, K: PastaCurve<ScalarExt = C::Base>>(
     let state = if j == chain.first_step { base } else { me.state };
     let state = if lie { state + <C::Base as Field>::ONE } else { state };
     // Q's first instance has no predecessor: its passthrough is A's base hash.
-    let start = embed(&ivc::ivc_hash::<Fp>(&IVC_A, 0, Fp::from(BASE), &[Fp::from(BASE)], Fp::ZERO));
+    let start = start_passthrough();
     let prepared = prepare_step(&chain, j, other, me.kept.as_ref(), their_last, vec![state], start).expect("prepare");
     let next = business(side, state, prepared.bridge[0]);
     let public = vec![step_public(&chain, j, base, prepared.passthrough, &[next], prepared.digest, &[C::Base::from(j)])];
@@ -199,4 +199,22 @@ fn a_step_lying_about_its_state_breaks_the_folding_accumulator() {
     let (acc_a, w_a) = chain.q.kept.as_ref().expect("kept");
     assert!(decide(&chain.rel.a, &chain.rel.key_a, acc_a, w_a).is_err());
     assert!(!chain.decides());
+}
+
+#[test]
+#[ignore = "k16 IVC step; run optimized"]
+fn the_chain_start_passes_exactly_the_other_sides_base_hash() {
+    let rel = relations();
+    let chain = Side::Q.chain();
+    let base = Fq::from(BASE);
+    let prepared = prepare_step::<Eq>(&chain, 1, &rel.a, None, None, vec![base], start_passthrough()).expect("prepare");
+    let next = business(Side::Q, base, prepared.bridge[0]);
+    let public = vec![step_public(&chain, 1, base, prepared.passthrough, &[next], prepared.digest, &[Fq::from(1)])];
+    let circuit = Step::<Eq> { side: Side::Q, shape: rel.a.shape(), witness: Some(prepared.witness) };
+    assert!(check_circuit(&circuit, K, &public, CheckMode::Strict).expect("synthesis").is_satisfied());
+    // Any other passthrough at the chain start (for example one that lets A
+    // continue a later chain) leaves the circuit unsatisfied.
+    let mut other = public;
+    other[0][0] += Fq::ONE;
+    assert!(!check_circuit(&circuit, K, &other, CheckMode::Strict).expect("synthesis").is_satisfied());
 }

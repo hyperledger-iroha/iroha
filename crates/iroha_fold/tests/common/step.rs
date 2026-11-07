@@ -10,10 +10,10 @@ use iroha_fold::{
         FoldVerifierChips, FoldVerifierConfig,
         ivc::{assert_equal_unless, fold_frame, frame_outputs},
     },
-    ivc::{ChainSide, FrameWitness},
+    ivc::{ChainSide, FrameWitness, embed, ivc_hash},
     relation::FoldShape,
 };
-use iroha_pasta::{PastaCurve, PastaField};
+use iroha_pasta::{Fp, PastaCurve, PastaField};
 use iroha_plonk::{
     cs::{Column, ConstraintSystem, Instance as InstanceColumn},
     frontend::{Circuit, Error, Layouter, Region, SimpleFloorPlanner},
@@ -87,7 +87,16 @@ impl<C: PastaCurve> Circuit<C::Base> for Step<C> {
 impl<C: PastaCurve> Step<C> {
     fn layout(&self, chips: &mut FoldVerifierChips<C>, region: &mut Region<'_, C::Base>) -> Result<Vec<Word<C::Base>>, Error> {
         let chain = self.side.chain();
-        let frame = fold_frame(chips, region, &chain, &self.shape, C::Base::from(BASE), 1, self.witness.as_ref())?;
+        let frame = fold_frame(
+            chips,
+            region,
+            &chain,
+            &self.shape,
+            C::Base::from(BASE),
+            start_passthrough(),
+            1,
+            self.witness.as_ref(),
+        )?;
         // The side's first instance starts from the base state.
         let later = chips.glue.not(region, &frame.first)?;
         assert_equal_unless(chips, region, &frame.state[0], &frame.base, Some(&later))?;
@@ -111,3 +120,10 @@ pub fn business<F: PastaField>(side: Side, state: F, bridge: F) -> F {
     }
 }
 
+
+/// The passthrough of the chain's first instance (Q's first step): A's base hash
+/// `H_A(0, base, [base], 0)`, a circuit constant.
+#[must_use]
+pub fn start_passthrough<F: PastaField>() -> F {
+    embed(&ivc_hash::<Fp>(&IVC_A, 0, Fp::from(BASE), &[Fp::from(BASE)], Fp::ZERO))
+}

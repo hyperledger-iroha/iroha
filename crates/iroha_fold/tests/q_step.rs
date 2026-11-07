@@ -9,7 +9,7 @@ use iroha_fold::{
     CommitKey, FoldedRelation,
     decide::{decide, decide_fresh},
     fold::fresh_instance,
-    ivc::{self, Fresh, Kept, embed, prepare_step, step_public},
+    ivc::{Fresh, Kept, prepare_step, step_public},
     relation::FoldShape,
 };
 use iroha_pasta::{Ep, Eq, Fp, Fq};
@@ -25,7 +25,7 @@ mod common;
 
 use common::{
     qstep::{QStep, leaf},
-    step::{BASE, DOMAIN_A, DOMAIN_Q, IVC_A, K, Side, Step, business},
+    step::{BASE, DOMAIN_A, DOMAIN_Q, K, Side, Step, business},
 };
 
 struct Relations {
@@ -77,7 +77,7 @@ fn q_steps_with_genuine_signature_leaves_fold_and_decide() {
     let mut a_kept: Option<Kept<Ep>> = None; // Q instances, kept by A
     let mut last_a: Option<Fresh<Eq>> = None;
     let mut last_q: Option<Fresh<Ep>> = None;
-    let start = embed(&ivc::ivc_hash::<Fp>(&IVC_A, 0, Fp::from(BASE), &[Fp::from(BASE)], Fp::ZERO));
+    let start = common::step::start_passthrough();
     for j in 1..=4u64 {
         let started = std::time::Instant::now();
         if j % 2 == 1 {

@@ -49,21 +49,29 @@ impl HCell {
 pub(crate) struct Member<F> {
     pub(crate) lookup: usize,
     pub(crate) inputs: Vec<Program<F>>,
+    /// The input expressions, retained for deciders.
+    pub(crate) expressions: Vec<Expression<F>>,
 }
 
 /// Lookups sharing one table expression.
 #[derive(Clone, Debug)]
 pub struct LookupGroup<F> {
     pub(crate) table: Vec<Program<F>>,
+    /// The table expressions, retained for deciders.
+    pub(crate) table_expressions: Vec<Expression<F>>,
     pub(crate) members: Vec<Member<F>>,
-    /// Reciprocal cells per slot (slot `s` is witness column `h_s` of the group).
+    /// The fixed members of each slot (slot `s` is witness column `h_s`).
+    pub(crate) slot_members: Vec<Vec<u16>>,
+    /// Reciprocal cells per slot: every row where any of its members is active.
     pub(crate) slots: Vec<Vec<HCell>>,
     /// Usable rows: the table side is constrained on each.
     pub(crate) usable: usize,
     /// Witness column of `m`; `h_s` follow, then `g`.
     pub(crate) first_column: usize,
-    /// Constraint index of slot 0; the table constraint follows the last slot.
-    pub(crate) first_constraint: usize,
+    /// Constraint index of each slot (its constraint class).
+    pub(crate) slot_constraints: Vec<usize>,
+    /// Constraint index of the table constraint.
+    pub(crate) table_constraint: usize,
 }
 
 impl<F> LookupGroup<F> {
@@ -80,20 +88,16 @@ impl<F> LookupGroup<F> {
     pub(crate) fn g_column(&self) -> usize {
         self.first_column + 1 + self.slots.len()
     }
-    /// Constraint indices of the group: one per slot, then the table constraint.
-    pub(crate) fn constraints(&self) -> usize {
-        self.slots.len() + 1
-    }
 }
 
-/// Compiles the lookups of `cs` into groups. `first_column` and `first_constraint`
-/// are the first free witness column and constraint index.
+/// Compiles the lookups of `cs` into groups; `first_column` is the first free
+/// witness column. Constraint indices are assigned by the caller (constraint
+/// classes).
 pub(crate) fn compile<F: PastaField>(
     cs: &ConstraintSystem<F>,
     tables: &Tables<'_, F>,
     usable: usize,
     first_column: usize,
-    first_constraint: usize,
 ) -> (Vec<LookupGroup<F>>, usize) {
     let mut keys: Vec<String> = Vec::new();
     let mut grouped: Vec<Vec<usize>> = Vec::new();
@@ -113,15 +117,11 @@ pub(crate) fn compile<F: PastaField>(
     let mut stack = Vec::with_capacity(64);
     let mut groups = Vec::with_capacity(grouped.len());
     let mut column = first_column;
-    let mut constraint = first_constraint;
     for indices in grouped {
         let lookups = cs.lookups();
         let width = lookups[indices[0]].width();
-        let table = lookups[indices[0]]
-            .table_expressions()
-            .iter()
-            .map(Program::compile)
-            .collect();
+        let table_expressions = lookups[indices[0]].table_expressions().to_vec();
+        let table = table_expressions.iter().map(Program::compile).collect();
         let mut members = Vec::with_capacity(indices.len());
         // Per member: the usable rows on which it is active.
         let mut active_rows: Vec<Vec<bool>> = Vec::with_capacity(indices.len());
@@ -148,44 +148,54 @@ pub(crate) fn compile<F: PastaField>(
                 }
             }
             active_rows.push(active);
+            let expressions = lookup.input_expressions().to_vec();
             members.push(Member {
                 lookup: index,
-                inputs: lookup.input_expressions().iter().map(Program::compile).collect(),
+                inputs: expressions.iter().map(Program::compile).collect(),
+                expressions,
             });
         }
+        // Fixed slots: members with similar activity share a slot (at most three
+        // single-column members, or one tuple member). A slot's cells are every
+        // row where any of its members is active; a member inactive on such a row
+        // contributes its exactly zero tuple, whose membership the original lookup
+        // asserts on that row too.
         let per_cell = if width == 1 { CELL_INPUTS } else { 1 };
-        let mut slots: Vec<Vec<HCell>> = Vec::new();
-        for row in 0..usable {
-            let here: Vec<u16> = active_rows
-                .iter()
-                .enumerate()
-                .filter(|(_, active)| active[row])
-                .map(|(m, _)| m)
-                .map(|m| u16::try_from(m).expect("members fit u16"))
-                .collect();
-            for (slot, chunk) in here.chunks(per_cell).enumerate() {
-                if slots.len() <= slot {
-                    slots.push(Vec::new());
-                }
+        let counts: Vec<usize> = active_rows.iter().map(|a| a.iter().filter(|x| **x).count()).collect();
+        let firsts: Vec<usize> = active_rows.iter().map(|a| a.iter().position(|x| *x).unwrap_or(usable)).collect();
+        let mut order: Vec<usize> = (0..members.len()).collect();
+        order.sort_by_key(|m| (core::cmp::Reverse(counts[*m]), firsts[*m], *m));
+        let slot_members: Vec<Vec<u16>> = order
+            .chunks(per_cell)
+            .map(|chunk| chunk.iter().map(|m| u16::try_from(*m).expect("members fit u16")).collect())
+            .collect();
+        let slots = slot_members
+            .iter()
+            .map(|chosen| {
                 let mut cell = HCell {
-                    row: u32::try_from(row).expect("rows fit u32"),
+                    row: 0,
                     members: [0; CELL_INPUTS],
-                    count: u8::try_from(chunk.len()).expect("at most three"),
+                    count: u8::try_from(chosen.len()).expect("at most three"),
                 };
-                cell.members[..chunk.len()].copy_from_slice(chunk);
-                slots[slot].push(cell);
-            }
-        }
+                cell.members[..chosen.len()].copy_from_slice(chosen);
+                (0..usable)
+                    .filter(|row| chosen.iter().any(|m| active_rows[usize::from(*m)][*row]))
+                    .map(|row| HCell { row: u32::try_from(row).expect("rows fit u32"), ..cell })
+                    .collect()
+            })
+            .collect::<Vec<Vec<HCell>>>();
         let group = LookupGroup {
             table,
+            table_expressions,
             members,
+            slot_constraints: vec![0; slot_members.len()],
+            slot_members,
             slots,
             usable,
             first_column: column,
-            first_constraint: constraint,
+            table_constraint: 0,
         };
         column += group.columns();
-        constraint += group.constraints();
         groups.push(group);
     }
     (groups, theta_len)

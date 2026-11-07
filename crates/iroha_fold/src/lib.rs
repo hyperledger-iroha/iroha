@@ -34,6 +34,7 @@ pub mod circuit;
 pub mod claims;
 pub mod commit;
 pub mod decide;
+pub mod decider;
 pub mod fold;
 pub mod ivc;
 pub mod logup;

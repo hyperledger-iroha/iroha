@@ -29,7 +29,7 @@ use iroha_plonk_gadgets::{
     sha256::native::sha256_of_digest,
 };
 
-use super::step::{BASE, Side};
+use super::step::{BASE, Side, start_passthrough};
 
 /// A genuine `SHA256withECDSA` signature over the 32-byte encoding of `digest`.
 pub fn signature(digest: u64, secret: u64, nonce: u64) -> SignatureWitness {
@@ -110,7 +110,16 @@ impl Circuit<Fq> for QStep {
             || "fold frame",
             |mut region| {
                 let chain = Side::Q.chain();
-                let frame = fold_frame(&mut chips, &mut region, &chain, &self.shape, Fq::from(BASE), 1, self.witness.as_ref())?;
+                let frame = fold_frame(
+                    &mut chips,
+                    &mut region,
+                    &chain,
+                    &self.shape,
+                    Fq::from(BASE),
+                    start_passthrough(),
+                    1,
+                    self.witness.as_ref(),
+                )?;
                 let later = chips.glue.not(&mut region, &frame.first)?;
                 assert_equal_unless(&mut chips, &mut region, &frame.state[0], &frame.base, Some(&later))?;
                 let next = chips.glue.linear(&mut region, &[(Fq::from(2), &frame.state[0])], Fq::ONE)?;

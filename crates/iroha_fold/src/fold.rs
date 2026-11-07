@@ -298,10 +298,10 @@ pub(crate) fn constraints_at<F: iroha_pasta::PastaField>(
     let tables = relation.tables();
     let point = view.point(relation.advice_columns);
     let mut stack = Vec::with_capacity(64);
-    for (index, gate) in relation.gates.iter().enumerate() {
+    for gate in &relation.gates {
         for (row, guard) in gate.rows.iter().zip(&gate.guards) {
             let row = *row as usize;
-            sink(row, index, gate.body.eval(&tables, point, row, &mut stack) * guard);
+            sink(row, gate.class, gate.body.eval(&tables, point, row, &mut stack) * guard);
         }
     }
     for (gi, group) in relation.groups.iter().enumerate() {
@@ -316,7 +316,7 @@ pub(crate) fn constraints_at<F: iroha_pasta::PastaField>(
                     let member = &group.members[usize::from(*member)];
                     *term = r + compress(&member.inputs, view.theta, &tables, point, row, &mut stack);
                 }
-                sink(row, group.first_constraint + slot, cell_constraint(h_column[row], &terms[..members.len()]));
+                sink(row, group.slot_constraints[slot], cell_constraint(h_column[row], &terms[..members.len()]));
             }
         }
         let (m, g) = (&view.columns[group.m_column()], &view.columns[group.g_column()]);
@@ -325,7 +325,7 @@ pub(crate) fn constraints_at<F: iroha_pasta::PastaField>(
                 continue;
             }
             let s = compress(&group.table, view.theta, &tables, point, row, &mut stack);
-            sink(row, group.first_constraint + group.slots.len(), g[row] * (r + s) - m[row]);
+            sink(row, group.table_constraint, g[row] * (r + s) - m[row]);
         }
     }
 }
@@ -360,14 +360,14 @@ fn constraints_on_line<F: iroha_pasta::PastaField>(
         out
     };
     let mut stack = Vec::with_capacity(64);
-    for (index, gate) in relation.gates.iter().enumerate() {
+    for gate in &relation.gates {
         for (row, guard) in gate.rows.iter().zip(&gate.guards) {
             let row = *row as usize;
             let mut v = gate.body.eval_line(&tables, pa, pn, xs, row, &mut stack);
             for x in v.iter_mut().take(m) {
                 *x *= guard;
             }
-            sink(row, index, &v);
+            sink(row, gate.class, &v);
         }
     }
     let thetas: Vec<[F; MAX_POINTS]> = acc.theta.iter().zip(new.theta).map(|(a, b)| line(*a, *b)).collect();
@@ -402,7 +402,7 @@ fn constraints_on_line<F: iroha_pasta::PastaField>(
                     let t: Vec<F> = terms[..members.len()].iter().map(|t| t[i]).collect();
                     out[i] = cell_constraint(h[i], &t);
                 }
-                sink(row, group.first_constraint + slot, &out);
+                sink(row, group.slot_constraints[slot], &out);
             }
         }
         let (mc, gc) = (group.m_column(), group.g_column());
@@ -417,7 +417,7 @@ fn constraints_on_line<F: iroha_pasta::PastaField>(
             for i in 0..m {
                 out[i] = gv[i] * (r[i] + s[i]) - mv[i];
             }
-            sink(row, group.first_constraint + group.slots.len(), &out);
+            sink(row, group.table_constraint, &out);
         }
     }
 }

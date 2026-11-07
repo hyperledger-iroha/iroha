@@ -4,13 +4,21 @@
 //! fixed columns, copy cycles), never from witness values, so a key-generation
 //! synthesis and a witness synthesis of one circuit yield the same relation.
 //!
-//! Constraint indices are row-major: constraint `p` on row `r` has index
-//! `r * 2^constraint_bits + p`, where `p` runs over the gate polynomials, then each
-//! `LogUp` group's slots and its table constraint. `ProtoGalaxy`'s `pow` weights use
-//! that index.
+//! Constraint indices are row-major: constraint `c` on row `r` has index
+//! `r * 2^constraint_bits + c`. `ProtoGalaxy`'s `pow` weights use that index.
+//! Gate polynomials and `LogUp` slot constraints whose row sets never meet (their
+//! fixed guards are never nonzero on the same row) share one constraint index, a
+//! *constraint class*: on every row at most one member of a class is constrained,
+//! so the class constraint is that member's constraint or exactly zero. Each
+//! group's table constraint, whose activity depends on the witness, has its own
+//! index after the classes. Classes keep the index space, hence `F(X)` and a
+//! decider's public weights, small.
 
 use iroha_pasta::PastaField;
-use iroha_plonk::{cs::Any, frontend::Synthesized};
+use iroha_plonk::{
+    cs::{Any, Expression},
+    frontend::Synthesized,
+};
 
 use crate::{
     Error,
@@ -25,10 +33,14 @@ pub(crate) struct GateConstraint<F> {
     pub(crate) body: Program<F>,
     pub(crate) rows: Vec<u32>,
     pub(crate) guards: Vec<F>,
+    /// Constraint index (class).
+    pub(crate) class: usize,
+    /// The whole polynomial (guard and body), retained for deciders.
+    pub(crate) expression: Expression<F>,
 }
 
 /// One cell of a copy constraint.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Cell {
     Advice(u32, u32),
     Fixed(u32, u32),
@@ -59,6 +71,8 @@ pub struct RelationSummary {
     pub columns: usize,
     /// Largest folded degree of any constraint.
     pub degree: usize,
+    /// Constraint classes (gate polynomials and slots sharing an index).
+    pub constraint_classes: usize,
 }
 
 /// The column layout of one `LogUp` group: its multiplicity column, then its
@@ -108,6 +122,48 @@ pub struct FoldedRelation<F> {
     pub(crate) degree: usize,
     pub(crate) constraint_bits: usize,
     pub(crate) theta_len: usize,
+    pub(crate) classes: usize,
+}
+
+/// Greedy colouring of gate polynomials and `LogUp` slots by row-set
+/// disjointness (largest row sets first); sets every member's class and each
+/// group's table constraint (after the classes). Returns the number of classes.
+fn assign_classes<F>(n: usize, gates: &mut [GateConstraint<F>], groups: &mut [LookupGroup<F>]) -> usize {
+    let words = n.div_ceil(64);
+    // (gate index or usize::MAX, group, slot) with its rows.
+    let mut items: Vec<(Option<usize>, usize, usize, Vec<u32>)> = Vec::new();
+    for (index, gate) in gates.iter().enumerate() {
+        items.push((Some(index), 0, 0, gate.rows.clone()));
+    }
+    for (g, group) in groups.iter().enumerate() {
+        for (slot, cells) in group.slots.iter().enumerate() {
+            items.push((None, g, slot, cells.iter().map(|cell| cell.row).collect()));
+        }
+    }
+    items.sort_by_key(|item| core::cmp::Reverse(item.3.len()));
+    let mut occupied: Vec<Vec<u64>> = Vec::new();
+    for (gate, g, slot, rows) in items {
+        let fits = |bits: &Vec<u64>| rows.iter().all(|r| bits[*r as usize / 64] >> (*r % 64) & 1 == 0);
+        let class = match occupied.iter().position(fits) {
+            Some(class) => class,
+            None => {
+                occupied.push(vec![0; words]);
+                occupied.len() - 1
+            }
+        };
+        for r in &rows {
+            occupied[class][*r as usize / 64] |= 1 << (*r % 64);
+        }
+        match gate {
+            Some(index) => gates[index].class = class,
+            None => groups[g].slot_constraints[slot] = class,
+        }
+    }
+    let classes = occupied.len();
+    for (g, group) in groups.iter_mut().enumerate() {
+        group.table_constraint = classes + g;
+    }
+    classes
 }
 
 fn u32_of(value: usize) -> u32 {
@@ -153,11 +209,13 @@ impl<F: PastaField> FoldedRelation<F> {
                     body,
                     rows,
                     guards,
+                    class: 0,
+                    expression: polynomial.clone(),
                 });
             }
         }
         let first_column = cs.num_advice_columns();
-        let (groups, theta_len) = logup::compile(cs, &tables, usable, first_column, gates.len());
+        let (mut groups, theta_len) = logup::compile(cs, &tables, usable, first_column);
         for group in &groups {
             let width = group.members.first().map_or(1, |m| m.inputs.len());
             let input_degree = group
@@ -189,7 +247,8 @@ impl<F: PastaField> FoldedRelation<F> {
         if degree > MAX_POINTS + 1 {
             return Err(Error::Degree(degree));
         }
-        let constraints = gates.len() + groups.iter().map(LookupGroup::constraints).sum::<usize>();
+        let classes = assign_classes(n, &mut gates, &mut groups);
+        let constraints = classes + groups.len();
         let constraint_bits = constraints.max(1).next_power_of_two().trailing_zeros() as usize;
         let permutation = assigned.permutation();
         let columns = permutation.columns();
@@ -225,6 +284,7 @@ impl<F: PastaField> FoldedRelation<F> {
             degree,
             constraint_bits,
             theta_len,
+            classes,
         })
     }
 
@@ -241,6 +301,7 @@ impl<F: PastaField> FoldedRelation<F> {
             copies: self.copies.len(),
             columns: self.columns(),
             degree: self.degree,
+            constraint_classes: self.classes,
         }
     }
 
