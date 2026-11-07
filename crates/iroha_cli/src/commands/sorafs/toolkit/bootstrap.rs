@@ -21,7 +21,6 @@ use iroha_crypto::{PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,
     isi::{InstructionBox, sorafs_repair::ApplySorafsRepairV1},
-    peer::PeerId,
     runtime::{
         definition::{DefinitionDescriptorV1, RootSelectionV1},
         lifecycle::ChangeSetV1,
@@ -35,7 +34,7 @@ use iroha_data_model::{
         provider_admission::{ProviderAdmissionCouncilPolicyV1, governance::decode_frame},
     },
 };
-use iroha_model_base::chain::ChainId;
+use iroha_model_base::{chain::ChainId, peer::PeerId};
 use sorafs_manifest::provider_admission::ProviderAdmissionEnvelopeV1;
 
 use super::validation::CliError;
