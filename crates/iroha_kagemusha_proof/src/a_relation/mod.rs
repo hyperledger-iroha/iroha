@@ -9,6 +9,7 @@ pub mod archive;
 mod binding;
 pub mod bootstrap;
 pub mod context;
+pub mod fold;
 mod frame;
 mod incoming_lineage;
 pub mod incoming_transport;
