@@ -14,6 +14,14 @@ pub enum FoldPurpose {
     ATerminal,
     /// Closed Vesta aggregation from the exact succinct A frame inside W/Omega.
     WrapperVesta,
+    /// Pallas aggregation into acc_P in the folding Fp wrap P (KAGEMUSHA-Fold
+    /// compression): the decided claims of the Q side and the restructured
+    /// Pallas claim accumulator.
+    FoldWrapPallas,
+    /// Vesta aggregation into acc_V in the folding Omega wrap: P's own
+    /// opening, the decided claims of the A side and the restructured Vesta
+    /// claim accumulator.
+    FoldWrapVesta,
 }
 impl FoldPurpose {
     /// Whether this compiled role permits the selected curve and fixed slot count.
@@ -27,6 +35,8 @@ impl FoldPurpose {
             Self::AInitial | Self::AContinuation => C::CURVE_ID == "pallas",
             Self::ATerminal => C::CURVE_ID == "pallas" && count == 4,
             Self::WrapperVesta => C::CURVE_ID == "vesta" && count == 4,
+            Self::FoldWrapPallas => C::CURVE_ID == "pallas",
+            Self::FoldWrapVesta => C::CURVE_ID == "vesta",
         }
     }
     /// Canonical eight-byte domain identifier, also required by private storage.
@@ -37,6 +47,8 @@ impl FoldPurpose {
             Self::AContinuation => *b"acpfold1",
             Self::ATerminal => *b"atpfold1",
             Self::WrapperVesta => *b"wrapv001",
+            Self::FoldWrapPallas => *b"fwpfold1",
+            Self::FoldWrapVesta => *b"fwvfold1",
         }
     }
     /// Native integer placed in context word two, exactly as the circuit constant.
@@ -51,6 +63,8 @@ impl FoldPurpose {
             Self::AContinuation,
             Self::ATerminal,
             Self::WrapperVesta,
+            Self::FoldWrapPallas,
+            Self::FoldWrapVesta,
         ]
         .into_iter()
         .find(|purpose| purpose.tag() == tag)
@@ -83,6 +97,16 @@ mod tests {
                 count == 4
             );
             assert!(!FoldPurpose::WrapperVesta.permits_shape::<Ep>(count));
+            assert_eq!(
+                FoldPurpose::FoldWrapPallas.permits_shape::<Ep>(count),
+                count != 0
+            );
+            assert!(!FoldPurpose::FoldWrapPallas.permits_shape::<Eq>(count));
+            assert_eq!(
+                FoldPurpose::FoldWrapVesta.permits_shape::<Eq>(count),
+                count != 0
+            );
+            assert!(!FoldPurpose::FoldWrapVesta.permits_shape::<Ep>(count));
         }
     }
     #[test]
@@ -93,6 +117,8 @@ mod tests {
             FoldPurpose::AContinuation,
             FoldPurpose::ATerminal,
             FoldPurpose::WrapperVesta,
+            FoldPurpose::FoldWrapPallas,
+            FoldPurpose::FoldWrapVesta,
         ];
         let mut tags = std::collections::BTreeSet::new();
         for purpose in purposes {
