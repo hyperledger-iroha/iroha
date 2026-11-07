@@ -273,7 +273,9 @@ impl<F: iroha_pasta::PastaField> Advice<F> {
 }
 
 /// Blinds, commits and writes the advice columns (`BlindingScheduleV1` item
-/// 1).
+/// 1). A column with a `committed` blind keeps all its given rows and is
+/// committed with that blind; its random rows and blind are still drawn, then
+/// wiped unused, so every other draw keeps its place in the schedule.
 ///
 /// # Errors
 ///
@@ -284,6 +286,7 @@ pub(super) fn commit<C, T, R>(
     pk: &ProvingKey<C>,
     shape: &Shape,
     values: Vec<Vec<C::ScalarExt>>,
+    committed: Vec<Option<C::ScalarExt>>,
     rng: &mut R,
     transcript: &mut T,
     budget: MemoryBudget,
@@ -294,21 +297,30 @@ where
     T: TranscriptWrite<C>,
     R: Rng,
 {
+    let committed = zeroize::Zeroizing::new(committed);
     let mut advice = Advice {
         values,
         polys: Vec::new(),
         blinds: Vec::new(),
     };
     let blinding_rows = shape.n - shape.usable_rows;
-    for column in &mut advice.values {
+    for (index, column) in advice.values.iter_mut().enumerate() {
         CancellationToken::checkpoint(cancellation)?;
         let random = crate::secret::SecretPolynomial::new(random_values::<C::ScalarExt, _>(
             rng,
             blinding_rows,
         ));
+        if committed.get(index).is_some_and(Option::is_some) {
+            continue;
+        }
         column[shape.usable_rows..].copy_from_slice(&random);
     }
     advice.blinds = random_values(rng, shape.num_advice);
+    for (blind, given) in advice.blinds.iter_mut().zip(committed.iter()) {
+        if let Some(given) = given {
+            *blind = *given;
+        }
+    }
     // One bounded batch: per-column Rayon tasks would let nested stealing open more
     // MSM kernels than the shared scratch ceiling admits.
     let columns: Vec<&[C::ScalarExt]> = advice.values.iter().map(Vec::as_slice).collect();

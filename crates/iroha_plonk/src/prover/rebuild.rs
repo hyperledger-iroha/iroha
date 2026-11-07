@@ -110,6 +110,7 @@ where
         let witness = Witness {
             advice: advice.into_vec(),
             instances,
+            committed: Vec::new(),
         };
         (synthesized, witness)
     };

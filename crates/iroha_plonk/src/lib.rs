@@ -156,7 +156,7 @@ pub use protocol::{Protocol, ProtocolError, Shape};
 pub use prover::{
     ProverConfig, ProverError, ProverOutput, ProverRandomness, QuotientWorkspace, Witness,
     WorkspaceError, create_proof, create_proof_owned, create_proof_owned_with_claim,
-    create_proof_owned_with_workspace, prove_circuit,
+    create_proof_owned_with_workspace, prove_circuit, prove_with_committed_advice,
 };
 pub use transcript::{Transcript, TranscriptError, TranscriptRead, TranscriptWrite};
 pub use verification_counters::VerificationCounts;

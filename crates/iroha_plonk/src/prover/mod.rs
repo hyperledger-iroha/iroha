@@ -88,6 +88,8 @@ pub use quotient::{QuotientWorkspace, WorkspaceError, bounded::bounded_quotient_
 #[cfg(test)]
 mod cancellation_tests;
 #[cfg(test)]
+mod committed_advice_tests;
+#[cfg(test)]
 mod tests;
 mod vanishing;
 
@@ -486,12 +488,24 @@ impl TryCryptoRng for StreamRng {}
 pub struct Witness<F: PastaField> {
     advice: Vec<Vec<F>>,
     instances: Vec<Vec<F>>,
+    /// Per advice column, the blind of a commitment made elsewhere; empty
+    /// when no column is committed elsewhere
+    /// ([`Witness::from_columns_with_committed_advice`]).
+    committed: Vec<Option<F>>,
 }
 
 impl<F: PastaField> fmt::Debug for Witness<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Witness")
             .field("advice_columns", &self.advice.len())
+            .field(
+                "committed_columns",
+                &self
+                    .committed
+                    .iter()
+                    .filter(|blind| blind.is_some())
+                    .count(),
+            )
             .field("instances", &self.instances)
             .finish()
     }
@@ -504,6 +518,7 @@ impl<F: PastaField> Drop for Witness<F> {
                 value.zeroize();
             }
         }
+        zeroize::Zeroize::zeroize(&mut self.committed);
         #[cfg(test)]
         rebuild::observe_wiped_witness(&self.advice);
     }
@@ -529,6 +544,15 @@ impl<F: PastaField> WitnessInput<'_, F> {
         match self {
             Self::Borrowed(witness) => witness.advice().to_vec(),
             Self::Owned(witness) => core::mem::take(&mut witness.advice),
+        }
+    }
+
+    /// The blinds of the columns committed elsewhere, empty when there are
+    /// none; [`advice::commit`] wipes them after use.
+    fn take_committed(&mut self) -> Vec<Option<F>> {
+        match self {
+            Self::Borrowed(witness) => witness.committed.clone(),
+            Self::Owned(witness) => core::mem::take(&mut witness.committed),
         }
     }
 }
@@ -619,6 +643,7 @@ impl<F: PastaField> Witness<F> {
         let witness = Self {
             advice,
             instances: instances.to_vec(),
+            committed: Vec::new(),
         };
         let tables = &synthesized.tables;
         let first_column = usize::try_from(descriptor.selectors.first_column)
@@ -672,7 +697,42 @@ impl<F: PastaField> Witness<F> {
     where
         C: PastaCurve<ScalarExt = F>,
     {
-        let witness = Self { advice, instances };
+        let witness = Self {
+            advice,
+            instances,
+            committed: Vec::new(),
+        };
+        witness.check_shape(pk)?;
+        Ok(witness)
+    }
+
+    /// [`Self::from_columns`] where `committed[i]`, when present, is the blind
+    /// of advice column `i`'s commitment made elsewhere: that column keeps
+    /// all `n` rows verbatim, blinding rows included, and is committed as
+    /// `sum_j v_j g_lagrange_j + blind W`, so the proof carries exactly the
+    /// caller's point. Every other column is blinded and committed as usual.
+    /// For internal proofs only (relaxed-relation deciders whose advice is a
+    /// folding accumulator): a committed column gets no zero-knowledge
+    /// blinding rows. `committed` has one entry per advice column.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::from_columns`], and [`ProverError::WitnessShape`] when
+    /// `committed` does not have one entry per advice column.
+    pub fn from_columns_with_committed_advice<C>(
+        pk: &ProvingKey<C>,
+        advice: Vec<Vec<F>>,
+        instances: Vec<Vec<F>>,
+        committed: Vec<Option<F>>,
+    ) -> Result<Self, ProverError>
+    where
+        C: PastaCurve<ScalarExt = F>,
+    {
+        let witness = Self {
+            advice,
+            instances,
+            committed,
+        };
         witness.check_shape(pk)?;
         Ok(witness)
     }
@@ -698,6 +758,12 @@ impl<F: PastaField> Witness<F> {
                 found: column.len(),
             });
         }
+        if !self.committed.is_empty() && self.committed.len() != columns {
+            return Err(ProverError::WitnessShape {
+                expected: columns,
+                found: self.committed.len(),
+            });
+        }
         check_instances(descriptor, &self.instances)
     }
 
@@ -714,7 +780,10 @@ impl<F: PastaField> Witness<F> {
 
     /// The witness digest over the usable rows of every advice column,
     /// streamed value by value (no copy of the advice is built; each
-    /// encoded value is wiped after it is absorbed).
+    /// encoded value is wiped after it is absorbed). A column committed
+    /// elsewhere also contributes its index, blind and remaining rows, which
+    /// are part of its commitment; without such columns the digest is the
+    /// usable-row digest alone.
     fn digest(
         &self,
         usable_rows: usize,
@@ -727,14 +796,32 @@ impl<F: PastaField> Witness<F> {
                 .to_le_bytes(),
         );
         hasher.update(&u32::try_from(usable_rows).unwrap_or(u32::MAX).to_le_bytes());
+        let mut absorb = |value: &F| {
+            let mut repr = value.to_repr();
+            hasher.update(repr.as_ref());
+            repr.as_mut().fill(0);
+        };
         for column in &self.advice {
             for (index, value) in column.iter().take(usable_rows).enumerate() {
                 if index % 1024 == 0 {
                     iroha_pasta::CancellationToken::checkpoint(cancellation)?;
                 }
-                let mut repr = value.to_repr();
-                hasher.update(repr.as_ref());
-                repr.as_mut().fill(0);
+                absorb(value);
+            }
+        }
+        for (column, blind) in self.committed.iter().enumerate() {
+            let Some(blind) = blind else { continue };
+            iroha_pasta::CancellationToken::checkpoint(cancellation)?;
+            absorb(&F::from(u64::try_from(column).unwrap_or(u64::MAX)));
+            absorb(blind);
+            for value in self
+                .advice
+                .get(column)
+                .into_iter()
+                .flatten()
+                .skip(usable_rows)
+            {
+                absorb(value);
             }
         }
         Ok(hasher.finalize())
@@ -807,6 +894,34 @@ pub struct ProverOutput<C: PastaCurve> {
     pub proof: Vec<u8>,
     /// The opening obligation; recursive consumers must fold or decide it.
     pub opening: crate::pcs::ipa::GeneratorClaim<C>,
+}
+
+/// Proves advice columns of which those with a `committed` blind were
+/// committed elsewhere ([`Witness::from_columns_with_committed_advice`]): the
+/// proof's commitment to such a column is `sum_j v_j g_lagrange_j + blind W`
+/// over all `n` given rows, the point a folding accumulator holds for it, so
+/// a verifier of this proof can compare the two. The verifier is unchanged.
+/// For internal proofs only; committed columns have no zero-knowledge
+/// blinding rows.
+///
+/// # Errors
+/// As [`Witness::from_columns_with_committed_advice`] and
+/// [`create_proof_owned_with_claim`].
+pub fn prove_with_committed_advice<C: PastaCurve>(
+    params: &PinnedParams<C>,
+    pk: &ProvingKey<C>,
+    advice: Vec<Vec<C::ScalarExt>>,
+    committed: Vec<Option<C::ScalarExt>>,
+    instances: Vec<Vec<C::ScalarExt>>,
+    randomness: ProverRandomness,
+    config: ProverConfig,
+) -> Result<ProverOutput<C>, ProverError>
+where
+    C::ScalarExt: PoseidonField,
+    C::Base: PoseidonField,
+{
+    let witness = Witness::from_columns_with_committed_advice(pk, advice, instances, committed)?;
+    create_proof_owned_with_claim(params, pk, witness, randomness, config)
 }
 
 /// Consumes the witness and returns proof bytes plus `(G, u)` without reparsing.
@@ -1066,6 +1181,12 @@ where
             found: column.len(),
         });
     }
+    if !witness.committed.is_empty() && witness.committed.len() != shape.num_advice {
+        return Err(ProverError::WitnessShape {
+            expected: shape.num_advice,
+            found: witness.committed.len(),
+        });
+    }
     check_instances(descriptor, &witness.instances)?;
 
     let binding = if randomness.needs_binding() {
@@ -1110,6 +1231,7 @@ where
         pk,
         &shape,
         input.take_advice(),
+        input.take_committed(),
         &mut rng,
         &mut transcript,
         budget,

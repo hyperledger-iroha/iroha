@@ -175,6 +175,7 @@ fn parity<C: PastaCurve>() {
                     let consumed_witness = Witness {
                         advice: witness.advice.clone(),
                         instances: witness.instances.clone(),
+                        committed: Vec::new(),
                     };
                     pool.install(|| {
                         create_proof_owned(
@@ -380,6 +381,7 @@ fn cancellation<C: PastaCurve>() {
     let witness = Witness {
         advice: advice.into_vec(),
         instances: public,
+        committed: Vec::new(),
     };
     let at_rebuild = CancellationToken::new();
     at_rebuild.cancel();

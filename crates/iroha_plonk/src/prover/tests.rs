@@ -505,14 +505,17 @@ where
         Witness {
             advice: Vec::new(),
             instances: instances.clone(),
+            committed: Vec::new(),
         },
         Witness {
             advice: vec![vec![C::ScalarExt::ONE; 3]; 3],
             instances: instances.clone(),
+            committed: Vec::new(),
         },
         Witness {
             advice: witness().advice().to_vec(),
             instances: Vec::new(),
+            committed: Vec::new(),
         },
     ] {
         let expected = create_proof(
