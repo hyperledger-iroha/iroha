@@ -16,8 +16,11 @@
 //! the coefficients of `F(X)` and `K(X)` and no cross-term commitment; the native
 //! verifier [`fold::verify_fold`] recomputes every challenge and the folded
 //! instance. [`decide::decide`] is the native (non-succinct) decider used as the
-//! test oracle. [`claims`] folds IPA generator claims `(G, u)` as committed tensor
-//! vectors.
+//! test oracle. [`decider_v2`] is the production decider: a zero-check and a
+//! shift-reduction sumcheck reduce an accumulator (committed under the monomial
+//! generators) to evaluation claims at one point for one batched IPA opening.
+//! [`decider`] is the relaxed-PLONK decider circuit (v1), kept as the baseline.
+//! [`claims`] folds IPA generator claims `(G, u)` as committed tensor vectors.
 //!
 //! Every transcript of instances committed on a curve runs over that curve's base
 //! field ([`transcript`]), the field of the circuit that folds them in the
@@ -35,6 +38,7 @@ pub mod claims;
 pub mod commit;
 pub mod decide;
 pub mod decider;
+pub mod decider_v2;
 pub mod fold;
 pub mod ivc;
 pub mod logup;

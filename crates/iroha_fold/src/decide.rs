@@ -152,4 +152,4 @@ pub fn decide_fresh<C: PastaCurve>(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

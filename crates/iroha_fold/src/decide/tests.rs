@@ -28,8 +28,8 @@ use crate::{
     relation::FoldedRelation,
 };
 
-const K: u32 = 6;
-const DOMAIN: [u8; 32] = *b"iroha_fold LogUp support domain!";
+pub(crate) const K: u32 = 6;
+pub(crate) const DOMAIN: [u8; 32] = *b"iroha_fold LogUp support domain!";
 /// Rows with an active lookup; the other usable rows hold no reciprocal cell
 /// (but one, which keeps the zero tuple checked).
 const LOOKUPS: usize = 4;
@@ -92,26 +92,31 @@ impl Circuit<Fq> for Sparse {
     }
 }
 
-struct Stage {
-    relation: FoldedRelation<Fq>,
-    key: CommitKey<Ep>,
+pub(crate) struct Stage {
+    pub(crate) relation: FoldedRelation<Fq>,
+    pub(crate) key: CommitKey<Ep>,
     advice: Vec<Vec<Fq>>,
     public: Vec<Vec<Fq>>,
 }
 
 fn stage() -> Stage {
+    let params = PinnedParams::<Ep>::derive(K).expect("params");
+    stage_with(CommitKey::lagrange(params.params()))
+}
+
+/// The sparse-lookup stage with accumulators committed under `key`.
+pub(crate) fn stage_with(key: CommitKey<Ep>) -> Stage {
     let layout = synthesize(&Sparse, K, None).expect("layout");
     let relation = FoldedRelation::from_synthesized(&layout).expect("relation");
     let none: Vec<Vec<Fq>> = Vec::new();
     let synthesized = synthesize(&Sparse, K, Some(&none)).expect("witness");
     let (advice, public) = relation.stage_witness(&synthesized).expect("stage witness");
-    let params = PinnedParams::<Ep>::derive(K).expect("params");
-    Stage { relation, key: CommitKey::lagrange(params.params()), advice, public }
+    Stage { relation, key, advice, public }
 }
 
 /// Where a forger puts the value that balances the `LogUp` sum.
 #[derive(Clone, Copy, Debug)]
-enum Balance {
+pub(crate) enum Balance {
     /// A reciprocal cell on a usable row where no member is active.
     InactiveReciprocal,
     /// A reciprocal cell past the usable rows.
@@ -123,7 +128,7 @@ enum Balance {
 /// A fresh instance with its own challenges whose lookup input on row 1 is not
 /// in the table: `m = g = 0`, every reciprocal cell genuine, and one cell no
 /// constraint touches balancing the sum.
-fn forged(stage: &Stage, balance: Balance) -> (Instance<Ep>, Witness<Fq>) {
+pub(crate) fn forged(stage: &Stage, balance: Balance) -> (Instance<Ep>, Witness<Fq>) {
     let relation = &stage.relation;
     let group = &relation.groups[0];
     let mut rng = ChaCha20Rng::seed_from_u64(77);
