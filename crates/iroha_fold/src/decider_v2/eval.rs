@@ -105,6 +105,11 @@ impl<F: PastaField> Poly<F> {
         stack.pop().unwrap_or(0)
     }
 
+    /// Multiplications of one evaluation (products and scalings).
+    pub(crate) fn multiplications(&self) -> usize {
+        self.ops.iter().filter(|op| matches!(op, Op::Mul | Op::Scale(_))).count()
+    }
+
     /// Evaluates at one point from table values and scalars.
     pub(crate) fn eval(&self, table: &impl Fn(usize) -> F, scalars: &[F]) -> F {
         let mut stack: Vec<F> = Vec::with_capacity(16);

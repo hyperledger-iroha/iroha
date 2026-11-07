@@ -546,6 +546,24 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
         self.degree
     }
 
+    /// The verifier's work beyond the opening: field multiplications of the
+    /// final term evaluation (one per term weight included), scalars absorbed
+    /// per proof, and the opened commitments as (witness, key, helper).
+    #[must_use]
+    pub fn verifier_profile(&self) -> (usize, usize, (usize, usize, usize)) {
+        let multiplications = self.terms.iter().map(|t| t.poly.multiplications() + 1).sum();
+        let absorbed = self.mu * self.degree + self.reads.len() + 2 * self.mu + self.committed.len();
+        let mut opened = (0, 0, 0);
+        for poly in &self.committed {
+            match poly {
+                Committed::Witness(_) => opened.0 += 1,
+                Committed::Key(_) => opened.1 += 1,
+                Committed::Helper(_) => opened.2 += 1,
+            }
+        }
+        (multiplications, absorbed, opened)
+    }
+
     /// Sizes of the plan: zero-check tables, key polynomials, copy helpers,
     /// terms.
     #[must_use]

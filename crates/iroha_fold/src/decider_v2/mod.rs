@@ -27,8 +27,14 @@
 //!    the same transcript and yields a generator claim. The decision is complete
 //!    once that claim is decided or accumulated into a claim accumulator.
 //!
+//! [`prove_many`] and [`verify_many`] decide several accumulators of one field
+//! (any relations with the same domain size and commitment key) at once. They
+//! share the copy challenges, one zero-check over `sum_r lambda^r S_r`, one
+//! shift reduction and one opening.
+//!
 //! The transcript runs over the commitment curve's base field, as the fold
-//! transcripts do ([`crate::transcript`]). Deciders are not zero-knowledge.
+//! transcripts do ([`crate::transcript`]). It starts with the batch size and
+//! every accumulator's digest. Deciders are not zero-knowledge.
 
 mod eval;
 mod mle;
@@ -98,12 +104,11 @@ pub struct Verified<C: PastaCurve> {
     pub transcript: Transcript<C>,
 }
 
-/// Challenges drawn before the zero-check.
+/// Challenges drawn after the copy helpers are bound.
 struct Challenges<F> {
-    gamma: F,
-    eta: F,
     alpha: F,
     kappa: F,
+    lambda: F,
     tau: Vec<F>,
 }
 
@@ -136,15 +141,24 @@ fn public_cell<C: PastaCurve>(public: &[Vec<C::ScalarExt>], column: usize, row: 
     public.get(column).and_then(|c| c.get(row)).copied().unwrap_or(<C::ScalarExt as Field>::ZERO)
 }
 
-fn weights<C: PastaCurve>(plan: &DeciderV2Plan<C>, acc: &Accumulator<C>, alpha: C::ScalarExt, kappa: C::ScalarExt) -> Vec<C::ScalarExt> {
+/// The term coefficients of one accumulator, scaled by its batch weight.
+fn weights<C: PastaCurve>(
+    plan: &DeciderV2Plan<C>,
+    acc: &Accumulator<C>,
+    challenges: &Challenges<C::ScalarExt>,
+    scale: C::ScalarExt,
+) -> Vec<C::ScalarExt> {
     let pow_lo = pow_vector(&acc.beta[..plan.relation.constraint_bits]);
     let power = |base: C::ScalarExt, k: usize| base.pow_vartime([k as u64]);
     plan.terms
         .iter()
-        .map(|term| match term.weight {
-            Weight::Index(c) => pow_lo[c],
-            Weight::Alpha(k) => power(alpha, k),
-            Weight::AlphaKappa(k, j) => power(alpha, k) * power(kappa, j),
+        .map(|term| {
+            scale
+                * match term.weight {
+                    Weight::Index(c) => pow_lo[c],
+                    Weight::Alpha(k) => power(challenges.alpha, k),
+                    Weight::AlphaKappa(k, j) => power(challenges.alpha, k) * power(challenges.kappa, j),
+                }
         })
         .collect()
 }
@@ -165,11 +179,42 @@ fn instance_copy_terms<C: PastaCurve>(plan: &DeciderV2Plan<C>, acc: &Accumulator
     Ok(total)
 }
 
-fn draw<C: PastaCurve>(transcript: &mut Transcript<C>, mu: usize) -> (C::ScalarExt, C::ScalarExt, Vec<C::ScalarExt>) {
+/// The shared start of a decider transcript: the batch size and every
+/// accumulator's digest, then the copy challenges `gamma` and `eta`.
+fn start<'a, C: PastaCurve + 'a>(
+    domain: &[u8; 32],
+    accs: impl ExactSizeIterator<Item = &'a Accumulator<C>>,
+) -> (Transcript<C>, C::ScalarExt, C::ScalarExt) {
+    let mut transcript = Transcript::<C>::new(TAG_DECIDER, domain);
+    transcript.absorb_u64(accs.len() as u64);
+    for acc in accs {
+        transcript.absorb_base(&[acc.digest(domain)]);
+    }
+    transcript.absorb_u64(TAG_DECIDER_PERMUTATION);
+    let gamma = transcript.challenge();
+    let eta = transcript.challenge();
+    (transcript, gamma, eta)
+}
+
+fn draw<C: PastaCurve>(transcript: &mut Transcript<C>, mu: usize) -> Challenges<C::ScalarExt> {
     let alpha = transcript.challenge();
     let kappa = transcript.challenge();
+    let lambda = transcript.challenge();
     let tau = (0..mu).map(|_| transcript.challenge()).collect();
-    (alpha, kappa, tau)
+    Challenges { alpha, kappa, lambda, tau }
+}
+
+/// The common row-bit count and the round degree of a batch.
+fn batch_shape<'a, C: PastaCurve + 'a>(plans: impl Iterator<Item = &'a DeciderV2Plan<C>>) -> Result<(usize, usize), Error> {
+    let mut shape: Option<(usize, usize)> = None;
+    for plan in plans {
+        shape = match shape {
+            None => Some((plan.mu, plan.degree)),
+            Some((mu, _)) if mu != plan.mu => return Err(Error::Shape("decider batch domains")),
+            Some((mu, degree)) => Some((mu, degree.max(plan.degree))),
+        };
+    }
+    shape.ok_or(Error::Shape("empty decider batch"))
 }
 
 /// The copy helper columns.
@@ -249,43 +294,23 @@ fn committed_poly<'a, C: PastaCurve>(
     }
 }
 
-/// Proves that `acc` with `witness` decides, down to opening claims at one point.
-///
-/// # Errors
-/// [`Error::Shape`] for inputs of another shape or a zero copy denominator
-/// (negligible), [`Error::Msm`].
-#[allow(clippy::too_many_lines)]
-pub fn prove<C: PastaCurve>(
-    plan: &DeciderV2Plan<C>,
-    domain: &[u8; 32],
-    acc: &Accumulator<C>,
-    witness: &Witness<C::ScalarExt>,
-) -> Result<Proved<C>, Error> {
+/// One accumulator of a batch, on the prover's side.
+struct Lane<'a, C: PastaCurve> {
+    plan: &'a DeciderV2Plan<C>,
+    acc: &'a Accumulator<C>,
+    witness: &'a Witness<C::ScalarExt>,
+    helpers: Vec<Vec<C::ScalarExt>>,
+    helper_commitments: Vec<C::AffineExt>,
+}
+
+/// The zero-check tables of one lane.
+fn lane_tables<C: PastaCurve>(lane: &Lane<'_, C>, tau: &[C::ScalarExt]) -> Vec<Vec<C::ScalarExt>> {
     type S<C> = <C as PastaCurve>::ScalarExt;
+    let (plan, acc, witness) = (lane.plan, lane.acc, lane.witness);
     let relation = &plan.relation;
     let n = relation.n;
-    check_accumulator(plan, acc)?;
-    if witness.columns.len() != relation.columns() || witness.columns.iter().any(|c| c.len() != n) {
-        return Err(Error::Shape("witness"));
-    }
-    let mut transcript = Transcript::<C>::new(TAG_DECIDER, domain);
-    transcript.absorb_base(&[acc.digest(domain)]);
-    transcript.absorb_u64(TAG_DECIDER_PERMUTATION);
-    let gamma = transcript.challenge();
-    let eta = transcript.challenge();
-    let helpers = copy_helpers(plan, witness, gamma, eta)?;
-    let helper_commitments =
-        helpers.iter().map(|h| plan.key.commit(h, &S::<C>::ZERO)).collect::<Result<Vec<_>, _>>()?;
-    for commitment in &helper_commitments {
-        transcript.absorb_point(commitment);
-    }
-    let (alpha, kappa, tau) = draw(&mut transcript, plan.mu);
-    let challenges = Challenges { gamma, eta, alpha, kappa, tau };
-    let scalars = scalars(plan, acc, challenges.gamma, challenges.eta);
-    let weights = weights(plan, acc, challenges.alpha, challenges.kappa);
     let pb = relation.constraint_bits;
-    let mut tables: Vec<Vec<S<C>>> = plan
-        .sources
+    plan.sources
         .iter()
         .map(|source| match *source {
             Source::Witness(c, k) => mle::rotated(&witness.columns[c], k),
@@ -295,84 +320,152 @@ pub fn prove<C: PastaCurve>(
                 column.resize(n, S::<C>::ZERO);
                 mle::rotated(&column, k)
             }
-            Source::Helper(j) => helpers[j].clone(),
+            Source::Helper(j) => lane.helpers[j].clone(),
             Source::Pow => pow_vector(&acc.beta[pb..]),
-            Source::EqTau => pcs_mle::eq_table(&challenges.tau),
+            Source::EqTau => pcs_mle::eq_table(tau),
             Source::Usable => (0..n).map(|i| if i < relation.usable { S::<C>::ONE } else { S::<C>::ZERO }).collect(),
             Source::Index => (0..n).map(|i| S::<C>::from(i as u64)).collect(),
         })
-        .collect();
+        .collect()
+}
 
-    // Zero-check.
-    let m = plan.degree;
-    let mut pairs: Vec<Pairs> = plan.terms.iter().map(|t| Pairs::of(&t.support)).collect();
+/// Proves that `acc` with `witness` decides, down to opening claims at one point.
+///
+/// # Errors
+/// As [`prove_many`].
+pub fn prove<C: PastaCurve>(
+    plan: &DeciderV2Plan<C>,
+    domain: &[u8; 32],
+    acc: &Accumulator<C>,
+    witness: &Witness<C::ScalarExt>,
+) -> Result<Proved<C>, Error> {
+    prove_many(domain, &[(plan, acc, witness)])
+}
+
+/// Proves that every accumulator of `inputs` decides, down to opening claims at
+/// one point. The accumulators share a field, a domain size and a commitment
+/// key, and may belong to different relations. They share one copy phase, one
+/// zero-check over `sum_r lambda^r S_r`, one shift reduction and one opening.
+///
+/// # Errors
+/// [`Error::Shape`] for inputs of another shape, an empty batch, unequal domains
+/// or a zero copy denominator (negligible); [`Error::Msm`].
+#[allow(clippy::too_many_lines)]
+pub fn prove_many<C: PastaCurve>(
+    domain: &[u8; 32],
+    inputs: &[(&DeciderV2Plan<C>, &Accumulator<C>, &Witness<C::ScalarExt>)],
+) -> Result<Proved<C>, Error> {
+    type S<C> = <C as PastaCurve>::ScalarExt;
+    let (mu, m) = batch_shape(inputs.iter().map(|input| input.0))?;
+    let n = 1usize << mu;
+    for &(plan, acc, witness) in inputs {
+        check_accumulator(plan, acc)?;
+        if witness.columns.len() != plan.relation.columns() || witness.columns.iter().any(|c| c.len() != n) {
+            return Err(Error::Shape("witness"));
+        }
+    }
+    let (mut transcript, gamma, eta) = start(domain, inputs.iter().map(|input| input.1));
+    let mut lanes = Vec::with_capacity(inputs.len());
+    for &(plan, acc, witness) in inputs {
+        let helpers = copy_helpers(plan, witness, gamma, eta)?;
+        let helper_commitments =
+            helpers.iter().map(|h| plan.key.commit(h, &S::<C>::ZERO)).collect::<Result<Vec<_>, _>>()?;
+        lanes.push(Lane { plan, acc, witness, helpers, helper_commitments });
+    }
+    for lane in &lanes {
+        for commitment in &lane.helper_commitments {
+            transcript.absorb_point(commitment);
+        }
+    }
+    let challenges = draw(&mut transcript, mu);
+
+    // Zero-check over every lane.
+    let mut scale = S::<C>::ONE;
+    let mut states = Vec::with_capacity(lanes.len());
+    for lane in &lanes {
+        let scalars = scalars(lane.plan, lane.acc, gamma, eta);
+        let weights = weights(lane.plan, lane.acc, &challenges, scale);
+        let tables = lane_tables(lane, &challenges.tau);
+        let pairs: Vec<Pairs> = lane.plan.terms.iter().map(|t| Pairs::of(&t.support)).collect();
+        states.push((scalars, weights, tables, pairs));
+        scale *= challenges.lambda;
+    }
     let mut stack = Vec::with_capacity(32);
-    let mut zero_check = Vec::with_capacity(plan.mu);
-    let mut rho = Vec::with_capacity(plan.mu);
-    for _ in 0..plan.mu {
-        let half = tables[0].len() / 2;
+    let mut zero_check = Vec::with_capacity(mu);
+    let mut rho = Vec::with_capacity(mu);
+    for _ in 0..mu {
         let mut sums = vec![S::<C>::ZERO; m];
-        for ((term, weight), pairs) in plan.terms.iter().zip(&weights).zip(&pairs) {
-            let mut line = [S::<C>::ZERO; eval::LINE];
-            let mut add = |p: usize| {
-                let v = term.poly.eval_pair(&tables, p, m, &scalars, &mut stack);
-                for (a, b) in line.iter_mut().zip(v).take(m) {
-                    *a += b;
+        for (lane, (scalars, weights, tables, pairs)) in lanes.iter().zip(&states) {
+            let half = tables[0].len() / 2;
+            for ((term, weight), pairs) in lane.plan.terms.iter().zip(weights).zip(pairs) {
+                let mut line = [S::<C>::ZERO; eval::LINE];
+                let mut add = |p: usize| {
+                    let v = term.poly.eval_pair(tables, p, m, scalars, &mut stack);
+                    for (a, b) in line.iter_mut().zip(v).take(m) {
+                        *a += b;
+                    }
+                };
+                match pairs {
+                    Pairs::List(list) => list.iter().for_each(|p| add(*p as usize)),
+                    Pairs::Prefix(count) => (0..(*count).min(half)).for_each(&mut add),
                 }
-            };
-            match pairs {
-                Pairs::List(list) => list.iter().for_each(|p| add(*p as usize)),
-                Pairs::Prefix(count) => (0..(*count).min(half)).for_each(&mut add),
-            }
-            for (s, v) in sums.iter_mut().zip(line) {
-                *s += *weight * v;
+                for (s, v) in sums.iter_mut().zip(line) {
+                    *s += *weight * v;
+                }
             }
         }
         transcript.absorb_scalars(&sums);
         let challenge = transcript.challenge();
-        for table in &mut tables {
-            mle::fold(table, challenge);
-        }
-        for p in &mut pairs {
-            p.halve();
+        for (_, _, tables, pairs) in &mut states {
+            for table in tables.iter_mut() {
+                mle::fold(table, challenge);
+            }
+            for p in pairs.iter_mut() {
+                p.halve();
+            }
         }
         zero_check.push(sums);
         rho.push(challenge);
     }
-    let at_rho: Vec<S<C>> = plan.reads.iter().map(|read| tables[read.source][0]).collect();
-    drop(tables);
+    let mut at_rho = Vec::new();
+    for (lane, (_, _, tables, _)) in lanes.iter().zip(&states) {
+        at_rho.extend(lane.plan.reads.iter().map(|read| tables[read.source][0]));
+    }
+    drop(states);
 
-    // Shift reduction.
+    // Shift reduction over every lane's reads.
     transcript.absorb_scalars(&at_rho);
     transcript.absorb_u64(TAG_DECIDER_SHIFT);
     let zeta = transcript.challenge();
-    let mut lanes: Vec<(Vec<S<C>>, Vec<S<C>>)> = Vec::new();
     let mut power = S::<C>::ONE;
     let mut combined: Vec<(i32, Vec<S<C>>)> = Vec::new();
-    for read in &plan.reads {
-        let poly = committed_poly(plan, witness, &helpers, plan.committed[read.poly]);
-        let slot = match combined.iter().position(|(k, _)| *k == read.rotation) {
-            Some(slot) => slot,
-            None => {
-                combined.push((read.rotation, vec![S::<C>::ZERO; n]));
-                combined.len() - 1
+    for lane in &lanes {
+        for read in &lane.plan.reads {
+            let poly = committed_poly(lane.plan, lane.witness, &lane.helpers, lane.plan.committed[read.poly]);
+            let slot = match combined.iter().position(|(k, _)| *k == read.rotation) {
+                Some(slot) => slot,
+                None => {
+                    combined.push((read.rotation, vec![S::<C>::ZERO; n]));
+                    combined.len() - 1
+                }
+            };
+            for (q, v) in combined[slot].1.iter_mut().zip(poly) {
+                *q += power * v;
             }
-        };
-        for (q, v) in combined[slot].1.iter_mut().zip(poly) {
-            *q += power * v;
+            power *= zeta;
         }
-        power *= zeta;
     }
+    let mut shift_lanes: Vec<(Vec<S<C>>, Vec<S<C>>)> = Vec::with_capacity(combined.len());
     for (k, q) in combined {
-        lanes.push((pcs_mle::shifted_eq_table(&rho, k).ok_or(Error::Shape("shift weights"))?, q));
+        shift_lanes.push((pcs_mle::shifted_eq_table(&rho, k).ok_or(Error::Shape("shift weights"))?, q));
     }
-    let mut shift = Vec::with_capacity(plan.mu);
-    let mut sigma = Vec::with_capacity(plan.mu);
+    let mut shift = Vec::with_capacity(mu);
+    let mut sigma = Vec::with_capacity(mu);
     let two = S::<C>::from(2);
-    for _ in 0..plan.mu {
-        let half = lanes[0].0.len() / 2;
+    for _ in 0..mu {
+        let half = shift_lanes[0].0.len() / 2;
         let (mut s0, mut s2) = (S::<C>::ZERO, S::<C>::ZERO);
-        for (e, q) in &lanes {
+        for (e, q) in &shift_lanes {
             for p in 0..half {
                 let (e0, e1, q0, q1) = (e[2 * p], e[2 * p + 1], q[2 * p], q[2 * p + 1]);
                 s0 += e0 * q0;
@@ -382,32 +475,38 @@ pub fn prove<C: PastaCurve>(
         let sent = [s0, s2];
         transcript.absorb_scalars(&sent);
         let challenge = transcript.challenge();
-        for (e, q) in &mut lanes {
+        for (e, q) in &mut shift_lanes {
             mle::fold(e, challenge);
             mle::fold(q, challenge);
         }
         shift.push(sent);
         sigma.push(challenge);
     }
-    let polys: Vec<Vec<S<C>>> =
-        plan.committed.iter().map(|poly| committed_poly(plan, witness, &helpers, *poly).to_vec()).collect();
+
+    // Every lane's committed polynomials at sigma.
+    let mut polys = Vec::new();
+    let mut commitments = Vec::new();
+    let mut blinds = Vec::new();
+    for lane in &lanes {
+        for poly in &lane.plan.committed {
+            polys.push(committed_poly(lane.plan, lane.witness, &lane.helpers, *poly).to_vec());
+            let (commitment, blind) = match *poly {
+                Committed::Witness(c) => (lane.acc.instance.commitments[c], lane.witness.blinds[c]),
+                Committed::Key(p) => (lane.plan.key_commitments[p], S::<C>::ZERO),
+                Committed::Helper(j) => (lane.helper_commitments[j], S::<C>::ZERO),
+            };
+            commitments.push(commitment);
+            blinds.push(blind);
+        }
+    }
     let at_sigma = polys
         .iter()
         .map(|poly| pcs_mle::evaluate(poly, &sigma).ok_or(Error::Shape("evaluation")))
         .collect::<Result<Vec<S<C>>, _>>()?;
     transcript.absorb_scalars(&at_sigma);
-    let mut claims = Vec::with_capacity(polys.len());
-    let mut blinds = Vec::with_capacity(polys.len());
-    for (poly, value) in plan.committed.iter().zip(&at_sigma) {
-        let (commitment, blind) = match *poly {
-            Committed::Witness(c) => (acc.instance.commitments[c], witness.blinds[c]),
-            Committed::Key(p) => (plan.key_commitments[p], S::<C>::ZERO),
-            Committed::Helper(j) => (helper_commitments[j], S::<C>::ZERO),
-        };
-        claims.push(MleClaim { commitment, value: *value });
-        blinds.push(blind);
-    }
-    let proof = DeciderV2Proof { helpers: helper_commitments, zero_check, at_rho, shift, at_sigma };
+    let claims = commitments.into_iter().zip(&at_sigma).map(|(commitment, value)| MleClaim { commitment, value: *value }).collect();
+    let helpers = lanes.iter().flat_map(|lane| lane.helper_commitments.iter().copied()).collect();
+    let proof = DeciderV2Proof { helpers, zero_check, at_rho, shift, at_sigma };
     Ok(Proved { proof, point: sigma, claims, polys, blinds, transcript })
 }
 
@@ -416,84 +515,108 @@ fn eq_row<F: Field>(point: &[F], row: usize) -> F {
     point.iter().enumerate().fold(F::ONE, |acc, (j, x)| if (row >> j) & 1 == 1 { acc * x } else { acc * (F::ONE - x) })
 }
 
-/// Verifies a decider proof for `acc` down to opening claims at one point; the
-/// batched opening of those claims completes the decision.
+/// Verifies a decider proof for `acc` down to opening claims at one point.
 ///
 /// # Errors
-/// [`Error::Shape`] for a proof or accumulator of another shape,
-/// [`Error::Rejected`] naming the failing check.
-#[allow(clippy::too_many_lines)]
+/// As [`verify_many`].
 pub fn verify<C: PastaCurve>(
     plan: &DeciderV2Plan<C>,
     domain: &[u8; 32],
     acc: &Accumulator<C>,
     proof: &DeciderV2Proof<C>,
 ) -> Result<Verified<C>, Error> {
+    verify_many(domain, &[(plan, acc)], proof)
+}
+
+/// Verifies a batched decider proof for every accumulator of `inputs` down to
+/// opening claims at one point; the batched opening of those claims completes
+/// the decision.
+///
+/// # Errors
+/// [`Error::Shape`] for a proof, batch or accumulator of another shape,
+/// [`Error::Rejected`] naming the failing check.
+#[allow(clippy::too_many_lines)]
+pub fn verify_many<C: PastaCurve>(
+    domain: &[u8; 32],
+    inputs: &[(&DeciderV2Plan<C>, &Accumulator<C>)],
+    proof: &DeciderV2Proof<C>,
+) -> Result<Verified<C>, Error> {
     type S<C> = <C as PastaCurve>::ScalarExt;
-    let relation = &plan.relation;
-    let n = relation.n;
-    check_accumulator(plan, acc)?;
-    if proof.helpers.len() != plan.copies.columns.len()
-        || proof.zero_check.len() != plan.mu
-        || proof.zero_check.iter().any(|round| round.len() != plan.degree)
-        || proof.at_rho.len() != plan.reads.len()
-        || proof.shift.len() != plan.mu
-        || proof.at_sigma.len() != plan.committed.len()
+    let (mu, m) = batch_shape(inputs.iter().map(|input| input.0))?;
+    let n = 1usize << mu;
+    for &(plan, acc) in inputs {
+        check_accumulator(plan, acc)?;
+    }
+    let helper_count: usize = inputs.iter().map(|(plan, _)| plan.copies.columns.len()).sum();
+    let read_count: usize = inputs.iter().map(|(plan, _)| plan.reads.len()).sum();
+    let committed_count: usize = inputs.iter().map(|(plan, _)| plan.committed.len()).sum();
+    if proof.helpers.len() != helper_count
+        || proof.zero_check.len() != mu
+        || proof.zero_check.iter().any(|round| round.len() != m)
+        || proof.at_rho.len() != read_count
+        || proof.shift.len() != mu
+        || proof.at_sigma.len() != committed_count
     {
         return Err(Error::Shape("decider proof"));
     }
-    let mut transcript = Transcript::<C>::new(TAG_DECIDER, domain);
-    transcript.absorb_base(&[acc.digest(domain)]);
-    transcript.absorb_u64(TAG_DECIDER_PERMUTATION);
-    let gamma = transcript.challenge();
-    let eta = transcript.challenge();
+    let (mut transcript, gamma, eta) = start(domain, inputs.iter().map(|input| input.1));
     for commitment in &proof.helpers {
         transcript.absorb_point(commitment);
     }
-    let (alpha, kappa, tau) = draw(&mut transcript, plan.mu);
-    let scalars = scalars(plan, acc, gamma, eta);
-    let weights = weights(plan, acc, alpha, kappa);
-    let groups = relation.groups.len();
-    let instance_terms = instance_copy_terms(plan, acc, gamma, eta)?;
+    let challenges = draw(&mut transcript, mu);
 
     // Zero-check.
-    let mut claim = acc.e - alpha.pow_vartime([(groups + 2) as u64]) * instance_terms;
-    let mut rho = Vec::with_capacity(plan.mu);
+    let mut claim = S::<C>::ZERO;
+    let mut scale = S::<C>::ONE;
+    for &(plan, acc) in inputs {
+        let groups = plan.relation.groups.len();
+        let terms = instance_copy_terms(plan, acc, gamma, eta)?;
+        claim += scale * (acc.e - challenges.alpha.pow_vartime([(groups + 2) as u64]) * terms);
+        scale *= challenges.lambda;
+    }
+    let mut rho = Vec::with_capacity(mu);
     for round in &proof.zero_check {
         transcript.absorb_scalars(round);
         let challenge = transcript.challenge();
         claim = sumcheck::next_claim(claim, round, challenge);
         rho.push(challenge);
     }
-    let pb = relation.constraint_bits;
-    let read_of: Vec<Option<usize>> = {
-        let mut out = vec![None; plan.sources.len()];
+    let mut total = S::<C>::ZERO;
+    let mut scale = S::<C>::ONE;
+    let mut read_offset = 0;
+    for &(plan, acc) in inputs {
+        let relation = &plan.relation;
+        let pb = relation.constraint_bits;
+        let scalars = scalars(plan, acc, gamma, eta);
+        let weights = weights(plan, acc, &challenges, scale);
+        let mut read_of = vec![None; plan.sources.len()];
         for (i, read) in plan.reads.iter().enumerate() {
-            out[read.source] = Some(i);
+            read_of[read.source] = Some(read_offset + i);
         }
-        out
-    };
-    let value = |index: usize| -> S<C> {
-        if let Some(i) = read_of[index] {
-            return proof.at_rho[i];
-        }
-        match plan.sources[index] {
-            Source::Instance(c, k) => acc.instance.public[c]
-                .iter()
-                .enumerate()
-                .fold(S::<C>::ZERO, |sum, (row, x)| sum + *x * eq_row(&rho, mle::rotate(row, -k, n))),
-            Source::Pow => mle::pow(&acc.beta[pb..], &rho),
-            Source::EqTau => mle::eq(&tau, &rho),
-            Source::Usable => mle::prefix_indicator(relation.usable, &rho),
-            Source::Index => mle::index(0, &rho),
-            Source::Witness(..) | Source::Key(..) | Source::Helper(_) => unreachable!("committed tables are read"),
-        }
-    };
-    let total = plan
-        .terms
-        .iter()
-        .zip(&weights)
-        .fold(S::<C>::ZERO, |sum, (term, weight)| sum + *weight * term.poly.eval(&value, &scalars));
+        let value = |index: usize| -> S<C> {
+            if let Some(i) = read_of[index] {
+                return proof.at_rho[i];
+            }
+            match plan.sources[index] {
+                Source::Instance(c, k) => acc.instance.public[c]
+                    .iter()
+                    .enumerate()
+                    .fold(S::<C>::ZERO, |sum, (row, x)| sum + *x * eq_row(&rho, mle::rotate(row, -k, n))),
+                Source::Pow => mle::pow(&acc.beta[pb..], &rho),
+                Source::EqTau => mle::eq(&challenges.tau, &rho),
+                Source::Usable => mle::prefix_indicator(relation.usable, &rho),
+                Source::Index => mle::index(0, &rho),
+                Source::Witness(..) | Source::Key(..) | Source::Helper(_) => unreachable!("committed tables are read"),
+            }
+        };
+        total += plan
+            .terms
+            .iter()
+            .zip(&weights)
+            .fold(S::<C>::ZERO, |sum, (term, weight)| sum + *weight * term.poly.eval(&value, &scalars));
+        read_offset += plan.reads.len();
+        scale *= challenges.lambda;
+    }
     if total != claim {
         return Err(Error::Rejected("zero-check"));
     }
@@ -508,7 +631,7 @@ pub fn verify<C: PastaCurve>(
         claim += power * v;
         power *= zeta;
     }
-    let mut sigma = Vec::with_capacity(plan.mu);
+    let mut sigma = Vec::with_capacity(mu);
     for round in &proof.shift {
         transcript.absorb_scalars(round);
         let challenge = transcript.challenge();
@@ -517,36 +640,41 @@ pub fn verify<C: PastaCurve>(
     }
     let mut expected = S::<C>::ZERO;
     let mut power = S::<C>::ONE;
-    let mut weights_by_rotation: Vec<(i32, S<C>)> = Vec::new();
-    for read in &plan.reads {
-        let weight = match weights_by_rotation.iter().position(|(k, _)| *k == read.rotation) {
-            Some(slot) => weights_by_rotation[slot].1,
-            None => {
-                let w = pcs_mle::shifted_eq(&rho, &sigma, read.rotation).ok_or(Error::Shape("shift weights"))?;
-                weights_by_rotation.push((read.rotation, w));
-                w
-            }
-        };
-        expected += power * weight * proof.at_sigma[read.poly];
-        power *= zeta;
+    let mut by_rotation: Vec<(i32, S<C>)> = Vec::new();
+    let mut committed_offset = 0;
+    for &(plan, _) in inputs {
+        for read in &plan.reads {
+            let weight = match by_rotation.iter().position(|(k, _)| *k == read.rotation) {
+                Some(slot) => by_rotation[slot].1,
+                None => {
+                    let w = pcs_mle::shifted_eq(&rho, &sigma, read.rotation).ok_or(Error::Shape("shift weights"))?;
+                    by_rotation.push((read.rotation, w));
+                    w
+                }
+            };
+            expected += power * weight * proof.at_sigma[committed_offset + read.poly];
+            power *= zeta;
+        }
+        committed_offset += plan.committed.len();
     }
     if expected != claim {
         return Err(Error::Rejected("shift reduction"));
     }
     transcript.absorb_scalars(&proof.at_sigma);
-    let claims = plan
-        .committed
-        .iter()
-        .zip(&proof.at_sigma)
-        .map(|(poly, value)| {
+    let mut claims = Vec::with_capacity(committed_count);
+    let (mut committed_offset, mut helper_offset) = (0, 0);
+    for &(plan, acc) in inputs {
+        for (i, poly) in plan.committed.iter().enumerate() {
             let commitment = match *poly {
                 Committed::Witness(c) => acc.instance.commitments[c],
                 Committed::Key(p) => plan.key_commitments[p],
-                Committed::Helper(j) => proof.helpers[j],
+                Committed::Helper(j) => proof.helpers[helper_offset + j],
             };
-            MleClaim { commitment, value: *value }
-        })
-        .collect();
+            claims.push(MleClaim { commitment, value: proof.at_sigma[committed_offset + i] });
+        }
+        committed_offset += plan.committed.len();
+        helper_offset += plan.copies.columns.len();
+    }
     Ok(Verified { point: sigma, claims, transcript })
 }
 

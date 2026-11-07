@@ -20,7 +20,7 @@ use iroha_plonk::{
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
 
-use super::{DeciderV2Plan, mle, open, prove, sumcheck, verify, verify_opening};
+use super::{DeciderV2Plan, mle, open, prove, prove_many, sumcheck, verify, verify_many, verify_opening};
 use crate::{
     Error,
     commit::{CommitKey, Witness},
@@ -380,4 +380,128 @@ fn false_gates_wrong_errors_and_tampered_messages_are_rejected() {
     let mut p = proved.proof;
     p.helpers.swap(0, 1);
     assert!(check(&p).is_err());
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PairConfig {
+    x: Column<Advice>,
+    y: Column<Advice>,
+    q: Selector,
+}
+
+/// `y = x^2` on six rows with the copy `y[0] = x[1]`: another relation of the
+/// same domain size as [`Mini`].
+#[derive(Clone, Copy, Debug)]
+struct Pair {
+    seed: u64,
+}
+
+impl Pair {
+    fn x(self, row: usize) -> u64 {
+        match row {
+            0 => 2,
+            1 => 4,
+            _ => (self.seed + row as u64) % 9,
+        }
+    }
+}
+
+impl Circuit<Fq> for Pair {
+    type Config = PairConfig;
+    type FloorPlanner = SimpleFloorPlanner;
+    type Params = ();
+
+    fn without_witnesses(&self) -> Self {
+        *self
+    }
+
+    fn configure(meta: &mut ConstraintSystem<Fq>) -> PairConfig {
+        let (x, y) = (meta.advice_column(), meta.advice_column());
+        meta.enable_equality(x);
+        meta.enable_equality(y);
+        let q = meta.selector();
+        meta.create_gate("square", |v| {
+            let q = v.query_selector(q);
+            let (x, y) = (v.query_advice(x, Rotation::cur()), v.query_advice(y, Rotation::cur()));
+            vec![q * (x.clone() * x - y)]
+        });
+        PairConfig { x, y, q }
+    }
+
+    fn synthesize(&self, config: PairConfig, mut layouter: impl Layouter<Fq>) -> Result<(), PlonkError> {
+        layouter.assign_region(
+            || "squares",
+            |mut region| {
+                let mut cells = Vec::new();
+                for row in 0..6 {
+                    config.q.enable(&mut region, row)?;
+                    let x = self.x(row);
+                    let xc = region.assign_advice(config.x, row, Value::known(Fq::from(x)))?.cell();
+                    let yc = region.assign_advice(config.y, row, Value::known(Fq::from(x * x)))?.cell();
+                    cells.push((xc, yc));
+                }
+                region.constrain_equal(cells[0].1, cells[1].0)
+            },
+        )
+    }
+}
+
+#[test]
+fn a_batch_of_accumulators_of_two_relations_decides_with_one_opening() {
+    let s = setup();
+    let (acc1, w1) = accumulator(&s);
+    let mut rng = ChaCha20Rng::seed_from_u64(8);
+    let (instance, w2) = fresh(&s, Mini { seed: 11, broken: false }, &mut rng);
+    let acc2 = Accumulator::from_fresh(&s.relation, &DOMAIN, instance).expect("accumulator");
+    let layout = synthesize(&Pair { seed: 1 }, K, None).expect("layout");
+    let pair = FoldedRelation::from_synthesized(&layout).expect("relation");
+    let pair_plan = DeciderV2Plan::new(pair.clone(), &s.key).expect("plan");
+    let none: Vec<Vec<Fq>> = Vec::new();
+    let synthesized = synthesize(&Pair { seed: 3 }, K, Some(&none)).expect("witness");
+    let (advice, public) = pair.stage_witness(&synthesized).expect("stage witness");
+    let (instance, w3) = fresh_instance(&pair, &s.key, &DOMAIN, advice, public, &mut rng).expect("fresh");
+    let acc3 = Accumulator::from_fresh(&pair, &DOMAIN, instance).expect("accumulator");
+    decide(&pair, &s.key, &acc3, &w3).expect("pair accumulator");
+
+    let inputs = [(&s.plan, &acc1, &w1), (&s.plan, &acc2, &w2), (&pair_plan, &acc3, &w3)];
+    let accs = [(&s.plan, &acc1), (&s.plan, &acc2), (&pair_plan, &acc3)];
+    let mut proved = prove_many(&DOMAIN, &inputs).expect("prove");
+    let (opening, prover_claim) = open(s.params.params(), &mut proved).expect("open");
+    let mut verified = verify_many(&DOMAIN, &accs, &proved.proof).expect("verify");
+    assert_eq!(verified.claims, proved.claims);
+    let claim = verify_opening(s.params.params(), &mut verified, &opening).expect("opening verifies");
+    assert_eq!(claim, prover_claim);
+    claim.decide(&s.params, MemoryBudget::DEFAULT).expect("generator claim decides");
+
+    // The verifier names the same members in the same order.
+    let swapped = [(&s.plan, &acc2), (&s.plan, &acc1), (&pair_plan, &acc3)];
+    assert!(verify_many(&DOMAIN, &swapped, &proved.proof).is_err());
+    assert!(verify_many(&DOMAIN, &accs[..2], &proved.proof).is_err());
+
+    // One false member fails the whole batch.
+    let mut wrong = acc2.clone();
+    wrong.e += Fq::ONE;
+    let proved = prove_many(&DOMAIN, &[(&s.plan, &acc1, &w1), (&s.plan, &wrong, &w2), (&pair_plan, &acc3, &w3)])
+        .expect("prove");
+    let accs = [(&s.plan, &acc1), (&s.plan, &wrong), (&pair_plan, &acc3)];
+    assert_eq!(verify_many(&DOMAIN, &accs, &proved.proof).map(|_| ()), Err(Error::Rejected("zero-check")));
+    let mut rng = ChaCha20Rng::seed_from_u64(9);
+    let (instance, broken) = fresh(&s, Mini { seed: 4, broken: true }, &mut rng);
+    let broken_acc = Accumulator::from_fresh(&s.relation, &DOMAIN, instance).expect("accumulator");
+    let proved = prove_many(&DOMAIN, &[(&s.plan, &acc1, &w1), (&s.plan, &broken_acc, &broken), (&pair_plan, &acc3, &w3)])
+        .expect("prove");
+    let accs = [(&s.plan, &acc1), (&s.plan, &broken_acc), (&pair_plan, &acc3)];
+    assert_eq!(verify_many(&DOMAIN, &accs, &proved.proof).map(|_| ()), Err(Error::Rejected("zero-check")));
+
+    // An empty batch and unequal domain sizes are refused.
+    assert_eq!(prove_many::<Ep>(&DOMAIN, &[]).map(|_| ()), Err(Error::Shape("empty decider batch")));
+    let params6 = PinnedParams::<Ep>::derive(forgery::K).expect("params");
+    let stage = forgery::stage_with(CommitKey::monomial(params6.params()));
+    let plan6 = DeciderV2Plan::new(stage.relation.clone(), &stage.key).expect("plan");
+    let (instance, w6) = forgery::forged(&stage, forgery::Balance::InactiveReciprocal);
+    let acc6 = Accumulator::from_fresh(&stage.relation, &forgery::DOMAIN, instance).expect("accumulator");
+    assert_eq!(
+        prove_many(&DOMAIN, &[(&s.plan, &acc1, &w1), (&plan6, &acc6, &w6)]).map(|_| ()),
+        Err(Error::Shape("decider batch domains"))
+    );
 }
