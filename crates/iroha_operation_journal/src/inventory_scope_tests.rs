@@ -355,6 +355,7 @@ fn original_child_records(
     child_records(journal.as_ref().map(Journal::native_inspection))
 }
 
+#[cfg(unix)]
 fn private_parent_fixture() -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
     // A generic tempdir follows the caller's umask. These tests explicitly
@@ -369,10 +370,10 @@ fn private_parent_fixture() -> tempfile::TempDir {
 
 #[test]
 fn optional_child_scope_reduces_ancestry_and_keeps_actual_records_locks_and_decoder_work() {
-    let root = private_parent_fixture();
-    let parent = PrivateDirectory::open(root.path()).unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let parent = PrivateDirectory::open_or_create(temporary.path().join("parent")).unwrap();
     let value = norito::json!({"request": 71});
-    let journal = Journal::create_preparation(&root.path().join("journal"), &value).unwrap();
+    let journal = Journal::create_preparation(&parent.path().join("journal"), &value).unwrap();
     journal.write_native(NativeRecord::Retired, &value).unwrap();
     drop(journal);
     let old = measured(|| outcome(original_child_records(&parent, "journal")));
@@ -447,19 +448,19 @@ fn optional_child_scope_reduces_ancestry_and_keeps_actual_records_locks_and_deco
 
 #[test]
 fn optional_child_scope_preserves_absence_admission_and_exclusive_lock_lifetime() {
-    let root = private_parent_fixture();
-    let parent = PrivateDirectory::open(root.path()).unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let parent = PrivateDirectory::open_or_create(temporary.path().join("parent")).unwrap();
     assert!(
         Journal::read_optional_child(&parent, "absent", child_records)
             .unwrap()
             .is_none()
     );
-    assert!(!root.path().join("absent").exists());
+    assert!(!parent.path().join("absent").exists());
     assert!(Journal::read_optional_child(&parent, "../journal", child_records).is_err());
     let incomplete = parent.ensure_child("incomplete").unwrap();
     assert!(Journal::read_optional_child(&parent, "incomplete", child_records).is_err());
     assert!(!incomplete.path().join("lock").exists());
-    let path = root.path().join("journal");
+    let path = parent.path().join("journal");
     let original = Journal::create_preparation(&path, &norito::json!({"request": 71})).unwrap();
     let directory_id = original.directory.identity().unwrap();
     let lock_id = FileIdentity::of(&original.lock).unwrap();

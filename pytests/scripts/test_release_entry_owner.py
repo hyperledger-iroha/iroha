@@ -271,7 +271,8 @@ def test_unrelated_private_values_are_not_forwarded_or_added_to_provenance(tmp_p
 
 @pytest.mark.parametrize('name', ['RUSTC_WRAPPER', 'RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'CARGO_BUILD_RUSTFLAGS',
     'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER', 'LD_PRELOAD', 'PKG_CONFIG_PATH',
-    'CARGO_PROFILE_DEV_DEBUG', 'CARGO_PROFILE_TEST_DEBUG'])
+    'CARGO_PROFILE_DEV_DEBUG', 'CARGO_PROFILE_TEST_DEBUG', 'CARGO_UNSTABLE_SPARSE_REGISTRY',
+    'CARGO_REGISTRIES_CRATES_IO_PROTOCOL', 'RUST_BACKTRACE', 'LD_LIBRARY_PATH'])
 def test_unsupported_override_refuses_before_entry_or_output_allocation(tmp_path, native_entry, monkeypatch, name):
     fixture = Fixture(tmp_path, native_entry)
     monkeypatch.setenv(name, 'unapproved')
