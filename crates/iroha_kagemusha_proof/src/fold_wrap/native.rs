@@ -13,8 +13,7 @@ use iroha_fold::{
     claims::{self, ClaimAccumulator},
     commit::Witness as FoldWitnessColumns,
     decider_v2::{self, DeciderV2Plan, Proved},
-    fold,
-    ivc::{Fresh, Kept},
+    ivc::{self, Fresh, Kept},
     transcript::s6_limbs,
 };
 use iroha_pasta::{
@@ -40,8 +39,8 @@ use iroha_plonk_recursion::{
 use super::{
     WrapError, WrapSpec,
     crossing::{
-        ACrossing, AccumulatorData, PPublic, Pair, PallasClaimCrossing, QCrossing,
-        VestaClaimCrossing,
+        ACrossing, AMember, AccumulatorData, PPublic, Pair, PallasClaimCrossing, QCrossing,
+        QMember, VestaClaimCrossing,
     },
     omega::{
         AGroupWitness, INSTANCE_TYPES, OmegaCircuit, OmegaPlan, OmegaWitness, PallasFieldWitness,
@@ -119,10 +118,12 @@ pub struct FinalChain {
     pub a_state: Vec<Fp>,
     /// `z_Q`, the Q state after `Q_{n-1}`.
     pub q_state: Vec<Fq>,
-    /// `U_Q` (A keeps it; it holds `Q_{n-1}`) and its witness.
-    pub u_q: Kept<Ep>,
-    /// `U_A` (`Q_{n-1}` keeps it) and its witness.
-    pub u_a: Kept<Eq>,
+    /// The Q accumulators `A_n` keeps after folding `Q_{n-1}`, one per Q
+    /// kind in kind order, with their witnesses.
+    pub u_q: Vec<Kept<Ep>>,
+    /// The A accumulators `Q_{n-1}` keeps, one per A kind in kind order; only
+    /// the last kind's may be absent (`A_n` then starts it).
+    pub u_a: Vec<Option<Kept<Eq>>>,
     /// `A_n`'s instance and witness.
     pub a_n: Fresh<Eq>,
     /// The Pallas claim accumulator A keeps and its witness `s`.
@@ -178,16 +179,24 @@ struct Decided<C: PastaCurve> {
 }
 
 fn decide<C: PastaCurve>(
-    plan: &DeciderV2Plan<C>,
+    plans: &[Arc<DeciderV2Plan<C>>],
     params: &PinnedParams<C>,
     domain: &[u8; 32],
-    (acc, witness): (&Accumulator<C>, &FoldWitnessColumns<C::ScalarExt>),
+    members: &[(&Accumulator<C>, &FoldWitnessColumns<C::ScalarExt>)],
 ) -> Result<Decided<C>, WrapError>
 where
     C::Base: PoseidonField,
     C::ScalarExt: PoseidonField,
 {
-    let mut proved = decider_v2::prove(plan, domain, acc, witness).map_err(|_| WrapError::Fold)?;
+    if plans.len() != members.len() {
+        return Err(WrapError::Input);
+    }
+    let inputs: Vec<_> = plans
+        .iter()
+        .zip(members)
+        .map(|(plan, (acc, witness))| (&**plan, *acc, *witness))
+        .collect();
+    let mut proved = decider_v2::prove_many(domain, &inputs).map_err(|_| WrapError::Fold)?;
     // alpha is the opening transcript's one 128-bit squeeze after its tag, k
     // and the claim count, as an endoscalar.
     let mut replay = proved.transcript.clone();
@@ -344,25 +353,45 @@ pub fn prepare(
     let p_plan = &*keys.p_plan;
     let spec = &*p_plan.spec;
     let domains = &spec.domains;
-    if chain.a_state.len() != spec.a_state || chain.q_state.len() != spec.q_state || chain.step < 2
+    let last = spec.last;
+    if chain.a_state.len() != spec.a_state
+        || chain.q_state.len() != spec.q_state
+        || chain.step < 2
+        || chain.u_q.len() != spec.q.len()
+        || chain.u_a.len() != spec.a.len()
+        || chain
+            .u_a
+            .iter()
+            .enumerate()
+            .any(|(k, kept)| kept.is_none() && k != last)
     {
         return Err(WrapError::Input);
     }
-    // The Q-side decider (P's commitment side, Omega's field side).
-    let (u_q, w_q) = &chain.u_q;
-    let q = decide(&p_plan.q_plan, &spec.params_q, &domains.q_fold, (u_q, w_q))?;
-    // The last A fold, then the A-side decider on U_A'.
-    let (u_a, w_a) = &chain.u_a;
+    // The Q-side decider over every Q kind (P's commitment side, Omega's
+    // field side).
+    let q_members: Vec<_> = chain.u_q.iter().map(|(acc, w)| (acc, w)).collect();
+    let q = decide(&p_plan.q_plans, &spec.params_q, &domains.q_fold, &q_members)?;
+    // The last A fold (or start), then the A-side decider over every A kind.
     let (a_n, a_n_witness) = &chain.a_n;
-    let (u_a_next, w_a_next, a_fold) =
-        fold::fold(&spec.a, &domains.a_fold, u_a, w_a, a_n, a_n_witness)
-            .map_err(|_| WrapError::Fold)?;
-    let a = decide(
-        &p_plan.a_plan,
-        &spec.params_a,
+    let (folded, folded_witness, a_fold) = ivc::fold_or_start(
+        &spec.a[last],
         &domains.a_fold,
-        (&u_a_next, &w_a_next),
-    )?;
+        chain.u_a[last].as_ref().map(|(acc, w)| (acc, w)),
+        a_n,
+        a_n_witness,
+    )
+    .map_err(|_| WrapError::Fold)?;
+    let mut decided: Vec<(Accumulator<Eq>, FoldWitnessColumns<Fp>)> =
+        Vec::with_capacity(spec.a.len());
+    for (kind, kept) in chain.u_a.iter().enumerate() {
+        if kind == last {
+            decided.push((folded.clone(), folded_witness.clone()));
+        } else {
+            decided.push(kept.clone().ok_or(WrapError::Input)?);
+        }
+    }
+    let a_members: Vec<_> = decided.iter().map(|(acc, w)| (acc, w)).collect();
+    let a = decide(&p_plan.a_plans, &spec.params_a, &domains.a_fold, &a_members)?;
     // The claim accumulators' restructurings.
     let (pallas_acc, pallas_s) = &chain.pallas_claims;
     let (pallas_proof, pallas_statement, pallas_opening, pallas_claim) = restructure(
@@ -398,9 +427,15 @@ pub fn prepare(
         a_public: a_public.clone(),
         d_a,
         q: QCrossing {
-            acc_digest: u_q.digest(&domains.q_fold),
+            members: chain
+                .u_q
+                .iter()
+                .map(|(acc, _)| QMember {
+                    acc_digest: acc.digest(&domains.q_fold),
+                    data: data_pairs(acc),
+                })
+                .collect(),
             helper_digest: q_helper,
-            data: data_pairs(u_q),
             field_digest: pair(&q.proved.field_digest),
             value: pair(&q.value),
             folded: pair(&q.folded),
@@ -408,9 +443,14 @@ pub fn prepare(
             rounds: q.claim.challenges().iter().map(pair).collect(),
         },
         a: ACrossing {
-            acc_digest: pair(&u_a_next.digest(&domains.a_fold)),
+            members: decided
+                .iter()
+                .map(|(acc, _)| AMember {
+                    acc_digest: pair(&acc.digest(&domains.a_fold)),
+                    data: data(acc),
+                })
+                .collect(),
             helper_digest: pair(&a_helper),
-            data: data(&u_a_next),
             field_digest: a.proved.field_digest,
             value: a.value,
             folded: a.folded,
@@ -443,13 +483,13 @@ pub fn prepare(
         state: chain.a_state.clone(),
         a_public,
         q: QGroupWitness {
-            acc: u_q.clone(),
+            accs: chain.u_q.iter().map(|(acc, _)| acc.clone()).collect(),
             helpers: q.proved.proof.helpers.clone(),
             opening: q.opening.clone(),
             imports: [q.proved.field_digest, q.value, q.folded],
         },
         a: AFieldWitness {
-            acc: u_a_next,
+            accs: decided.iter().map(|(acc, _)| acc.clone()).collect(),
             proof: a.proved.proof.clone(),
             helper_digest: a_helper,
             alpha: a.alpha,
@@ -471,7 +511,7 @@ pub fn prepare(
         step: chain.step - 1,
         state: chain.q_state.clone(),
         q: QFieldWitness {
-            acc: u_q.clone(),
+            accs: chain.u_q.iter().map(|(acc, _)| acc.clone()).collect(),
             proof: q.proved.proof,
         },
         pallas: PallasFieldWitness {
@@ -479,7 +519,11 @@ pub fn prepare(
             proof: pallas_proof,
         },
         a: AGroupWitness {
-            acc: u_a.clone(),
+            accs: chain
+                .u_a
+                .iter()
+                .map(|kept| kept.as_ref().map(|(acc, _)| acc.clone()))
+                .collect(),
             fresh: a_n.clone(),
             fold: a_fold,
             helpers: a.proved.proof.helpers,

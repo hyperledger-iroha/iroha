@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use ff::PrimeField;
+use ff::{Field, PrimeField};
 use iroha_fold::{
     Accumulator,
     circuit::{
@@ -31,7 +31,6 @@ use iroha_fold::{
     },
     claims::{ClaimAccumulator, ROUNDS, RestructureProof},
     decider_v2::{DeciderV2Plan, DeciderV2Proof},
-    relation::FoldShape,
     transcript::s6_limbs,
 };
 use iroha_pasta::{Ep, EpAffine, Eq, Fp, Fq};
@@ -58,34 +57,35 @@ use iroha_plonk_recursion::{
 use super::{
     K_U32, WrapError, WrapSpec,
     crossing::{
-        ACrossing, AccumulatorData, PLayout, PPublic, Pair, PallasClaimCrossing, QCrossing,
-        VestaClaimCrossing,
+        ACrossing, AMember, AccumulatorData, PLayout, PPublic, Pair, PallasClaimCrossing,
+        QCrossing, QMember, VestaClaimCrossing,
     },
 };
 use crate::a_relation::LINEAGE_DOMAIN;
 
-/// The Q-side decider's witness in P: the accumulator, the decider's helper
-/// commitments and its bound opening, and the imported field-side values.
+/// The Q-side decider's witness in P: the accumulators of every Q kind, the
+/// batch's helper commitments and bound opening, and the imported field-side
+/// values.
 #[derive(Clone, Debug)]
 pub struct QGroupWitness {
-    /// The decided Q accumulator.
-    pub acc: Accumulator<Ep>,
+    /// The decided Q accumulators, in kind order.
+    pub accs: Vec<Accumulator<Ep>>,
     /// `proof.helpers`.
     pub helpers: Vec<EpAffine>,
     /// The bound opening.
     pub opening: BatchOpening<Ep>,
-    /// `d_F`, `v*`, `b'` (scalars of the Q relation, `Fq`).
+    /// `d_F`, `v*`, `b'` (scalars of the Q relations, `Fq`).
     pub imports: [Fq; 3],
 }
 
-/// The A-side decider's field-side witness in P: `U_A'` (the accumulator after
-/// Omega's last A fold), the decider proof's field messages, and the values
+/// The A-side decider's field-side witness in P: the A accumulators after
+/// Omega's last A fold, the batch proof's field messages, and the values
 /// Omega's commitment side computes (`D_H`, the opening's `alpha` and `u`).
 #[derive(Clone, Debug)]
 pub struct AFieldWitness {
-    /// `U_A'`.
-    pub acc: Accumulator<Eq>,
-    /// The decider proof.
+    /// The decided A accumulators, in kind order.
+    pub accs: Vec<Accumulator<Eq>>,
+    /// The batch proof.
     pub proof: DeciderV2Proof<Eq>,
     /// `D_H` of the proof's helpers (a Vesta base-field value).
     pub helper_digest: Fq,
@@ -99,9 +99,10 @@ fn known<T: Clone>(value: Option<&T>) -> Value<T> {
     value.map_or_else(Value::unknown, |v| Value::known(v.clone()))
 }
 
-/// The A-side decider's field side with its crossing values as cells: the
-/// field data and the digest limbs `assign_accumulator_field` witnesses, the
-/// imported `D_H`, `alpha`, `u`, and the exported `d_F`, `v*`, `b'`.
+/// The A-side decider's field side over every A kind, with its crossing
+/// values as cells: each member's field data and digest limbs
+/// (`assign_accumulator_field` witnesses them), the imported `D_H`, `alpha`
+/// and `u`, and the exported `d_F`, `v*`, `b'`.
 ///
 /// # Errors
 /// Layout errors or a witness of another shape; a false proof is
@@ -109,17 +110,26 @@ fn known<T: Clone>(value: Option<&T>) -> Value<T> {
 pub fn a_field_side(
     lanes: &mut FieldLanes<'_, Fp>,
     region: &mut Region<'_, Fp>,
-    domain: &[u8; 32],
-    plan: &DeciderV2Plan<Eq>,
-    shape: &FoldShape,
+    plan: &PPlan,
     witness: Option<&AFieldWitness>,
 ) -> Result<ACrossing<Word<Fp>>, Error> {
-    if witness.is_some_and(|w| w.rounds.len() != plan.mu()) {
+    let spec = &*plan.spec;
+    let plans: Vec<&DeciderV2Plan<Eq>> = plan.a_plans.iter().map(|p| &**p).collect();
+    let mu = plans.first().ok_or(Error::Synthesis)?.mu();
+    if witness.is_some_and(|w| w.rounds.len() != mu || w.accs.len() != plans.len()) {
         return Err(Error::Synthesis);
     }
-    let acc =
-        assign_accumulator_field::<Eq>(lanes, region, domain, shape, witness.map(|w| &w.acc))?;
-    let proof = assign_decider_v2_field_proof(lanes, region, &[plan], witness.map(|w| &w.proof))?;
+    let mut members = Vec::with_capacity(plans.len());
+    for (index, relation) in spec.a.iter().enumerate() {
+        members.push(assign_accumulator_field::<Eq>(
+            lanes,
+            region,
+            &spec.domains.a_fold,
+            &relation.shape(),
+            witness.map(|w| &w.accs[index]),
+        )?);
+    }
+    let proof = assign_decider_v2_field_proof(lanes, region, &plans, witness.map(|w| &w.proof))?;
     let limbs = witness.map(|w| s6_limbs(&w.helper_digest).map(Fp::from_u128));
     let helper_digest = [
         lanes
@@ -129,18 +139,19 @@ pub fn a_field_side(
             .glue
             .witness(region, known(limbs.as_ref().map(|l| &l[1])))?,
     ];
+    let batch: Vec<_> = plans.iter().copied().zip(members.iter()).collect();
     let output = verify_decider_v2_field(
         lanes,
         region,
-        domain,
-        &[(plan, &acc)],
+        &spec.domains.a_fold,
+        &batch,
         &helper_digest,
         &proof,
     )?;
     let alpha = lanes
         .glue
         .witness(region, known(witness.map(|w| &w.alpha)))?;
-    let rounds = (0..plan.mu())
+    let rounds = (0..mu)
         .map(|j| {
             lanes
                 .glue
@@ -156,15 +167,20 @@ pub fn a_field_side(
         &rounds,
     )?;
     Ok(ACrossing {
-        acc_digest: acc.digest.clone(),
+        members: members
+            .into_iter()
+            .map(|acc| AMember {
+                acc_digest: acc.digest.clone(),
+                data: AccumulatorData {
+                    public: acc.public.concat(),
+                    theta: acc.theta,
+                    r: acc.r,
+                    beta: acc.beta,
+                    e: acc.e,
+                },
+            })
+            .collect(),
         helper_digest,
-        data: AccumulatorData {
-            public: acc.public.concat(),
-            theta: acc.theta,
-            r: acc.r,
-            beta: acc.beta,
-            e: acc.e,
-        },
         field_digest: output.field_digest,
         value,
         folded,
@@ -177,8 +193,10 @@ fn pair<C: iroha_pasta::PastaCurve>(cell: &ScalarCell<C>) -> Pair<Word<C::Base>>
     [cell.s6.lo().word().clone(), cell.s6.hi().word().clone()]
 }
 
-/// The Q-side decider's commitment side with its crossing values as cells,
-/// and the opening's undecided Pallas claim `(G'_0, u)` for `acc_P`.
+/// The Q-side decider's commitment side over every Q kind, with its crossing
+/// values as cells, and the opening's undecided Pallas claim `(G'_0, u)` for
+/// `acc_P`. Every Q kind shares the side's fold domain, which is also the
+/// batch decider's.
 ///
 /// # Errors
 /// Layout errors or a witness of another shape; a false opening is
@@ -186,19 +204,41 @@ fn pair<C: iroha_pasta::PastaCurve>(cell: &ScalarCell<C>) -> Pair<Word<C::Base>>
 pub fn q_commitment_side(
     lanes: &mut FoldLanes<'_, Ep>,
     region: &mut Region<'_, Fp>,
-    domain: &[u8; 32],
-    plan: &DeciderV2Plan<Ep>,
-    shape: &FoldShape,
-    key: &OpeningKey<Ep>,
+    plan: &PPlan,
     witness: Option<&QGroupWitness>,
 ) -> Result<(QCrossing<Word<Fp>>, OpeningClaimCells<Ep>), Error> {
-    if witness.is_some_and(|w| w.helpers.len() != plan.helper_count()) {
+    let spec = &*plan.spec;
+    let plans: Vec<&DeciderV2Plan<Ep>> = plan.q_plans.iter().map(|p| &**p).collect();
+    let mu = plans.first().ok_or(Error::Synthesis)?.mu();
+    let helper_count: usize = plans.iter().map(|p| p.helper_count()).sum();
+    if witness.is_some_and(|w| w.helpers.len() != helper_count || w.accs.len() != plans.len()) {
         return Err(Error::Synthesis);
     }
-    let acc = assign_accumulator(lanes, region, shape, witness.map(|w| &w.acc))?;
-    let acc_digest = accumulator_digest(lanes, region, domain, &acc)?;
-    let mut helpers = Vec::with_capacity(plan.helper_count());
-    for index in 0..plan.helper_count() {
+    let mut accs = Vec::with_capacity(plans.len());
+    let mut members = Vec::with_capacity(plans.len());
+    let domain = &spec.domains.q_fold;
+    for (index, relation) in spec.q.iter().enumerate() {
+        let acc = assign_accumulator(
+            lanes,
+            region,
+            &relation.shape(),
+            witness.map(|w| &w.accs[index]),
+        )?;
+        let acc_digest = accumulator_digest(lanes, region, domain, &acc)?;
+        members.push(QMember {
+            acc_digest,
+            data: AccumulatorData {
+                public: acc.instance.public.iter().flatten().map(pair).collect(),
+                theta: acc.theta.iter().map(pair).collect(),
+                r: acc.r.iter().map(pair).collect(),
+                beta: acc.beta.iter().map(pair).collect(),
+                e: pair(&acc.e),
+            },
+        });
+        accs.push(acc);
+    }
+    let mut helpers = Vec::with_capacity(helper_count);
+    for index in 0..helper_count {
         let value =
             witness.map_or_else(Value::unknown, |w| Value::known(Ep::from(w.helpers[index])));
         helpers.push(lanes.assign_point(region, value)?);
@@ -209,14 +249,15 @@ pub fn q_commitment_side(
     let field_digest = lanes.assign_scalar(region, import(0))?;
     let value = lanes.assign_scalar(region, import(1))?;
     let folded = lanes.assign_scalar(region, import(2))?;
-    let opening = assign_batch_opening(lanes, region, plan.mu(), witness.map(|w| &w.opening))?;
-    let commitments = claim_commitments(lanes, region, &[(plan, &acc)], &helpers)?;
+    let opening = assign_batch_opening(lanes, region, mu, witness.map(|w| &w.opening))?;
+    let batch: Vec<_> = plans.iter().copied().zip(accs.iter()).collect();
+    let commitments = claim_commitments(lanes, region, &batch, &helpers)?;
     opening_transcript(lanes, region, domain, &field_digest)?;
     let group = verify_batch_bound_group(
         lanes,
         region,
-        key,
-        plan.mu(),
+        &plan.opening,
+        mu,
         &commitments,
         &value,
         &folded,
@@ -224,17 +265,9 @@ pub fn q_commitment_side(
     )?;
     t::finish(lanes, region)?;
     let EndoAlpha { scalar: alpha, .. } = group.alpha.ok_or(Error::Synthesis)?;
-    let data = AccumulatorData {
-        public: acc.instance.public.iter().flatten().map(pair).collect(),
-        theta: acc.theta.iter().map(pair).collect(),
-        r: acc.r.iter().map(pair).collect(),
-        beta: acc.beta.iter().map(pair).collect(),
-        e: pair(&acc.e),
-    };
     let crossing = QCrossing {
-        acc_digest,
+        members,
         helper_digest: helper,
-        data,
         field_digest: pair(&field_digest),
         value: pair(&value),
         folded: pair(&folded),
@@ -350,10 +383,10 @@ pub fn vesta_claim_side(
 pub struct PPlan {
     /// The chain's fixed parts.
     pub spec: Arc<WrapSpec>,
-    /// The Q relation's decider plan.
-    pub q_plan: Arc<DeciderV2Plan<Ep>>,
-    /// The last A relation's decider plan.
-    pub a_plan: Arc<DeciderV2Plan<Eq>>,
+    /// Each Q kind's decider plan, in kind order.
+    pub q_plans: Vec<Arc<DeciderV2Plan<Ep>>>,
+    /// Each A kind's decider plan, in kind order.
+    pub a_plans: Vec<Arc<DeciderV2Plan<Eq>>>,
     /// The Q opening's fixed generators.
     pub opening: OpeningKey<Ep>,
     /// The Pallas claim restructuring's pinned points and context.
@@ -368,25 +401,54 @@ impl PPlan {
     /// P's program for `spec`.
     ///
     /// # Errors
-    /// [`WrapError::Input`] for relations the decider or the k16 recursion
-    /// do not admit.
+    /// [`WrapError::Input`] for a spec without kinds, a last kind or
+    /// boundary or lineage position out of range, or relations the decider
+    /// or the k16 recursion do not admit.
     pub fn new(spec: Arc<WrapSpec>) -> Result<Self, WrapError> {
-        let q_plan =
-            DeciderV2Plan::new(spec.q.clone(), &spec.key_q).map_err(|_| WrapError::Input)?;
-        let a_plan =
-            DeciderV2Plan::new(spec.a.clone(), &spec.key_a).map_err(|_| WrapError::Input)?;
-        if q_plan.mu() != a_plan.mu() || u32::try_from(q_plan.mu()) != Ok(K_U32) {
+        if spec.q.is_empty()
+            || spec.last >= spec.a.len()
+            || spec
+                .boundary
+                .iter()
+                .chain(&spec.lineage)
+                .any(|&i| i >= spec.a_state)
+        {
             return Err(WrapError::Input);
         }
-        let layout = PLayout::new(&spec.a.shape(), &spec.q.shape(), q_plan.mu());
+        let q_plans = spec
+            .q
+            .iter()
+            .map(|r| DeciderV2Plan::new(r.clone(), &spec.key_q).map(Arc::new))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| WrapError::Input)?;
+        let a_plans = spec
+            .a
+            .iter()
+            .map(|r| DeciderV2Plan::new(r.clone(), &spec.key_a).map(Arc::new))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| WrapError::Input)?;
+        if q_plans
+            .iter()
+            .map(|p| p.mu())
+            .chain(a_plans.iter().map(|p| p.mu()))
+            .any(|mu| u32::try_from(mu) != Ok(K_U32))
+        {
+            return Err(WrapError::Input);
+        }
+        let layout = PLayout::new(
+            &spec.a[spec.last].shape(),
+            &spec.a.iter().map(|r| r.shape()).collect::<Vec<_>>(),
+            &spec.q.iter().map(|r| r.shape()).collect::<Vec<_>>(),
+            K_U32 as usize,
+        );
         Ok(Self {
             opening: OpeningKey::new(spec.params_q.params()),
             restructure: RestructurePlan::new(&spec.params_q).map_err(|_| WrapError::Input)?,
             fold: FoldPlan::new(&spec.params_q, vec![K_U32; 2], FoldPurpose::FoldWrapPallas)
                 .map_err(|_| WrapError::Input)?,
             layout,
-            q_plan: Arc::new(q_plan),
-            a_plan: Arc::new(a_plan),
+            q_plans,
+            a_plans,
             spec,
         })
     }
@@ -518,14 +580,7 @@ impl Circuit<Fp> for PCircuit {
                         range: refs.range,
                         duplex: refs.hash,
                     };
-                    let a = a_field_side(
-                        &mut lanes,
-                        region,
-                        &spec.domains.a_fold,
-                        &plan.a_plan,
-                        &spec.a.shape(),
-                        witness.map(|w| &w.a),
-                    )?;
+                    let a = a_field_side(&mut lanes, region, plan, witness.map(|w| &w.a))?;
                     let vesta = vesta_claim_side(
                         &mut lanes,
                         region,
@@ -544,15 +599,7 @@ impl Circuit<Fp> for PCircuit {
                         ecc: refs.ecc,
                         duplex: refs.hash,
                     };
-                    q_commitment_side(
-                        &mut lanes,
-                        region,
-                        &spec.domains.q_fold,
-                        &plan.q_plan,
-                        &spec.q.shape(),
-                        &plan.opening,
-                        witness.map(|w| &w.q),
-                    )?
+                    q_commitment_side(&mut lanes, region, plan, witness.map(|w| &w.q))?
                 };
                 // The Pallas claims' group side.
                 let (pallas, restructured) = pallas_claim_side(
@@ -617,10 +664,20 @@ impl Circuit<Fp> for PCircuit {
                                 .witness(region, known(witness.map(|w| &w.state[i])))
                         })
                         .collect::<Result<Vec<_>, _>>()?;
+                    // An Omega only at an operation boundary: the step context
+                    // and the program counter are zero.
+                    for &index in &spec.boundary {
+                        lanes
+                            .glue
+                            .enforce_constant(region, &state[index], Fp::ZERO)?;
+                    }
                     let step = lanes
                         .glue
                         .witness(region, known(witness.map(|w| Fp::from(w.step)).as_ref()))?;
                     let base = lanes.glue.constant(region, spec.base_a)?;
+                    let mut digests: Vec<Word<Fp>> =
+                        q.members.iter().map(|m| m.acc_digest.clone()).collect();
+                    digests.push(pallas.digest.clone());
                     let h_out = ivc_hash(
                         &mut lanes,
                         region,
@@ -628,7 +685,7 @@ impl Circuit<Fp> for PCircuit {
                         &step,
                         &base,
                         &state,
-                        &[q.acc_digest.clone(), pallas.digest.clone()],
+                        &digests,
                     )?;
                     let h_out_n = a_public.get(1).ok_or(Error::Synthesis)?;
                     GlueChip::assert_equal(region, &h_out.word, h_out_n)?;

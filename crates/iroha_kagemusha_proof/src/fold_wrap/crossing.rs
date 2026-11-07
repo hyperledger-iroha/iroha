@@ -34,18 +34,27 @@ pub struct AccumulatorData<T> {
     pub e: T,
 }
 
-/// The Q-side decider's crossing values. Its commitments are Pallas points
-/// (base `Fp`), its scalars `Fq`. The commitment side, with the
-/// accumulator, its digest and the opening's group part, is in P. The field
-/// side, with the field transcript and the opening scalars, is in Omega.
+/// One decided Q accumulator's crossing values: its digest (P) and field
+/// data (P), both computed or assigned in P.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QMember<X> {
+    /// `kgwfacd1(U_Q[k])`.
+    pub acc_digest: X,
+    /// `U_Q[k]`'s field data.
+    pub data: AccumulatorData<Pair<X>>,
+}
+
+/// The Q-side decider's crossing values: one batch over every Q kind. Its
+/// commitments are Pallas points (base `Fp`), its scalars `Fq`. The
+/// commitment side, with the accumulators, their digests and the opening's
+/// group part, is in P. The field side, with the field transcript and the
+/// opening scalars, is in Omega.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QCrossing<X> {
-    /// `kgwfacd1(U_Q)` (P).
-    pub acc_digest: X,
-    /// `D_H` of the decider's helpers (P).
+    /// The batch's members, in kind order.
+    pub members: Vec<QMember<X>>,
+    /// `D_H` of the batch's helpers (P).
     pub helper_digest: X,
-    /// `U_Q`'s field data (P).
-    pub data: AccumulatorData<Pair<X>>,
     /// `d_F` (Omega).
     pub field_digest: Pair<X>,
     /// `v* = sum_c alpha^c v_c` (Omega).
@@ -58,17 +67,26 @@ pub struct QCrossing<X> {
     pub rounds: Vec<Pair<X>>,
 }
 
-/// The A-side decider's crossing values. Its commitments are Vesta points
-/// (base `Fq`), its scalars `Fp`. The commitment side (the last A fold, the
-/// digest and the opening's group part) is in Omega; the field side is in P.
+/// One decided A accumulator's crossing values, computed in Omega (the last
+/// kind after the fold of `A_n`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AMember<X> {
+    /// `kgwfacd1(U_A[k])`.
+    pub acc_digest: Pair<X>,
+    /// `U_A[k]`'s field data.
+    pub data: AccumulatorData<X>,
+}
+
+/// The A-side decider's crossing values: one batch over every A kind. Its
+/// commitments are Vesta points (base `Fq`), its scalars `Fp`. The commitment
+/// side (the last A fold, the digests and the opening's group part) is in
+/// Omega; the field side is in P.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ACrossing<X> {
-    /// `kgwfacd1(U_A')` of the accumulator after the last A fold (Omega).
-    pub acc_digest: Pair<X>,
-    /// `D_H` of the decider's helpers (Omega).
+    /// The batch's members, in kind order.
+    pub members: Vec<AMember<X>>,
+    /// `D_H` of the batch's helpers (Omega).
     pub helper_digest: Pair<X>,
-    /// `U_A'`'s field data (Omega's fold).
-    pub data: AccumulatorData<X>,
     /// `d_F` (P).
     pub field_digest: X,
     /// `v*` (P).
@@ -167,14 +185,14 @@ impl DataShape {
 }
 
 /// The counts that fix P's instance layout.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PLayout {
     /// `A_n`'s public values.
     pub a_public: usize,
-    /// The Q relation's field data.
-    pub q_data: DataShape,
-    /// The A relation's field data.
-    pub a_data: DataShape,
+    /// Each Q kind's field data, in kind order.
+    pub q_data: Vec<DataShape>,
+    /// Each A kind's field data, in kind order.
+    pub a_data: Vec<DataShape>,
     /// Opening rounds of either decider (`mu`).
     pub rounds: usize,
     /// Claim rounds (`iroha_fold::claims::ROUNDS`).
@@ -182,13 +200,14 @@ pub struct PLayout {
 }
 
 impl PLayout {
-    /// The layout for the last A relation `a` and the Q relation `q`.
+    /// The layout for the Q kinds `q`, the A kinds `a` and the last A kind's
+    /// public columns `a_public`.
     #[must_use]
-    pub fn new(a: &FoldShape, q: &FoldShape, rounds: usize) -> Self {
+    pub fn new(a_public: &FoldShape, a: &[FoldShape], q: &[FoldShape], rounds: usize) -> Self {
         Self {
-            a_public: a.instance_lengths.iter().sum(),
-            q_data: DataShape::of(q),
-            a_data: DataShape::of(a),
+            a_public: a_public.instance_lengths.iter().sum(),
+            q_data: q.iter().map(DataShape::of).collect(),
+            a_data: a.iter().map(DataShape::of).collect(),
             rounds,
             claim_rounds: iroha_fold::claims::ROUNDS,
         }
@@ -197,8 +216,10 @@ impl PLayout {
     /// Rows of P's public column.
     #[must_use]
     pub fn rows(&self) -> usize {
-        let q = 2 + 2 * self.q_data.values() + 2 * 4 + 2 * self.rounds;
-        let a = 2 * 2 + self.a_data.values() + 4 + self.rounds;
+        let q_members: usize = self.q_data.iter().map(|d| 1 + 2 * d.values()).sum();
+        let a_members: usize = self.a_data.iter().map(|d| 2 + d.values()).sum();
+        let q = q_members + 1 + 2 * 4 + 2 * self.rounds;
+        let a = a_members + 2 + 4 + self.rounds;
         let pallas = 1 + 2 * (3 * self.claim_rounds + 2);
         let vesta = 2 + 3 * self.claim_rounds + 2;
         self.a_public + 1 + q + a + pallas + vesta
@@ -217,9 +238,15 @@ impl PLayout {
         let a_public = cursor.many(self.a_public);
         let d_a = cursor.one();
         let q = QCrossing {
-            acc_digest: cursor.one(),
+            members: self
+                .q_data
+                .iter()
+                .map(|shape| QMember {
+                    acc_digest: cursor.one(),
+                    data: cursor.data_pairs(shape),
+                })
+                .collect(),
             helper_digest: cursor.one(),
-            data: cursor.data_pairs(&self.q_data),
             field_digest: cursor.pair(),
             value: cursor.pair(),
             folded: cursor.pair(),
@@ -227,9 +254,15 @@ impl PLayout {
             rounds: cursor.pairs(self.rounds),
         };
         let a = ACrossing {
-            acc_digest: cursor.pair(),
+            members: self
+                .a_data
+                .iter()
+                .map(|shape| AMember {
+                    acc_digest: cursor.pair(),
+                    data: cursor.data(shape),
+                })
+                .collect(),
             helper_digest: cursor.pair(),
-            data: cursor.data(&self.a_data),
             field_digest: cursor.one(),
             value: cursor.one(),
             folded: cursor.one(),
@@ -332,8 +365,11 @@ impl<X: Clone> PPublic<X> {
         let mut out = self.a_public.clone();
         out.push(self.d_a.clone());
         let q = &self.q;
-        out.extend([q.acc_digest.clone(), q.helper_digest.clone()]);
-        push_data_pairs(&mut out, &q.data);
+        for member in &q.members {
+            out.push(member.acc_digest.clone());
+            push_data_pairs(&mut out, &member.data);
+        }
+        out.push(q.helper_digest.clone());
         push_pairs(
             &mut out,
             &[
@@ -345,8 +381,11 @@ impl<X: Clone> PPublic<X> {
         );
         push_pairs(&mut out, &q.rounds);
         let a = &self.a;
-        push_pairs(&mut out, &[a.acc_digest.clone(), a.helper_digest.clone()]);
-        push_data(&mut out, &a.data);
+        for member in &a.members {
+            out.extend(member.acc_digest.iter().cloned());
+            push_data(&mut out, &member.data);
+        }
+        out.extend(a.helper_digest.iter().cloned());
         out.extend([
             a.field_digest.clone(),
             a.value.clone(),
@@ -378,20 +417,16 @@ mod tests {
 
     #[test]
     fn rows_and_parse_are_inverse() {
+        let shape = |public, theta, r, beta| DataShape {
+            public,
+            theta,
+            r,
+            beta,
+        };
         let layout = PLayout {
             a_public: 3,
-            q_data: DataShape {
-                public: 5,
-                theta: 2,
-                r: 3,
-                beta: 18,
-            },
-            a_data: DataShape {
-                public: 3,
-                theta: 1,
-                r: 1,
-                beta: 17,
-            },
+            q_data: vec![shape(5, 2, 3, 18), shape(2, 0, 0, 18)],
+            a_data: vec![shape(3, 1, 1, 17), shape(4, 0, 2, 17)],
             rounds: 16,
             claim_rounds: 16,
         };
@@ -399,6 +434,8 @@ mod tests {
         let parsed = layout.parse(&rows).expect("exact rows");
         assert_eq!(parsed.rows(), rows);
         assert_eq!(parsed.d_a, 3);
+        assert_eq!(parsed.q.members.len(), 2);
+        assert_eq!(parsed.a.members[1].data.e, parsed.a.helper_digest[0] - 1);
         assert_eq!(parsed.vesta.value, layout.rows() - 1);
         assert!(layout.parse(&rows[1..]).is_err());
     }

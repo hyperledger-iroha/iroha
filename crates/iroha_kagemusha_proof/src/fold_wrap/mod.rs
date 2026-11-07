@@ -1,20 +1,23 @@
 //! The KAGEMUSHA-Fold compression wraps (output `IVC.md` sections 7 and 11).
 //!
-//! After the last business instance `A_n`, two k16 PIPA-R proofs turn the
-//! folded state into an Omega in today's transport:
+//! After the last business instance `A_n` of an operation, two k16 PIPA-R
+//! proofs turn the folded state into an Omega in today's transport. Each side
+//! keeps one accumulator per relation kind of the other side, so each decider
+//! is one batch over every kind ([`WrapSpec`]).
 //!
 //! - **P**, over `Fp` (a Vesta proof): the commitment side of the Q-side
 //!   decider (Pallas group operations) and its bound opening, the field side
 //!   of the A-side decider (native `Fp`), the Pallas claim accumulator's
 //!   committed-mask opening, the Vesta claim accumulator's restructuring
 //!   sumcheck, the PIPA-AS fold into `acc_P`, `D_A`, and `A_n`'s recomputed
-//!   `h_out` ([`p::PCircuit`]);
+//!   `h_out` from a state at an operation boundary ([`p::PCircuit`]);
 //! - **Omega**, over `Fq` (a Pallas proof, today's three public columns
 //!   `[D_A]`, `acc_V.G`, `acc_V.u`): verifies P, the field side of the Q-side
 //!   decider, the Pallas claims' restructuring sumcheck, the fold of `A_n`
-//!   into `U_A` with `A_n`'s passthrough recomputed, the commitment side of the
-//!   A-side decider and its opening, the Vesta claims' committed-mask opening,
-//!   and the PIPA-AS fold into `acc_V` ([`omega::OmegaCircuit`]).
+//!   into its kind's accumulator (or its start, when `Q_{n-1}` kept none)
+//!   with `A_n`'s passthrough recomputed, the commitment side of the A-side
+//!   decider and its opening, the Vesta claims' committed-mask opening, and
+//!   the PIPA-AS fold into `acc_V` ([`omega::OmegaCircuit`]).
 //!
 //! Each decider is split (DESIGN.md section 9.0): its field messages are
 //! native in the circuit over its scalar field, its commitments in the circuit
@@ -79,9 +82,11 @@ impl std::error::Error for WrapError {}
 /// The domains the wraps use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Domains {
-    /// Fold domain of the Q relation (`U_Q`'s digest and decider).
+    /// Fold domain of every Q kind (the `U_Q` digests and their batch
+    /// decider).
     pub q_fold: [u8; 32],
-    /// Fold domain of the last A relation (`U_A`, `A_n`'s fold and decider).
+    /// Fold domain of every A kind (the `U_A` digests, `A_n`'s fold and
+    /// their batch decider).
     pub a_fold: [u8; 32],
     /// IVC hash domain of the A side (`A_n`'s `h_out`).
     pub a_ivc: [u8; 32],
@@ -93,15 +98,23 @@ pub struct Domains {
     pub vesta_claims: [u8; 32],
 }
 
-/// What the wraps fix about the chain they finish: the relations, keys and
-/// parameters, the domains and bases, the state lengths, and where `D_A`'s
-/// lineage fields sit in the final A state.
+/// What the wraps fix about the chain they finish: the relation kinds of
+/// each side, the kind of the last A instance, keys and parameters, the
+/// domains and bases, the state lengths, where `D_A`'s lineage fields sit in
+/// the final A state, and which A state words are zero at an operation
+/// boundary.
+///
+/// A side keeps one accumulator per kind of the other side, in kind order,
+/// then its claim accumulator; its frame hashes their digests in that order.
 #[derive(Clone, Debug)]
 pub struct WrapSpec {
-    /// The Q relation (`U_Q`'s instances).
-    pub q: FoldedRelation<Fq>,
-    /// The last A relation (`U_A`'s instances and `A_n`).
-    pub a: FoldedRelation<Fp>,
+    /// The Q relations, in the order of A's digest list.
+    pub q: Vec<FoldedRelation<Fq>>,
+    /// The A relations, in the order of Q's digest list.
+    pub a: Vec<FoldedRelation<Fp>>,
+    /// The kind of `A_n` (an index into `a`): Omega folds `A_n` into that
+    /// kind's accumulator, or starts it when `Q_{n-1}` kept none.
+    pub last: usize,
     /// Q's commitment key (monomial generators of `params_q`).
     pub key_q: CommitKey<Ep>,
     /// A's commitment key (monomial generators of `params_a`).
@@ -122,6 +135,9 @@ pub struct WrapSpec {
     pub q_state: usize,
     /// The positions in `z_A` of `D_A`'s public lineage fields.
     pub lineage: [usize; LINEAGE_FIELDS],
+    /// The positions in `z_A` that are zero between operations (the step
+    /// context and the program counter): P accepts only such a state.
+    pub boundary: Vec<usize>,
 }
 
 /// Lays out byte strings as one tape and decodes their 32-byte little-endian
