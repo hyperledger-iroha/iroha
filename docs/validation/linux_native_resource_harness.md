@@ -1,12 +1,14 @@
 # Required Linux native resource harness
 
 This change moves only `NativeRunTests` out of the broad helper pytest command
-and adds an unconditional `linux_resource_harness` job in the same workflow.
+and uses an unconditional `linux_resource_harness` aggregate in the same workflow.
 `rust_required` accepts this job only when its result is `success`; missing pins,
 failed admission, expired artifacts, cancellation and skipped execution all fail
-the required aggregate. The job invokes the existing Linux native runner for all
-20 names in `ci/linux_native_harness_tests.json`. It requires every named result,
-the count of 20, exit status zero, and zero skipped tests.
+the required aggregate. Four separate GitHub-hosted VMs invoke the existing Linux native runner for the
+closed partitions in `ci/linux_native_harness_shards.json`. Their disjoint union
+must match all 20 names in `ci/linux_native_harness_tests.json` and the actual
+`NativeRunTests` class. The required aggregate accepts every named result exactly
+once, the total count of 20, exit status zero, and zero skipped tests.
 
 The checked-in approval template intentionally fails. No binary has been approved
 by this proposal. Enabling the job requires independent review of a real candidate
@@ -23,8 +25,12 @@ commit containing `ci/linux_observer_approval.json` in `observer-approval/`. Its
 approved `source_commit` selects a third, clean checkout at `observer-source/`.
 The current observer candidate uses the clean base
 `3743ff550ca3632e92b23e5d60d084b41a069b29`; the PR checkout is never used as the
-observer source. The job verifies the approval checkout's HEAD against the
-variable and retains the approval bytes and commit with the results.
+observer source. The input job captures the approval variable once and freezes both the API head
+commit and actual harness merge commit, run and attempt, approval bytes, complete
+approved pins, consumer, runner, native test source, inventory and partition
+digests. Each shard and the aggregate checks its clean checkouts and original
+bytes against that identical context before use. Each shard rechecks them after
+execution and retains the approval bytes and commit with its results.
 
 Treat changes to that repository variable and to the selected approval commit as
 approval operations. Access to update the variable must remain restricted to
@@ -98,8 +104,10 @@ receipt with the approval. The bridge directory contains exactly the original
 module and original provenance document expected by the existing loader.
 
 The native runner receives all four approved admission pins and separate source
-and bridge roots. Twenty repeated `--test` arguments name the actual existing
-methods. An AST comparison fails if the current class changes without an updated
+and bridge roots. Each shard passes its fixed list of repeated `--test` arguments
+to name the actual existing methods; no method body, internal loop or assertion
+is split or changed. Independent processes avoid the fixture global monkeypatches
+interfering with each other. An AST comparison fails if the current class changes without an updated
 reviewed inventory; the consumer cannot silently run fewer methods. Each native
 method continues to exercise the normal-publication fixture, original custody,
 native child observation, refusal cases and public resource harness. This is not
@@ -121,8 +129,8 @@ observer behavior: all 20 actual tests must still pass with the approved module.
 The native runner receives only PATH, HOME, locale and Python bytecode settings,
 not the API token. Full test output, explicit method names, command, current
 harness commit, runner digest, approved pins and outcome are retained in the
-result artifact, along with source approval and producer metadata. The outer job
-has a 90-minute deadline. It does not terminate unrelated host processes.
+result artifact, along with source approval and producer metadata. Each native VM
+retains the original 90-minute deadline and unchanged native resource limits. It does not terminate unrelated host processes.
 
 The workflows request 30-day artifact retention, but effective retention is
 controlled by repository policy. GitHub reports that candidate artifact
@@ -132,12 +140,47 @@ new independently reviewed immutable candidate or an explicitly reviewed archiva
 transport change; there is no unpinned fallback. Approval changes are separate
 from ordinary PR harness changes.
 
+## Four original packets and the required aggregate
+
+`linux_resource_harness_inputs` freezes authority once; the fixed matrix runs
+`native-1` through `native-4`, with `fail-fast: false` and separate disposable VMs.
+A shard receipt is explicitly `shard_only` and cannot qualify the full suite.
+Each VM repeats the original approved ZIP, clean source, retained original module,
+provenance, native custody and perf-policy admission. The original 20 test bodies
+and their refusal, resource-limit and salvage loops remain byte-identical.
+
+The always-running `linux_resource_harness` requires successful input and matrix
+jobs. It retrieves current attempt-specific jobs and run metadata, selects exactly
+four attempt-named artifact IDs, and downloads the four original ZIPs without
+extracting them. The data-only aggregate verifies their GitHub API sizes/digests,
+run/head/attempt, exact successful job names, shared context and pins, original
+producer metadata and original approved candidate/module/provenance digests. It
+requires each shard's original raw log to contain precisely its assigned method
+results once, an exact terminal count, plain `OK`, and no skip/failure/error.
+Every method must occur exactly once across all four packets. Missing, duplicate,
+unknown, cancelled, partial, wrong-head or wrong-pin evidence fails closed.
+
+GitHub artifact metadata does not supply a direct producer job ID. Binding uses
+the reviewed exact job/artifact names, current run and attempt, API head and
+matching packet context; the receipt states this limitation rather than inventing
+a job-ID attestation. Physical file identities and process handles belong to each
+VM and are enforced by its unchanged native fixtures, not compared across hosts.
+The aggregate retains each API job/runner identity and time interval. It reports
+20 methods across four hosts, not a single-host sequential benchmark, publication
+approval or a guaranteed speedup.
+
+Partition balancing uses static estimates of 62 `public_run` admissions. The 33
+salvage replays bypass `ObserverDelivery`; they remain intact and are secondary,
+unmeasured cost. These estimates motivate separate VMs but do not predict exact
+runtime. A full sequential `run` remains supported for local qualification with
+all 20 methods; arbitrary runtime subset selection is not exposed by the consumer.
+
 ## Local control verification and activation
 
 Run the new stdlib control suite with:
 
 ```sh
-python3 -B -m unittest discover -s scripts/tests -p required_linux_resource_harness_test.py -v
+python3 -B -m unittest discover -s scripts/tests -p 'required_linux_resource_harness*_test.py' -v
 ```
 
 These tests check refusal of missing pins, substitutions, archive hazards,
@@ -149,7 +192,7 @@ They do not load a bridge or claim to execute any of the
 20 real native tests. Qualification of the required job remains pending until the
 Linux run with independently approved originals reports all 20 methods passing.
 
-Apply the workflow addition, scoped broad-pytest deselection, consumer, inventory,
+Apply the workflow addition, scoped broad-pytest deselection, consumer, inventory, fixed partition,
 controls and documentation together. Do not apply the deselection by itself.
 The `Required affected Rust validation` workflow aggregate refuses a failed,
 skipped or cancelled native harness. GitHub's `optimizations` branch currently

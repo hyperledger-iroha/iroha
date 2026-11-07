@@ -262,7 +262,7 @@ class RequiredWorkflowTests(unittest.TestCase):
         workflow = (ROOT / '.github/workflows/pr.yml').read_text()
         step = workflow.split('      - name: Permit required user-space perf events on the disposable hosted VM\n', 1)[1]
         shell = textwrap.dedent(step.split('        run: |\n', 1)[1].split('      - name:', 1)[0])
-        job = workflow.split('  linux_resource_harness:\n', 1)[1].split('\n  rust_required:\n', 1)[0]
+        job = workflow.split('  linux_resource_harness_shards:\n', 1)[1].split('\n  linux_resource_harness:\n', 1)[0]
         self.assertEqual([line.strip() for line in job.splitlines() if 'sudo ' in line],
                          ['sudo -n sysctl -w kernel.perf_event_paranoid=2 \\'])
         controls = r'''
@@ -313,9 +313,13 @@ class RequiredWorkflowTests(unittest.TestCase):
 
     def test_native_job_has_no_skip_gate_and_deselection_is_scoped(self):
         workflow = (ROOT / '.github/workflows/pr.yml').read_text()
-        job = workflow.split('  linux_resource_harness:\n', 1)[1].split('\n  rust_required:\n', 1)[0]
+        job = workflow.split('  linux_resource_harness_shards:\n', 1)[1].split('\n  linux_resource_harness:\n', 1)[0]
         self.assertNotRegex(job, r'(?m)^    (if|continue-on-error):')
-        self.assertIn('Run all 20 actual native methods with zero skips', job)
+        self.assertIn('Run assigned actual native methods with zero skips', job)
+        self.assertIn('shard: [native-1, native-2, native-3, native-4]', job)
+        aggregate = workflow.split('  linux_resource_harness:\n', 1)[1].split('\n  rust_required:\n', 1)[0]
+        self.assertIn('if: always()', aggregate)
+        self.assertIn('Require all four same-attempt shards and exact 20 passing native methods', aggregate)
         self.assertEqual(workflow.count('--deselect=scripts/tests/zk_resource_harness_test.py::NativeRunTests'), 1)
         self.assertIn('skip-decompress: true', job)
         self.assertIn('digest-mismatch: error', job)

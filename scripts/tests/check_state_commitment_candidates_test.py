@@ -2011,7 +2011,7 @@ class HostedWorkflow(unittest.TestCase):
             ("FASTPQ prove and verify under the shared phase and resource recorder",
              ["test", "--locked", "-p", "iroha_core_privacy", "--features", "fastpq-replay-measurement", "--test", "fastpq_phase_tree_measurement"], None),
             ("State commitment candidates satisfy the keyed State contract",
-             ["test", "--locked", "-p", "iroha_core", "--lib", "--features", "state-commitment-prototypes", "--", "keyed_commitment::candidates_tests"], "2"),
+             ["test", "--locked", "-p", "iroha_core", "--lib", "--features", "state-commitment-prototypes", "--", "keyed_commitment::candidates_tests"], "1"),
             ("State commitment candidate measurement target (smoke run)",
              ["test", "--locked", "-p", "iroha_core_privacy", "--features", "fastpq-replay-measurement", "--test", "state_commitment_candidates_measurement"], None),
         )

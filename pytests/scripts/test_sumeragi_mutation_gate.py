@@ -2828,7 +2828,7 @@ def test_ci_sumeragi_sweeps_execute_with_their_declared_seed_environment(
     assert (declared.group(1) if declared else None) == explicit_count
     declared_jobs = re.search(r'(?m)^          CARGO_BUILD_JOBS: "([0-9]+)"$', step.group(1))
     compiler_jobs = declared_jobs.group(1) if declared_jobs else None
-    assert compiler_jobs == ("2" if workflow_name == "pr.yml" and step_name.startswith("Node driver,") else None)
+    assert compiler_jobs == ("1" if workflow_name == "pr.yml" and step_name.startswith("Node driver,") else None)
     recorder = tmp_path / "cargo"
     recorder.write_text(
         "#!" + sys.executable + "\n"
