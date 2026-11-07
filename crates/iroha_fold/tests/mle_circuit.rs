@@ -7,7 +7,7 @@
 use iroha_fold::{
     circuit::{
         FoldVerifierChips, FoldVerifierConfig,
-        mle::{OpeningKey, assign_batch_opening, verify_batch_bound},
+        mle::{OpeningKey, assign_batch_opening, verify_batch_bound, verify_batch_bound_group},
         transcript as ct,
     },
     transcript::Transcript,
@@ -302,4 +302,187 @@ fn an_fp_circuit_verifies_pallas_bound_openings_as_the_native_verifier() {
 #[ignore = "k16 opening circuit; run optimized"]
 fn an_fq_circuit_verifies_vesta_bound_openings_as_the_native_verifier() {
     verifies_exactly_as_the_native_verifier::<Eq>(52);
+}
+
+/// The group side of a split decider opening: `v*` and `b'` arrive from the
+/// field side (here as private scalars); the circuit exposes `G'_0`, the
+/// finished digest and the exported low limb of `alpha`.
+struct GroupCircuit<C: PastaCurve> {
+    key: OpeningKey<C>,
+    k: usize,
+    m: usize,
+    inputs: Option<(Inputs<C>, C::ScalarExt, C::ScalarExt)>,
+}
+
+impl<C: PastaCurve> Circuit<C::Base> for GroupCircuit<C> {
+    type Config = Config<C>;
+    type FloorPlanner = SimpleFloorPlanner;
+    type Params = ();
+
+    fn without_witnesses(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            k: self.k,
+            m: self.m,
+            inputs: None,
+        }
+    }
+
+    fn configure(meta: &mut ConstraintSystem<C::Base>) -> Config<C> {
+        let fold = FoldVerifierConfig::configure(meta);
+        let instance = meta.instance_column(4);
+        meta.enable_equality(instance);
+        Config { fold, instance }
+    }
+
+    fn synthesize(
+        &self,
+        config: Config<C>,
+        mut layouter: impl Layouter<C::Base>,
+    ) -> Result<(), Error> {
+        let mut chips = FoldVerifierChips::new(&config.fold);
+        chips.load_tables(&mut layouter)?;
+        let inputs = self.inputs.as_ref();
+        let outputs = layouter.assign_region(
+            || "group opening",
+            |mut region| {
+                let mut lanes = chips.lanes();
+                let mut point = Vec::with_capacity(self.k);
+                for i in 0..self.k {
+                    point.push(
+                        lanes
+                            .assign_scalar(&mut region, value_of(inputs.map(|x| &x.0.point[i])))?,
+                    );
+                }
+                let mut claims = Vec::with_capacity(self.m);
+                for c in 0..self.m {
+                    let commitment = lanes.assign_point(
+                        &mut region,
+                        value_of(inputs.map(|x| C::from(x.0.claims[c].commitment)).as_ref()),
+                    )?;
+                    let value = lanes.assign_scalar(
+                        &mut region,
+                        value_of(inputs.map(|x| &x.0.claims[c].value)),
+                    )?;
+                    claims.push((commitment, value));
+                }
+                let opening = assign_batch_opening(
+                    &mut lanes,
+                    &mut region,
+                    self.k,
+                    inputs.map(|x| &x.0.opening),
+                )?;
+                let value = lanes.assign_scalar(&mut region, value_of(inputs.map(|x| &x.1)))?;
+                let folded = lanes.assign_scalar(&mut region, value_of(inputs.map(|x| &x.2)))?;
+                // The caller's transcript is bound as in the single-circuit test.
+                ct::start(&mut lanes, TAG, &DOMAIN)?;
+                ct::absorb_scalars(&mut lanes, &mut region, &point)?;
+                for (commitment, claim_value) in &claims {
+                    ct::absorb_point(&mut lanes, commitment);
+                    ct::absorb_scalar(&mut lanes, &mut region, claim_value)?;
+                }
+                let commitments: Vec<_> = claims
+                    .iter()
+                    .map(|(commitment, _)| commitment.clone())
+                    .collect();
+                let group = verify_batch_bound_group(
+                    &mut lanes,
+                    &mut region,
+                    &self.key,
+                    self.k,
+                    &commitments,
+                    &value,
+                    &folded,
+                    &opening,
+                )?;
+                let digest = ct::finish(&mut lanes, &mut region)?;
+                let alpha = group.alpha.ok_or(Error::Synthesis)?;
+                Ok([
+                    group.claim.folded_generator.x().cell(),
+                    group.claim.folded_generator.y().cell(),
+                    digest.cell(),
+                    alpha.0.word().cell(),
+                ])
+            },
+        )?;
+        for (row, cell) in outputs.into_iter().enumerate() {
+            layouter.constrain_instance(cell, config.instance, row)?;
+        }
+        Ok(())
+    }
+}
+
+/// The field side's values natively: `alpha` (replayed), `v* = sum alpha^c v_c`
+/// and `b' = folded_eq(sigma, u)` with the native verifier's `u`.
+fn field_side<C: PastaCurve>(
+    params: &PinnedParams<C>,
+    inputs: &Inputs<C>,
+) -> (C::ScalarExt, C::ScalarExt, C::ScalarExt) {
+    let mut replay = bound(inputs);
+    replay.absorb_u64(mle::TAG_BATCH_OPENING);
+    replay.absorb_u64(inputs.point.len() as u64);
+    replay.absorb_u64(inputs.claims.len() as u64);
+    let alpha = replay.challenge_128();
+    let value = inputs
+        .claims
+        .iter()
+        .rev()
+        .fold(<C::ScalarExt as ff::Field>::ZERO, |acc, claim| {
+            acc * alpha + claim.value
+        });
+    let mut transcript = bound(inputs);
+    let claim = mle::verify_batch_bound(
+        params.params(),
+        &mut transcript,
+        &inputs.point,
+        &inputs.claims,
+        &inputs.opening,
+        BUDGET,
+    )
+    .expect("honest opening");
+    let folded = mle::folded_eq(&inputs.point, claim.challenges()).expect("k challenges");
+    (alpha, value, folded)
+}
+
+fn group_side_verifies_as_the_native_verifier<C: PastaCurve>(seed: u64) {
+    let (params, inputs, mut expected) = honest::<C>(seed, 3, 3);
+    let (alpha, value, folded) = field_side(&params, &inputs);
+    expected.push(<C::Base as ff::PrimeField>::from_u128(u128::from_le_bytes(
+        <C::ScalarExt as ff::PrimeField>::to_repr(&alpha).as_ref()[..16]
+            .try_into()
+            .expect("16 bytes"),
+    )));
+    let satisfied = |value: C::ScalarExt, folded: C::ScalarExt, public: &[C::Base]| {
+        let circuit = GroupCircuit {
+            key: OpeningKey::new(params.params()),
+            k: inputs.point.len(),
+            m: inputs.claims.len(),
+            inputs: Some((inputs.clone(), value, folded)),
+        };
+        check_circuit(&circuit, CIRCUIT_K, &[public.to_vec()], CheckMode::Strict)
+            .expect("synthesis")
+            .is_satisfied()
+    };
+    assert!(
+        satisfied(value, folded, &expected),
+        "honest field-side values"
+    );
+    let one = <C::ScalarExt as ff::Field>::ONE;
+    assert!(!satisfied(value + one, folded, &expected), "wrong v*");
+    assert!(!satisfied(value, folded + one, &expected), "wrong b'");
+    let mut other = expected.clone();
+    other[3] += <C::Base as ff::Field>::ONE;
+    assert!(!satisfied(value, folded, &other), "another exported alpha");
+}
+
+#[test]
+#[ignore = "k16 opening circuit; run optimized"]
+fn an_fp_circuit_runs_the_group_side_of_a_split_opening() {
+    group_side_verifies_as_the_native_verifier::<Ep>(53);
+}
+
+#[test]
+#[ignore = "k16 opening circuit; run optimized"]
+fn an_fq_circuit_runs_the_group_side_of_a_split_opening() {
+    group_side_verifies_as_the_native_verifier::<Eq>(54);
 }

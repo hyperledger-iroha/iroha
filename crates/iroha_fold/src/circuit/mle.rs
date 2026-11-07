@@ -30,6 +30,7 @@ use iroha_plonk::{
     pcs::mle::{BatchOpening, TAG_BATCH_OPENING},
 };
 use iroha_plonk_gadgets::{
+    U128,
     ecc::{AssignedPoint, EccChip, ScalarLimbs},
     ff::FfValue,
 };
@@ -154,69 +155,177 @@ pub fn verify_batch_bound<C: PastaCurve>(
 ) -> Result<OpeningClaimCells<C>, Error> {
     let k = point.len();
     let (last, init) = claims.split_last().ok_or(Error::Synthesis)?;
-    if opening.rounds.len() != k {
-        return Err(Error::Synthesis);
-    }
-
-    // The transcript, exactly as the native bound verifier.
-    t::absorb_u64(lanes, TAG_BATCH_OPENING);
-    t::absorb_u64(lanes, k as u64);
-    t::absorb_u64(lanes, claims.len() as u64);
-    let alpha = if init.is_empty() {
-        None
-    } else {
-        Some(t::challenge_128(lanes, region)?)
-    };
-    t::absorb_scalar(lanes, region, &opening.blind)?;
-    let z = t::challenge(lanes, region)?;
-    let mut challenges = Vec::with_capacity(k);
-    for (left, right) in &opening.rounds {
-        t::absorb_point(lanes, left);
-        t::absorb_point(lanes, right);
-        challenges.push(t::challenge(lanes, region)?);
-    }
-    t::absorb_point(lanes, &opening.folded_generator);
-    t::absorb_scalar(lanes, region, &opening.scalar)?;
-
-    // The field part: v*, b' and the U coefficient. z has an inverse.
-    let _nonzero = lanes.ff.inverse(region, &z.ff)?;
+    let challenges = opening_transcript(lanes, region, k, claims.len(), opening)?;
     // v* = sum_c alpha^c v_c by Horner's rule, the last claim first.
     let mut value = last.1.ff.clone();
-    if let Some((_, alpha)) = &alpha {
+    if let Some((_, alpha)) = &challenges.alpha {
         for (_, claim_value) in init.iter().rev() {
             let scaled = lanes.mul(region, &value, &alpha.ff)?;
             value = lanes.add(region, &scaled, &claim_value.ff)?;
         }
     }
+    // b' = prod_j (1 + sigma_{k-1-j} (u_j - 1)).
     let one = lanes.constant(region, C::ScalarExt::ONE)?;
     let mut folded = one.clone();
-    for (challenge, coordinate) in challenges.iter().zip(point.iter().rev()) {
+    for (challenge, coordinate) in challenges.rounds.iter().zip(point.iter().rev()) {
         let shifted = lanes.sub(region, &challenge.ff, &one)?;
         let product = lanes.mul(region, &coordinate.ff, &shifted)?;
         let factor = lanes.add(region, &one, &product)?;
         folded = lanes.mul(region, &folded, &factor)?;
     }
-    let opened = lanes.mul(region, &opening.scalar.ff, &folded)?;
-    let difference = lanes.sub(region, &value, &opened)?;
-    let auxiliary_coefficient = lanes.mul(region, &difference, &z.ff)?;
+    let commitments: Vec<AssignedPoint<C::Base>> = claims
+        .iter()
+        .map(|(commitment, _)| commitment.clone())
+        .collect();
+    group_equation(
+        lanes,
+        region,
+        key,
+        &commitments,
+        &challenges,
+        &value,
+        &folded,
+        opening,
+    )?;
+    Ok(OpeningClaimCells {
+        folded_generator: opening.folded_generator.clone(),
+        challenges: challenges.rounds,
+    })
+}
 
-    // The group part, with complete additions: C* = sum_c alpha^c C_c as one
-    // Horner chain sharing one GLV split of the 128-bit alpha.
-    let mut equation = match &alpha {
-        Some((alpha_lo, _)) => {
+/// The group side of a split decider opening and what it hands back to the
+/// field side.
+#[derive(Clone, Debug)]
+pub struct GroupOpeningCells<C: PastaCurve> {
+    /// The undecided claim `(G'_0, u)`; its `u_j` go to the field side.
+    pub claim: OpeningClaimCells<C>,
+    /// The 128-bit batching challenge (its low limb and its scalar) for the
+    /// field side's `v*`; `None` for a single claim.
+    pub alpha: Option<(U128<C::Base>, ScalarCell<C>)>,
+}
+
+/// The group side of [`verify_batch_bound`] for a decider whose field part
+/// runs natively in the other circuit: the same opening transcript and group
+/// equation, with `v* = sum_c alpha^c v_c` and `b' = folded_eq(sigma, u)`
+/// computed by that field side (which binds the claim values and `sigma` in
+/// its own transcript) and imported here as `value` and `folded`. It returns
+/// `alpha` and the round challenges for the field side, which must use exactly
+/// these values (through the public instances that join the two circuits).
+///
+/// # Errors
+/// [`Error::Synthesis`] for no commitments or a round count other than `k`;
+/// layout errors. A false opening is unsatisfiable.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_batch_bound_group<C: PastaCurve>(
+    lanes: &mut FoldLanes<'_, C>,
+    region: &mut Region<'_, C::Base>,
+    key: &OpeningKey<C>,
+    k: usize,
+    commitments: &[AssignedPoint<C::Base>],
+    value: &ScalarCell<C>,
+    folded: &ScalarCell<C>,
+    opening: &BatchOpeningCells<C>,
+) -> Result<GroupOpeningCells<C>, Error> {
+    if commitments.is_empty() {
+        return Err(Error::Synthesis);
+    }
+    let challenges = opening_transcript(lanes, region, k, commitments.len(), opening)?;
+    group_equation(
+        lanes,
+        region,
+        key,
+        commitments,
+        &challenges,
+        &value.ff,
+        &folded.ff,
+        opening,
+    )?;
+    Ok(GroupOpeningCells {
+        claim: OpeningClaimCells {
+            folded_generator: opening.folded_generator.clone(),
+            challenges: challenges.rounds,
+        },
+        alpha: challenges.alpha,
+    })
+}
+
+/// The opening's challenges, squeezed exactly as the native bound verifier.
+struct OpeningChallenges<C: PastaCurve> {
+    alpha: Option<(U128<C::Base>, ScalarCell<C>)>,
+    z: ScalarCell<C>,
+    rounds: Vec<ScalarCell<C>>,
+}
+
+/// Absorbs the tag, `k` and the count, squeezes `alpha` (two or more claims),
+/// absorbs `rho*`, squeezes `z`, absorbs each round's `L_j`, `R_j` before
+/// squeezing `u_j`, then absorbs `G'_0` and `c`.
+fn opening_transcript<C: PastaCurve>(
+    lanes: &mut FoldLanes<'_, C>,
+    region: &mut Region<'_, C::Base>,
+    k: usize,
+    claims: usize,
+    opening: &BatchOpeningCells<C>,
+) -> Result<OpeningChallenges<C>, Error> {
+    if opening.rounds.len() != k {
+        return Err(Error::Synthesis);
+    }
+    t::absorb_u64(lanes, TAG_BATCH_OPENING);
+    t::absorb_u64(lanes, k as u64);
+    t::absorb_u64(lanes, claims as u64);
+    let alpha = if claims > 1 {
+        Some(t::challenge_128(lanes, region)?)
+    } else {
+        None
+    };
+    t::absorb_scalar(lanes, region, &opening.blind)?;
+    let z = t::challenge(lanes, region)?;
+    let mut rounds = Vec::with_capacity(k);
+    for (left, right) in &opening.rounds {
+        t::absorb_point(lanes, left);
+        t::absorb_point(lanes, right);
+        rounds.push(t::challenge(lanes, region)?);
+    }
+    t::absorb_point(lanes, &opening.folded_generator);
+    t::absorb_scalar(lanes, region, &opening.scalar)?;
+    Ok(OpeningChallenges { alpha, z, rounds })
+}
+
+/// Constrains the opening equation with complete additions,
+///
+/// ```text
+/// sum_c alpha^c C_c - rho* W + (v* - c b') z U + sum_j (u_j^-1 L_j + u_j R_j) - c G'_0 = O,
+/// ```
+///
+/// with `z` and every `u_j` invertible.
+#[allow(clippy::too_many_arguments)]
+fn group_equation<C: PastaCurve>(
+    lanes: &mut FoldLanes<'_, C>,
+    region: &mut Region<'_, C::Base>,
+    key: &OpeningKey<C>,
+    commitments: &[AssignedPoint<C::Base>],
+    challenges: &OpeningChallenges<C>,
+    value: &FfValue<C::Base>,
+    folded: &FfValue<C::Base>,
+    opening: &BatchOpeningCells<C>,
+) -> Result<(), Error> {
+    let _nonzero = lanes.ff.inverse(region, &challenges.z.ff)?;
+    let opened = lanes.mul(region, &opening.scalar.ff, folded)?;
+    let difference = lanes.sub(region, value, &opened)?;
+    let auxiliary_coefficient = lanes.mul(region, &difference, &challenges.z.ff)?;
+    // C* = sum_c alpha^c C_c as one Horner chain sharing one GLV split of the
+    // 128-bit alpha.
+    let mut equation = match (&challenges.alpha, commitments) {
+        (Some((alpha_lo, _)), _) => {
             let zero = lanes.uint().constant::<127>(region, 0)?;
-            let commitments: Vec<AssignedPoint<C::Base>> = claims
-                .iter()
-                .map(|(commitment, _)| commitment.clone())
-                .collect();
             lanes.ecc.horner(
                 region,
                 lanes.range,
                 ScalarLimbs::new(alpha_lo, &zero),
-                &commitments,
+                commitments,
             )?
         }
-        None => last.0.clone(),
+        (None, [only]) => only.clone(),
+        (None, _) => return Err(Error::Synthesis),
     };
     let w = lanes.ecc.constant_point(region, &C::from(key.w))?;
     let zero = lanes.constant(region, C::ScalarExt::ZERO)?;
@@ -226,7 +335,7 @@ pub fn verify_batch_bound<C: PastaCurve>(
     let u = lanes.ecc.constant_point(region, &C::from(key.u))?;
     let term = scale(lanes, region, &u, auxiliary_coefficient)?;
     equation = lanes.ecc.add(region, &equation, &term)?;
-    for ((left, right), challenge) in opening.rounds.iter().zip(&challenges) {
+    for ((left, right), challenge) in opening.rounds.iter().zip(&challenges.rounds) {
         let inverse = lanes.ff.inverse(region, &challenge.ff)?;
         let term = scale(lanes, region, left, inverse)?;
         equation = lanes.ecc.add(region, &equation, &term)?;
@@ -239,9 +348,5 @@ pub fn verify_batch_bound<C: PastaCurve>(
     let identity = EccChip::<C>::is_identity(lanes.glue, region, &equation)?;
     lanes
         .glue
-        .enforce_constant(region, identity.word(), C::Base::ONE)?;
-    Ok(OpeningClaimCells {
-        folded_generator: opening.folded_generator.clone(),
-        challenges,
-    })
+        .enforce_constant(region, identity.word(), C::Base::ONE)
 }
