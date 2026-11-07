@@ -16,7 +16,7 @@
 use ff::{Field, PrimeField};
 use iroha_pasta::PastaCurve;
 use iroha_plonk::frontend::{Error, Region, Value};
-use iroha_plonk_gadgets::{Word, ecc::AssignedPoint};
+use iroha_plonk_gadgets::{Bit, Word, ecc::AssignedPoint};
 
 use super::{
     FoldLanes, ScalarCell,
@@ -26,7 +26,7 @@ use super::{
 };
 use crate::{
     claims::{Claim, ClaimAccumulator, ClaimProof, ROUNDS, RestructureProof},
-    transcript::{TAG_CLAIM_DIGEST, TAG_CLAIM_FOLD, TAG_CLAIM_RESTRUCTURE, s6_limbs},
+    transcript::{TAG_CLAIM_ACCUMULATOR, TAG_CLAIM_DIGEST, TAG_CLAIM_FOLD, TAG_CLAIM_RESTRUCTURE, s6_limbs},
 };
 
 /// A claim `(G, u)` in circuit.
@@ -148,9 +148,56 @@ pub fn verify_claim_fold<C: PastaCurve>(
     claim: &ClaimCells<C>,
     proof: &ClaimProofCells<C>,
 ) -> Result<ClaimAccumulatorCells<C>, Error> {
+    claim_fold_cells(lanes, region, domain, acc, claim, proof, None)
+}
+
+/// [`verify_claim_fold`], or, where `start` is one, the accumulator started from
+/// `claim` ([`ClaimAccumulator::from_claim`]): the fold with `gamma = 1` (so
+/// `G* = G`, `u* = u` and `e* = 0`) and `beta` from `kgwfcla1`; `acc` and the
+/// messages are ignored when starting. The first claim a side folds starts its
+/// accumulator, so one circuit serves both.
+///
+/// # Errors
+/// Layout errors, or inputs of another shape.
+pub fn verify_claim_fold_or_start<C: PastaCurve>(
+    lanes: &mut FoldLanes<'_, C>,
+    region: &mut Region<'_, C::Base>,
+    domain: &[u8; 32],
+    acc: &ClaimAccumulatorCells<C>,
+    claim: &ClaimCells<C>,
+    proof: &ClaimProofCells<C>,
+    start: &Bit<C::Base>,
+) -> Result<ClaimAccumulatorCells<C>, Error> {
+    claim_fold_cells(lanes, region, domain, acc, claim, proof, Some(start))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn claim_fold_cells<C: PastaCurve>(
+    lanes: &mut FoldLanes<'_, C>,
+    region: &mut Region<'_, C::Base>,
+    domain: &[u8; 32],
+    acc: &ClaimAccumulatorCells<C>,
+    claim: &ClaimCells<C>,
+    proof: &ClaimProofCells<C>,
+    start: Option<&Bit<C::Base>>,
+) -> Result<ClaimAccumulatorCells<C>, Error> {
     if acc.u.len() != ROUNDS || acc.beta.len() != ROUNDS || claim.u.len() != ROUNDS || proof.f.len() != ROUNDS {
         return Err(Error::Synthesis);
     }
+    // The beta of an accumulator started from the claim (kgwfcla1).
+    let started = match start {
+        Some(_) => {
+            t::start(lanes, TAG_CLAIM_ACCUMULATOR, domain)?;
+            t::absorb_point(lanes, &claim.g);
+            t::absorb_scalars(lanes, region, &claim.u)?;
+            let mut beta = Vec::with_capacity(ROUNDS);
+            for j in 0..ROUNDS {
+                beta.push(if j + 1 == ROUNDS { t::challenge_last(lanes, region)? } else { t::challenge(lanes, region)? });
+            }
+            Some(beta)
+        }
+        None => None,
+    };
     t::start(lanes, TAG_CLAIM_FOLD, domain)?;
     t::absorb_point(lanes, &acc.g);
     t::absorb_scalars(lanes, region, &acc.u)?;
@@ -163,6 +210,18 @@ pub fn verify_claim_fold<C: PastaCurve>(
     let alpha = t::challenge(lanes, region)?;
     t::absorb_scalar(lanes, region, &proof.k)?;
     let (gamma_limb, gamma) = t::challenge_128_last(lanes, region)?;
+    let one = lanes.constant(region, <C::ScalarExt as Field>::ONE)?;
+    // Starting is the fold with gamma = 1.
+    let (gamma_limb, gamma) = match start {
+        None => (gamma_limb, gamma.ff),
+        Some(bit) => {
+            let one_word = lanes.glue.constant(region, <C::Base as Field>::ONE)?;
+            let selected = lanes.glue.select(region, bit, &one_word, gamma_limb.word())?;
+            let limb = lanes.uint().range_check::<128>(region, &selected)?;
+            let scalar = lanes.ff.select(lanes.glue, region, bit, &one, &gamma.ff)?;
+            (limb, scalar)
+        }
+    };
 
     let mut f_coefficients = vec![&acc.e.ff];
     f_coefficients.extend(proof.f.iter().map(|c| &c.ff));
@@ -174,20 +233,22 @@ pub fn verify_claim_fold<C: PastaCurve>(
             power = lanes.mul(region, &power, &power)?;
         }
         let scaled = lanes.mul(region, &alpha.ff, &power)?;
-        let folded = lanes.add(region, &b.ff, &scaled)?;
+        let mut folded = lanes.add(region, &b.ff, &scaled)?;
+        if let (Some(bit), Some(started)) = (start, &started) {
+            folded = lanes.ff.select(lanes.glue, region, bit, &started[i].ff, &folded)?;
+        }
         beta.push(lanes.export(region, folded)?);
     }
-    let one = lanes.constant(region, <C::ScalarExt as Field>::ONE)?;
-    let one_minus_gamma = lanes.sub(region, &one, &gamma.ff)?;
+    let one_minus_gamma = lanes.sub(region, &one, &gamma)?;
     let left = lanes.mul(region, &f_alpha, &one_minus_gamma)?;
-    let gamma_minus_one = lanes.sub(region, &gamma.ff, &one)?;
-    let z = lanes.mul(region, &gamma.ff, &gamma_minus_one)?;
+    let gamma_minus_one = lanes.sub(region, &gamma, &one)?;
+    let z = lanes.mul(region, &gamma, &gamma_minus_one)?;
     let right = lanes.mul(region, &z, &proof.k.ff)?;
     let e = lanes.add(region, &left, &right)?;
     let e = lanes.export(region, e)?;
     let mut u = Vec::with_capacity(ROUNDS);
     for (a, b) in acc.u.iter().zip(&claim.u) {
-        let folded = lanes.lerp(region, &a.ff, &b.ff, &gamma.ff)?;
+        let folded = lanes.lerp(region, &a.ff, &b.ff, &gamma)?;
         u.push(lanes.export(region, folded)?);
     }
     let g = fold_commitments(lanes, region, core::slice::from_ref(&acc.g), core::slice::from_ref(&claim.g), &gamma_limb)?

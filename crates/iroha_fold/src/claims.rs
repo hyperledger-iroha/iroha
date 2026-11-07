@@ -278,6 +278,35 @@ pub fn fold_claim<C: PastaCurve>(
     Ok((folded, witness, ClaimProof { f, k }))
 }
 
+/// Folds `claim` into the claim accumulator a side keeps, or starts it from the
+/// claim while the side keeps none (its first claim, with zero messages, which
+/// the circuit ignores: [`crate::circuit::claims::verify_claim_fold_or_start`]).
+///
+/// # Errors
+/// As [`fold_claim`].
+pub fn fold_or_start_claim<C: PastaCurve>(
+    domain: &[u8; 32],
+    acc: Option<(&ClaimAccumulator<C>, &[C::ScalarExt])>,
+    claim: &Claim<C>,
+) -> Result<ClaimFoldOutput<C>, Error> {
+    match acc {
+        Some((acc, s)) => fold_claim(domain, acc, s, claim),
+        None => {
+            let (started, s) = ClaimAccumulator::from_claim(domain, claim);
+            let zero = <C::ScalarExt as Field>::ZERO;
+            Ok((started, s, ClaimProof { f: [zero; ROUNDS], k: zero }))
+        }
+    }
+}
+
+/// A claim accumulator of the identity and zero values: the witness of an
+/// absent accumulator, so that every circuit has one layout.
+#[must_use]
+pub fn placeholder_claim_accumulator<C: PastaCurve>() -> ClaimAccumulator<C> {
+    let zero = <C::ScalarExt as Field>::ZERO;
+    ClaimAccumulator { g: C::AffineExt::default(), u: [zero; ROUNDS], beta: [zero; ROUNDS], e: zero }
+}
+
 /// The native claim-fold verifier: recomputes the challenges and the folded
 /// accumulator.
 #[must_use]
