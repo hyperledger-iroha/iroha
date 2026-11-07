@@ -6,6 +6,13 @@
 //! own field, truncated to [`HASH_BITS`] bits so that the same integer is a
 //! canonical element of both Pasta fields ([`embed`]); `passthrough` copies the
 //! previous instance's `h_out`, and the next instance of the same side checks it.
+//!
+//! A side keeps a list of digests, hashed in a fixed order: one accumulator per
+//! kind of the other side's relations (non-uniform IVC, `IVC.md` section 4),
+//! then the side's own claim accumulator (section 6), each zero while absent.
+//! A step circuit folds the other side's previous instance into the one slot
+//! its schedule fixes ([`ChainSide::slot`]) and passes the others through; its
+//! business may replace the claim digest.
 
 use ff::Field;
 use iroha_pasta::{PastaCurve, PastaField, poseidon::Sponge};
@@ -37,16 +44,17 @@ pub fn embed<F: PastaField, G: PastaField>(value: &F) -> G {
     G::from_raw_reduced(value.to_canonical_limbs())
 }
 
-/// The IVC hash of one side: `H(kgwfivc1, domain, step, base, state, digest)`
-/// truncated to [`HASH_BITS`] bits. `digest` is the digest of the accumulator the
-/// side keeps, zero while it is absent.
+/// The IVC hash of one side: `H(kgwfivc1, domain, step, base, state, digests)`
+/// truncated to [`HASH_BITS`] bits. `digests` is the side's digest list: the
+/// digests of the accumulators it keeps, in kind order, then its claim
+/// accumulator's digest, each zero while absent.
 #[must_use]
 pub fn ivc_hash<F: PastaField + iroha_pasta::poseidon::PoseidonField>(
     domain: &[u8; 32],
     step: u64,
     base: F,
     state: &[F],
-    digest: F,
+    digests: &[F],
 ) -> F {
     let mut sponge = Sponge::<F>::new();
     sponge.update(&[F::from(TAG_IVC)]);
@@ -55,7 +63,7 @@ pub fn ivc_hash<F: PastaField + iroha_pasta::poseidon::PoseidonField>(
     }
     sponge.update(&[F::from(step), base]);
     sponge.update(state);
-    sponge.update(&[digest]);
+    sponge.update(digests);
     truncate(&sponge.squeeze())
 }
 
@@ -123,16 +131,32 @@ pub type Fresh<C> = (Instance<C>, Witness<<C as PastaCurve>::ScalarExt>);
 /// An accumulator and its witness.
 pub type Kept<C> = (Accumulator<C>, Witness<<C as PastaCurve>::ScalarExt>);
 
-/// One side of the chain as its circuits see it (`IVC.md` section 4).
+/// The frame of one step circuit (`IVC.md` section 4): its side's hash
+/// domain, chain start and digest list, and the kind of the other side's
+/// relation it folds, which the schedule fixes per circuit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChainSide {
     /// Domain of the IVC hash this side outputs.
     pub ivc_domain: [u8; 32],
-    /// Fold domain of the other side's relation, whose instances this side folds.
+    /// Fold domain of the kind of the other side's relation this circuit folds.
     pub fold_domain: [u8; 32],
     /// Step of this side's first instance; the side with `1` starts the chain and
     /// its first instance has no predecessor.
     pub first_step: u64,
+    /// Position, in the side's digest list, of the accumulator this circuit
+    /// folds into.
+    pub slot: usize,
+    /// Length of the side's digest list (kept accumulators, then the claim
+    /// accumulator).
+    pub digests: usize,
+}
+
+impl ChainSide {
+    /// Whether the slot lies in the digest list.
+    #[must_use]
+    pub const fn is_valid(&self) -> bool {
+        self.slot < self.digests
+    }
 }
 
 /// The witness of a step's fold frame
@@ -143,9 +167,9 @@ pub struct FrameWitness<C: PastaCurve> {
     pub step: u64,
     /// This side's previous state.
     pub state: Vec<C::Base>,
-    /// Digest of the accumulator this side keeps, zero while absent.
-    pub stored: C::Base,
-    /// That accumulator (a placeholder while absent).
+    /// This side's previous digest list ([`ChainSide::digests`] entries).
+    pub digests: Vec<C::Base>,
+    /// The accumulator in [`ChainSide::slot`] (a placeholder while absent).
     pub acc: Accumulator<C>,
     /// The other side's previous instance (a placeholder without predecessor).
     pub fresh: Instance<C>,
@@ -153,29 +177,35 @@ pub struct FrameWitness<C: PastaCurve> {
     pub proof: FoldProof<C::ScalarExt>,
 }
 
-/// A step's fold done natively: the frame witness, the accumulator the side
-/// keeps after the step, and the frame's outputs.
+/// A step's fold done natively: the frame witness, the accumulator in the
+/// folded slot after the step, and the frame's outputs.
 #[derive(Clone, Debug)]
 pub struct PreparedStep<C: PastaCurve> {
     /// The frame witness of the step circuit.
     pub witness: FrameWitness<C>,
-    /// The kept accumulator after the step.
+    /// The accumulator in the folded slot after the step.
     pub kept: Option<Kept<C>>,
     /// The other side's bridge values.
     pub bridge: Vec<C::Base>,
     /// The passthrough the step outputs.
     pub passthrough: C::Base,
-    /// The kept accumulator's digest after the step (zero without predecessor).
-    pub digest: C::Base,
+    /// The digest list after the fold: the folded slot replaced, every other
+    /// digest passed through; all zero without predecessor. The step's business
+    /// may still replace entries (its claim digest) before hashing them.
+    pub digests: Vec<C::Base>,
 }
 
 /// Prepares the fold frame of step `step` of `side`: folds the other side's last
-/// instance into the kept accumulator (or starts it), as the circuit will.
-/// `start_passthrough` is the passthrough of an instance without predecessor:
-/// the other side's base hash, the same constant the circuit holds.
+/// instance into the accumulator in `side.slot` (or starts it), as the circuit
+/// will. `digests` is the side's previous digest list; its folded slot must be
+/// `kept`'s digest (zero while absent). `start_passthrough` is the passthrough
+/// of an instance without predecessor: the other side's base hash, the same
+/// constant the circuit holds.
 ///
 /// # Errors
-/// As [`fold_or_start`]; [`Error::Shape`] for an instance of another shape.
+/// As [`fold_or_start`]; [`Error::Shape`] for an instance of another shape, a
+/// digest list of another length or a folded slot that is not `kept`'s digest.
+#[allow(clippy::too_many_arguments)]
 pub fn prepare_step<C: PastaCurve>(
     side: &ChainSide,
     step: u64,
@@ -183,21 +213,28 @@ pub fn prepare_step<C: PastaCurve>(
     kept: Option<&Kept<C>>,
     their_last: Option<&Fresh<C>>,
     state: Vec<C::Base>,
+    digests: Vec<C::Base>,
     start_passthrough: C::Base,
 ) -> Result<PreparedStep<C>, Error> {
     let zero_base = <C::Base as Field>::ZERO;
+    if !side.is_valid() || digests.len() != side.digests {
+        return Err(Error::Shape("digest list"));
+    }
     let stored = kept.map_or(zero_base, |(acc, _)| acc.digest(&side.fold_domain));
+    if digests[side.slot] != stored {
+        return Err(Error::Shape("kept digest"));
+    }
     let acc = kept.map_or_else(|| placeholder_accumulator::<C>(other), |(acc, _)| acc.clone());
     let Some((fresh, fresh_witness)) = their_last else {
         let zero = <C::ScalarExt as Field>::ZERO;
         let proof = FoldProof { f: vec![zero; other.index_bits()], k: vec![zero; other.degree() - 1] };
-        let witness = FrameWitness { step, state, stored, acc, fresh: placeholder_instance::<C>(other), proof };
+        let witness = FrameWitness { step, state, digests, acc, fresh: placeholder_instance::<C>(other), proof };
         return Ok(PreparedStep {
             witness,
             kept: kept.cloned(),
             bridge: vec![zero_base; other.instance_lengths()[0].saturating_sub(2)],
             passthrough: start_passthrough,
-            digest: zero_base,
+            digests: vec![zero_base; side.digests],
         });
     };
     let public = fresh.public.first().ok_or(Error::Shape("passthrough column"))?;
@@ -206,15 +243,16 @@ pub fn prepare_step<C: PastaCurve>(
     }
     let (folded, folded_witness, proof) =
         fold_or_start(other, &side.fold_domain, kept.map(|(a, w)| (a, w)), fresh, fresh_witness)?;
-    let digest = folded.digest(&side.fold_domain);
+    let mut next = digests.clone();
+    next[side.slot] = folded.digest(&side.fold_domain);
     let passthrough = embed(&public[1]);
     let bridge = public[2..].iter().map(embed).collect();
-    let witness = FrameWitness { step, state, stored, acc, fresh: fresh.clone(), proof };
-    Ok(PreparedStep { witness, kept: Some((folded, folded_witness)), bridge, passthrough, digest })
+    let witness = FrameWitness { step, state, digests, acc, fresh: fresh.clone(), proof };
+    Ok(PreparedStep { witness, kept: Some((folded, folded_witness)), bridge, passthrough, digests: next })
 }
 
 /// The public inputs a step outputs: `[passthrough, h_out, bridge...]` with
-/// `h_out = ivc_hash(step, base, next, digest)`.
+/// `h_out = ivc_hash(step, base, next, digests)`.
 #[must_use]
 pub fn step_public<F: PastaField + iroha_pasta::poseidon::PoseidonField>(
     side: &ChainSide,
@@ -222,10 +260,10 @@ pub fn step_public<F: PastaField + iroha_pasta::poseidon::PoseidonField>(
     base: F,
     passthrough: F,
     next: &[F],
-    digest: F,
+    digests: &[F],
     bridge: &[F],
 ) -> Vec<F> {
-    let mut out = vec![passthrough, ivc_hash(&side.ivc_domain, step, base, next, digest)];
+    let mut out = vec![passthrough, ivc_hash(&side.ivc_domain, step, base, next, digests)];
     out.extend_from_slice(bridge);
     out
 }
@@ -237,11 +275,20 @@ mod tests {
 
     #[test]
     fn truncated_hashes_embed_exactly() {
-        let h = ivc_hash::<Fq>(&[7; 32], 3, Fq::from(5u64), &[Fq::from(9u64)], Fq::ZERO);
+        let h = ivc_hash::<Fq>(&[7; 32], 3, Fq::from(5u64), &[Fq::from(9u64)], &[Fq::ZERO]);
         assert_eq!(h.to_canonical_limbs()[3] >> (HASH_BITS - 192), 0);
         let in_fp: Fp = embed(&h);
         assert_eq!(in_fp.to_canonical_limbs(), h.to_canonical_limbs());
         assert_eq!(embed::<Fp, Fq>(&in_fp), h);
-        assert_ne!(h, ivc_hash::<Fq>(&[7; 32], 4, Fq::from(5u64), &[Fq::from(9u64)], Fq::ZERO));
+        assert_ne!(h, ivc_hash::<Fq>(&[7; 32], 4, Fq::from(5u64), &[Fq::from(9u64)], &[Fq::ZERO]));
+    }
+
+    #[test]
+    fn every_digest_of_the_list_enters_the_hash_in_order() {
+        let hash = |digests: &[Fp]| ivc_hash::<Fp>(&[3; 32], 2, Fp::from(5u64), &[Fp::from(9u64)], digests);
+        let (a, b) = (Fp::from(11u64), Fp::from(13u64));
+        assert_ne!(hash(&[a, b]), hash(&[b, a]));
+        assert_ne!(hash(&[a, b]), hash(&[a, b + Fp::ONE]));
+        assert_ne!(hash(&[a]), hash(&[a, Fp::ZERO]));
     }
 }

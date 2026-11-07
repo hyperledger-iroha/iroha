@@ -1,6 +1,7 @@
 //! In-circuit pieces of the two-curve IVC (output `IVC.md` section 4): the
-//! truncated IVC hash, the passthrough check against a public input of the
-//! other side's instance, and foreign bounded values as native words.
+//! truncated IVC hash over a side's state and digest list, the passthrough
+//! check against a public input of the other side's instance, and foreign
+//! bounded values as native words.
 //!
 //! A public input of the other side's instance is a foreign scalar here
 //! ([`ScalarCell`], canonical S6 limbs). A truncated hash below `2^250` and a
@@ -39,7 +40,7 @@ fn two_pow<F: PrimeField>(bits: u32) -> F {
     F::from(2u64).pow_vartime([u64::from(bits)])
 }
 
-/// The IVC hash `H(kgwfivc1, domain, step, base, state, digest)`, truncated to
+/// The IVC hash `H(kgwfivc1, domain, step, base, state, digests)`, truncated to
 /// 250 bits, as [`crate::ivc::ivc_hash`].
 ///
 /// # Errors
@@ -51,15 +52,14 @@ pub fn ivc_hash<C: PastaCurve>(
     step: &Word<C::Base>,
     base: &Word<C::Base>,
     state: &[Word<C::Base>],
-    digest: &Word<C::Base>,
+    digests: &[Word<C::Base>],
 ) -> Result<HashCells<C::Base>, Error> {
     t::start(chips, TAG_IVC, domain)?;
     t::absorb_word(chips, step);
     t::absorb_word(chips, base);
-    for word in state {
+    for word in state.iter().chain(digests) {
         t::absorb_word(chips, word);
     }
-    t::absorb_word(chips, digest);
     let word = t::finish(chips, region)?;
     let mut uint = chips.uint();
     let canonical = CanonicalS6::from_native_word(&mut uint, region, &word)?;
@@ -149,38 +149,47 @@ pub fn foreign_bounded_word<C: PastaCurve>(
 }
 
 /// The constrained fold frame of one step: the step index, the base, whether
-/// this is the side's first instance, the side's previous state, the other
-/// side's bridge, the passthrough to output and the kept accumulator's digest.
+/// this is the side's first instance, the side's previous state, the folded
+/// instance's public columns and bridge, the passthrough to output and the
+/// digest list after the fold.
 #[derive(Clone, Debug)]
-pub struct Frame<F: iroha_pasta::PastaField> {
+pub struct Frame<C: PastaCurve> {
     /// The step index.
-    pub step: Word<F>,
+    pub step: Word<C::Base>,
     /// The segment base (a circuit constant).
-    pub base: Word<F>,
+    pub base: Word<C::Base>,
     /// One on the side's first instance; the business checks its base rule there.
-    pub first: Bit<F>,
+    pub first: Bit<C::Base>,
     /// The side's previous state, authenticated by the passthrough check.
-    pub state: Vec<Word<F>>,
+    pub state: Vec<Word<C::Base>>,
+    /// The public columns of the other side's instance this step folded, as
+    /// foreign scalars (column 0 is its frame column); placeholders without
+    /// predecessor.
+    pub public: Vec<Vec<ScalarCell<C>>>,
     /// The other side's bridge values as native words.
-    pub bridge: Vec<Word<F>>,
+    pub bridge: Vec<Word<C::Base>>,
     /// The passthrough this step outputs.
-    pub passthrough: Word<F>,
-    /// The kept accumulator's digest after the step.
-    pub digest: Word<F>,
+    pub passthrough: Word<C::Base>,
+    /// The digest list after the fold: the folded slot replaced, every other
+    /// digest passed through, all zero without predecessor.
+    pub digests: Vec<Word<C::Base>>,
 }
 
 /// The fold frame of a step of `side` (`IVC.md` section 4): checks that the
 /// other side's previous instance passes through this side's previous hash
-/// (`H(step - 2, base, state, stored)`), that the kept accumulator is the stored
-/// one, folds the instance into it (or starts it), and reads the instance's
-/// `h_out` (the passthrough to output) and bridge. The other side's frame
-/// column is its relation's first instance column, `[passthrough, h_out,
-/// bridge...]`. On the first instance of the side that starts the chain there is
-/// no predecessor: the checks are skipped, the digest is zero and the
+/// (`H(step - 2, base, state, digests)`), that the accumulator in `side.slot` is
+/// the one its digest names, folds the instance into it (or starts it while the
+/// digest is zero), and reads the instance's `h_out` (the passthrough to
+/// output), bridge and public columns. The other side's frame column is its
+/// relation's first instance column, `[passthrough, h_out, bridge...]`. Every
+/// digest outside the slot passes through unchanged.
+///
+/// On the first instance of the side that starts the chain there is no
+/// predecessor: the checks are skipped, every output digest is zero and the
 /// passthrough is `start_passthrough`, a circuit constant: the other side's base
-/// hash `H(0, base, base_state, 0)`. It is never a witness, so a mid-chain
+/// hash `H(0, base, base_state, [0, ..])`. It is never a witness, so a mid-chain
 /// "restart" of this side forces the other side back to its first instance with
-/// its base state and an absent accumulator (`IVC.md` section 5); no folded
+/// its base state and absent accumulators (`IVC.md` section 5); no folded
 /// instance can be dropped while its effects stay in a state.
 ///
 /// # Errors
@@ -195,8 +204,11 @@ pub fn fold_frame<C: PastaCurve>(
     start_passthrough: C::Base,
     state_len: usize,
     witness: Option<&FrameWitness<C>>,
-) -> Result<Frame<C::Base>, Error> {
-    if witness.is_some_and(|w| w.state.len() != state_len) || shape.instance_lengths.first().is_none_or(|len| *len < 2) {
+) -> Result<Frame<C>, Error> {
+    if !side.is_valid()
+        || witness.is_some_and(|w| w.state.len() != state_len || w.digests.len() != side.digests)
+        || shape.instance_lengths.first().is_none_or(|len| *len < 2)
+    {
         return Err(Error::Synthesis);
     }
     let known = |f: &dyn Fn(&FrameWitness<C>) -> C::Base| witness.map_or_else(Value::unknown, |w| Value::known(f(w)));
@@ -206,54 +218,67 @@ pub fn fold_frame<C: PastaCurve>(
     for i in 0..state_len {
         state.push(chips.glue.witness(region, known(&|w| w.state[i]))?);
     }
-    let stored = chips.glue.witness(region, known(&|w| w.stored))?;
+    let mut digests = Vec::with_capacity(side.digests);
+    for i in 0..side.digests {
+        digests.push(chips.glue.witness(region, known(&|w| w.digests[i]))?);
+    }
     let acc = assign_accumulator(chips, region, shape, witness.map(|w| &w.acc))?;
     let fresh = assign_instance(chips, region, shape, witness.map(|w| &w.fresh))?;
     let proof = assign_proof(chips, region, shape, witness.map(|w| &w.proof))?;
 
     let shifted = chips.glue.add_constant(region, &step, -C::Base::from(side.first_step))?;
     let first = chips.glue.is_zero(region, &shifted)?;
+    let stored = digests[side.slot].clone();
     let absent = chips.glue.is_zero(region, &stored)?;
     let no_predecessor = (side.first_step == 1).then(|| first.clone());
 
     let previous = chips.glue.add_constant(region, &step, -C::Base::from(2))?;
-    let expected = ivc_hash(chips, region, &side.ivc_domain, &previous, &base, &state, &stored)?;
+    let expected = ivc_hash(chips, region, &side.ivc_domain, &previous, &base, &state, &digests)?;
     let frame_column = &fresh.public[0];
     assert_hash_unless(chips, region, &frame_column[0], &expected, no_predecessor.as_ref())?;
     let digest = accumulator_digest(chips, region, &side.fold_domain, &acc)?;
     assert_equal_unless(chips, region, &digest, &stored, Some(&absent))?;
     let folded = verify_fold_or_start(chips, region, shape, &side.fold_domain, &acc, &fresh, &proof, &absent)?;
-    let new_digest = accumulator_digest(chips, region, &side.fold_domain, &folded)?;
+    digests[side.slot] = accumulator_digest(chips, region, &side.fold_domain, &folded)?;
     let from_fresh = foreign_hash_word(chips, region, &frame_column[1])?;
     let mut bridge = Vec::with_capacity(frame_column.len() - 2);
     for value in &frame_column[2..] {
         bridge.push(foreign_bounded_word(chips, region, value)?);
     }
-    let (digest, passthrough) = match &no_predecessor {
+    let passthrough = match &no_predecessor {
         Some(bit) => {
             let zero = chips.glue.constant(region, <C::Base as Field>::ZERO)?;
+            for digest in &mut digests {
+                *digest = chips.glue.select(region, bit, &zero, digest)?;
+            }
             let start = chips.glue.constant(region, start_passthrough)?;
-            (chips.glue.select(region, bit, &zero, &new_digest)?, chips.glue.select(region, bit, &start, &from_fresh)?)
+            chips.glue.select(region, bit, &start, &from_fresh)?
         }
-        None => (new_digest, from_fresh),
+        None => from_fresh,
     };
-    Ok(Frame { step, base, first, state, bridge, passthrough, digest })
+    Ok(Frame { step, base, first, state, public: fresh.public, bridge, passthrough, digests })
 }
 
 /// The frame column a step outputs: `[passthrough, h_out, bridge...]` with
-/// `h_out = H(step, base, next, digest)`, as [`crate::ivc::step_public`].
+/// `h_out = H(step, base, next, digests)`, as [`crate::ivc::step_public`].
+/// `digests` is the side's digest list after the step: the frame's, with any
+/// entry the business replaced (its claim digest).
 ///
 /// # Errors
-/// Layout errors.
+/// Layout errors, or a digest list of another length.
 pub fn frame_outputs<C: PastaCurve>(
     chips: &mut FoldLanes<'_, C>,
     region: &mut Region<'_, C::Base>,
     side: &ChainSide,
-    frame: &Frame<C::Base>,
+    frame: &Frame<C>,
     next: &[Word<C::Base>],
+    digests: &[Word<C::Base>],
     bridge: &[Word<C::Base>],
 ) -> Result<Vec<Word<C::Base>>, Error> {
-    let h = ivc_hash(chips, region, &side.ivc_domain, &frame.step, &frame.base, next, &frame.digest)?;
+    if digests.len() != side.digests {
+        return Err(Error::Synthesis);
+    }
+    let h = ivc_hash(chips, region, &side.ivc_domain, &frame.step, &frame.base, next, digests)?;
     let mut out = vec![frame.passthrough.clone(), h.word];
     out.extend(bridge.iter().cloned());
     Ok(out)

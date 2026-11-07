@@ -29,7 +29,7 @@ use iroha_plonk_gadgets::{
     sha256::native::sha256_of_digest,
 };
 
-use super::step::{BASE, Side, start_passthrough};
+use super::step::{BASE, Side, claim_business, start_passthrough};
 
 /// A genuine `SHA256withECDSA` signature over the 32-byte encoding of `digest`.
 pub fn signature(digest: u64, secret: u64, nonce: u64) -> SignatureWitness {
@@ -122,8 +122,9 @@ impl Circuit<Fq> for QStep {
                 )?;
                 let later = chips.glue.not(&mut region, &frame.first)?;
                 assert_equal_unless(&mut chips.lanes(), &mut region, &frame.state[0], &frame.base, Some(&later))?;
+                let digests = claim_business(&mut chips, &mut region, Side::Q, &frame)?;
                 let next = chips.glue.linear(&mut region, &[(Fq::from(2), &frame.state[0])], Fq::ONE)?;
-                frame_outputs(&mut chips.lanes(), &mut region, &chain, &frame, &[next], &[frame.step.clone()])
+                frame_outputs(&mut chips.lanes(), &mut region, &chain, &frame, &[next], &digests, &[frame.step.clone()])
             },
         )?;
         for (row, word) in outputs.iter().enumerate() {

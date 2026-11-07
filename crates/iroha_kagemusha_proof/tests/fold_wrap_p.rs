@@ -9,7 +9,7 @@ mod common;
 
 use common::{
     qstep::{QStep, leaf},
-    step::{BASE, DOMAIN_A, DOMAIN_Q, IVC_A, K, Side, Step, business},
+    step::{BASE, DIGESTS, DOMAIN_A, DOMAIN_Q, IVC_A, K, Side, Step, business, business_digests},
 };
 use ff::{Field, PrimeField};
 use iroha_fold::circuit::{FoldLanes, mle::OpeningKey};
@@ -97,6 +97,7 @@ fn chain(rel: &Relations) -> (Kept<Eq>, Kept<Ep>) {
     let mut rng = ChaCha20Rng::seed_from_u64(91);
     let (q_chain, a_chain) = (Side::Q.chain(), Side::A.chain());
     let (mut q_state, mut a_state) = (Fq::from(BASE), Fp::from(BASE));
+    let (mut q_digests, mut a_digests) = (vec![Fq::ZERO; DIGESTS], vec![Fp::ZERO; DIGESTS]);
     let (mut q_kept, mut a_kept): (Option<Kept<Eq>>, Option<Kept<Ep>>) = (None, None);
     let (mut last_a, mut last_q): (Option<Fresh<Eq>>, Option<Fresh<Ep>>) = (None, None);
     let start = embed(&ivc::ivc_hash::<Fp>(
@@ -104,7 +105,7 @@ fn chain(rel: &Relations) -> (Kept<Eq>, Kept<Ep>) {
         0,
         Fp::from(BASE),
         &[Fp::from(BASE)],
-        Fp::ZERO,
+        &[Fp::ZERO; DIGESTS],
     ));
     for j in 1..=4_u64 {
         if j % 2 == 1 {
@@ -115,10 +116,12 @@ fn chain(rel: &Relations) -> (Kept<Eq>, Kept<Ep>) {
                 q_kept.as_ref(),
                 last_a.as_ref(),
                 vec![q_state],
+                q_digests.clone(),
                 start,
             )
             .expect("prepare");
             let next = business(Side::Q, q_state, prepared.bridge[0]);
+            q_digests = business_digests(Side::Q, j == 1, prepared.digests.clone());
             let leaf = leaf(j);
             let leaf_public =
                 leaf.instances(&[true, true, true]).expect("leaf instances")[0].clone();
@@ -128,7 +131,7 @@ fn chain(rel: &Relations) -> (Kept<Eq>, Kept<Ep>) {
                 Fq::from(BASE),
                 prepared.passthrough,
                 &[next],
-                prepared.digest,
+                &q_digests,
                 &[Fq::from(j)],
             );
             let circuit = QStep {
@@ -153,17 +156,19 @@ fn chain(rel: &Relations) -> (Kept<Eq>, Kept<Ep>) {
                 a_kept.as_ref(),
                 last_q.as_ref(),
                 vec![a_state],
+                a_digests.clone(),
                 Fp::ZERO,
             )
             .expect("prepare");
             let next = business(Side::A, a_state, prepared.bridge[0]);
+            a_digests = business_digests(Side::A, j == 2, prepared.digests.clone());
             let public = vec![step_public(
                 &a_chain,
                 j,
                 Fp::from(BASE),
                 prepared.passthrough,
                 &[next],
-                prepared.digest,
+                &a_digests,
                 &[Fp::from(j)],
             )];
             let circuit = Step::<Ep> {

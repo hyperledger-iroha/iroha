@@ -31,7 +31,7 @@ use rand_core::SeedableRng;
 
 mod common;
 
-use common::step::{BASE, DOMAIN_A, DOMAIN_Q, IVC_A, K, Side, Step, business, start_passthrough};
+use common::step::{BASE, DIGESTS, DOMAIN_A, DOMAIN_Q, IVC_A, K, Side, Step, business, business_digests, claim_digest, start_passthrough};
 
 /// The two relations: Q steps (over `Fq`, instances committed on Pallas) and A
 /// steps (over `Fp`, instances committed on Vesta).
@@ -75,6 +75,8 @@ fn relations() -> Relations {
 struct SideState<C: PastaCurve, K: PastaCurve> {
     /// The side's own state (over `C::Base`).
     state: C::Base,
+    /// The side's digest list (kept accumulator, claim accumulator).
+    digests: Vec<C::Base>,
     /// The accumulator of the other side's instances this side keeps.
     kept: Option<Kept<C>>,
     /// The side's last fresh instance (committed on `K`).
@@ -114,9 +116,12 @@ fn run_step<C: PastaCurve, K: PastaCurve<ScalarExt = C::Base>>(
     let state = if lie { state + <C::Base as Field>::ONE } else { state };
     // Q's first instance has no predecessor: its passthrough is A's base hash.
     let start = start_passthrough();
-    let prepared = prepare_step(&chain, j, other, me.kept.as_ref(), their_last, vec![state], start).expect("prepare");
+    let digests = if j == chain.first_step { vec![<C::Base as Field>::ZERO; DIGESTS] } else { me.digests.clone() };
+    let prepared =
+        prepare_step(&chain, j, other, me.kept.as_ref(), their_last, vec![state], digests, start).expect("prepare");
     let next = business(side, state, prepared.bridge[0]);
-    let public = vec![step_public(&chain, j, base, prepared.passthrough, &[next], prepared.digest, &[C::Base::from(j)])];
+    let digests = business_digests(side, j == chain.first_step, prepared.digests.clone());
+    let public = vec![step_public(&chain, j, base, prepared.passthrough, &[next], &digests, &[C::Base::from(j)])];
     let circuit = Step::<C> { side, shape: other.shape(), witness: Some(prepared.witness) };
     let satisfied = check_circuit(&circuit, K, &public, CheckMode::Strict).expect("synthesis").is_satisfied();
     let synthesized = synthesize(&circuit, K, Some(&public)).expect("witness");
@@ -124,6 +129,7 @@ fn run_step<C: PastaCurve, K: PastaCurve<ScalarExt = C::Base>>(
     let instance = fresh_instance(own, own_key, own_domain, advice, public, rng).expect("fresh instance");
     me.kept = prepared.kept;
     me.state = next;
+    me.digests = digests;
     (instance, satisfied)
 }
 
@@ -131,8 +137,8 @@ impl Chain {
     fn new(corrupt: Option<u64>) -> Self {
         Self {
             rel: relations(),
-            q: SideState { state: Fq::from(BASE), kept: None, last: None },
-            a: SideState { state: Fp::from(BASE), kept: None, last: None },
+            q: SideState { state: Fq::from(BASE), digests: vec![Fq::ZERO; DIGESTS], kept: None, last: None },
+            a: SideState { state: Fp::from(BASE), digests: vec![Fp::ZERO; DIGESTS], kept: None, last: None },
             rng: ChaCha20Rng::seed_from_u64(77),
             corrupt,
             satisfied: Vec::new(),
@@ -178,11 +184,14 @@ fn a_toy_two_curve_chain_folds_and_decides() {
     }
     assert!(chain.satisfied.iter().all(|ok| *ok), "every step circuit is satisfied: {:?}", chain.satisfied);
     assert!(chain.decides());
-    // The last hash recomputes from A's state and the Q accumulator it keeps.
+    // The last hash recomputes from A's state, the Q accumulator it keeps and
+    // its claim accumulator.
     let (last, _) = chain.a.last.as_ref().expect("last");
     let (acc_q, _) = chain.a.kept.as_ref().expect("kept");
-    let h = ivc::ivc_hash::<Fp>(&IVC_A, 6, Fp::from(BASE), &[chain.a.state], acc_q.digest(&DOMAIN_Q));
+    let digests = [acc_q.digest(&DOMAIN_Q), claim_digest::<Fp>(Side::A)];
+    let h = ivc::ivc_hash::<Fp>(&IVC_A, 6, Fp::from(BASE), &[chain.a.state], &digests);
     assert_eq!(last.public[0][1], h);
+    assert_eq!(chain.a.digests, digests);
     // A's state is the base plus the squares of Q's bridges (steps 1, 3, 5).
     assert_eq!(chain.a.state, Fp::from(BASE + 1 + 9 + 25));
 }
@@ -207,9 +216,12 @@ fn the_chain_start_passes_exactly_the_other_sides_base_hash() {
     let rel = relations();
     let chain = Side::Q.chain();
     let base = Fq::from(BASE);
-    let prepared = prepare_step::<Eq>(&chain, 1, &rel.a, None, None, vec![base], start_passthrough()).expect("prepare");
+    let prepared =
+        prepare_step::<Eq>(&chain, 1, &rel.a, None, None, vec![base], vec![Fq::ZERO; DIGESTS], start_passthrough())
+            .expect("prepare");
     let next = business(Side::Q, base, prepared.bridge[0]);
-    let public = vec![step_public(&chain, 1, base, prepared.passthrough, &[next], prepared.digest, &[Fq::from(1)])];
+    let digests = business_digests(Side::Q, true, prepared.digests.clone());
+    let public = vec![step_public(&chain, 1, base, prepared.passthrough, &[next], &digests, &[Fq::from(1)])];
     let circuit = Step::<Eq> { side: Side::Q, shape: rel.a.shape(), witness: Some(prepared.witness) };
     assert!(check_circuit(&circuit, K, &public, CheckMode::Strict).expect("synthesis").is_satisfied());
     // Any other passthrough at the chain start (for example one that lets A

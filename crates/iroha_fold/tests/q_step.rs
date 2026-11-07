@@ -25,7 +25,7 @@ mod common;
 
 use common::{
     qstep::{QStep, leaf},
-    step::{BASE, DOMAIN_A, DOMAIN_Q, K, Side, Step, business},
+    step::{BASE, DIGESTS, DOMAIN_A, DOMAIN_Q, K, Side, Step, business, business_digests},
 };
 
 struct Relations {
@@ -73,6 +73,7 @@ fn q_steps_with_genuine_signature_leaves_fold_and_decide() {
     let q_chain = Side::Q.chain();
     let a_chain = Side::A.chain();
     let (mut q_state, mut a_state) = (Fq::from(BASE), Fp::from(BASE));
+    let (mut q_digests, mut a_digests) = (vec![Fq::ZERO; DIGESTS], vec![Fp::ZERO; DIGESTS]);
     let mut q_kept: Option<Kept<Eq>> = None; // A instances, kept by Q
     let mut a_kept: Option<Kept<Ep>> = None; // Q instances, kept by A
     let mut last_a: Option<Fresh<Eq>> = None;
@@ -81,11 +82,14 @@ fn q_steps_with_genuine_signature_leaves_fold_and_decide() {
     for j in 1..=4u64 {
         let started = std::time::Instant::now();
         if j % 2 == 1 {
-            let prepared = prepare_step(&q_chain, j, &rel.a, q_kept.as_ref(), last_a.as_ref(), vec![q_state], start).expect("prepare");
+            let prepared =
+                prepare_step(&q_chain, j, &rel.a, q_kept.as_ref(), last_a.as_ref(), vec![q_state], q_digests.clone(), start)
+                    .expect("prepare");
             let next = business(Side::Q, q_state, prepared.bridge[0]);
+            q_digests = business_digests(Side::Q, j == 1, prepared.digests.clone());
             let leaf = leaf(j);
             let leaf_public = leaf.instances(&[true, true, true]).expect("leaf instances")[0].clone();
-            let frame = step_public(&q_chain, j, Fq::from(BASE), prepared.passthrough, &[next], prepared.digest, &[Fq::from(j)]);
+            let frame = step_public(&q_chain, j, Fq::from(BASE), prepared.passthrough, &[next], &q_digests, &[Fq::from(j)]);
             let public = vec![frame, leaf_public];
             let circuit = QStep { leaf, shape: rel.a.shape(), witness: Some(prepared.witness) };
             let report = check_circuit(&circuit, K, &public, CheckMode::Strict).expect("synthesis");
@@ -96,9 +100,12 @@ fn q_steps_with_genuine_signature_leaves_fold_and_decide() {
             q_kept = prepared.kept;
             q_state = next;
         } else {
-            let prepared = prepare_step(&a_chain, j, &rel.q, a_kept.as_ref(), last_q.as_ref(), vec![a_state], Fp::ZERO).expect("prepare");
+            let prepared =
+                prepare_step(&a_chain, j, &rel.q, a_kept.as_ref(), last_q.as_ref(), vec![a_state], a_digests.clone(), Fp::ZERO)
+                    .expect("prepare");
             let next = business(Side::A, a_state, prepared.bridge[0]);
-            let public = vec![step_public(&a_chain, j, Fp::from(BASE), prepared.passthrough, &[next], prepared.digest, &[Fp::from(j)])];
+            a_digests = business_digests(Side::A, j == 2, prepared.digests.clone());
+            let public = vec![step_public(&a_chain, j, Fp::from(BASE), prepared.passthrough, &[next], &a_digests, &[Fp::from(j)])];
             let circuit = Step::<Ep> { side: Side::A, shape: rel.q.shape(), witness: Some(prepared.witness) };
             let report = check_circuit(&circuit, K, &public, CheckMode::Strict).expect("synthesis");
             assert!(report.is_satisfied(), "A step {j}: {report}");
