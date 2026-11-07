@@ -564,6 +564,21 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
         (multiplications, absorbed, opened)
     }
 
+    /// For verifier-cost planning: each key polynomial's number of maximal
+    /// constant runs (cyclic, so a constant column has one) and the run
+    /// boundaries (row indices where a value changes).
+    #[must_use]
+    pub fn key_runs(&self) -> Vec<(usize, Vec<usize>)> {
+        self.key_polys
+            .iter()
+            .map(|poly| {
+                let n = poly.len();
+                let boundaries: Vec<usize> = (0..n).filter(|&i| poly[i] != poly[(i + n - 1) % n]).collect();
+                (boundaries.len().max(1), boundaries)
+            })
+            .collect()
+    }
+
     /// Sizes of the plan: zero-check tables, key polynomials, copy helpers,
     /// terms.
     #[must_use]
