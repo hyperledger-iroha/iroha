@@ -2083,3 +2083,142 @@ fn fixed_base_needs_the_fixed_base_columns() {
         Err(Error::Synthesis)
     );
 }
+
+// ---------------------------------------------------------------------------
+// Endoscalars
+// ---------------------------------------------------------------------------
+
+/// The digit words of scalar 0 (`[B1, B2]` as its two limbs) as glue words.
+fn endo_digit_words<C: PastaCurve>(
+    chips: &mut Chips<C>,
+    region: &mut Region<'_, C::Base>,
+    inputs: &Inputs<C>,
+) -> Result<[Word<C::Base>; 2], Error> {
+    let value = inputs.scalar(0);
+    let b1 = chips
+        .glue
+        .witness(region, value.map(|v| C::Base::from_u128(v[0])))?;
+    let b2 = chips
+        .glue
+        .witness(region, value.map(|v| C::Base::from_u128(v[1])))?;
+    Ok([b1, b2])
+}
+
+/// `[alpha] P_i` for every point, `alpha` the endoscalar of scalar 0's digit
+/// words, then the chip rows one multiplication took.
+fn endo_program<C: PastaCurve>(
+    chips: &mut Chips<C>,
+    region: &mut Region<'_, C::Base>,
+    inputs: &Inputs<C>,
+) -> Result<Vec<Word<C::Base>>, Error> {
+    let [b1, b2] = endo_digit_words(chips, region, inputs)?;
+    let mut out = Vec::new();
+    for index in 0..inputs.points.len() {
+        let point = chips.ecc.witness_point(region, inputs.point(index))?;
+        let before = chips.ecc.next_row();
+        let product = chips.ecc.mul_endo(region, [&b1, &b2], &point)?;
+        let rows = chips.ecc.next_row() - before;
+        out.extend(expose(&product));
+        out.push(chips.glue.constant(region, C::Base::from(rows as u64))?);
+    }
+    Ok(out)
+}
+
+/// `sum_i alpha^i P_i` for the endoscalar `alpha` of scalar 0's digit words.
+fn horner_endo_program<C: PastaCurve>(
+    chips: &mut Chips<C>,
+    region: &mut Region<'_, C::Base>,
+    inputs: &Inputs<C>,
+) -> Result<Vec<Word<C::Base>>, Error> {
+    let [b1, b2] = endo_digit_words(chips, region, inputs)?;
+    let values: Vec<_> = (0..inputs.points.len()).map(|i| inputs.point(i)).collect();
+    let points = chips.ecc.witness_points(region, &values)?;
+    let out = chips.ecc.horner_endo(region, [&b1, &b2], &points)?;
+    Ok(expose(&out).to_vec())
+}
+
+/// The digit words of a limb as the two limbs the programs read.
+fn endo_words(lo: u128) -> [u128; 2] {
+    let (b1, b2) = endo_digits(lo);
+    [u128::from(b1), u128::from(b2)]
+}
+
+fn endo_cases<C: PastaCurve>(seed: u64) {
+    let mut rng = ChaCha20Rng::seed_from_u64(seed);
+    let o = C::identity();
+    let p = random_point::<C>(&mut rng);
+    let q = random_point::<C>(&mut rng);
+    let random = random_limbs::<C>(&mut rng)[0];
+    for lo in [0, 1, u128::MAX, 1 << 64, (1 << 64) - 1, random] {
+        let alpha = endoscalar::<C>(lo);
+        let points = vec![p, o, generator::<C>(), q];
+        let mut public = Vec::new();
+        for point in &points {
+            public.extend(public_of(&[*point * alpha]));
+            public.push(C::Base::from((ENDO_CHAIN_ROWS + 1) as u64));
+        }
+        let circuit = TestCircuit::new(
+            endo_program::<C>,
+            Inputs::new(points, vec![endo_words(lo)]),
+            public.len(),
+        );
+        assert_accepts(&circuit, 10, &public);
+        // Horner, against the explicit sum of powers.
+        let points = vec![p, q, o, generator::<C>().double(), p];
+        let mut power = C::ScalarExt::ONE;
+        let mut expected = o;
+        for point in &points {
+            expected += *point * power;
+            power *= alpha;
+        }
+        let public = public_of(&[expected]);
+        let circuit = TestCircuit::new(
+            horner_endo_program::<C>,
+            Inputs::new(points, vec![endo_words(lo)]),
+            public.len(),
+        );
+        assert_accepts(&circuit, 11, &public);
+    }
+}
+
+#[test]
+fn endo_multiplication_and_horner_match_native_on_both_curves() {
+    endo_cases::<Ep>(71);
+    endo_cases::<Eq>(72);
+}
+
+/// Digit words outside `[0, 2^64)` cannot be used: the chain's running sums
+/// stay below `2^64` and are copied onto the words.
+fn endo_range_cases<C: PastaCurve>() {
+    let p = generator::<C>().double();
+    for words in [[1 << 64, 0], [0, 1 << 64], [u128::MAX, 3]] {
+        // Whatever the chain computes, its running sums differ from the words.
+        for lo in [0_u128, endo_digits_combined(words)] {
+            let public = [
+                public_of(&[p * endoscalar::<C>(lo)]),
+                vec![C::Base::from((ENDO_CHAIN_ROWS + 1) as u64)],
+            ]
+            .concat();
+            let circuit = TestCircuit::new(
+                endo_program::<C>,
+                Inputs::new(vec![p], vec![words]),
+                public.len(),
+            );
+            assert!(
+                !check_report(&circuit, 10, &public).is_satisfied(),
+                "words {words:?}"
+            );
+        }
+    }
+}
+
+/// The 128-bit limb the native witness reads from two digit words.
+fn endo_digits_combined(words: [u128; 2]) -> u128 {
+    words[0] | (words[1] << 64)
+}
+
+#[test]
+fn endo_digit_words_out_of_range_are_rejected() {
+    endo_range_cases::<Ep>();
+    endo_range_cases::<Eq>();
+}

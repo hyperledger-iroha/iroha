@@ -852,6 +852,125 @@ pub fn fixed_base_witness<F: PastaField>(
     })
 }
 
+/// Iterations of the endoscalar chain: one per bit of the 64-bit digit words.
+pub const ENDO_ITERATIONS: usize = 64;
+
+/// The digit words `(B1, B2)` of a 128-bit limb `lo = B1 + 2^64 B2`.
+#[must_use]
+pub const fn endo_digits(lo: u128) -> (u64, u64) {
+    #[allow(clippy::cast_possible_truncation)]
+    (lo as u64, (lo >> 64) as u64)
+}
+
+/// The endoscalar of the digit words of `lo` (Halo-style endoscaling):
+/// `(2^64 + 2 B1 + 1) + zeta (2^64 + 2 B2 + 1)`. Distinct limbs give distinct
+/// scalars (the GLV lattice has no nonzero vector of sup-norm below `2^65`),
+/// so a uniform 128-bit limb gives a uniform scalar on a set of `2^128`.
+#[must_use]
+pub fn endoscalar<C: PastaCurve>(lo: u128) -> C::ScalarExt {
+    let (b1, b2) = endo_digits(lo);
+    let half =
+        |b: u64| two_pow::<C::ScalarExt>(64) + C::ScalarExt::from(b).double() + C::ScalarExt::ONE;
+    half(b1) + zeta::<C>() * half(b2)
+}
+
+/// The witness of one endoscalar chain: the GLV chain's init and incomplete
+/// iterations for the digit words `B1, B2 < 2^64`, without split, complete
+/// tail or even-digit correction (module documentation, "Endoscalars").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EndoChainWitness<F> {
+    /// Whether the guarded input was the identity.
+    pub is_identity: bool,
+    /// `inv0(x_in)` (guard).
+    pub inverse: F,
+    /// The non-identity base (the generator when the input is the identity).
+    pub base: Coordinates<F>,
+    /// The tangent slope of `2P`.
+    pub lambda_double: F,
+    /// The slope of `P - phi(P)`.
+    pub lambda_minus: F,
+    /// `S- = P - phi(P)`.
+    pub minus: Coordinates<F>,
+    /// The accumulator before each iteration and after the last
+    /// (`ENDO_ITERATIONS + 1` points).
+    pub acc: Vec<Coordinates<F>>,
+    /// `(lambda_1, lambda_2)` of each iteration.
+    pub lambdas: Vec<(F, F)>,
+    /// The running sums `Y1_j, Y2_j = floor(B / 2^(64 - j))`, `j = 0..=64`.
+    pub running: [Vec<F>; 2],
+    /// The (guarded) result `[endoscalar] P`.
+    pub output: Coordinates<F>,
+}
+
+/// The endoscalar chain witness for the chip-encoded `input` (the identity is
+/// guarded as in [`chain_witness`]) and the limb `lo`.
+///
+/// Returns `None` if an iteration met an exceptional case, which the lattice
+/// bound excludes for every on-curve input (iterations `j <= 63`).
+#[must_use]
+pub fn endo_chain_witness<C: PastaCurve>(
+    input: Coordinates<C::Base>,
+    lo: u128,
+) -> Option<EndoChainWitness<C::Base>> {
+    let (b1, b2) = endo_digits(lo);
+    let beta = beta::<C>();
+    let is_identity = bool::from(input.0.is_zero());
+    let inverse = inv0(input.0);
+    let base = if is_identity {
+        coordinates(&C::generator())
+    } else {
+        input
+    };
+    let (x, y) = base;
+    let lambda_double =
+        x.square() * C::Base::from(3) * Option::<C::Base>::from(y.double().invert())?;
+    let x_2 = lambda_double.square() - x.double();
+    let y_2 = lambda_double * (x - x_2) - y;
+    let lambda_minus = y.double() * Option::<C::Base>::from(((C::Base::ONE - beta) * x).invert())?;
+    let x_minus = lambda_minus.square() - (C::Base::ONE + beta) * x;
+    let minus = (x_minus, lambda_minus * (x - x_minus) - y);
+    let plus = (beta.square() * x, -y);
+    let mut acc = vec![(beta.square() * x_2, -y_2)];
+    let mut lambdas = Vec::with_capacity(ENDO_ITERATIONS);
+    for j in 0..ENDO_ITERATIONS {
+        let index = ENDO_ITERATIONS - 1 - j;
+        let digit = |b: u64| (b >> index) & 1 == 1;
+        let current = *acc.last()?;
+        let (lambda_1, lambda_2, next) =
+            double_and_add(current, joint_point(digit(b1), digit(b2), plus, minus))?;
+        lambdas.push((lambda_1, lambda_2));
+        acc.push(next);
+    }
+    let running = [b1, b2].map(|b| {
+        (0..=ENDO_ITERATIONS)
+            .map(|j| {
+                C::Base::from(if j == 0 {
+                    0
+                } else {
+                    b >> (ENDO_ITERATIONS - j)
+                })
+            })
+            .collect::<Vec<_>>()
+    });
+    let output = if is_identity {
+        (C::Base::ZERO, C::Base::ZERO)
+    } else {
+        *acc.last()?
+    };
+    Some(EndoChainWitness {
+        is_identity,
+        inverse,
+        base,
+        lambda_double,
+        lambda_minus,
+        minus,
+        acc,
+        lambdas,
+        running,
+        output,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use iroha_pasta::{Ep, Eq, Fp, Fq};
@@ -1038,5 +1157,49 @@ mod tests {
     fn fixed_base_witness_matches_scalar_multiplication() {
         fixed_base_cases::<Ep>();
         fixed_base_cases::<Eq>();
+    }
+
+    fn endo_cases<C: PastaCurve>() {
+        let mut rng = ChaCha20Rng::seed_from_u64(29);
+        let mut limbs = vec![0, 1, u128::MAX, 1 << 64, (1 << 64) - 1, 1 << 127];
+        limbs.extend((0..8).map(|_| {
+            let words = random_scalar::<C::ScalarExt>(&mut rng).to_canonical_limbs();
+            u128::from(words[0]) | (u128::from(words[1]) << 64)
+        }));
+        let points = [
+            C::generator(),
+            C::generator().double() * random_scalar::<C::ScalarExt>(&mut rng),
+        ];
+        for lo in limbs {
+            for point in points {
+                let witness =
+                    endo_chain_witness::<C>(coordinates(&point), lo).expect("exception-free");
+                assert_eq!(
+                    witness.output,
+                    coordinates(&(point * endoscalar::<C>(lo))),
+                    "lo {lo:#x}"
+                );
+                assert_eq!(witness.acc.len(), ENDO_ITERATIONS + 1);
+                let (b1, b2) = endo_digits(lo);
+                assert_eq!(witness.running[0][ENDO_ITERATIONS], C::Base::from(b1));
+                assert_eq!(witness.running[1][ENDO_ITERATIONS], C::Base::from(b2));
+            }
+            let guarded =
+                endo_chain_witness::<C>((C::Base::ZERO, C::Base::ZERO), lo).expect("guarded");
+            assert!(guarded.is_identity);
+            assert_eq!(guarded.output, (C::Base::ZERO, C::Base::ZERO));
+        }
+        // Distinct limbs give distinct endoscalars (no short lattice vector).
+        assert_ne!(endoscalar::<C>(1), endoscalar::<C>(1 << 64));
+        assert_eq!(
+            endoscalar::<C>(0),
+            (two_pow::<C::ScalarExt>(64) + C::ScalarExt::ONE) * (C::ScalarExt::ONE + zeta::<C>())
+        );
+    }
+
+    #[test]
+    fn endo_chain_witness_matches_scalar_multiplication() {
+        endo_cases::<Ep>();
+        endo_cases::<Eq>();
     }
 }

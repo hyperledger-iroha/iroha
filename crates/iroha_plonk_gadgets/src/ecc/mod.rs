@@ -88,6 +88,13 @@
 //! which every chain consuming the split copies (a [`GlvScalar`] exists only
 //! after its first chain), and those of `lo`, `hi` from [`ScalarLimbs`].
 //!
+//! **Endoscalars.** [`EccChip::mul_endo`] and [`EccChip::horner_endo`]
+//! multiply by `(2^64 + 2 B1 + 1) + zeta (2^64 + 2 B2 + 1)` for digit words
+//! `B1, B2 < 2^64` given directly (a 128-bit challenge used as an
+//! endoscalar): the same chain with 64 incomplete iterations (all
+//! exception-free by the bound above), no split and no correction, 68 rows
+//! (layout in the `endo` module).
+//!
 //! **Identity guard.** [`EccChip::mul`] accepts an input that may be `O`:
 //! the init row computes `is_id = [x = 0]`, multiplies the generator instead
 //! and the output row replaces the result by `O`.
@@ -126,6 +133,7 @@
 //! verifier's challenges and commitments), like the `*_vartime` routines of
 //! [`iroha_pasta`].
 
+mod endo;
 mod fixed_base;
 mod gates;
 mod glv;
@@ -171,6 +179,8 @@ pub const GLV_GUARDED_CHAIN_ROWS: usize = 141;
 
 /// Rows of the split check (columns `a0..a3`).
 pub const GLV_SPLIT_ROWS: usize = 3;
+
+pub use endo::ENDO_CHAIN_ROWS;
 
 /// Rows of a fixed-base multiplication (result row excluded).
 pub const FIXED_BASE_ROWS: usize = 2 + native::FIXED_BASE_WINDOWS + 1;
