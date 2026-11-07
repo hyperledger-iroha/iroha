@@ -638,3 +638,137 @@ fn prover_and_verifier_follow_one_transcript_schedule() {
     assert_eq!(proving.calls, expected);
     assert_eq!(verifying.calls, expected);
 }
+
+/// Absorbs what a decider binds before its opening: the point and every claim.
+fn bind<C: PastaCurve>(
+    transcript: &mut Transcript<C>,
+    point: &[C::ScalarExt],
+    claims: &[MleClaim<C>],
+) {
+    transcript.absorb_scalars(point);
+    for claim in claims {
+        transcript.absorb_point(&claim.commitment);
+        transcript.absorb_scalars(&[claim.value]);
+    }
+}
+
+#[test]
+fn bound_openings_verify_and_follow_the_short_schedule_when_the_caller_binds() {
+    let mut rng = ChaCha20Rng::seed_from_u64(14);
+    let pinned = PinnedParams::<Ep>::derive(4).expect("params");
+    let params = pinned.params();
+    let (k, m) = (4, 3);
+    let batch = Batch::<Ep>::new(params, &mut rng, k, m);
+    let mut proving = Recording {
+        inner: Transcript::<Ep>::new(15),
+        calls: Vec::new(),
+    };
+    bind(&mut proving.inner, &batch.point, &batch.claims);
+    let (opening, claim) = open_batch_bound(
+        params,
+        &mut proving,
+        &batch.point,
+        &batch.claims,
+        &batch.columns(),
+        &batch.blinds,
+        BUDGET,
+    )
+    .expect("opening");
+    let mut expected = vec![Call::U64(TAG_BATCH_OPENING), Call::U64(4), Call::U64(3)];
+    expected.extend([Call::Challenge128; 2]);
+    expected.extend([Call::Scalars(1), Call::Challenge]);
+    for _ in 0..k {
+        expected.extend([Call::Point, Call::Point, Call::Challenge]);
+    }
+    expected.extend([Call::Point, Call::Scalars(1)]);
+    assert_eq!(proving.calls, expected);
+
+    let verify = |claims: &[MleClaim<Ep>]| {
+        let mut transcript = Transcript::<Ep>::new(15);
+        bind(&mut transcript, &batch.point, claims);
+        verify_batch_bound(
+            params,
+            &mut transcript,
+            &batch.point,
+            claims,
+            &opening,
+            BUDGET,
+        )
+    };
+    assert_eq!(verify(&batch.claims), Ok(claim.clone()));
+    assert_eq!(claim.decide(&pinned, BUDGET), Ok(()));
+    // The caller's binding is what refuses a changed claim.
+    for c in 0..m {
+        let mut claims = batch.claims.clone();
+        claims[c].value += Fq::ONE;
+        assert!(verify(&claims).is_err(), "value {c}");
+    }
+    // A full-absorption verifier does not accept a bound opening.
+    let mut transcript = Transcript::<Ep>::new(15);
+    bind(&mut transcript, &batch.point, &batch.claims);
+    assert!(
+        verify_batch(
+            params,
+            &mut transcript,
+            &batch.point,
+            &batch.claims,
+            &opening,
+            BUDGET
+        )
+        .is_err()
+    );
+}
+
+/// Negative control: without the caller's binding, the batching coefficients
+/// are known before the values, so a prover claims two false values whose
+/// combination is true; the opening verifies and its generator claim decides.
+/// [`open_batch`] refuses the same claims.
+#[test]
+fn bound_openings_are_forgeable_when_the_caller_does_not_bind() {
+    let mut rng = ChaCha20Rng::seed_from_u64(16);
+    let pinned = PinnedParams::<Ep>::derive(3).expect("params");
+    let params = pinned.params();
+    let batch = Batch::<Ep>::new(params, &mut rng, 3, 2);
+    let mut predicted = Transcript::<Ep>::new(17);
+    predicted.absorb_u64(TAG_BATCH_OPENING);
+    predicted.absorb_u64(3);
+    predicted.absorb_u64(2);
+    let alpha = predicted.challenge_128();
+    let mut claims = batch.claims.clone();
+    claims[1].value += Fq::ONE;
+    claims[0].value -= alpha;
+
+    let (opening, _) = open_batch_bound(
+        params,
+        &mut Transcript::<Ep>::new(17),
+        &batch.point,
+        &claims,
+        &batch.columns(),
+        &batch.blinds,
+        BUDGET,
+    )
+    .expect("the combination of the false values is true");
+    let claim = verify_batch_bound(
+        params,
+        &mut Transcript::<Ep>::new(17),
+        &batch.point,
+        &claims,
+        &opening,
+        BUDGET,
+    )
+    .expect("verifies");
+    assert_eq!(claim.decide(&pinned, BUDGET), Ok(()));
+    assert_eq!(
+        open_batch(
+            params,
+            &mut Transcript::<Ep>::new(17),
+            &batch.point,
+            &claims,
+            &batch.columns(),
+            &batch.blinds,
+            BUDGET,
+        )
+        .map(|_| ()),
+        Err(IpaError::OpeningFailed)
+    );
+}

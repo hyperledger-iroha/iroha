@@ -31,6 +31,14 @@
 //! challenge, so only deciding the returned [`GeneratorClaim`] (or folding it
 //! into an accumulator that is decided) makes the opening sound.
 //!
+//! [`open_batch_bound`] and [`verify_batch_bound`] skip step 1's `sigma` and
+//! `(C_c, v_c)` for a caller whose transcript has already bound them (a
+//! decider absorbs its accumulator digest and its evaluations, takes `sigma`
+//! from its own challenges and its key commitments are fixed): they absorb only
+//! the tag, `k` and the claim count before the batching coefficients. Without
+//! that binding a prover picks the values after the coefficients and opens two
+//! false claims whose combination is true (see the tests).
+//!
 //! The argument is not hiding: `L_j`, `R_j`, `c` and `rho*` reveal
 //! combinations of the columns and blinds. Deciders are private witnesses of
 //! the hiding wraps (DESIGN.md section 10); the column commitments themselves
@@ -52,6 +60,15 @@ use crate::{
     pcs::ipa::{GeneratorClaim, IpaError, commit::Msm},
     secret::SecretPolynomial,
 };
+
+/// What an opening absorbs before its batching coefficients.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Binding {
+    /// The tag, `k`, the count, the point and every commitment and value.
+    Absorb,
+    /// The tag, `k` and the count: the caller has bound the rest.
+    Bound,
+}
 
 /// A claim that the column committed as `commitment` takes `value` at the
 /// batch's point.
@@ -112,9 +129,107 @@ where
 /// # Errors
 ///
 /// As [`open_batch`], or [`IpaError::Cancelled`].
+#[allow(clippy::too_many_arguments)]
+pub fn open_batch_cancellable<C, T>(
+    params: &ParamsIpa<C>,
+    transcript: &mut T,
+    point: &[C::ScalarExt],
+    claims: &[MleClaim<C>],
+    columns: &[&[C::ScalarExt]],
+    blinds: &[C::ScalarExt],
+    budget: MemoryBudget,
+    cancellation: Option<&CancellationToken>,
+) -> Result<(BatchOpening<C>, GeneratorClaim<C>), IpaError>
+where
+    C: PastaCurve,
+    T: MleTranscript<C> + ?Sized,
+{
+    open(
+        Binding::Absorb,
+        params,
+        transcript,
+        point,
+        claims,
+        columns,
+        blinds,
+        budget,
+        cancellation,
+    )
+}
+
+/// [`open_batch`] for claims that `transcript` has already bound: it must
+/// have absorbed `point` and every claim's commitment and value, through data
+/// from which the verifier rebuilds the same claim list in the same order.
+/// The opening then absorbs only [`TAG_BATCH_OPENING`], `k` and the claim
+/// count before the batching coefficients.
+///
+/// # Errors
+///
+/// As [`open_batch`].
+pub fn open_batch_bound<C, T>(
+    params: &ParamsIpa<C>,
+    transcript: &mut T,
+    point: &[C::ScalarExt],
+    claims: &[MleClaim<C>],
+    columns: &[&[C::ScalarExt]],
+    blinds: &[C::ScalarExt],
+    budget: MemoryBudget,
+) -> Result<(BatchOpening<C>, GeneratorClaim<C>), IpaError>
+where
+    C: PastaCurve,
+    T: MleTranscript<C> + ?Sized,
+{
+    open(
+        Binding::Bound,
+        params,
+        transcript,
+        point,
+        claims,
+        columns,
+        blinds,
+        budget,
+        None,
+    )
+}
+
+/// [`open_batch_bound`] with cooperative cancellation. On cancellation,
+/// discard the transcript: it is not a resumable prefix.
+///
+/// # Errors
+///
+/// As [`open_batch`], or [`IpaError::Cancelled`].
+#[allow(clippy::too_many_arguments)]
+pub fn open_batch_bound_cancellable<C, T>(
+    params: &ParamsIpa<C>,
+    transcript: &mut T,
+    point: &[C::ScalarExt],
+    claims: &[MleClaim<C>],
+    columns: &[&[C::ScalarExt]],
+    blinds: &[C::ScalarExt],
+    budget: MemoryBudget,
+    cancellation: Option<&CancellationToken>,
+) -> Result<(BatchOpening<C>, GeneratorClaim<C>), IpaError>
+where
+    C: PastaCurve,
+    T: MleTranscript<C> + ?Sized,
+{
+    open(
+        Binding::Bound,
+        params,
+        transcript,
+        point,
+        claims,
+        columns,
+        blinds,
+        budget,
+        cancellation,
+    )
+}
+
 // The single-letter names follow the BGH19 notation, as in the IPA prover.
 #[allow(clippy::too_many_arguments, clippy::many_single_char_names)]
-pub fn open_batch_cancellable<C, T>(
+fn open<C, T>(
+    binding: Binding,
     params: &ParamsIpa<C>,
     transcript: &mut T,
     point: &[C::ScalarExt],
@@ -146,7 +261,7 @@ where
         });
     }
 
-    let alphas = absorb_statement(transcript, k, point, claims);
+    let alphas = absorb_statement(transcript, binding, k, point, claims);
     let mut a = SecretPolynomial::new(vec![C::ScalarExt::ZERO; n]);
     let mut blind = C::ScalarExt::ZERO;
     let mut value = C::ScalarExt::ZERO;
@@ -246,9 +361,64 @@ where
 /// than `k`; [`IpaError::ParamsTooSmall`] when `k` exceeds the parameters;
 /// [`IpaError::OpeningFailed`] when the opening equation fails or `z` is zero;
 /// [`IpaError::ZeroChallenge`] for a zero round challenge.
+pub fn verify_batch<C, T>(
+    params: &ParamsIpa<C>,
+    transcript: &mut T,
+    point: &[C::ScalarExt],
+    claims: &[MleClaim<C>],
+    opening: &BatchOpening<C>,
+    budget: MemoryBudget,
+) -> Result<GeneratorClaim<C>, IpaError>
+where
+    C: PastaCurve,
+    T: MleTranscript<C> + ?Sized,
+{
+    verify(
+        Binding::Absorb,
+        params,
+        transcript,
+        point,
+        claims,
+        opening,
+        budget,
+    )
+}
+
+/// Verifies an [`open_batch_bound`] opening. `transcript` must have bound
+/// `point` and every claim exactly as the prover's did (see
+/// [`open_batch_bound`]); otherwise a verified opening proves nothing about
+/// the individual claims.
+///
+/// # Errors
+///
+/// As [`verify_batch`].
+pub fn verify_batch_bound<C, T>(
+    params: &ParamsIpa<C>,
+    transcript: &mut T,
+    point: &[C::ScalarExt],
+    claims: &[MleClaim<C>],
+    opening: &BatchOpening<C>,
+    budget: MemoryBudget,
+) -> Result<GeneratorClaim<C>, IpaError>
+where
+    C: PastaCurve,
+    T: MleTranscript<C> + ?Sized,
+{
+    verify(
+        Binding::Bound,
+        params,
+        transcript,
+        point,
+        claims,
+        opening,
+        budget,
+    )
+}
+
 // The single-letter names follow the BGH19 notation, as in the IPA verifier.
 #[allow(clippy::many_single_char_names)]
-pub fn verify_batch<C, T>(
+fn verify<C, T>(
+    binding: Binding,
     params: &ParamsIpa<C>,
     transcript: &mut T,
     point: &[C::ScalarExt],
@@ -267,7 +437,7 @@ where
             actual: opening.rounds.len(),
         });
     }
-    let alphas = absorb_statement(transcript, k, point, claims);
+    let alphas = absorb_statement(transcript, binding, k, point, claims);
     transcript.absorb_scalars(&[opening.blind]);
     let z = transcript.challenge();
     if bool::from(z.is_zero()) {
@@ -335,9 +505,12 @@ fn check_shape<C: PastaCurve>(
     }
 }
 
-/// Absorbs the statement and draws the batching coefficients (`alpha_0 = 1`).
+/// Absorbs the statement (all of it, or only the tag, `k` and the count for a
+/// caller that bound the rest) and draws the batching coefficients
+/// (`alpha_0 = 1`).
 fn absorb_statement<C, T>(
     transcript: &mut T,
+    binding: Binding,
     k: usize,
     point: &[C::ScalarExt],
     claims: &[MleClaim<C>],
@@ -349,10 +522,12 @@ where
     transcript.absorb_u64(TAG_BATCH_OPENING);
     transcript.absorb_u64(k as u64);
     transcript.absorb_u64(claims.len() as u64);
-    transcript.absorb_scalars(point);
-    for claim in claims {
-        transcript.absorb_point(&claim.commitment);
-        transcript.absorb_scalars(&[claim.value]);
+    if binding == Binding::Absorb {
+        transcript.absorb_scalars(point);
+        for claim in claims {
+            transcript.absorb_point(&claim.commitment);
+            transcript.absorb_scalars(&[claim.value]);
+        }
     }
     let mut alphas = Vec::with_capacity(claims.len());
     alphas.push(C::ScalarExt::ONE);

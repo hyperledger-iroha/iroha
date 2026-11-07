@@ -20,14 +20,18 @@
 //! - [`folded_eq`]: the public vector `eq(x, .)` after the inner-product
 //!   argument's folds;
 //! - [`open_batch`] and [`verify_batch`]: one inner-product argument opening
-//!   many columns at one point (the `batch` module).
+//!   many columns at one point (the `batch` module); [`open_batch_bound`] and
+//!   [`verify_batch_bound`] for claims the caller's transcript already bound.
 
 use ff::Field;
 use iroha_pasta::PastaCurve;
 
 mod batch;
 
-pub use batch::{BatchOpening, MleClaim, open_batch, open_batch_cancellable, verify_batch};
+pub use batch::{
+    BatchOpening, MleClaim, open_batch, open_batch_bound, open_batch_bound_cancellable,
+    open_batch_cancellable, verify_batch, verify_batch_bound,
+};
 
 /// Role tag of a batch opening, absorbed first.
 pub const TAG_BATCH_OPENING: u64 = u64::from_le_bytes(*b"kgwfdbo1");
