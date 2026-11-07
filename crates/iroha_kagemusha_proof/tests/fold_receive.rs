@@ -52,6 +52,7 @@ use iroha_kagemusha_proof::{
     fold_lineage::{
         A_CONTEXT, A_DIGESTS, A_PC, AKind, BASE, CLAIM_Q, FOLD_A, FOLD_Q, Q_CLAIM_SLOT, Q_DIGESTS, QFrameStep, QKind,
         sigma::{QSigmaStep, QSigmaStepWitness, fold_selected},
+        signature::QSignatureStep,
         start_passthrough,
     },
     operation_relation::{
@@ -63,7 +64,7 @@ use iroha_kagemusha_proof::{
         QSigmaPlan, SigmaClass, SigmaSlotWitness,
         native::{IncomingMode, IncomingSigma},
     },
-    q_signature::QSignaturePlan,
+    q_signature::{QSignatureCircuit, QSignaturePlan, SignatureWitness},
     tree::IndexedInsert,
 };
 use iroha_pasta::{Ep, Eq, Fp, Fq, poseidon::hash_with_domain};
@@ -82,6 +83,8 @@ use iroha_plonk::{
 use iroha_plonk_gadgets::{
     GlueChip, GlueConfig, UintChip,
     imt::{LeafCells, OpeningCells, PathCells},
+    p256::native::{self as p256, Affine, HALF_N, ORDER, verify_prehashed},
+    sha256::native::sha256_of_digest,
     statement::STATEMENT_DOMAIN,
 };
 use iroha_plonk_recursion::{
@@ -735,4 +738,83 @@ fn folded_q_sigma_step_verifies_sigma_and_folds_its_claim() {
             );
         }
     }
+}
+
+/// A genuine `SHA256withECDSA` signature over the 32-byte encoding of `digest`.
+fn p256_signature(digest: u64, secret: u64, nonce: u64) -> SignatureWitness {
+    let digest = Fp::from(digest);
+    let hash = sha256_of_digest(&digest);
+    let message =
+        core::array::from_fn(|i| u64::from_be_bytes(hash[(3 - i) * 8..(4 - i) * 8].try_into().expect("eight bytes")));
+    let secret = [secret, 0x1234_5678_9abc_def0, 0x0fed_cba9_8765_4321, 0x0123_4567];
+    let nonce = [nonce, 0x0bad_cafe_dead_beef, 0x1357_9bdf_2468_ace0, 0x0765_4321];
+    let key = p256::mul(&Affine::GENERATOR, &secret).expect("key");
+    let r = ORDER.reduce_once(&p256::mul(&Affine::GENERATOR, &nonce).expect("nonce point").x);
+    let mut s = ORDER.mul(&ORDER.inverse(&nonce), &ORDER.add(&ORDER.reduce_once(&message), &ORDER.mul(&r, &secret)));
+    if p256::words_cmp(&s, &HALF_N).is_gt() {
+        s = ORDER.neg(&s);
+    }
+    assert!(verify_prehashed(&message, &r, &s, &key));
+    SignatureWitness { digest, key: [key.x, key.y], signature: [r, s] }
+}
+
+#[test]
+#[ignore = "k16 folded Receive Q signature steps with genuine P-256 slots; run optimized"]
+fn folded_q_signature_step_keeps_the_own_slot_hard_and_incoming_slots_soft() {
+    let plan = plan();
+    let rel = relations(&plan);
+    let policy = OwnPolicy::new([31, 32], bootstrap_objects::key(23)).expect("policy");
+    let schema = ReceiveStagePlan::signature_schema_for(Variant::Receive, policy).expect("schema");
+    let own = 0x5eed_0001;
+    let genuine = vec![p256_signature(0x1111, own, 0xa1), p256_signature(0x2222, 0x5eed_1000, 0xa2), p256_signature(0x3333, own, 0xa3)];
+    let chain = QKind::Signature.chain(AKind::Receive3);
+    let start = Fq::from(9);
+    let step = |witnesses: Vec<SignatureWitness>, verdicts: Option<Vec<Fq>>| {
+        let leaf = QSignatureCircuit::new(schema.clone(), witnesses.clone()).expect("leaf");
+        let prepared =
+            prepare_step(&chain, 1, &rel.a1, None, None, vec![], vec![Fq::ZERO; Q_DIGESTS], start).expect("prepare");
+        let mut public = vec![step_public(&chain, 1, Fq::from(BASE), prepared.passthrough, &[], &prepared.digests, &[])];
+        let mut column = match schema.native_instances(&witnesses) {
+            Ok([column]) => column,
+            Err(_) => vec![Fq::ZERO; schema.instance_length()],
+        };
+        if let Some(verdicts) = verdicts {
+            for (slot, verdict) in verdicts.into_iter().enumerate() {
+                column[(slot + 1) * iroha_kagemusha_proof::q_signature::SLOT_WORDS - 1] = verdict;
+            }
+        }
+        public.push(column);
+        (QSignatureStep { leaf, shape: rel.a1.shape(), start, frame: Some(prepared.witness) }, public)
+    };
+    let satisfied = |circuit: &QSignatureStep, public: &[Vec<Fq>]| {
+        check_circuit(circuit, K, public, CheckMode::Strict).expect("synthesis").is_satisfied()
+    };
+    let (circuit, public) = step(genuine.clone(), None);
+    assert!(satisfied(&circuit, &public), "genuine merged slots");
+    // A malformed incoming slot is satisfiable only with its false soft verdict.
+    let mut malformed = genuine.clone();
+    malformed[1].signature[1][0] ^= 1;
+    let (circuit, public) = step(malformed.clone(), None);
+    assert_eq!(public[1][2 * iroha_kagemusha_proof::q_signature::SLOT_WORDS - 1], Fq::ZERO);
+    assert!(satisfied(&circuit, &public), "soft incoming slot");
+    let (circuit, public) = step(malformed, Some(vec![Fq::ONE; 3]));
+    assert!(!satisfied(&circuit, &public), "a malformed incoming slot claimed valid");
+    // No verdict satisfies a malformed own receipt.
+    let mut forged = genuine.clone();
+    forged[0].signature[1][0] ^= 1;
+    for verdict in [Fq::ZERO, Fq::ONE] {
+        let (circuit, public) = step(forged.clone(), Some(vec![verdict, Fq::ONE, Fq::ONE]));
+        assert!(!satisfied(&circuit, &public), "a malformed own receipt with verdict {verdict:?}");
+    }
+    let (circuit, public) = step(genuine, None);
+    let synthesized = synthesize(&circuit, K, Some(&public)).expect("witness");
+    let rows = synthesized.tables.advice_assigned().iter().map(|c| c.iter().rposition(|v| *v).map_or(0, |r| r + 1)).max();
+    let unknown = synthesize(&circuit.without_witnesses(), K, None).expect("layout");
+    assert_eq!(synthesized.tables.fixed(), unknown.tables.fixed());
+    assert_eq!(synthesized.tables.permutation(), unknown.tables.permutation());
+    let relation = FoldedRelation::<Fq>::from_synthesized(&unknown).expect("Q signature relation");
+    let key = CommitKey::<Ep>::monomial(PinnedParams::<Ep>::derive(K).expect("params").params());
+    let decider = iroha_fold::decider_v2::DeciderV2Plan::new(relation.clone(), &key).expect("decider plan");
+    let (_, keys, copy_columns, _) = decider.sizes();
+    eprintln!("FOLD_RECEIVE_QSIGNATURE rows={rows:?} relation={:?} decider_keys={keys} copy_columns={copy_columns}", relation.summary());
 }

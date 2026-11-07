@@ -39,6 +39,7 @@
 //! the instance it folds.
 
 pub mod sigma;
+pub mod signature;
 
 use ff::Field;
 use iroha_fold::{
