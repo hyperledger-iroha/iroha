@@ -39,7 +39,7 @@ use iroha_kagemusha_proof::{
     PrefixMode, RelationShape, SigmaRelation,
     a_relation::{
         AProofPlan, LineagePublicCells, QProofPlan,
-        fold::receive::{ReceiveFoldPlan, ReceiveFoldSource, ReceiveFoldStep, ReceiveStepWitness},
+        fold::receive::{ReceiveFoldPlan, ReceiveFoldSource, ReceiveFoldStep, ReceiveStepWitness, pc_before},
         native::receive::{IncomingWitness, Transition},
         own::OwnPolicy,
         receive::{MAX_OMEGA_RAW_BYTES, MAX_SIGMA_RAW_BYTES, ReceiveStagePlan},
@@ -83,6 +83,7 @@ use iroha_plonk::{
 use iroha_plonk_gadgets::{
     GlueChip, GlueConfig, UintChip,
     imt::{LeafCells, OpeningCells, PathCells},
+    bytes::p_bytes_native,
     p256::native::{self as p256, Affine, HALF_N, ORDER, verify_prehashed},
     sha256::native::sha256_of_digest,
     statement::STATEMENT_DOMAIN,
@@ -236,18 +237,47 @@ fn incoming(valid: bool, public: [Fp; 18]) -> IncomingWitness {
     }
 }
 
+/// `LE32(length) || raw`.
+fn framed(raw: &[u8]) -> Vec<u8> {
+    let mut out = u32::try_from(raw.len()).expect("length").to_le_bytes().to_vec();
+    out.extend(raw);
+    out
+}
+
+/// The commitment of an active original tape (`kgwcact1`), as the context
+/// assigns it.
+fn active_commitment(spec: iroha_kagemusha_proof::a_relation::context::ContextObjectSpec, digest: Fp, raw: &[u8]) -> [Fp; 3] {
+    let domain = u64::from_le_bytes(*b"kgwcact1");
+    let length = Fp::from(u64::try_from(raw.len()).expect("length"));
+    let words = [Fp::from(u64::from(spec.tag)), Fp::from(u64::from(spec.capacity)), length, p_bytes_native(domain, &framed(raw))];
+    [digest, length, hash_with_domain(domain, &words)]
+}
+
+/// The originals of the folded steps' tests: a genuine own transition, the raw
+/// Omega and sigma tapes with their exact commitments and combined digest, and
+/// placeholder tapes for the objects the A3 and A4 owners decode.
 fn source(plan: &ReceiveFoldPlan, valid: bool, insert: bool) -> ReceiveFoldSource {
     let (send, fixture) = transition(valid, insert);
     let context = plan.stage().context();
-    let commitments = context
-        .object_specs()
+    let specs = context.object_specs();
+    let omega: Vec<u8> = (0..200u32).map(|i| (i * 7 + 3) as u8).collect();
+    let sigma: Vec<u8> = (0..100u32).map(|i| (i * 11 + 5) as u8).collect();
+    let objects: [Vec<u8>; 9] = core::array::from_fn(|i| match i {
+        4 => omega.clone(),
+        5 => sigma.clone(),
+        _ => vec![0; specs[i].capacity as usize],
+    });
+    let proof_digest = p_bytes_native(u64::from_le_bytes(*b"kgwprf_1"), &[framed(&omega), framed(&sigma)].concat());
+    let sigma_digest = p_bytes_native(u64::from_le_bytes(*b"kgwstep1"), &framed(&sigma));
+    let commitments = specs
         .iter()
         .enumerate()
-        .map(|(i, spec)| {
-            let i = u64::try_from(i).expect("small");
-            if i == 3 {
-                [fixture.payment, Fp::from(u64::from(spec.capacity)), Fp::from(203)]
-            } else {
+        .map(|(i, spec)| match i {
+            3 => [fixture.payment, Fp::from(u64::from(spec.capacity)), Fp::from(203)],
+            4 => active_commitment(*spec, proof_digest, &omega),
+            5 => active_commitment(*spec, sigma_digest, &sigma),
+            _ => {
+                let i = u64::try_from(i).expect("small");
                 [Fp::from(100 + i), Fp::from(u64::from(spec.capacity)), Fp::from(200 + i)]
             }
         })
@@ -277,6 +307,7 @@ fn source(plan: &ReceiveFoldPlan, valid: bool, insert: bool) -> ReceiveFoldSourc
         },
         send.statement,
         fixture.step,
+        objects,
         commitments,
         q,
         incoming(valid, send.before.lineage),
@@ -293,7 +324,23 @@ struct Relations {
 }
 
 fn a1_step(plan: &Arc<ReceiveFoldPlan>, shape: FoldShape, witness: Option<ReceiveStepWitness>) -> ReceiveFoldStep {
-    ReceiveFoldStep::new(plan.clone(), AKind::Receive1, shape, witness).expect("A1 step")
+    a_step(plan, AKind::Receive1, shape, witness)
+}
+
+fn a_step(plan: &Arc<ReceiveFoldPlan>, kind: AKind, shape: FoldShape, witness: Option<ReceiveStepWitness>) -> ReceiveFoldStep {
+    ReceiveFoldStep::new(plan.clone(), kind, shape, witness).expect("A step")
+}
+
+/// The A state the circuit outputs from `base` (also for a refused base, so
+/// that the frame stays consistent and only the body refuses it).
+fn circuit_next(plan: &ReceiveFoldPlan, source: &ReceiveFoldSource, kind: AKind, base: &[Fp]) -> Vec<Fp> {
+    let mut next = if kind == AKind::Receive5 { source.transition.after.lineage.to_vec() } else { base[..18].to_vec() };
+    if kind == AKind::Receive5 {
+        next.extend([Fp::ZERO, Fp::ZERO]);
+    } else {
+        next.extend([plan.context_digest(source).expect("digest"), Fp::from(pc_before(kind) + 1)]);
+    }
+    next
 }
 
 fn relations(plan: &Arc<ReceiveFoldPlan>) -> Relations {
@@ -338,6 +385,16 @@ struct Segment {
 }
 
 fn build_segment(rel: &Relations, plan: &Arc<ReceiveFoldPlan>, source: &ReceiveFoldSource, base: &[Fp]) -> Segment {
+    build_segment_of(rel, plan, source, AKind::Receive1, base)
+}
+
+fn build_segment_of(
+    rel: &Relations,
+    plan: &Arc<ReceiveFoldPlan>,
+    source: &ReceiveFoldSource,
+    kind: AKind,
+    base: &[Fp],
+) -> Segment {
     let mut rng = ChaCha20Rng::seed_from_u64(29);
     let start = start_passthrough(base);
     let q = q_relation(rel.a1.shape(), start);
@@ -351,20 +408,15 @@ fn build_segment(rel: &Relations, plan: &Arc<ReceiveFoldPlan>, source: &ReceiveF
     let (advice, public) = q.stage_witness(&synthesize(&step, K, Some(&public)).expect("Q witness")).expect("stage");
     let fresh = fresh_instance(&q, &rel.key_q, &FOLD_Q, advice, public, &mut rng).expect("Q instance");
 
-    let a_chain = AKind::Receive1.chain();
+    let a_chain = kind.chain();
     let prepared = prepare_step(&a_chain, 2, &q, None, Some(&fresh), base.to_vec(), vec![Fp::ZERO; A_DIGESTS], Fp::ZERO)
-        .expect("prepare A1");
+        .expect("prepare A step");
     // A refused state still lays out a consistent frame: the body must refuse it.
-    let next = plan.next_state(AKind::Receive1, source, base).unwrap_or_else(|_| {
-        let mut next = base.to_vec();
-        next[A_CONTEXT] = plan.context_digest(source).expect("digest");
-        next[A_PC] = Fp::ONE;
-        next
-    });
+    let next = plan.next_state(kind, source, base).unwrap_or_else(|_| circuit_next(plan, source, kind, base));
     let public = vec![step_public(&a_chain, 2, Fp::from(BASE), prepared.passthrough, &next, &prepared.digests, &[])];
     let witness = ReceiveStepWitness { source: Arc::new(source.clone()), frame: prepared.witness };
     Segment {
-        circuit: a1_step(plan, q.shape(), Some(witness)),
+        circuit: a_step(plan, kind, q.shape(), Some(witness)),
         public,
         kept: prepared.kept.expect("A starts the Q accumulator"),
         q,
@@ -817,4 +869,46 @@ fn folded_q_signature_step_keeps_the_own_slot_hard_and_incoming_slots_soft() {
     let decider = iroha_fold::decider_v2::DeciderV2Plan::new(relation.clone(), &key).expect("decider plan");
     let (_, keys, copy_columns, _) = decider.sizes();
     eprintln!("FOLD_RECEIVE_QSIGNATURE rows={rows:?} relation={:?} decider_keys={keys} copy_columns={copy_columns}", relation.summary());
+}
+
+#[test]
+#[ignore = "k16 folded Receive A5 steps on genuine transitions; run optimized"]
+fn folded_a5_closes_the_receive_with_todays_terminal_owners() {
+    let plan = plan();
+    let rel = relations(&plan);
+    for (valid, insert) in [(true, true), (false, true), (false, false)] {
+        let genuine = source(&plan, valid, insert);
+        let base = plan.state_before(AKind::Receive5, &genuine).expect("A5 state");
+        let segment = build_segment_of(&rel, &plan, &genuine, AKind::Receive5, &base);
+        assert!(satisfied(&segment.circuit, &segment.public), "valid={valid} insert={insert}");
+        // A5 writes the successor's lineage and closes the context.
+        let next = plan.next_state(AKind::Receive5, &genuine, &base).expect("next");
+        assert_eq!(next[..18], genuine.transition.after.lineage);
+        assert_eq!(next[A_CONTEXT..], [Fp::ZERO, Fp::ZERO]);
+        let cases: [(&str, Box<dyn Fn(&mut ReceiveFoldSource, &mut Vec<Fp>)>); 5] = [
+            // Burned total belongs to A5's terminal effects (A1 let it pass).
+            ("burned total", Box::new(|s: &mut ReceiveFoldSource, _: &mut Vec<Fp>| s.transition.after.lineage[14] += Fp::ONE)),
+            ("consumed route", Box::new(|s: &mut ReceiveFoldSource, _: &mut Vec<Fp>| s.transition.consumed.leaf_siblings[0] += Fp::ONE)),
+            ("Omega tape", Box::new(|s: &mut ReceiveFoldSource, _: &mut Vec<Fp>| s.objects[4][17] ^= 1)),
+            ("program counter", Box::new(|_: &mut ReceiveFoldSource, b: &mut Vec<Fp>| b[A_PC] = Fp::from(2))),
+            ("context", Box::new(|_: &mut ReceiveFoldSource, b: &mut Vec<Fp>| b[A_CONTEXT] += Fp::ONE)),
+        ];
+        for (case, mutate) in cases {
+            let (mut source, mut base) = (genuine.clone(), base.clone());
+            mutate(&mut source, &mut base);
+            let segment = build_segment_of(&rel, &plan, &source, AKind::Receive5, &base);
+            assert!(!satisfied(&segment.circuit, &segment.public), "valid={valid} insert={insert}: A5 accepted another {case}");
+        }
+    }
+    let genuine = source(&plan, true, true);
+    let base = plan.state_before(AKind::Receive5, &genuine).expect("A5 state");
+    let segment = build_segment_of(&rel, &plan, &genuine, AKind::Receive5, &base);
+    let synthesized = synthesize(&segment.circuit, K, Some(&segment.public)).expect("A5 witness");
+    let rows = synthesized.tables.advice_assigned().iter().map(|c| c.iter().rposition(|v| *v).map_or(0, |r| r + 1)).max();
+    let unknown = synthesize(&segment.circuit.without_witnesses(), K, None).expect("A5 layout");
+    assert_eq!(synthesized.tables.fixed(), unknown.tables.fixed());
+    assert_eq!(synthesized.tables.permutation(), unknown.tables.permutation());
+    let relation = FoldedRelation::<Fp>::from_synthesized(&unknown).expect("A5 relation");
+    assert_eq!(relation.shape(), rel.a1.shape(), "every A kind shares one fold shape");
+    eprintln!("FOLD_RECEIVE_A5 rows={rows:?} relation={:?}", relation.summary());
 }

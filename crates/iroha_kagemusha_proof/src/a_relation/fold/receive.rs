@@ -46,7 +46,7 @@ use crate::{
             ContextPredecessor, ContextState,
         },
         native::receive::{IncomingWitness, Transition},
-        receive::{ReceiveStageInputs, ReceiveStagePlan, ReceiveStageWitness},
+        receive::{ReceiveProofDigest, ReceiveStageInputs, ReceiveStagePlan, ReceiveStageWitness},
         results::ReceiveResultClaims,
         transition::TransitionInputs,
     },
@@ -205,17 +205,38 @@ impl ReceiveFoldPlan {
     /// [`Error::Input`] for a state the sub-step refuses; [`Error::Artifact`]
     /// for a kind not folded yet.
     pub fn next_state(&self, kind: AKind, source: &ReceiveFoldSource, state: &[Fp]) -> Result<Vec<Fp>, Error> {
-        match kind {
-            AKind::Receive1 => {
-                if state != source.initial_state() {
-                    return Err(Error::Input);
-                }
-                let mut next = source.transition.before.lineage.to_vec();
-                next.extend([self.context_digest(source)?, Fp::from(pc_before(kind) + 1)]);
-                Ok(next)
-            }
-            AKind::Receive3 | AKind::Receive4 | AKind::Receive5 => Err(Error::Artifact),
+        let digest = self.context_digest(source)?;
+        if state != self.state_before(kind, source)? {
+            return Err(Error::Input);
         }
+        Ok(match kind {
+            AKind::Receive1 | AKind::Receive3 | AKind::Receive4 => {
+                let mut next = source.transition.before.lineage.to_vec();
+                next.extend([digest, Fp::from(pc_before(kind) + 1)]);
+                next
+            }
+            // The Receive is complete: the successor's lineage, no context.
+            AKind::Receive5 => {
+                let mut next = source.transition.after.lineage.to_vec();
+                next.extend([Fp::ZERO, Fp::ZERO]);
+                next
+            }
+        })
+    }
+
+    /// The A state a sub-step of `kind` requires: the predecessor's lineage,
+    /// then no context and pc 0 before A1, or the Receive's context digest and
+    /// the sub-steps done.
+    ///
+    /// # Errors
+    /// As [`Self::context_digest`].
+    pub fn state_before(&self, kind: AKind, source: &ReceiveFoldSource) -> Result<Vec<Fp>, Error> {
+        let mut state = source.transition.before.lineage.to_vec();
+        match kind {
+            AKind::Receive1 => state.extend([Fp::ZERO, Fp::ZERO]),
+            _ => state.extend([self.context_digest(source)?, Fp::from(pc_before(kind))]),
+        }
+        Ok(state)
     }
 }
 
@@ -251,6 +272,10 @@ pub struct ReceiveFoldSource {
     /// The original incoming Send statement.
     pub incoming_statement: [Fp; 26],
     step: Option<(StepWitness<Fp>, NativeStep<Fp>)>,
+    /// The nine original tapes: Request, payer Credential, Send Receipt,
+    /// Payment, raw Omega, raw sigma, own Receipt, quoted Credential, quoted
+    /// certificate.
+    pub objects: [Vec<u8>; 9],
     /// The nine context objects' commitments `(digest, length, tape digest)`.
     pub commitments: Vec<[Fp; 3]>,
     /// The public columns of Q0 (the `σ_send` soft verifier) and Q1 (the
@@ -271,6 +296,7 @@ impl ReceiveFoldSource {
         transition: Transition,
         incoming_statement: [Fp; 26],
         step: StepWitness<Fp>,
+        objects: [Vec<u8>; 9],
         commitments: Vec<[Fp; 3]>,
         q: [Vec<Vec<Fq>>; 2],
         incoming: IncomingWitness,
@@ -282,7 +308,7 @@ impl ReceiveFoldSource {
         if !native.violations.is_empty() || native.statement != transition.statement {
             return Err(Error::Input);
         }
-        let source = Self { transition, incoming_statement, step: Some((step, native)), commitments, q, incoming };
+        let source = Self { transition, incoming_statement, step: Some((step, native)), objects, commitments, q, incoming };
         source.check_shape(plan)?;
         Ok(source)
     }
@@ -318,6 +344,10 @@ impl ReceiveFoldSource {
             },
             incoming_statement: [Fp::ZERO; 26],
             step: None,
+            objects: core::array::from_fn(|i| {
+                let spec = plan.context().object_specs()[i];
+                if matches!(i, 4 | 5) { Vec::new() } else { vec![0; spec.capacity as usize] }
+            }),
             commitments: vec![[Fp::ZERO; 3]; plan.context().object_specs().len()],
             q,
             incoming: IncomingWitness {
@@ -335,7 +365,14 @@ impl ReceiveFoldSource {
     }
 
     fn check_shape(&self, plan: &ReceiveFoldPlan) -> Result<(), Error> {
-        if self.commitments.len() != plan.context().object_specs().len() {
+        let specs = plan.context().object_specs();
+        if self.commitments.len() != specs.len()
+            || specs.len() != self.objects.len()
+            || self.objects.iter().zip(specs).enumerate().any(|(i, (raw, spec))| {
+                let capacity = spec.capacity as usize;
+                if matches!(i, 4 | 5) { raw.len() > capacity } else { raw.len() != capacity }
+            })
+        {
             return Err(Error::Input);
         }
         for (index, columns) in self.q.iter().enumerate() {
@@ -535,7 +572,7 @@ impl ReceiveFoldStep {
         shape: FoldShape,
         witness: Option<ReceiveStepWitness>,
     ) -> Result<Self, Error> {
-        if kind != AKind::Receive1 {
+        if !matches!(kind, AKind::Receive1 | AKind::Receive5) {
             return Err(Error::Artifact);
         }
         Ok(Self { plan, kind, shape, witness })
@@ -544,6 +581,7 @@ impl ReceiveFoldStep {
     fn layout(
         &self,
         chip: &mut VerifierChip<Ep>,
+        bytes: &mut BytesChip<Fp>,
         region: &mut Region<'_, Fp>,
     ) -> Result<Vec<Word<Fp>>, SynthesisError> {
         let assign = Assign { known: self.witness.is_some() };
@@ -578,23 +616,71 @@ impl ReceiveFoldStep {
         // The program counter orders the sub-steps; the context digest binds
         // every sub-step to the one context the first wrote.
         GlueChip::assert_constant(region, &state.pc, Fp::from(pc_before(self.kind)))?;
-        let next = match self.kind {
-            AKind::Receive1 => {
-                GlueChip::assert_constant(region, &state.context, Fp::ZERO)?;
-                for (carried, opened) in state.lineage.iter().zip(context.pred_public.fields()) {
-                    GlueChip::assert_equal(region, carried, opened)?;
-                }
-                self.receive1(assign, chip, region, &context, &input, source)?;
-                let pc = chip.uint().glue().constant(region, Fp::from(pc_before(self.kind) + 1))?;
-                let mut next = state.lineage.to_vec();
-                next.extend([digest, pc]);
-                next
+        if self.kind == AKind::Receive1 {
+            GlueChip::assert_constant(region, &state.context, Fp::ZERO)?;
+            for (carried, opened) in state.lineage.iter().zip(context.pred_public.fields()) {
+                GlueChip::assert_equal(region, carried, opened)?;
             }
-            AKind::Receive3 | AKind::Receive4 | AKind::Receive5 => return Err(SynthesisError::Synthesis),
+        } else {
+            GlueChip::assert_equal(region, &state.context, &digest)?;
+        }
+        match self.kind {
+            AKind::Receive1 => self.receive1(assign, chip, region, &context, &input, source)?,
+            AKind::Receive5 => self.receive5(assign, chip, bytes, region, &context, &input, source)?,
+            AKind::Receive3 | AKind::Receive4 => return Err(SynthesisError::Synthesis),
+        }
+        let next = if self.kind == AKind::Receive5 {
+            // The Receive is complete: the successor's lineage, no context.
+            let zero = chip.uint().glue().constant(region, Fp::ZERO)?;
+            let mut next = context.next_public.fields().to_vec();
+            next.extend([zero.clone(), zero]);
+            next
+        } else {
+            let pc = chip.uint().glue().constant(region, Fp::from(pc_before(self.kind) + 1))?;
+            let mut next = state.lineage.to_vec();
+            next.extend([digest, pc]);
+            next
         };
         let refs = chip.fold_lanes()?;
         let mut lanes = FoldLanes { glue: refs.glue, range: refs.range, ff: refs.ff, ecc: refs.ecc, duplex: refs.hash };
         frame_outputs(&mut lanes, region, &chain, &frame, &next, &frame.digests, &[])
+    }
+
+    /// Stage A5's tasks: the consumed-credit nonmembership, the terminal burn
+    /// and preserve effects, and the combined digest of the original Omega and
+    /// sigma tapes.
+    #[allow(clippy::too_many_arguments)]
+    fn receive5(
+        &self,
+        assign: Assign,
+        chip: &mut VerifierChip<Ep>,
+        bytes: &mut BytesChip<Fp>,
+        region: &mut Region<'_, Fp>,
+        context: &ContextCells,
+        input: &ContextInputs<'_>,
+        source: &ReceiveFoldSource,
+    ) -> Result<(), SynthesisError> {
+        let specs = self.plan.context().object_specs();
+        let omega = assign.active(chip, bytes, region, &source.objects[4], specs[4].capacity as usize, &[])?;
+        let sigma = assign.active(chip, bytes, region, &source.objects[5], specs[5].capacity as usize, &[])?;
+        let proof_digest =
+            ReceiveProofDigest::from_active(chip, region, &omega, &sigma, context.objects[5].authenticated_digest())?;
+        let nonmembership = assign.insertion(&mut chip.uint(), region, &source.transition.consumed)?.low;
+        let stage = u32::try_from(stage_of(self.kind)).map_err(|_| SynthesisError::BoundsFailure)?;
+        self.plan.stage.constrain_stage(
+            chip,
+            region,
+            stage,
+            ReceiveStageInputs {
+                context: input,
+                proof_digest: Some(&proof_digest),
+                objects: None,
+                signed: None,
+                authorization: None,
+            },
+            ReceiveStageWitness { nonmembership: Some(&nonmembership), ..ReceiveStageWitness::default() },
+        )?;
+        Ok(())
     }
 
     /// Stage A1's tasks: the consumed-credit and credit-record effects and the
@@ -659,10 +745,11 @@ impl Circuit<Fp> for ReceiveFoldStep {
 
     fn synthesize(&self, config: AStepConfig, mut layouter: impl Layouter<Fp>) -> Result<(), SynthesisError> {
         let mut chip = VerifierChip::new(config.verifier);
-        let bytes = BytesChip::new(config.bytes);
+        let mut bytes = BytesChip::new(config.bytes);
         chip.load_tables(&mut layouter)?;
         bytes.load_table(&mut layouter)?;
-        let out = layouter.assign_region(|| "folded Receive A step", |mut region| self.layout(&mut chip, &mut region))?;
+        let out =
+            layouter.assign_region(|| "folded Receive A step", |mut region| self.layout(&mut chip, &mut bytes, &mut region))?;
         for (row, word) in out.iter().enumerate() {
             layouter.constrain_instance(word.cell(), config.frame, row)?;
         }

@@ -23,7 +23,10 @@ use iroha_plonk::{
 };
 use iroha_plonk_gadgets::{
     GlueChip, UintChip, Word,
-    bytes::tape::BytesConfig,
+    bytes::{
+        tape::{BytesChip, BytesConfig, SegmentSpec},
+        variable::ActiveBytes,
+    },
     imt::{LeafCells, OpeningCells, PathCells},
     statement::foreign_limbs,
 };
@@ -183,6 +186,20 @@ impl Assign {
         let cells = StateCells::constrain_with_verifier(chip, region, &core, &rest)?;
         let public = self.words(chip, region, &state.lineage)?;
         Ok((cells, LineagePublicCells::constrain(&mut chip.uint(), region, &public)?))
+    }
+
+    /// An original tape of at most `capacity` bytes, with its active length.
+    pub(crate) fn active(
+        self,
+        chip: &mut VerifierChip<Ep>,
+        bytes: &mut BytesChip<Fp>,
+        region: &mut Region<'_, Fp>,
+        raw: &[u8],
+        capacity: usize,
+        segments: &[SegmentSpec],
+    ) -> Result<ActiveBytes<Fp>, SynthesisError> {
+        let values = if self.known { Value::known(raw.to_vec()) } else { Value::unknown() };
+        ActiveBytes::assign(&mut chip.uint(), bytes, region, capacity, &values, segments)
     }
 
     /// An authenticated insertion route (low leaf and slot paths).
