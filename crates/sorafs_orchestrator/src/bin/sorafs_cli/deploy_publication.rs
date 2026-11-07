@@ -777,6 +777,8 @@ mod tests {
                         Err(error) => panic!("test accept: {error}"),
                     }
                 };
+                // Use blocking reads with the bounded timeouts below.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();

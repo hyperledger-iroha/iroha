@@ -11855,6 +11855,657 @@
           "name": "policy_key_roundtrip_is_bounded_and_canonical"
         }
       ]
+    },
+    {
+      "id": "transaction.parliament_credential_registration_max_bytes",
+      "group": "transaction",
+      "what": "Largest opaque candidate-credential registration frame accepted by the original private Core preparation and read-back owner. This additive input is not an activated executable instruction.",
+      "unit": "bytes",
+      "value": 167936,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/governance/anonymous_ballot/registration_input.rs",
+        "symbol": "MAX_FRAME_BYTES",
+        "kind": "const",
+        "expr": "164 * 1024"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core/src/state/parliament_registration.rs",
+          "contains": "if envelope.frame().len() > RegisterParliamentCredentialV1::MAX_FRAME_BYTES {",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "id": "attachment.kagemusha_suffix_header_max_bytes",
+      "group": "attachment",
+      "what": "Complete canonical suffix header frame, including every selected chunk digest.",
+      "unit": "bytes",
+      "value": 49152,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "KAGEMUSHA_WALLET_SUFFIX_HEADER_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "49_152"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "encode_frame_v1(self, KAGEMUSHA_WALLET_SUFFIX_HEADER_MAX_BYTES_V1)"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "decode_frame_v1(bytes, KAGEMUSHA_WALLET_SUFFIX_HEADER_MAX_BYTES_V1)?"
+        }
+      ]
+    },
+    {
+      "id": "attachment.kagemusha_suffix_anchor_max_bytes",
+      "group": "attachment",
+      "what": "Complete canonical suffix anchor frame retaining the original verified Omega and its opening.",
+      "unit": "bytes",
+      "value": 24576,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "KAGEMUSHA_WALLET_SUFFIX_ANCHOR_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "24_576"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "encode_frame_v1(self, KAGEMUSHA_WALLET_SUFFIX_ANCHOR_MAX_BYTES_V1)"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "decode_frame_v1(bytes, KAGEMUSHA_WALLET_SUFFIX_ANCHOR_MAX_BYTES_V1)?"
+        }
+      ]
+    },
+    {
+      "id": "attachment.kagemusha_suffix_step_max_bytes",
+      "group": "attachment",
+      "what": "Complete canonical semantic suffix step frame; the chunk parser checks each framed entry against this same ceiling.",
+      "unit": "bytes",
+      "value": 65536,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "KAGEMUSHA_WALLET_SUFFIX_STEP_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "65_536"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "encode_frame_v1(self, KAGEMUSHA_WALLET_SUFFIX_STEP_MAX_BYTES_V1)"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "decode_frame_v1(bytes, KAGEMUSHA_WALLET_SUFFIX_STEP_MAX_BYTES_V1)?"
+        }
+      ]
+    },
+    {
+      "id": "attachment.kagemusha_suffix_unload_max_bytes",
+      "group": "attachment",
+      "what": "Complete canonical Finalize frame including the original Unload proof, receipt and charge data.",
+      "unit": "bytes",
+      "value": 16384,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "KAGEMUSHA_WALLET_SUFFIX_UNLOAD_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "16_384"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "encode_frame_v1(self, KAGEMUSHA_WALLET_SUFFIX_UNLOAD_MAX_BYTES_V1)"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "decode_frame_v1(bytes, KAGEMUSHA_WALLET_SUFFIX_UNLOAD_MAX_BYTES_V1)?"
+        }
+      ]
+    },
+    {
+      "id": "work_budget.kagemusha_suffix_chunk_max_steps",
+      "group": "work_budget",
+      "what": "At most eight complete semantic steps in an Append chunk, limiting its deterministic verification work independently of proof-call quota.",
+      "unit": "count",
+      "value": 8,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "KAGEMUSHA_WALLET_SUFFIX_CHUNK_STEPS_MAX_V1",
+        "kind": "const",
+        "expr": "8"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "frames.len() == KAGEMUSHA_WALLET_SUFFIX_CHUNK_STEPS_MAX_V1"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "frames.len() > KAGEMUSHA_WALLET_SUFFIX_CHUNK_STEPS_MAX_V1"
+        }
+      ]
+    },
+    {
+      "id": "attachment.kagemusha_suffix_chunk_data_max_bytes",
+      "group": "attachment",
+      "what": "Total framed step-stream bytes in one chunk: at most eight entries, each with four-byte length prefix and a bounded complete step frame.",
+      "unit": "bytes",
+      "value": 524320,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "KAGEMUSHA_WALLET_SUFFIX_CHUNK_DATA_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "KAGEMUSHA_WALLET_SUFFIX_CHUNK_STEPS_MAX_V1 * (4 + KAGEMUSHA_WALLET_SUFFIX_STEP_MAX_BYTES_V1)"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "refs": {
+        "KAGEMUSHA_WALLET_SUFFIX_CHUNK_STEPS_MAX_V1": "work_budget.kagemusha_suffix_chunk_max_steps",
+        "KAGEMUSHA_WALLET_SUFFIX_STEP_MAX_BYTES_V1": "attachment.kagemusha_suffix_step_max_bytes"
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "self.data.len() > KAGEMUSHA_WALLET_SUFFIX_CHUNK_DATA_MAX_BYTES_V1"
+        }
+      ]
+    },
+    {
+      "id": "attachment.kagemusha_suffix_chunk_max_bytes",
+      "group": "attachment",
+      "what": "Complete canonical Append chunk frame, including its bounded step stream, fixed identities and framing overhead.",
+      "unit": "bytes",
+      "value": 528416,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "KAGEMUSHA_WALLET_SUFFIX_CHUNK_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "KAGEMUSHA_WALLET_SUFFIX_CHUNK_DATA_MAX_BYTES_V1 + 4_096"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "refs": {
+        "KAGEMUSHA_WALLET_SUFFIX_CHUNK_DATA_MAX_BYTES_V1": "attachment.kagemusha_suffix_chunk_data_max_bytes"
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "encode_frame_v1(self, KAGEMUSHA_WALLET_SUFFIX_CHUNK_MAX_BYTES_V1)"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "decode_frame_v1(bytes, KAGEMUSHA_WALLET_SUFFIX_CHUNK_MAX_BYTES_V1)?"
+        }
+      ]
+    },
+    {
+      "id": "work_budget.kagemusha_suffix_max_chunks",
+      "group": "work_budget",
+      "what": "At most 512 committed Append chunks in one suffix header.",
+      "unit": "count",
+      "value": 512,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "KAGEMUSHA_WALLET_SUFFIX_CHUNKS_MAX_V1",
+        "kind": "const",
+        "expr": "512"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "chunks > KAGEMUSHA_WALLET_SUFFIX_CHUNKS_MAX_V1"
+        }
+      ]
+    },
+    {
+      "id": "work_budget.kagemusha_suffix_max_steps",
+      "group": "work_budget",
+      "what": "At most 4096 complete semantic steps selected by one suffix header, also checked against the per-chunk ceiling.",
+      "unit": "count",
+      "value": 4096,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "KAGEMUSHA_WALLET_SUFFIX_STEPS_MAX_V1",
+        "kind": "const",
+        "expr": "4_096"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "steps > KAGEMUSHA_WALLET_SUFFIX_STEPS_MAX_V1"
+        }
+      ]
+    },
+    {
+      "id": "transport.kagemusha_suffix_review_max_bytes",
+      "group": "attachment",
+      "what": "Complete canonical Native financial display projection; decoding this bounded DATA grants no approval or proof authority.",
+      "unit": "bytes",
+      "value": 12288,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+        "symbol": "SUFFIX_UNLOAD_REVIEW_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "12_288"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+          "contains": "encode_frame_v1(self, SUFFIX_UNLOAD_REVIEW_MAX_BYTES_V1)"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+          "contains": "decode_frame_v1(bytes, SUFFIX_UNLOAD_REVIEW_MAX_BYTES_V1)?"
+        }
+      ]
+    },
+    {
+      "id": "transport.kagemusha_suffix_progress_max_bytes",
+      "group": "attachment",
+      "what": "Complete canonical transient Native progress frame; its schema bound does not substitute for proof verification.",
+      "unit": "bytes",
+      "value": 256,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+        "symbol": "SUFFIX_UNLOAD_PROGRESS_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "256"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+          "contains": "encode_frame_v1(self, SUFFIX_UNLOAD_PROGRESS_MAX_BYTES_V1)"
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+          "contains": "decode_frame_v1(bytes, SUFFIX_UNLOAD_PROGRESS_MAX_BYTES_V1)?"
+        }
+      ]
+    },
+    {
+      "id": "transport.kagemusha_suffix_status_max_bytes",
+      "group": "attachment",
+      "what": "Complete canonical Native scheduling status or release summary, both sharing the fixed schema byte ceiling.",
+      "unit": "bytes",
+      "value": 512,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+        "symbol": "SUFFIX_UNLOAD_STATUS_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "512"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+          "contains": "encode_frame_v1(self, SUFFIX_UNLOAD_STATUS_MAX_BYTES_V1)",
+          "count": 2
+        },
+        {
+          "stage": "sdk",
+          "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+          "contains": "decode_frame_v1(bytes, SUFFIX_UNLOAD_STATUS_MAX_BYTES_V1)?",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "id": "transaction.kagemusha_suffix_declared_instruction_max_bytes",
+      "group": "transaction",
+      "what": "Declared intended complete suffix instruction ceiling. No current production consumer enforces this exact outer-frame maximum; do not treat it as an effective admission guarantee.",
+      "unit": "bytes",
+      "value": 544800,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+        "symbol": "SUFFIX_UNLOAD_INSTRUCTION_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "KAGEMUSHA_WALLET_SUFFIX_CHUNK_MAX_BYTES_V1 + 16_384"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "refs": {
+        "KAGEMUSHA_WALLET_SUFFIX_CHUNK_MAX_BYTES_V1": "attachment.kagemusha_suffix_chunk_max_bytes"
+      },
+      "unenforced": {
+        "owner": "F.2",
+        "summary": "This intended complete outer-frame maximum is declared but has no production consumers. Nested suffix frames and the generic signed-transaction envelope have their own bounds; equivalence to this smaller declared maximum is not established. Recording this gap does not repair or qualify the missing enforcement."
+      }
+    },
+    {
+      "id": "transaction.kagemusha_suffix_declared_signed_wire_max_bytes",
+      "group": "transaction",
+      "what": "Declared intended complete suffix signed wire ceiling. No current production consumer enforces this exact outer-frame maximum; do not treat it as an effective admission guarantee.",
+      "unit": "bytes",
+      "value": 593952,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+        "symbol": "SUFFIX_UNLOAD_SIGNED_WIRE_MAX_BYTES_V1",
+        "kind": "const",
+        "expr": "KAGEMUSHA_WALLET_SUFFIX_CHUNK_MAX_BYTES_V1 + 65_536"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "refs": {
+        "KAGEMUSHA_WALLET_SUFFIX_CHUNK_MAX_BYTES_V1": "attachment.kagemusha_suffix_chunk_max_bytes"
+      },
+      "unenforced": {
+        "owner": "F.2",
+        "summary": "This intended complete outer-frame maximum is declared but has no production consumers. Nested suffix frames and the generic signed-transaction envelope have their own bounds; equivalence to this smaller declared maximum is not established. Recording this gap does not repair or qualify the missing enforcement."
+      }
+    },
+    {
+      "id": "storage.kagemusha_suffix_segment_record_max_bytes",
+      "group": "storage",
+      "what": "Maximum completely verified segment DATA retained in a committed suffix stage row; both append execution and restored-row validation enforce it.",
+      "unit": "bytes",
+      "value": 8192,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_core/src/kagemusha_wallet_v1/suffix.rs",
+        "symbol": "SUFFIX_SEGMENT_RECORD_MAX_BYTES",
+        "kind": "const",
+        "expr": "8_192"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core/src/kagemusha_wallet_v1/suffix.rs",
+          "contains": "record.len() > SUFFIX_SEGMENT_RECORD_MAX_BYTES",
+          "count": 2
+        },
+        {
+          "stage": "storage",
+          "path": "crates/iroha_core/src/kagemusha_wallet_v1/suffix.rs",
+          "contains": "row.record.len() > SUFFIX_SEGMENT_RECORD_MAX_BYTES"
+        }
+      ]
+    },
+    {
+      "id": "storage.kagemusha_suffix_begin_row_max_bytes",
+      "group": "storage",
+      "what": "Maximum complete canonical persisted suffix begin row decoded during original ledger row validation and reconstruction.",
+      "unit": "bytes",
+      "value": 74752,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_core/src/kagemusha_wallet_v1/suffix.rs",
+        "symbol": "BEGIN_CAP",
+        "kind": "const",
+        "expr": "iroha_data_model::kagemusha::kagemusha_wallet_suffix_unload_v1::KAGEMUSHA_WALLET_SUFFIX_HEADER_MAX_BYTES_V1 + iroha_data_model::kagemusha::kagemusha_wallet_suffix_unload_v1::KAGEMUSHA_WALLET_SUFFIX_ANCHOR_MAX_BYTES_V1 + 1_024"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "refs": {
+        "KAGEMUSHA_WALLET_SUFFIX_HEADER_MAX_BYTES_V1": "attachment.kagemusha_suffix_header_max_bytes",
+        "KAGEMUSHA_WALLET_SUFFIX_ANCHOR_MAX_BYTES_V1": "attachment.kagemusha_suffix_anchor_max_bytes"
+      },
+      "enforcement": [
+        {
+          "stage": "storage",
+          "path": "crates/iroha_core/src/kagemusha_wallet_v1/suffix.rs",
+          "contains": "storage::decode(bytes, BEGIN_CAP)?"
+        }
+      ]
+    },
+    {
+      "id": "storage.kagemusha_suffix_stage_row_max_bytes",
+      "group": "storage",
+      "what": "Maximum complete canonical persisted suffix stage row decoded during original ledger row validation and reconstruction.",
+      "unit": "bytes",
+      "value": 16384,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_core/src/kagemusha_wallet_v1/suffix.rs",
+        "symbol": "STAGE_CAP",
+        "kind": "const",
+        "expr": "SUFFIX_SEGMENT_RECORD_MAX_BYTES + 8_192"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "refs": {
+        "SUFFIX_SEGMENT_RECORD_MAX_BYTES": "storage.kagemusha_suffix_segment_record_max_bytes"
+      },
+      "enforcement": [
+        {
+          "stage": "storage",
+          "path": "crates/iroha_core/src/kagemusha_wallet_v1/suffix.rs",
+          "contains": "storage::decode(bytes, STAGE_CAP)?",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "id": "storage.kagemusha_suffix_final_row_max_bytes",
+      "group": "storage",
+      "what": "Maximum complete canonical persisted suffix final row decoded during original ledger row validation and reconstruction.",
+      "unit": "bytes",
+      "value": 16384,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_core/src/kagemusha_wallet_v1/suffix.rs",
+        "symbol": "FINAL_CAP",
+        "kind": "const",
+        "expr": "16_384"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "storage",
+          "path": "crates/iroha_core/src/kagemusha_wallet_v1/suffix.rs",
+          "contains": "storage::decode(bytes, FINAL_CAP)?",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "id": "work_budget.kagemusha_native_suffix_max_steps",
+      "group": "work_budget",
+      "what": "At most 4096 verified steps across all linked suffix segments. The cursor refuses further steps and linking checks the same cumulative ceiling.",
+      "unit": "count",
+      "value": 4096,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_core_zk/src/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "SUFFIX_UNLOAD_MAX_STEPS_V1",
+        "kind": "const",
+        "expr": "4_096"
+      },
+      "inclusive": true,
+      "test_gap": {
+        "owner": "V.3",
+        "summary": "An active exact-bound and one-over regression for this newly inventoried suffix or registration limit has not been established by this source audit; V.3 owns verifying or adding that boundary coverage. Existing broad functional tests and ignored genuine-corpus lanes are not claimed as that coverage."
+      },
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": "if self.completed >= SUFFIX_UNLOAD_MAX_STEPS_V1 {"
+        },
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_suffix_unload_v1.rs",
+          "contains": ".filter(|total| *total <= SUFFIX_UNLOAD_MAX_STEPS_V1)"
+        }
+      ]
+    },
+    {
+      "id": "work_budget.kagemusha_suffix_deferred_max_steps",
+      "group": "work_budget",
+      "what": "Retained-claim working-set ceiling of one local batch: after 64 unsettled steps verify_step immediately calls settle and decides every accumulated proof. It replans the same mandatory verification into bounded batches; it does not change the cumulative suffix validity ceiling. A failed settle restores the last settled snapshot.",
+      "unit": "count",
+      "value": 64,
+      "source": "constant",
+      "class": "local_schedule",
+      "owner": {
+        "path": "crates/iroha_core_zk/src/kagemusha_wallet_suffix_unload_v1.rs",
+        "symbol": "SUFFIX_UNLOAD_DEFERRED_STEPS_V1",
+        "kind": "const",
+        "expr": "64"
+      },
+      "inclusive": true,
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_suffix_unload_v1/deferred_batch.rs",
+          "contains": "completed(self.current) - completed(self.settled) < SUFFIX_UNLOAD_DEFERRED_STEPS_V1"
+        }
+      ],
+      "validity": false,
+      "on_exceed": "replan",
+      "tests": [
+        {
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_suffix_unload_v1/deferred_batch.rs",
+          "name": "sixty_three_steps_stay_owned_and_sixty_four_failed_decisions_restore_every_field"
+        },
+        {
+          "path": "crates/iroha_core_zk/src/kagemusha_wallet_suffix_unload_v1/deferred_batch.rs",
+          "name": "explicit_failed_settle_rolls_back_below_limit_and_foreign_owner_refusal_never_drains"
+        }
+      ],
+      "test_note": "Active tests exercise the same private production transition with multiple retained items per step: 63 steps preserve their original pending allocation, 64 cause one decision, a deliberately failed decision restores all snapshot fields and disposes the rejected batch once. Foreign-verifier refusal does not drain; explicit early failure also rolls back. These are focused local ownership/scheduling tests, not cryptographic admission or genuine-corpus qualification. Production still supplies ArtifactSet::decide_deferred; full crate compilation and execution remain required after installing this source proposal."
     }
   ],
   "relations": [
@@ -25912,6 +26563,26 @@
           "MANIFEST_CHUNK_SHRINK_ROWS": "8",
           "MANIFEST_CHUNK_WRITERS": "16"
         }
+      },
+      {
+        "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+        "reason": "Minimum lexical shape of one length-prefixed step-stream entry: four bytes of LE32 length plus at least one frame byte. This is representation geometry, not an upper byte, allocation or work allowance.",
+        "symbols": [
+          "STREAM_ENTRY_MIN_BYTES"
+        ],
+        "exprs": {
+          "STREAM_ENTRY_MIN_BYTES": "5"
+        }
+      },
+      {
+        "path": "crates/iroha_zkp_vole/src/crt/codec.rs",
+        "reason": "Exact FAESTCRT format discriminator encoded as little-endian ASCII bytes; equality identifies the table-word format and does not bound bytes, allocation or work.",
+        "symbols": [
+          "MAGIC"
+        ],
+        "exprs": {
+          "MAGIC": "u64::from_le_bytes(*b\"FAESTCRT\")"
+        }
       }
     ],
     "literals": {
@@ -29629,6 +30300,53 @@
               "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_lifecycle_journal.rs",
               "sites": {
                 "text.len() > 20": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Closed Native status-code and reason-tag geometry: states zero through six, reasons one through three only for unavailable state, request presence for states three through six and completion for states four through six. These select schema variants; resource counters retain their independent named limits.",
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1/native.rs",
+              "sites": {
+                "self.state > 6": 1,
+                "(1..=3).contains(&self.reason)": 1,
+                "self.state >= 3": 1,
+                "self.state >= 4": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "A step-stream entry needs four bytes before reading its LE32 length prefix. This is minimum scalar framing, while all step and chunk byte ceilings remain explicitly inventoried.",
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/kagemusha/kagemusha_wallet_suffix_unload_v1.rs",
+              "sites": {
+                "rest.len() < 4": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Minimum Finalize stage identity: ordinal zero is Begin and at least one Append occupies ordinal one, so Finalize starts at ordinal two. This is stage ordering, not a resource ceiling.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/kagemusha_wallet_v1/suffix.rs",
+              "sites": {
+                "row.ordinal < 2": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Minimum Finalize stage identity in certified block-proof projection: ordinal zero identifies Begin, Append starts at one and Finalize starts at two. This discriminates a stage and does not supply a byte or work allowance.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/state/block_proofs.rs",
+              "sites": {
+                "ordinal >= 2": 1
               }
             }
           ]

@@ -632,7 +632,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         ):
             self.assertIn(f'      - "{trigger}"', source)
         for marker in (
-            "runs-on: macos-14",
+            "runs-on: macos-15",
             "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
             'python-version: "3.12"',
             "update-environment: false",

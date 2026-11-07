@@ -270,7 +270,7 @@ jobs:
         runner:
           - ubuntu-latest
           - ubuntu-24.04-arm
-          - macos-14
+          - macos-15
           - windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -385,6 +385,7 @@ jobs:
             scripts/tests/check_zk_primitive_workloads_test.py \
             scripts/tests/check_state_commitment_candidates_test.py \
             scripts/tests/zk_resource_harness_test.py \
+            --deselect=scripts/tests/zk_resource_harness_test.py::NativeRunTests \
             pytests/scripts/iso_xsd_fixture_verify_test.py \
             pytests/scripts/iso_xsd_profile_catalog_include_test.py
           python3 scripts/check_cargo_feature_hygiene.py
@@ -558,14 +559,128 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
 
+  linux_resource_harness:
+    name: Required Linux native resource harness (20 tests)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out current harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: harness
+          persist-credentials: false
+      - name: Require independently selected immutable approval
+        env:
+          APPROVAL_COMMIT: ${{ vars.LINUX_OBSERVER_APPROVAL_COMMIT }}
+        run: |
+          set -euo pipefail
+          [[ "$APPROVAL_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$APPROVAL_COMMIT" != 0000000000000000000000000000000000000000 ]]
+      - name: Check out independent approval record
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ vars.LINUX_OBSERVER_APPROVAL_COMMIT }}
+          path: observer-approval
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Validate independent approval and exact pins
+        id: approval
+        run: |
+          set -euo pipefail
+          python -B harness/scripts/run_required_linux_resource_harness.py approval \
+            --config observer-approval/ci/linux_observer_approval.json \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Check out approved clean observer source separately
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ steps.approval.outputs.source_commit }}
+          path: observer-source
+          persist-credentials: false
+      - name: Retain immutable producer metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVED_REPOSITORY: ${{ steps.approval.outputs.repository }}
+          ARTIFACT_ID: ${{ steps.approval.outputs.artifact_id }}
+          RUN_ID: ${{ steps.approval.outputs.producer_run_id }}
+          RUN_ATTEMPT: ${{ steps.approval.outputs.producer_run_attempt }}
+          APPROVAL_COMMIT: ${{ vars.LINUX_OBSERVER_APPROVAL_COMMIT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir "$RUNNER_TEMP/native-observer-metadata"
+          git -C observer-approval rev-parse HEAD > "$RUNNER_TEMP/native-observer-metadata/approval-commit.txt"
+          test "$(cat "$RUNNER_TEMP/native-observer-metadata/approval-commit.txt")" = "$APPROVAL_COMMIT"
+          cp observer-approval/ci/linux_observer_approval.json "$RUNNER_TEMP/native-observer-metadata/approval.json"
+          gh api "repos/$APPROVED_REPOSITORY/actions/artifacts/$ARTIFACT_ID" > "$RUNNER_TEMP/native-observer-metadata/artifact.json"
+          gh api "repos/$APPROVED_REPOSITORY/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT" > "$RUNNER_TEMP/native-observer-metadata/run.json"
+      - name: Download exact approved artifact without extracting it
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          repository: ${{ steps.approval.outputs.repository }}
+          run-id: ${{ steps.approval.outputs.producer_run_id }}
+          artifact-ids: ${{ steps.approval.outputs.artifact_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/native-observer-download
+          merge-multiple: true
+          skip-decompress: true
+          digest-mismatch: error
+      - name: Install current harness Python dependencies
+        run: python -m pip install --disable-pip-version-check -r harness/scripts/requirements.txt
+      - name: Exercise fail-closed consumer controls
+        run: python -B -m unittest discover -s harness/scripts/tests -p required_linux_resource_harness_test.py -v
+      - name: Permit required user-space perf events on the disposable hosted VM
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(id -u)" -ne 0
+          umask 077
+          readonly evidence_dir="$RUNNER_TEMP/native-observer-metadata"
+          uname -a > "$evidence_dir/kernel.txt"
+          id > "$evidence_dir/runner-identity.txt"
+          sysctl -n kernel.perf_event_paranoid > "$evidence_dir/perf-policy-before.txt"
+          sudo -n sysctl -w kernel.perf_event_paranoid=2 \
+            > "$evidence_dir/perf-policy-setup.stdout" 2> "$evidence_dir/perf-policy-setup.stderr"
+          sysctl -n kernel.perf_event_paranoid > "$evidence_dir/perf-policy-after.txt"
+          test "$(cat "$evidence_dir/perf-policy-after.txt")" = 2
+      - name: Run all 20 actual native methods with zero skips
+        run: |
+          set -euo pipefail
+          python -B harness/scripts/run_required_linux_resource_harness.py run \
+            --config observer-approval/ci/linux_observer_approval.json \
+            --harness-root "$GITHUB_WORKSPACE/harness" \
+            --source-root "$GITHUB_WORKSPACE/observer-source" \
+            --archive-root "$RUNNER_TEMP/native-observer-download" \
+            --artifact-metadata "$RUNNER_TEMP/native-observer-metadata/artifact.json" \
+            --run-metadata "$RUNNER_TEMP/native-observer-metadata/run.json" \
+            --output-root "$RUNNER_TEMP/native-observer-required"
+      - name: Preserve native results and original failure evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: linux-resource-harness-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/native-observer-required/
+            ${{ runner.temp }}/native-observer-metadata/
+          if-no-files-found: warn
+          retention-days: 30
+
   rust_required:
     name: Required affected Rust validation
     if: always()
-    needs: [rust_changes, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests, sora_parliament_lifecycle]
+    needs: [rust_changes, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests, sora_parliament_lifecycle, linux_resource_harness]
     runs-on: ubuntu-latest
     steps:
       - name: Aggregate dynamic Rust lane results
         env:
+          NATIVE_HARNESS_RESULT: ${{ needs.linux_resource_harness.result }}
           CLASSIFIER_RESULT: ${{ needs.rust_changes.result }}
           BINARY_FREE_RESULT: ${{ needs.rust_affected.result }}
           BINARY_FREE_SELECTED: ${{ needs.rust_changes.outputs.has_binary_free_rust }}
@@ -584,6 +699,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$CLASSIFIER_RESULT" = success
+          test "$NATIVE_HARNESS_RESULT" = success
           check_result() {
             case "$1:$2" in
               true:success|false:skipped) return 0 ;;

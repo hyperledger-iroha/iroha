@@ -198,7 +198,7 @@ jobs:
     # the checkout, set MOBILE_SDK_APPLE_ARTIFACT_DIR to that canonical directory,
     # and supply the source/tool identity required by check_mobile_sdk_artifacts.sh.
     # Missing input fails closed; never use or rebuild dist/NoritoBridge.xcframework.
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 30
     env:
       MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT: "1"

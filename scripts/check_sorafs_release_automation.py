@@ -29,7 +29,7 @@ RELEASE_TARGET_RUNNERS: tuple[tuple[str, str], ...] = (
     ("ubuntu-24.04", "x86_64-unknown-linux-gnu"),
     ("ubuntu-24.04-arm", "aarch64-unknown-linux-gnu"),
     ("macos-15-intel", "x86_64-apple-darwin"),
-    ("macos-14", "aarch64-apple-darwin"),
+    ("macos-15", "aarch64-apple-darwin"),
     ("windows-latest", "x86_64-pc-windows-msvc"),
 )
 SUPPLY_CHAIN_SOURCE_TARGETS: tuple[str, ...] = (
@@ -1227,7 +1227,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         'echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"',
         "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
         'node-version: "24"',
-        "runs-on: macos-14",
+        "runs-on: macos-15",
         "  mobile-parity:",
         "  csharp-parity:",
         "actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad",
@@ -2549,7 +2549,7 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
             )
         required_job_markers = {
             "sdk-parity": (
-                "runs-on: macos-14",
+                "runs-on: macos-15",
                 'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"',
                 "bash ci/check_sorafs_python_native_sdk.sh",
                 "bash ci/sdk_sorafs_orchestrator.sh",

@@ -472,10 +472,8 @@ fn ceiling_proof_complete_envelopes_fit_the_fixed_transaction_cap() {
                     .expect("exact signed X509 occurrence");
                 assert_eq!(
                     signed
-                        .payload()
-                        .attachments
-                        .as_ref()
-                        .unwrap()
+                        .attachments()
+                        .expect("signed X509 attachments")
                         .occurrence(0)
                         .unwrap()
                         .bytes

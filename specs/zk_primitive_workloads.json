@@ -3791,7 +3791,7 @@
     },
     "sha2-256": {
      "class": "proof-internal",
-     "note": "Relation statement hashing."
+     "note": "Relation statement hashing; wallet tests also reconstruct note/nullifier and bundle-bound dummy memo hashes from original fixture material."
     },
     "sha3": {
      "class": "proof-internal",
@@ -4138,11 +4138,11 @@
    }
   },
   "kagemusha": {
-   "description": "KAGEMUSHA offline monetary-authority helpers inside the proof-owner crates, outside this delivery plan. Current owners share native Pasta/PLONK arithmetic and digests; this inventory does not qualify the separate product policy.",
+   "description": "KAGEMUSHA offline monetary-authority helpers inside the proof-owner crates and the iroha_fold local folding lineage engine, outside this delivery plan. Current owners share native Pasta/PLONK arithmetic and digests; this inventory does not qualify the separate product policy.",
    "uses": {
     "blake2b": {
      "class": "proof-internal",
-     "note": "Native recursion/VK binding and explicit transcript-profile tests; product entry points are not inferred from primitive-name census.",
+     "note": "Native recursion/VK binding, deterministic deferred-proof batch weights and explicit transcript-profile tests; product entry points are not inferred from primitive-name census.",
      "roles": ["halo2.transcript-blake2b", "pipa-r.vk-binding-blake2b"]
     },
     "iroha-hash": {
@@ -4150,9 +4150,13 @@
      "note": "Typed ledger identity hashes of networks, blocks and test labels.",
      "roles": ["ledger.identity-hash"]
     },
+    "pedersen": {
+     "class": "commitment-scheme",
+     "note": "Native per-column folding witness commitments in iroha_fold: Pasta multi-scalar multiplication under the IPA generator basis plus a blinding base. Linear folding preserves the corresponding witness openings; this local engine is not itself a succinct proof or zero-knowledge argument."
+    },
     "poseidon": {
      "class": "in-circuit",
-     "note": "Paired field-native Poseidon commitments, native circuit gadgets and base-field recursion transcripts using pinned RP57 tables.",
+     "note": "Paired field-native Poseidon commitments, native circuit gadgets and base-field recursion transcripts using pinned RP57 tables. The local iroha_fold engine also uses RP57 scalar-field transcripts for folding challenges; these native transcript calls are not additional in-circuit implementations.",
      "roles": ["halo2.pasta-poseidon", "bn254-poseidon.native-helpers", "pipa-r.transcript-poseidon-base"]
     },
     "sha2-256": {
@@ -4483,6 +4487,10 @@
   "consumer_rules": [
    {
     "pattern": "kagemusha",
+    "consumer": "kagemusha"
+   },
+   {
+    "pattern": "^crates/iroha_fold/",
     "consumer": "kagemusha"
    },
    {
@@ -5135,7 +5143,7 @@
    "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/relation.rs": ["iroha-hash", "sha2-256"],
    "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/stark.rs": ["iroha-hash", "sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/test_fixtures.rs": ["iroha-hash"],
-   "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/wallet.rs": ["iroha-hash"],
+   "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/wallet.rs": ["iroha-hash", "sha2-256"],
    "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/wallet/preparation.rs": ["iroha-hash"],
    "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/wallet/preparation/custody.rs": ["iroha-hash"],
    "crates/iroha_core_privacy/src/privacy_engines/atomic_private_settlement/wallet/preparation/custody/tests.rs": ["iroha-hash"],
@@ -5425,7 +5433,7 @@
    "crates/iroha_core_zk/src/kagemusha_wallet_preparation_v1/load/native_finality_tests/selected_epoch.rs": ["iroha-hash"],
    "crates/iroha_core_zk/src/kagemusha_wallet_preparation_v1/monetary/incoming_original.rs": ["poseidon"],
    "crates/iroha_core_zk/src/kagemusha_wallet_preparation_v1/tests.rs": ["iroha-hash"],
-   "crates/iroha_core_zk/src/kagemusha_wallet_proofs_v1.rs": ["poseidon"],
+   "crates/iroha_core_zk/src/kagemusha_wallet_proofs_v1.rs": ["blake2b", "poseidon"],
    "crates/iroha_core_zk/src/kagemusha_wallet_proofs_v1/tests.rs": ["iroha-hash", "poseidon"],
    "crates/iroha_core_zk/src/kagemusha_wallet_registration_v1.rs": ["sha2-256"],
    "crates/iroha_core_zk/src/kagemusha_wallet_registration_v1/builder.rs": ["sha2-256"],
@@ -5445,6 +5453,7 @@
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming/soft_omega_differential.rs": ["blake2b", "poseidon", "sha2-256"],
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/incoming_inputs.rs": ["poseidon"],
    "crates/iroha_core_zk/src/kagemusha_wallet_state_v1/native_worker/retention.rs": ["sha2-256"],
+   "crates/iroha_core_zk/src/kagemusha_wallet_suffix_unload_v1.rs": ["poseidon"],
    "crates/iroha_core_zk/src/kaigi_client_v1.rs": ["iroha-hash"],
    "crates/iroha_core_zk/src/lib.rs": ["blake2b", "digest384", "iroha-hash", "poseidon", "poseidon2", "sha2-256", "sha2-512"],
    "crates/iroha_core_zk/src/native_pipa_r_tests.rs": ["iroha-hash"],
@@ -5457,6 +5466,9 @@
    "crates/iroha_core_zk/src/stark/frame_identity_tests.rs": ["digest384", "poseidon"],
    "crates/iroha_core_zk/src/stark/tests.rs": ["digest384", "poseidon", "poseidon2", "sha2-256"],
    "crates/iroha_core_zk/src/strict_verifying_key_preparation_tests.rs": ["iroha-hash", "poseidon"],
+   "crates/iroha_core_zk/tests/kagemusha_suffix_corpus.rs": ["sha2-256"],
+   "crates/iroha_core_zk/tests/kagemusha_suffix_corpus/continuation.rs": ["poseidon"],
+   "crates/iroha_core_zk/tests/kagemusha_suffix_corpus/stages.rs": ["sha2-256"],
    "crates/iroha_crypto/benches/sm_perf.rs": ["sha2-256", "sm3"],
    "crates/iroha_crypto/examples/compute_shielded_golden.rs": ["iroha-hash"],
    "crates/iroha_crypto/src/bin/sm_perf_check.rs": ["sha2-256", "sm3"],
@@ -5719,6 +5731,8 @@
    "crates/iroha_fhe/tests/bgv_threshold.rs": ["blake3"],
    "crates/iroha_fhe/tests/support/oracle.rs": ["blake3"],
    "crates/iroha_fhe/tests/vectors/bgv_reference.py": ["blake3"],
+   "crates/iroha_fold/src/commit.rs": ["pedersen"],
+   "crates/iroha_fold/src/transcript.rs": ["poseidon"],
    "crates/iroha_js_codec/src/verifying_key_instruction_tests.rs": ["poseidon"],
    "crates/iroha_js_host/src/kaigi_authorization_v1.rs": ["iroha-hash"],
    "crates/iroha_js_host/src/lib.rs": ["blake2b", "blake3", "iroha-hash", "poseidon", "sha3"],
@@ -6578,6 +6592,7 @@
    "crates/iroha_data_model#other": ["blake2b", "blake3", "hkdf", "hmac", "iroha-hash", "keccak", "lthash", "sha2-256", "sha3", "sm3"],
    "crates/iroha_deploy#other": ["blake3", "iroha-hash", "scrypt", "sha2-256"],
    "crates/iroha_executor_data_model#other": ["iroha-hash"],
+   "crates/iroha_fold#other": ["sha2-256"],
    "crates/iroha_genesis#other": ["iroha-hash"],
    "crates/iroha_js_codec#other": ["blake2b", "iroha-hash", "sha2-256"],
    "crates/iroha_js_host#other": ["blake2b", "iroha-hash"],

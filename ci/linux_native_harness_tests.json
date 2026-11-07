@@ -1,0 +1,22 @@
+[
+  "test_a_command_that_emits_nothing_is_rejected",
+  "test_a_record_must_observe_exactly_the_limit_the_harness_applied",
+  "test_a_report_that_cannot_be_written_leaves_a_failure_marker",
+  "test_a_running_image_other_than_the_pinned_executable_is_an_identity_failure",
+  "test_accepted_run_merges_the_record_with_kernel_process_observations",
+  "test_device_thermal_state_and_granularity_requirements_are_enforced_when_stated",
+  "test_failed_commands_are_recorded_and_earlier_failures_are_never_erased",
+  "test_malformed_record_is_a_retained_decode_failure",
+  "test_partial_and_excess_record_files_are_reported",
+  "test_peak_rss_bound_uses_the_native_child_peak_and_preserves_rejected_runs",
+  "test_private_text_printed_or_passed_by_the_command_is_not_retained",
+  "test_refusals_precede_any_run_directory",
+  "test_requested_address_space_limit_is_enforced_or_the_run_is_rejected",
+  "test_salvage_accepts_only_unchanged_accepted_evidence_in_the_same_scope",
+  "test_salvage_derives_the_verdict_and_scope_from_the_evidence_not_the_manifest",
+  "test_short_command_keeps_exact_kernel_totals_and_observer_failures",
+  "test_stream_digest_counts_hashes_and_bounds_the_tail",
+  "test_substituted_identity_wrong_process_and_inflated_accounting_are_rejected",
+  "test_timeout_kills_only_the_child_and_retains_the_run",
+  "test_unattributed_share_above_one_percent_is_rejected_and_retained"
+]
