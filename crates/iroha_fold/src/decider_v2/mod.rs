@@ -47,7 +47,7 @@ use ff::Field;
 use iroha_pasta::{PastaCurve, msm::MemoryBudget, params::ParamsIpa};
 use iroha_plonk::pcs::{
     ipa::GeneratorClaim,
-    mle::{self as pcs_mle, BatchOpening, MleClaim, open_batch, verify_batch},
+    mle::{self as pcs_mle, BatchOpening, MleClaim, open_batch_bound, verify_batch_bound},
 };
 
 pub use plan::DeciderV2Plan;
@@ -681,6 +681,12 @@ pub fn verify_many<C: PastaCurve>(
 /// Opens the decider's claims with one batched IPA opening, continuing the
 /// prover's transcript. Returns the opening and its generator claim.
 ///
+/// The opening is `pcs::mle`'s bound variant: it does not re-absorb the claims,
+/// because the decider transcript has already bound every one of them. Each
+/// accumulator column is bound by the absorbed accumulator digest, each key
+/// commitment is fixed by the plan, each helper is absorbed, every value is in
+/// the absorbed `at_sigma`, and `sigma` is squeezed from the same transcript.
+///
 /// # Errors
 /// [`Error::Rejected`] when the opening fails (claims not the polynomials'
 /// values, a zero challenge, an MSM over budget).
@@ -689,7 +695,7 @@ pub fn open<C: PastaCurve>(
     proved: &mut Proved<C>,
 ) -> Result<(BatchOpening<C>, GeneratorClaim<C>), Error> {
     let columns: Vec<&[C::ScalarExt]> = proved.polys.iter().map(Vec::as_slice).collect();
-    open_batch(params, &mut proved.transcript, &proved.point, &proved.claims, &columns, &proved.blinds, MemoryBudget::DEFAULT)
+    open_batch_bound(params, &mut proved.transcript, &proved.point, &proved.claims, &columns, &proved.blinds, MemoryBudget::DEFAULT)
         .map_err(|_| Error::Rejected("batched opening"))
 }
 
@@ -704,6 +710,6 @@ pub fn verify_opening<C: PastaCurve>(
     verified: &mut Verified<C>,
     opening: &BatchOpening<C>,
 ) -> Result<GeneratorClaim<C>, Error> {
-    verify_batch(params, &mut verified.transcript, &verified.point, &verified.claims, opening, MemoryBudget::DEFAULT)
+    verify_batch_bound(params, &mut verified.transcript, &verified.point, &verified.claims, opening, MemoryBudget::DEFAULT)
         .map_err(|_| Error::Rejected("batched opening"))
 }

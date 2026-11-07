@@ -31,6 +31,7 @@
 
 use ff::Field;
 use iroha_pasta::{PastaCurve, msm::{MemoryBudget, msm_public}};
+use iroha_plonk::pcs::ipa::GeneratorClaim;
 
 use crate::{
     Error,
@@ -50,6 +51,24 @@ pub struct Claim<C: PastaCurve> {
     pub g: C::AffineExt,
     /// The round challenges, `u_0` first (`u_0` multiplies bit 15 of the index).
     pub u: [C::ScalarExt; ROUNDS],
+}
+
+impl<C: PastaCurve> Claim<C> {
+    /// The claim of an IPA generator claim over the first `2^k` generators (a
+    /// decider's batched opening): `16 - k` leading zero challenges, then its
+    /// challenges, both in top-index-bit order.
+    ///
+    /// # Errors
+    /// [`Error::Shape`] for more than 16 rounds.
+    pub fn from_generator_claim(claim: &GeneratorClaim<C>) -> Result<Self, Error> {
+        let challenges = claim.challenges();
+        if challenges.len() > ROUNDS {
+            return Err(Error::Shape("generator claim rounds"));
+        }
+        let mut u = [<C::ScalarExt as Field>::ZERO; ROUNDS];
+        u[ROUNDS - challenges.len()..].copy_from_slice(challenges);
+        Ok(Self { g: *claim.g(), u })
+    }
 }
 
 /// A relaxed claim accumulator.

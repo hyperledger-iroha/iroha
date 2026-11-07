@@ -600,3 +600,29 @@ fn the_decider_circuit_verifies_exactly_as_the_native_verifier() {
     p.at_sigma[0] += Fq::ONE;
     assert!(!satisfied(&p, digest));
 }
+
+#[test]
+fn decider_claims_enter_a_claim_accumulator_and_restructure() {
+    use crate::claims::{Claim, ClaimAccumulator, decide_claims, fold_claim, restructure_prove, restructure_verify};
+    let s = setup();
+    let generators = PinnedParams::<Ep>::derive(16).expect("params");
+    let (acc, witness) = accumulator(&s);
+    let mut proved = prove(&s.plan, &DOMAIN, &acc, &witness).expect("prove");
+    let (_, first) = open(s.params.params(), &mut proved).expect("open");
+    let mut rng = ChaCha20Rng::seed_from_u64(10);
+    let (instance, w) = fresh(&s, Mini { seed: 6, broken: false }, &mut rng);
+    let fresh_acc = Accumulator::from_fresh(&s.relation, &DOMAIN, instance).expect("accumulator");
+    let mut proved = prove(&s.plan, &DOMAIN, &fresh_acc, &w).expect("prove");
+    let (_, second) = open(s.params.params(), &mut proved).expect("open");
+    // A k5 opening claim is a 16-round claim with 11 leading zero challenges.
+    let first = Claim::from_generator_claim(&first).expect("claim");
+    let second = Claim::from_generator_claim(&second).expect("claim");
+    let g = generators.params().g();
+    let (claims, s1) = ClaimAccumulator::from_claim(&DOMAIN, &first);
+    decide_claims(g, &claims, &s1).expect("one decider claim decides over the 2^16 generators");
+    let (claims, s2, _) = fold_claim(&DOMAIN, &claims, &s1, &second).expect("fold");
+    decide_claims(g, &claims, &s2).expect("two folded decider claims decide");
+    let (proof, statement) = restructure_prove(&DOMAIN, &claims, &s2).expect("restructure");
+    assert_eq!(restructure_verify(&DOMAIN, &claims, &proof), Ok(statement));
+    assert_eq!(statement.commitment, claims.g);
+}
