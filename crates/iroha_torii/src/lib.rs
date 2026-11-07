@@ -12,6 +12,7 @@
 //! - `app_api_wss` (on by default): enables WebSocket/WebSocket Secure webhook delivery
 #[cfg(feature = "app_api")]
 mod account_activity;
+mod account_signing_keys;
 mod amx_approval_proof;
 #[cfg(feature = "app_api")]
 mod app_api;
@@ -37902,6 +37903,7 @@ impl Torii {
             PRIVATE_DATASPACE_RECORD_PROOF => public_get(private_dataspaces::record_proof);
             GAME_PARTITION_STATE => public_get(game_partitions::snapshot);
             GAME_PARTITION_EXPORT_PROOF => public_get(game_partitions::export_proof);
+            ACCOUNT_SIGNING_KEY => public_get(account_signing_keys::read);
             SNS_DATASPACE_LEASE => public_get(sns_lease::handler);
             PRIVATE_ROOT_REGISTRATION => private_root_owner_get(private_root_export::registration);
             PRIVATE_ROOT_ANCHOR => private_root_owner_get(private_root_export::anchor);

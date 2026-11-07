@@ -2732,6 +2732,13 @@ pub mod sumeragi {
         "/v1/game-partitions/{world}/exports/{receipt}/proof",
     )
     .with_projections(RouteProjections::SDK);
+    /// Read the off-chain signing key an account registered, so verifiers of its off-chain
+    /// signatures check them against committed state (`specs/account_signing_keys.md`).
+    pub const ACCOUNT_SIGNING_KEY: RouteDescriptor = public_get(
+        "account.signing_key.read",
+        "/v1/accounts/{account_id}/signing-key",
+    )
+    .with_projections(RouteProjections::SDK);
     /// Export the immutable private root registration to its authenticated owner token.
     pub const PRIVATE_ROOT_REGISTRATION: RouteDescriptor = public_get(
         "private_root.registration.read",
@@ -2793,6 +2800,7 @@ pub mod sumeragi {
         PRIVATE_DATASPACE_RECORD_PROOF,
         GAME_PARTITION_STATE,
         GAME_PARTITION_EXPORT_PROOF,
+        ACCOUNT_SIGNING_KEY,
         SNS_DATASPACE_LEASE,
         PRIVATE_ROOT_REGISTRATION,
         PRIVATE_ROOT_ANCHOR,

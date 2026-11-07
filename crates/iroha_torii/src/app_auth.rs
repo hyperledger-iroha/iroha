@@ -39,6 +39,12 @@
 //! - `X-Iroha-Account` only identifies a caller when paired with a valid
 //!   signature or witness; bare account headers are rejected on caller-scoped
 //!   read paths.
+//! - An account that registered an off-chain signing key
+//!   (`iroha_data_model::account::signing_key`) authenticates only with that key: its
+//!   `X-Iroha-Signature` signs the off-chain envelope of the canonical request bytes with
+//!   purpose `ToriiCanonicalRequest` and tag `iroha:torii:canonical-request:v1`, and
+//!   signatures or witnesses of its controller are refused. Other accounts authenticate with
+//!   their controller as above.
 //!
 //! Some endpoints carry the same auth envelope inside a JSON body instead of HTTP headers. Those
 //! callers provide `account_id`, `timestamp_ms`, `nonce`, and exactly one proof field in the body,
@@ -48,13 +54,22 @@ use axum::http::HeaderMap;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_config::parameters::{actual::AppApi as AppApiConfig, defaults};
 use iroha_core::{
+    smartcontracts::isi::account_signing_key::account_signing_key,
     sns::resolve_active_account_alias,
     state::{State as CoreState, WorldReadOnly},
 };
 use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId, ValidationFail,
-    account::{AccountController, AccountId, address::AccountAddress, rekey::AccountAlias},
+    account::{
+        AccountController, AccountId,
+        address::AccountAddress,
+        rekey::AccountAlias,
+        signing_key::{
+            OffchainSignaturePurposeV1, OffchainSigningContextV1,
+            TORII_CANONICAL_REQUEST_DOMAIN_TAG_V1,
+        },
+    },
     alias_setup::AccountAliasName,
     query::error::QueryExecutionFail,
     soracloud::{
@@ -265,10 +280,14 @@ pub fn configure(
 pub struct VerifiedCanonicalRequest {
     /// Account declared in the canonical request authentication material.
     pub account: AccountId,
-    /// Exact account controller key that verified the request signature.
+    /// Exact key that verified the request signature: a member of the account's controller,
+    /// or the account's off-chain signing key once it registered one.
     pub signer: PublicKey,
     /// Full signer set that satisfied the request authorisation.
     pub verified_signers: Vec<PublicKey>,
+    /// True when `signer` is the account's off-chain signing key: the request is the
+    /// account's, but its controller members did not sign it.
+    pub offchain_signing_key: bool,
 }
 #[cfg(test)]
 #[derive(Debug, Clone, Copy)]
@@ -1587,6 +1606,80 @@ fn decode_witness_value(
     }
     Ok(witness)
 }
+/// The off-chain envelope an account's signing key signs for canonical request bytes.
+fn canonical_request_offchain_message(
+    network_id: &NetworkId,
+    account: &AccountId,
+    generation: u32,
+    message: &[u8],
+) -> Result<Vec<u8>, crate::Error> {
+    OffchainSigningContextV1 {
+        purpose: OffchainSignaturePurposeV1::ToriiCanonicalRequest,
+        network_id,
+        account,
+        generation,
+        domain_tag: TORII_CANONICAL_REQUEST_DOMAIN_TAG_V1,
+    }
+    .message(message)
+    .map_err(|_| canonical_request_capacity_error())
+}
+/// Verify one signature authenticating `account` over canonical request `message`.
+///
+/// An account with an off-chain signing key authenticates only with that key, over the
+/// off-chain envelope of `message`; its controller key no longer authenticates off chain.
+/// Any other single-key account authenticates with its controller key over `message`, and a
+/// multisig account without a signing key must use a witness.
+fn verify_account_signature(
+    world: &impl WorldReadOnly,
+    network_id: &NetworkId,
+    account: &AccountId,
+    signature_bytes: &[u8],
+    message: &[u8],
+    signature_context: &'static str,
+) -> Result<(PublicKey, bool), crate::Error> {
+    let account_entry = world.account(account).map_err(|_| {
+        crate::Error::Query(ValidationFail::NotPermitted(
+            "canonical request account is not registered".to_owned(),
+        ))
+    })?;
+    if let Some(signing_key) = account_signing_key(world, account) {
+        let signature = checked_app_auth_signature_from_bytes(
+            signature_bytes,
+            &signing_key.public_key,
+            signature_context,
+        )?;
+        let envelope = canonical_request_offchain_message(
+            network_id,
+            account,
+            signing_key.generation,
+            message,
+        )?;
+        verify_app_auth_signature(
+            &signature,
+            &signing_key.public_key,
+            &envelope,
+            signature_context,
+        )?;
+        return signing_key
+            .public_key
+            .try_clone_for_admission()
+            .map(|key| (key, true))
+            .map_err(|_| canonical_request_capacity_error());
+    }
+    match account_entry.id.controller() {
+        AccountController::Single(pk) => {
+            let signature =
+                checked_app_auth_signature_from_bytes(signature_bytes, pk, signature_context)?;
+            verify_app_auth_signature(&signature, pk, message, signature_context)?;
+            pk.try_clone_for_admission()
+                .map(|key| (key, false))
+                .map_err(|_| canonical_request_capacity_error())
+        }
+        AccountController::Multisig(_) => Err(crate::Error::Query(ValidationFail::NotPermitted(
+            "multisig accounts must use X-Iroha-Witness".to_owned(),
+        ))),
+    }
+}
 #[cfg(test)]
 fn verify_single_signature_authorization(
     state: &Arc<CoreState>,
@@ -1595,32 +1688,17 @@ fn verify_single_signature_authorization(
     message: &[u8],
     signature_context: &'static str,
     context: &norito::core::DecodeBudgetContext,
-) -> Result<PublicKey, crate::Error> {
+) -> Result<(PublicKey, bool), crate::Error> {
     state
         .try_with_authorization_view(context, |view| {
-            let world = view.world();
-            let account_entry = world.account(account).map_err(|_| {
-                crate::Error::Query(ValidationFail::NotPermitted(
-                    "canonical request account is not registered".to_owned(),
-                ))
-            })?;
-            match account_entry.id.controller() {
-                AccountController::Single(pk) => {
-                    let signature = checked_app_auth_signature_from_bytes(
-                        signature_bytes,
-                        pk,
-                        signature_context,
-                    )?;
-                    verify_app_auth_signature(&signature, pk, message, signature_context)?;
-                    pk.try_clone_for_admission()
-                        .map_err(|_| canonical_request_capacity_error())
-                }
-                AccountController::Multisig(_) => {
-                    Err(crate::Error::Query(ValidationFail::NotPermitted(
-                        "multisig accounts must use X-Iroha-Witness".to_owned(),
-                    )))
-                }
-            }
+            verify_account_signature(
+                view.world(),
+                state.network_id_ref(),
+                account,
+                signature_bytes,
+                message,
+                signature_context,
+            )
         })
         .map_err(authorization_view_error)?
 }
@@ -1644,6 +1722,12 @@ fn verify_multisig_witness_authorization(
             "canonical request account is not registered".to_owned(),
         ))
     })?;
+    if account_signing_key(world, account).is_some() {
+        return Err(crate::Error::Query(ValidationFail::NotPermitted(
+            "accounts with an off-chain signing key authenticate with X-Iroha-Signature from that key"
+                .to_owned(),
+        )));
+    }
     match account_entry.id.controller() {
         AccountController::Single(_) => Err(crate::Error::Query(ValidationFail::NotPermitted(
             "single-signature accounts must use X-Iroha-Signature".to_owned(),
@@ -1774,6 +1858,7 @@ fn finish_verified_canonical_request(
     account: AccountId,
     signer: PublicKey,
     verified_signers: Vec<PublicKey>,
+    offchain_signing_key: bool,
     nonce: &str,
     replay_cache: &ReplayCache,
     minimum_ttl: Duration,
@@ -1788,6 +1873,7 @@ fn finish_verified_canonical_request(
         account,
         signer,
         verified_signers,
+        offchain_signing_key,
     })
 }
 /// Validate an iterable query against the executor on behalf of `authority`.
@@ -1858,7 +1944,7 @@ pub fn verify_canonical_body_request(
                     unsigned_body,
                     Some((auth.timestamp_ms, auth.nonce)),
                 )?;
-                let signer = verify_single_signature_authorization(
+                let (signer, offchain_signing_key) = verify_single_signature_authorization(
                     state,
                     &account,
                     &signature_bytes,
@@ -1875,6 +1961,7 @@ pub fn verify_canonical_body_request(
                     account,
                     primary_signer,
                     verified_signers,
+                    offchain_signing_key,
                     auth.nonce,
                     &replay_cache,
                     auth_config.nonce_ttl,
@@ -2121,6 +2208,7 @@ fn verify_canonical_request_for_network(
             account,
             signer,
             verified_signers,
+            false,
             &witness.nonce,
             &replay_cache,
             auth_config.nonce_ttl,
@@ -2162,32 +2250,18 @@ fn verify_canonical_request_for_network(
         body,
         Some((timestamp_ms, nonce)),
     )?;
-    let signer = state.try_with_authorization_view(context, |view| {
-        let world = view.world();
-    let account_entry = world.account(&account).map_err(|_| {
-        crate::Error::Query(ValidationFail::NotPermitted(
-            "canonical request account is not registered".to_owned(),
-        ))
-    })?;
-    let signer = match account_entry.id.controller() {
-        AccountController::Single(pk) => {
-            let signature = checked_app_auth_signature_from_bytes(
+    let (signer, offchain_signing_key) = state
+        .try_with_authorization_view(context, |view| {
+            verify_account_signature(
+                view.world(),
+                network_id,
+                &account,
                 &signature_bytes,
-                pk,
+                &message,
                 "X-Iroha-Signature payload",
-            )?;
-            verify_app_auth_signature(&signature, pk, &message, "X-Iroha-Signature payload")?;
-            pk.try_clone_for_admission()
-                .map_err(|_| canonical_request_capacity_error())?
-        }
-        AccountController::Multisig(_) => {
-            return Err(crate::Error::Query(ValidationFail::NotPermitted(
-                "multisig accounts must use X-Iroha-Witness".to_owned(),
-            )));
-        }
-    };
-        Ok::<_, crate::Error>(signer)
-    }).map_err(authorization_view_error)??;
+            )
+        })
+        .map_err(authorization_view_error)??;
     let primary_signer = signer
         .try_clone_for_admission()
         .map_err(|_| canonical_request_capacity_error())?;
@@ -2197,6 +2271,7 @@ fn verify_canonical_request_for_network(
         account,
         primary_signer,
         verified_signers,
+        offchain_signing_key,
         nonce,
         &replay_cache,
         auth_config.nonce_ttl,
@@ -2310,6 +2385,7 @@ pub fn verify_fee_quote_canonical_request(
             account,
             primary_signer,
             verified_signers,
+            false,
             nonce,
             &replay_cache,
             auth_config.nonce_ttl,
@@ -2483,6 +2559,21 @@ mod tests {
         let account_value = Account::new(account.clone()).build(account);
         Arc::new(State::new_for_testing(
             World::with([domain], [account_value], []),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ))
+    }
+    /// [`minimal_state_with_account`] on a root that activated the account signing key
+    /// addition, whose tables exist only once its change set installs them.
+    fn signing_key_state_with_account(account: &AccountId) -> Arc<State> {
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(account);
+        let account_value = Account::new(account.clone()).build(account);
+        let world = World::with([domain], [account_value], []);
+        iroha_core::runtime::activate_additions_for_testing(&world, "iroha.account.signing_key.v1")
+            .expect("activate the account signing key addition");
+        Arc::new(State::new_for_testing(
+            world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ))
@@ -3851,6 +3942,7 @@ mod tests {
                 account,
                 signer: ALICE_KEYPAIR.public_key().clone(),
                 verified_signers: vec![ALICE_KEYPAIR.public_key().clone()],
+                offchain_signing_key: false,
             })
         );
     }
@@ -3970,6 +4062,7 @@ mod tests {
                 account,
                 signer: ALICE_KEYPAIR.public_key().clone(),
                 verified_signers: vec![ALICE_KEYPAIR.public_key().clone()],
+                offchain_signing_key: false,
             })
         );
     }
@@ -5424,5 +5517,252 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    /// Install `signing_key` as `account`'s off-chain signing key in committed state.
+    fn install_signing_key(state: &Arc<State>, account: &AccountId, signing_key: &KeyPair) {
+        use iroha_core::smartcontracts::Execute as _;
+        let mut block = state.block(BlockHeader::new(
+            std::num::NonZeroU64::new(1).expect("height"),
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut tx = block.transaction();
+        iroha_data_model::isi::account_signing_key::SetAccountSigningKeyV1::install(
+            account.clone(),
+            signing_key.public_key().clone(),
+        )
+        .execute(account, &mut tx)
+        .expect("install the off-chain signing key");
+        tx.apply();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit the signing key fixture");
+    }
+    /// Headers signing the canonical request with `key` over the off-chain envelope
+    /// (`purpose`, `generation`), or over the bare canonical message when `purpose` is `None`.
+    fn offchain_signed_headers(
+        state: &Arc<State>,
+        account: &AccountId,
+        key: &KeyPair,
+        envelope: Option<(OffchainSignaturePurposeV1, u32)>,
+        request: (&Method, &Uri, &[u8]),
+        nonce: &'static str,
+    ) -> HeaderMap {
+        let (method, uri, body) = request;
+        let timestamp_ms = crate::utils::unix_now_ms();
+        let message = canonical_network_request_signature_message(
+            state.network_id_ref(),
+            method,
+            uri,
+            body,
+            timestamp_ms,
+            nonce,
+        )
+        .expect("canonical test request is within V1 limits");
+        let signed = match envelope {
+            Some((purpose, generation)) => OffchainSigningContextV1 {
+                purpose,
+                network_id: state.network_id_ref(),
+                account,
+                generation,
+                domain_tag: TORII_CANONICAL_REQUEST_DOMAIN_TAG_V1,
+            }
+            .message(&message)
+            .expect("off-chain envelope"),
+            None => message,
+        };
+        let signature = checked_signature(key.private_key(), &signed);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_ACCOUNT,
+            account
+                .to_canonical_hex()
+                .expect("canonical account header")
+                .parse()
+                .expect("valid account header"),
+        );
+        headers.insert(
+            HEADER_SIGNATURE,
+            signature_header_value(&signature)
+                .expect("encode valid signature header")
+                .parse()
+                .expect("valid signature header"),
+        );
+        headers.insert(
+            HEADER_TIMESTAMP_MS,
+            timestamp_ms
+                .to_string()
+                .parse()
+                .expect("valid timestamp header"),
+        );
+        headers.insert(HEADER_NONCE, nonce.parse().expect("valid nonce header"));
+        headers
+    }
+    fn refused(result: Result<Option<VerifiedCanonicalRequest>, crate::Error>) -> String {
+        match result {
+            Err(crate::Error::Query(ValidationFail::NotPermitted(message))) => message,
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+    #[test]
+    fn an_account_with_a_signing_key_authenticates_only_with_that_key() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let transaction_key = checked_app_auth_key_fixture();
+        let signing_key = checked_app_auth_key_fixture();
+        let account = AccountId::new(transaction_key.public_key().clone());
+        let state = signing_key_state_with_account(&account);
+        let method = Method::GET;
+        let uri: Uri = "/v1/accounts/signing-key-fixture/assets"
+            .parse()
+            .expect("uri");
+        let request = (&method, &uri, &b""[..]);
+        let verify = |headers: &HeaderMap| {
+            verify_canonical_request(
+                &state,
+                headers,
+                &method,
+                &uri,
+                &[],
+                None,
+                &standalone_auth_context(),
+            )
+        };
+
+        let before = verify(&offchain_signed_headers(
+            &state,
+            &account,
+            &transaction_key,
+            None,
+            request,
+            "signing-key-controller-before",
+        ))
+        .expect("the controller authenticates an account without a signing key")
+        .expect("signed request");
+        assert!(!before.offchain_signing_key);
+
+        install_signing_key(&state, &account, &signing_key);
+
+        let verified = verify(&offchain_signed_headers(
+            &state,
+            &account,
+            &signing_key,
+            Some((OffchainSignaturePurposeV1::ToriiCanonicalRequest, 1)),
+            request,
+            "signing-key-envelope",
+        ))
+        .expect("the signing key authenticates over the envelope")
+        .expect("signed request");
+        assert_eq!(verified.account, account);
+        assert_eq!(&verified.signer, signing_key.public_key());
+        assert_eq!(
+            verified.verified_signers,
+            vec![signing_key.public_key().clone()]
+        );
+        assert!(verified.offchain_signing_key);
+
+        for (key, envelope, nonce, why) in [
+            (
+                &transaction_key,
+                None,
+                "signing-key-controller-after",
+                "the controller no longer authenticates off chain",
+            ),
+            (
+                &transaction_key,
+                Some((OffchainSignaturePurposeV1::ToriiCanonicalRequest, 1)),
+                "signing-key-controller-envelope",
+                "not even over the envelope",
+            ),
+            (
+                &signing_key,
+                None,
+                "signing-key-bare-message",
+                "the signing key signs only envelopes",
+            ),
+            (
+                &signing_key,
+                Some((OffchainSignaturePurposeV1::ConnectRaw, 1)),
+                "signing-key-connect-purpose",
+                "a Connect raw signature is not a canonical-request signature",
+            ),
+            (
+                &signing_key,
+                Some((OffchainSignaturePurposeV1::ToriiCanonicalRequest, 2)),
+                "signing-key-wrong-generation",
+                "a signature names the key generation it was made under",
+            ),
+        ] {
+            let message = refused(verify(&offchain_signed_headers(
+                &state, &account, key, envelope, request, nonce,
+            )));
+            assert!(
+                message.contains("signature failed verification"),
+                "{why}: {message}"
+            );
+        }
+    }
+    #[test]
+    fn a_multisig_account_with_a_signing_key_uses_it_instead_of_witnesses() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let member_one = checked_app_auth_key_fixture();
+        let member_two = checked_app_auth_key_fixture();
+        let signing_key = checked_app_auth_key_fixture();
+        let account = AccountId::new_multisig(
+            MultisigPolicy::new(
+                2,
+                vec![
+                    MultisigMember::new(member_one.public_key().clone(), 1).expect("member"),
+                    MultisigMember::new(member_two.public_key().clone(), 1).expect("member"),
+                ],
+            )
+            .expect("policy"),
+        );
+        let state = signing_key_state_with_account(&account);
+        install_signing_key(&state, &account, &signing_key);
+        let method = Method::POST;
+        let uri: Uri = "/v1/soracloud/deploy".parse().expect("uri");
+        let body = b"{\"deploy\":true}";
+        let witness = multisig_witness(
+            state.network_id_ref(),
+            &account,
+            &method,
+            &uri,
+            body,
+            (crate::utils::unix_now_ms(), "signing-key-multisig-witness"),
+            &[&member_one, &member_two],
+        );
+        let message = refused(verify_canonical_request(
+            &state,
+            &witness_headers(&account, &witness),
+            &method,
+            &uri,
+            body,
+            None,
+            &standalone_auth_context(),
+        ));
+        assert!(message.contains("off-chain signing key"), "{message}");
+        let verified = verify_canonical_request(
+            &state,
+            &offchain_signed_headers(
+                &state,
+                &account,
+                &signing_key,
+                Some((OffchainSignaturePurposeV1::ToriiCanonicalRequest, 1)),
+                (&method, &uri, body),
+                "signing-key-multisig-signature",
+            ),
+            &method,
+            &uri,
+            body,
+            None,
+            &standalone_auth_context(),
+        )
+        .expect("the signing key authenticates the multisig account")
+        .expect("signed request");
+        assert_eq!(&verified.signer, signing_key.public_key());
+        assert!(verified.offchain_signing_key);
     }
 }

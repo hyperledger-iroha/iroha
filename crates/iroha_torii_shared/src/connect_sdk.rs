@@ -11,7 +11,16 @@ use iroha_crypto::{
     encryption::{ChaCha20Poly1305, SymmetricEncryptor},
     kex::{KeyExchangeScheme as _, X25519Sha256},
 };
-use iroha_data_model::NetworkId;
+use iroha_data_model::{
+    NetworkId,
+    account::{
+        AccountId,
+        signing_key::{
+            AccountSigningKeyV1, OffchainSignaturePurposeV1, OffchainSigningContextV1,
+            OffchainSigningError,
+        },
+    },
+};
 use norito::codec::Encode;
 use sha2::{Digest, Sha256};
 /// Derive the canonical Connect session identifier for one exact deployment.
@@ -411,6 +420,80 @@ pub fn verify_wallet_approval_signature(
         .verify(account_signatory, &preimage)
         .map_err(|_| "connect_wallet_signature_invalid")
 }
+/// The off-chain signing context of a Connect `SignRequestRaw` for `domain_tag`.
+///
+/// The wallet chooses the purpose from the tag
+/// ([`OffchainSignaturePurposeV1::for_connect_raw_tag`]); the requesting dApp never does.
+fn raw_request_context<'a>(
+    network_id: &'a NetworkId,
+    account: &'a AccountId,
+    generation: u32,
+    domain_tag: &'a str,
+) -> OffchainSigningContextV1<'a> {
+    OffchainSigningContextV1 {
+        purpose: OffchainSignaturePurposeV1::for_connect_raw_tag(domain_tag),
+        network_id,
+        account,
+        generation,
+        domain_tag,
+    }
+}
+/// Sign a Connect `SignRequestRaw` with the account's off-chain signing key.
+///
+/// A wallet never signs a raw request's bytes with the account's transaction key. It signs
+/// the off-chain envelope (`iroha_data_model::account::signing_key`) of `domain_tag` and
+/// `bytes` with the separate key registered for the account at `generation`, so no raw
+/// request can yield a transaction or query signature. For
+/// `iroha:torii:canonical-request:v1` the envelope is a Torii canonical-request signature: the
+/// wallet must check that `bytes` are a canonical request and show it before calling this.
+///
+/// # Errors
+/// The envelope cannot be built or the key cannot sign.
+pub fn sign_raw_request(
+    signing_key: &iroha_crypto::KeyPair,
+    network_id: &NetworkId,
+    account: &AccountId,
+    generation: u32,
+    domain_tag: &str,
+    bytes: &[u8],
+) -> Result<WalletSignatureV1, OffchainSigningError> {
+    let algorithm = signing_key
+        .public_key()
+        .try_algorithm()
+        .map_err(|error| OffchainSigningError::Signing(error.to_string()))?;
+    let signature = raw_request_context(network_id, account, generation, domain_tag)
+        .sign(signing_key.private_key(), bytes)?;
+    Ok(WalletSignatureV1::new(algorithm, signature))
+}
+/// Verify a wallet's `SignRequestRaw` result against the account's registered signing key.
+///
+/// `signing_key` must come from committed state (Torii
+/// `GET /v1/accounts/{account_id}/signing-key`), never from the wallet's reply. A signature
+/// of the account's transaction key never verifies here.
+///
+/// # Errors
+/// `connect_wallet_signature_algorithm_mismatch` when the reply names another algorithm,
+/// `connect_wallet_signature_invalid` when the signature does not verify.
+pub fn verify_raw_request_signature(
+    signing_key: &AccountSigningKeyV1,
+    network_id: &NetworkId,
+    account: &AccountId,
+    domain_tag: &str,
+    bytes: &[u8],
+    signature: &WalletSignatureV1,
+) -> Result<(), &'static str> {
+    if signing_key
+        .public_key
+        .try_algorithm()
+        .map_err(|_| "connect_wallet_account_key_invalid")?
+        != signature.algorithm
+    {
+        return Err("connect_wallet_signature_algorithm_mismatch");
+    }
+    raw_request_context(network_id, account, signing_key.generation, domain_tag)
+        .verify(&signing_key.public_key, &signature.signature, bytes)
+        .map_err(|_| "connect_wallet_signature_invalid")
+}
 fn push_tagged(out: &mut Vec<u8>, tag: &[u8], value: &[u8]) {
     let tag_len = u16::try_from(tag.len()).expect("connect SDK tags are bounded");
     out.extend_from_slice(&tag_len.to_le_bytes());
@@ -473,6 +556,140 @@ fn parse_canonical_network_id_literal(literal: &str) -> NetworkId {
         .parse::<iroha_crypto::Hash>()
         .expect("fixture NetworkId must contain a valid genesis hash");
     NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(genesis_hash))
+}
+
+#[cfg(test)]
+mod raw_request_signing_tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+
+    fn key(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("fixture key")
+    }
+
+    fn network() -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed([0x5A; 32])))
+    }
+
+    #[test]
+    fn raw_requests_verify_only_under_the_registered_signing_key() {
+        let transaction_key = key(1);
+        let signing_key = key(2);
+        let account = AccountId::new(transaction_key.public_key().clone());
+        let network_id = network();
+        let registered = AccountSigningKeyV1 {
+            public_key: signing_key.public_key().clone(),
+            generation: 3,
+        };
+        let signature = sign_raw_request(
+            &signing_key,
+            &network_id,
+            &account,
+            3,
+            "iroha-connect/v1/login",
+            b"nonce",
+        )
+        .unwrap();
+        verify_raw_request_signature(
+            &registered,
+            &network_id,
+            &account,
+            "iroha-connect/v1/login",
+            b"nonce",
+            &signature,
+        )
+        .unwrap();
+        for (tag, bytes) in [
+            ("iroha-connect/v1/other", &b"nonce"[..]),
+            ("iroha-connect/v1/login", &b"other"[..]),
+            (
+                iroha_data_model::account::signing_key::TORII_CANONICAL_REQUEST_DOMAIN_TAG_V1,
+                &b"nonce"[..],
+            ),
+        ] {
+            assert_eq!(
+                verify_raw_request_signature(
+                    &registered,
+                    &network_id,
+                    &account,
+                    tag,
+                    bytes,
+                    &signature
+                ),
+                Err("connect_wallet_signature_invalid")
+            );
+        }
+        let rotated = AccountSigningKeyV1 {
+            generation: 4,
+            ..registered.clone()
+        };
+        assert_eq!(
+            verify_raw_request_signature(
+                &rotated,
+                &network_id,
+                &account,
+                "iroha-connect/v1/login",
+                b"nonce",
+                &signature
+            ),
+            Err("connect_wallet_signature_invalid")
+        );
+    }
+
+    #[test]
+    fn a_raw_transaction_hash_is_signed_only_inside_the_envelope() {
+        let transaction_key = key(1);
+        let signing_key = key(2);
+        let account = AccountId::new(transaction_key.public_key().clone());
+        let network_id = network();
+        let transaction_hash = Hash::new(b"a transaction payload");
+        let signature = sign_raw_request(
+            &signing_key,
+            &network_id,
+            &account,
+            1,
+            "iroha-connect/v1/verify",
+            transaction_hash.as_ref(),
+        )
+        .unwrap();
+        // The reply is neither the transaction key's signature nor a signature of the hash.
+        assert!(
+            signature
+                .signature
+                .verify(transaction_key.public_key(), transaction_hash.as_ref())
+                .is_err()
+        );
+        assert!(
+            signature
+                .signature
+                .verify(signing_key.public_key(), transaction_hash.as_ref())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_reply_of_another_algorithm_is_refused() {
+        let signing_key = key(2);
+        let account = AccountId::new(key(1).public_key().clone());
+        let network_id = network();
+        let mut signature =
+            sign_raw_request(&signing_key, &network_id, &account, 1, "tag", b"x").unwrap();
+        signature.algorithm = Algorithm::Secp256k1;
+        assert_eq!(
+            verify_raw_request_signature(
+                &AccountSigningKeyV1 {
+                    public_key: signing_key.public_key().clone(),
+                    generation: 1
+                },
+                &network_id,
+                &account,
+                "tag",
+                b"x",
+                &signature
+            ),
+            Err("connect_wallet_signature_algorithm_mismatch")
+        );
+    }
 }
 
 #[cfg(test)]

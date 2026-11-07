@@ -11446,6 +11446,7 @@ fn moderation_dead_letter_transport_rejects_aliases_and_noncanonical_frames() {
         account: AccountId::new(attestor.public_key().clone()),
         signer: attestor.public_key().clone(),
         verified_signers: vec![attestor.public_key().clone()],
+        offchain_signing_key: false,
     };
     assert_eq!(
         require_independent_moderation_recovery_attestor(&same_operator, &resolution)
@@ -11458,6 +11459,7 @@ fn moderation_dead_letter_transport_rejects_aliases_and_noncanonical_frames() {
         account: AccountId::new(independent_key.clone()),
         signer: independent_key.clone(),
         verified_signers: vec![independent_key],
+        offchain_signing_key: false,
     };
     require_independent_moderation_recovery_attestor(&independent_operator, &resolution)
         .expect("independent operator and attestor are accepted");

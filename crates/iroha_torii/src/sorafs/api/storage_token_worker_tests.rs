@@ -357,6 +357,7 @@ async fn account_token_rejects_missing_auth_and_missing_native_policy_before_sig
         account,
         signer: key.public_key().clone(),
         verified_signers: vec![key.public_key().clone()],
+        offchain_signing_key: false,
     };
     // This fixture has an operational signed custody service, but no native admitted
     // account-read policy. Authenticating a wallet must not grant operator issuance.

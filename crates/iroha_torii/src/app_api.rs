@@ -942,6 +942,7 @@ mod tests {
             account: caller.clone(),
             signer: key.public_key().clone(),
             verified_signers: vec![key.public_key().clone()],
+            offchain_signing_key: false,
         };
         for (authority, expected) in [
             (&*iroha_test_samples::ALICE_ID, StatusCode::FORBIDDEN),

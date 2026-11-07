@@ -2804,12 +2804,38 @@ fn authenticate_da_ingest_request(
             "DA ingest quota owner does not match the authenticated account",
         ));
     }
-    if request.signatures.iter().any(|witness| {
-        !principal
-            .verified_signers
+    // DA authorizations are signed by the account's controller. An account with an off-chain
+    // signing key authenticated this request with that key, which is never a controller member
+    // and never signs a DA authorization, so its witness is the request's own controller
+    // signatures instead of the authenticated signers.
+    let controller_members: Vec<&iroha_crypto::PublicKey> = match principal.account.controller() {
+        iroha_data_model::account::AccountController::Single(signatory) => vec![signatory],
+        iroha_data_model::account::AccountController::Multisig(policy) => policy
+            .members()
             .iter()
-            .any(|signer| signer == &witness.signer)
-    }) {
+            .map(|member| member.public_key())
+            .collect(),
+    };
+    let signing_key_principal = principal.offchain_signing_key;
+    let mut account_witness: Vec<&iroha_crypto::PublicKey> = if signing_key_principal {
+        request
+            .signatures
+            .iter()
+            .map(|witness| &witness.signer)
+            .collect()
+    } else {
+        principal.verified_signers.iter().collect()
+    };
+    let authorized_signers = if signing_key_principal {
+        &controller_members
+    } else {
+        &account_witness
+    };
+    if request
+        .signatures
+        .iter()
+        .any(|witness| !authorized_signers.contains(&&witness.signer))
+    {
         return Err((
             StatusCode::FORBIDDEN,
             "DA ingest authorization includes a signer outside the authenticated account witness",
@@ -2821,9 +2847,8 @@ fn authenticate_da_ingest_request(
             .iter()
             .map(|witness| &witness.signer)
             .collect::<Vec<_>>();
-        let mut principal_signers = principal.verified_signers.iter().collect::<Vec<_>>();
-        principal_signers.sort();
-        if scope_signers != principal_signers {
+        account_witness.sort();
+        if scope_signers != account_witness {
             return Err((
                 StatusCode::FORBIDDEN,
                 "DA pin-scope signers must exactly match the authenticated account witness",
