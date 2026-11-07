@@ -14,6 +14,20 @@
 //! multiplications), `F(X)` through the `pow` tree, `G(2)` and the one coefficient
 //! of `K`; the verifier folds `G` with one group operation. A source of size
 //! `k < 16` enters with `16 - k` leading zero challenges, as in PIPA-AS-v1.
+//!
+//! **Restructuring.** Given an accumulator's public `(u, beta)`, its error is
+//! linear in `s`. Every child `t + 2^j` of `t` (for `j > msb t`) carries
+//! `pow_t(beta) beta_j`, so
+//!
+//! ```text
+//! e + 1 = <s, B>,  B_t = pow_t(beta) (1 - T(msb t)),  T(m) = sum_{j > m} beta_j u_{15-j}
+//! ```
+//!
+//! with `T(-1)` for `t = 0`. [`restructure_prove`] runs one 16-round degree-2
+//! sumcheck of `sum_x s~(x) B~(x) = e + 1` over the little-endian index bits.
+//! `B~(rho)` costs `O(16)`. The sumcheck ends in the statement `s~(rho) = v` about
+//! `G = <s, g>`, which a committed-mask IPA (`iroha_plonk_recursion`, in its own
+//! PIPA-AS transcript) turns back into one structured claim.
 
 use ff::Field;
 use iroha_pasta::{PastaCurve, msm::{MemoryBudget, msm_public}};
@@ -21,7 +35,7 @@ use iroha_pasta::{PastaCurve, msm::{MemoryBudget, msm_public}};
 use crate::{
     Error,
     commit::{fold_point, fold_scalar},
-    transcript::{TAG_CLAIM_ACCUMULATOR, TAG_CLAIM_DIGEST, TAG_CLAIM_FOLD, Transcript},
+    transcript::{TAG_CLAIM_ACCUMULATOR, TAG_CLAIM_DIGEST, TAG_CLAIM_FOLD, TAG_CLAIM_RESTRUCTURE, Transcript},
 };
 
 /// Rounds of a claim (`2^16` generators).
@@ -295,4 +309,160 @@ pub fn decide_claims<C: PastaCurve>(
         return Err(Error::Rejected("claim error"));
     }
     Ok(())
+}
+
+/// The statement a restructuring sumcheck ends in: `G = <s, g>` with
+/// `s~(point) = value` (little-endian index bits).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RestructureStatement<C: PastaCurve> {
+    /// The accumulator's commitment `G`.
+    pub commitment: C::AffineExt,
+    /// The sumcheck's point `rho`.
+    pub point: [C::ScalarExt; ROUNDS],
+    /// The claimed `s~(rho)`.
+    pub value: C::ScalarExt,
+}
+
+/// The messages of a restructuring sumcheck.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RestructureProof<F> {
+    /// Each round polynomial at `0` and `2`.
+    pub rounds: [[F; 2]; ROUNDS],
+    /// The claimed `s~(rho)`.
+    pub value: F,
+}
+
+/// `T(m) = sum_{j > m} beta_j u_{15-j}` for `m = -1..15`, indexed `m + 1`.
+fn suffix_weights<C: PastaCurve>(acc: &ClaimAccumulator<C>) -> [C::ScalarExt; ROUNDS + 1] {
+    let mut t = [<C::ScalarExt as Field>::ZERO; ROUNDS + 1];
+    for m in (0..ROUNDS).rev() {
+        t[m] = t[m + 1] + acc.beta[m] * acc.u[ROUNDS - 1 - m];
+    }
+    t
+}
+
+/// The restructured weights `B_t = pow_t(beta) (1 - T(msb t))` of `acc`.
+#[must_use]
+pub fn restructured_weights<C: PastaCurve>(acc: &ClaimAccumulator<C>) -> Vec<C::ScalarExt> {
+    type S<C> = <C as PastaCurve>::ScalarExt;
+    let t = suffix_weights(acc);
+    let mut weights = Vec::with_capacity(SIZE);
+    weights.push(S::<C>::ONE - t[0]);
+    let mut pow = Vec::with_capacity(SIZE);
+    pow.push(S::<C>::ONE);
+    for m in 0..ROUNDS {
+        let factor = S::<C>::ONE - t[m + 1];
+        for i in 0..pow.len() {
+            let p = pow[i] * acc.beta[m];
+            pow.push(p);
+            weights.push(p * factor);
+        }
+    }
+    weights
+}
+
+/// `B~(rho)`, the multilinear extension of [`restructured_weights`] at `rho`,
+/// in `O(16)`: index 0, then the indices `t` with `msb t = m` for each `m`.
+#[must_use]
+pub fn restructured_weight_at<C: PastaCurve>(acc: &ClaimAccumulator<C>, rho: &[C::ScalarExt; ROUNDS]) -> C::ScalarExt {
+    type S<C> = <C as PastaCurve>::ScalarExt;
+    let one = S::<C>::ONE;
+    let t = suffix_weights(acc);
+    // above[m] = prod_{l >= m} (1 - rho_l); below[m] = prod_{l < m} (1 - rho_l + rho_l beta_l).
+    let mut above = [one; ROUNDS + 1];
+    for l in (0..ROUNDS).rev() {
+        above[l] = above[l + 1] * (one - rho[l]);
+    }
+    let mut total = (one - t[0]) * above[0];
+    let mut below = one;
+    for m in 0..ROUNDS {
+        total += (one - t[m + 1]) * acc.beta[m] * rho[m] * above[m + 1] * below;
+        below *= one - rho[m] + rho[m] * acc.beta[m];
+    }
+    total
+}
+
+fn restructure_transcript<C: PastaCurve>(domain: &[u8; 32], acc: &ClaimAccumulator<C>) -> Transcript<C> {
+    let mut transcript = Transcript::<C>::new(TAG_CLAIM_RESTRUCTURE, domain);
+    transcript.absorb_base(&[acc.digest(domain)]);
+    transcript
+}
+
+/// Proves `e + 1 = <s, B>` for `acc` with witness `s` by one sumcheck, ending in
+/// the statement `s~(rho) = v` about `acc.g` for the committed-mask IPA.
+///
+/// # Errors
+/// [`Error::Shape`] for a witness of the wrong length.
+pub fn restructure_prove<C: PastaCurve>(
+    domain: &[u8; 32],
+    acc: &ClaimAccumulator<C>,
+    s: &[C::ScalarExt],
+) -> Result<(RestructureProof<C::ScalarExt>, RestructureStatement<C>), Error> {
+    type S<C> = <C as PastaCurve>::ScalarExt;
+    if s.len() != SIZE {
+        return Err(Error::Shape("claim witness"));
+    }
+    let mut transcript = restructure_transcript(domain, acc);
+    let mut left = s.to_vec();
+    let mut right = restructured_weights(acc);
+    let two = S::<C>::from(2u64);
+    let mut rounds = [[S::<C>::ZERO; 2]; ROUNDS];
+    let mut rho = [S::<C>::ZERO; ROUNDS];
+    for (round, point) in rounds.iter_mut().zip(rho.iter_mut()) {
+        let half = left.len() / 2;
+        let (mut s0, mut s2) = (S::<C>::ZERO, S::<C>::ZERO);
+        for p in 0..half {
+            let (a0, a1, b0, b1) = (left[2 * p], left[2 * p + 1], right[2 * p], right[2 * p + 1]);
+            s0 += a0 * b0;
+            s2 += (two * a1 - a0) * (two * b1 - b0);
+        }
+        *round = [s0, s2];
+        transcript.absorb_scalars(round);
+        let challenge = transcript.challenge();
+        for table in [&mut left, &mut right] {
+            for p in 0..half {
+                let (low, high) = (table[2 * p], table[2 * p + 1]);
+                table[p] = low + challenge * (high - low);
+            }
+            table.truncate(half);
+        }
+        *point = challenge;
+    }
+    let value = left[0];
+    transcript.absorb_scalars(&[value]);
+    Ok((RestructureProof { rounds, value }, RestructureStatement { commitment: acc.g, point: rho, value }))
+}
+
+/// Verifies a restructuring sumcheck for `acc` and returns its statement, which
+/// the committed-mask IPA must still open.
+///
+/// # Errors
+/// [`Error::Rejected`] when the sumcheck fails.
+pub fn restructure_verify<C: PastaCurve>(
+    domain: &[u8; 32],
+    acc: &ClaimAccumulator<C>,
+    proof: &RestructureProof<C::ScalarExt>,
+) -> Result<RestructureStatement<C>, Error> {
+    type S<C> = <C as PastaCurve>::ScalarExt;
+    let mut transcript = restructure_transcript(domain, acc);
+    let two = S::<C>::from(2u64);
+    let half = two.invert().expect("two is invertible");
+    let mut claim = acc.e + S::<C>::ONE;
+    let mut rho = [S::<C>::ZERO; ROUNDS];
+    for (round, point) in proof.rounds.iter().zip(rho.iter_mut()) {
+        transcript.absorb_scalars(round);
+        let x = transcript.challenge();
+        // The degree-2 polynomial through (0, s0), (1, claim - s0), (2, s2).
+        let (s0, s1, s2) = (round[0], claim - round[0], round[1]);
+        let l0 = (x - S::<C>::ONE) * (x - two) * half;
+        let l1 = -(x * (x - two));
+        let l2 = x * (x - S::<C>::ONE) * half;
+        claim = s0 * l0 + s1 * l1 + s2 * l2;
+        *point = x;
+    }
+    if claim != proof.value * restructured_weight_at(acc, &rho) {
+        return Err(Error::Rejected("restructuring sumcheck"));
+    }
+    transcript.absorb_scalars(&[proof.value]);
+    Ok(RestructureStatement { commitment: acc.g, point: rho, value: proof.value })
 }

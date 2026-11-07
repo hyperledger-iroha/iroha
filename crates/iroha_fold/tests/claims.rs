@@ -1,10 +1,14 @@
-//! Claim accumulators over genuine 2^16 IPA generators.
+//! Claim accumulators over genuine 2^16 IPA generators, and their restructuring
+//! sumcheck.
 
 use ff::Field;
 use group::CurveAffine;
-use iroha_fold::claims::{Claim, ClaimAccumulator, claim_for, decide_claims, fold_claim, verify_claim_fold};
+use iroha_fold::claims::{
+    Claim, ClaimAccumulator, claim_for, decide_claims, fold_claim, restructure_prove, restructure_verify,
+    restructured_weight_at, restructured_weights, verify_claim_fold,
+};
 use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve};
-use iroha_plonk::pcs::ipa::PinnedParams;
+use iroha_plonk::pcs::{ipa::PinnedParams, mle};
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
 
@@ -31,6 +35,7 @@ fn run<C: PastaCurve>(seed: u64) {
         s = witness;
     }
     decide_claims(g, &acc, &s).expect("folded true claims decide");
+    restructures(&acc, &s, &mut ChaCha20Rng::seed_from_u64(seed + 100));
     // A false claim (shifted point, true challenges) never decides after folding.
     let mut bad = claim_for::<C>(g, challenges(0)).expect("claim");
     bad.g = (C::from(bad.g) + C::from(C::AffineExt::generator())).to_affine();
@@ -42,6 +47,31 @@ fn run<C: PastaCurve>(seed: u64) {
     proof.k += C::ScalarExt::ONE;
     let tampered = verify_claim_fold(&DOMAIN, &acc, &good, &proof);
     assert!(decide_claims(g, &tampered, &witness).is_err());
+}
+
+/// The restructuring sumcheck of a deciding accumulator: `e + 1 = <s, B>`,
+/// `B~(rho)` in `O(16)` equals the extension of `B`, the sumcheck ends in
+/// `s~(rho) = v`, and another `e`, round or value is rejected.
+fn restructures<C: PastaCurve>(acc: &ClaimAccumulator<C>, s: &[C::ScalarExt], rng: &mut ChaCha20Rng) {
+    let weights = restructured_weights(acc);
+    let inner = s.iter().zip(&weights).fold(C::ScalarExt::ZERO, |sum, (a, b)| sum + *a * b);
+    assert_eq!(inner, acc.e + C::ScalarExt::ONE);
+    let rho: [C::ScalarExt; 16] = core::array::from_fn(|_| C::ScalarExt::random(&mut *rng));
+    assert_eq!(Some(restructured_weight_at(acc, &rho)), mle::evaluate(&weights, &rho));
+    let (proof, statement) = restructure_prove(&DOMAIN, acc, s).expect("restructure");
+    assert_eq!(restructure_verify(&DOMAIN, acc, &proof), Ok(statement));
+    assert_eq!(statement.commitment, acc.g);
+    assert_eq!(Some(statement.value), mle::evaluate(s, &statement.point));
+    let mut wrong = *acc;
+    wrong.e += C::ScalarExt::ONE;
+    let (proof_for_wrong, _) = restructure_prove(&DOMAIN, &wrong, s).expect("restructure");
+    assert!(restructure_verify(&DOMAIN, &wrong, &proof_for_wrong).is_err());
+    let mut tampered = proof;
+    tampered.rounds[5][1] += C::ScalarExt::ONE;
+    assert!(restructure_verify(&DOMAIN, acc, &tampered).is_err());
+    let mut tampered = proof;
+    tampered.value += C::ScalarExt::ONE;
+    assert!(restructure_verify(&DOMAIN, acc, &tampered).is_err());
 }
 
 #[test]

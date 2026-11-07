@@ -41,6 +41,8 @@ pub const TAG_CLAIM_ACCUMULATOR: u64 = u64::from_le_bytes(*b"kgwfcla1");
 pub const TAG_CLAIM_FOLD: u64 = u64::from_le_bytes(*b"kgwfclm1");
 /// Role tag of a claim-accumulator digest.
 pub const TAG_CLAIM_DIGEST: u64 = u64::from_le_bytes(*b"kgwfcld1");
+/// Role tag of a claim accumulator's restructuring sumcheck.
+pub const TAG_CLAIM_RESTRUCTURE: u64 = u64::from_le_bytes(*b"kgwfcrs1");
 /// Role tag of a v2 (multilinear) decider's transcript.
 pub const TAG_DECIDER: u64 = u64::from_le_bytes(*b"kgwfdec1");
 /// Phase tag of a v2 decider's copy permutation (absorbed as a word).
@@ -141,6 +143,26 @@ impl<C: PastaCurve> Transcript<C> {
     /// A challenge below `2^128` (used as a scalar on commitments).
     pub fn challenge_128(&mut self) -> C::ScalarExt {
         map_challenge_128::<C>(&self.sponge.squeeze())
+    }
+}
+
+/// The batched multilinear opening (`iroha_plonk::pcs::mle`) continues a
+/// decider's transcript with the same encodings.
+impl<C: PastaCurve> iroha_plonk::pcs::mle::MleTranscript<C> for Transcript<C> {
+    fn absorb_u64(&mut self, value: u64) {
+        Self::absorb_u64(self, value);
+    }
+    fn absorb_scalars(&mut self, values: &[C::ScalarExt]) {
+        Self::absorb_scalars(self, values);
+    }
+    fn absorb_point(&mut self, point: &C::AffineExt) {
+        Self::absorb_point(self, point);
+    }
+    fn challenge(&mut self) -> C::ScalarExt {
+        Self::challenge(self)
+    }
+    fn challenge_128(&mut self) -> C::ScalarExt {
+        Self::challenge_128(self)
     }
 }
 

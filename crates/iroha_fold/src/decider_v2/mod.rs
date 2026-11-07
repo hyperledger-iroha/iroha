@@ -21,9 +21,11 @@
 //! 3. *Shift reduction*: the zero-check ends at `rho` with claimed values of every
 //!    committed table at its rotations; one degree-two sumcheck reduces them to
 //!    unshifted values at `sigma` through the weights `shifted_eq(rho, sigma, k)`.
-//! 4. *Claims*: every committed polynomial (accumulator witness columns, key
-//!    polynomials, copy helpers) at `sigma`, for `iroha_plonk::pcs::mle`'s
-//!    batched opening, which continues the same transcript.
+//! 4. *Opening*: every committed polynomial (accumulator witness columns, key
+//!    polynomials, copy helpers) at `sigma`, proved by one batched IPA opening
+//!    (`iroha_plonk::pcs::mle`, [`open`] and [`verify_opening`]) that continues
+//!    the same transcript and yields a generator claim. The decision is complete
+//!    once that claim is decided or accumulated into a claim accumulator.
 //!
 //! The transcript runs over the commitment curve's base field, as the fold
 //! transcripts do ([`crate::transcript`]). Deciders are not zero-knowledge.
@@ -36,7 +38,11 @@ mod sumcheck;
 mod tests;
 
 use ff::Field;
-use iroha_pasta::PastaCurve;
+use iroha_pasta::{PastaCurve, msm::MemoryBudget, params::ParamsIpa};
+use iroha_plonk::pcs::{
+    ipa::GeneratorClaim,
+    mle::{self as pcs_mle, BatchOpening, MleClaim, open_batch, verify_batch},
+};
 
 pub use plan::DeciderV2Plan;
 use plan::{Committed, CopyColumn, Source, Support, Weight};
@@ -48,15 +54,6 @@ use crate::{
     logup::batch_invert,
     transcript::{TAG_DECIDER, TAG_DECIDER_PERMUTATION, TAG_DECIDER_SHIFT, Transcript},
 };
-
-/// A claimed evaluation, at the decider's point, of one committed polynomial.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MleClaim<C: PastaCurve> {
-    /// The polynomial's commitment.
-    pub commitment: C::AffineExt,
-    /// Its claimed value at the point.
-    pub value: C::ScalarExt,
-}
 
 /// The decider's messages.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -300,7 +297,7 @@ pub fn prove<C: PastaCurve>(
             }
             Source::Helper(j) => helpers[j].clone(),
             Source::Pow => pow_vector(&acc.beta[pb..]),
-            Source::EqTau => mle::eq_table(&challenges.tau),
+            Source::EqTau => pcs_mle::eq_table(&challenges.tau),
             Source::Usable => (0..n).map(|i| if i < relation.usable { S::<C>::ONE } else { S::<C>::ZERO }).collect(),
             Source::Index => (0..n).map(|i| S::<C>::from(i as u64)).collect(),
         })
@@ -349,7 +346,6 @@ pub fn prove<C: PastaCurve>(
     transcript.absorb_scalars(&at_rho);
     transcript.absorb_u64(TAG_DECIDER_SHIFT);
     let zeta = transcript.challenge();
-    let eq_rho = mle::eq_table(&rho);
     let mut lanes: Vec<(Vec<S<C>>, Vec<S<C>>)> = Vec::new();
     let mut power = S::<C>::ONE;
     let mut combined: Vec<(i32, Vec<S<C>>)> = Vec::new();
@@ -368,8 +364,7 @@ pub fn prove<C: PastaCurve>(
         power *= zeta;
     }
     for (k, q) in combined {
-        let e: Vec<S<C>> = (0..n).map(|i| eq_rho[mle::rotate(i, -k, n)]).collect();
-        lanes.push((e, q));
+        lanes.push((pcs_mle::shifted_eq_table(&rho, k).ok_or(Error::Shape("shift weights"))?, q));
     }
     let mut shift = Vec::with_capacity(plan.mu);
     let mut sigma = Vec::with_capacity(plan.mu);
@@ -396,7 +391,10 @@ pub fn prove<C: PastaCurve>(
     }
     let polys: Vec<Vec<S<C>>> =
         plan.committed.iter().map(|poly| committed_poly(plan, witness, &helpers, *poly).to_vec()).collect();
-    let at_sigma: Vec<S<C>> = polys.iter().map(|poly| mle::evaluate(poly, &sigma)).collect();
+    let at_sigma = polys
+        .iter()
+        .map(|poly| pcs_mle::evaluate(poly, &sigma).ok_or(Error::Shape("evaluation")))
+        .collect::<Result<Vec<S<C>>, _>>()?;
     transcript.absorb_scalars(&at_sigma);
     let mut claims = Vec::with_capacity(polys.len());
     let mut blinds = Vec::with_capacity(polys.len());
@@ -524,7 +522,7 @@ pub fn verify<C: PastaCurve>(
         let weight = match weights_by_rotation.iter().position(|(k, _)| *k == read.rotation) {
             Some(slot) => weights_by_rotation[slot].1,
             None => {
-                let w = mle::shifted_eq(&rho, &sigma, read.rotation);
+                let w = pcs_mle::shifted_eq(&rho, &sigma, read.rotation).ok_or(Error::Shape("shift weights"))?;
                 weights_by_rotation.push((read.rotation, w));
                 w
             }
@@ -552,29 +550,32 @@ pub fn verify<C: PastaCurve>(
     Ok(Verified { point: sigma, claims, transcript })
 }
 
-/// The native stand-in for the batched opening (until `pcs::mle` lands): each
-/// claim's polynomial recommits to its commitment with its blind and evaluates
-/// to its value at `point`.
+/// Opens the decider's claims with one batched IPA opening, continuing the
+/// prover's transcript. Returns the opening and its generator claim.
 ///
 /// # Errors
-/// [`Error::Rejected`] naming the failing claim kind, [`Error::Msm`].
-pub fn open_naively<C: PastaCurve>(
-    plan: &DeciderV2Plan<C>,
-    point: &[C::ScalarExt],
-    claims: &[MleClaim<C>],
-    polys: &[Vec<C::ScalarExt>],
-    blinds: &[C::ScalarExt],
-) -> Result<(), Error> {
-    if claims.len() != polys.len() || claims.len() != blinds.len() {
-        return Err(Error::Shape("opening"));
-    }
-    for ((claim, poly), blind) in claims.iter().zip(polys).zip(blinds) {
-        if plan.key.commit(poly, blind)? != claim.commitment {
-            return Err(Error::Rejected("opening commitment"));
-        }
-        if mle::evaluate(poly, point) != claim.value {
-            return Err(Error::Rejected("opening value"));
-        }
-    }
-    Ok(())
+/// [`Error::Rejected`] when the opening fails (claims not the polynomials'
+/// values, a zero challenge, an MSM over budget).
+pub fn open<C: PastaCurve>(
+    params: &ParamsIpa<C>,
+    proved: &mut Proved<C>,
+) -> Result<(BatchOpening<C>, GeneratorClaim<C>), Error> {
+    let columns: Vec<&[C::ScalarExt]> = proved.polys.iter().map(Vec::as_slice).collect();
+    open_batch(params, &mut proved.transcript, &proved.point, &proved.claims, &columns, &proved.blinds, MemoryBudget::DEFAULT)
+        .map_err(|_| Error::Rejected("batched opening"))
+}
+
+/// Verifies the batched opening of a verified decider's claims, continuing its
+/// transcript. Returns the generator claim, which still has to be decided or
+/// folded into a claim accumulator.
+///
+/// # Errors
+/// [`Error::Rejected`] when the opening equation fails.
+pub fn verify_opening<C: PastaCurve>(
+    params: &ParamsIpa<C>,
+    verified: &mut Verified<C>,
+    opening: &BatchOpening<C>,
+) -> Result<GeneratorClaim<C>, Error> {
+    verify_batch(params, &mut verified.transcript, &verified.point, &verified.claims, opening, MemoryBudget::DEFAULT)
+        .map_err(|_| Error::Rejected("batched opening"))
 }

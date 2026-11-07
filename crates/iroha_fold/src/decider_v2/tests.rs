@@ -1,18 +1,26 @@
 //! The v2 decider against the native one: honest accumulators reduce to claims
-//! that open; false copies, lookup inputs outside their tables, false gates,
-//! wrong errors and tampered messages do not.
+//! whose batched opening verifies and whose generator claim decides; false
+//! copies, lookup inputs outside their tables, false gates, wrong errors and
+//! tampered messages do not.
 
 use ff::Field;
-use iroha_pasta::{Ep, Fq};
+use group::Curve;
+use iroha_pasta::{Ep, Fq, msm::MemoryBudget};
 use iroha_plonk::{
     cs::{Advice, Column, ConstraintSystem, Instance as InstanceColumn, Rotation, Selector, TableColumn},
     frontend::{Circuit, Error as PlonkError, Layouter, SimpleFloorPlanner, Value, synthesize},
-    pcs::ipa::PinnedParams,
+    pcs::{
+        ipa::{
+            PinnedParams,
+            commit::{Secrecy, commit},
+        },
+        mle as pcs_mle,
+    },
 };
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
 
-use super::{DeciderV2Plan, mle, open_naively, prove, sumcheck, verify};
+use super::{DeciderV2Plan, mle, open, prove, sumcheck, verify, verify_opening};
 use crate::{
     Error,
     commit::{CommitKey, Witness},
@@ -29,13 +37,23 @@ fn random_point(rng: &mut ChaCha20Rng, mu: usize) -> Vec<Fq> {
     (0..mu).map(|_| Fq::random(&mut *rng)).collect()
 }
 
+fn evaluate(values: &[Fq], point: &[Fq]) -> Fq {
+    pcs_mle::evaluate(values, point).expect("matching length")
+}
+
+/// `sum_j eq(rho, j) eq(sigma, (j + k) mod n)` by brute force.
+fn shifted_eq_by_definition(rho: &[Fq], sigma: &[Fq], k: i32) -> Fq {
+    let (a, b) = (pcs_mle::eq_table(rho), pcs_mle::eq_table(sigma));
+    (0..a.len()).fold(Fq::ZERO, |acc, j| acc + a[j] * b[mle::rotate(j, k, a.len())])
+}
+
 #[test]
 fn multilinear_primitives_match_their_definitions() {
     let mut rng = ChaCha20Rng::seed_from_u64(1);
     let mu = 4;
     let n = 1 << mu;
     let x = random_point(&mut rng, mu);
-    let table = mle::eq_table(&x);
+    let table = pcs_mle::eq_table(&x);
     for (i, w) in table.iter().enumerate() {
         let bits: Vec<Fq> = (0..mu).map(|j| Fq::from(((i >> j) & 1) as u64)).collect();
         assert_eq!(*w, mle::eq(&x, &bits));
@@ -45,26 +63,28 @@ fn multilinear_primitives_match_their_definitions() {
     for r in &x {
         mle::fold(&mut folded, *r);
     }
-    assert_eq!(folded[0], mle::evaluate(&column, &x));
+    assert_eq!(folded[0], evaluate(&column, &x));
     for u in 0..=n {
         let direct = table[..u].iter().fold(Fq::ZERO, |acc, w| acc + w);
         assert_eq!(mle::prefix_indicator(u, &x), direct, "u = {u}");
     }
     let index: Vec<Fq> = (0..n).map(|i| Fq::from(7 + i as u64)).collect();
-    assert_eq!(mle::index(7, &x), mle::evaluate(&index, &x));
+    assert_eq!(mle::index(7, &x), evaluate(&index, &x));
     let beta = random_point(&mut rng, mu);
-    assert_eq!(mle::pow(&beta, &x), mle::evaluate(&pow_vector(&beta), &x));
+    assert_eq!(mle::pow(&beta, &x), evaluate(&pow_vector(&beta), &x));
     // A column at rotation k, at rho, is sum_m v[m] e[m] with e[m] = eq(rho, m - k),
     // and e at sigma is shifted_eq(rho, sigma, k), for negative and wrapping k too.
     let rho = random_point(&mut rng, mu);
     let sigma = random_point(&mut rng, mu);
-    let eq_rho = mle::eq_table(&rho);
+    let eq_rho = pcs_mle::eq_table(&rho);
     let n_i32 = i32::try_from(n).expect("small");
     for k in [-n_i32 - 1, -n_i32 + 1, -3, -1, 0, 1, 2, 5, n_i32 - 1, n_i32 + 2] {
         let e: Vec<Fq> = (0..n).map(|m| eq_rho[mle::rotate(m, -k, n)]).collect();
         let weighted = column.iter().zip(&e).fold(Fq::ZERO, |acc, (v, w)| acc + *v * w);
-        assert_eq!(mle::evaluate(&mle::rotated(&column, k), &rho), weighted, "k = {k}");
-        assert_eq!(mle::evaluate(&e, &sigma), mle::shifted_eq(&rho, &sigma, k), "k = {k}");
+        assert_eq!(evaluate(&mle::rotated(&column, k), &rho), weighted, "k = {k}");
+        assert_eq!(evaluate(&e, &sigma), shifted_eq_by_definition(&rho, &sigma, k), "k = {k}");
+        assert_eq!(pcs_mle::shifted_eq(&rho, &sigma, k), Some(evaluate(&e, &sigma)), "k = {k}");
+        assert_eq!(pcs_mle::shifted_eq_table(&rho, k), Some(e), "k = {k}");
     }
 }
 
@@ -206,6 +226,7 @@ impl Circuit<Fq> for Mini {
 
 struct Setup {
     relation: FoldedRelation<Fq>,
+    params: PinnedParams<Ep>,
     key: CommitKey<Ep>,
     plan: DeciderV2Plan<Ep>,
 }
@@ -216,7 +237,7 @@ fn setup() -> Setup {
     let params = PinnedParams::<Ep>::derive(K).expect("params");
     let key = CommitKey::monomial(params.params());
     let plan = DeciderV2Plan::new(relation.clone(), &key).expect("plan");
-    Setup { relation, key, plan }
+    Setup { relation, params, key, plan }
 }
 
 fn fresh(s: &Setup, mini: Mini, rng: &mut ChaCha20Rng) -> (Instance<Ep>, Witness<Fq>) {
@@ -240,11 +261,14 @@ fn accumulator(s: &Setup) -> (Accumulator<Ep>, Witness<Fq>) {
     (acc, witness)
 }
 
-/// Whether the v2 decider accepts: the proof verifies and its claims open.
-fn decides(plan: &DeciderV2Plan<Ep>, acc: &Accumulator<Ep>, witness: &Witness<Fq>) -> Result<(), Error> {
-    let proved = prove(plan, &DOMAIN, acc, witness)?;
-    let verified = verify(plan, &DOMAIN, acc, &proved.proof)?;
-    open_naively(plan, &verified.point, &verified.claims, &proved.polys, &proved.blinds)
+/// Whether the v2 decider accepts: the proof verifies, its batched opening
+/// verifies and the resulting generator claim decides.
+fn decides(s: &Setup, acc: &Accumulator<Ep>, witness: &Witness<Fq>) -> Result<(), Error> {
+    let mut proved = prove(&s.plan, &DOMAIN, acc, witness)?;
+    let (opening, _) = open(s.params.params(), &mut proved)?;
+    let mut verified = verify(&s.plan, &DOMAIN, acc, &proved.proof)?;
+    let claim = verify_opening(s.params.params(), &mut verified, &opening)?;
+    claim.decide(&s.params, MemoryBudget::DEFAULT).map_err(|_| Error::Rejected("generator claim"))
 }
 
 #[test]
@@ -253,17 +277,34 @@ fn honest_accumulators_reduce_to_claims_that_open() {
     let (sources, keys, helpers, terms) = s.plan.sizes();
     assert!(sources > 0 && keys > 0 && terms > 0);
     assert_eq!(helpers, 4, "copy columns a, b, c and the constants column");
+    // The decider's commitments are the batched opening's: sum_j a_j g_j + rho W.
+    let mut rng = ChaCha20Rng::seed_from_u64(7);
+    let column: Vec<Fq> = (0..s.relation.n).map(|_| Fq::random(&mut rng)).collect();
+    let blind = Fq::random(&mut rng);
+    let pcs = commit(s.params.params(), &column, &blind, Secrecy::Secret, MemoryBudget::DEFAULT).expect("commit");
+    assert_eq!(s.key.commit(&column, &blind).expect("commit"), pcs.to_affine());
     let (acc, witness) = accumulator(&s);
-    let proved = prove(&s.plan, &DOMAIN, &acc, &witness).expect("prove");
-    let verified = verify(&s.plan, &DOMAIN, &acc, &proved.proof).expect("verify");
+    let mut proved = prove(&s.plan, &DOMAIN, &acc, &witness).expect("prove");
+    let (opening, prover_claim) = open(s.params.params(), &mut proved).expect("open");
+    let mut verified = verify(&s.plan, &DOMAIN, &acc, &proved.proof).expect("verify");
     assert_eq!(verified.point, proved.point);
     assert_eq!(verified.claims, proved.claims);
-    open_naively(&s.plan, &verified.point, &verified.claims, &proved.polys, &proved.blinds).expect("claims open");
+    let claim = verify_opening(s.params.params(), &mut verified, &opening).expect("opening verifies");
+    assert_eq!(claim, prover_claim);
+    claim.decide(&s.params, MemoryBudget::DEFAULT).expect("generator claim decides");
+    // A claimed value other than the polynomial's: the opening does not verify,
+    // or its generator claim does not decide.
+    let mut lying = verify(&s.plan, &DOMAIN, &acc, &proved.proof).expect("verify");
+    lying.claims[0].value += Fq::ONE;
+    assert!(
+        verify_opening(s.params.params(), &mut lying, &opening)
+            .map_or(true, |claim| claim.decide(&s.params, MemoryBudget::DEFAULT).is_err())
+    );
     // A fresh instance is an accumulator with e = 0 too.
     let mut rng = ChaCha20Rng::seed_from_u64(4);
     let (instance, w) = fresh(&s, Mini { seed: 9, broken: false }, &mut rng);
     let fresh_acc = Accumulator::from_fresh(&s.relation, &DOMAIN, instance).expect("accumulator");
-    decides(&s.plan, &fresh_acc, &w).expect("fresh accumulator");
+    decides(&s, &fresh_acc, &w).expect("fresh accumulator");
 }
 
 #[test]
@@ -273,12 +314,12 @@ fn a_false_copy_never_decides() {
     let (instance, w) = fresh(&s, Mini { seed: 2, broken: true }, &mut rng);
     let acc = Accumulator::from_fresh(&s.relation, &DOMAIN, instance).expect("accumulator");
     assert_eq!(decide(&s.relation, &s.key, &acc, &w), Err(Error::Rejected("copy constraint")));
-    assert_eq!(decides(&s.plan, &acc, &w), Err(Error::Rejected("zero-check")));
+    assert_eq!(decides(&s, &acc, &w), Err(Error::Rejected("zero-check")));
     // Folded into a genuine accumulator, it still never decides.
     let (genuine, gw) = accumulator(&s);
     let (next, next_w, _) = fold(&s.relation, &DOMAIN, &genuine, &gw, &acc.instance, &w).expect("fold");
     assert!(decide(&s.relation, &s.key, &next, &next_w).is_err());
-    assert!(decides(&s.plan, &next, &next_w).is_err());
+    assert!(decides(&s, &next, &next_w).is_err());
 }
 
 #[test]
@@ -305,7 +346,7 @@ fn false_gates_wrong_errors_and_tampered_messages_are_rejected() {
     // Another accumulated error.
     let mut wrong = acc.clone();
     wrong.e += Fq::ONE;
-    assert_eq!(decides(&s.plan, &wrong, &witness), Err(Error::Rejected("zero-check")));
+    assert_eq!(decides(&s, &wrong, &witness), Err(Error::Rejected("zero-check")));
     // A false gate witness (c on row 4), recommitted honestly and folded in.
     let mut rng = ChaCha20Rng::seed_from_u64(6);
     let (_, mut w) = fresh(&s, Mini { seed: 5, broken: false }, &mut rng);
@@ -315,11 +356,11 @@ fn false_gates_wrong_errors_and_tampered_messages_are_rejected() {
     let (instance, w) = fresh_instance(&s.relation, &s.key, &DOMAIN, advice, public, &mut rng).expect("instance");
     let (next, next_w, _) = fold(&s.relation, &DOMAIN, &acc, &witness, &instance, &w).expect("fold");
     assert!(decide(&s.relation, &s.key, &next, &next_w).is_err());
-    assert_eq!(decides(&s.plan, &next, &next_w), Err(Error::Rejected("zero-check")));
+    assert_eq!(decides(&s, &next, &next_w), Err(Error::Rejected("zero-check")));
     // A witness cell that is not the committed one: the claims do not open.
     let mut bad = witness.clone();
     bad.columns[0][5] += Fq::ONE;
-    assert!(decides(&s.plan, &acc, &bad).is_err());
+    assert!(decides(&s, &acc, &bad).is_err());
     // Tampered messages.
     let proved = prove(&s.plan, &DOMAIN, &acc, &witness).expect("prove");
     let check = |proof: &super::DeciderV2Proof<Ep>| verify(&s.plan, &DOMAIN, &acc, proof).map(|_| ());
