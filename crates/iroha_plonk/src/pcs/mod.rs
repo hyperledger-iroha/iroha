@@ -5,13 +5,16 @@
 //!   pending accumulator, and `decide`/`batch_decide`;
 //! - [`multiopen`]: the halo2 multi-point opening with **static** query
 //!   grouping (soundness invariants S1-S3): queries are grouped by the slot
-//!   that names the polynomial, never by commitment value.
+//!   that names the polynomial, never by commitment value;
+//! - [`mle`]: multilinear openings of monomial-basis column commitments for
+//!   the multilinear folding decider (one batched argument at one point).
 
 use iroha_pasta::PastaCurve;
 
 use crate::cs::CurveV1;
 
 pub mod ipa;
+pub mod mle;
 pub mod multiopen;
 
 /// The descriptor curve of `C` (`None` only for a curve this crate does not
