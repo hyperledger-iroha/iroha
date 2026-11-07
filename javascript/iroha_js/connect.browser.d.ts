@@ -7,6 +7,47 @@ export { NetworkId };
 /** Wallet policy domain for exact Torii canonical-request message bytes. */
 export const TORII_CANONICAL_REQUEST_DOMAIN_TAG: "iroha:torii:canonical-request:v1";
 
+/** Purpose codes of the off-chain signing envelope (`specs/account_signing_keys.md`). */
+export const OffchainSignaturePurposeV1: Readonly<{
+  CONNECT_RAW: 1;
+  TORII_CANONICAL_REQUEST: 2;
+}>;
+
+/** An account's off-chain signing key, read from Torii committed state. */
+export interface AccountSigningKey {
+  readonly publicKey: Uint8Array;
+  readonly generation: number;
+}
+
+/** The JSON body of Torii `GET /v1/accounts/{account_id}/signing-key`, or decoded bytes. */
+export type AccountSigningKeyInput =
+  | { public_key: string; generation: number }
+  | { publicKey: Uint8Array; generation: number };
+
+export interface OffchainSigningMessageInput {
+  purpose: 1 | 2;
+  networkId: NetworkId;
+  /** I105 account literal, parsed by the native codec when `accountCanonicalBytes` is absent. */
+  accountId?: string;
+  /** Canonical account-address bytes from a trusted source, such as a Torii native identity. */
+  accountCanonicalBytes?: BrowserConnectBinaryLike;
+  generation: number;
+  domainTag: string;
+  bytes: BrowserConnectBinaryLike;
+}
+
+/** The message an account's signing key signs off chain; never a 32-byte hash. */
+export function buildOffchainSigningMessageV1(input: OffchainSigningMessageInput): Uint8Array;
+/** The purpose a wallet signs a Connect raw request with `domainTag` under. */
+export function offchainPurposeForConnectRawTag(domainTag: string): 1 | 2;
+export function normalizeAccountSigningKey(value: AccountSigningKeyInput): AccountSigningKey;
+export function verifyOffchainSignatureV1(
+  input: Omit<OffchainSigningMessageInput, "generation"> & {
+    signingKey: AccountSigningKeyInput;
+    signature: BrowserConnectBinaryLike;
+  },
+): boolean;
+
 export interface BrowserConnectKeyPair {
   publicKey: Uint8Array;
   privateKey: Uint8Array;
@@ -97,6 +138,8 @@ export interface BrowserConnectAppMeta {
 
 export interface BrowserConnectApproval {
   readonly accountId: string;
+  /** Exact network the session and every off-chain envelope are bound to. */
+  readonly networkId: NetworkId;
   readonly nativeIdentity?: NativeAccountIdentity;
   /** Ed25519 key cryptographically bound to `accountId` by wallet approval. */
   readonly signingPublicKey: Uint8Array;
@@ -113,6 +156,16 @@ export interface BrowserConnectAppSessionOptions extends BrowserConnectSocketOpt
   session: Pick<BrowserConnectSessionResponse, "sid" | "token_app" | "token_relay">;
   permissions?: BrowserConnectPermissions | null;
   appMeta?: BrowserConnectAppMeta | null;
+  /**
+   * Reads the approved account's off-chain signing key from committed state;
+   * resolves `null` when it has none. Defaults to Torii
+   * `GET {baseUrl}/v1/accounts/{account_id}/signing-key` through `fetchImpl`.
+   */
+  resolveAccountSigningKey?: (
+    accountId: string,
+    options: { signal: AbortSignal },
+  ) => Promise<AccountSigningKeyInput | null>;
+  fetchImpl?: typeof fetch;
 }
 
 export interface BrowserConnectAppSession {
@@ -120,11 +173,17 @@ export interface BrowserConnectAppSession {
   readonly approvedAccountId: string | null;
   waitForApproval(): Promise<BrowserConnectApproval>;
   signTransaction(unsignedTxBytes: BrowserConnectBinaryLike): Promise<Uint8Array>;
-  /** Requires the corresponding `sign_raw` permission to be granted by the wallet. */
+  /**
+   * Requires the corresponding `sign_raw` permission to be granted by the wallet.
+   * Resolves only with a signature of the account's off-chain signing key over the
+   * off-chain envelope of `domainTag` and `bytes`; never a transaction-key signature.
+   */
   signRaw(
     domainTag: string,
     bytes: BrowserConnectBinaryLike,
   ): Promise<Uint8Array>;
+  /** The approved account's off-chain signing key; rejects with `SIGNING_KEY_REQUIRED` without one. */
+  accountSigningKey(): Promise<AccountSigningKey>;
   close(reason?: string): void;
 }
 
@@ -209,7 +268,7 @@ export function createConnectAppSession(
   options: BrowserConnectAppSessionOptions,
 ): BrowserConnectAppSession;
 export function createConnectCanonicalRequestAuth(
-  session: Pick<BrowserConnectAppSession, "waitForApproval" | "signRaw">,
+  session: Pick<BrowserConnectAppSession, "waitForApproval" | "signRaw" | "accountSigningKey">,
 ): Promise<BrowserConnectCanonicalRequestAuth>;
 /** Exact current binary transaction-request framing and AEAD overhead. */
 export const CONNECT_SIGN_REQUEST_TX_FRAME_OVERHEAD_V1: number;

@@ -4,6 +4,15 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Connect raw requests are verified against the approved account's separate off-chain signing key
+  over the off-chain envelope (`buildOffchainSigningMessageV1`, `specs/account_signing_keys.md`),
+  never against its transaction key or over the bare bytes. `createConnectAppSession` reads the key
+  from Torii `GET /v1/accounts/{account_id}/signing-key` (or `resolveAccountSigningKey`) before it
+  sends a raw request, refuses accounts without one (`SIGNING_KEY_REQUIRED`), and exposes it as
+  `accountSigningKey()`; approvals carry `networkId`. `createConnectCanonicalRequestAuth` requires
+  `accountSigningKey` and now authenticates multisig and non-Ed25519 accounts through their Ed25519
+  signing key.
+
 - The Exact12 capability manifest parser accepts what current nodes return. It reads digests and the
   feature mask in the one-element tuple-struct arrays Core's JSON writes, which every real manifest
   failed on before; the parsed model still exposes the inner 32 bytes and number.

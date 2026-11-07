@@ -8,6 +8,9 @@ import { AccountAddress } from "../src/address.js";
 
 const PRIVATE_KEY = Buffer.alloc(32, 7);
 const PUBLIC_KEY = ed25519.getPublicKey(PRIVATE_KEY);
+// The account's separate off-chain signing key; its controller signs only transactions.
+const SIGNING_PRIVATE_KEY = Buffer.alloc(32, 9);
+const SIGNING_KEY = Object.freeze({ publicKey: ed25519.getPublicKey(SIGNING_PRIVATE_KEY), generation: 1 });
 const ADDRESS = AccountAddress.fromAccount({ publicKey: PUBLIC_KEY });
 const ACCOUNT_ID = ADDRESS.toI105(369);
 const VECTORS = JSON.parse(readFileSync(new URL("../../../fixtures/account/address_vectors.json", import.meta.url), "utf8"));
@@ -17,13 +20,24 @@ const bundle = await build({
       'export { ToriiBrowserClient } from "@iroha/iroha-js/torii-browser";',
       'export { AccountAddress } from "@iroha/iroha-js/address";',
       'export { NetworkId, canonicalRequestSignatureMessage } from "@iroha/iroha-js/canonical-request";',
-      'export { createConnectCanonicalRequestAuth } from "@iroha/iroha-js/connect-browser";',
+      'export { createConnectCanonicalRequestAuth, buildOffchainSigningMessageV1, OffchainSignaturePurposeV1 } from "@iroha/iroha-js/connect-browser";',
     ].join("\n"),
     resolveDir: fileURLToPath(new URL("..", import.meta.url)),
   }, platform: "browser", format: "esm", bundle: true, write: false, metafile: true,
 });
 const browser = await import(`data:text/javascript;base64,${Buffer.from(`${bundle.outputFiles[0].text}\n//# sourceURL=iroha-browser-native-inspection-test.mjs`).toString("base64")}`);
 const NETWORK = browser.NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
+/** The envelope the signing key signs for a canonical request of `address`. */
+function envelope(message, address = ADDRESS, generation = SIGNING_KEY.generation) {
+  return browser.buildOffchainSigningMessageV1({
+    purpose: browser.OffchainSignaturePurposeV1.TORII_CANONICAL_REQUEST,
+    networkId: NETWORK,
+    accountCanonicalBytes: Buffer.from(address.canonicalHex().slice(2), "hex"),
+    generation,
+    domainTag: "iroha:torii:canonical-request:v1",
+    bytes: message,
+  });
+}
 const BASE = "https://localhost:8080/proxy";
 function inspection(body, address = ADDRESS) {
   return { ...JSON.parse(body), canonical_hex: address.canonicalHex().toLowerCase(),
@@ -41,13 +55,14 @@ test("browser keeps native admission mandatory and authenticates reads with exac
     code: "ERR_IROHA_NATIVE_BINDING", nativeStatus: "browser_unavailable",
   });
   const nativeIdentity = await inspect();
-  const approved = { accountId: ACCOUNT_ID, nativeIdentity };
+  const approved = { accountId: ACCOUNT_ID, nativeIdentity, networkId: NETWORK };
   const signed = [];
   const connected = await browser.createConnectCanonicalRequestAuth({
     async waitForApproval() { return approved; },
+    async accountSigningKey() { return SIGNING_KEY; },
     async signRaw(domain, message) {
       signed.push({ domain, message: Buffer.from(message) });
-      return ed25519.sign(message, PRIVATE_KEY);
+      return ed25519.sign(envelope(message), SIGNING_PRIVATE_KEY);
     },
   });
   approved.accountId = "other@example.public";
@@ -76,7 +91,9 @@ test("browser keeps native admission mandatory and authenticates reads with exac
       timestampMs: Number(init.headers["X-Iroha-Timestamp-Ms"]), nonce: init.headers["X-Iroha-Nonce"],
     });
     assert.deepEqual(signed[index].message, Buffer.from(message));
-    assert.equal(ed25519.verify(Buffer.from(init.headers["X-Iroha-Signature"], "base64"), message, PUBLIC_KEY), true);
+    const header = Buffer.from(init.headers["X-Iroha-Signature"], "base64");
+    assert.equal(ed25519.verify(header, envelope(message), SIGNING_KEY.publicKey), true);
+    assert.equal(ed25519.verify(header, message, PUBLIC_KEY), false, "the controller never signs the request");
     assert.equal(init.redirect, "error");
   }
   assert.equal(captured.length, 4);
@@ -171,20 +188,35 @@ test("browser rejects forged or cross-context identity before signing and preser
   }
   assert.equal(signs, 0);
   const connected = await browser.createConnectCanonicalRequestAuth({
-    async waitForApproval() { return { accountId: ACCOUNT_ID, nativeIdentity }; },
-    async signRaw(_domain, message) { return ed25519.sign(message, Buffer.alloc(32, 8)); },
+    async waitForApproval() { return { accountId: ACCOUNT_ID, nativeIdentity, networkId: NETWORK }; },
+    async accountSigningKey() { return SIGNING_KEY; },
+    async signRaw(_domain, message) { return ed25519.sign(envelope(message), Buffer.alloc(32, 8)); },
   });
   await assert.rejects(connected.sign({ message: Uint8Array.of(1, 2, 3) }), /signature/iu);
+  const controllerSigned = await browser.createConnectCanonicalRequestAuth({
+    async waitForApproval() { return { accountId: ACCOUNT_ID, nativeIdentity, networkId: NETWORK }; },
+    async accountSigningKey() { return SIGNING_KEY; },
+    async signRaw(_domain, message) { return ed25519.sign(envelope(message), PRIVATE_KEY); },
+  });
+  await assert.rejects(controllerSigned.sign({ message: Uint8Array.of(1, 2, 3) }), /signature/iu);
   const multisig = VECTORS.cases.positive.find((row) => row.category === "multisig");
   const multiIdentity = await new browser.ToriiBrowserClient(BASE, {
     networkId: NETWORK, fetchImpl: async (_url, init) => new Response(JSON.stringify({
       ...JSON.parse(init.body), canonical_hex: multisig.encodings.canonical_hex.toLowerCase(), controller: { kind: "multisig" },
     }), { headers: { "content-type": "application/json" } }),
   }).inspectAccountIdentity(multisig.encodings.i105.string);
-  await assert.rejects(browser.createConnectCanonicalRequestAuth({
-    async waitForApproval() { return { accountId: multiIdentity.accountId, nativeIdentity: multiIdentity }; },
-    async signRaw() { assert.fail("multisig must not reach the single-key signer"); },
-  }), /single-key Ed25519/u);
+  // A multisig account authenticates off chain through its own Ed25519 signing key.
+  const multisigAddress = { canonicalHex: () => multisig.encodings.canonical_hex.toLowerCase() };
+  const multisigAuth = await browser.createConnectCanonicalRequestAuth({
+    async waitForApproval() { return { accountId: multiIdentity.accountId, nativeIdentity: multiIdentity, networkId: NETWORK }; },
+    async accountSigningKey() { return SIGNING_KEY; },
+    async signRaw(_domain, message) { return ed25519.sign(envelope(message, multisigAddress), SIGNING_PRIVATE_KEY); },
+  });
+  const multisigMessage = Uint8Array.of(4, 5, 6);
+  assert.deepEqual(
+    Buffer.from(await multisigAuth.sign({ message: multisigMessage })),
+    Buffer.from(ed25519.sign(envelope(multisigMessage, multisigAddress), SIGNING_PRIVATE_KEY)),
+  );
 });
 
 test("native inspection rejects redirects, wrong media type, replay and canceled reads", async () => {

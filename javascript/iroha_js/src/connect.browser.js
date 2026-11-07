@@ -8,8 +8,22 @@ import { requireToriiNativeIdentity, toriiNativeIdentityEd25519Key } from "./nat
 import { crc64Xz } from "./crc64Xz.js";
 import { verifyEd25519Strict } from "./ed25519Strict.js";
 import { NetworkId, networkIdBytes } from "./networkId.js";
+import {
+  OffchainSignaturePurposeV1,
+  buildOffchainSigningMessageV1,
+  normalizeAccountSigningKey,
+  offchainPurposeForConnectRawTag,
+  verifyOffchainSignatureV1,
+} from "./offchainSigning.js";
 
 export { NetworkId };
+export {
+  OffchainSignaturePurposeV1,
+  buildOffchainSigningMessageV1,
+  normalizeAccountSigningKey,
+  offchainPurposeForConnectRawTag,
+  verifyOffchainSignatureV1,
+};
 
 /** Exact current binary FrameV1 + EnvelopeV1 + AEAD overhead for SignRequestTx. */
 export const CONNECT_SIGN_REQUEST_TX_FRAME_OVERHEAD_V1 = 472;
@@ -1260,7 +1274,25 @@ function accountEd25519PublicKey(accountId) {
   return Uint8Array.from(controller.publicKey);
 }
 
-function requireValidEd25519Signature(signature, message, publicKey) {
+/**
+ * Canonical address bytes of an approved account: from its Torii native
+ * identity when one was inspected (browsers have no native codec), otherwise
+ * from the native I105 codec.
+ */
+function approvedAccountCanonicalBytes(accountId, nativeIdentity, binding) {
+  if (nativeIdentity === undefined) {
+    return AccountAddress.fromAccountId(accountId).canonicalBytes();
+  }
+  const { canonicalHex } = requireToriiNativeIdentity(nativeIdentity, binding);
+  return Uint8Array.from(canonicalHex.slice(2).match(/../gu), (pair) => Number.parseInt(pair, 16));
+}
+
+/**
+ * Verify a wallet's raw-request signature against the approved account's
+ * off-chain signing key over the off-chain envelope. The account's transaction
+ * key never signs raw bytes, so its signature is refused here.
+ */
+function requireValidOffchainSignature(signature, { signingKey, networkId, accountCanonicalBytes, domainTag, bytes }) {
   const normalizedSignature = toUint8Array(signature, "wallet signature");
   if (normalizedSignature.length !== 64) {
     throw new ConnectSignRequestError(
@@ -1270,17 +1302,48 @@ function requireValidEd25519Signature(signature, message, publicKey) {
   }
   let valid = false;
   try {
-    valid = verifyEd25519Strict(message, normalizedSignature, publicKey);
+    valid = verifyOffchainSignatureV1({
+      signingKey,
+      purpose: offchainPurposeForConnectRawTag(domainTag),
+      networkId,
+      accountCanonicalBytes,
+      domainTag,
+      bytes,
+      signature: normalizedSignature,
+    });
   } catch {
     // Use one stable error for every malformed or mismatched wallet signature.
   }
   if (!valid) {
     throw new ConnectSignRequestError(
       "INVALID_SIGNATURE",
-      "wallet signature does not match the approved account and requested bytes",
+      "wallet signature does not match the account's off-chain signing key and requested bytes",
     );
   }
   return normalizedSignature;
+}
+
+/**
+ * Read an account's off-chain signing key from Torii committed state.
+ * Resolves `null` when the account has none.
+ */
+async function fetchAccountSigningKey(baseUrl, fetchImpl, accountId, { signal } = {}) {
+  const url = `${baseUrl.replace(/\/+$/u, "")}/v1/accounts/${encodeURIComponent(accountId)}/signing-key`;
+  const response = await fetchImpl(url, {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    signal,
+  });
+  if (response.status === 404) {
+    return null;
+  }
+  if (!response.ok) {
+    throw new ConnectSignRequestError(
+      "SIGNING_KEY_UNAVAILABLE",
+      `account signing key lookup failed with HTTP ${response.status}`,
+    );
+  }
+  return response.json();
 }
 
 function buildApprovalPreimage(preview, control, relayToken) {
@@ -1429,6 +1492,7 @@ function rejectDeferred(deferred, error) {
 function copyConnectApproval(approval) {
   return Object.freeze({
     accountId: approval.accountId,
+    networkId: approval.networkId,
     ...(approval.nativeIdentity === undefined ? {} : { nativeIdentity: approval.nativeIdentity }),
     signingPublicKey: Uint8Array.from(approval.signingPublicKey),
     walletPublicKey: Uint8Array.from(approval.walletPublicKey),
@@ -1446,6 +1510,23 @@ export function createConnectAppSession(options = {}) {
   const inspectAccountIdentity = options.inspectAccountIdentity;
   if (inspectAccountIdentity !== undefined && typeof inspectAccountIdentity !== "function") {
     throw new TypeError("inspectAccountIdentity must be a function");
+  }
+  // Raw requests verify against the account's off-chain signing key from
+  // committed state. The default reads Torii `/v1/accounts/{id}/signing-key`.
+  let resolveAccountSigningKey = options.resolveAccountSigningKey;
+  if (resolveAccountSigningKey === undefined) {
+    const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    resolveAccountSigningKey = (accountId, context) => {
+      if (typeof fetchImpl !== "function") {
+        throw new ConnectSignRequestError(
+          "SIGNING_KEY_UNAVAILABLE",
+          "no fetch implementation to read the account signing key; pass resolveAccountSigningKey",
+        );
+      }
+      return fetchAccountSigningKey(baseUrl, fetchImpl, accountId, context);
+    };
+  } else if (typeof resolveAccountSigningKey !== "function") {
+    throw new TypeError("resolveAccountSigningKey must be a function");
   }
   const inspectionAbort = new AbortController();
   const socket = openConnectWebSocket(baseUrl, session.sid, session.tokenApp, "app", {
@@ -1470,6 +1551,29 @@ export function createConnectAppSession(options = {}) {
   let approved = null;
   let approvalFailure = null;
   let keys = null;
+  let approvedAccountBytes = null;
+  let signingKeyResolution = null;
+
+  // One lookup per session; a failed lookup is retried by the next request.
+  function resolveApprovedSigningKey() {
+    if (signingKeyResolution === null) {
+      const accountId = approved.accountId;
+      signingKeyResolution = (async () => {
+        const resolved = await resolveAccountSigningKey(accountId, { signal: inspectionAbort.signal });
+        if (resolved === null || resolved === undefined) {
+          throw new ConnectSignRequestError(
+            "SIGNING_KEY_REQUIRED",
+            "the approved account has no registered off-chain signing key; raw requests are signed only by that key",
+          );
+        }
+        return normalizeAccountSigningKey(resolved);
+      })();
+      signingKeyResolution.catch(() => {
+        signingKeyResolution = null;
+      });
+    }
+    return signingKeyResolution;
+  }
 
   function failSession(error) {
     if (closed) {
@@ -1528,7 +1632,7 @@ export function createConnectAppSession(options = {}) {
     appSeq += 1;
   }
 
-  function requestSignature(payloadBytes, verificationBytes = null) {
+  function requestSignature(payloadBytes, verification = null) {
     if (pendingSign) {
       throw new ConnectSignRequestError(
         "REQUEST_IN_FLIGHT",
@@ -1537,7 +1641,8 @@ export function createConnectAppSession(options = {}) {
     }
     const request = {
       ...createDeferred(),
-      verificationBytes,
+      verification,
+      signingKey: null,
     };
     pendingSign = request;
     void (async () => {
@@ -1548,6 +1653,14 @@ export function createConnectAppSession(options = {}) {
         }
         if (pendingSign !== request) {
           return;
+        }
+        if (verification !== null) {
+          // Resolve the key before the wallet prompt: a raw request whose
+          // signature cannot be verified is never sent.
+          request.signingKey = await resolveApprovedSigningKey();
+          if (pendingSign !== request) {
+            return;
+          }
         }
         sendEncrypted(payloadBytes);
       } catch (error) {
@@ -1597,12 +1710,16 @@ export function createConnectAppSession(options = {}) {
             requireToriiNativeIdentity(nativeIdentity, { accountId: control.accountId, networkId: preview.networkId, baseUrl });
           }
           const signingPublicKey = verifyApproval(preview, control, session.tokenRelay, nativeIdentity, baseUrl);
+          approvedAccountBytes = approvedAccountCanonicalBytes(control.accountId, nativeIdentity, {
+            accountId: control.accountId, networkId: preview.networkId, baseUrl,
+          });
           keys = deriveDirectionKeys(
             x25519.getSharedSecret(preview.appKeyPair.privateKey, control.walletPublicKey),
             preview.sidBytes,
           );
           approved = Object.freeze({
             accountId: control.accountId,
+            networkId: preview.networkId,
             ...(nativeIdentity === undefined ? {} : { nativeIdentity }),
             signingPublicKey: Uint8Array.from(signingPublicKey),
             walletPublicKey: Uint8Array.from(control.walletPublicKey),
@@ -1649,13 +1766,15 @@ export function createConnectAppSession(options = {}) {
         }
         const request = pendingSign;
         let signature = envelope.payload.signature.signature;
-        if (request.verificationBytes !== null) {
+        if (request.verification !== null) {
           try {
-            signature = requireValidEd25519Signature(
-              signature,
-              request.verificationBytes,
-              approved.signingPublicKey,
-            );
+            signature = requireValidOffchainSignature(signature, {
+              signingKey: request.signingKey,
+              networkId: preview.networkId,
+              accountCanonicalBytes: approvedAccountBytes,
+              domainTag: request.verification.domainTag,
+              bytes: request.verification.bytes,
+            });
           } catch (error) {
             request.reject(error);
             pendingSign = null;
@@ -1751,10 +1870,19 @@ export function createConnectAppSession(options = {}) {
         "domainTag",
       );
       const message = Uint8Array.from(toUint8Array(bytes, "bytes"));
+      // The wallet signs the off-chain envelope of the tag and bytes with the
+      // account's signing key; the signature is verified before it resolves.
       return requestSignature(
         encodeSignRequestRawPayload(normalizedDomainTag, message),
-        message,
+        { domainTag: normalizedDomainTag, bytes: message },
       );
+    },
+    async accountSigningKey() {
+      await approval.promise;
+      if (approvalFailure !== null) {
+        throw approvalFailure;
+      }
+      return resolveApprovedSigningKey();
     },
     close(reason = "client closed session") {
       if (closed) {
@@ -1788,9 +1916,12 @@ export function createConnectAppSession(options = {}) {
 /**
  * Bind Torii canonical-request authentication to an approved Connect identity.
  * The signer sends the exact canonical message bytes to the wallet as a raw
- * request; no private key material is accepted or exposed by this adapter.
+ * request under the Torii canonical-request tag. The wallet signs their
+ * off-chain envelope with the account's signing key, the signature Torii
+ * accepts once the account registered that key; no private key material is
+ * accepted or exposed by this adapter.
  *
- * @param {{waitForApproval: () => Promise<{accountId: string}>, signRaw: (domainTag: string, bytes: Uint8Array) => Promise<Uint8Array>}} session
+ * @param {{waitForApproval: () => Promise<{accountId: string, networkId: NetworkId}>, signRaw: (domainTag: string, bytes: Uint8Array) => Promise<Uint8Array>, accountSigningKey: () => Promise<{publicKey: Uint8Array, generation: number}>}} session
  * @returns {Promise<{readonly authAccountId: string, readonly sign: (input: {message: ArrayBuffer | ArrayBufferView}) => Promise<Uint8Array>}>}
  */
 export async function createConnectCanonicalRequestAuth(session) {
@@ -1802,6 +1933,9 @@ export async function createConnectCanonicalRequestAuth(session) {
   }
   if (typeof session.signRaw !== "function") {
     throw new TypeError("session.signRaw must be a function");
+  }
+  if (typeof session.accountSigningKey !== "function") {
+    throw new TypeError("session.accountSigningKey must be a function");
   }
   const approved = await session.waitForApproval();
   if (!approved || typeof approved !== "object") {
@@ -1818,8 +1952,14 @@ export async function createConnectCanonicalRequestAuth(session) {
     baseUrl: nativeIdentity.baseUrl,
   };
   if (nativeIdentity !== undefined) requireToriiNativeIdentity(nativeIdentity, inspectedBinding);
-  const approvedPublicKey = nativeIdentity === undefined ? accountEd25519PublicKey(authAccountId)
-    : toriiNativeIdentityEd25519Key(nativeIdentity, inspectedBinding);
+  const networkId = approved.networkId;
+  networkIdBytes(networkId, "approval.networkId");
+  const accountCanonicalBytes = approvedAccountCanonicalBytes(authAccountId, nativeIdentity, {
+    accountId: authAccountId,
+    networkId,
+    baseUrl: nativeIdentity?.baseUrl,
+  });
+  const signingKey = normalizeAccountSigningKey(await session.accountSigningKey());
   const sign = async (input) => {
     if (!input || typeof input !== "object") {
       throw new TypeError("canonical signer input must be an object");
@@ -1831,11 +1971,13 @@ export async function createConnectCanonicalRequestAuth(session) {
       TORII_CANONICAL_REQUEST_DOMAIN_TAG,
       Uint8Array.from(message),
     );
-    return requireValidEd25519Signature(
-      signature,
-      message,
-      approvedPublicKey,
-    );
+    return requireValidOffchainSignature(signature, {
+      signingKey,
+      networkId,
+      accountCanonicalBytes,
+      domainTag: TORII_CANONICAL_REQUEST_DOMAIN_TAG,
+      bytes: message,
+    });
   };
   return Object.freeze({ authAccountId, sign, ...(nativeIdentity === undefined ? {} : { nativeIdentity }) });
 }
