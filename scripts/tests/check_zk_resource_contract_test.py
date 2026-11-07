@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+import tomllib
 from pathlib import Path
 from runpy import run_path
 
@@ -560,12 +561,26 @@ def test_declared_items_are_not_yet_implemented_and_state_their_requirements() -
     entrypoint_variants = entrypoints.split("pub enum TransactionEntrypoint {", 1)[1].split("\n    }", 1)[0]
     assert "AnonymousBallot(CanonicalAnonymousBallotEnvelopeV1)" in entrypoint_variants
     core_manifest = (ROOT / "crates/iroha_core/Cargo.toml").read_text(encoding="utf-8")
-    assert "iroha_parliament_ballot" not in core_manifest
+    # The typed crate owns private E2 credential registration; its dependency
+    # does not enable anonymous-ballot admission or its missing verifier budget.
+    assert tomllib.loads(core_manifest)["dependencies"]["iroha_parliament_ballot"] == {"workspace": True}
+    registration = (ROOT / "crates/iroha_core/src/state/parliament_registration.rs").read_text(encoding="utf-8")
+    assert "use iroha_parliament_ballot::registration::{RegistrationErrorV1, verify_registration_v1};" in registration
+    assert "verify_registration_v1(&body, signed.authority(), &assignment, &input.registration)" in registration
+    assert "private E2 registration preparation" in ballot["today"]
     core_transactions = (ROOT / "crates/iroha_core/src/tx.rs").read_text(encoding="utf-8")
     assert re.search(
         r"fn anonymous_ballot_unavailable\(\) -> ExecutionDeferred \{\s*"
         r"ivm::error::ExecutionDeferral::VerifierInitializationUnavailable\.into\(\)\s*}",
         core_transactions,
+    )
+    admission = CHECKER["_function_body"](
+        core_transactions, "enforce_nts_health_for_entrypoint", "test", "crates/iroha_core/src/tx.rs",
+    )
+    assert re.search(
+        r"TransactionEntrypoint::AnonymousBallot\(_\) => \{\s*"
+        r"Err\(AcceptTransactionFail::AnonymousBallotUnavailable\)",
+        admission,
     )
     relation_ids = {item["id"] for item in CONTRACT["relations"]}
     for item in CONTRACT["declared"]:
@@ -1306,16 +1321,26 @@ def test_every_consensus_bound_names_a_test_or_the_owner_of_the_gap() -> None:
 
 
 def test_a_value_bound_into_state_but_compared_nowhere_is_recorded_unenforced() -> None:
-    unenforced = {item["id"] for item in CONTRACT["bounds"] if "unenforced" in item}
-    assert unenforced == {
-        "queued_effects.config_overlay_chunk_instructions",
-        "proof.config_confidential_max_public_inputs",
-        "proof.config_confidential_registry_max_vk_entries",
-        "proof.config_confidential_registry_max_params_entries",
+    unenforced = {
+        item["id"]: item["unenforced"]["owner"]
+        for item in CONTRACT["bounds"] if "unenforced" in item
     }
-    for identifier in unenforced:
+    assert unenforced == {
+        "queued_effects.config_overlay_chunk_instructions": "F.4",
+        "proof.config_confidential_max_public_inputs": "F.4",
+        "proof.config_confidential_registry_max_vk_entries": "F.4",
+        "proof.config_confidential_registry_max_params_entries": "F.4",
+        "transaction.kagemusha_suffix_declared_instruction_max_bytes": "F.2",
+        "transaction.kagemusha_suffix_declared_signed_wire_max_bytes": "F.2",
+    }
+    for identifier, owner in unenforced.items():
         item = bound(CONTRACT, identifier)
-        assert "enforcement" not in item and item["unenforced"]["owner"] == "F.4"
+        assert "enforcement" not in item
+        if owner == "F.2":
+            # Intended outer-frame constants are not effective admission bounds.
+            # Their enforcement and exact-bound test gaps remain explicitly open.
+            assert item["source"] == "constant" and item["test_gap"]["owner"] == "V.3"
+            assert "no production consumers" in item["unenforced"]["summary"]
     # Native private admission is selected from authenticated committed policy.
     proof = bound(CONTRACT, "proof.private_settlement_admission_max_proof_bytes")
     assert proof["value"] == 8 * MIB and len(proof["enforcement"]) == 2
