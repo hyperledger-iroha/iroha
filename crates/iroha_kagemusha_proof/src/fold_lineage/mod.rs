@@ -38,6 +38,8 @@
 //! export their leaves' public columns, which the following A step reads from
 //! the instance it folds.
 
+pub mod sigma;
+
 use ff::Field;
 use iroha_fold::{
     circuit::{FoldVerifierChips, FoldVerifierConfig, ivc::{fold_frame, frame_outputs}},

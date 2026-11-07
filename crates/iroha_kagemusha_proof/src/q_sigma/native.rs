@@ -510,6 +510,90 @@ impl QSigmaPlan {
     }
 }
 
+/// The incoming slot prepared for the folded lineage's Q step
+/// (`crate::fold_lineage`): Q0's circuit and witness, its public columns with
+/// the selected claim where today's folded part is, and that claim.
+#[derive(Clone, Debug)]
+pub struct FoldedQSigma {
+    /// The leaf circuit (its local fold witness is unused).
+    pub circuit: QSigmaCircuit,
+    /// Q0's public columns.
+    pub instances: Vec<Vec<Fq>>,
+    /// The selected claim the step folds into its claim accumulator.
+    pub selected: FoldInput<Eq>,
+}
+
+impl QSigmaPlan {
+    /// Prepares an incoming-only plan's slot for the folded lineage: the same
+    /// soft verification, mode rules and selected claim as [`Self::prepare`],
+    /// without today's local fold. Accept and Corrected claims must decide;
+    /// Trivial selects the pinned trivial claim.
+    ///
+    /// # Errors
+    /// A plan with an own slot or without an incoming one, a wrong length or
+    /// class, an impossible mode, or an Accept claim that does not decide.
+    pub fn prepare_folded(
+        &self,
+        input: IncomingSigma,
+        params: &PinnedParams<Eq>,
+        config: &FoldConfig,
+    ) -> Result<FoldedQSigma, QSigmaError> {
+        iroha_pasta::CancellationToken::checkpoint(config.cancellation.as_ref())
+            .map_err(|_| QSigmaError::Fold(iroha_plonk_recursion::Error::Cancelled))?;
+        let class = self.incoming.as_ref().ok_or(QSigmaError::IncomingMode)?;
+        if self.own.is_some() || input.sigma.proof.len() != class.verifier.proof_length() {
+            return Err(QSigmaError::Layout(LayoutError::Synthesis));
+        }
+        let index = class.index(&input.sigma)?;
+        let original =
+            self.incoming_original_cancellable(&input.sigma, index, config.kernel_budget, config.cancellation.as_ref())?;
+        let valid = original.is_some();
+        let trivial = AccumulatorT::trivial_cancellable(params, config.kernel_budget, config.cancellation.as_ref())
+            .map_err(QSigmaError::Fold)?;
+        let (selected, corrected) = match input.mode {
+            IncomingMode::Accept => {
+                let original = original.ok_or(QSigmaError::IncomingMode)?;
+                original
+                    .decide_cancellable(params, config.kernel_budget, config.cancellation.as_ref())
+                    .map_err(QSigmaError::Fold)?;
+                (original, Eq::from(*trivial.g()))
+            }
+            IncomingMode::Trivial => (trivial.as_input(), Eq::from(*trivial.g())),
+            IncomingMode::Corrected => {
+                let original = original.ok_or(QSigmaError::IncomingMode)?;
+                let correction = original
+                    .corrected_cancellable(params, config.kernel_budget, config.cancellation.as_ref())
+                    .map_err(QSigmaError::Fold)?;
+                (correction.replacement().clone(), Eq::from(*correction.replacement().g()))
+            }
+        };
+        let mut statements = vec![scalar(input.sigma.statement)];
+        statements.extend(chunks(&input.sigma));
+        statements.extend(selected.challenges().iter().copied().map(scalar));
+        let (x, y) = iroha_plonk::transcript::generator_coordinates::<Eq>(selected.g());
+        let mut verdicts = vec![Fq::from(u64::from(valid))];
+        verdicts.extend(input.mode.bits().map(|bit| Fq::from(u64::from(bit))));
+        let instances = vec![
+            statements,
+            vec![x, y],
+            vec![Fq::from(u64::from(index))],
+            verdicts,
+            vec![Fq::from(u64::from(selected.source_k()))],
+        ];
+        let witness = QSigmaWitness {
+            own: None,
+            incoming: Some(IncomingSigmaWitness {
+                sigma: input.sigma,
+                mode: input.mode.bits(),
+                corrected,
+                fold: crate::private_fold::PrivateFoldBytes::unknown(),
+            }),
+        };
+        let circuit = QSigmaCircuit::new(self.clone(), witness).map_err(QSigmaError::Layout)?;
+        Ok(FoldedQSigma { circuit, instances, selected })
+    }
+}
+
 /// Source-only installation metadata for one fixed Q plan and slot schedule.
 ///
 /// The installation owner independently authenticates the complete plan/catalog,

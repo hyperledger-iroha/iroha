@@ -11,6 +11,8 @@
 
 #[path = "common/bootstrap.rs"]
 mod bootstrap;
+#[allow(dead_code)]
+mod common;
 #[path = "common/bootstrap_objects.rs"]
 #[allow(dead_code)]
 mod bootstrap_objects;
@@ -45,13 +47,22 @@ use iroha_kagemusha_proof::{
         transition::TransitionInputs,
     },
     admin_sigma::StateWitness,
-    fold_lineage::{A_CONTEXT, A_DIGESTS, A_PC, AKind, BASE, FOLD_A, FOLD_Q, Q_DIGESTS, QFrameStep, QKind, start_passthrough},
+    SigmaProver,
+    a_relation::schedule::sigma_selector,
+    fold_lineage::{
+        A_CONTEXT, A_DIGESTS, A_PC, AKind, BASE, CLAIM_Q, FOLD_A, FOLD_Q, Q_CLAIM_SLOT, Q_DIGESTS, QFrameStep, QKind,
+        sigma::{QSigmaStep, QSigmaStepWitness, fold_selected},
+        start_passthrough,
+    },
     operation_relation::{
         map_effects::{CONSUMED_DOMAIN, InsertCells, MapEffectsChip, MapState, MapTransition, ReceiveMapWitness},
         state::StateCells,
         statement::StatementCells,
     },
-    q_sigma::{QSigmaPlan, SigmaClass, native::IncomingMode},
+    q_sigma::{
+        QSigmaPlan, SigmaClass, SigmaSlotWitness,
+        native::{IncomingMode, IncomingSigma},
+    },
     q_signature::QSignaturePlan,
     tree::IndexedInsert,
 };
@@ -74,7 +85,7 @@ use iroha_plonk_gadgets::{
     statement::STATEMENT_DOMAIN,
 };
 use iroha_plonk_recursion::{
-    AccumulatorT, FoldInput, PALLAS_TRIVIAL_GENERATOR, VESTA_TRIVIAL_GENERATOR,
+    AccumulatorT, FoldConfig, FoldInput, PALLAS_TRIVIAL_GENERATOR, VESTA_TRIVIAL_GENERATOR,
     obligation::ledger::Variant,
     verifier::{VerifierChip, VerifierConfig, VerifierPlan},
 };
@@ -600,5 +611,128 @@ fn folded_a1_binds_the_a_state_and_decides() {
         wrong[position] += delta;
         let segment = build_segment(&rel, &plan, &source, &wrong);
         assert!(!satisfied(&segment.circuit, &segment.public), "A1 accepted another {case}");
+    }
+}
+
+/// The decider profile of the folded A1 relation (key polynomials and opened
+/// commitments per accumulator), for the compression wraps' capacity budget.
+#[test]
+#[ignore = "k16 relation and decider plan; run optimized"]
+fn folded_a1_decider_profile() {
+    let plan = plan();
+    let rel = relations(&plan);
+    let key = CommitKey::<Eq>::monomial(PinnedParams::<Eq>::derive(K).expect("params").params());
+    let decider = iroha_fold::decider_v2::DeciderV2Plan::new(rel.a1.clone(), &key).expect("decider plan");
+    let (sources, keys, copy_columns, terms) = decider.sizes();
+    let (multiplications, absorbed, (witness, keyed, helpers)) = decider.verifier_profile();
+    let runs = decider.key_runs();
+    let few = runs.iter().filter(|(count, _)| *count <= 16).count();
+    let distinct = {
+        let mut points: Vec<_> = decider.key_commitments().iter().map(|p| format!("{p:?}")).collect();
+        points.sort_unstable();
+        points.dedup();
+        points.len()
+    };
+    eprintln!(
+        "FOLD_RECEIVE_A1_DECIDER sources={sources} key_polys={keys} distinct_key_commitments={distinct} \
+         keys_with_at_most_16_runs={few} copy_columns={copy_columns} terms={terms} \
+         final_multiplications={multiplications} absorbed={absorbed} opened=(witness {witness}, key {keyed}, helper {helpers})"
+    );
+}
+
+/// A genuine incoming Send sigma (k12) and the incoming-only plan over its
+/// verifier; `valid = false` corrupts the first commitment encoding.
+fn sigma_source(valid: bool) -> (QSigmaPlan, SigmaSlotWitness) {
+    let (payer, _, _) = bootstrap_objects::enrollment();
+    let (loaded, _, _) = load_objects::funded(&payer);
+    let send = send_objects::from_load(&loaded.successor);
+    let prover = SigmaProver::<Eq>::keygen_with_params(
+        common::pinned_shape(common::folded(SigmaRelation::SEND), (12, 1)),
+        common::vesta_params(12),
+    )
+    .expect("sigma key");
+    let proof = prover.prove(&send.step, common::fresh_randomness()).expect("sigma proof");
+    let mut bytes = proof.bytes;
+    if !valid {
+        bytes[..32].fill(0xff);
+    }
+    let verifier = prover.verifier();
+    let plan = QSigmaPlan::incoming_only(
+        SigmaClass::from_verifiers(&[(sigma_selector(3, 0).expect("selector"), &verifier)]).expect("class"),
+        &common::vesta_params(16),
+    )
+    .expect("sigma plan");
+    let witness = SigmaSlotWitness {
+        key: prover.proving_key().vk().clone(),
+        statement: proof.public.instance()[0],
+        length: bytes.len().try_into().expect("length"),
+        proof: bytes,
+    };
+    (plan, witness)
+}
+
+#[test]
+#[ignore = "k16 folded Receive Q sigma steps on genuine Send sigmas; run optimized"]
+fn folded_q_sigma_step_verifies_sigma_and_folds_its_claim() {
+    let plan = plan();
+    let rel = relations(&plan);
+    let vparams = common::vesta_params(16);
+    for (valid, mode) in [(true, IncomingMode::Accept), (false, IncomingMode::Trivial)] {
+        let (sigma_plan, sigma) = sigma_source(valid);
+        let folded = sigma_plan
+            .prepare_folded(IncomingSigma { sigma, mode }, &vparams, &FoldConfig::default())
+            .expect("prepared incoming slot");
+        // One step without predecessor: the sigma business and the claim start
+        // (the chain test folds A1 here).
+        let chain = QKind::Sigma.chain(AKind::Receive1);
+        let start = Fq::from(7);
+        let prepared = prepare_step(&chain, 1, &rel.a1, None, None, vec![], vec![Fq::ZERO; Q_DIGESTS], start)
+            .expect("prepare");
+        let (claims, s, claim_proof) = fold_selected(None, &folded.selected).expect("claim start");
+        let mut digests = prepared.digests.clone();
+        digests[Q_CLAIM_SLOT] = claims.digest(&CLAIM_Q);
+        let mut public = vec![step_public(&chain, 1, Fq::from(BASE), prepared.passthrough, &[], &digests, &[])];
+        public.extend(folded.instances.clone());
+        let step = QSigmaStep {
+            leaf: folded.circuit.clone(),
+            shape: rel.a1.shape(),
+            start,
+            witness: Some(QSigmaStepWitness { frame: prepared.witness, selected: folded.selected.clone(), claims: None, claim_proof }),
+        };
+        let satisfied = |public: &[Vec<Fq>]| {
+            let report = check_circuit(&step, K, public, CheckMode::Strict).expect("synthesis");
+            if !report.is_satisfied() && std::env::var_os("FOLD_RECEIVE_FAILURES").is_some() {
+                eprintln!("FOLD_RECEIVE failures: {:?}", &report.failures()[..report.failures().len().min(6)]);
+            }
+            report.is_satisfied()
+        };
+        assert!(satisfied(&public), "valid={valid} mode={mode:?}");
+        // The soft verdict and the mode are Q0's exports; the claim
+        // accumulator decides.
+        assert_eq!(public[4][0], Fq::from(u64::from(valid)));
+        iroha_fold::claims::decide_claims(vparams.params().g(), &claims, &s).expect("the selected claim decides");
+        for (column, row) in [(4, 0), (4, 1), (3, 0), (1, 0)] {
+            let mut changed = public.clone();
+            changed[column][row] += Fq::ONE;
+            assert!(!satisfied(&changed), "valid={valid} column {column} row {row}");
+        }
+        let mut changed = public.clone();
+        changed[0][1] += Fq::ONE;
+        assert!(!satisfied(&changed), "another claim digest in h_out");
+        if valid {
+            let synthesized = synthesize(&step, K, Some(&public)).expect("witness");
+            let rows = synthesized.tables.advice_assigned().iter().map(|c| c.iter().rposition(|v| *v).map_or(0, |r| r + 1)).max();
+            let unknown = synthesize(&step.without_witnesses(), K, None).expect("layout");
+            assert_eq!(synthesized.tables.fixed(), unknown.tables.fixed());
+            assert_eq!(synthesized.tables.permutation(), unknown.tables.permutation());
+            let relation = FoldedRelation::<Fq>::from_synthesized(&unknown).expect("Q sigma relation");
+            let key = CommitKey::<Ep>::monomial(PinnedParams::<Ep>::derive(K).expect("params").params());
+            let decider = iroha_fold::decider_v2::DeciderV2Plan::new(relation.clone(), &key).expect("decider plan");
+            let (_, keys, copy_columns, _) = decider.sizes();
+            eprintln!(
+                "FOLD_RECEIVE_QSIGMA rows={rows:?} relation={:?} decider_keys={keys} copy_columns={copy_columns}",
+                relation.summary()
+            );
+        }
     }
 }

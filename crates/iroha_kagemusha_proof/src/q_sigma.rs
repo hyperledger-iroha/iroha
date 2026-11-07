@@ -546,6 +546,76 @@ struct TapedProof {
     length: iroha_plonk_gadgets::Uint<Fq, 32>,
     chunks: Vec<Word<Fq>>,
 }
+
+/// The incoming slot of the folded lineage's Q step (`crate::fold_lineage`):
+/// Q0's public columns with the selected claim where today's folded part is,
+/// and the selected claim itself, which the step folds into its claim
+/// accumulator.
+pub(crate) struct FoldIncomingCells {
+    pub(crate) columns: [Vec<Word<Fq>>; 5],
+    pub(crate) selected: FoldInputCells<Eq>,
+}
+
+impl QSigmaCircuit {
+    /// Byte-tape rows of the folded profile: the incoming sigma's tape only (no
+    /// local fold witness).
+    pub(crate) fn folded_byte_rows(&self) -> Result<usize, Error> {
+        let class = self.plan.incoming.as_ref().ok_or(Error::Synthesis)?;
+        Ok(4 + class.verifier.proof_length())
+    }
+
+    /// Today's incoming slot without its local fold: the sigma tape, the soft
+    /// verification, the one-hot mode and the selected claim (the original,
+    /// its correction or the trivial claim). Runs on the caller's chips; the
+    /// byte rows precede every curve-lane row, as in [`Circuit::synthesize`].
+    pub(crate) fn fold_incoming(
+        &self,
+        chip: &mut VerifierChip<Eq>,
+        bytes: &mut BytesChip<Fq>,
+        region: &mut iroha_plonk::frontend::Region<'_, Fq>,
+    ) -> Result<FoldIncomingCells, Error> {
+        Self::check_structure(&self.plan, &self.witness)?;
+        let (Some(class), Some(incoming), None) = (&self.plan.incoming, &self.witness.incoming, &self.plan.own) else {
+            return Err(Error::Synthesis);
+        };
+        let tape = self.proof_tape(chip, bytes, region, &incoming.sigma.proof, incoming.sigma.length)?;
+        let slot = self.slot(chip, tape, region, class, &incoming.sigma, VerificationMode::Soft)?;
+        let modes = incoming
+            .mode
+            .map(|value| chip.uint().glue().witness(region, self.value(Fq::from(u64::from(value)))))
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+        let modes: [Word<Fq>; 3] = modes.try_into().map_err(|_| Error::Synthesis)?;
+        let mode = ModeCells::constrain(chip.uint().glue(), region, &modes)?;
+        let corrected = chip.witness_generator(region, self.value(incoming.corrected))?;
+        let selected = FoldInputCells::select_incoming(chip, region, &slot.claim, &corrected, &mode)?;
+        let mut statements = vec![slot.statement];
+        statements.extend(slot.chunks);
+        for challenge in selected.challenges() {
+            let word = match challenge.native_word() {
+                Some(word) => word.clone(),
+                None => chip.uint().glue().linear(
+                    region,
+                    &[(Fq::ONE, challenge.lo().word()), (Fq::from(2).pow_vartime([128]), challenge.hi().word())],
+                    Fq::ZERO,
+                )?,
+            };
+            statements.push(word);
+        }
+        let mut verdicts = vec![slot.valid];
+        verdicts.extend(modes);
+        Ok(FoldIncomingCells {
+            columns: [
+                statements,
+                vec![selected.g().x().clone(), selected.g().y().clone()],
+                vec![slot.index],
+                verdicts,
+                vec![selected.source_k().clone()],
+            ],
+            selected,
+        })
+    }
+}
 struct SlotOutput {
     statement: Word<Fq>,
     chunks: Vec<Word<Fq>>,
