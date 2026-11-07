@@ -6,6 +6,15 @@ inventory: `python3 scripts/rust_ci.py validate` verifies that every workspace
 member has exactly one owner lane. The tables below explain the dependency
 boundaries and where to make changes.
 
+The PR workflow classifies affected Rust packages after provenance, exhaustive
+lane validation and the router tests. The unconditional `rust_helper_controls`
+and `rust_source_guards` jobs run the complete helper-test inventory and source
+checks concurrently, with the same 45-minute deadlines and pinned setup. Both
+must succeed in `rust_required`; their failure, cancellation or absence cannot be
+accepted as a skipped optional lane. The native resource harness keeps its own
+required aggregate. `scripts/tests/rust_helper_workflow_test.py` guards the exact
+command conservation and rejects non-success helper outcomes.
+
 ## Rust ownership
 
 | Owner | Responsibility and dependency boundary |

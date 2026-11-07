@@ -332,7 +332,8 @@ class RequiredWorkflowTests(unittest.TestCase):
         job = workflow.split('  rust_required:\n', 1)[1].split('\n  pytests:\n', 1)[0]
         self.assertRegex(job, r'needs: \[[^\n]*linux_resource_harness\]')
         shell = textwrap.dedent(job.split('        run: |\n', 1)[1])
-        base = {'PATH': os.environ['PATH'], 'CLASSIFIER_RESULT': 'success'}
+        base = {'PATH': os.environ['PATH'], 'CLASSIFIER_RESULT': 'success',
+                'HELPER_CONTROLS_RESULT': 'success', 'SOURCE_GUARDS_RESULT': 'success'}
         for name in ('BINARY_FREE', 'NETWORK', 'BUILD', 'CONSISTENCY', 'KOTODAMA', 'PYTESTS', 'PARLIAMENT'):
             base[name + '_SELECTED'] = 'false'
             base[name + '_RESULT'] = 'skipped'
