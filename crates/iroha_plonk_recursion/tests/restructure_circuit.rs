@@ -180,6 +180,15 @@ impl<C: PastaCurve> Circuit<C::Base> for RestructureCircuit<C> {
                 let length = chip
                     .uint()
                     .assign::<32>(&mut region, self.witness(u128::from(self.length)))?;
+                let before = {
+                    let lanes = chip.fold_lanes()?;
+                    [
+                        lanes.ff.next_row(),
+                        lanes.ecc.next_row(),
+                        lanes.glue.next_row(),
+                        lanes.range.next_row(),
+                    ]
+                };
                 let statement = RestructureStatementCells {
                     commitment,
                     point,
@@ -192,6 +201,16 @@ impl<C: PastaCurve> Circuit<C::Base> for RestructureCircuit<C> {
                     &elements,
                     &length,
                 )?;
+                {
+                    let lanes = chip.fold_lanes()?;
+                    let after = [
+                        lanes.ff.next_row(),
+                        lanes.ecc.next_row(),
+                        lanes.glue.next_row(),
+                        lanes.range.next_row(),
+                    ];
+                    LANES.with(|cell| cell.set([before, after]));
+                }
                 let forwarded = FoldInputCells::from_claim(&mut chip, &mut region, &output.claim)?;
                 let mut outputs = vec![forwarded.g().x().cell(), forwarded.g().y().cell()];
                 for value in forwarded.challenges() {
@@ -205,6 +224,10 @@ impl<C: PastaCurve> Circuit<C::Base> for RestructureCircuit<C> {
         }
         Ok(())
     }
+}
+
+thread_local! {
+    static LANES: std::cell::Cell<[[usize; 4]; 2]> = const { std::cell::Cell::new([[0; 4]; 2]) };
 }
 
 fn satisfied<C: PastaCurve>(circuit: &RestructureCircuit<C>, output: &AccumulatorT<C>) -> bool {
@@ -271,6 +294,17 @@ where
 {
     let (params, circuit, output) = honest::<C>(seed);
     assert!(satisfied(&circuit, &output), "honest restructuring");
+    let [before, after] = LANES.with(std::cell::Cell::get);
+    println!(
+        "{} restructure verifier rows (FF, ECC, glue, range): {:?}",
+        C::CURVE_ID,
+        [
+            after[0] - before[0],
+            after[1] - before[1],
+            after[2] - before[2],
+            after[3] - before[3]
+        ]
+    );
     let other = AccumulatorT::new(*output.g(), [C::ScalarExt::ONE; K]).expect("claim");
     assert!(!satisfied(&circuit, &other), "another output claim");
     let mut changed = circuit.clone();
