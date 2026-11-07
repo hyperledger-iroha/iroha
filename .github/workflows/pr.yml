@@ -171,8 +171,29 @@ jobs:
           cache-on-failure: "true"
       - name: Core, simulator, specification traceability and quorums (default seeds)
         run: env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS cargo test --locked -p iroha_sumeragi --features sim
+      - name: Record node compiler memory envelope
+        run: |
+          for resource in /proc/meminfo /proc/self/cgroup /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.events; do
+            if [ -r "$resource" ]; then
+              printf '%s\n' "$resource"
+              cat "$resource"
+            fi
+          done
       - name: Node driver, lanes and four-validator node tests
+        # Match the existing nightly Core gate's compiler concurrency on the
+        # 16 GiB hosted runner; keep the test profile and complete selectors.
+        env:
+          CARGO_BUILD_JOBS: "2"
         run: env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS cargo test --locked -p iroha_core --lib -- sumeragi::lanes sumeragi::node sumeragi::driver sumeragi::executor
+      - name: Record node compiler memory result
+        if: always()
+        run: |
+          for resource in /proc/meminfo /proc/self/cgroup /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.events; do
+            if [ -r "$resource" ]; then
+              printf '%s\n' "$resource"
+              cat "$resource"
+            fi
+          done
 
   # The Rust lanes test default features only; this target needs the opt-in
   # `fastpq-replay-measurement` feature. `iroha_measurement` itself is tested by
