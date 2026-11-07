@@ -19,7 +19,9 @@ use iroha_plonk::{
     frontend::synthesize,
     keys::{KeygenConfigV2, keygen_pk_v2},
     pcs::ipa::PinnedParams,
-    prove_circuit, verify_full,
+    prove_circuit, prove_with_committed_advice,
+    transcript::encode_point,
+    verify_full,
 };
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
@@ -130,3 +132,38 @@ fn a_pipa_r_proof_of_the_decider_verifies() {
     assert!(verify_full(&params, pk.binding(), pk.vk(), &wrong, &proof, MemoryBudget::DEFAULT).is_err());
 }
 
+#[test]
+fn a_committed_advice_decider_proof_carries_the_accumulator_commitments() {
+    let s = setup();
+    let plan = Arc::new(DeciderPlan::new(s.relation.clone()).expect("plan"));
+    let (acc, witness) = accumulator(&s);
+    let instances = decider_instances(&plan, &acc);
+    let params = PinnedParams::<Ep>::derive(K).expect("params");
+    let config = KeygenConfigV2::pipa_r(vec![InstanceType::Field; instances.len()]);
+    let pk = keygen_pk_v2(&params, &Decider::layout(Arc::clone(&plan)), &config).expect("proving key");
+    // The decider's advice columns as synthesized, with the accumulator's witness
+    // columns (decider advice columns 0..W) given verbatim with their blinds.
+    let circuit = Decider::new(Arc::clone(&plan), decider_witness(&plan, &acc, &witness));
+    let synthesized = synthesize(&circuit, K, Some(&instances)).expect("witness");
+    let mut advice = synthesized.tables.advice().expect("advice").to_vec();
+    let mut committed = vec![None; advice.len()];
+    for (c, column) in witness.columns.iter().enumerate() {
+        advice[c].clone_from(column);
+        committed[c] = Some(witness.blinds[c]);
+    }
+    let output = prove_with_committed_advice(
+        &params,
+        &pk,
+        advice,
+        committed,
+        instances.clone(),
+        ProverRandomness::hedged(),
+        ProverConfig::default(),
+    )
+    .expect("committed-advice proof");
+    assert_eq!(verify_full(&params, pk.binding(), pk.vk(), &instances, &output.proof, MemoryBudget::DEFAULT), Ok(()));
+    // Proof messages 0..W are the advice commitments, in column order.
+    for (c, commitment) in acc.instance.commitments.iter().enumerate() {
+        assert_eq!(&output.proof[32 * c..32 * (c + 1)], &encode_point::<Ep>(commitment)[..], "column {c}");
+    }
+}
