@@ -21,7 +21,7 @@ use iroha_crypto::{PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
     NetworkId,
     isi::{InstructionBox, sorafs_repair::ApplySorafsRepairV1},
-    prelude::PeerId,
+    peer::PeerId,
     runtime::{
         definition::{DefinitionDescriptorV1, RootSelectionV1},
         lifecycle::ChangeSetV1,
@@ -140,6 +140,7 @@ pub struct ContextArgs {
 
 /// Public share bound to one ordered seat of the exact four-validator repair plan.
 #[derive(Debug, Clone, norito::codec::Encode, norito::codec::Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha::commands::sorafs::toolkit::bootstrap::RepairSignatureShare")]
 struct RepairSignatureShare {
     signer_index: u16,
     signature: Signature,
