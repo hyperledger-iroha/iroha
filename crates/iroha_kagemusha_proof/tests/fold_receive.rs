@@ -200,7 +200,7 @@ fn plan() -> Arc<ReceiveFoldPlan> {
     let specs = ReceiveStagePlan::context_specs(Variant::Receive, MAX_OMEGA_RAW_BYTES, MAX_SIGMA_RAW_BYTES).expect("specs");
     let context = OperationSchedule::for_variant(Variant::Receive).bind(operation, specs).expect("schedule");
     let stage = ReceiveStagePlan::new(context, policy).expect("stage plan");
-    Arc::new(ReceiveFoldPlan::new(stage).expect("fold plan"))
+    Arc::new(ReceiveFoldPlan::new(stage, policy).expect("fold plan"))
 }
 
 /// The genuine Receive transition of today's map component test.
@@ -910,5 +910,247 @@ fn folded_a5_closes_the_receive_with_todays_terminal_owners() {
     assert_eq!(synthesized.tables.permutation(), unknown.tables.permutation());
     let relation = FoldedRelation::<Fp>::from_synthesized(&unknown).expect("A5 relation");
     assert_eq!(relation.shape(), rel.a1.shape(), "every A kind shares one fold shape");
-    eprintln!("FOLD_RECEIVE_A5 rows={rows:?} relation={:?}", relation.summary());
+    let key = CommitKey::<Eq>::monomial(PinnedParams::<Eq>::derive(K).expect("params").params());
+    let decider = iroha_fold::decider_v2::DeciderV2Plan::new(relation.clone(), &key).expect("decider plan");
+    let (_, keys, copy_columns, _) = decider.sizes();
+    eprintln!("FOLD_RECEIVE_A5 rows={rows:?} relation={:?} decider_keys={keys} copy_columns={copy_columns}", relation.summary());
+}
+
+/// The signed digest of a fixed signed object (body message, then the four
+/// signature limbs).
+fn signed_digest(kind: iroha_kagemusha_proof::operation_relation::objects::ObjectKind, raw: &[u8]) -> Fp {
+    use ff::PrimeField;
+    use iroha_kagemusha_proof::operation_relation::objects::signed_message_native;
+    let end = kind.body_len();
+    let mut words = vec![signed_message_native(kind, &raw[..end])];
+    for offset in [16, 0, 48, 32] {
+        words.push(Fp::from_u128(u128::from_be_bytes(raw[end + offset..end + offset + 16].try_into().expect("limb"))));
+    }
+    hash_with_domain(kind.object_domain(), &words)
+}
+
+/// The Payment transcript from the retained Request and payer credential.
+fn payment_transcript(request: &[u8], payer: &[u8], statement: &[Fp; 26], proof_digest: Fp, receipt: Fp) -> Vec<u8> {
+    use ff::PrimeField;
+    use iroha_kagemusha_proof::operation_relation::objects::ObjectKind;
+    let package = hash_with_domain(
+        u64::from_le_bytes(*b"kgwpkg_1"),
+        &[hash_with_domain(STATEMENT_DOMAIN, statement), proof_digest, receipt],
+    );
+    let mut payment = 1u16.to_le_bytes().to_vec();
+    payment.extend(signed_digest(ObjectKind::Request, request).to_repr());
+    payment.extend(&payer[130..195]);
+    payment.extend(signed_digest(ObjectKind::Credential, payer).to_repr());
+    payment.extend(package.to_repr());
+    assert_eq!(payment.len(), 163);
+    payment
+}
+
+/// A receipt over `statement` under the wallet `wallet`, signed by `secret`.
+fn receipt(statement: &[Fp; 26], wallet: &[Fp], proof: Fp, payment: Fp, secret: u64, nonce: u64) -> bootstrap_objects::Signed {
+    use ff::PrimeField;
+    use iroha_kagemusha_proof::operation_relation::objects::ObjectKind;
+    let operation = hash_with_domain(u64::from_le_bytes(*b"kgwopid1"), &[wallet[0], wallet[1], statement[16], statement[17]]);
+    let mut body = 1u16.to_le_bytes().to_vec();
+    body.extend(bootstrap_objects::id(statement[3], statement[4]));
+    body.extend(bootstrap_objects::id(wallet[0], wallet[1]));
+    body.extend(bootstrap_objects::small_id(31, 32));
+    body.extend(&statement[9].to_repr()[..16]);
+    for word in [operation, statement[14], statement[15], hash_with_domain(STATEMENT_DOMAIN, statement), proof] {
+        body.extend(word.to_repr());
+    }
+    body.extend(bootstrap_objects::small_id(501, 502));
+    body.extend(payment.to_repr());
+    bootstrap_objects::sign(ObjectKind::Receipt, body, secret, nonce)
+}
+
+/// The commitment of an exact (fixed-capacity) original tape (`kgwctap1`).
+fn exact_commitment(spec: iroha_kagemusha_proof::a_relation::context::ContextObjectSpec, digest: Fp, raw: &[u8]) -> [Fp; 3] {
+    use ff::PrimeField;
+    let mut words = vec![Fp::from(u64::from(spec.tag)), Fp::from(u64::from(spec.capacity))];
+    for chunk in framed(raw).chunks(31) {
+        let mut repr = [0; 32];
+        repr[..chunk.len()].copy_from_slice(chunk);
+        words.push(Fp::from_repr(repr).expect("31-byte chunk"));
+    }
+    [digest, Fp::from(u64::try_from(raw.len()).expect("length")), hash_with_domain(u64::from_le_bytes(*b"kgwctap1"), &words)]
+}
+
+/// A genuine signed-object Receive: the payer's Send receipt and Payment over
+/// the actual Request and payer credential, the own receipt under the
+/// receiver's payment key, the quoted current credential and its
+/// certificate, Q1's merged signatures over them, and the transition bound to
+/// that Payment.
+fn signed_source(plan: &ReceiveFoldPlan, valid: bool, insert: bool) -> (ReceiveFoldSource, Vec<SignatureWitness>) {
+    use iroha_kagemusha_proof::operation_relation::objects::ObjectKind;
+    let (payer, _, _) = bootstrap_objects::enrollment();
+    let (loaded, _, _) = load_objects::funded(&payer);
+    let send = send_objects::from_load(&loaded.successor);
+    let (receiver, certificate, credential) = bootstrap_objects::enrollment_for(bootstrap_objects::Identity::Receiver);
+    let before = StateWitness::from(&receiver);
+    let context = plan.stage().context();
+    let specs = context.object_specs();
+    let omega: Vec<u8> = (0..200u32).map(|i| (i * 7 + 3) as u8).collect();
+    let sigma: Vec<u8> = (0..100u32).map(|i| (i * 11 + 5) as u8).collect();
+    let proof_digest = p_bytes_native(u64::from_le_bytes(*b"kgwprf_1"), &[framed(&omega), framed(&sigma)].concat());
+    let send_receipt = receipt(&send.statement, &send.before.lineage[6..8], proof_digest, Fp::ZERO, 29, 71);
+    let request = send.objects[1].clone();
+    let payer_credential = send.objects[0].clone();
+    let payment = payment_transcript(&request, &payer_credential, &send.statement, proof_digest, send_receipt.digest());
+    let payment_digest = p_bytes_native(u64::from_le_bytes(*b"kgwpay_1"), &payment);
+    let fixture = receive_objects::from_send(&send, &before, payment_digest, valid, insert);
+    let own_proof = p_bytes_native(u64::from_le_bytes(*b"kgwstep1"), &framed(b"retained own sigma"));
+    let own_receipt = receipt(&fixture.statement, &before.lineage[6..8], own_proof, payment_digest, 43, 73);
+    let request_signature = {
+        let signed = bootstrap_objects::sign(ObjectKind::Request, request[..ObjectKind::Request.body_len()].to_vec(), 43, 59);
+        assert_eq!(signed.bytes, request);
+        signed.signature
+    };
+    let signatures = vec![own_receipt.signature, send_receipt.signature, request_signature];
+    let schema = plan.stage().signature_schema(ReceiveStagePlan::SIGNATURE_Q).expect("schema");
+    let [q1] = schema.native_instances(&signatures).expect("Q1 columns");
+    let objects: [Vec<u8>; 9] = [
+        request,
+        payer_credential,
+        send_receipt.bytes,
+        payment,
+        omega,
+        sigma,
+        own_receipt.bytes,
+        credential.bytes,
+        certificate.bytes,
+    ];
+    let kinds = [
+        Some(ObjectKind::Request),
+        Some(ObjectKind::Credential),
+        Some(ObjectKind::Receipt),
+        None,
+        None,
+        None,
+        Some(ObjectKind::Receipt),
+        Some(ObjectKind::Credential),
+        Some(ObjectKind::Certificate),
+    ];
+    let sigma_digest = p_bytes_native(u64::from_le_bytes(*b"kgwstep1"), &framed(&objects[5]));
+    let commitments = specs
+        .iter()
+        .enumerate()
+        .map(|(i, spec)| match (i, kinds[i]) {
+            (_, Some(kind)) => exact_commitment(*spec, signed_digest(kind, &objects[i]), &objects[i]),
+            (3, None) => exact_commitment(*spec, payment_digest, &objects[i]),
+            (4, None) => active_commitment(*spec, proof_digest, &objects[i]),
+            (5, None) => active_commitment(*spec, sigma_digest, &objects[i]),
+            _ => unreachable!("nine fixed slots"),
+        })
+        .collect();
+    let q0 = context
+        .operation()
+        .q(0)
+        .expect("Q0 plan")
+        .verifier()
+        .binding()
+        .descriptor()
+        .instance_lengths
+        .iter()
+        .map(|n| vec![Fq::ZERO; *n as usize])
+        .collect();
+    let source = ReceiveFoldSource::new(
+        plan,
+        Transition {
+            before: fixture.before,
+            after: fixture.after,
+            statement: fixture.statement,
+            consumed: fixture.consumed,
+            credit: fixture.credit,
+            insert: fixture.insert,
+        },
+        send.statement,
+        fixture.step,
+        objects,
+        commitments,
+        [q0, vec![q1]],
+        incoming(valid, send.before.lineage),
+    )
+    .expect("genuine signed source");
+    (source, signatures)
+}
+
+/// The segment `Q signature (step 1), A4 (step 2)` from the A state `base`:
+/// the Q step carries Q1's leaf over `signatures`.
+fn signature_segment(
+    rel: &Relations,
+    plan: &Arc<ReceiveFoldPlan>,
+    source: &ReceiveFoldSource,
+    signatures: &[SignatureWitness],
+    base: &[Fp],
+) -> Segment {
+    let mut rng = ChaCha20Rng::seed_from_u64(37);
+    let schema = plan.stage().signature_schema(ReceiveStagePlan::SIGNATURE_Q).expect("schema").clone();
+    let leaf = QSignatureCircuit::new(schema.clone(), signatures.to_vec()).expect("leaf");
+    let start = start_passthrough(base);
+    let q_chain = QKind::Signature.chain(AKind::Receive3);
+    let prepared =
+        prepare_step(&q_chain, 1, &rel.a1, None, None, vec![], vec![Fq::ZERO; Q_DIGESTS], start).expect("prepare Q");
+    // The Q step exports its leaf's own column; the context may claim another.
+    let [column] = schema.native_instances(signatures).expect("Q1 column");
+    let mut public = vec![step_public(&q_chain, 1, Fq::from(BASE), prepared.passthrough, &[], &prepared.digests, &[])];
+    public.push(column);
+    let step = QSignatureStep { leaf, shape: rel.a1.shape(), start, frame: Some(prepared.witness) };
+    let q = FoldedRelation::<Fq>::from_synthesized(&synthesize(&step.without_witnesses(), K, None).expect("Q layout"))
+        .expect("Q signature relation");
+    assert!(check_circuit(&step, K, &public, CheckMode::Strict).expect("Q synthesis").is_satisfied());
+    let (advice, public) = q.stage_witness(&synthesize(&step, K, Some(&public)).expect("Q witness")).expect("stage");
+    let fresh = fresh_instance(&q, &rel.key_q, &FOLD_Q, advice, public, &mut rng).expect("Q instance");
+    let kind = AKind::Receive4;
+    let a_chain = kind.chain();
+    let prepared = prepare_step(&a_chain, 2, &q, None, Some(&fresh), base.to_vec(), vec![Fp::ZERO; A_DIGESTS], Fp::ZERO)
+        .expect("prepare A4");
+    let next = plan.next_state(kind, source, base).unwrap_or_else(|_| circuit_next(plan, source, kind, base));
+    let public = vec![step_public(&a_chain, 2, Fp::from(BASE), prepared.passthrough, &next, &prepared.digests, &[])];
+    let witness = ReceiveStepWitness { source: Arc::new(source.clone()), frame: prepared.witness };
+    Segment { circuit: a_step(plan, kind, q.shape(), Some(witness)), public, kept: prepared.kept.expect("A starts U_Q"), q }
+}
+
+#[test]
+#[ignore = "k16 folded Receive A4 steps on genuine signed objects; run optimized"]
+fn folded_a4_authorizes_the_own_receipt_and_checks_incoming_signatures() {
+    let plan = plan();
+    let rel = relations(&plan);
+    for (valid, insert) in [(true, true), (false, true)] {
+        let (genuine, signatures) = signed_source(&plan, valid, insert);
+        let base = plan.state_before(AKind::Receive4, &genuine).expect("A4 state");
+        let segment = signature_segment(&rel, &plan, &genuine, &signatures, &base);
+        assert!(satisfied(&segment.circuit, &segment.public), "valid={valid} insert={insert}");
+        // Another own receipt byte, Request byte or Send receipt byte breaks a
+        // signed digest the context or Q1 holds; a context Q1 column other than
+        // the folded instance's, or another program counter, is refused.
+        for (case, index, offset) in [("own receipt", 6, 40), ("Request", 0, 10), ("Send receipt", 2, 40)] {
+            let mut source = genuine.clone();
+            source.objects[index][offset] ^= 1;
+            let segment = signature_segment(&rel, &plan, &source, &signatures, &base);
+            assert!(!satisfied(&segment.circuit, &segment.public), "valid={valid}: A4 accepted another {case}");
+        }
+        let mut source = genuine.clone();
+        source.q[1][0][9] = Fq::ZERO;
+        let segment = signature_segment(&rel, &plan, &source, &signatures, &base);
+        assert!(!satisfied(&segment.circuit, &segment.public), "valid={valid}: A4 accepted Q1 columns the Q step did not fold");
+        let mut wrong = base.clone();
+        wrong[A_PC] = Fp::ONE;
+        let segment = signature_segment(&rel, &plan, &genuine, &signatures, &wrong);
+        assert!(!satisfied(&segment.circuit, &segment.public), "valid={valid}: A4 accepted another program counter");
+    }
+    let (genuine, signatures) = signed_source(&plan, true, true);
+    let base = plan.state_before(AKind::Receive4, &genuine).expect("A4 state");
+    let segment = signature_segment(&rel, &plan, &genuine, &signatures, &base);
+    let synthesized = synthesize(&segment.circuit, K, Some(&segment.public)).expect("A4 witness");
+    let rows = synthesized.tables.advice_assigned().iter().map(|c| c.iter().rposition(|v| *v).map_or(0, |r| r + 1)).max();
+    let unknown = synthesize(&segment.circuit.without_witnesses(), K, None).expect("A4 layout");
+    assert_eq!(synthesized.tables.fixed(), unknown.tables.fixed());
+    assert_eq!(synthesized.tables.permutation(), unknown.tables.permutation());
+    let relation = FoldedRelation::<Fp>::from_synthesized(&unknown).expect("A4 relation");
+    assert_eq!(relation.shape(), rel.a1.shape(), "every A kind shares one fold shape");
+    let key = CommitKey::<Eq>::monomial(PinnedParams::<Eq>::derive(K).expect("params").params());
+    let decider = iroha_fold::decider_v2::DeciderV2Plan::new(relation.clone(), &key).expect("decider plan");
+    let (_, keys, copy_columns, _) = decider.sizes();
+    eprintln!("FOLD_RECEIVE_A4 rows={rows:?} relation={:?} decider_keys={keys} copy_columns={copy_columns}", relation.summary());
 }

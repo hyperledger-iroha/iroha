@@ -16,7 +16,7 @@ use std::sync::Arc;
 use ff::{Field, PrimeField};
 use iroha_fold::{
     circuit::{
-        FoldLanes,
+        FoldLanes, ScalarCell,
         ivc::{fold_frame, frame_outputs},
     },
     ivc::FrameWitness,
@@ -45,8 +45,13 @@ use crate::{
             ContextIncoming, ContextIncomingProof, ContextInputs, ContextObjectCells, ContextPlan,
             ContextPredecessor, ContextState,
         },
+        VerifiedQCells, bind_signature_q,
         native::receive::{IncomingWitness, Transition},
-        receive::{ReceiveProofDigest, ReceiveStageInputs, ReceiveStagePlan, ReceiveStageWitness},
+        own::OwnPolicy,
+        receive::{
+            ReceiveProofDigest, ReceiveSignedObjects, ReceiveStageInputs, ReceiveStagePlan, ReceiveStageWitness,
+            authorization::{ReceiveAuthorizationObjects, ReceiveAuthorizationSources, ReceiveSignatureQProjection},
+        },
         results::ReceiveResultClaims,
         transition::TransitionInputs,
     },
@@ -95,16 +100,18 @@ pub const fn pc_before(kind: AKind) -> u64 {
 #[derive(Clone, Debug)]
 pub struct ReceiveFoldPlan {
     stage: ReceiveStagePlan,
+    policy: OwnPolicy,
     trivial_pallas: FoldInput<Ep>,
     trivial_vesta: AccumulatorT<Eq>,
 }
 
 impl ReceiveFoldPlan {
-    /// Pins today's ordinary Receive schedule for folding.
+    /// Pins today's ordinary Receive schedule for folding, with the own policy
+    /// its stage plan was built under.
     ///
     /// # Errors
     /// [`Error::Artifact`] for another variant or schedule.
-    pub fn new(stage: ReceiveStagePlan) -> Result<Self, Error> {
+    pub fn new(stage: ReceiveStagePlan, policy: OwnPolicy) -> Result<Self, Error> {
         let context = stage.context();
         if context.operation().frame().variant() != Variant::Receive
             || context.stage_count() != Q_PARTITIONS.len()
@@ -118,7 +125,7 @@ impl ReceiveFoldPlan {
         let vesta = decode_point::<Eq>(&VESTA_TRIVIAL_GENERATOR).map_err(|_| Error::Artifact)?;
         let trivial_pallas = FoldInput::from_normalized(pallas, 16, [Fq::ONE; 16]).map_err(|_| Error::Artifact)?;
         let trivial_vesta = AccumulatorT::new(vesta, [Fp::ONE; 16]).map_err(|_| Error::Artifact)?;
-        Ok(Self { stage, trivial_pallas, trivial_vesta })
+        Ok(Self { stage, policy, trivial_pallas, trivial_vesta })
     }
 
     /// Today's Receive stage plan.
@@ -253,6 +260,23 @@ fn lineage_fields_fit(fields: &[Fp; 18]) -> bool {
     fields[0] == Fp::ONE
         && [1, 2, 3, 4, 6, 7, 9, 10, 11, 12, 14].iter().all(|i| below(&fields[*i], 128))
         && below(&fields[13], 104)
+}
+
+/// Binds the context's columns of a Q leaf to the public columns of the Q
+/// instance a step folded (after its frame column), limb for limb.
+fn bind_q_columns(
+    region: &mut Region<'_, Fp>,
+    context: &[Vec<ScalarCells<Ep>>],
+    folded: &[Vec<ScalarCell<Ep>>],
+) -> Result<(), SynthesisError> {
+    if context.len() != folded.len() || context.iter().zip(folded).any(|(a, b)| a.len() != b.len()) {
+        return Err(SynthesisError::Synthesis);
+    }
+    for (a, b) in context.iter().flatten().zip(folded.iter().flatten()) {
+        GlueChip::assert_equal(region, a.lo().word(), b.s6.lo().word())?;
+        GlueChip::assert_equal(region, a.hi().word(), b.s6.hi().word())?;
+    }
+    Ok(())
 }
 
 /// Canonical one-hot Accept, Trivial and Corrected words.
@@ -572,7 +596,7 @@ impl ReceiveFoldStep {
         shape: FoldShape,
         witness: Option<ReceiveStepWitness>,
     ) -> Result<Self, Error> {
-        if !matches!(kind, AKind::Receive1 | AKind::Receive5) {
+        if kind == AKind::Receive3 {
             return Err(Error::Artifact);
         }
         Ok(Self { plan, kind, shape, witness })
@@ -626,8 +650,9 @@ impl ReceiveFoldStep {
         }
         match self.kind {
             AKind::Receive1 => self.receive1(assign, chip, region, &context, &input, source)?,
+            AKind::Receive4 => self.receive4(assign, chip, bytes, region, &context, &input, source, &frame.public)?,
             AKind::Receive5 => self.receive5(assign, chip, bytes, region, &context, &input, source)?,
-            AKind::Receive3 | AKind::Receive4 => return Err(SynthesisError::Synthesis),
+            AKind::Receive3 => return Err(SynthesisError::Synthesis),
         }
         let next = if self.kind == AKind::Receive5 {
             // The Receive is complete: the successor's lineage, no context.
@@ -644,6 +669,72 @@ impl ReceiveFoldStep {
         let refs = chip.fold_lanes()?;
         let mut lanes = FoldLanes { glue: refs.glue, range: refs.range, ff: refs.ff, ecc: refs.ecc, duplex: refs.hash };
         frame_outputs(&mut lanes, region, &chain, &frame, &next, &frame.digests, &[])
+    }
+
+    /// Stage A4's tasks: the hard own receipt (Authorization) and the soft
+    /// Send receipt and Request signatures (Signatures), over Q1's columns.
+    /// Folding authenticates those columns: the Q Signature instance this step
+    /// folds carries exactly the context's Q1 columns, and the decider of its
+    /// kind decides that today's Q1 leaf holds for them, which replaces today's
+    /// hard Q1 verifier (its key digest is the plan's constant; no Q1 proof
+    /// opening exists, so the opening slot is the pinned trivial claim).
+    #[allow(clippy::too_many_arguments)]
+    fn receive4(
+        &self,
+        assign: Assign,
+        chip: &mut VerifierChip<Ep>,
+        bytes: &mut BytesChip<Fp>,
+        region: &mut Region<'_, Fp>,
+        context: &ContextCells,
+        input: &ContextInputs<'_>,
+        source: &ReceiveFoldSource,
+        folded: &[Vec<ScalarCell<Ep>>],
+    ) -> Result<(), SynthesisError> {
+        let index = ReceiveStagePlan::SIGNATURE_Q;
+        bind_q_columns(region, &context.q_instances[index], folded.get(1..).ok_or(SynthesisError::Synthesis)?)?;
+        let values = source.objects.each_ref().map(|raw| raw.iter().map(|byte| assign.value(*byte)).collect::<Vec<_>>());
+        let signed = ReceiveSignedObjects::decode(chip, bytes, region, [&values[0], &values[1], &values[2]])?;
+        let authorization = ReceiveAuthorizationObjects::decode(
+            chip,
+            bytes,
+            region,
+            Variant::Receive,
+            ReceiveAuthorizationSources { receipt: &values[6], quoted: [&values[7], &values[8]] },
+        )?;
+        let operation = self.plan.context().operation();
+        let fixed = operation.q(index).ok_or(SynthesisError::Synthesis)?;
+        let key_digest = fixed.key.kagemusha_digest(fixed.verifier().binding()).map_err(|_| SynthesisError::Synthesis)?;
+        let opening = assign.pallas(chip, region, &self.plan.trivial_pallas)?;
+        pin_pallas(region, &opening, &self.plan.trivial_pallas)?;
+        let verified = VerifiedQCells {
+            index,
+            opening,
+            instances: context.q_instances[index].clone(),
+            key_digest: chip.uint().glue().constant(region, key_digest)?,
+        };
+        let schema = self.plan.stage.signature_schema(index).ok_or(SynthesisError::Synthesis)?;
+        let own = bind_signature_q(chip, region, operation, index, schema, &verified)?;
+        let stage = u32::try_from(stage_of(self.kind)).map_err(|_| SynthesisError::BoundsFailure)?;
+        let incoming =
+            ReceiveSignatureQProjection::from_context(chip, region, self.plan.context(), stage, self.plan.policy, input)?;
+        self.plan.stage.constrain_stage(
+            chip,
+            region,
+            stage,
+            ReceiveStageInputs {
+                context: input,
+                proof_digest: None,
+                objects: None,
+                signed: Some(&signed),
+                authorization: Some(&authorization),
+            },
+            ReceiveStageWitness {
+                own_signatures: Some(&own),
+                incoming_signatures: Some(&incoming),
+                ..ReceiveStageWitness::default()
+            },
+        )?;
+        Ok(())
     }
 
     /// Stage A5's tasks: the consumed-credit nonmembership, the terminal burn
