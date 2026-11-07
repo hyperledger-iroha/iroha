@@ -165,3 +165,28 @@ fn tampered_messages_or_challenges_are_rejected() {
     let other = *b"another relation domain of tests";
     assert!(verify_fold(&s.relation, &other, &acc, &instance, &proof).is_err());
 }
+
+/// Fresh instances, a fold and a decider v2 proof are the same bytes whether
+/// the engine runs on one thread or on several.
+#[test]
+fn results_do_not_depend_on_the_thread_count() {
+    use iroha_fold::decider_v2::{DeciderV2Plan, prove};
+    let synthesized = synthesize(&Toy { seed: 1 }, K, None).expect("layout");
+    let relation = FoldedRelation::from_synthesized(&synthesized).expect("relation");
+    let params = PinnedParams::<Ep>::derive(K).expect("params");
+    let s = Setup { relation, key: CommitKey::monomial(params.params()) };
+    let plan = DeciderV2Plan::new(s.relation.clone(), &s.key).expect("plan");
+    let run = |threads: usize| {
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().expect("pool");
+        pool.install(|| {
+            let mut rng = ChaCha20Rng::seed_from_u64(77);
+            let (first, w1) = fresh(&s, 1, &mut rng);
+            let (second, w2) = fresh(&s, 2, &mut rng);
+            let acc = Accumulator::from_fresh(&s.relation, &DOMAIN, first.clone()).expect("accumulator");
+            let (folded, witness, proof) = fold(&s.relation, &DOMAIN, &acc, &w1, &second, &w2).expect("fold");
+            let decided = prove(&plan, &DOMAIN, &folded, &witness).expect("decider");
+            (first, second, folded, witness, proof, decided.proof, decided.claims)
+        })
+    };
+    assert_eq!(run(1), run(4));
+}

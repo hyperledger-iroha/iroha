@@ -82,6 +82,20 @@ impl<C: PastaCurve> CommitKey<C> {
     }
 }
 
+impl<C: PastaCurve> CommitKey<C> {
+    /// Commits every column with its blinding scalar, columns in parallel.
+    ///
+    /// # Errors
+    /// As [`Self::commit`].
+    pub fn commit_many(&self, columns: &[&[C::ScalarExt]], blinds: &[C::ScalarExt]) -> Result<Vec<C::AffineExt>, Error> {
+        use rayon::prelude::*;
+        if columns.len() != blinds.len() {
+            return Err(Error::Shape("blinds"));
+        }
+        columns.par_iter().zip(blinds).map(|(column, blind)| self.commit(column, blind)).collect()
+    }
+}
+
 /// `acc + gamma (new - acc)` for points.
 pub(crate) fn fold_point<C: PastaCurve>(
     acc: &C::AffineExt,

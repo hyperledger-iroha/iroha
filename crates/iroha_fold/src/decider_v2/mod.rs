@@ -45,6 +45,7 @@ mod tests;
 
 use ff::Field;
 use iroha_pasta::{PastaCurve, msm::MemoryBudget, params::ParamsIpa};
+use rayon::prelude::*;
 use iroha_plonk::pcs::{
     ipa::GeneratorClaim,
     mle::{self as pcs_mle, BatchOpening, MleClaim, open_batch_bound, verify_batch_bound},
@@ -311,7 +312,7 @@ fn lane_tables<C: PastaCurve>(lane: &Lane<'_, C>, tau: &[C::ScalarExt]) -> Vec<V
     let n = relation.n;
     let pb = relation.constraint_bits;
     plan.sources
-        .iter()
+        .par_iter()
         .map(|source| match *source {
             Source::Witness(c, k) => mle::rotated(&witness.columns[c], k),
             Source::Key(p, k) => mle::rotated(&plan.key_polys[p], k),
@@ -368,8 +369,8 @@ pub fn prove_many<C: PastaCurve>(
     let mut lanes = Vec::with_capacity(inputs.len());
     for &(plan, acc, witness) in inputs {
         let helpers = copy_helpers(plan, witness, gamma, eta)?;
-        let helper_commitments =
-            helpers.iter().map(|h| plan.key.commit(h, &S::<C>::ZERO)).collect::<Result<Vec<_>, _>>()?;
+        let slices: Vec<&[S<C>]> = helpers.iter().map(Vec::as_slice).collect();
+        let helper_commitments = plan.key.commit_many(&slices, &vec![S::<C>::ZERO; helpers.len()])?;
         lanes.push(Lane { plan, acc, witness, helpers, helper_commitments });
     }
     for lane in &lanes {
@@ -390,40 +391,53 @@ pub fn prove_many<C: PastaCurve>(
         states.push((scalars, weights, tables, pairs));
         scale *= challenges.lambda;
     }
-    let mut stack = Vec::with_capacity(32);
+    // Every (lane, term) is one parallel work item of a round.
+    let work: Vec<(usize, usize)> = lanes
+        .iter()
+        .enumerate()
+        .flat_map(|(li, lane)| (0..lane.plan.terms.len()).map(move |ti| (li, ti)))
+        .collect();
     let mut zero_check = Vec::with_capacity(mu);
     let mut rho = Vec::with_capacity(mu);
     for _ in 0..mu {
-        let mut sums = vec![S::<C>::ZERO; m];
-        for (lane, (scalars, weights, tables, pairs)) in lanes.iter().zip(&states) {
-            let half = tables[0].len() / 2;
-            for ((term, weight), pairs) in lane.plan.terms.iter().zip(weights).zip(pairs) {
-                let mut line = [S::<C>::ZERO; eval::LINE];
-                let mut add = |p: usize| {
-                    let v = term.poly.eval_pair(tables, p, m, scalars, &mut stack);
-                    for (a, b) in line.iter_mut().zip(v).take(m) {
-                        *a += b;
+        let sums = work
+            .par_iter()
+            .map_init(
+                || Vec::with_capacity(32),
+                |stack, &(li, ti)| {
+                    let (scalars, weights, tables, pairs) = &states[li];
+                    let term = &lanes[li].plan.terms[ti];
+                    let half = tables[0].len() / 2;
+                    let mut line = [S::<C>::ZERO; eval::LINE];
+                    let mut add = |p: usize| {
+                        let v = term.poly.eval_pair(tables, p, m, scalars, stack);
+                        for (a, b) in line.iter_mut().zip(v).take(m) {
+                            *a += b;
+                        }
+                    };
+                    match &pairs[ti] {
+                        Pairs::List(list) => list.iter().for_each(|p| add(*p as usize)),
+                        Pairs::Prefix(count) => (0..(*count).min(half)).for_each(&mut add),
                     }
-                };
-                match pairs {
-                    Pairs::List(list) => list.iter().for_each(|p| add(*p as usize)),
-                    Pairs::Prefix(count) => (0..(*count).min(half)).for_each(&mut add),
-                }
-                for (s, v) in sums.iter_mut().zip(line) {
-                    *s += *weight * v;
-                }
-            }
-        }
+                    let weight = weights[ti];
+                    line.iter().take(m).map(|v| weight * v).collect::<Vec<_>>()
+                },
+            )
+            .reduce(
+                || vec![S::<C>::ZERO; m],
+                |mut a, b| {
+                    for (x, y) in a.iter_mut().zip(b) {
+                        *x += y;
+                    }
+                    a
+                },
+            );
         transcript.absorb_scalars(&sums);
         let challenge = transcript.challenge();
-        for (_, _, tables, pairs) in &mut states {
-            for table in tables.iter_mut() {
-                mle::fold(table, challenge);
-            }
-            for p in pairs.iter_mut() {
-                p.halve();
-            }
-        }
+        states.par_iter_mut().for_each(|(_, _, tables, pairs)| {
+            tables.par_iter_mut().for_each(|table| mle::fold(table, challenge));
+            pairs.iter_mut().for_each(Pairs::halve);
+        });
         zero_check.push(sums);
         rho.push(challenge);
     }
@@ -449,9 +463,7 @@ pub fn prove_many<C: PastaCurve>(
                     combined.len() - 1
                 }
             };
-            for (q, v) in combined[slot].1.iter_mut().zip(poly) {
-                *q += power * v;
-            }
+            combined[slot].1.par_iter_mut().zip(poly).for_each(|(q, v)| *q += power * v);
             power *= zeta;
         }
     }
@@ -464,21 +476,25 @@ pub fn prove_many<C: PastaCurve>(
     let two = S::<C>::from(2);
     for _ in 0..mu {
         let half = shift_lanes[0].0.len() / 2;
-        let (mut s0, mut s2) = (S::<C>::ZERO, S::<C>::ZERO);
-        for (e, q) in &shift_lanes {
-            for p in 0..half {
-                let (e0, e1, q0, q1) = (e[2 * p], e[2 * p + 1], q[2 * p], q[2 * p + 1]);
-                s0 += e0 * q0;
-                s2 += (two * e1 - e0) * (two * q1 - q0);
-            }
-        }
+        let (s0, s2) = shift_lanes
+            .par_iter()
+            .map(|(e, q)| {
+                (0..half)
+                    .into_par_iter()
+                    .map(|p| {
+                        let (e0, e1, q0, q1) = (e[2 * p], e[2 * p + 1], q[2 * p], q[2 * p + 1]);
+                        (e0 * q0, (two * e1 - e0) * (two * q1 - q0))
+                    })
+                    .reduce(|| (S::<C>::ZERO, S::<C>::ZERO), |a, b| (a.0 + b.0, a.1 + b.1))
+            })
+            .reduce(|| (S::<C>::ZERO, S::<C>::ZERO), |a, b| (a.0 + b.0, a.1 + b.1));
         let sent = [s0, s2];
         transcript.absorb_scalars(&sent);
         let challenge = transcript.challenge();
-        for (e, q) in &mut shift_lanes {
+        shift_lanes.par_iter_mut().for_each(|(e, q)| {
             mle::fold(e, challenge);
             mle::fold(q, challenge);
-        }
+        });
         shift.push(sent);
         sigma.push(challenge);
     }
@@ -500,7 +516,7 @@ pub fn prove_many<C: PastaCurve>(
         }
     }
     let at_sigma = polys
-        .iter()
+        .par_iter()
         .map(|poly| pcs_mle::evaluate(poly, &sigma).ok_or(Error::Shape("evaluation")))
         .collect::<Result<Vec<S<C>>, _>>()?;
     transcript.absorb_scalars(&at_sigma);

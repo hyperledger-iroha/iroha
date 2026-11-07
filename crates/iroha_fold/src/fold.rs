@@ -21,9 +21,12 @@
 //! challenges, and the folded instance; it rejects nothing by itself: a dishonest
 //! fold yields an accumulator the decider rejects.
 
+use core::ops::Range;
+
 use ff::Field;
 use iroha_pasta::PastaCurve;
 use rand_core::{CryptoRng, Rng};
+use rayon::prelude::*;
 
 use crate::{
     Error,
@@ -213,35 +216,49 @@ pub fn fresh_instance<C: PastaCurve, R: Rng + CryptoRng>(
     let columns_total = relation.columns();
     let mut columns: Vec<Vec<S<C>>> = advice;
     columns.resize(columns_total, Vec::new());
-    let point = Point { advice: &columns[..relation.advice_columns], instance: &public };
-    let mut ms = Vec::with_capacity(relation.groups.len());
-    for group in &relation.groups {
-        ms.push(logup::multiplicities(group, &tables, point)?);
-    }
+    let ms = {
+        let point = Point { advice: &columns[..relation.advice_columns], instance: &public };
+        relation
+            .groups
+            .par_iter()
+            .map(|group| logup::multiplicities(group, &tables, point))
+            .collect::<Result<Vec<_>, _>>()?
+    };
     for (group, m) in relation.groups.iter().zip(ms) {
         columns[group.m_column()] = m;
     }
     let blinds: Vec<S<C>> = (0..columns_total).map(|_| S::<C>::random(&mut *rng)).collect();
     let mut commitments = vec![C::AffineExt::default(); columns_total];
-    for c in 0..relation.advice_columns {
-        commitments[c] = key.commit(&columns[c], &blinds[c])?;
-    }
-    for group in &relation.groups {
-        let c = group.m_column();
-        commitments[c] = key.commit(&columns[c], &blinds[c])?;
-    }
+    let commit_columns = |indices: &[usize], columns: &[Vec<S<C>>], commitments: &mut [C::AffineExt]| -> Result<(), Error> {
+        let slices: Vec<&[S<C>]> = indices.iter().map(|c| columns[*c].as_slice()).collect();
+        let column_blinds: Vec<S<C>> = indices.iter().map(|c| blinds[*c]).collect();
+        for (c, commitment) in indices.iter().zip(key.commit_many(&slices, &column_blinds)?) {
+            commitments[*c] = commitment;
+        }
+        Ok(())
+    };
+    let first_round: Vec<usize> =
+        (0..relation.advice_columns).chain(relation.groups.iter().map(|group| group.m_column())).collect();
+    commit_columns(&first_round, &columns, &mut commitments)?;
     let (_, theta, r) = round_one::<C>(relation, domain, &public, &commitments);
-    for (group, rg) in relation.groups.iter().zip(&r) {
+    let reciprocals = {
         let point = Point { advice: &columns[..relation.advice_columns], instance: &public };
-        let (h, g) = logup::reciprocals(group, &tables, point, &columns[group.m_column()], &theta, *rg)?;
+        relation
+            .groups
+            .par_iter()
+            .zip(&r)
+            .map(|(group, rg)| logup::reciprocals(group, &tables, point, &columns[group.m_column()], &theta, *rg))
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    for (group, (h, g)) in relation.groups.iter().zip(reciprocals) {
         for (slot, column) in h.into_iter().enumerate() {
             columns[group.h_column(slot)] = column;
         }
         columns[group.g_column()] = g;
-        for c in (group.m_column() + 1)..=group.g_column() {
-            commitments[c] = key.commit(&columns[c], &blinds[c])?;
-        }
     }
+    let second_round: Vec<usize> =
+        relation.groups.iter().flat_map(|group| (group.m_column() + 1)..=group.g_column()).collect();
+    commit_columns(&second_round, &columns, &mut commitments)?;
     Ok((Instance { commitments, public, theta, r }, Witness { columns, blinds }))
 }
 
@@ -293,22 +310,53 @@ impl<C: PastaCurve> Accumulator<C> {
 pub(crate) fn constraints_at<F: iroha_pasta::PastaField>(
     relation: &FoldedRelation<F>,
     view: View<'_, F>,
+    sink: impl FnMut(usize, usize, F),
+) {
+    constraints_in(relation, view, 0..relation.n, sink);
+}
+
+/// The indices of the ascending `rows` that lie in `range`.
+fn rows_in(rows: impl Fn(usize) -> usize, len: usize, range: &Range<usize>) -> Range<usize> {
+    let first = partition(len, |i| rows(i) < range.start);
+    let last = partition(len, |i| rows(i) < range.end);
+    first..last
+}
+
+/// The first index in `0..len` where `before` turns false (it is monotone).
+fn partition(len: usize, before: impl Fn(usize) -> bool) -> usize {
+    let (mut lo, mut hi) = (0, len);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if before(mid) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+/// As [`constraints_at`] for the constraints on rows in `range` only.
+pub(crate) fn constraints_in<F: iroha_pasta::PastaField>(
+    relation: &FoldedRelation<F>,
+    view: View<'_, F>,
+    range: Range<usize>,
     mut sink: impl FnMut(usize, usize, F),
 ) {
     let tables = relation.tables();
     let point = view.point(relation.advice_columns);
     let mut stack = Vec::with_capacity(64);
     for gate in &relation.gates {
-        for (row, guard) in gate.rows.iter().zip(&gate.guards) {
-            let row = *row as usize;
-            sink(row, gate.class, gate.body.eval(&tables, point, row, &mut stack) * guard);
+        for i in rows_in(|i| gate.rows[i] as usize, gate.rows.len(), &range) {
+            let row = gate.rows[i] as usize;
+            sink(row, gate.class, gate.body.eval(&tables, point, row, &mut stack) * gate.guards[i]);
         }
     }
     for (gi, group) in relation.groups.iter().enumerate() {
         let r = view.r[gi];
         for (slot, cells) in group.slots.iter().enumerate() {
             let h_column = &view.columns[group.h_column(slot)];
-            for cell in cells {
+            for cell in &cells[rows_in(|i| cells[i].row as usize, cells.len(), &range)] {
                 let row = cell.row as usize;
                 let mut terms = [F::ZERO; logup::CELL_INPUTS];
                 let members = cell.members();
@@ -320,7 +368,7 @@ pub(crate) fn constraints_at<F: iroha_pasta::PastaField>(
             }
         }
         let (m, g) = (&view.columns[group.m_column()], &view.columns[group.g_column()]);
-        for row in 0..group.usable {
+        for row in range.start.min(group.usable)..range.end.min(group.usable) {
             if bool::from(m[row].is_zero()) && bool::from(g[row].is_zero()) {
                 continue;
             }
@@ -340,13 +388,14 @@ fn cell_constraint<F: Field>(h: F, terms: &[F]) -> F {
     }
 }
 
-/// As [`constraints_at`] along the line `acc + x (new - acc)` for every `x` in
+/// As [`constraints_in`] along the line `acc + x (new - acc)` for every `x` in
 /// `xs` (at most [`MAX_POINTS`]).
 fn constraints_on_line<F: iroha_pasta::PastaField>(
     relation: &FoldedRelation<F>,
     acc: View<'_, F>,
     new: View<'_, F>,
     xs: &[F],
+    range: Range<usize>,
     mut sink: impl FnMut(usize, usize, &[F; MAX_POINTS]),
 ) {
     let tables = relation.tables();
@@ -361,11 +410,11 @@ fn constraints_on_line<F: iroha_pasta::PastaField>(
     };
     let mut stack = Vec::with_capacity(64);
     for gate in &relation.gates {
-        for (row, guard) in gate.rows.iter().zip(&gate.guards) {
-            let row = *row as usize;
+        for i in rows_in(|i| gate.rows[i] as usize, gate.rows.len(), &range) {
+            let row = gate.rows[i] as usize;
             let mut v = gate.body.eval_line(&tables, pa, pn, xs, row, &mut stack);
             for x in v.iter_mut().take(m) {
-                *x *= guard;
+                *x *= gate.guards[i];
             }
             sink(row, gate.class, &v);
         }
@@ -385,7 +434,7 @@ fn constraints_on_line<F: iroha_pasta::PastaField>(
         let r = line(acc.r[gi], new.r[gi]);
         for (slot, cells) in group.slots.iter().enumerate() {
             let column = group.h_column(slot);
-            for cell in cells {
+            for cell in &cells[rows_in(|i| cells[i].row as usize, cells.len(), &range)] {
                 let row = cell.row as usize;
                 let h = line(acc.columns[column][row], new.columns[column][row]);
                 let members = cell.members();
@@ -406,7 +455,7 @@ fn constraints_on_line<F: iroha_pasta::PastaField>(
             }
         }
         let (mc, gc) = (group.m_column(), group.g_column());
-        for row in 0..group.usable {
+        for row in range.start.min(group.usable)..range.end.min(group.usable) {
             let zero = |c: usize| bool::from(acc.columns[c][row].is_zero()) && bool::from(new.columns[c][row].is_zero());
             if zero(mc) && zero(gc) {
                 continue;
@@ -469,6 +518,11 @@ fn delta_powers<F: Field>(delta: F, t: usize) -> Vec<F> {
     out
 }
 
+/// Rows per parallel chunk of a constraint walk.
+fn row_chunk(n: usize) -> usize {
+    (n / (rayon::current_num_threads() * 8)).max(256)
+}
+
 /// `F(X) = sum_i pow_i(beta + X delta) f_i(w_acc)`, all `t + 1` coefficients.
 fn f_polynomial<F: iroha_pasta::PastaField>(
     relation: &FoldedRelation<F>,
@@ -489,17 +543,21 @@ fn f_polynomial<F: iroha_pasta::PastaField>(
         })
         .collect();
     let mut rows: Vec<Vec<F>> = vec![Vec::new(); relation.n];
-    constraints_at(relation, acc, |row, index, value| {
-        if !bool::from(value.is_zero()) {
-            let target = &mut rows[row];
-            let p = &inner[index];
-            if target.len() < p.len() {
-                target.resize(p.len(), F::ZERO);
+    let chunk = row_chunk(relation.n);
+    rows.par_chunks_mut(chunk).enumerate().for_each(|(ci, slots)| {
+        let start = ci * chunk;
+        constraints_in(relation, acc, start..start + slots.len(), |row, index, value| {
+            if !bool::from(value.is_zero()) {
+                let target = &mut slots[row - start];
+                let p = &inner[index];
+                if target.len() < p.len() {
+                    target.resize(p.len(), F::ZERO);
+                }
+                for (t, c) in target.iter_mut().zip(p) {
+                    *t += *c * value;
+                }
             }
-            for (t, c) in target.iter_mut().zip(p) {
-                *t += *c * value;
-            }
-        }
+        });
     });
     let mut stack: Vec<(usize, Vec<F>)> = Vec::new();
     for leaf in rows {
@@ -566,7 +624,7 @@ fn fold_instance<C: PastaCurve>(
         commitments: acc
             .instance
             .commitments
-            .iter()
+            .par_iter()
             .zip(&fresh.commitments)
             .map(|(a, b)| fold_point::<C>(a, b, &gamma))
             .collect(),
@@ -626,12 +684,16 @@ pub fn fold<C: PastaCurve>(
     let d = relation.degree;
     let xs: Vec<S<C>> = (2..=d).map(|x| S::<C>::from(x as u64)).collect();
     let mut rows = vec![[S::<C>::ZERO; MAX_POINTS]; relation.n];
-    constraints_on_line(relation, acc_view, new_view, &xs, |row, index, values| {
-        let w = pow_lo[index];
-        let slot = &mut rows[row];
-        for i in 0..xs.len() {
-            slot[i] += w * values[i];
-        }
+    let chunk = row_chunk(relation.n);
+    rows.par_chunks_mut(chunk).enumerate().for_each(|(ci, slots)| {
+        let start = ci * chunk;
+        constraints_on_line(relation, acc_view, new_view, &xs, start..start + slots.len(), |row, index, values| {
+            let w = pow_lo[index];
+            let slot = &mut slots[row - start];
+            for i in 0..xs.len() {
+                slot[i] += w * values[i];
+            }
+        });
     });
     let mut g = vec![S::<C>::ZERO; xs.len()];
     for (row, values) in rows.iter().enumerate() {
@@ -654,7 +716,7 @@ pub fn fold<C: PastaCurve>(
     let witness = Witness {
         columns: acc_witness
             .columns
-            .iter()
+            .par_iter()
             .zip(&fresh_witness.columns)
             .map(|(a, b)| a.iter().zip(b).map(|(x, y)| fold_scalar(x, y, &gamma)).collect())
             .collect(),
