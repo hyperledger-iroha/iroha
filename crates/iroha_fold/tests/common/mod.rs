@@ -5,6 +5,7 @@
 
 #![allow(dead_code)]
 
+pub mod qstep;
 pub mod step;
 
 use iroha_pasta::PastaField;

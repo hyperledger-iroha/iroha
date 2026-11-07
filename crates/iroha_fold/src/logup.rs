@@ -8,16 +8,19 @@
 //! at most three per cell (`h (r+a)(r+b)(r+c) = sum of pair products`, degree
 //! four); tuple lookups use one cell per input (`h (r + A) = 1`, degree three).
 //!
-//! Activity is structural: a lookup is active on the usable rows where the fixed
-//! guard (fixed and selector factors) of any of its inputs is nonzero. On every
-//! other usable row its tuple is all zero; one such row stays active so that the
-//! zero tuple's membership, which the original lookup asserts there, is checked
-//! too.
+//! Activity is structural: an input that is a sum of guarded terms (each a product
+//! with a factor of fixed and selector columns only, as the running-sum range
+//! check `step (z - 2^k z') + limb z`) is active on the usable rows where the guard
+//! of any of its terms is nonzero; an input with an unguarded term is active on
+//! every usable row. A lookup is active where any of its inputs is. On every
+//! other usable row each term vanishes, so its tuple is exactly zero whatever the
+//! witness; one such row stays active so that the zero tuple's membership, which
+//! the original lookup asserts there, is checked too.
 
 use std::collections::HashMap;
 
 use iroha_pasta::PastaField;
-use iroha_plonk::cs::ConstraintSystem;
+use iroha_plonk::cs::{ConstraintSystem, Expression};
 
 use crate::{
     Error,
@@ -127,9 +130,10 @@ pub(crate) fn compile<F: PastaField>(
             let mut guards = Vec::new();
             let mut everywhere = false;
             for input in lookup.input_expressions() {
-                let (guard, _, trivial) = split_guard(input);
-                everywhere |= trivial || guard.is_one();
-                guards.push(guard);
+                match term_guards(input) {
+                    Some(terms) => guards.extend(terms),
+                    None => everywhere = true,
+                }
             }
             let mut active = vec![everywhere; usable];
             if !everywhere {
@@ -185,6 +189,24 @@ pub(crate) fn compile<F: PastaField>(
         groups.push(group);
     }
     (groups, theta_len)
+}
+
+/// The guards of the terms of `input` (a sum of guarded products), or `None` when
+/// a term has no guard and the input may be nonzero on every row.
+fn term_guards<F: PastaField>(input: &Expression<F>) -> Option<Vec<Program<F>>> {
+    match input {
+        Expression::Sum(left, right) => {
+            let mut guards = term_guards(left)?;
+            guards.extend(term_guards(right)?);
+            Some(guards)
+        }
+        Expression::Negated(inner) | Expression::Scaled(inner, _) => term_guards(inner),
+        Expression::Constant(value) if bool::from(value.is_zero()) => Some(Vec::new()),
+        _ => {
+            let (guard, _, trivial) = split_guard(input);
+            (!trivial && !guard.is_one()).then(|| vec![guard])
+        }
+    }
 }
 
 /// Compressed tuple `a_0 + theta_1 a_1 + ...` of `programs` at one point.
