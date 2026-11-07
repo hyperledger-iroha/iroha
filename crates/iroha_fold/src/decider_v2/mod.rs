@@ -32,9 +32,14 @@
 //! share the copy challenges, one zero-check over `sum_r lambda^r S_r`, one
 //! shift reduction and one opening.
 //!
-//! The transcript runs over the commitment curve's base field, as the fold
-//! transcripts do ([`crate::transcript`]). It starts with the batch size and
-//! every accumulator's digest. Deciders are not zero-knowledge.
+//! Two transcripts (the DESIGN.md section 9.0 split): the *field transcript*
+//! runs natively over the decider's scalar field ([`FieldTranscript`]) and
+//! carries every field message, so that its circuit (over that field) checks
+//! the sumchecks natively. Values computed on the commitment side enter it as
+//! S6 limbs: each accumulator's digest `kgwfacd1`, which binds its commitments,
+//! and [`helper_digest`] of the copy helpers. Its final digest `d_F` seeds the
+//! *opening transcript* over the commitment curve's base field, where the
+//! batched opening runs. Deciders are not zero-knowledge.
 
 pub(crate) mod eval;
 pub(crate) mod mle;
@@ -59,7 +64,10 @@ use crate::{
     commit::Witness,
     fold::{Accumulator, pow_vector},
     logup::batch_invert,
-    transcript::{TAG_DECIDER, TAG_DECIDER_PERMUTATION, TAG_DECIDER_SHIFT, Transcript},
+    transcript::{
+        FieldTranscript, TAG_DECIDER_FIELD, TAG_DECIDER_HELPERS, TAG_DECIDER_OPENING, TAG_DECIDER_PERMUTATION,
+        TAG_DECIDER_SHIFT, Transcript,
+    },
 };
 
 /// The decider's messages.
@@ -90,7 +98,10 @@ pub struct Proved<C: PastaCurve> {
     pub polys: Vec<Vec<C::ScalarExt>>,
     /// Their blinding scalars.
     pub blinds: Vec<C::ScalarExt>,
-    /// The transcript, for the batched opening to continue.
+    /// The field transcript's final digest `d_F`, which seeds the opening.
+    pub field_digest: C::ScalarExt,
+    /// The opening transcript (over the commitment base field, seeded with
+    /// `d_F`), for the batched opening to continue.
     pub transcript: Transcript<C>,
 }
 
@@ -101,7 +112,10 @@ pub struct Verified<C: PastaCurve> {
     pub point: Vec<C::ScalarExt>,
     /// One claim per committed polynomial.
     pub claims: Vec<MleClaim<C>>,
-    /// The transcript, for the batched opening to continue.
+    /// The field transcript's final digest `d_F`, which seeds the opening.
+    pub field_digest: C::ScalarExt,
+    /// The opening transcript (over the commitment base field, seeded with
+    /// `d_F`), for the batched opening to continue.
     pub transcript: Transcript<C>,
 }
 
@@ -180,16 +194,27 @@ fn instance_copy_terms<C: PastaCurve>(plan: &DeciderV2Plan<C>, acc: &Accumulator
     Ok(total)
 }
 
-/// The shared start of a decider transcript: the batch size and every
-/// accumulator's digest, then the copy challenges `gamma` and `eta`.
+/// The shared start of a decider's field transcript: the batch size, then per
+/// member its digest (`kgwfacd1`, as limbs) and its field data natively
+/// (public columns, `theta`, `r`, `beta`, `e`), then the copy challenges
+/// `gamma` and `eta`.
 fn start<'a, C: PastaCurve + 'a>(
     domain: &[u8; 32],
     accs: impl ExactSizeIterator<Item = &'a Accumulator<C>>,
-) -> (Transcript<C>, C::ScalarExt, C::ScalarExt) {
-    let mut transcript = Transcript::<C>::new(TAG_DECIDER, domain);
+) -> (FieldTranscript<C::ScalarExt>, C::ScalarExt, C::ScalarExt) {
+    let mut transcript = FieldTranscript::<C::ScalarExt>::new(TAG_DECIDER_FIELD, domain);
     transcript.absorb_u64(accs.len() as u64);
     for acc in accs {
-        transcript.absorb_base(&[acc.digest(domain)]);
+        transcript.absorb_foreign(&acc.digest(domain));
+        transcript.absorb_u64(acc.instance.public.len() as u64);
+        for column in &acc.instance.public {
+            transcript.absorb_u64(column.len() as u64);
+            transcript.absorb(column);
+        }
+        transcript.absorb(&acc.instance.theta);
+        transcript.absorb(&acc.instance.r);
+        transcript.absorb(&acc.beta);
+        transcript.absorb(&[acc.e]);
     }
     transcript.absorb_u64(TAG_DECIDER_PERMUTATION);
     let gamma = transcript.challenge();
@@ -197,7 +222,26 @@ fn start<'a, C: PastaCurve + 'a>(
     (transcript, gamma, eta)
 }
 
-fn draw<C: PastaCurve>(transcript: &mut Transcript<C>, mu: usize) -> Challenges<C::ScalarExt> {
+/// The digest of every member's copy-helper commitments, in member order, over
+/// the commitment base field (the field transcript absorbs it as limbs).
+#[must_use]
+pub fn helper_digest<C: PastaCurve>(domain: &[u8; 32], helpers: &[C::AffineExt]) -> C::Base {
+    let mut transcript = Transcript::<C>::new(TAG_DECIDER_HELPERS, domain);
+    transcript.absorb_u64(helpers.len() as u64);
+    for point in helpers {
+        transcript.absorb_point(point);
+    }
+    transcript.digest()
+}
+
+/// The opening transcript, seeded with the field transcript's digest `d_F`.
+fn opening_transcript<C: PastaCurve>(domain: &[u8; 32], field_digest: C::ScalarExt) -> Transcript<C> {
+    let mut transcript = Transcript::<C>::new(TAG_DECIDER_OPENING, domain);
+    transcript.absorb_scalars(&[field_digest]);
+    transcript
+}
+
+fn draw<C: PastaCurve>(transcript: &mut FieldTranscript<C::ScalarExt>, mu: usize) -> Challenges<C::ScalarExt> {
     let alpha = transcript.challenge();
     let kappa = transcript.challenge();
     let lambda = transcript.challenge();
@@ -373,12 +417,9 @@ pub fn prove_many<C: PastaCurve>(
         let helper_commitments = plan.key.commit_many(&slices, &vec![S::<C>::ZERO; helpers.len()])?;
         lanes.push(Lane { plan, acc, witness, helpers, helper_commitments });
     }
-    for lane in &lanes {
-        for commitment in &lane.helper_commitments {
-            transcript.absorb_point(commitment);
-        }
-    }
-    let challenges = draw(&mut transcript, mu);
+    let helpers: Vec<C::AffineExt> = lanes.iter().flat_map(|lane| lane.helper_commitments.iter().copied()).collect();
+    transcript.absorb_foreign(&helper_digest::<C>(domain, &helpers));
+    let challenges = draw::<C>(&mut transcript, mu);
 
     // Zero-check over every lane.
     let mut scale = S::<C>::ONE;
@@ -432,7 +473,7 @@ pub fn prove_many<C: PastaCurve>(
                     a
                 },
             );
-        transcript.absorb_scalars(&sums);
+        transcript.absorb(&sums);
         let challenge = transcript.challenge();
         states.par_iter_mut().for_each(|(_, _, tables, pairs)| {
             tables.par_iter_mut().for_each(|table| mle::fold(table, challenge));
@@ -448,7 +489,7 @@ pub fn prove_many<C: PastaCurve>(
     drop(states);
 
     // Shift reduction over every lane's reads.
-    transcript.absorb_scalars(&at_rho);
+    transcript.absorb(&at_rho);
     transcript.absorb_u64(TAG_DECIDER_SHIFT);
     let zeta = transcript.challenge();
     let mut power = S::<C>::ONE;
@@ -489,7 +530,7 @@ pub fn prove_many<C: PastaCurve>(
             })
             .reduce(|| (S::<C>::ZERO, S::<C>::ZERO), |a, b| (a.0 + b.0, a.1 + b.1));
         let sent = [s0, s2];
-        transcript.absorb_scalars(&sent);
+        transcript.absorb(&sent);
         let challenge = transcript.challenge();
         shift_lanes.par_iter_mut().for_each(|(e, q)| {
             mle::fold(e, challenge);
@@ -519,11 +560,12 @@ pub fn prove_many<C: PastaCurve>(
         .par_iter()
         .map(|poly| pcs_mle::evaluate(poly, &sigma).ok_or(Error::Shape("evaluation")))
         .collect::<Result<Vec<S<C>>, _>>()?;
-    transcript.absorb_scalars(&at_sigma);
+    transcript.absorb(&at_sigma);
+    let field_digest = transcript.challenge();
     let claims = commitments.into_iter().zip(&at_sigma).map(|(commitment, value)| MleClaim { commitment, value: *value }).collect();
-    let helpers = lanes.iter().flat_map(|lane| lane.helper_commitments.iter().copied()).collect();
     let proof = DeciderV2Proof { helpers, zero_check, at_rho, shift, at_sigma };
-    Ok(Proved { proof, point: sigma, claims, polys, blinds, transcript })
+    let transcript = opening_transcript::<C>(domain, field_digest);
+    Ok(Proved { proof, point: sigma, claims, polys, blinds, field_digest, transcript })
 }
 
 /// The `eq(point, row)` weight of one hypercube row.
@@ -576,10 +618,8 @@ pub fn verify_many<C: PastaCurve>(
         return Err(Error::Shape("decider proof"));
     }
     let (mut transcript, gamma, eta) = start(domain, inputs.iter().map(|input| input.1));
-    for commitment in &proof.helpers {
-        transcript.absorb_point(commitment);
-    }
-    let challenges = draw(&mut transcript, mu);
+    transcript.absorb_foreign(&helper_digest::<C>(domain, &proof.helpers));
+    let challenges = draw::<C>(&mut transcript, mu);
 
     // Zero-check.
     let mut claim = S::<C>::ZERO;
@@ -592,7 +632,7 @@ pub fn verify_many<C: PastaCurve>(
     }
     let mut rho = Vec::with_capacity(mu);
     for round in &proof.zero_check {
-        transcript.absorb_scalars(round);
+        transcript.absorb(round);
         let challenge = transcript.challenge();
         claim = sumcheck::next_claim(claim, round, challenge);
         rho.push(challenge);
@@ -638,7 +678,7 @@ pub fn verify_many<C: PastaCurve>(
     }
 
     // Shift reduction.
-    transcript.absorb_scalars(&proof.at_rho);
+    transcript.absorb(&proof.at_rho);
     transcript.absorb_u64(TAG_DECIDER_SHIFT);
     let zeta = transcript.challenge();
     let mut claim = S::<C>::ZERO;
@@ -649,7 +689,7 @@ pub fn verify_many<C: PastaCurve>(
     }
     let mut sigma = Vec::with_capacity(mu);
     for round in &proof.shift {
-        transcript.absorb_scalars(round);
+        transcript.absorb(round);
         let challenge = transcript.challenge();
         claim = sumcheck::next_claim(claim, round, challenge);
         sigma.push(challenge);
@@ -676,7 +716,8 @@ pub fn verify_many<C: PastaCurve>(
     if expected != claim {
         return Err(Error::Rejected("shift reduction"));
     }
-    transcript.absorb_scalars(&proof.at_sigma);
+    transcript.absorb(&proof.at_sigma);
+    let field_digest = transcript.challenge();
     let mut claims = Vec::with_capacity(committed_count);
     let (mut committed_offset, mut helper_offset) = (0, 0);
     for &(plan, acc) in inputs {
@@ -691,7 +732,8 @@ pub fn verify_many<C: PastaCurve>(
         committed_offset += plan.committed.len();
         helper_offset += plan.copies.columns.len();
     }
-    Ok(Verified { point: sigma, claims, transcript })
+    let transcript = opening_transcript::<C>(domain, field_digest);
+    Ok(Verified { point: sigma, claims, field_digest, transcript })
 }
 
 /// Opens the decider's claims with one batched IPA opening, continuing the

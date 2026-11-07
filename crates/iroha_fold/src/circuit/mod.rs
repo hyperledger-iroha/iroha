@@ -15,6 +15,7 @@
 
 pub mod claims;
 pub mod decider_v2;
+pub mod field;
 pub mod ivc;
 pub mod mle;
 pub mod transcript;

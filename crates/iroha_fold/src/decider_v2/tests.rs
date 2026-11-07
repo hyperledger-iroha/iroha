@@ -3,7 +3,7 @@
 //! copies, lookup inputs outside their tables, false gates, wrong errors and
 //! tampered messages do not.
 
-use ff::Field;
+use ff::{Field, PrimeField};
 use group::Curve;
 use iroha_pasta::{Ep, Fq, msm::MemoryBudget};
 use iroha_plonk::{
@@ -22,21 +22,23 @@ use rand_core::SeedableRng;
 
 use std::sync::Arc;
 
-use iroha_pasta::{Fp, PastaAffine};
-use iroha_plonk::{
-    check::{CheckMode, check_circuit},
-    pcs::mle::BatchOpening,
-};
+use iroha_pasta::Fp;
+use iroha_plonk::check::{CheckMode, check_circuit};
 
-use super::{DeciderV2Plan, DeciderV2Proof, mle, open, prove, prove_many, sumcheck, verify, verify_many, verify_opening};
+use super::{
+    DeciderV2Plan, DeciderV2Proof, helper_digest, mle, open, prove, prove_many, sumcheck, verify, verify_many, verify_opening,
+};
 use crate::{
     circuit::{
         FoldVerifierChips, FoldVerifierConfig,
-        decider_v2::{assign_decider_v2_proof, verify_decider_v2},
-        mle::{OpeningKey, assign_batch_opening, verify_batch_bound as verify_opening_in_circuit},
+        decider_v2::{
+            assign_accumulator_field, assign_decider_v2_field_proof, helper_digest as helper_digest_in_circuit,
+            opening_scalars, opening_transcript, verify_decider_v2_field,
+        },
+        field::{FieldVerifierChips, FieldVerifierConfig},
         transcript as circuit_transcript,
-        verify::assign_accumulator,
     },
+    transcript::s6_limbs,
     relation::FoldShape,
 };
 use crate::{
@@ -524,27 +526,28 @@ fn a_batch_of_accumulators_of_two_relations_decides_with_one_opening() {
     );
 }
 
-/// The in-circuit decider verifier over one accumulator, continued by the
-/// in-circuit bound opening (`circuit::mle`). It exposes the finished
-/// transcript's digest and the opening's folded generator `G'_0`.
+/// The field side of the decider over one accumulator: a circuit over the
+/// decider's scalar field that exposes `d_F` and the opening scalars `v*`, `b'`
+/// for given `alpha` and `u`.
 #[derive(Clone)]
-struct DeciderCircuit {
+struct FieldDeciderCircuit {
     plan: Arc<DeciderV2Plan<Ep>>,
     shape: FoldShape,
-    key: OpeningKey<Ep>,
     acc: Option<Accumulator<Ep>>,
     proof: Option<DeciderV2Proof<Ep>>,
-    opening: Option<BatchOpening<Ep>>,
+    helpers: Option<Fp>,
+    alpha: Option<Fq>,
+    u: Option<Vec<Fq>>,
 }
 
 #[derive(Clone, Debug)]
-struct DeciderCircuitConfig {
-    fold: FoldVerifierConfig<Ep>,
+struct FieldDeciderConfig {
+    field: FieldVerifierConfig<Fq>,
     instance: Column<InstanceColumn>,
 }
 
-impl Circuit<Fp> for DeciderCircuit {
-    type Config = DeciderCircuitConfig;
+impl Circuit<Fq> for FieldDeciderCircuit {
+    type Config = FieldDeciderConfig;
     type FloorPlanner = SimpleFloorPlanner;
     type Params = ();
 
@@ -552,92 +555,174 @@ impl Circuit<Fp> for DeciderCircuit {
         Self {
             plan: Arc::clone(&self.plan),
             shape: self.shape.clone(),
-            key: self.key.clone(),
             acc: None,
             proof: None,
-            opening: None,
+            helpers: None,
+            alpha: None,
+            u: None,
         }
     }
 
-    fn configure(meta: &mut ConstraintSystem<Fp>) -> DeciderCircuitConfig {
-        let fold = FoldVerifierConfig::configure(meta);
+    fn configure(meta: &mut ConstraintSystem<Fq>) -> FieldDeciderConfig {
+        let field = FieldVerifierConfig::configure(meta);
         let instance = meta.instance_column(3);
         meta.enable_equality(instance);
-        DeciderCircuitConfig { fold, instance }
+        FieldDeciderConfig { field, instance }
     }
 
-    fn synthesize(&self, config: DeciderCircuitConfig, mut layouter: impl Layouter<Fp>) -> Result<(), PlonkError> {
-        let mut chips = FoldVerifierChips::new(&config.fold);
+    fn synthesize(&self, config: FieldDeciderConfig, mut layouter: impl Layouter<Fq>) -> Result<(), PlonkError> {
+        let mut chips = FieldVerifierChips::new(&config.field);
         chips.load_tables(&mut layouter)?;
-        let (digest, generator) = layouter.assign_region(
-            || "decider v2",
+        let k = self.plan.mu;
+        let (digest, value, folded) = layouter.assign_region(
+            || "decider v2 field side",
             |mut region| {
                 let mut lanes = chips.lanes();
-                let acc = assign_accumulator(&mut lanes, &mut region, &self.shape, self.acc.as_ref())?;
-                let proof = assign_decider_v2_proof(&mut lanes, &mut region, &[&self.plan], self.proof.as_ref())?;
-                let claims = verify_decider_v2(&mut lanes, &mut region, &DOMAIN, &[(&self.plan, &acc)], &proof)?;
-                let opening = assign_batch_opening(&mut lanes, &mut region, self.plan.mu, self.opening.as_ref())?;
-                let claim =
-                    verify_opening_in_circuit(&mut lanes, &mut region, &self.key, &claims.point, &claims.claims, &opening)?;
-                let digest = circuit_transcript::finish(&mut lanes, &mut region)?;
-                Ok((digest, claim.folded_generator))
+                let acc = assign_accumulator_field(&mut lanes, &mut region, &DOMAIN, &self.shape, self.acc.as_ref())?;
+                let limbs = self.helpers.map(|d| s6_limbs(&d).map(Fq::from_u128));
+                let witness = |lanes: &mut crate::circuit::field::FieldLanes<'_, Fq>, region: &mut _, v: Option<Fq>| {
+                    lanes.glue.witness(region, v.map_or_else(Value::unknown, Value::known))
+                };
+                let helpers = [
+                    witness(&mut lanes, &mut region, limbs.map(|l| l[0]))?,
+                    witness(&mut lanes, &mut region, limbs.map(|l| l[1]))?,
+                ];
+                let proof = assign_decider_v2_field_proof(&mut lanes, &mut region, &[&self.plan], self.proof.as_ref())?;
+                let out = verify_decider_v2_field(&mut lanes, &mut region, &DOMAIN, &[(&self.plan, &acc)], &helpers, &proof)?;
+                let alpha = witness(&mut lanes, &mut region, self.alpha)?;
+                let u = (0..k)
+                    .map(|j| witness(&mut lanes, &mut region, self.u.as_ref().map(|u| u[j])))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let (value, folded) = opening_scalars(&mut lanes, &mut region, &out.at_sigma, &out.point, &alpha, &u)?;
+                Ok((out.field_digest, value, folded))
             },
         )?;
         layouter.constrain_instance(digest.cell(), config.instance, 0)?;
-        layouter.constrain_instance(generator.x().cell(), config.instance, 1)?;
-        layouter.constrain_instance(generator.y().cell(), config.instance, 2)
+        layouter.constrain_instance(value.cell(), config.instance, 1)?;
+        layouter.constrain_instance(folded.cell(), config.instance, 2)
     }
 }
 
 #[test]
-#[ignore = "k16 decider circuit; run optimized"]
-fn the_decider_circuit_verifies_exactly_as_the_native_verifier() {
+#[ignore = "k16 field-side decider circuit; run optimized"]
+fn the_field_side_decider_circuit_verifies_exactly_as_the_native_verifier() {
     let s = setup();
     let (acc, witness) = accumulator(&s);
-    let mut proved = prove(&s.plan, &DOMAIN, &acc, &witness).expect("prove");
-    let (opening, _) = open(s.params.params(), &mut proved).expect("open");
-    let mut verified = verify(&s.plan, &DOMAIN, &acc, &proved.proof).expect("verify");
-    let claim = verify_opening(s.params.params(), &mut verified, &opening).expect("opening verifies");
-    let public = vec![verified.transcript.digest(), claim.g().x(), claim.g().y()];
+    let proved = prove(&s.plan, &DOMAIN, &acc, &witness).expect("prove");
+    let verified = verify(&s.plan, &DOMAIN, &acc, &proved.proof).expect("verify");
+    assert_eq!(verified.field_digest, proved.field_digest);
+    let helpers = helper_digest::<Ep>(&DOMAIN, &proved.proof.helpers);
+    // The opening scalars for some alpha and u, against their native definitions.
+    let mut rng = ChaCha20Rng::seed_from_u64(12);
+    let alpha = Fq::random(&mut rng);
+    let u: Vec<Fq> = (0..s.plan.mu).map(|_| Fq::random(&mut rng)).collect();
+    let value = proved.proof.at_sigma.iter().rev().fold(Fq::ZERO, |acc, v| acc * alpha + v);
+    let folded = pcs_mle::folded_eq(&verified.point, &u).expect("lengths");
+    let public = vec![verified.field_digest, value, folded];
     let plan = Arc::new(DeciderV2Plan::new(s.relation.clone(), &s.key).expect("plan"));
     let shape = s.relation.shape();
-    let key = OpeningKey::new(s.params.params());
-    let satisfied = |proof: &DeciderV2Proof<Ep>, opening: &BatchOpening<Ep>, public: &[Fp]| {
-        let circuit = DeciderCircuit {
+    let satisfied = |proof: &DeciderV2Proof<Ep>, helpers: Fp, public: &[Fq]| {
+        let circuit = FieldDeciderCircuit {
             plan: Arc::clone(&plan),
             shape: shape.clone(),
-            key: key.clone(),
             acc: Some(acc.clone()),
             proof: Some(proof.clone()),
-            opening: Some(opening.clone()),
+            helpers: Some(helpers),
+            alpha: Some(alpha),
+            u: Some(u.clone()),
         };
-        let report = check_circuit(&circuit, 16, &[public.to_vec()], CheckMode::Strict).expect("synthesis");
-        report.is_satisfied()
+        check_circuit(&circuit, 16, &[public.to_vec()], CheckMode::Strict).expect("synthesis").is_satisfied()
     };
-    // The circuit reaches the native transcript state and the native G'_0.
-    assert!(satisfied(&proved.proof, &opening, &public));
+    assert!(satisfied(&proved.proof, helpers, &public));
     let mut other = public.clone();
-    other[1] += Fp::ONE;
-    assert!(!satisfied(&proved.proof, &opening, &other));
-    // Tampered decider messages or opening: unsatisfied.
+    other[0] += Fq::ONE;
+    assert!(!satisfied(&proved.proof, helpers, &other));
+    // Another helper digest changes every challenge, hence d_F.
+    assert!(!satisfied(&proved.proof, helpers + Fp::ONE, &public));
+    // Tampered field messages: unsatisfied.
     let mut p = proved.proof.clone();
     p.zero_check[3][2] += Fq::ONE;
-    assert!(!satisfied(&p, &opening, &public));
+    assert!(!satisfied(&p, helpers, &public));
     let mut p = proved.proof.clone();
     p.at_rho[1] += Fq::ONE;
-    assert!(!satisfied(&p, &opening, &public));
+    assert!(!satisfied(&p, helpers, &public));
     let mut p = proved.proof.clone();
     p.shift[2][1] += Fq::ONE;
-    assert!(!satisfied(&p, &opening, &public));
-    let mut p = proved.proof.clone();
+    assert!(!satisfied(&p, helpers, &public));
+    let mut p = proved.proof;
     p.at_sigma[0] += Fq::ONE;
-    assert!(!satisfied(&p, &opening, &public));
-    let mut o = opening.clone();
-    o.scalar += Fq::ONE;
-    assert!(!satisfied(&proved.proof, &o, &public));
-    let mut o = opening;
-    o.rounds.swap(0, 1);
-    assert!(!satisfied(&proved.proof, &o, &public));
+    assert!(!satisfied(&p, helpers, &public));
+}
+
+/// The commitment side's decider pieces: the helper digest and the opening
+/// transcript seeded with `d_F`, finished here to expose its state.
+#[derive(Clone)]
+struct GroupDeciderCircuit {
+    helpers: Vec<Option<Ep>>,
+    field_digest: Option<Fq>,
+}
+
+#[derive(Clone, Debug)]
+struct GroupDeciderConfig {
+    fold: FoldVerifierConfig<Ep>,
+    instance: Column<InstanceColumn>,
+}
+
+impl Circuit<Fp> for GroupDeciderCircuit {
+    type Config = GroupDeciderConfig;
+    type FloorPlanner = SimpleFloorPlanner;
+    type Params = ();
+
+    fn without_witnesses(&self) -> Self {
+        Self { helpers: vec![None; self.helpers.len()], field_digest: None }
+    }
+
+    fn configure(meta: &mut ConstraintSystem<Fp>) -> GroupDeciderConfig {
+        let fold = FoldVerifierConfig::configure(meta);
+        let instance = meta.instance_column(2);
+        meta.enable_equality(instance);
+        GroupDeciderConfig { fold, instance }
+    }
+
+    fn synthesize(&self, config: GroupDeciderConfig, mut layouter: impl Layouter<Fp>) -> Result<(), PlonkError> {
+        let mut chips = FoldVerifierChips::new(&config.fold);
+        chips.load_tables(&mut layouter)?;
+        let (helpers, opening) = layouter.assign_region(
+            || "decider v2 group side",
+            |mut region| {
+                let mut lanes = chips.lanes();
+                let points = self
+                    .helpers
+                    .iter()
+                    .map(|p| lanes.assign_point(&mut region, p.map_or_else(Value::unknown, Value::known)))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let helpers = helper_digest_in_circuit(&mut lanes, &mut region, &DOMAIN, &points)?;
+                let digest = lanes.assign_scalar(&mut region, self.field_digest.map_or_else(Value::unknown, Value::known))?;
+                opening_transcript(&mut lanes, &mut region, &DOMAIN, &digest)?;
+                let opening = circuit_transcript::finish(&mut lanes, &mut region)?;
+                Ok((helpers, opening))
+            },
+        )?;
+        layouter.constrain_instance(helpers.cell(), config.instance, 0)?;
+        layouter.constrain_instance(opening.cell(), config.instance, 1)
+    }
+}
+
+#[test]
+#[ignore = "k16 group-side decider circuit; run optimized"]
+fn the_group_side_decider_pieces_match_the_native_transcripts() {
+    let s = setup();
+    let (acc, witness) = accumulator(&s);
+    let proved = prove(&s.plan, &DOMAIN, &acc, &witness).expect("prove");
+    let mut verified = verify(&s.plan, &DOMAIN, &acc, &proved.proof).expect("verify");
+    let public = vec![helper_digest::<Ep>(&DOMAIN, &proved.proof.helpers), verified.transcript.digest()];
+    let circuit = GroupDeciderCircuit {
+        helpers: proved.proof.helpers.iter().map(|p| Some(Ep::from(*p))).collect(),
+        field_digest: Some(verified.field_digest),
+    };
+    assert!(check_circuit(&circuit, 16, &[public.clone()], CheckMode::Strict).expect("synthesis").is_satisfied());
+    let other = GroupDeciderCircuit { field_digest: Some(verified.field_digest + Fq::ONE), ..circuit };
+    assert!(!check_circuit(&other, 16, &[public], CheckMode::Strict).expect("synthesis").is_satisfied());
 }
 
 #[test]

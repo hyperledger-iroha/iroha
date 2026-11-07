@@ -25,7 +25,10 @@
 use core::marker::PhantomData;
 
 use ff::PrimeField;
-use iroha_pasta::{Fp, PastaAffine, PastaCurve, PastaField, poseidon::Sponge};
+use iroha_pasta::{
+    Fp, PastaAffine, PastaCurve, PastaField,
+    poseidon::{PoseidonField, Sponge},
+};
 
 /// Role tag of a fresh instance's transcript (`theta`, `r`, its digest).
 pub const TAG_INSTANCE: u64 = u64::from_le_bytes(*b"kgwfins1");
@@ -41,10 +44,14 @@ pub const TAG_CLAIM_ACCUMULATOR: u64 = u64::from_le_bytes(*b"kgwfcla1");
 pub const TAG_CLAIM_FOLD: u64 = u64::from_le_bytes(*b"kgwfclm1");
 /// Role tag of a claim-accumulator digest.
 pub const TAG_CLAIM_DIGEST: u64 = u64::from_le_bytes(*b"kgwfcld1");
-/// Role tag of a claim accumulator's restructuring sumcheck.
+/// Role tag of a claim accumulator's restructuring sumcheck (a field transcript).
 pub const TAG_CLAIM_RESTRUCTURE: u64 = u64::from_le_bytes(*b"kgwfcrs1");
-/// Role tag of a v2 (multilinear) decider's transcript.
-pub const TAG_DECIDER: u64 = u64::from_le_bytes(*b"kgwfdec1");
+/// Role tag of a v2 decider's field transcript, over the decider's scalar field.
+pub const TAG_DECIDER_FIELD: u64 = u64::from_le_bytes(*b"kgwfdec2");
+/// Role tag of the digest of a v2 decider's copy-helper commitments.
+pub const TAG_DECIDER_HELPERS: u64 = u64::from_le_bytes(*b"kgwfdhc1");
+/// Role tag of a v2 decider's opening transcript, over the commitment base field.
+pub const TAG_DECIDER_OPENING: u64 = u64::from_le_bytes(*b"kgwfdog1");
 /// Phase tag of a v2 decider's copy permutation (absorbed as a word).
 pub const TAG_DECIDER_PERMUTATION: u64 = u64::from_le_bytes(*b"kgwfdpm1");
 /// Phase tag of a v2 decider's shift reduction (absorbed as a word).
@@ -143,6 +150,51 @@ impl<C: PastaCurve> Transcript<C> {
     /// A challenge below `2^128` (used as a scalar on commitments).
     pub fn challenge_128(&mut self) -> C::ScalarExt {
         map_challenge_128::<C>(&self.sponge.squeeze())
+    }
+}
+
+/// A native transcript over one Pasta field: the field part of a decider or a
+/// claim restructuring, which runs in a circuit over that field (output
+/// `IVC.md` section 11). A value of the field absorbs as itself. A word of the
+/// other Pasta field (a digest computed on the commitment side) absorbs as its
+/// two S6 limbs, `lo < 2^128` and `hi < 2^127`, which are canonical in either
+/// field. A challenge is a squeezed word, used as is.
+#[derive(Clone, Debug)]
+pub struct FieldTranscript<F: PastaField + PoseidonField> {
+    sponge: Sponge<F>,
+}
+
+impl<F: PastaField + PoseidonField> FieldTranscript<F> {
+    /// A transcript for role `tag` under `domain`.
+    #[must_use]
+    pub fn new(tag: u64, domain: &[u8; 32]) -> Self {
+        let mut sponge = Sponge::new();
+        sponge.update(&[F::from(tag)]);
+        for chunk in domain.as_chunks::<16>().0 {
+            sponge.update(&[F::from_u128(u128::from_le_bytes(*chunk))]);
+        }
+        Self { sponge }
+    }
+
+    /// Absorbs a count or length.
+    pub fn absorb_u64(&mut self, value: u64) {
+        self.sponge.update(&[F::from(value)]);
+    }
+
+    /// Absorbs values of the field.
+    pub fn absorb(&mut self, values: &[F]) {
+        self.sponge.update(values);
+    }
+
+    /// Absorbs a word of the other Pasta field as its two S6 limbs.
+    pub fn absorb_foreign<B: PastaField>(&mut self, word: &B) {
+        let [lo, hi] = s6_limbs(word);
+        self.sponge.update(&[F::from_u128(lo), F::from_u128(hi)]);
+    }
+
+    /// A challenge: the next squeezed word.
+    pub fn challenge(&mut self) -> F {
+        self.sponge.squeeze()
     }
 }
 
