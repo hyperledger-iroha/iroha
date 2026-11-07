@@ -40,11 +40,23 @@ use tiny_keccak::{Hasher as _, Sha3};
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Prepare, sign or assemble a local SoraFS all-four-validator repair certificate.
-    #[command(subcommand)]
-    Repair(bootstrap::Command),
+    Repair {
+        /// Independent I105 account chain discriminant for public JSON (Taira: 369).
+        #[arg(long, global = true, default_value_t = 753)]
+        account_chain_discriminant: u16,
+        /// Offline repair operation.
+        #[command(subcommand)]
+        command: bootstrap::Command,
+    },
     /// Prepare ordinary provider provisioning and signed public artifacts offline.
-    #[command(subcommand)]
-    Provision(provision::Command),
+    Provision {
+        /// Independent I105 account chain discriminant for public JSON (Taira: 369).
+        #[arg(long, global = true, default_value_t = 753)]
+        account_chain_discriminant: u16,
+        /// Offline provisioning operation.
+        #[command(subcommand)]
+        command: provision::Command,
+    },
     /// Compile a Kotodama source into an IVM artifact for publication.
     Compile(CompileArgs),
     /// Package a payload into a CAR and manifest bundle.
@@ -87,8 +99,8 @@ impl Command {
     pub(crate) fn is_artifact_tool(&self) -> bool {
         matches!(
             self,
-            Self::Repair(_)
-                | Self::Provision(_)
+            Self::Repair { .. }
+                | Self::Provision { .. }
                 | Self::Instruction(_)
                 | Self::Validate(_)
                 | Self::Sign(_)
@@ -103,8 +115,26 @@ impl Command {
         self,
     ) -> std::result::Result<std::process::ExitCode, validation::CliError> {
         match self {
-            Self::Repair(command) => command.run(),
-            Self::Provision(command) => command.run(),
+            Self::Repair {
+                account_chain_discriminant,
+                command,
+            } => {
+                let _account_context =
+                    iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                        account_chain_discriminant,
+                    );
+                command.run()
+            }
+            Self::Provision {
+                account_chain_discriminant,
+                command,
+            } => {
+                let _account_context =
+                    iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                        account_chain_discriminant,
+                    );
+                command.run()
+            }
             Self::Instruction(command) => Ok(command.run()),
             Self::Validate(command) => command.run(),
             Self::Sign(args) => validation::run_sign(args),

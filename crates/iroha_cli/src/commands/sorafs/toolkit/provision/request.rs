@@ -307,7 +307,9 @@ mod tests {
     #[test]
     fn request_command_writes_private_exact_body_headers_and_receipt_without_key_material() {
         use iroha_crypto::ExposedPrivateKey;
+        use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discriminant};
         use std::os::unix::fs::PermissionsExt as _;
+        let _default = ChainDiscriminantGuard::enter(753);
         let key = KeyPair::from_seed(vec![12; 32], Algorithm::Ed25519);
         let network =
             NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed([11; 32])));
@@ -317,29 +319,42 @@ mod tests {
         let body_output = directory.path().join("body");
         let headers_output = directory.path().join("headers");
         let output = directory.path().join("receipt.json");
-        let json = norito::json!({ "network_id": network, "authority": (AccountId::new(key.public_key().clone())), "action": "status", "url": "https://gateway.example.com/v1/sorafs/gateway/compliance/status", "body_blake3": (*blake3::hash(&[]).as_bytes()), "max_clock_skew_ms": 30000 });
+        let json = {
+            let _taira = ChainDiscriminantGuard::enter(369);
+            norito::json!({ "network_id": network, "authority": (AccountId::new(key.public_key().clone())), "action": "status", "url": "https://gateway.example.com/v1/sorafs/gateway/compliance/status", "body_blake3": (*blake3::hash(&[]).as_bytes()), "max_clock_skew_ms": 30000 })
+        };
         let bytes = norito::json::to_vec(&json).expect("public request");
         write_new(&request_path, &bytes).expect("request file");
         let secret = ExposedPrivateKey(key.private_key().clone())
             .try_to_multihash_string()
             .expect("synthetic key text");
         write_new(&key_path, secret.as_bytes()).expect("private synthetic key");
-        run(RequestArgs {
-            input: InputArgs {
-                request_json: request_path,
-                request_blake3_hex: *blake3::hash(&bytes).as_bytes(),
-                output: output.clone(),
-            },
-            body_file: None,
-            body_output: body_output.clone(),
-            headers_output: headers_output.clone(),
-            private_key_file: key_path,
-        })
-        .expect("offline request");
+        let command = |account_chain_discriminant| super::super::super::Command::Provision {
+            account_chain_discriminant,
+            command: super::super::Command::Request(RequestArgs {
+                input: InputArgs {
+                    request_json: request_path.clone(),
+                    request_blake3_hex: *blake3::hash(&bytes).as_bytes(),
+                    output: output.clone(),
+                },
+                body_file: None,
+                body_output: body_output.clone(),
+                headers_output: headers_output.clone(),
+                private_key_file: key_path.clone(),
+            }),
+        };
+        assert!(command(753).run_artifact().is_err());
+        assert_eq!(chain_discriminant(), 753);
+        assert!(!output.exists());
+        command(369).run_artifact().expect("offline Taira request");
+        assert_eq!(chain_discriminant(), 753);
         assert!(std::fs::read(&body_output).expect("body").is_empty());
-        let receipt: RequestReceipt =
+        let receipt: RequestReceipt = {
+            let _taira = ChainDiscriminantGuard::enter(369);
             norito::json::from_slice(&std::fs::read(&output).expect("receipt"))
-                .expect("public receipt");
+                .expect("public Taira receipt")
+        };
+        assert_eq!(receipt.authority, AccountId::new(key.public_key().clone()));
         assert_eq!(receipt.method, "GET");
         assert!(!receipt.headers.contains_key("Idempotency-Key"));
         for path in [&body_output, &headers_output, &output] {

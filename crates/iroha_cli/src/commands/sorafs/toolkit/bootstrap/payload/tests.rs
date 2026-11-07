@@ -221,3 +221,90 @@ fn payload_command_uses_pinned_public_request_and_runtime_only_key_file() {
     let payload = norito::json::from_slice(&result).expect("payload JSON");
     validate_payload(&payload, &network, NOW).expect("native verification");
 }
+
+#[cfg(unix)]
+#[test]
+fn repair_group_uses_explicit_taira_account_context_and_restores_it() {
+    use clap::Parser as _;
+    use iroha_data_model::account::address::{ChainDiscriminantGuard, chain_discriminant};
+
+    let _default = ChainDiscriminantGuard::enter(753);
+    let (network, mut request, key) = request();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs();
+    request.providers[0].issued_at = now - 60;
+    request.providers[0].retention_epoch = now + 3600;
+    request.providers[0].endpoints[0].attested_at = now - 120;
+    request.providers[0].endpoints[0].expires_at = now + 7200;
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let request_path = directory.path().join("request.json");
+    let key_path = directory.path().join("council.key");
+    let output = directory.path().join("payload.json");
+    let bytes = {
+        let _taira = ChainDiscriminantGuard::enter(369);
+        norito::json::to_vec(&request).expect("Taira request JSON")
+    };
+    assert!(String::from_utf8_lossy(&bytes).contains("test"));
+    write_new(&request_path, &bytes).expect("public request");
+    let secret = ExposedPrivateKey(key.private_key().clone())
+        .try_to_multihash_string()
+        .expect("synthetic key");
+    write_new(&key_path, secret.as_bytes()).expect("synthetic private key");
+    let pin = blake3::hash(&bytes).to_hex().to_string();
+    let command = |prefix: Option<&str>, digest: &str| {
+        let mut args = vec!["iroha", "app", "sorafs", "toolkit", "repair"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if let Some(prefix) = prefix {
+            args.extend(["--account-chain-discriminant".into(), prefix.into()]);
+        }
+        args.extend([
+            "prepare-payload".into(),
+            "--network-id".into(),
+            network.to_string(),
+            "--request-json".into(),
+            request_path.display().to_string(),
+            "--request-blake3-hex".into(),
+            digest.into(),
+            "--council-key-file".into(),
+            key_path.display().to_string(),
+            "--output".into(),
+            output.display().to_string(),
+        ]);
+        let parsed = crate::Args::try_parse_from(args).expect("offline repair args");
+        let crate::Command::App(crate::app::Command::Sorafs(
+            crate::commands::sorafs::Command::Toolkit(command),
+        )) = parsed.command
+        else {
+            panic!("expected toolkit command")
+        };
+        command
+    };
+    assert!(command(None, &pin).run_artifact().is_err());
+    assert_eq!(chain_discriminant(), 753);
+    assert!(!output.exists());
+    assert!(
+        command(Some("369"), &"00".repeat(32))
+            .run_artifact()
+            .is_err()
+    );
+    assert_eq!(chain_discriminant(), 753);
+    assert!(!output.exists());
+    assert_eq!(
+        command(Some("369"), &pin)
+            .run_artifact()
+            .expect("Taira payload"),
+        std::process::ExitCode::SUCCESS
+    );
+    assert_eq!(chain_discriminant(), 753);
+    let result = std::fs::read(output).expect("native payload");
+    assert!(!String::from_utf8_lossy(&result).contains(&secret));
+    let _taira = ChainDiscriminantGuard::enter(369);
+    let payload: SorafsBootstrapPayloadV1 =
+        norito::json::from_slice(&result).expect("Taira payload JSON");
+    assert_eq!(payload.providers[0].owner, request.providers[0].owner);
+    validate_payload(&payload, &network, now).expect("native payload verification");
+}
