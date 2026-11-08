@@ -1658,6 +1658,46 @@ private state so later caller mutation cannot replace an admitted controller.
 > `name@dataspace` or `name@domain.dataspace`, and QR codes should always
 > encode the i105 value.
 
+## Public SCCP metadata
+
+`ToriiClient` exposes the current public metadata routes:
+
+```js
+const capabilities = await client.getSccpCapabilitiesV1({ signal });
+const routes = await client.getSccpRegistryV1({ signal });
+const page = await client.listSccpRecentMessagesV1({
+  direction: "outbound",
+  network: "ethereum-mainnet",
+  limit: 20,
+  signal,
+});
+// Pass page.next_before as before on the next request when it is non-null.
+```
+
+The methods send no configured credentials and return validated native snake_case JSON. Networks
+in records retain `{ network: "ethereum_mainnet", profile: null }`; query filters use the current
+`ethereum-mainnet`, `bsc-mainnet`, or `ton-mainnet` profile keys. Integer JSON values exceeding the
+safe JavaScript range remain `bigint`; native decimal strings remain strings. Capabilities, registry,
+and recent-message responses are capped at 256 KiB, 4 MiB, and 1 MiB respectively. Recent pages
+contain at most 50 messages and can be empty with a continuation cursor when the native scan budget
+ends. Route errors and unavailable data propagate to the caller.
+
+`ToriiBrowserClient` also supports `getSccpCapabilitiesV1`. Registry and message reads require
+the Node native account codec and are not exposed on the browser client.
+
+These are public peer metadata, not verified finality, committee trust anchors, bridge authorization,
+or proof verification. `provable` only reports whether the committed native tip covers the record.
+
+## Kagemusha wallet evidence reads
+
+The Node `ToriiClient` provides `getKagemushaWalletLoadIssuanceOriginalV1`,
+`getKagemushaWalletLoadFinalityOriginalV1`, `getKagemushaWalletLoadEpochOriginalV1`,
+`getKagemushaWalletLedgerFinalityOriginalV1`, and `getKagemushaWalletLedgerEpochOriginalV1` for the current
+wallet evidence routes. Supply the exact `NetworkId` through `LocalSigningContext` and canonical
+I105 account authentication. The HTTPS reads return bounded original Norito response bytes marked
+unverified; the native wallet verifier must authenticate them before use. They do not restore the
+retired Kagemusha readiness API or add offline device lifecycle or payment operations.
+
 ## Subscriptions
 
 Subscription plans are stored on asset definitions and billed by triggers. Use

@@ -1,3 +1,4 @@
+import { kagemushaWalletReadSelection, requireKagemushaWalletReadEndpoint, validateKagemushaWalletOriginalResponse } from "./kagemushaWalletRead.js";
 import { requireMultisigId, requireMultisigNonce } from "./multisigIdentifiers.js";
 import { deriveMultisigProposalId } from "./multisigOccurrence.js";
 import { normalizeContractEmissionV1 } from "./contractEmissions.js";
@@ -14,6 +15,11 @@ import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
 import { timingSafeEqual } from "node:crypto";
 import { JS_TYPE_BIGINT, JS_TYPE_FUNCTION, JS_TYPE_NUMBER, JS_TYPE_OBJECT, JS_TYPE_STRING, KAIGI_MAX_PARTICIPANTS_V1 } from "./commonLiterals.js";
 import { readAccountCapabilitiesResponseV1 } from "./accountCapabilities.js";
+import {
+  SCCP_CAPABILITIES_MAX_BYTES, SCCP_REGISTRY_MAX_BYTES, SCCP_RECENT_MAX_BYTES,
+  normalizeSccpCapabilitiesV1, normalizeSccpRegistryV1,
+  normalizeSccpRecentMessagesV1, sccpRecentParams,
+} from "./sccpRead.js";
 import {
   BOND_ENTITLEMENT_PAGE_MAX_BYTES,
   BOND_RECORD_MAX_BYTES,
@@ -2684,6 +2690,46 @@ export class ToriiClient {
       payload,
       "ram-lfe program policy list response",
     );
+  }
+
+  /** Read public native SCCP capabilities; no configured credentials are sent. */
+  async getSccpCapabilitiesV1(options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, "getSccpCapabilitiesV1");
+    assertSupportedOptionKeys(rest, new Set([]), "getSccpCapabilitiesV1 options");
+    const response = await this._request("GET", "/v1/sccp/capabilities", {
+      headers: JSON_ACCEPT_HEADERS, signal, publicRequest: true, redirect: "error",
+    });
+    await this._expectStatus(response, [200]);
+    return normalizeSccpCapabilitiesV1(await this._readBoundedLosslessIntegerJson(
+      response, SCCP_CAPABILITIES_MAX_BYTES, "SCCP capabilities response", { signal },
+    ));
+  }
+
+  /** Read public native SCCP route records, capped at 4 MiB. */
+  async getSccpRegistryV1(options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, "getSccpRegistryV1");
+    assertSupportedOptionKeys(rest, new Set([]), "getSccpRegistryV1 options");
+    const response = await this._request("GET", "/v1/sccp/registry", {
+      headers: JSON_ACCEPT_HEADERS, signal, publicRequest: true, redirect: "error",
+    });
+    await this._expectStatus(response, [200]);
+    return normalizeSccpRegistryV1(await this._readBoundedLosslessIntegerJson(
+      response, SCCP_REGISTRY_MAX_BYTES, "SCCP registry response", { signal },
+    ));
+  }
+
+  /** Read one bounded native SCCP message page (1..50), without proof or write authority. */
+  async listSccpRecentMessagesV1(options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, "listSccpRecentMessagesV1");
+    assertSupportedOptionKeys(rest, new Set(["direction", "network", "before", "limit"]), "listSccpRecentMessagesV1 options");
+    const params = sccpRecentParams(rest);
+    const response = await this._request("GET", "/v1/sccp/messages/recent", {
+      params, headers: JSON_ACCEPT_HEADERS, signal, publicRequest: true, redirect: "error",
+    });
+    await this._expectStatus(response, [200]);
+    return normalizeSccpRecentMessagesV1(await this._readBoundedLosslessIntegerJson(
+      response, SCCP_RECENT_MAX_BYTES, "SCCP recent messages response", { signal },
+    ), params);
   }
 
   /**
@@ -7297,6 +7343,71 @@ export class ToriiClient {
       return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     } catch (error) {
       rejectType(`${context} must be valid UTF-8`, { cause: error });
+    }
+  }
+
+  /** Bounded unverified original issuance bytes; never a balance/admission verdict. */
+  getKagemushaWalletLoadIssuanceOriginalV1(selection, options) {
+    return this.#readKagemushaWalletOriginalV1("load", selection, options);
+  }
+
+  getKagemushaWalletLoadFinalityOriginalV1(selection, options) {
+    return this.#readKagemushaWalletOriginalV1("loadFinality", selection, options);
+  }
+
+  getKagemushaWalletLoadEpochOriginalV1(selection, options) {
+    return this.#readKagemushaWalletOriginalV1("loadEpoch", selection, options);
+  }
+
+  getKagemushaWalletLedgerFinalityOriginalV1(selection, options) {
+    return this.#readKagemushaWalletOriginalV1("ledgerFinality", selection, options);
+  }
+
+  getKagemushaWalletLedgerEpochOriginalV1(selection, options) {
+    return this.#readKagemushaWalletOriginalV1("ledgerEpoch", selection, options);
+  }
+
+  async #readKagemushaWalletOriginalV1(kind, input, options) {
+    const label = "Kagemusha wallet original";
+    const context = requireLocalDraftSigningContext(this._localSigningContext, label);
+    const opts = requirePlainObjectOption(options, `${label} options`);
+    if (objectKeys(opts).some((key) => key !== "signal" && key !== "canonicalAuth")) rejectType(`${label} only accepts signal and canonicalAuth`);
+    const auth = ToriiClient._normalizeCanonicalAuth(opts.canonicalAuth);
+    if (auth === null) rejectType(`${label} requires canonicalAuth`);
+    const parsed = AccountAddress.parseEncoded(auth.accountId);
+    if (parsed.chainDiscriminant !== context.chainDiscriminant || parsed.address.toI105(context.chainDiscriminant) !== auth.accountId) {
+      rejectType(`${label} requires the exact canonical I105 account for the signing context`);
+    }
+    const base = requireKagemushaWalletReadEndpoint(this._baseUrl);
+    const { selection, path, maxBytes } = kagemushaWalletReadSelection(kind, input);
+    const configuredTimeoutMs = Number(this.#config.timeoutMs);
+    const timeoutMs = numberIsFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
+      ? Math.min(configuredTimeoutMs, BOUNDED_JSON_MAX_READ_TIMEOUT_MS) : BOUNDED_JSON_MAX_READ_TIMEOUT_MS;
+    const operation = composeRequestSignal(opts.signal, timeoutMs);
+    const { signal } = operation;
+    try {
+      throwIfAborted(signal);
+      const response = await waitForResponseWithSignal(this._request("GET", path, {
+        headers: { Accept: APPLICATION_NORITO, "Accept-Encoding": "identity", "Cache-Control": "no-store" },
+        publicRequest: true, canonicalAuth: auth, exactNetworkId: context.networkId,
+        cache: "no-store", signal, disableRetries: true, redirect: "error",
+      }), signal, label);
+      await this._expectStatus(response, [200], { signal, maximumBodyBytes: 64 * 1024, responseLabel: label });
+      try {
+        validateKagemushaWalletOriginalResponse(response, new URL(path, base).href, (name) => this._getHeader(response, name));
+      } catch (error) {
+        cancelResponseBodyBestEffort(response, `${label} rejected response headers`);
+        throw error;
+      }
+      const declared = this._getHeader(response, "content-length");
+      const { bytes } = await this._readBoundedResponseBytes(response, maxBytes, label, { signal });
+      if (bytes.byteLength === 0 || (declared !== null && Number(declared) !== bytes.byteLength)) {
+        rejectType(`${label} must be nonempty and match Content-Length`);
+      }
+      throwIfAborted(signal);
+      return Object.freeze({ selection, accountId: auth.accountId, networkId: context.networkId, canonicalResponseOriginal: Uint8Array.from(bytes) });
+    } finally {
+      operation.cleanup();
     }
   }
 

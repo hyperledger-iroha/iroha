@@ -299,6 +299,8 @@
     "sorafs.d.ts",
     "crypto.d.ts",
     "index.d.ts",
+    "sccp-read.d.ts",
+    "kagemusha-wallet-read.d.ts",
     "repo-agreement.d.ts",
     "privacy-capabilities.d.ts",
     "bootle-lantern-issuance.d.ts",

@@ -4,6 +4,14 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- The Node client exposes typed public SCCP v1 capabilities, registry and recent-message
+  reads; the browser client also supports capabilities. These omit credentials, validate current native JSON without reshaping it, retain lossless
+  integers, and bound response bytes and message pages. Metadata does not authenticate certificates.
+- The Node client exposes five authenticated HTTPS Kagemusha wallet reads for load issuance,
+  load finality/epoch proofs and ledger finality/epoch proofs. Each requires exact `NetworkId` and
+  canonical I105 account authentication and returns bounded original Norito bytes, explicitly
+  unverified. Retired readiness and offline lifecycle/payment operations are not exposed.
+
 - Connect raw requests are verified against the approved account's separate off-chain signing key
   over the off-chain envelope (`buildOffchainSigningMessageV1`, `specs/account_signing_keys.md`),
   never against its transaction key or over the bare bytes. `createConnectAppSession` reads the key
