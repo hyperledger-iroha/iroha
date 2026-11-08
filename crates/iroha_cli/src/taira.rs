@@ -191,6 +191,8 @@ pub enum Command {
     /// Remove only retired validator configuration under the routine updater owner.
     #[cfg(unix)]
     RetireValidatorConfig(crate::taira_public_reset::RetireValidatorConfig),
+    /// Prepare, sign or assemble the local one-time Time and Ironwood activation certificate.
+    TimeIronwood(crate::taira_time_ironwood::TimeIronwood),
     /// Prepare, submit, or recover exactly one authorized public-reset child.
     WriteCanary(WriteCanary),
     /// Generate the canonical deploy-mode Inrou canary workspace from `AArch64` guest assets.
@@ -220,6 +222,9 @@ impl Run for Command {
             Self::RetireValidatorConfig(_) => eyre::bail!(
                 "`taira retire-validator-config` must run before client configuration is loaded"
             ),
+            Self::TimeIronwood(_) => {
+                eyre::bail!("`taira time-ironwood` must run before client configuration is loaded")
+            }
             Self::WriteCanary(cmd) => cmd.run(context),
             Self::InrouWorkspace(cmd) => cmd.run(context),
             Self::InrouStage(cmd) => cmd.run(context),

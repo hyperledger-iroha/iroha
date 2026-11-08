@@ -5,21 +5,29 @@
 //! real replayed State, and the plan's pool bootstrapped. No SignedBlock, vote, QC, finality
 //! authorization or publication owner is constructed. It answers whether this State can take the
 //! transition; it does not exercise the certificate's real signatures or the live roster.
+//!
+//! A reserve account the chain has not registered yet is registered in the same overlay, and the
+//! report says so. A real activation registers it by ordinary transaction before the bootstrap.
 
 use super::*;
 use crate::{
     runtime::{
         change_set::{PublishedDefinitions, activate_due, record_attestation},
+        lifecycle_activation::committed_policy,
+        lifecycle_preflight::{LifecyclePreflightReport, lifecycle_preflight},
         taira_activation::AUTHORIZATION_DIGEST,
     },
-    smartcontracts::Execute as _,
+    smartcontracts::{Execute as _, isi::triggers::set::SetReadOnly as _},
     state::{State, StateReadOnly, WorldReadOnly, world_projection::WorldStateAccumulator},
 };
 use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::{
-    account::AccountId,
+    account::{AccountId, NewAccount},
     block::BlockHeader,
-    isi::{privacy::BootstrapPrivacyIronwoodPoolV1, taira_activation::ScheduleTairaTimeIronwoodV1},
+    isi::{
+        Register, privacy::BootstrapPrivacyIronwoodPoolV1,
+        taira_activation::ScheduleTairaTimeIronwoodV1,
+    },
     privacy::PrivacyIronwoodPoolBootstrapV1,
     runtime::{
         lifecycle::{ChangeSetStatusV1, RuntimeNoticeV1, SupportAttestationV1, committee_digest},
@@ -27,6 +35,7 @@ use iroha_data_model::{
             TAIRA_ACTIVATION_VERSION_V1, TairaActivationCertificateV1, TairaActivationPlanV1,
         },
     },
+    trigger::Trigger,
 };
 use mv::storage::StorageReadOnly as _;
 use norito::derive::JsonSerialize;
@@ -45,8 +54,10 @@ pub struct TairaActivationRehearsalReport {
     pub successor: String,
     /// Identity of the exact compiled change set at this rehearsal's height.
     pub change_set: String,
-    /// Definitions the change set publishes.
+    /// Number of definitions the change set publishes.
     pub published_definitions: u64,
+    /// Digest of those definitions, for comparison with what the signing tool drafted.
+    pub published_digest: String,
     /// Canonical bytes of the plan, against the certificate bound.
     pub plan_bytes: u64,
     /// Whether the change set activated at its block start with every check in force.
@@ -55,10 +66,22 @@ pub struct TairaActivationRehearsalReport {
     pub status: String,
     /// Whether the successor selects trigger lifecycle capture.
     pub lifecycle_enabled: bool,
+    /// Kernel of the selection the change set starts from.
+    pub predecessor_kernel: String,
+    /// Kernel selected once the change set was applied or lapsed.
+    pub resulting_kernel: String,
+    /// Lifecycle policy read back through the activation lineage, or why that read refused.
+    pub lifecycle_lineage: String,
+    /// Capture sizing over this State's complete trigger registry, rekeyed onto a throwaway account.
+    pub trigger_capture: Option<LifecyclePreflightReport>,
+    /// Why the capture sizing could not be produced.
+    pub trigger_capture_error: Option<String>,
     /// Cold World commitment before the attempt.
     pub committed_world_before: String,
     /// Cold World commitment of the overlay once the successor is selected.
     pub activated_world: String,
+    /// Whether the plan's reserve account was absent and had to be registered in the overlay.
+    pub reserve_registered_in_overlay: bool,
     /// Result of bootstrapping the plan's pool under the retained certificate.
     pub pool_bootstrap: String,
     /// Cold World commitment of the overlay after the pool bootstrap.
@@ -119,6 +142,7 @@ impl State {
             .runtime_selection()
             .id()
             .map_err(|error| error.to_string())?;
+        let predecessor_kernel = view.world().runtime_selection().kernel.to_string();
         let change_set = crate::runtime::ironwood::taira_time_ironwood_change_set(
             network,
             effective_height,
@@ -156,6 +180,18 @@ impl State {
         let certificate = TairaActivationCertificateV1 { plan, signatures };
         let time_ms = tip.creation_time_ms().saturating_add(1_000);
         let digest = committee_digest(&committee).map_err(|error| error.to_string())?;
+        let triggers: Vec<Trigger> = view.world().triggers().triggers_iter().collect();
+        let capture_destination = AccountId::new(keys[1].public_key().clone());
+        let (trigger_capture, trigger_capture_error) = match lifecycle_preflight(
+            view.world().parameters(),
+            &triggers,
+            1,
+            1,
+            Some(&capture_destination),
+        ) {
+            Ok(report) => (Some(report), None),
+            Err(error) => (None, Some(error)),
+        };
         drop(view);
 
         let header = BlockHeader::new(
@@ -232,9 +268,30 @@ impl State {
             let lifecycle_enabled =
                 crate::runtime::trigger_lifecycle_enabled(block.world.runtime_selection())
                     .map_err(|error| error.to_string())?;
+            let resulting_kernel = block.world.runtime_selection().kernel.to_string();
+            let lifecycle_lineage = match committed_policy(&block.world, network, effective_height)
+            {
+                Ok(policy) => format!(
+                    "active={} activation={:?}",
+                    policy.active,
+                    policy.activation.map(|(id, at)| (id.to_string(), at.get())),
+                ),
+                Err(error) => format!("refused: {error}"),
+            };
             let activated_world = WorldStateAccumulator::capture(&block.world)?
                 .root(block.world.runtime_selection())?
                 .to_string();
+            let reserve_registered_in_overlay =
+                block.world.accounts().get(&pool.reserve_account).is_none();
+            if reserve_registered_in_overlay {
+                let mut tx = block
+                    .try_transaction()
+                    .map_err(|error| format!("transaction admission refused: {error:?}"))?;
+                Register::account(NewAccount::new(pool.reserve_account.clone()))
+                    .execute(&authority, &mut tx)
+                    .map_err(|error| format!("reserve registration refused: {error}"))?;
+                tx.apply();
+            }
             let pool_bootstrap = {
                 let mut tx = block
                     .try_transaction()
@@ -245,21 +302,24 @@ impl State {
                         tx.apply();
                         "bootstrapped".to_owned()
                     }
-                    Err(error) => format!("refused: {error}"),
+                    Err(error) => format!("refused: {error:?}"),
                 }
             };
             let bootstrapped_world = WorldStateAccumulator::capture(&block.world)?
                 .root(block.world.runtime_selection())?
                 .to_string();
             drop(block);
-            Ok((
+            Ok(AttemptOutcome {
                 activated,
-                format!("{status:?}"),
+                status: format!("{status:?}"),
                 lifecycle_enabled,
+                resulting_kernel,
+                lifecycle_lineage,
                 activated_world,
+                reserve_registered_in_overlay,
                 pool_bootstrap,
                 bootstrapped_world,
-            ))
+            })
         })();
         let after = self
             .verify_world_state_accumulator()
@@ -274,8 +334,7 @@ impl State {
         {
             return Err("discarded activation changed committed State or durable history".into());
         }
-        let (activated, status, lifecycle_enabled, activated_world, pool_bootstrap, bootstrapped) =
-            attempted?;
+        let outcome = attempted?;
         Ok(TairaActivationRehearsalReport {
             scope: "keyless_activation_discarded_overlay".into(),
             parent_height: tip.height(),
@@ -283,16 +342,37 @@ impl State {
             successor: change_set.successor.to_string(),
             change_set: id.to_string(),
             published_definitions: u64::try_from(change_set.publish.len()).unwrap_or(u64::MAX),
+            published_digest: crate::runtime::ironwood::published_digest(&change_set)
+                .map_err(|error| error.to_string())?,
             plan_bytes: u64::try_from(plan_bytes.len()).unwrap_or(u64::MAX),
-            activated,
-            status,
-            lifecycle_enabled,
+            activated: outcome.activated,
+            status: outcome.status,
+            lifecycle_enabled: outcome.lifecycle_enabled,
+            predecessor_kernel,
+            resulting_kernel: outcome.resulting_kernel,
+            lifecycle_lineage: outcome.lifecycle_lineage,
+            trigger_capture,
+            trigger_capture_error,
             committed_world_before: before.to_string(),
-            activated_world,
-            pool_bootstrap,
-            bootstrapped_world: bootstrapped,
+            activated_world: outcome.activated_world,
+            reserve_registered_in_overlay: outcome.reserve_registered_in_overlay,
+            pool_bootstrap: outcome.pool_bootstrap,
+            bootstrapped_world: outcome.bootstrapped_world,
             committed_world_after: after.to_string(),
             state_published: false,
         })
     }
+}
+
+/// What the discarded overlay produced, before it was dropped.
+struct AttemptOutcome {
+    activated: bool,
+    status: String,
+    lifecycle_enabled: bool,
+    resulting_kernel: String,
+    lifecycle_lineage: String,
+    activated_world: String,
+    reserve_registered_in_overlay: bool,
+    pool_bootstrap: String,
+    bootstrapped_world: String,
 }

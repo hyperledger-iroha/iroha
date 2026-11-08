@@ -38,6 +38,12 @@ from the release catalog. An invalid certificate stays the unbound envelope it i
 kept this payload opaque, so old and new validators commit the same rejection. A valid certificate
 requires all four validators to run this release first.
 
+`iroha taira time-ironwood` prepares it offline: `draft-change-set` from the selection that
+`GET /v1/runtime/upgrades` returns, `prepare`, `sign` once with each validator's credential, then
+`assemble`, which writes one instruction for `iroha tx stdin`. The tool derives the
+published definitions from this release and prints their count and digest; the copied-State execution
+below reports the same two values from real State, and the boundary refuses any difference.
+
 The certificate takes the place of Parliament's approval and of nothing else. Its handler calls
 `change_set::enact`, the path Parliament enactment uses, and retains the complete certificate at
 `runtime/taira_time_ironwood/certificate` as the once-only receipt. Normal signed-transaction
@@ -47,8 +53,20 @@ admission, resource metering and fees remain mandatory. Scheduling selects nothi
 
 Every current validator then attests with the ordinary `AttestRuntimeSupportV1`. At the start of the
 effective height `change_set::activate_due` activates the change set if all four attested, its notice
-elapsed and it still applies; otherwise it lapses and never applies. A lapse consumes the receipt, so
-another attempt needs an owner decision and a new release.
+elapsed and it still applies; otherwise it lapses and never applies.
+
+A lapse selects nothing, so it leaves the activation open: a new certificate, with a later height and
+all four signatures again, may replace the lapsed receipt. Nothing else reopens it. While a change set
+is scheduled, activated or cancelled, every other certificate is refused, and once the successor is
+selected the exact-predecessor check also refuses. The selection changes at most once. A lapsed
+attempt leaves its record and is ignored by the lineage.
+
+The height must leave room for four attestation transactions. They are ordinary transactions, so each
+needs a block, and other traffic also advances the height. Under load the measured median block gap
+was 13.5 s, so 64 blocks is about 14 minutes. The operator reads `GET /v1/runtime/upgrades` before the
+height and checks that the record lists all four attestations. Idle chains create no blocks, so after
+the attestations ordinary traffic must carry the chain to the height. A missed attestation costs a
+lapse and a re-signing, not a release.
 
 The change set moves the repaired selection to the compiled Time and Ironwood composition and keeps
 the repair kernel. It uses the byte-preserving Ironwood identity cutover and rewrites no row. The spent
@@ -65,17 +83,32 @@ The Ironwood pool needs the successor selected, so it is a second transaction af
 ordinary `iroha.privacy.bootstrap_ironwood_pool.v1` with the plan's exact values. While the certified
 change set is activated and its successor selected, the retained certificate stands in for
 `CanEnactGovernance` for exactly that pool. Every other check of the instruction stays, and a repeat
-refuses as already initialized. Any other pool still needs the permission.
+refuses as already initialized. Any other pool still needs the permission. The plan's reserve account
+must already exist: register it by ordinary transaction before this step.
+
+## Receipts
+
+The two receipts, this certificate and `sorafs/repair/certificate`, carry authority, and only their
+native handlers write them. A deployed contract's durable writes are always scoped to its own
+`sc/<digest>/` namespace, generic programs are refused the durable-state syscalls by the static
+generic profile, a proved artifact needs a snapshot that owns the path, and no instruction carries a
+caller-chosen state path.
 
 ## Qualification before activation
 
-- Read-only preflights against authenticated exports: `trigger_lifecycle_preflight` (live parameters
-  report no output-support error; a complete trigger export is still needed for capture sizing) and
-  the exact change-set construction against the authenticated selection.
+- Read-only preflights against authenticated exports: `trigger_lifecycle_preflight` and the exact
+  change-set construction against the authenticated selection.
 - All-four native replay of retained histories on the release that will activate.
 - Copied-State execution of the schedule, attestations, activation block and pool bootstrap, without
-  consensus voting. Production validator keys must not sign a divergent rehearsal fork.
-- The four-peer campaign `specs/ironwood_activation_runbook.md` requires.
+  consensus voting: `iroha3d --check-replay --rehearse-taira-activation`. It reports the resulting
+  kernel, the lineage read, and capture sizing over the complete trigger registry. Production validator
+  keys must not sign a divergent rehearsal fork.
+- The four-peer campaign `specs/ironwood_activation_runbook.md` requires. A network's identity is its
+  genesis header hash, so a local network can never pass the deployment check, and release source has
+  no toggle for it. The campaign runs the candidate plus an out-of-tree patch that changes only that
+  check, and reaches the repaired selection through the real repair boundary. It exercises consensus
+  and readers on a binary one check away from the release; the release binary itself is covered by the
+  copied-State execution above and by unit tests.
 - The decoder gate in `specs/ironwood_runtime_transition.md`, plus this wire ID: every block and
   snapshot consumer has the new decoders before activation, including BOI Core and the Kotlin and
   Swift SDKs. Base-tree observers stop at the effective height with `UnsupportedRuntime`.

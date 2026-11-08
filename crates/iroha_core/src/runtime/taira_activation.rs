@@ -158,8 +158,17 @@ fn validate_context(
     if plan.change_set.effective_height < height.saturating_add(plan.notice.blocks) {
         return Err(rejected("the change set takes effect before its notice"));
     }
-    if retained_certificate(world).map_err(rejected)?.is_some() {
-        return Err(rejected("the activation was already scheduled"));
+    // A lapsed attempt selected nothing, so a new certificate may replace its receipt. Every other
+    // recorded outcome ends this authorization.
+    if let Some(retained) = retained_certificate(world).map_err(rejected)? {
+        let id = retained.plan.change_set.id().map_err(rejected)?;
+        let lapsed = world
+            .runtime_change_sets()
+            .get(&id)
+            .is_some_and(|record| matches!(record.status, ChangeSetStatusV1::Lapsed(_)));
+        if !lapsed {
+            return Err(rejected("the activation was already scheduled"));
+        }
     }
     let published = PublishedDefinitions(world.runtime_definitions());
     let exact = super::ironwood::taira_time_ironwood_change_set(

@@ -707,6 +707,43 @@ fn state_get_reserves_exact_available_gas_for_base_overlay_miss_and_tombstone() 
     }
 }
 
+/// The activation receipts carry authority. Every key a deployed contract writes is scoped to its
+/// own namespace, and a path its interface does not declare is refused outright. Generic programs
+/// cannot reach these syscalls at all
+/// (`generic_summary_rejects_contract_only_syscalls_with_stable_reason`), and a proved artifact
+/// cannot name a receipt (`pipeline::overlay`).
+#[test]
+fn a_contract_spelling_an_activation_receipt_never_reaches_it() {
+    let declared: StatePath = "declared_user_key".parse().unwrap();
+    for text in [
+        "runtime/taira_time_ironwood/certificate",
+        "sorafs/repair/certificate",
+    ] {
+        let receipt: StatePath = text.parse().unwrap();
+        let mut host = custody_namespace_scoped_host();
+        let scoped = host
+            .scoped_durable_state_path(&receipt)
+            .unwrap()
+            .expect("a contract's keys are always scoped");
+        let scoped: &str = scoped.as_ref();
+        assert!(
+            scoped.starts_with("sc/") && scoped.ends_with(&format!("/{text}")),
+            "{scoped}",
+        );
+        let mut vm = custody_namespace_vm(std::slice::from_ref(&declared));
+        let path_ptr = store_state_path_tlv(&mut vm, &receipt);
+        let value = norito::to_bytes(&7_u64).expect("encode state value");
+        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &value);
+        for syscall in [ivm_sys::SYSCALL_STATE_SET, ivm_sys::SYSCALL_STATE_DEL] {
+            vm.set_register(10, path_ptr);
+            vm.set_register(11, value_ptr);
+            host.syscall(syscall, &mut vm)
+                .expect_err("an undeclared path is refused");
+            assert!(host.durable_state_overlay.is_empty(), "{text}");
+        }
+    }
+}
+
 #[test]
 fn escrow_scope_rejects_forged_generic_durable_writes_and_deletes() {
     for text in [

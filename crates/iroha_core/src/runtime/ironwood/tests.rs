@@ -600,6 +600,66 @@ fn time_service_successor(
     catalog.lifecycle_successor(previous).unwrap()
 }
 
+/// `selection_change_set` gained `Unbind` for the Taira activation, whose predecessor binds a wire
+/// its successor drops. No other compiled change set drops one, so its transitions, and with them
+/// its identity, are unchanged. The pinned identities catch any later change to either.
+#[test]
+fn only_the_taira_activation_unbinds_a_wire() {
+    let base = super::super::release_catalog().unwrap();
+    let network =
+        NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(b"composition")));
+    let baseline_published: BTreeMap<_, _> = base
+        .baseline_definitions
+        .iter()
+        .map(|id| (*id, base.definitions[id].clone()))
+        .collect();
+    let mut catalog = base.clone();
+    let time = time_service_successor(&mut catalog, &base.baseline);
+    let time_published: BTreeMap<_, _> = catalog
+        .definitions
+        .iter()
+        .filter(|(id, _)| {
+            base.baseline_definitions.contains(id)
+                || **id == time.services_profile
+                || **id == time.bindings[0].implementation
+        })
+        .map(|(id, d)| (*id, d.clone()))
+        .collect();
+    let ironwood = activation_change_set(network, 90, [6; 32]).unwrap();
+    let ironwood_after_time =
+        activation_change_set_for_selection(network, 100, [7; 32], &time, &time_published).unwrap();
+    let lifecycle = super::super::lifecycle_activation::from_selection(
+        base.clone(),
+        &base.baseline,
+        &baseline_published,
+        network,
+        90,
+        [8; 32],
+    )
+    .unwrap();
+    let changes = [&ironwood, &ironwood_after_time, &lifecycle];
+    for change in changes {
+        assert!(
+            !change
+                .transitions
+                .iter()
+                .any(|transition| matches!(transition, SelectionTransitionV1::Unbind(_))),
+            "every other compiled change set keeps its bindings",
+        );
+    }
+    assert_eq!(
+        changes.map(|change| change.id().unwrap().to_string()),
+        PINNED_CHANGE_SET_IDS,
+    );
+}
+
+/// Ironwood, Ironwood after Time, and lifecycle, in the order the test computes them.
+const PINNED_CHANGE_SET_IDS: [&str; 3] = [
+    "1e4c77b2821cea5891c3b5738dd9aee94ee28a4fc1a77795c50fbd08df7f972b",
+    "d161c9f481810943a4212814fab4968dc5455a6290f72877f355fa9123329fdf",
+    "9f6b930d1c808c44f48b007de7f884db20de35aa889340ce944a39009de68573",
+];
+
 #[test]
 fn ironwood_and_time_service_closure_compose_in_both_current_selection_orders() {
     let base = super::super::release_catalog().unwrap();

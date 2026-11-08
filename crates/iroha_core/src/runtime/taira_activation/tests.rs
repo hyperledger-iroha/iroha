@@ -564,6 +564,156 @@ fn certified_activation_applies_at_a_block_start_and_authorizes_one_pool() {
     assert!(format!("{repeated:?}").contains("already initialized"));
 }
 
+#[test]
+fn only_a_lapsed_attempt_accepts_a_new_certificate_and_the_selection_changes_once() {
+    let mut fixture = repaired_chain();
+    let first = sign(plan(&fixture));
+    let first_id = first.plan.change_set.id().unwrap();
+    let predecessor = first.plan.change_set.predecessor;
+    schedule(&mut fixture, first.clone()).expect("scheduled");
+
+    // While the first attempt is scheduled nothing else can start, whatever its height.
+    let mut competing = first.plan.clone();
+    competing.change_set = ironwood::taira_time_ironwood_change_set(
+        fixture.chain.network_id(),
+        first.plan.change_set.effective_height + 1,
+        first.plan.change_set.qualification,
+        fixture.chain.state().view().world().runtime_selection(),
+        &PublishedDefinitions(fixture.chain.state().view().world().runtime_definitions()),
+    )
+    .expect("exact change set");
+    let refused = validate(&fixture, &sign(competing)).expect_err("first attempt is scheduled");
+    assert!(format!("{refused:?}").contains("already scheduled"));
+
+    // Without attestations its height passes and it lapses, selecting nothing.
+    while fixture.chain.height() < first.plan.change_set.effective_height {
+        let time = fixture.next_time_ms();
+        fixture.chain.commit_at(time, Vec::new());
+    }
+    {
+        let view = fixture.chain.state().view();
+        assert_eq!(
+            view.world()
+                .runtime_change_sets()
+                .get(&first_id)
+                .unwrap()
+                .status,
+            ChangeSetStatusV1::Lapsed(first.plan.change_set.effective_height),
+        );
+        assert_eq!(view.world().runtime_selection().id().unwrap(), predecessor);
+    }
+    assert!(with_transaction(&mut fixture, |tx| {
+        !certified_pool_bootstrap(tx, &pool())
+    }));
+
+    // Its own certificate stays refused: its height has passed.
+    assert!(validate(&fixture, &first).is_err());
+
+    // A new certificate replaces the receipt and activates through the same checks.
+    let second = sign(plan(&fixture));
+    let second_id = second.plan.change_set.id().unwrap();
+    assert_ne!(second_id, first_id);
+    schedule(&mut fixture, second.clone()).expect("a lapse leaves the activation open");
+    {
+        let view = fixture.chain.state().view();
+        assert_eq!(
+            retained_certificate(view.world()).unwrap().as_ref(),
+            Some(&second),
+        );
+    }
+    attest_all(&mut fixture, &second.plan.change_set);
+    while fixture.chain.height() < second.plan.change_set.effective_height {
+        let time = fixture.next_time_ms();
+        fixture.chain.commit_at(time, Vec::new());
+    }
+    {
+        let view = fixture.chain.state().view();
+        assert_eq!(
+            view.world()
+                .runtime_change_sets()
+                .get(&second_id)
+                .unwrap()
+                .status,
+            ChangeSetStatusV1::Activated(second.plan.change_set.effective_height),
+        );
+        assert_eq!(
+            view.world().runtime_selection().id().unwrap(),
+            second.plan.change_set.successor,
+        );
+        let policy = lifecycle_activation::committed_policy(
+            view.world(),
+            fixture.chain.network_id(),
+            fixture.chain.height(),
+        )
+        .expect("a lapsed attempt leaves no mark on the lineage");
+        assert_eq!(
+            policy.activation.map(|(id, _)| id),
+            Some(second_id),
+            "the lineage follows only the activated change set",
+        );
+    }
+    assert!(with_transaction(&mut fixture, |tx| {
+        certified_pool_bootstrap(tx, &pool())
+    }));
+
+    // Activation ends the authorization, before the selection check would refuse anything.
+    let mut third = second.plan.clone();
+    third.change_set.effective_height = fixture.chain.height() + 5;
+    let refused = validate(&fixture, &sign(third)).expect_err("the activation already happened");
+    assert!(format!("{refused:?}").contains("already scheduled"));
+}
+
+#[test]
+fn the_rehearsal_activates_in_a_discarded_overlay_and_changes_nothing() {
+    let fixture = repaired_chain();
+    let state = fixture.chain.state();
+    let tip = state.view().native_execution_tip().unwrap();
+    let before = state.verify_world_state_accumulator().unwrap();
+
+    let report = state.rehearse_taira_activation(pool()).expect("rehearsal");
+    assert!(report.activated, "{}", report.status);
+    assert_eq!(report.predecessor, LIVE_REPAIRED_SELECTION);
+    assert_eq!(report.resulting_kernel, report.predecessor_kernel);
+    assert!(report.lifecycle_enabled);
+    assert!(
+        report.lifecycle_lineage.starts_with("active=true"),
+        "{}",
+        report.lifecycle_lineage,
+    );
+    assert!(report.published_definitions > 0);
+    assert_eq!(report.published_digest.len(), 64);
+    assert_eq!(report.trigger_capture_error, None);
+    assert!(report.trigger_capture.is_some());
+    assert!(!report.reserve_registered_in_overlay);
+    assert_eq!(report.pool_bootstrap, "bootstrapped");
+    assert_ne!(report.bootstrapped_world, report.activated_world);
+    assert_eq!(report.committed_world_after, report.committed_world_before);
+    assert!(!report.state_published);
+
+    // A reserve the chain has not registered yet is registered in the same discarded overlay.
+    let unregistered = PrivacyIronwoodPoolBootstrapV1::new(
+        PrivacyPoolIdV1::new([0x41; 32]),
+        asset_definition(),
+        AssetBalanceScope::Global,
+        account(7),
+    )
+    .expect("pool");
+    let report = state
+        .rehearse_taira_activation(unregistered)
+        .expect("rehearsal");
+    assert!(report.reserve_registered_in_overlay);
+    assert_eq!(report.pool_bootstrap, "bootstrapped");
+
+    assert_eq!(state.verify_world_state_accumulator().unwrap(), before);
+    assert_eq!(state.view().native_execution_tip(), Some(tip));
+    let view = state.view();
+    assert_eq!(
+        view.world().runtime_selection().id().unwrap().to_string(),
+        LIVE_REPAIRED_SELECTION,
+    );
+    assert!(retained_certificate(view.world()).unwrap().is_none());
+}
+
 fn schedule_transaction(
     fixture: &mut Fixture,
     certificate: TairaActivationCertificateV1,

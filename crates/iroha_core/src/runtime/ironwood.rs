@@ -949,6 +949,40 @@ fn activation_change_set_in_catalog(
     selection_change_set(network, height, qualification, previous, &next, publish)
 }
 
+/// What a chain has once the certified SoraFS repair is selected: the compiled repair successor of
+/// the frozen baseline, and every definition published by then. Nothing else can publish on such a
+/// chain before this activation, and the activation boundary compares against its real State.
+///
+/// # Errors
+/// The compiled repair transition cannot be constructed.
+pub fn taira_repaired_chain(
+    network: NetworkId,
+) -> Result<(RootSelectionV1, BTreeMap<DefinitionId, Descriptor>), CatalogError> {
+    let base = super::release_catalog()?;
+    let mut published: BTreeMap<DefinitionId, Descriptor> = base
+        .baseline_definitions
+        .iter()
+        .map(|id| (*id, base.definitions[id].clone()))
+        .collect();
+    let applied = base
+        .sorafs_repair_activation(&base.baseline, &published, network, 2, [1; 32])?
+        .apply(&base.baseline, &published)
+        .map_err(|error| CatalogError::Parameters(error.to_string()))?;
+    published.extend(applied.published);
+    Ok((applied.selection, published))
+}
+
+/// Digest of exactly what `change` publishes, so a drafted plan can be compared with what real
+/// State would publish.
+///
+/// # Errors
+/// The descriptors cannot be encoded.
+pub fn published_digest(change: &ChangeSetV1) -> Result<String, CatalogError> {
+    let bytes = norito::encode_canonical(&change.publish)
+        .map_err(|error| CatalogError::Parameters(error.to_string()))?;
+    Ok(hex::encode(iroha_crypto::Hash::new(bytes).as_ref()))
+}
+
 /// The one owner-authorized Taira change set: from the compiled repair successor of the frozen
 /// baseline to the compiled Time and Ironwood composition.
 ///
@@ -969,22 +1003,7 @@ pub fn taira_time_ironwood_change_set(
     let invalid = |message: String| CatalogError::Parameters(message);
     let base = super::release_catalog()?;
     let extension = base.ironwood.as_ref().expect("compiled Ironwood");
-    let baseline_definitions: BTreeMap<DefinitionId, Descriptor> = base
-        .baseline_definitions
-        .iter()
-        .map(|id| (*id, base.definitions[id].clone()))
-        .collect();
-    let repaired = base
-        .sorafs_repair_activation(
-            &base.baseline,
-            &baseline_definitions,
-            network,
-            height,
-            qualification,
-        )?
-        .apply(&base.baseline, &baseline_definitions)
-        .map_err(|error| invalid(error.to_string()))?
-        .selection;
+    let (repaired, _) = taira_repaired_chain(network)?;
     if previous != &repaired {
         return Err(invalid(
             "Taira activation requires the exact repaired selection".into(),

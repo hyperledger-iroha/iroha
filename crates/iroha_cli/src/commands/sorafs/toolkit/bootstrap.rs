@@ -267,7 +267,7 @@ impl Command {
     }
 }
 
-pub(super) fn read_private_key(path: &Path) -> Result<PrivateKey> {
+pub(crate) fn read_private_key(path: &Path) -> Result<PrivateKey> {
     let bytes = super::super::read_owner_private_handshake_file(
         path,
         16 * 1024,
@@ -353,7 +353,7 @@ impl DraftArgs {
     }
 }
 
-fn validate_roster(roster: &[PeerId]) -> Result<()> {
+pub(crate) fn validate_roster(roster: &[PeerId]) -> Result<()> {
     ensure!(
         roster.len() == SORAFS_REPAIR_COMMITTEE_SIZE_V1,
         "repair committee must contain exactly four validators"
@@ -503,7 +503,7 @@ fn assemble(
     Ok(certificate)
 }
 
-pub(super) fn parse_digest(text: &str) -> std::result::Result<[u8; 32], String> {
+pub(crate) fn parse_digest(text: &str) -> std::result::Result<[u8; 32], String> {
     if text.len() != 64
         || !text
             .bytes()
@@ -516,7 +516,7 @@ pub(super) fn parse_digest(text: &str) -> std::result::Result<[u8; 32], String> 
     Ok(digest)
 }
 
-fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>> {
+pub(crate) fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>> {
     let file = fs::File::open(path).wrap_err("cannot open public SoraFS input")?;
     ensure!(
         file.metadata()?.is_file(),
@@ -536,7 +536,7 @@ fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-pub(super) fn read_pinned(path: &Path, limit: usize, digest: [u8; 32]) -> Result<Vec<u8>> {
+pub(crate) fn read_pinned(path: &Path, limit: usize, digest: [u8; 32]) -> Result<Vec<u8>> {
     let bytes = read_bounded(path, limit)?;
     ensure!(
         blake3::hash(&bytes).as_bytes() == &digest,
@@ -545,7 +545,7 @@ pub(super) fn read_pinned(path: &Path, limit: usize, digest: [u8; 32]) -> Result
     Ok(bytes)
 }
 
-fn decode_canonical<T>(bytes: &[u8]) -> Result<T>
+pub(crate) fn decode_canonical<T>(bytes: &[u8]) -> Result<T>
 where
     T: norito::core::NoritoSerialize + for<'de> norito::core::NoritoDeserialize<'de>,
 {
@@ -562,7 +562,7 @@ where
     .map_err(|_| eyre!("SoraFS artifact is not canonical bounded Norito"))
 }
 
-pub(super) fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
