@@ -55,12 +55,12 @@ const WORKLOADS: [Workload; 16] = [
     w("serial", 16384, 88, 1, true),
 ];
 
-/// Plans around the planner's choice: window widths `c - 1 ..= c + 2`, a few
+/// Plans around the planner's choice: window widths `c - 1 ..= c + 3`, a few
 /// window groupings and point splits, every one within the default budget.
 fn candidates(n: usize, bits: usize, threads: usize, chosen: Plan) -> Vec<Plan> {
     let budget = MemoryBudget::DEFAULT.bytes();
     let mut out = vec![chosen];
-    for c in chosen.c.saturating_sub(1).max(MIN_WINDOW)..=(chosen.c + 2).min(MAX_WINDOW) {
+    for c in chosen.c.saturating_sub(1).max(MIN_WINDOW)..=(chosen.c + 3).min(MAX_WINDOW) {
         let nw = num_windows(bits, c);
         let nb_per = 1usize << (c - 1);
         let max_per_task = ((2usize << 20) / (nb_per * BUCKET_BYTES)).max(1);
