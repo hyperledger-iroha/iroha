@@ -96,7 +96,7 @@ mod tests {
             );
             assert!(route.requires_private_no_store());
             assert_eq!(route.feature_gate(), FeatureGate::Feature("app_api"));
-            assert_eq!(route.projections(), RouteProjections::SDK);
+            assert_eq!(route.projections(), RouteProjections::OPENAPI_AND_SDK);
             assert!(contracts_and_verification_keys::ROUTES.contains(&route));
             assert!(CATALOGED_ROUTES.contains(&route));
         }
@@ -1668,7 +1668,7 @@ mod tests {
             AuthenticationPolicy::CanonicalAccountSignature
         );
         assert!(route.projections().sdk());
-        assert!(!route.projections().openapi());
+        assert!(route.projections().openapi());
         assert_eq!(validate_catalog(&[route]), Ok(()));
     }
     #[test]

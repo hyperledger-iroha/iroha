@@ -1469,8 +1469,15 @@ fn openapi_authorities_preserve_native_enrollment_and_retire_wallet_transport_in
                 .map(String::as_str)
                 .filter(|path| path.starts_with("/v1/kagemusha/"))
                 .collect::<BTreeSet<_>>(),
-            BTreeSet::from(["/v1/kagemusha/enrollment"]),
-            "only current native enrollment remains in {variant} OpenAPI"
+            BTreeSet::from([
+                "/v1/kagemusha/enrollment",
+                "/v1/kagemusha/{scheme}/wallets/{wallet}/ledger/{entrypoint}/epochs/{boundary}",
+                "/v1/kagemusha/{scheme}/wallets/{wallet}/ledger/{entrypoint}/finality",
+                "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}",
+                "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/epochs/{boundary}",
+                "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/finality",
+            ]),
+            "only native enrollment and the authenticated wallet reads remain in {variant} OpenAPI"
         );
         let enrollment = &paths["/v1/kagemusha/enrollment"]["post"];
         assert_eq!(
