@@ -169,11 +169,7 @@ mod tests {
             norito::canonical_frame_len(&envelope).unwrap(),
             envelope_limit
         );
-        let instruction = SubmitPrivacyProofV1::new(
-            (envelope.clone())
-                .try_into()
-                .expect("frozen Exact12 test input"),
-        );
+        let instruction = SubmitPrivacyProofV1::new(envelope.clone());
         let exact = norito::encode_canonical(&instruction).expect("ceiling instruction");
         assert_eq!(
             exact.len(),
@@ -181,10 +177,8 @@ mod tests {
         );
         assert!(project_instruction(&exact).is_some());
         envelope.proof.bytes_mut().bytes.push(0x5a);
-        let one_over = norito::encode_canonical(&SubmitPrivacyProofV1::new(
-            (envelope).try_into().expect("frozen Exact12 test input"),
-        ))
-        .expect("one-over instruction");
+        let one_over = norito::encode_canonical(&SubmitPrivacyProofV1::new(envelope))
+            .expect("one-over instruction");
         assert_eq!(one_over.len(), exact.len() + 1);
         assert!(project_instruction(&one_over).is_none());
     }

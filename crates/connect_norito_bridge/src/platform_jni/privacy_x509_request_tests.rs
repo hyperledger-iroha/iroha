@@ -54,7 +54,7 @@ fn request_admitted(
 #[test]
 fn request_construction_and_inspection_bind_actual_context_without_proof_bytes() {
     let (request, _, _, _) = fixture();
-    let statement = norito::encode_canonical(&PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(
+    let statement = norito::encode_canonical(&PrivacyStatementV1::IrohaZkX509StarkP256V1(
         request.statement.clone(),
     ))
     .unwrap();
@@ -107,7 +107,7 @@ fn request_construction_and_inspection_bind_actual_context_without_proof_bytes()
 fn request_boundary_rejects_materialized_inline_wrong_type_and_malformed_frames() {
     let (request, _, materialized, _) = fixture();
     let canonical = norito::encode_canonical(&request).unwrap();
-    let independent = norito::encode_canonical(&PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(
+    let independent = norito::encode_canonical(&PrivacyStatementV1::IrohaZkX509StarkP256V1(
         request.statement.clone(),
     ))
     .unwrap();
@@ -116,6 +116,14 @@ fn request_boundary_rejects_materialized_inline_wrong_type_and_malformed_frames(
         "caller-derived intent is forbidden"
     );
     assert!(inspect_request(&materialized).is_none());
+    let runtime_statement = norito::encode_canonical(
+        &PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(request.statement.clone()),
+    )
+    .unwrap();
+    assert!(
+        create_request(&runtime_statement, 0).is_none(),
+        "internal runtime schema is not the SDK statement wire format"
+    );
     let mut trailing = canonical.clone();
     trailing.push(0);
     for bad in [
@@ -178,7 +186,7 @@ fn materialization_uses_original_action_statement_and_preserves_privacy_ordinal(
     let materialized =
         materialize_statement(&request_frame, &action_frame, intent.as_bytes()).unwrap();
     assert_eq!(materialized, expected_statement);
-    let tagged: PrivacyRuntimeStatementV1 = norito::decode_canonical(&materialized).unwrap();
+    let tagged: PrivacyStatementV1 = norito::decode_canonical(&materialized).unwrap();
     assert_eq!(
         tagged.context().action_index,
         request.statement.context.action_index
@@ -251,7 +259,7 @@ fn materialization_uses_original_action_statement_and_preserves_privacy_ordinal(
             changed_intent.as_bytes(),
         )
         .unwrap();
-        let changed: PrivacyRuntimeStatementV1 = norito::decode_canonical(&changed).unwrap();
+        let changed: PrivacyStatementV1 = norito::decode_canonical(&changed).unwrap();
         assert_ne!(
             changed.context().transaction_intent_digest,
             tagged.context().transaction_intent_digest
@@ -324,7 +332,7 @@ fn independent_request_ordinal_is_not_replaced_by_attachment_ordinal() {
         intent.as_bytes(),
     )
     .unwrap();
-    let output: PrivacyRuntimeStatementV1 = norito::decode_canonical(&output).unwrap();
+    let output: PrivacyStatementV1 = norito::decode_canonical(&output).unwrap();
     assert_eq!(output.context().action_index, 0);
     assert_eq!(action.action_index, 1);
     assert_eq!(

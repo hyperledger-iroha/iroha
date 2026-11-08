@@ -28,7 +28,14 @@ sys.modules[SPEC.name] = validator
 SPEC.loader.exec_module(validator)
 WALLET_JNI_SYMBOLS = [
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
-    for method in ("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "beginExchange", "endExchange", "call", "setup", "enrollment", "enrollmentRefusal", "execute", "snapshot")
+    for method in (
+        "revision", "openBegin", "openFinish", "openCancel", "close", "activity",
+        "beginExchange", "endExchange", "call", "setup", "enrollment",
+        "enrollmentRefusal", "execute", "snapshot", "suffixUnloadStatus",
+        "suffixUnloadPrepare", "suffixUnloadResume", "executeReviewedSuffixUnload",
+        "suffixUnloadInstruction", "suffixUnloadAttemptOutcome",
+        "suffixUnloadIngestFinality", "suffixUnloadSignedWire",
+    )
 ] + [
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_beginInstallation",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_registerInstallation",

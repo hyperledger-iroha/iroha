@@ -1,12 +1,12 @@
 //! Canonical public X.509 ownership-signing preparation for foreign-language wallets.
 //!
+//! The statement archive uses the frozen Exact12 `PrivacyStatementV1` schema.
 //! This boundary accepts no subject key or private witness. Canonical preparation
 //! does not authenticate State, establish readiness, prove, pair a host or submit.
 
 use iroha_core_privacy::privacy_engines::zk_x509::holder;
 use iroha_data_model::privacy::{
-    PrivacyRuntimeStatementV1,
-    TAIRA_PRIVACY_MAX_STATEMENT_AND_ENCRYPTED_OUTPUT_BYTES_PER_TRANSACTION_V1,
+    PrivacyStatementV1, TAIRA_PRIVACY_MAX_STATEMENT_AND_ENCRYPTED_OUTPUT_BYTES_PER_TRANSACTION_V1,
 };
 use libc::{c_int, c_uchar, c_ulong};
 use std::ptr;
@@ -42,10 +42,9 @@ pub(super) fn prepare(archive: &[u8]) -> Result<Prepared, c_int> {
         base.max_total_allocated_bytes(),
         64,
     );
-    let statement =
-        norito::decode_canonical_with_limits::<PrivacyRuntimeStatementV1>(archive, limits)
-            .map_err(|_| NON_CANONICAL)?;
-    let PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement) = statement else {
+    let statement = norito::decode_canonical_with_limits::<PrivacyStatementV1>(archive, limits)
+        .map_err(|_| NON_CANONICAL)?;
+    let PrivacyStatementV1::IrohaZkX509StarkP256V1(statement) = statement else {
         return Err(WRONG_PROTOCOL);
     };
     let message = holder::ownership_signing_message_v1(&statement).map_err(|_| PREPARATION)?;
