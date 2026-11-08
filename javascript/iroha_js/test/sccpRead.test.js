@@ -6,7 +6,9 @@ import { ToriiBrowserClient } from "../src/toriiBrowserClient.js";
 import { stringifyStrictLosslessIntegerJson } from "../src/strictLosslessJson.js";
 import { SCCP_CAPABILITIES_MAX_BYTES, SCCP_REGISTRY_MAX_BYTES, SCCP_RECENT_MAX_BYTES } from "../src/sccpRead.js";
 
-const HASH = "ab".repeat(32);
+// Native [u8; N] JSON uses uppercase; recent_cursor's formatter uses lowercase.
+const HASH = "AB".repeat(32);
+const CURSOR_HASH = "ab".repeat(32);
 const NETWORK = { network: "ethereum_mainnet", profile: null };
 const ACCOUNT = JSON.parse(readFileSync(new URL("./fixtures/bond-v1-codec.json", import.meta.url), "utf8")).accounts.holder;
 const U64_MAX = 18446744073709551615n;
@@ -64,7 +66,7 @@ function page(direction = "outbound") {
       status: { status: "released", detail: { height: U64_MAX, payout: U128_MAX } },
     },
   };
-  return { messages: [{ direction, detail }], next_before: direction === "outbound" ? "1:0" : `1:${HASH}` };
+  return { messages: [{ direction, detail }], next_before: direction === "outbound" ? "1:0" : `1:${CURSOR_HASH}` };
 }
 function response(value, headers = {}) {
   return new Response(stringifyStrictLosslessIntegerJson(value, "fixture"), {
@@ -126,7 +128,7 @@ for (const Client of [ToriiClient]) {
   for (const direction of ["inbound", "outbound"]) {
     test(`${name} bounds and encodes ${direction} cursor pages and preserves integers`, async () => {
       let url;
-      const before = direction === "outbound" ? `${U64_MAX}:1` : `${U64_MAX}:${HASH}`;
+      const before = direction === "outbound" ? `${U64_MAX}:1` : `${U64_MAX}:${CURSOR_HASH}`;
       const result = await client(async (value) => { url = new URL(value); return response(page(direction)); })
         .listSccpRecentMessagesV1({ direction, network: "ethereum-mainnet", before, limit: 2 });
       assert.equal(url.pathname, "/prefix/v1/sccp/messages/recent");
@@ -148,7 +150,8 @@ for (const Client of [ToriiClient]) {
     for (const options of [{ limit: 0 }, { limit: 51 }, { limit: "1" }, { direction: "all" },
       { network: "tron-mainnet" }, { network: "sora-taira" }, { before: "01:2" },
       { before: "1:4294967296" }, { before: "18446744073709551616:1" },
-      { direction: "inbound", before: "1:2" }, { cursor: "1:2" }, { canonicalAuth: {} }]) {
+      { direction: "inbound", before: "1:2" }, { direction: "inbound", before: `1:${HASH}` },
+      { cursor: "1:2" }, { canonicalAuth: {} }]) {
       await assert.rejects(() => subject.listSccpRecentMessagesV1(options));
     }
     await assert.rejects(() => subject.getSccpCapabilitiesV1({ headers: {} }));
@@ -161,6 +164,8 @@ for (const Client of [ToriiClient]) {
       (value) => { value.retired = true; },
       (value) => { value.committed_height = "1"; },
       (value) => { value.network_id = [1, 2]; },
+      (value) => { value.network_id = CURSOR_HASH; },
+      (value) => { value.consensus_instance = `aB${HASH.slice(2)}`; },
       (value) => { value.finality.dst_sig = HASH; },
       (value) => { value.parameters.enabled = 1; },
       (value) => { value.profiles[0].network = "ethereum-mainnet"; },
@@ -176,6 +181,7 @@ for (const Client of [ToriiClient]) {
       (value) => { value[0].escrow = "alice@wonderland"; },
       (value) => { value[0].revisions["1"].revision = 2; },
       (value) => { value[0].revisions["1"].deployment.family = "tron"; },
+      (value) => { value[0].revisions["1"].destination_word = CURSOR_HASH; },
       (value) => { value[0].stranded = U128_MAX; },
       (value) => { value[0].stranded = (U128_MAX + 1n).toString(); },
       (value) => { value.push(structuredClone(value[0])); },
@@ -190,6 +196,7 @@ for (const Client of [ToriiClient]) {
       (value) => { value.messages[0].detail.record.network.network = "bsc_mainnet"; },
       (value) => { value.messages.push(structuredClone(value.messages[0])); },
       (value) => { value.messages[0].detail.record.payload = "AB=="; },
+      (value) => { value.messages[0].detail.message_id = CURSOR_HASH; },
       (value) => { value.messages[0].detail.record.status.detail = {}; },
       (value) => { value.next_before = `1:${HASH}`; },
     ]) {
