@@ -1,0 +1,111 @@
+<!doctype html>
+<!-- Copyright 2026 Hyperledger Iroha Contributors -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>IrohaConnect live example</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: "Sora", system-ui, sans-serif;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: #e7ebf6;
+      }
+      main {
+        width: min(720px, 100%);
+        margin: 0 auto;
+        padding: 48px 16px;
+        display: grid;
+        gap: 20px;
+      }
+      section {
+        padding: 20px;
+        display: grid;
+        gap: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 18px;
+        background: rgba(13, 15, 22, 0.6);
+        backdrop-filter: blur(18px);
+      }
+      label {
+        display: grid;
+        gap: 6px;
+        font-size: 0.8rem;
+        color: #a9acb8;
+      }
+      input {
+        min-height: 40px;
+        padding: 0 10px;
+        border: 1px solid rgba(255, 255, 255, 0.17);
+        border-radius: 10px;
+        color: inherit;
+        background: rgba(8, 10, 15, 0.7);
+        font: 0.85rem "SFMono-Regular", Consolas, Menlo, monospace;
+      }
+      p {
+        margin: 0;
+        color: #a9acb8;
+        font-size: 0.85rem;
+        line-height: 1.6;
+      }
+      pre {
+        min-height: 72px;
+        margin: 0;
+        overflow: auto;
+        color: #a9acb8;
+        font-size: 0.75rem;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+    </style>
+    <script type="module" src="../dist/iroha-connect.js"></script>
+  </head>
+  <body>
+    <main>
+      <section>
+        <iroha-connect id="connect" app-name="IrohaConnect live example" backdrop></iroha-connect>
+        <p>
+          Pairs with a real IrohaConnect wallet. Torii must allow this page's origin
+          (<code>torii.cors.allowed_origins</code>), and the NetworkId must match the deployed network.
+        </p>
+      </section>
+      <section>
+        <label>Torii origin <input id="torii" value="https://taira.sora.org" /></label>
+        <label>
+          NetworkId
+          <input id="network" value="hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94" />
+        </label>
+      </section>
+      <section aria-label="Events">
+        <pre id="log" aria-live="polite">Waiting for IrohaConnect events…</pre>
+      </section>
+    </main>
+    <script type="module">
+      const connect = document.getElementById("connect");
+      const torii = document.getElementById("torii");
+      const network = document.getElementById("network");
+      const log = document.getElementById("log");
+
+      const apply = () => {
+        connect.setAttribute("torii-url", torii.value.trim());
+        connect.setAttribute("network-id", network.value.trim());
+      };
+      torii.addEventListener("change", apply);
+      network.addEventListener("change", apply);
+      apply();
+
+      const write = (line) => {
+        log.textContent = `${new Date().toLocaleTimeString()}  ${line}\n${log.textContent}`;
+      };
+      connect.addEventListener("iroha-connect-state", (event) => write(`state → ${event.detail.status}`));
+      connect.addEventListener("iroha-connect-approved", (event) => write(`approved ${event.detail.accountId}`));
+      connect.addEventListener("iroha-connect-disconnected", (event) => write(`disconnected (${event.detail.initiator})`));
+      connect.addEventListener("iroha-connect-error", (event) => write(`error ${event.detail.code}: ${event.detail.message}`));
+    </script>
+  </body>
+</html>

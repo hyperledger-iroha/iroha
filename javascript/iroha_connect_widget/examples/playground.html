@@ -1,0 +1,302 @@
+<!doctype html>
+<!-- Copyright 2026 Hyperledger Iroha Contributors -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hanami Market · IrohaConnect playground</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        color-scheme: light;
+        --page: #f6f4f1;
+        --ink: #1d1e22;
+        --muted: #5b5e66;
+        --card: rgba(255, 255, 255, 0.72);
+        --line: rgba(29, 30, 34, 0.1);
+        font-family: "Sora", system-ui, sans-serif;
+      }
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+        --page: #0b0c10;
+        --ink: #eceef4;
+        --muted: #a3a6b1;
+        --card: rgba(20, 22, 29, 0.66);
+        --line: rgba(255, 255, 255, 0.1);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          color-scheme: dark;
+          --page: #0b0c10;
+          --ink: #eceef4;
+          --muted: #a3a6b1;
+          --card: rgba(20, 22, 29, 0.66);
+          --line: rgba(255, 255, 255, 0.1);
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--ink);
+        background: var(--page);
+      }
+      header {
+        position: sticky;
+        top: 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 14px clamp(16px, 4vw, 40px);
+        border-bottom: 1px solid var(--line);
+        background: color-mix(in srgb, var(--page) 70%, transparent);
+        backdrop-filter: blur(14px);
+      }
+      .brand {
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+      main {
+        width: min(1080px, 100%);
+        margin: 0 auto;
+        padding: clamp(24px, 6vw, 72px) clamp(16px, 4vw, 40px) 220px;
+        display: grid;
+        gap: 24px;
+      }
+      .hero {
+        padding: clamp(24px, 5vw, 48px);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        background: var(--card);
+        backdrop-filter: blur(16px);
+      }
+      .hero h1 {
+        margin: 0 0 10px;
+        font-size: clamp(1.8rem, 4vw, 2.8rem);
+        line-height: 1.1;
+      }
+      .hero p {
+        max-width: 56ch;
+        margin: 0 0 22px;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 16px;
+      }
+      .card {
+        min-height: 140px;
+        padding: 20px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: var(--card);
+        backdrop-filter: blur(16px);
+      }
+      .card strong {
+        display: block;
+        margin-bottom: 6px;
+      }
+      .card span {
+        color: var(--muted);
+        font-size: 0.9rem;
+        overflow-wrap: anywhere;
+      }
+      code {
+        font-family: "SFMono-Regular", Consolas, Menlo, monospace;
+        overflow-wrap: anywhere;
+      }
+      .wallet {
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        z-index: 10;
+        width: min(340px, calc(100vw - 32px));
+        padding: 14px;
+        display: grid;
+        gap: 10px;
+        border: 1px dashed var(--line);
+        border-radius: 14px;
+        background: var(--card);
+        backdrop-filter: blur(16px);
+        font-size: 0.8rem;
+      }
+      .wallet h2 {
+        margin: 0;
+        font-size: 0.72rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+      .row button,
+      .row select {
+        min-height: 34px;
+        padding: 0 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        color: var(--ink);
+        background: var(--page);
+        font: inherit;
+      }
+      .row button:disabled {
+        opacity: 0.45;
+      }
+      #log {
+        max-height: 96px;
+        margin: 0;
+        overflow: auto;
+        color: var(--muted);
+        font-size: 0.72rem;
+        line-height: 1.5;
+      }
+    </style>
+    <script type="module" src="../dist/iroha-connect.js"></script>
+  </head>
+  <body>
+    <header>
+      <span class="brand">Hanami Market</span>
+      <iroha-connect
+        id="header-connect"
+        torii-url="https://taira.sora.org"
+        network-id="hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94"
+        app-name="Hanami Market"
+      ></iroha-connect>
+    </header>
+
+    <main>
+      <section class="hero">
+        <h1>Trade spring collectibles on SORA Nexus</h1>
+        <p>
+          This page is an ordinary web app. Adding one <code>&lt;iroha-connect&gt;</code> element brings the
+          IrohaConnect button, the pairing dialog and the sakura layer every SORA Nexus app shares.
+        </p>
+        <iroha-connect
+          torii-url="https://taira.sora.org"
+          network-id="hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94"
+          app-name="Hanami Market"
+        ></iroha-connect>
+      </section>
+      <section class="grid" aria-label="Status">
+        <div class="card"><strong>Account</strong><span id="account">Not connected</span></div>
+        <div class="card"><strong>Pairing state</strong><span id="state">idle</span></div>
+        <div class="card"><strong>Same session</strong><span>Both buttons share one IrohaConnect session.</span></div>
+      </section>
+    </main>
+
+    <aside class="wallet" aria-label="Simulated wallet">
+      <h2>Simulated wallet (playground only)</h2>
+      <span>While the dialog is open press <kbd>A</kbd> approve · <kbd>D</kbd> decline · <kbd>W</kbd> close from wallet.</span>
+      <div class="row">
+        <button id="approve" type="button" disabled>Approve</button>
+        <button id="decline" type="button" disabled>Decline</button>
+        <button id="close" type="button" disabled>Close from wallet</button>
+      </div>
+      <div class="row">
+        <select id="theme" aria-label="Theme">
+          <option value="auto">Theme: auto</option>
+          <option value="dark">Theme: dark</option>
+          <option value="light">Theme: light</option>
+        </select>
+        <select id="sakura" aria-label="Sakura">
+          <option value="background">Sakura: background</option>
+          <option value="overlay">Sakura: overlay</option>
+          <option value="off">Sakura: off</option>
+        </select>
+        <select id="lang" aria-label="Language">
+          <option value="en">English</option>
+          <option value="ja">日本語</option>
+        </select>
+        <label><input id="backdrop" type="checkbox" /> SORA backdrop</label>
+      </div>
+      <pre id="log" aria-live="polite"></pre>
+    </aside>
+
+    <script type="module">
+      import { createSimulatedWallet } from "./simulated-wallet.js";
+
+      const widgets = [...document.querySelectorAll("iroha-connect")];
+      const $ = (id) => document.getElementById(id);
+      const wallet = createSimulatedWallet({ onChange: sync });
+      for (const widget of widgets) {
+        widget.sdk = wallet.sdk;
+      }
+
+      function sync() {
+        const state = widgets[0].state;
+        const pending = state.status === "awaiting" && wallet.session;
+        $("approve").disabled = !pending;
+        $("decline").disabled = !pending;
+        $("close").disabled = state.status !== "connected" || !wallet.session;
+        $("state").textContent = state.status;
+        $("account").textContent = state.status === "connected" ? state.accountId : "Not connected";
+      }
+
+      function log(line) {
+        $("log").textContent = `${new Date().toLocaleTimeString()}  ${line}\n${$("log").textContent}`;
+      }
+
+      document.addEventListener("iroha-connect-state", (event) => {
+        if (event.target === widgets[0]) {
+          log(`state → ${event.detail.status}`);
+          sync();
+        }
+      });
+      document.addEventListener("iroha-connect-approved", (event) => {
+        if (event.target === widgets[0]) log(`approved ${event.detail.accountId}`);
+      });
+      document.addEventListener("iroha-connect-error", (event) => {
+        if (event.target === widgets[0]) log(`error (${event.detail.code}) ${event.detail.message}`);
+      });
+      document.addEventListener("iroha-connect-disconnected", (event) => {
+        if (event.target === widgets[0]) log(`disconnected by ${event.detail.initiator}`);
+      });
+
+      const actions = {
+        a: () => wallet.session?.approve("sorau7xHanamiDemoAccount0000000000000000000000000001"),
+        d: () => wallet.session?.decline(),
+        w: () => wallet.session?.closeFromWallet(),
+      };
+      $("approve").addEventListener("click", actions.a);
+      $("decline").addEventListener("click", actions.d);
+      $("close").addEventListener("click", actions.w);
+      // The pairing dialog is modal, so the wallet panel is inert while it is
+      // open; keyboard shortcuts still reach the document.
+      document.addEventListener("keydown", (event) => {
+        const action = actions[event.key.toLowerCase()];
+        if (action && !event.metaKey && !event.ctrlKey && !event.altKey) {
+          action();
+        }
+      });
+      $("theme").addEventListener("change", (event) => {
+        if (event.target.value === "auto") {
+          document.documentElement.removeAttribute("data-theme");
+        } else {
+          document.documentElement.dataset.theme = event.target.value;
+        }
+      });
+      $("sakura").addEventListener("change", (event) => {
+        for (const widget of widgets) widget.setAttribute("sakura", event.target.value);
+      });
+      $("backdrop").addEventListener("change", (event) => {
+        for (const widget of widgets) widget.toggleAttribute("backdrop", event.target.checked);
+      });
+      $("lang").addEventListener("change", (event) => {
+        for (const widget of widgets) widget.setAttribute("lang", event.target.value);
+      });
+      sync();
+    </script>
+  </body>
+</html>
