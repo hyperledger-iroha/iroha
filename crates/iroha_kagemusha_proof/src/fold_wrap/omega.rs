@@ -3,12 +3,15 @@
 //! Omega verifies P hard under P's pinned key, reads P's public column as
 //! canonical `Fp` scalars and binds every crossing value to its own side:
 //! values P computed enter Omega's arithmetic from P's rows, and values Omega
-//! computes are constrained to P's rows (canonical limbs, exactly). Its own
-//! public columns are today's `[D_A]`, `acc_V.G`, `acc_V.u`.
+//! computes are constrained to P's rows (canonical limbs, exactly). The Q
+//! crossing with S is bound through `D_SQ`: Omega hashes its field side's
+//! values and the ones it imports from S, and compares with the `D_SQ` R
+//! computed from S's verified rows (P forwards it). Its own public columns
+//! are today's `[D_A]`, `acc_V.G`, `acc_V.u`.
 
 use std::sync::Arc;
 
-use ff::Field;
+use ff::{Field, PrimeField};
 use iroha_fold::{
     Accumulator,
     circuit::{
@@ -25,6 +28,7 @@ use iroha_fold::{
     },
     claims::{ClaimAccumulator, RestructureProof},
     decider_v2::{DeciderV2Plan, DeciderV2Proof},
+    transcript::s6_limbs,
 };
 use iroha_pasta::{Ep, Eq, Fp, Fq};
 use iroha_plonk::{
@@ -33,7 +37,7 @@ use iroha_plonk::{
     frontend::{Circuit, Error, Layouter, Region, SimpleFloorPlanner, Value},
 };
 use iroha_plonk_gadgets::{
-    GlueChip, Word,
+    GlueChip, Word, WordHasher,
     bytes::tape::{BytesChip, BytesConfig},
     ff::CanonicalS6,
 };
@@ -47,8 +51,9 @@ use iroha_plonk_recursion::{
 
 use super::{
     K_U32, WrapError,
-    crossing::{Pair, PallasClaimCrossing, QCrossing},
+    crossing::{AccumulatorTerms, Pair, PallasClaimCrossing, Q_CROSSING_DOMAIN, QCrossingWords},
     p::PPlan,
+    s::SPlan,
 };
 
 /// Omega's public column types (today's Omega): `D_A`, `acc_V.G`, `acc_V.u`.
@@ -74,7 +79,8 @@ pub struct OmegaPlan {
     pub key: VerifyingKey<Eq>,
     /// The Vesta claim restructuring's pinned points and context.
     pub restructure: RestructurePlan<Eq>,
-    /// `acc_V`'s fold: P's claim, the A decider's claim, the restructured claim.
+    /// `acc_V`'s fold: P's claim, R's claim for S, the A decider's claim, the
+    /// restructured claim.
     pub fold: FoldPlan<Eq>,
 }
 
@@ -95,7 +101,7 @@ impl OmegaPlan {
         }
         Ok(Self {
             restructure: RestructurePlan::new(&params).map_err(|_| WrapError::Input)?,
-            fold: FoldPlan::new(&params, vec![K_U32; 3], FoldPurpose::FoldWrapVesta)
+            fold: FoldPlan::new(&params, vec![K_U32; 4], FoldPurpose::FoldWrapVesta)
                 .map_err(|_| WrapError::Input)?,
             verifier: VerifierPlan::new(binding, params).map_err(|_| WrapError::Input)?,
             key,
@@ -104,16 +110,22 @@ impl OmegaPlan {
     }
 }
 
-/// The Q-side decider's field side in Omega: every Q kind's field data and
-/// the batch proof.
+/// The Q-side decider's field side in Omega: every Q kind's field data, the
+/// batch proof, and the values S computes that the field side imports.
 #[derive(Clone, Debug)]
 pub struct QFieldWitness {
     /// The decided Q accumulators, in kind order.
     pub accs: Vec<Accumulator<Ep>>,
-    /// Each member's instance copy term `I` (P computes them).
+    /// Each member's instance copy term `I` (S computes them).
     pub copy_terms: Vec<Fq>,
     /// The batch proof.
     pub proof: DeciderV2Proof<Ep>,
+    /// `D_H` of the batch's helpers (S).
+    pub helper_digest: Fp,
+    /// The opening's batching challenge (S).
+    pub alpha: Fq,
+    /// The opening's round challenges (S).
+    pub rounds: Vec<Fq>,
 }
 
 /// The Pallas claims' restructuring sumcheck in Omega.
@@ -240,30 +252,46 @@ fn bind_canonical(
     GlueChip::assert_equal(region, limbs.hi().word(), &hi)
 }
 
+/// Words assigned from the witness (`None`: key generation).
+fn witness_words(
+    lanes: &mut FieldLanes<'_, Fq>,
+    region: &mut Region<'_, Fq>,
+    values: Option<&[Fq]>,
+    count: usize,
+) -> Result<Vec<Word<Fq>>, Error> {
+    if values.is_some_and(|v| v.len() != count) {
+        return Err(Error::Synthesis);
+    }
+    (0..count)
+        .map(|i| lanes.glue.witness(region, known(values.map(|v| &v[i]))))
+        .collect()
+}
+
 /// The Q-side decider's field side over every Q kind (native `Fq`): each
-/// member's field data and digest from P's rows, the field transcript, and
-/// `v*`, `b'`, `d_F` constrained to P's rows.
+/// member's field data, the batch proof, the field transcript, and `v*`,
+/// `b'` from S's opening challenges. Its values and the ones it imports from
+/// S (the members' digests and field terms, `D_H`, `alpha`, `u`) must hash to
+/// `D_SQ`, R's digest of S's rows (P's pair `q_crossing_digest`).
 ///
 /// # Errors
-/// Layout errors or a witness of another shape; a false proof is
-/// unsatisfiable.
+/// Layout errors or a witness of another shape; a false proof or another
+/// crossing is unsatisfiable.
 pub fn q_field_side(
     lanes: &mut FieldLanes<'_, Fq>,
     region: &mut Region<'_, Fq>,
-    plan: &PPlan,
-    crossing: &QCrossing<ScalarCells<Eq>>,
+    plan: &SPlan,
+    q_crossing_digest: &Pair<ScalarCells<Eq>>,
     witness: Option<&QFieldWitness>,
 ) -> Result<(), Error> {
     let spec = &*plan.spec;
     let domain = &spec.domains.q_fold;
     let plans: Vec<&DeciderV2Plan<Ep>> = plan.q_plans.iter().map(|p| &**p).collect();
-    if crossing.members.len() != plans.len()
-        || witness.is_some_and(|w| w.accs.len() != plans.len() || w.copy_terms.len() != plans.len())
-    {
+    if witness.is_some_and(|w| w.accs.len() != plans.len() || w.copy_terms.len() != plans.len()) {
         return Err(Error::Synthesis);
     }
     let mut members = Vec::with_capacity(plans.len());
-    for (index, (relation, member)) in spec.q.iter().zip(&crossing.members).enumerate() {
+    let mut crossing = Vec::with_capacity(plans.len());
+    for (index, relation) in spec.q.iter().enumerate() {
         let acc = assign_accumulator_field_terms::<Ep>(
             lanes,
             region,
@@ -272,55 +300,63 @@ pub fn q_field_side(
             witness.map(|w| &w.accs[index]),
             witness.map(|w| w.copy_terms[index]),
         )?;
-        bind_digest_limbs(region, &acc.digest, &member.acc_digest)?;
-        let terms = &member.terms;
-        if acc.theta.len() != terms.theta.len()
-            || acc.r.len() != terms.r.len()
-            || acc.beta.len() != terms.beta.len()
-        {
-            return Err(Error::Synthesis);
-        }
-        for (words, pairs) in [
-            (&acc.theta, &terms.theta),
-            (&acc.r, &terms.r),
-            (&acc.beta, &terms.beta),
-        ] {
-            for (word, pair) in words.iter().zip(pairs) {
-                bind_pair(lanes, region, word, pair)?;
-            }
-        }
-        bind_pair(lanes, region, &acc.e, &terms.e)?;
-        let copy_terms = acc.copy_terms.as_ref().ok_or(Error::Synthesis)?;
-        bind_pair(lanes, region, copy_terms, &terms.copy_terms)?;
+        let terms = AccumulatorTerms {
+            theta: acc.theta.clone(),
+            r: acc.r.clone(),
+            beta: acc.beta.clone(),
+            e: acc.e.clone(),
+            copy_terms: acc.copy_terms.clone().ok_or(Error::Synthesis)?,
+        };
+        crossing.push((acc.digest.clone(), terms));
         members.push(acc);
     }
     let proof = assign_decider_v2_field_proof(lanes, region, &plans, witness.map(|w| &w.proof))?;
-    let helper = [
-        crossing.helper_digest.lo().word().clone(),
-        crossing.helper_digest.hi().word().clone(),
-    ];
+    let helper_limbs = witness.map(|w| s6_limbs(&w.helper_digest).map(Fq::from_u128));
+    let helper = witness_words(
+        lanes,
+        region,
+        helper_limbs.as_ref().map(|l| l.as_slice()),
+        2,
+    )?;
+    let alpha = witness_words(
+        lanes,
+        region,
+        witness.map(|w| core::slice::from_ref(&w.alpha)),
+        1,
+    )?;
+    let rounds = witness_words(
+        lanes,
+        region,
+        witness.map(|w| w.rounds.as_slice()),
+        plan.layout.rounds,
+    )?;
+    let helper = [helper[0].clone(), helper[1].clone()];
     let batch: Vec<_> = plans.iter().copied().zip(members.iter()).collect();
     let output = verify_decider_v2_field(lanes, region, domain, &batch, &helper, &proof)?;
-    let alpha = pair_word(lanes, region, &crossing.alpha)?;
-    let rounds = crossing
-        .rounds
-        .iter()
-        .map(|pair| pair_word(lanes, region, pair))
-        .collect::<Result<Vec<_>, _>>()?;
     let (value, folded) = opening_scalars(
         lanes,
         region,
         &output.at_sigma,
         &output.point,
-        &alpha,
+        &alpha[0],
         &rounds,
     )?;
-    for (word, pair) in output.copy_challenges.iter().zip(&crossing.copy_challenges) {
-        bind_pair(lanes, region, word, pair)?;
-    }
-    bind_pair(lanes, region, &output.field_digest, &crossing.field_digest)?;
-    bind_pair(lanes, region, &value, &crossing.value)?;
-    bind_pair(lanes, region, &folded, &crossing.folded)
+    let [gamma, eta] = &output.copy_challenges;
+    let words = QCrossingWords {
+        members: crossing,
+        helper_digest: helper,
+        copy_challenges: [gamma.clone(), eta.clone()],
+        field_digest: output.field_digest.clone(),
+        value,
+        folded,
+        alpha: alpha[0].clone(),
+        rounds,
+    };
+    let digest = lanes
+        .duplex
+        .hash_words(region, Q_CROSSING_DOMAIN, &words.words())?;
+    let expected = pair_word(lanes, region, q_crossing_digest)?;
+    FieldLanes::assert_equal(region, &digest, &expected)
 }
 
 /// The Pallas claims' restructuring sumcheck (native `Fq`): the claim
@@ -457,8 +493,8 @@ impl Circuit<Fq> for OmegaCircuit {
                     q_field_side(
                         &mut lanes,
                         region,
-                        &plan.p,
-                        &public.q,
+                        &plan.p.r.s,
+                        &public.q_crossing_digest,
                         witness.map(|w| &w.q),
                     )?;
                     pallas_field_side(
@@ -471,7 +507,7 @@ impl Circuit<Fq> for OmegaCircuit {
                 }
                 // The Vesta claim accumulator: its digest is the one R hashed
                 // into the passthrough (P forwards it), its field data P's.
-                let (claims, a_claim_g) = {
+                let (claims, a_claim_g, s_claim_g) = {
                     let refs = chip.fold_lanes()?;
                     let mut lanes = FoldLanes {
                         glue: refs.glue,
@@ -506,9 +542,15 @@ impl Circuit<Fq> for OmegaCircuit {
                         range: lanes.range,
                         duplex: lanes.duplex,
                     };
-                    let x = pair_word(&mut field, region, &public.a_claim.g[0])?;
-                    let y = pair_word(&mut field, region, &public.a_claim.g[1])?;
-                    (claims, [x, y])
+                    let mut point = |g: &[Pair<ScalarCells<Eq>>; 2]| {
+                        Ok::<_, Error>([
+                            pair_word(&mut field, region, &g[0])?,
+                            pair_word(&mut field, region, &g[1])?,
+                        ])
+                    };
+                    let a_claim_g = point(&public.a_claim.g)?;
+                    let s_claim_g = point(&public.s_claim.g)?;
+                    (claims, a_claim_g, s_claim_g)
                 };
                 // The Vesta claims' group side at P's rho and v.
                 let statement = RestructureStatementCells {
@@ -523,27 +565,26 @@ impl Circuit<Fq> for OmegaCircuit {
                     restructure_messages,
                     &restructure_length,
                 )?;
-                // acc_V = fold(P's claim, the A decider's claim from R, the
-                // restructured claim).
+                // acc_V = fold(P's claim, R's claim for S, the A decider's
+                // claim (both from R, through P), the restructured claim).
                 let p_input = FoldInputCells::from_claim(&mut chip, region, &verified.claim)?;
-                let g = chip.constrain_generator(region, &a_claim_g[0], &a_claim_g[1])?;
-                let a_input = FoldInputCells::from_normalized(
-                    &mut chip,
-                    region,
-                    K_U32,
-                    g,
-                    public
-                        .a_claim
-                        .u
-                        .clone()
-                        .try_into()
-                        .map_err(|_| Error::Synthesis)?,
-                )?;
+                let mut forwarded = |g: &[Word<Fq>; 2], u: &[ScalarCells<Eq>]| {
+                    let g = chip.constrain_generator(region, &g[0], &g[1])?;
+                    FoldInputCells::from_normalized(
+                        &mut chip,
+                        region,
+                        K_U32,
+                        g,
+                        u.to_vec().try_into().map_err(|_| Error::Synthesis)?,
+                    )
+                };
+                let s_input = forwarded(&s_claim_g, &public.s_claim.u)?;
+                let a_input = forwarded(&a_claim_g, &public.a_claim.u)?;
                 let r_input = FoldInputCells::from_claim(&mut chip, region, &restructured.claim)?;
                 let acc_v = chip.verify_fold(
                     region,
                     &plan.fold,
-                    &[p_input, a_input, r_input],
+                    &[p_input, s_input, a_input, r_input],
                     fold_messages,
                     &fold_length,
                     VerificationMode::Hard,

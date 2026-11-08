@@ -5,10 +5,10 @@
 //! A chain of four ends with `A_b` while `Q_b` kept no `A_b`, so R starts that
 //! accumulator. A chain of eight ends with `A_b` folding into the kept one.
 //! For both chains:
-//! - the native producer's R, P and Omega are satisfied;
-//! - a changed crossing row or public value is rejected, including an R row
-//!   P's copy of R's public column changes;
-//! - all three proofs are made, Omega verifies natively, and its opening,
+//! - the native producer's S, R, P and Omega are satisfied;
+//! - a changed crossing row or public value is rejected, including a row of
+//!   R's copy of S's public column and of P's copy of R's;
+//! - all four proofs are made, Omega verifies natively, and its opening,
 //!   `acc_V` and `acc_P` decide.
 //!
 //! The wraps' sizes without witnesses (the sizing other relations use) equal
@@ -19,196 +19,21 @@
 #[path = "support/fold_wrap_toy.rs"]
 mod fold_wrap_toy;
 
-use std::{sync::Arc, time::Instant};
+use std::time::Instant;
 
 use ff::{Field, PrimeField};
 use fold_wrap_toy::{A_A, A_B, A_CONTEXT, A_PC, K};
-use iroha_kagemusha_proof::{
-    a_relation::{LINEAGE_DOMAIN, LINEAGE_FIELDS},
-    fold_wrap::{
-        native::{self, FinalChain},
-        p::{PCircuit, PWitness},
-    },
-};
+use iroha_kagemusha_proof::a_relation::{LINEAGE_DOMAIN, LINEAGE_FIELDS};
 use iroha_pasta::{Ep, Eq, Fp, Fq, msm::MemoryBudget, poseidon::hash_with_domain};
 use iroha_plonk::{
-    ProverConfig, ProverRandomness, Witness,
-    check::{CheckMode, check_circuit},
-    create_proof_owned_with_claim,
-    pcs::ipa::PinnedParams,
-    transcript::generator_coordinates,
-    verifier::accumulate_generator,
+    pcs::ipa::PinnedParams, transcript::generator_coordinates, verifier::accumulate_generator,
 };
 use iroha_plonk_gadgets::statement::foreign_limbs;
-use iroha_plonk_recursion::{
-    AccumulatorT, FoldConfig, FoldInput, FoldWitness,
-    verifier::{VerifierUsage, diagnostic_take_usage},
-};
+use iroha_plonk_recursion::{AccumulatorT, FoldInput};
 
 /// The lineage the chains' `A_b` write.
 fn lineage(seed: u64) -> [Fp; LINEAGE_FIELDS] {
     core::array::from_fn(|i| Fp::from(seed + 7 * i as u64))
-}
-
-fn copy_fold(witness: &FoldWitness<Ep>) -> FoldWitness<Ep> {
-    FoldWitness::from_private_bytes(&witness.to_private_bytes()).expect("canonical witness")
-}
-
-/// P whose copy of R's public column has one row changed, so R's proof no
-/// longer verifies inside P.
-fn with_r_row_changed(keys: &native::WrapKeys, stage: &native::PStage, row: usize) -> PCircuit {
-    let original: &PWitness = &stage.p_witness;
-    let mut r_public = original.r_public.clone();
-    r_public[row] += Fq::ONE;
-    let witness = PWitness {
-        step: original.step,
-        state: original.state.clone(),
-        r_public,
-        r_proof: original.r_proof.clone(),
-        q: original.q.clone(),
-        a: original.a.clone(),
-        pallas: original.pallas.clone(),
-        vesta: original.vesta.clone(),
-        restructure: copy_fold(&original.restructure),
-        fold: copy_fold(&original.fold),
-    };
-    PCircuit {
-        plan: Arc::clone(&keys.p_plan),
-        witness: Some(Arc::new(witness)),
-    }
-}
-
-/// Wraps one chain: R, P and Omega checked (with mutations when `mutate`),
-/// proved, Omega verified natively and every carried accumulator decided.
-/// Returns the rows R, P and Omega used.
-#[allow(clippy::too_many_lines)]
-fn wrap(
-    keys: &native::WrapKeys,
-    chain: &FinalChain,
-    seed: u64,
-    mutate: bool,
-) -> [VerifierUsage; 3] {
-    let spec = &keys.p_plan.spec;
-    let config = FoldConfig::default();
-    let _ = diagnostic_take_usage();
-    let now = Instant::now();
-    let prepared =
-        native::prepare(keys, chain, fold_wrap_toy::tapes(seed), &config).expect("native wraps");
-    println!(
-        "native deciders, folds and restructurings: {:.1?}",
-        now.elapsed()
-    );
-    // R.
-    let r = native::r_circuit(keys, &prepared);
-    let report = check_circuit(&r, K, &[prepared.r_public.clone()], CheckMode::Strict).expect("R");
-    let r_rows = fold_wrap_toy::take_rows("R").expect("R rows");
-    assert!(report.is_satisfied(), "R: {:?}", report.failures().first());
-    if mutate {
-        let layout = &keys.r_plan.layout;
-        for (label, row) in [
-            ("passthrough", 0),
-            ("a value of A_n's second column", layout.a_public - 1),
-            ("an A member digest", layout.a_public),
-            ("the claim digest", layout.rows() - 1),
-        ] {
-            let mut changed = prepared.r_public.clone();
-            changed[row] += Fq::ONE;
-            let report = check_circuit(&r, K, &[changed], CheckMode::Strict).expect("R");
-            let _ = diagnostic_take_usage();
-            assert!(!report.is_satisfied(), "R accepts another {label}");
-        }
-    }
-    let now = Instant::now();
-    let (r_proof, r_opening) = native::prove_r(keys, &prepared).expect("R proof");
-    println!("R proof ({} bytes): {:.1?}", r_proof.len(), now.elapsed());
-    let stage = native::p_stage(keys, prepared, r_proof, &r_opening, &config).expect("P stage");
-    // P (R's proving recorded R's rows again).
-    let _ = diagnostic_take_usage();
-    let p = native::p_circuit(keys, &stage);
-    let report = check_circuit(&p, K, &[stage.p_public.clone()], CheckMode::Strict).expect("P");
-    let p_rows = fold_wrap_toy::take_rows("P").expect("P rows");
-    assert!(report.is_satisfied(), "P: {:?}", report.failures().first());
-    if mutate {
-        let layout = &keys.p_plan.layout;
-        let parsed = layout.parse(&stage.p_public).expect("layout");
-        let row_of = |value: &Fp| stage.p_public.iter().position(|v| v == value).expect("row");
-        for (label, row) in [
-            ("D_A", 0),
-            ("a Q member digest", row_of(&parsed.q.members[1].acc_digest)),
-            ("an A claim challenge", row_of(&parsed.a_claim.u[3])),
-            ("the last row", layout.rows() - 1),
-        ] {
-            let mut changed = stage.p_public.clone();
-            changed[row] += Fp::ONE;
-            let report = check_circuit(&p, K, &[changed], CheckMode::Strict).expect("P");
-            let _ = diagnostic_take_usage();
-            assert!(!report.is_satisfied(), "P accepts another {label}");
-        }
-        // A_n's h_out as R hands it to P.
-        let circuit = with_r_row_changed(keys, &stage, 1);
-        let report =
-            check_circuit(&circuit, K, &[stage.p_public.clone()], CheckMode::Strict).expect("P");
-        let _ = diagnostic_take_usage();
-        assert!(!report.is_satisfied(), "P accepts another R row");
-    }
-    let now = Instant::now();
-    let (p_proof, p_opening) = native::prove_p(keys, &stage).expect("P proof");
-    println!("P proof ({} bytes): {:.1?}", p_proof.len(), now.elapsed());
-    let acc_p = stage.acc_p.clone();
-    let (omega, instances, acc_v) =
-        native::omega_circuit(keys, stage, p_proof, &p_opening, &config).expect("Omega");
-    let _ = diagnostic_take_usage();
-    let report = check_circuit(&omega, K, &instances, CheckMode::Strict).expect("Omega");
-    let omega_rows = fold_wrap_toy::take_rows("Omega").expect("Omega rows");
-    assert!(
-        report.is_satisfied(),
-        "Omega: {:?}",
-        report.failures().first()
-    );
-    if mutate {
-        for (column, row) in [(0, 0), (1, 0), (2, 15)] {
-            let mut changed = instances.clone();
-            changed[column][row] += Fq::ONE;
-            let report = check_circuit(&omega, K, &changed, CheckMode::Strict).expect("Omega");
-            let _ = diagnostic_take_usage();
-            assert!(
-                !report.is_satisfied(),
-                "Omega accepts another column {column} row {row}"
-            );
-        }
-    }
-    let now = Instant::now();
-    let columns = Witness::from_circuit(&keys.omega_key, &omega, &instances).expect("witness");
-    let output = create_proof_owned_with_claim(
-        &spec.params_q,
-        &keys.omega_key,
-        columns,
-        ProverRandomness::os(),
-        ProverConfig::default(),
-    )
-    .expect("Omega proof");
-    println!(
-        "Omega proof ({} bytes): {:.1?}",
-        output.proof.len(),
-        now.elapsed()
-    );
-    let budget = MemoryBudget::DEFAULT;
-    let claim = accumulate_generator(
-        &spec.params_q,
-        keys.omega_key.binding(),
-        keys.omega_key.vk(),
-        &instances,
-        &output.proof,
-        budget,
-    )
-    .expect("Omega verifies");
-    FoldInput::from_opening(*claim.g(), claim.challenges())
-        .expect("claim")
-        .decide(&spec.params_q, budget)
-        .expect("Omega's opening decides");
-    acc_v.decide(&spec.params_a, budget).expect("acc_V decides");
-    acc_p.decide(&spec.params_q, budget).expect("acc_P decides");
-    [r_rows, p_rows, omega_rows]
 }
 
 #[test]
@@ -221,16 +46,20 @@ fn the_wraps_finish_two_kind_chains_into_omegas_that_decide() {
     // Four half-steps: Q_b kept no A_b, so R starts it from A_4.
     let short = fold_wrap_toy::chain(&toy.relations, 4, &lineage(3));
     assert!(short.u_a[A_B].is_none() && short.u_a[A_A].is_some());
-    let rows = wrap(keys, &short, 1, true);
+    let rows = fold_wrap_toy::wrap(keys, &short, 1, true);
     // Eight half-steps: A_8 folds into the A_b accumulator Q_7 kept.
     let long = fold_wrap_toy::chain(&toy.relations, 8, &lineage(5));
     assert!(long.u_a.iter().all(Option::is_some));
-    assert_eq!(wrap(keys, &long, 11, false), rows, "the wraps' rows");
+    assert_eq!(
+        fold_wrap_toy::wrap(keys, &long, 11, false),
+        rows,
+        "the wraps' rows"
+    );
     // Sizing without witnesses counts exactly the rows the wraps use.
     let now = Instant::now();
     let sizes = fold_wrap_toy::sizes(&keys.p_plan.spec);
     println!("sizes without witnesses: {:.1?}", now.elapsed());
-    assert_eq!(sizes.len(), 3, "every wrap is sized");
+    assert_eq!(sizes.len(), 4, "every wrap is sized");
     for (size, used) in sizes.iter().zip(rows) {
         assert!(size.fits, "{} fits k16", size.wrap);
         assert_eq!(size.usage, used, "{}'s rows", size.wrap);

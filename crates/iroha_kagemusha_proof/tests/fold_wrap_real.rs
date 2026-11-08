@@ -2,14 +2,23 @@
 //! (`support/fold_receive_chain.rs`: A1, A3, A4, A5; Frame, Sigma,
 //! Signature).
 //!
-//! R, P and Omega are sized without witnesses (`fold_wrap_toy::sizes`): each
-//! is synthesized at k16, or counted at k17 when it overflows k16 (Omega is
-//! sized only once P fits). The test prints every wrap's rows per lane
-//! against the k16 limit, and its public rows.
+//! S, R, P and Omega are sized without witnesses (`fold_wrap_toy::sizes`):
+//! each is synthesized at k16, or counted at k17 when it overflows k16 (a
+//! wrap is sized only once the wrap it verifies fits). The test prints every
+//! wrap's rows per lane against the k16 limit and its public rows, and
+//! requires all four to fit.
 //!
-//! First measurement (iroha 5bde12ef2c relations): R fits (sponge 35%, glue
-//! 16%, ECC 69%, range 98%); P does not (sponge 115%, glue 70%, ECC 100%,
-//! range 41%).
+//! The second test wraps the genuine Receive after its eight half-steps:
+//! S, R, P and Omega are checked strictly and proved, Omega verifies
+//! natively, and its opening, `acc_V` and `acc_P` decide.
+//!
+//! Measurements:
+//! - three wraps on iroha 5bde12ef2c's relations: R fit (sponge 35%, glue
+//!   16%, ECC 69%, range 98%), P did not (sponge 115%, glue 70%, ECC 100%,
+//!   range 41%);
+//! - four wraps on the relations after the key cuts (iroha 5927848dae), with
+//!   S on two range buses and R on four, all fit (sponge/glue/ECC/range):
+//!   S 28/15/48/50%, R 54/57/87/67%, P 89/66/50/32%, Omega 78/74/58/34%.
 
 #[path = "support/fold_receive_chain.rs"]
 mod fold_receive_chain;
@@ -18,12 +27,14 @@ mod fold_wrap_toy;
 
 use std::{sync::Arc, time::Instant};
 
-use fold_receive_chain::{ReceiveRelations, full_receive, receive_keys, receive_relations};
+use fold_receive_chain::{
+    Chain, HalfStep, ReceiveRelations, full_receive, receive_keys, receive_relations, run_chain,
+};
 use iroha_kagemusha_proof::{
     fold_lineage::{
         A_CONTEXT, A_PC, AKind, BASE, CLAIM_A, CLAIM_Q, FOLD_A, FOLD_Q, IVC_A, IVC_Q, Q_STATE,
     },
-    fold_wrap::{Domains, WrapSpec},
+    fold_wrap::{Domains, WrapSpec, native::FinalChain},
 };
 use iroha_pasta::{Fp, Fq};
 
@@ -57,6 +68,30 @@ fn spec(rel: &ReceiveRelations) -> Arc<WrapSpec> {
         lineage: core::array::from_fn(|i| i),
         boundary: vec![A_CONTEXT, A_PC],
     })
+}
+
+/// The finished chain the wraps take: the Receive after its eight
+/// half-steps, which A5 (step 8) closes after Q's Frame (step 7). Q keeps no
+/// state.
+fn final_chain(chain: &Chain) -> FinalChain {
+    assert!(
+        matches!(chain.last, Some(HalfStep::A(AKind::Receive5))),
+        "the Receive ends with A5"
+    );
+    FinalChain {
+        step: 8,
+        a_state: chain.a_state.clone(),
+        q_state: Vec::new(),
+        u_q: chain
+            .a_kept
+            .iter()
+            .map(|kept| kept.clone().expect("A keeps every Q kind"))
+            .collect(),
+        u_a: chain.q_kept.clone(),
+        a_n: chain.last_a.clone().expect("A5's instance"),
+        pallas_claims: chain.claims_a.clone().expect("A's claim accumulator"),
+        vesta_claims: chain.claims_q.clone().expect("Q's claim accumulator"),
+    }
 }
 
 fn percent(rows: usize) -> String {
@@ -94,5 +129,35 @@ fn the_wraps_size_on_the_real_receive_relations() {
             size.public_rows,
         );
     }
-    assert!(!sizes.is_empty(), "R is sized");
+    assert_eq!(
+        sizes.iter().map(|size| size.wrap).collect::<Vec<_>>(),
+        ["S", "R", "P", "Omega"],
+        "every wrap is sized"
+    );
+    for size in &sizes {
+        assert!(size.fits, "{} fits k16", size.wrap);
+    }
+}
+
+#[test]
+#[ignore = "the real eight-half-step Receive, four k16 keygens, checks and proofs; run optimized"]
+fn the_wraps_finish_the_real_receive_into_an_omega_that_decides() {
+    let _serial = fold_wrap_toy::serial();
+    let started = Instant::now();
+    let keys = receive_keys();
+    let full = full_receive(&keys, None);
+    let rel = receive_relations(&keys, &full);
+    let chain = final_chain(&run_chain(&keys, &rel, &full, 8));
+    assert_eq!(Q_STATE, 0, "Q keeps no state");
+    println!(
+        "keys, fixture, relations and eight half-steps: {:.1?}",
+        started.elapsed()
+    );
+    let now = Instant::now();
+    let wrap_keys = iroha_kagemusha_proof::fold_wrap::native::keygen(spec(&rel)).expect("keys");
+    println!("keygen S, R, P and Omega: {:.1?}", now.elapsed());
+    let now = Instant::now();
+    fold_wrap_toy::wrap(&wrap_keys, &chain, 7, false);
+    println!("wraps checked, proved and decided: {:.1?}", now.elapsed());
+    println!("total: {:.1?}", started.elapsed());
 }

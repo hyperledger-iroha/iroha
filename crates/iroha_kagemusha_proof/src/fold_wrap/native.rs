@@ -1,11 +1,13 @@
-//! The wraps' native producer: key generation (R, then P, which pins R, then
-//! Omega, which pins P), then for one finished chain every decider, fold and
-//! restructuring natively and the three proofs in order.
+//! The wraps' native producer: key generation (S, then R, which pins S, then
+//! P, which pins R, then Omega, which pins P), then for one finished chain
+//! every decider, fold and restructuring natively and the four proofs in
+//! order.
 //!
 //! Both deciders, the last A fold and both restructurings run natively
-//! first, so R's witness is complete. R's proof gives the claim `acc_P` folds,
-//! then P's witness is complete; P's proof gives the claim `acc_V` folds,
-//! then Omega's.
+//! first, so S's witness is complete. S's proof gives R's claim for S, which
+//! R forwards, then R's witness is complete. R's proof gives the claim
+//! `acc_P` folds, then P's witness is complete; P's proof gives the last
+//! claim `acc_V` folds, then Omega's.
 
 use std::sync::Arc;
 
@@ -41,22 +43,24 @@ use iroha_plonk_recursion::{
 use super::{
     WrapError, WrapSpec,
     crossing::{
-        AClaimCrossing, AccumulatorTerms, PPublic, Pair, PallasClaimCrossing, QCrossing, QMember,
-        RMember, RPublic, VestaClaimCrossing,
+        AccumulatorTerms, ClaimRows, ForwardedClaim, PPublic, Pair, PallasClaimCrossing,
+        Q_CROSSING_DOMAIN, QCrossing, QMember, RMember, RPublic, SPublic, VestaClaimCrossing,
     },
     omega::{
         INSTANCE_TYPES, OmegaCircuit, OmegaPlan, OmegaWitness, PallasFieldWitness, QFieldWitness,
     },
-    p::{
-        AFieldWitness, PCircuit, PPlan, PWitness, PallasClaimWitness, QGroupWitness,
-        VestaClaimWitness,
-    },
+    p::{AFieldWitness, PCircuit, PPlan, PWitness, PallasClaimWitness, VestaClaimWitness},
     r::{RCircuit, RPlan, RWitness},
+    s::{QGroupWitness, SCircuit, SPlan},
 };
 use crate::a_relation::LINEAGE_DOMAIN;
 
-/// The three wraps' programs and proving keys.
+/// The four wraps' programs and proving keys.
 pub struct WrapKeys {
+    /// S's program.
+    pub s_plan: Arc<SPlan>,
+    /// S's proving key (Vesta).
+    pub s_key: ProvingKey<Eq>,
     /// R's program.
     pub r_plan: Arc<RPlan>,
     /// R's proving key (Pallas).
@@ -77,14 +81,28 @@ impl core::fmt::Debug for WrapKeys {
     }
 }
 
-/// Generates R's key, then P's (which pins R's), then Omega's (which pins
-/// P's).
+/// Generates S's key, then R's (which pins S's), then P's (which pins R's),
+/// then Omega's (which pins P's).
 ///
 /// # Errors
 /// [`WrapError::Input`] for relations the wraps do not admit,
 /// [`WrapError::Proof`] when key generation fails.
 pub fn keygen(spec: Arc<WrapSpec>) -> Result<WrapKeys, WrapError> {
-    let r_plan = Arc::new(RPlan::new(Arc::clone(&spec))?);
+    let s_plan = Arc::new(SPlan::new(Arc::clone(&spec))?);
+    let s_key = keygen_pk_v2(
+        &spec.params_a,
+        &SCircuit {
+            plan: Arc::clone(&s_plan),
+            witness: None,
+        },
+        &KeygenConfigV2::pipa_r(vec![InstanceType::Field]),
+    )
+    .map_err(|_| WrapError::Proof)?;
+    let r_plan = Arc::new(RPlan::new(
+        Arc::clone(&s_plan),
+        s_key.binding().clone(),
+        s_key.vk().clone(),
+    )?);
     let r_key = keygen_pk_v2(
         &spec.params_q,
         &RCircuit {
@@ -123,6 +141,8 @@ pub fn keygen(spec: Arc<WrapSpec>) -> Result<WrapKeys, WrapError> {
     )
     .map_err(|_| WrapError::Proof)?;
     Ok(WrapKeys {
+        s_plan,
+        s_key,
         r_plan,
         r_key,
         p_plan,
@@ -334,13 +354,14 @@ fn embed_fp(value: &Fp) -> Fq {
     Fq::from_raw_reduced(value.to_canonical_limbs())
 }
 
-/// Everything computed natively before R's proof: R's witness and public
-/// column, and P's and Omega's inputs besides the earlier proofs.
+/// Everything computed natively before S's proof: S's witness and public
+/// column, and R's, P's and Omega's inputs besides the earlier proofs.
 pub struct Prepared {
-    /// R's public column.
-    pub r_public: Vec<Fq>,
-    /// R's witness.
-    pub r_witness: Arc<RWitness>,
+    /// S's public column.
+    pub s_public: Vec<Fp>,
+    /// S's witness.
+    pub s_witness: Arc<QGroupWitness>,
+    r: RInputs,
     p: PInputs,
     omega: OmegaInputs,
 }
@@ -351,11 +372,17 @@ impl core::fmt::Debug for Prepared {
     }
 }
 
+/// R's witness and public column, except S's column and proof and R's claim
+/// for S, which [`r_stage`] adds after S's proof.
+struct RInputs {
+    witness: RWitness,
+    public: RPublic<Fq>,
+}
+
 /// P's inputs besides R's proof and `acc_P`'s fold.
 struct PInputs {
     step: u64,
     state: Vec<Fp>,
-    q: QGroupWitness,
     a: AFieldWitness,
     pallas: PallasClaimWitness,
     vesta: VestaClaimWitness,
@@ -363,8 +390,8 @@ struct PInputs {
     q_claim: GeneratorClaim<Ep>,
     pallas_claim: AccumulatorT<Ep>,
     fold_tape: FoldTape<Ep>,
-    q_crossing: QCrossing<Fp>,
-    a_claim: AClaimCrossing<Fp>,
+    q_crossing_digest: Fq,
+    a_claim: ForwardedClaim<Fp>,
     pallas_crossing: PallasClaimCrossing<Fp>,
     vesta_crossing: VestaClaimCrossing<Fp>,
 }
@@ -381,7 +408,8 @@ struct OmegaInputs {
 }
 
 /// Runs both deciders, the last A fold and both restructurings natively,
-/// and assembles R's witness and public column and P's and Omega's inputs.
+/// and assembles S's witness and public column and R's, P's and Omega's
+/// inputs.
 ///
 /// # Errors
 /// [`WrapError::Input`] for a chain of another shape and [`WrapError::Fold`]
@@ -393,9 +421,9 @@ pub fn prepare(
     tapes: WrapTapes,
     config: &FoldConfig,
 ) -> Result<Prepared, WrapError> {
+    let s_plan = &*keys.s_plan;
     let r_plan = &*keys.r_plan;
-    let p_plan = &*keys.p_plan;
-    let spec = &*p_plan.spec;
+    let spec = &*s_plan.spec;
     let domains = &spec.domains;
     let last = spec.last;
     if chain.a_state.len() != spec.a_state
@@ -411,10 +439,10 @@ pub fn prepare(
     {
         return Err(WrapError::Input);
     }
-    // The Q-side decider over every Q kind (P's commitment side, Omega's
+    // The Q-side decider over every Q kind (S's commitment side, Omega's
     // field side).
     let q_members: Vec<_> = chain.u_q.iter().map(|(acc, w)| (acc, w)).collect();
-    let q = decide(&p_plan.q_plans, &spec.params_q, &domains.q_fold, &q_members)?;
+    let q = decide(&s_plan.q_plans, &spec.params_q, &domains.q_fold, &q_members)?;
     // The last A fold (or start), then the A-side decider over every A kind
     // (R's commitment side, P's field side).
     let (a_n, a_n_witness) = &chain.a_n;
@@ -440,7 +468,7 @@ pub fn prepare(
     // The instance copy terms each field side imports.
     let q_accs: Vec<&Accumulator<Ep>> = chain.u_q.iter().map(|(acc, _)| acc).collect();
     let a_accs: Vec<&Accumulator<Eq>> = decided.iter().map(|(acc, _)| acc).collect();
-    let q_terms = copy_terms(&p_plan.q_plans, &q_accs, q.proved.copy_challenges)?;
+    let q_terms = copy_terms(&s_plan.q_plans, &q_accs, q.proved.copy_challenges)?;
     let a_terms = copy_terms(&r_plan.a_plans, &a_accs, a.proved.copy_challenges)?;
     // The claim accumulators' restructurings.
     let (pallas_acc, pallas_s) = &chain.pallas_claims;
@@ -459,7 +487,54 @@ pub fn prepare(
         tapes.vesta_restructure,
         config,
     )?;
-    // R's public column and witness.
+    // S's public column: the Q crossing and G'_0.
+    let q_helper = decider_v2::helper_digest::<Ep>(&domains.q_fold, &q.proved.proof.helpers);
+    let (q_x, q_y) = generator_coordinates::<Ep>(q.claim.g());
+    let s_public = SPublic {
+        q: QCrossing {
+            members: q_accs
+                .iter()
+                .zip(&q_terms)
+                .map(|(acc, copy)| QMember {
+                    acc_digest: acc.digest(&domains.q_fold),
+                    terms: terms_pairs(acc, *copy),
+                })
+                .collect(),
+            helper_digest: q_helper,
+            copy_challenges: q.proved.copy_challenges.map(|c| pair(&c)),
+            field_digest: pair(&q.proved.field_digest),
+            value: pair(&q.value),
+            folded: pair(&q.folded),
+            alpha: pair(&q.alpha),
+            rounds: q.claim.challenges().iter().map(pair).collect(),
+        },
+        claim: [q_x, q_y],
+    };
+    // D_SQ, as R hashes S's rows.
+    let two128 = Fq::from_u128(1 << 64).square();
+    let q_crossing_digest = hash_with_domain(
+        Q_CROSSING_DOMAIN,
+        &s_public
+            .q
+            .to_words(
+                |digest: &Fp| s6_limbs(digest).map(Fq::from_u128),
+                |[lo, hi]: &Pair<Fp>| Ok::<_, WrapError>(embed_fp(lo) + two128 * embed_fp(hi)),
+            )?
+            .words(),
+    );
+    let s_rows = s_public.rows();
+    if s_rows.len() != s_plan.layout.rows() {
+        return Err(WrapError::Input);
+    }
+    let s_witness = QGroupWitness {
+        accs: q_accs.iter().map(|acc| (*acc).clone()).collect(),
+        helpers: q.proved.proof.helpers.clone(),
+        opening: q.opening.clone(),
+        imports: [q.proved.field_digest, q.value, q.folded],
+        copy_challenges: q.proved.copy_challenges,
+    };
+    // R's public column and witness, but for S's column and proof and R's
+    // claim for S.
     let a_helper = decider_v2::helper_digest::<Eq>(&domains.a_fold, &a.proved.proof.helpers);
     let (claim_x, claim_y) = generator_coordinates::<Eq>(a.claim.g());
     let vesta_digest = vesta_acc.digest(&domains.vesta_claims);
@@ -488,12 +563,23 @@ pub fn prepare(
         rounds: a.claim.challenges().iter().map(embed_fp).collect(),
         claim: [claim_x, claim_y],
         claim_digest: vesta_digest,
-    }
-    .rows();
-    if r_public.len() != r_plan.layout.rows() {
-        return Err(WrapError::Input);
-    }
+        q_digests: q_accs
+            .iter()
+            .map(|acc| embed_fp(&acc.digest(&domains.q_fold)))
+            .collect(),
+        q_claim: ClaimRows {
+            g: [embed_fp(&q_x), embed_fp(&q_y)],
+            u: q.claim.challenges().to_vec(),
+        },
+        q_crossing_digest,
+        s_claim: ClaimRows {
+            g: [Fq::ZERO; 2],
+            u: Vec::new(),
+        },
+    };
     let r_witness = RWitness {
+        s_public: Vec::new(),
+        s_proof: Vec::new(),
         step: chain.step - 1,
         state: chain.q_state.clone(),
         accs: chain
@@ -510,28 +596,11 @@ pub fn prepare(
         claim_digest: vesta_digest,
     };
     // P's inputs.
-    let q_helper = decider_v2::helper_digest::<Ep>(&domains.q_fold, &q.proved.proof.helpers);
     let p = PInputs {
         step: chain.step,
         state: chain.a_state.clone(),
-        q_crossing: QCrossing {
-            members: q_accs
-                .iter()
-                .zip(&q_terms)
-                .map(|(acc, copy)| QMember {
-                    acc_digest: acc.digest(&domains.q_fold),
-                    terms: terms_pairs(acc, *copy),
-                })
-                .collect(),
-            helper_digest: q_helper,
-            copy_challenges: q.proved.copy_challenges.map(|c| pair(&c)),
-            field_digest: pair(&q.proved.field_digest),
-            value: pair(&q.value),
-            folded: pair(&q.folded),
-            alpha: pair(&q.alpha),
-            rounds: q.claim.challenges().iter().map(pair).collect(),
-        },
-        a_claim: AClaimCrossing {
+        q_crossing_digest,
+        a_claim: ForwardedClaim {
             g: [pair(&claim_x), pair(&claim_y)],
             u: a.claim.challenges().to_vec(),
         },
@@ -551,13 +620,6 @@ pub fn prepare(
             rho: vesta_statement.point.to_vec(),
             value: vesta_statement.value,
         },
-        q: QGroupWitness {
-            accs: q_accs.iter().map(|acc| (*acc).clone()).collect(),
-            helpers: q.proved.proof.helpers.clone(),
-            opening: q.opening.clone(),
-            imports: [q.proved.field_digest, q.value, q.folded],
-            copy_challenges: q.proved.copy_challenges,
-        },
         a: AFieldWitness {
             accs: a_accs.iter().map(|acc| (*acc).clone()).collect(),
             proof: a.proved.proof.clone(),
@@ -573,7 +635,7 @@ pub fn prepare(
             proof: vesta_proof,
         },
         restructure: pallas_opening,
-        q_claim: q.claim,
+        q_claim: q.claim.clone(),
         pallas_claim,
         fold_tape: tapes.pallas_fold,
     };
@@ -581,7 +643,10 @@ pub fn prepare(
         q: QFieldWitness {
             accs: chain.u_q.iter().map(|(acc, _)| acc.clone()).collect(),
             copy_terms: q_terms,
+            rounds: q.claim.challenges().to_vec(),
             proof: q.proved.proof,
+            helper_digest: q_helper,
+            alpha: q.alpha,
         },
         pallas: PallasFieldWitness {
             acc: *pallas_acc,
@@ -594,19 +659,107 @@ pub fn prepare(
         fold_tape: tapes.vesta_fold,
     };
     Ok(Prepared {
-        r_public,
-        r_witness: Arc::new(r_witness),
+        s_public: s_rows,
+        s_witness: Arc::new(s_witness),
+        r: RInputs {
+            witness: r_witness,
+            public: r_public,
+        },
         p,
         omega,
     })
 }
 
-/// R with `prepared`'s witness.
+/// S with `prepared`'s witness.
 #[must_use]
-pub fn r_circuit(keys: &WrapKeys, prepared: &Prepared) -> RCircuit {
+pub fn s_circuit(keys: &WrapKeys, prepared: &Prepared) -> SCircuit {
+    SCircuit {
+        plan: Arc::clone(&keys.s_plan),
+        witness: Some(Arc::clone(&prepared.s_witness)),
+    }
+}
+
+/// Proves S (Vesta), returning its proof and opening claim.
+///
+/// # Errors
+/// [`WrapError::Proof`] when proving fails.
+pub fn prove_s(
+    keys: &WrapKeys,
+    prepared: &Prepared,
+) -> Result<(Vec<u8>, GeneratorClaim<Eq>), WrapError> {
+    let circuit = s_circuit(keys, prepared);
+    let columns = Witness::from_circuit(&keys.s_key, &circuit, &[prepared.s_public.clone()])
+        .map_err(|_| WrapError::Proof)?;
+    let output = create_proof_owned_with_claim(
+        &keys.s_plan.spec.params_a,
+        &keys.s_key,
+        columns,
+        ProverRandomness::os(),
+        ProverConfig::default(),
+    )
+    .map_err(|_| WrapError::Proof)?;
+    Ok((output.proof, output.opening))
+}
+
+/// R's witness and public column after S's proof.
+pub struct RStage {
+    /// R's public column.
+    pub r_public: Vec<Fq>,
+    /// R's witness.
+    pub r_witness: Arc<RWitness>,
+    s_claim: GeneratorClaim<Eq>,
+    p: PInputs,
+    omega: OmegaInputs,
+}
+
+impl core::fmt::Debug for RStage {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("RStage { private: [REDACTED] }")
+    }
+}
+
+/// Completes R's witness with S's column and proof, and R's public column
+/// with R's claim for S (S's opening claim, which R's verification of S
+/// yields).
+///
+/// # Errors
+/// [`WrapError::Input`] for another layout.
+pub fn r_stage(
+    keys: &WrapKeys,
+    prepared: Prepared,
+    s_proof: Vec<u8>,
+    s_opening: &GeneratorClaim<Eq>,
+) -> Result<RStage, WrapError> {
+    let RInputs {
+        mut witness,
+        mut public,
+    } = prepared.r;
+    let (x, y) = generator_coordinates::<Eq>(s_opening.g());
+    public.s_claim = ClaimRows {
+        g: [x, y],
+        u: s_opening.challenges().iter().map(embed_fp).collect(),
+    };
+    let r_public = public.rows();
+    if r_public.len() != keys.r_plan.layout.rows() {
+        return Err(WrapError::Input);
+    }
+    witness.s_public = prepared.s_public;
+    witness.s_proof = s_proof;
+    Ok(RStage {
+        r_public,
+        r_witness: Arc::new(witness),
+        s_claim: s_opening.clone(),
+        p: prepared.p,
+        omega: prepared.omega,
+    })
+}
+
+/// R with `stage`'s witness.
+#[must_use]
+pub fn r_circuit(keys: &WrapKeys, stage: &RStage) -> RCircuit {
     RCircuit {
         plan: Arc::clone(&keys.r_plan),
-        witness: Some(Arc::clone(&prepared.r_witness)),
+        witness: Some(Arc::clone(&stage.r_witness)),
     }
 }
 
@@ -616,10 +769,10 @@ pub fn r_circuit(keys: &WrapKeys, prepared: &Prepared) -> RCircuit {
 /// [`WrapError::Proof`] when proving fails.
 pub fn prove_r(
     keys: &WrapKeys,
-    prepared: &Prepared,
+    stage: &RStage,
 ) -> Result<(Vec<u8>, GeneratorClaim<Ep>), WrapError> {
-    let circuit = r_circuit(keys, prepared);
-    let columns = Witness::from_circuit(&keys.r_key, &circuit, &[prepared.r_public.clone()])
+    let circuit = r_circuit(keys, stage);
+    let columns = Witness::from_circuit(&keys.r_key, &circuit, &[stage.r_public.clone()])
         .map_err(|_| WrapError::Proof)?;
     let output = create_proof_owned_with_claim(
         &keys.r_plan.spec.params_q,
@@ -643,6 +796,7 @@ pub struct PStage {
     pub d_a: Fp,
     /// `acc_P`.
     pub acc_p: AccumulatorT<Ep>,
+    s_claim: GeneratorClaim<Eq>,
     omega: OmegaInputs,
 }
 
@@ -660,13 +814,13 @@ impl core::fmt::Debug for PStage {
 /// another layout.
 pub fn p_stage(
     keys: &WrapKeys,
-    prepared: Prepared,
+    stage: RStage,
     r_proof: Vec<u8>,
     r_opening: &GeneratorClaim<Ep>,
     config: &FoldConfig,
 ) -> Result<PStage, WrapError> {
     let spec = &*keys.p_plan.spec;
-    let inputs = prepared.p;
+    let inputs = stage.p;
     let (fold, acc_p) = create_fold(
         &spec.params_q,
         &[
@@ -680,9 +834,14 @@ pub fn p_stage(
     )
     .map_err(|_| WrapError::Fold)?;
     let d_a = lineage_digest(spec, &inputs.state, &acc_p)?;
+    let (s_x, s_y) = generator_coordinates::<Eq>(stage.s_claim.g());
     let p_public = PPublic {
         d_a,
-        q: inputs.q_crossing,
+        q_crossing_digest: pair(&inputs.q_crossing_digest),
+        s_claim: ForwardedClaim {
+            g: [pair(&s_x), pair(&s_y)],
+            u: stage.s_claim.challenges().to_vec(),
+        },
         a_claim: inputs.a_claim,
         pallas: inputs.pallas_crossing,
         vesta: inputs.vesta_crossing,
@@ -694,9 +853,8 @@ pub fn p_stage(
     let p_witness = PWitness {
         step: inputs.step,
         state: inputs.state,
-        r_public: prepared.r_public,
+        r_public: stage.r_public,
         r_proof,
-        q: inputs.q,
         a: inputs.a,
         pallas: inputs.pallas,
         vesta: inputs.vesta,
@@ -708,7 +866,8 @@ pub fn p_stage(
         p_witness: Arc::new(p_witness),
         d_a,
         acc_p,
-        omega: prepared.omega,
+        s_claim: stage.s_claim,
+        omega: stage.omega,
     })
 }
 
@@ -757,11 +916,13 @@ pub fn omega_circuit(
 ) -> Result<(OmegaCircuit, Vec<Vec<Fq>>, AccumulatorT<Eq>), WrapError> {
     let spec = &*keys.p_plan.spec;
     let inputs = stage.omega;
-    // acc_V = fold(P's claim, the A decider's claim, restructured Vesta claim).
+    // acc_V = fold(P's claim, R's claim for S, the A decider's claim, the
+    // restructured Vesta claim).
     let (fold, acc_v) = create_fold(
         &spec.params_a,
         &[
             input(p_opening)?,
+            input(&stage.s_claim)?,
             input(&inputs.a_claim)?,
             inputs.vesta_claim.as_input(),
         ],
@@ -787,7 +948,7 @@ pub fn omega_circuit(
     Ok((circuit, instances, acc_v))
 }
 
-/// Proves R, then P, then Omega, for `chain`.
+/// Proves S, then R, then P, then Omega, for `chain`.
 ///
 /// # Errors
 /// [`WrapError::Input`] for a chain of another shape, [`WrapError::Fold`]
@@ -800,8 +961,10 @@ pub fn prove(
     config: &FoldConfig,
 ) -> Result<WrapOutput, WrapError> {
     let prepared = prepare(keys, chain, tapes, config)?;
-    let (r_proof, r_opening) = prove_r(keys, &prepared)?;
-    let stage = p_stage(keys, prepared, r_proof, &r_opening, config)?;
+    let (s_proof, s_opening) = prove_s(keys, &prepared)?;
+    let stage = r_stage(keys, prepared, s_proof, &s_opening)?;
+    let (r_proof, r_opening) = prove_r(keys, &stage)?;
+    let stage = p_stage(keys, stage, r_proof, &r_opening, config)?;
     let (d_a, acc_p) = (stage.d_a, stage.acc_p.clone());
     let (p_proof, p_opening) = prove_p(keys, &stage)?;
     let (circuit, instances, acc_v) = omega_circuit(keys, stage, p_proof, &p_opening, config)?;

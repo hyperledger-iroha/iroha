@@ -1,46 +1,51 @@
 //! The KAGEMUSHA-Fold compression wraps (output `IVC.md` sections 7 and 11).
 //!
-//! After the last business instance `A_n` of an operation, three k16 PIPA-R
+//! After the last business instance `A_n` of an operation, four k16 PIPA-R
 //! proofs turn the folded state into an Omega in today's transport. Each side
 //! keeps one accumulator per relation kind of the other side, so each decider
 //! is one batch over every kind ([`WrapSpec`]).
 //!
-//! - **R**, over `Fq` (a Pallas proof): the fold of `A_n` into its kind's
-//!   accumulator (or its start, when `Q_{n-1}` kept none), `A_n`'s
-//!   passthrough recomputed as `Q_{n-1}`'s `h_out`, and the A-side decider's
-//!   commitment side and bound opening ([`r::RCircuit`]);
-//! - **P**, over `Fp` (a Vesta proof): verifies R, the commitment side of the
-//!   Q-side decider (Pallas group operations) and its bound opening, the
-//!   field side of the A-side decider against R's values, the Pallas claim
-//!   accumulator's committed-mask opening, the Vesta claim accumulator's
-//!   restructuring sumcheck, the PIPA-AS fold of the Q decider's claim, the
-//!   restructured Pallas claim and R's claim into `acc_P`, `D_A`, and `A_n`'s
-//!   recomputed `h_out` from a state at an operation boundary
-//!   ([`p::PCircuit`]);
+//! - **S**, over `Fp` (a Vesta proof): the commitment side of the Q-side
+//!   decider (Pallas group operations) and its bound opening
+//!   ([`s::SCircuit`]);
+//! - **R**, over `Fq` (a Pallas proof): verifies S and hashes S's Q crossing
+//!   into `D_SQ`, the fold of `A_n` into its kind's accumulator (or its
+//!   start, when `Q_{n-1}` kept none), `A_n`'s passthrough recomputed as
+//!   `Q_{n-1}`'s `h_out`, and the A-side decider's commitment side and bound
+//!   opening ([`r::RCircuit`]);
+//! - **P**, over `Fp` (a Vesta proof): verifies R, the field side of the
+//!   A-side decider against R's values, the Pallas claim accumulator's
+//!   committed-mask opening, the Vesta claim accumulator's restructuring
+//!   sumcheck, the PIPA-AS fold of the Q decider's claim (S's, forwarded by
+//!   R), the restructured Pallas claim and R's claim into `acc_P`, `D_A`,
+//!   and `A_n`'s recomputed `h_out` from a state at an operation boundary
+//!   over S's Q digests ([`p::PCircuit`]);
 //! - **Omega**, over `Fq` (a Pallas proof, today's three public columns
 //!   `[D_A]`, `acc_V.G`, `acc_V.u`): verifies P, the field side of the Q-side
-//!   decider, the Pallas claims' restructuring sumcheck, the Vesta claims'
-//!   committed-mask opening, and the PIPA-AS fold of P's claim, the A
-//!   decider's claim and the restructured Vesta claim into `acc_V`
-//!   ([`omega::OmegaCircuit`]).
+//!   decider checked against `D_SQ`, the Pallas claims' restructuring
+//!   sumcheck, the Vesta claims' committed-mask opening, and the PIPA-AS fold
+//!   of P's claim, R's claim for S, the A decider's claim and the
+//!   restructured Vesta claim into `acc_V` ([`omega::OmegaCircuit`]).
 //!
 //! Each decider is split (DESIGN.md section 9.0): its field messages are
 //! native in the circuit over its scalar field, its commitments in a circuit
 //! over its commitment curve's base field. The values that cross are rows of
-//! the verified proof's public column ([`crossing`]): R's for the A side
-//! (P verifies R), P's for the rest (Omega verifies P), so every crossing
-//! value is bound on both sides. The prover computes everything natively,
-//! then proves R, P and Omega in order ([`native`]).
+//! a verified proof's public column ([`crossing`]): S's for the Q side (R
+//! verifies S and hashes them into `D_SQ`, which Omega recomputes), R's for
+//! the A side (P verifies R), P's for the rest (Omega verifies P), so every
+//! crossing value is bound on both sides. The prover computes everything
+//! natively, then proves S, R, P and Omega in order ([`native`]).
 //!
 //! Every proof before payout stays: every accumulator, both claim
-//! accumulators, R and P are decided or folded into the transported `acc_P`
-//! (inside `D_A`) and `acc_V`, which the consumer decides as today.
+//! accumulators, S, R and P are decided or folded into the transported
+//! `acc_P` (inside `D_A`) and `acc_V`, which the consumer decides as today.
 
 pub mod crossing;
 pub mod native;
 pub mod omega;
 pub mod p;
 pub mod r;
+pub mod s;
 
 use ff::Field;
 use iroha_fold::{

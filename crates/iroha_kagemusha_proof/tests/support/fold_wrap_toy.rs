@@ -1,8 +1,9 @@
-//! A two-kind toy chain for the compression wraps, the wraps' sizes for any
-//! spec ([`sizes`]), and an Omega over the toy chain for other tests
+//! A two-kind toy chain for the compression wraps, the wraps' checks, proofs
+//! and decisions for any finished chain ([`wrap`]), their sizes for any spec
+//! ([`sizes`]), and an Omega over the toy chain for other tests
 //! ([`omega_fixture`]).
 //!
-//! Each side has two relation kinds, so R, P and Omega decide batches. The
+//! Each side has two relation kinds, so S, R, P and Omega decide batches. The
 //! schedule repeats `Q_a, A_a, Q_b, A_b` (`Q_a` folds `A_b`, `Q_b` folds
 //! `A_a`, `A_a` folds `Q_a`, `A_b` folds `Q_b`), and each side keeps its claim
 //! accumulator from iroha_fold's fixtures.
@@ -53,21 +54,25 @@ use iroha_kagemusha_proof::{
         Domains, WrapSpec,
         native::{self, FinalChain, WrapKeys, WrapTapes},
         omega::{OmegaCircuit, OmegaPlan},
-        p::{PCircuit, PPlan},
+        p::{PCircuit, PPlan, PWitness},
         r::{RCircuit, RPlan},
+        s::{SCircuit, SPlan},
     },
 };
-use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve, PastaField};
+use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve, PastaField, msm::MemoryBudget};
 use iroha_plonk::{
-    DescriptorBinding, VerifyingKey,
+    DescriptorBinding, ProverConfig, ProverRandomness, VerifyingKey, Witness,
+    check::{CheckMode, check_circuit},
+    create_proof_owned_with_claim,
     cs::{Column, ConstraintSystem, Instance as InstanceColumn, InstanceType},
     frontend::{Circuit, Error, Layouter, Region, SimpleFloorPlanner, Value, synthesize},
     keys::{KeygenConfigV2, keygen_pk_v2},
     pcs::ipa::PinnedParams,
+    verifier::accumulate_generator,
 };
 use iroha_plonk_gadgets::Word;
 use iroha_plonk_recursion::{
-    ACCUMULATOR_BYTES, FoldConfig, FoldTape,
+    ACCUMULATOR_BYTES, FoldConfig, FoldInput, FoldTape, FoldWitness,
     verifier::{VerifierUsage, diagnostic_take_usage},
 };
 use rand_chacha::{ChaCha20Rng, rand_core::SeedableRng};
@@ -466,7 +471,7 @@ pub fn spec(rel: &Relations) -> Arc<WrapSpec> {
 pub struct Toy {
     /// The relations.
     pub relations: Relations,
-    /// R's, P's and Omega's plans and keys.
+    /// S's, R's, P's and Omega's plans and keys.
     pub keys: WrapKeys,
 }
 
@@ -480,8 +485,9 @@ pub fn toy() -> &'static Toy {
         let now = Instant::now();
         let keys = native::keygen(spec(&relations)).expect("toy wrap keys");
         println!(
-            "keygen R, P and Omega: {:.1?}; R has {} public rows, P {}",
+            "keygen S, R, P and Omega: {:.1?}; S has {} public rows, R {}, P {}",
             now.elapsed(),
+            keys.s_plan.layout.rows(),
             keys.r_plan.layout.rows(),
             keys.p_plan.layout.rows()
         );
@@ -664,10 +670,243 @@ pub fn take_rows(label: &str) -> Option<VerifierUsage> {
     entries.last().copied()
 }
 
+fn copy_fold(witness: &FoldWitness<Ep>) -> FoldWitness<Ep> {
+    FoldWitness::from_private_bytes(&witness.to_private_bytes()).expect("canonical witness")
+}
+
+/// P whose copy of R's public column has one row changed, so R's proof no
+/// longer verifies inside P.
+fn with_r_row_changed(keys: &native::WrapKeys, stage: &native::PStage, row: usize) -> PCircuit {
+    let original: &PWitness = &stage.p_witness;
+    let mut r_public = original.r_public.clone();
+    r_public[row] += Fq::ONE;
+    let witness = PWitness {
+        step: original.step,
+        state: original.state.clone(),
+        r_public,
+        r_proof: original.r_proof.clone(),
+        a: original.a.clone(),
+        pallas: original.pallas.clone(),
+        vesta: original.vesta.clone(),
+        restructure: copy_fold(&original.restructure),
+        fold: copy_fold(&original.fold),
+    };
+    PCircuit {
+        plan: Arc::clone(&keys.p_plan),
+        witness: Some(Arc::new(witness)),
+    }
+}
+
+/// R whose copy of S's public column has one row changed, so S's proof no
+/// longer verifies inside R.
+fn with_s_row_changed(keys: &native::WrapKeys, stage: &native::RStage, row: usize) -> RCircuit {
+    let mut witness = (*stage.r_witness).clone();
+    witness.s_public[row] += Fp::ONE;
+    RCircuit {
+        plan: Arc::clone(&keys.r_plan),
+        witness: Some(Arc::new(witness)),
+    }
+}
+
+/// Wraps one chain: S, R, P and Omega checked (with mutations when
+/// `mutate`: a changed public row of each wrap, and a changed row of R's copy
+/// of S's column and of P's copy of R's, are rejected), proved, Omega
+/// verified natively and every carried accumulator decided. Returns the rows
+/// S, R, P and Omega used.
+///
+/// # Panics
+/// When a wrap is unsatisfied, a mutation is accepted, a proof fails or an
+/// accumulator does not decide.
+#[allow(clippy::too_many_lines)]
+pub fn wrap(
+    keys: &native::WrapKeys,
+    chain: &FinalChain,
+    seed: u64,
+    mutate: bool,
+) -> [VerifierUsage; 4] {
+    let spec = &keys.p_plan.spec;
+    let config = FoldConfig::default();
+    let _ = diagnostic_take_usage();
+    let now = Instant::now();
+    let prepared = native::prepare(keys, chain, tapes(seed), &config).expect("native wraps");
+    println!(
+        "native deciders, folds and restructurings: {:.1?}",
+        now.elapsed()
+    );
+    // S.
+    let s = native::s_circuit(keys, &prepared);
+    let report = check_circuit(&s, K, &[prepared.s_public.clone()], CheckMode::Strict).expect("S");
+    let s_rows = take_rows("S").expect("S rows");
+    assert!(report.is_satisfied(), "S: {:?}", report.failures().first());
+    let s_layout = &keys.s_plan.layout;
+    let s_parsed = s_layout.parse(&prepared.s_public).expect("layout");
+    let s_row_of = |value: &Fp| {
+        prepared
+            .s_public
+            .iter()
+            .position(|v| v == value)
+            .expect("row")
+    };
+    let s_crossing_row = s_row_of(&s_parsed.q.rounds[5][1]);
+    if mutate {
+        for (label, row) in [
+            ("a Q member digest", 0),
+            (
+                "an imported copy challenge",
+                s_row_of(&s_parsed.q.copy_challenges[0][0]),
+            ),
+            ("a round challenge's high limb", s_crossing_row),
+            ("G'_0", s_layout.rows() - 1),
+        ] {
+            let mut changed = prepared.s_public.clone();
+            changed[row] += Fp::ONE;
+            let report = check_circuit(&s, K, &[changed], CheckMode::Strict).expect("S");
+            let _ = diagnostic_take_usage();
+            assert!(!report.is_satisfied(), "S accepts another {label}");
+        }
+    }
+    let now = Instant::now();
+    let (s_proof, s_opening) = native::prove_s(keys, &prepared).expect("S proof");
+    println!("S proof ({} bytes): {:.1?}", s_proof.len(), now.elapsed());
+    let stage = native::r_stage(keys, prepared, s_proof, &s_opening).expect("R stage");
+    // R (S's proving recorded S's rows again).
+    let _ = diagnostic_take_usage();
+    let r = native::r_circuit(keys, &stage);
+    let report = check_circuit(&r, K, &[stage.r_public.clone()], CheckMode::Strict).expect("R");
+    let r_rows = take_rows("R").expect("R rows");
+    assert!(report.is_satisfied(), "R: {:?}", report.failures().first());
+    if mutate {
+        let layout = &keys.r_plan.layout;
+        let parsed = layout.parse(&stage.r_public).expect("layout");
+        let row_of = |value: &Fq| stage.r_public.iter().position(|v| v == value).expect("row");
+        for (label, row) in [
+            ("passthrough", 0),
+            ("a value of A_n's second column", layout.a_public - 1),
+            ("an A member digest", layout.a_public),
+            ("the claim digest", row_of(&parsed.claim_digest)),
+            ("a Q member digest", row_of(&parsed.q_digests[1])),
+            ("D_SQ", row_of(&parsed.q_crossing_digest)),
+            ("a challenge of R's claim for S", layout.rows() - 1),
+        ] {
+            let mut changed = stage.r_public.clone();
+            changed[row] += Fq::ONE;
+            let report = check_circuit(&r, K, &[changed], CheckMode::Strict).expect("R");
+            let _ = diagnostic_take_usage();
+            assert!(!report.is_satisfied(), "R accepts another {label}");
+        }
+        // S's rows as R verifies them.
+        for (label, row) in [
+            ("Q crossing row", s_crossing_row),
+            ("G'_0 row", s_layout.rows() - 1),
+        ] {
+            let circuit = with_s_row_changed(keys, &stage, row);
+            let report = check_circuit(&circuit, K, &[stage.r_public.clone()], CheckMode::Strict)
+                .expect("R");
+            let _ = diagnostic_take_usage();
+            assert!(!report.is_satisfied(), "R accepts another S {label}");
+        }
+    }
+    let now = Instant::now();
+    let (r_proof, r_opening) = native::prove_r(keys, &stage).expect("R proof");
+    println!("R proof ({} bytes): {:.1?}", r_proof.len(), now.elapsed());
+    let stage = native::p_stage(keys, stage, r_proof, &r_opening, &config).expect("P stage");
+    // P (R's proving recorded R's rows again).
+    let _ = diagnostic_take_usage();
+    let p = native::p_circuit(keys, &stage);
+    let report = check_circuit(&p, K, &[stage.p_public.clone()], CheckMode::Strict).expect("P");
+    let p_rows = take_rows("P").expect("P rows");
+    assert!(report.is_satisfied(), "P: {:?}", report.failures().first());
+    if mutate {
+        let layout = &keys.p_plan.layout;
+        let parsed = layout.parse(&stage.p_public).expect("layout");
+        let row_of = |value: &Fp| stage.p_public.iter().position(|v| v == value).expect("row");
+        for (label, row) in [
+            ("D_A", 0),
+            ("D_SQ's high limb", 2),
+            (
+                "a challenge of R's claim for S",
+                row_of(&parsed.s_claim.u[3]),
+            ),
+            ("an A claim challenge", row_of(&parsed.a_claim.u[3])),
+            ("the last row", layout.rows() - 1),
+        ] {
+            let mut changed = stage.p_public.clone();
+            changed[row] += Fp::ONE;
+            let report = check_circuit(&p, K, &[changed], CheckMode::Strict).expect("P");
+            let _ = diagnostic_take_usage();
+            assert!(!report.is_satisfied(), "P accepts another {label}");
+        }
+        // A_n's h_out as R hands it to P.
+        let circuit = with_r_row_changed(keys, &stage, 1);
+        let report =
+            check_circuit(&circuit, K, &[stage.p_public.clone()], CheckMode::Strict).expect("P");
+        let _ = diagnostic_take_usage();
+        assert!(!report.is_satisfied(), "P accepts another R row");
+    }
+    let now = Instant::now();
+    let (p_proof, p_opening) = native::prove_p(keys, &stage).expect("P proof");
+    println!("P proof ({} bytes): {:.1?}", p_proof.len(), now.elapsed());
+    let acc_p = stage.acc_p.clone();
+    let (omega, instances, acc_v) =
+        native::omega_circuit(keys, stage, p_proof, &p_opening, &config).expect("Omega");
+    let _ = diagnostic_take_usage();
+    let report = check_circuit(&omega, K, &instances, CheckMode::Strict).expect("Omega");
+    let omega_rows = take_rows("Omega").expect("Omega rows");
+    assert!(
+        report.is_satisfied(),
+        "Omega: {:?}",
+        report.failures().first()
+    );
+    if mutate {
+        for (column, row) in [(0, 0), (1, 0), (2, 15)] {
+            let mut changed = instances.clone();
+            changed[column][row] += Fq::ONE;
+            let report = check_circuit(&omega, K, &changed, CheckMode::Strict).expect("Omega");
+            let _ = diagnostic_take_usage();
+            assert!(
+                !report.is_satisfied(),
+                "Omega accepts another column {column} row {row}"
+            );
+        }
+    }
+    let now = Instant::now();
+    let columns = Witness::from_circuit(&keys.omega_key, &omega, &instances).expect("witness");
+    let output = create_proof_owned_with_claim(
+        &spec.params_q,
+        &keys.omega_key,
+        columns,
+        ProverRandomness::os(),
+        ProverConfig::default(),
+    )
+    .expect("Omega proof");
+    println!(
+        "Omega proof ({} bytes): {:.1?}",
+        output.proof.len(),
+        now.elapsed()
+    );
+    let budget = MemoryBudget::DEFAULT;
+    let claim = accumulate_generator(
+        &spec.params_q,
+        keys.omega_key.binding(),
+        keys.omega_key.vk(),
+        &instances,
+        &output.proof,
+        budget,
+    )
+    .expect("Omega verifies");
+    FoldInput::from_opening(*claim.g(), claim.challenges())
+        .expect("claim")
+        .decide(&spec.params_q, budget)
+        .expect("Omega's opening decides");
+    acc_v.decide(&spec.params_a, budget).expect("acc_V decides");
+    acc_p.decide(&spec.params_q, budget).expect("acc_P decides");
+    [s_rows, r_rows, p_rows, omega_rows]
+}
+
 /// The rows one wrap uses, from a synthesis without witnesses.
 #[derive(Clone, Copy, Debug)]
 pub struct Size {
-    /// R, P or Omega.
+    /// S, R, P or Omega.
     pub wrap: &'static str,
     /// Whether the wrap fits k16; otherwise its rows are counted at k17.
     pub fits: bool,
@@ -677,10 +916,10 @@ pub struct Size {
     pub public_rows: usize,
 }
 
-/// The rows R, P and Omega use for `spec`, without a chain or proofs: each
-/// wrap is synthesized without witnesses at k16, or at k17 when it overflows
-/// k16. The next wrap verifies the previous one's k16 key, so sizing stops
-/// after a wrap that overflows.
+/// The rows S, R, P and Omega use for `spec`, without a chain or proofs:
+/// each wrap is synthesized without witnesses at k16, or at k17 when it
+/// overflows k16. The next wrap verifies the previous one's k16 key, so
+/// sizing stops after a wrap that overflows.
 ///
 /// # Panics
 /// When `spec` admits no plan or a wrap overflows k17.
@@ -688,13 +927,24 @@ pub struct Size {
 pub fn sizes(spec: &Arc<WrapSpec>) -> Vec<Size> {
     let field = || KeygenConfigV2::pipa_r(vec![InstanceType::Field]);
     let mut sizes = Vec::new();
-    let r_plan = Arc::new(RPlan::new(Arc::clone(spec)).expect("R plan"));
+    let s_plan = Arc::new(SPlan::new(Arc::clone(spec)).expect("S plan"));
+    let s = SCircuit {
+        plan: Arc::clone(&s_plan),
+        witness: None,
+    };
+    sizes.push(size("S", &s, s_plan.layout.rows()));
+    if !sizes[0].fits {
+        return sizes;
+    }
+    let s_key = keygen_pk_v2(&spec.params_a, &s, &field()).expect("S key");
+    let r_plan =
+        Arc::new(RPlan::new(s_plan, s_key.binding().clone(), s_key.vk().clone()).expect("R plan"));
     let r = RCircuit {
         plan: Arc::clone(&r_plan),
         witness: None,
     };
     sizes.push(size("R", &r, r_plan.layout.rows()));
-    if !sizes[0].fits {
+    if !sizes[1].fits {
         return sizes;
     }
     let r_key = keygen_pk_v2(&spec.params_q, &r, &field()).expect("R key");
@@ -705,7 +955,7 @@ pub fn sizes(spec: &Arc<WrapSpec>) -> Vec<Size> {
         witness: None,
     };
     sizes.push(size("P", &p, p_plan.layout.rows()));
-    if !sizes[1].fits {
+    if !sizes[2].fits {
         return sizes;
     }
     let p_key = keygen_pk_v2(&spec.params_a, &p, &field()).expect("P key");

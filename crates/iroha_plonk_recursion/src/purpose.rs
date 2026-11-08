@@ -19,8 +19,8 @@ pub enum FoldPurpose {
     /// Pallas claim accumulator.
     FoldWrapPallas,
     /// Vesta aggregation into acc_V in the folding Omega wrap: P's own
-    /// opening, the decided claims of the A side and the restructured Vesta
-    /// claim accumulator.
+    /// opening, R's opening claim for the first wrap S, the decided claims of
+    /// the A side and the restructured Vesta claim accumulator.
     FoldWrapVesta,
 }
 impl FoldPurpose {
