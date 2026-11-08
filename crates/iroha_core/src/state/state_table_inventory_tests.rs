@@ -1899,6 +1899,14 @@ const CONSTRUCTION_USES: &[ConstructionUse] = &[
         ),
     },
     ConstructionUse {
+        path: "crates/iroha_core/src/state/repair_rehearsal.rs",
+        uses: &[("MerkleTree", 1)],
+        owner: UseOwner::Other(
+            Use::BlockContent,
+            "Merkle root of a rehearsal block's single supplied transaction: block content bound by the header of that local block, no State content.",
+        ),
+    },
+    ConstructionUse {
         path: "crates/iroha_core/src/state/retail_contract_state_snapshot.rs",
         uses: &[("MerkleMap", 3)],
         owner: UseOwner::Roots(&["retail_contract_state_map_root"]),

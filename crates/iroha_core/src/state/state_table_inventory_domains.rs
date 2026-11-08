@@ -81,11 +81,37 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Name,
-        reason: "Closed local schemas for unsigned SoraFS authority replay inspection requests, observations and package manifests; these format names confer no State, qualification or governance authority",
+        reason: "Reserved additive wire name of anonymous Parliament credential registration; no current registry or selection activates it.",
+        literals: &[r"iroha.governance.parliament.credential.register.v1"],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "Definition, module and wire names of the SoraFS bootstrap repair addition: they name a kernel and an instruction and hash no State content.",
         literals: &[
-            r"iroha.sorafs.authority.inspect-request.v1",
-            r"iroha.sorafs.authority.inspection-package.v1",
-            r"iroha.sorafs.authority.inspection.v1",
+            r"iroha.kernel.taira_sorafs_repair.v1",
+            r"iroha.sorafs.bootstrap.repair.apply.v1",
+            r"iroha.sorafs.bootstrap.repair.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Content identities of one post-genesis SoraFS bootstrap payload and of its session: each hashes that supplied record, not a State table.",
+        literals: &[
+            r"iroha.sorafs.post-genesis-bootstrap.payload.v1\0",
+            r"iroha.sorafs.post-genesis-bootstrap.session.v1\0",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Role prefix of the SHA-256 digests of one KAGEMUSHA suffix Unload record; the active ledger does not admit suffix Unload.",
+        literals: &[r"iroha:kagemusha:wallet:suffix-unload:v1:"],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Content identity of one SoraFS repair plan and the domain of its signatures: both cover that supplied plan, not a State table.",
+        literals: &[
+            r"iroha:sorafs:repair:plan:v1\0",
+            r"iroha:sorafs:repair:signature:v1\0",
         ],
     },
     OtherDomains {
@@ -1508,11 +1534,11 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha.ironwood.v1",
             r"iroha.kernel.v1",
             r"iroha.parameters.v1",
-            r"iroha.sorafs.authority_governance.v1",
             r"iroha.runtime.endorsed_change_set_proposal.v1",
+            r"iroha.sorafs.authority_governance.v1",
             r"iroha.world.lthash16.v1",
-            r"iroha:runtime:addition:v1\0",
             r"iroha:ironwood:qualification-evidence:v1\0",
+            r"iroha:runtime:addition:v1\0",
             r"iroha:runtime:baseline:v1\0",
             r"iroha:runtime:definition:v1\0",
             r"iroha:runtime:ironwood:v1\0",
@@ -1524,6 +1550,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
         usage: Use::Record,
         reason: "Identities and signature domains of live-upgrade lifecycle records (specs/live_runtime_upgrades.md §6, §7, §13): change sets and the release signers' provenance endorsements of them, validator support attestations with the release digests and committees they bind, adoption trust anchors, and emergency containment with its panel endorsements. Each hashes or signs one canonical record or a release's build status and implemented definitions; none commits to State content",
         literals: &[
+            r"iroha:runtime:adoption-attestation:v1\0",
             r"iroha:runtime:adoption:v1\0",
             r"iroha:runtime:change-set-endorsement:v1\0",
             r"iroha:runtime:change-set:v1\0",

@@ -151,9 +151,7 @@ fn sorafs_authority_catalog_preserves_original_pool_refusal_and_publication_retr
 
 #[test]
 fn sorafs_authority_frozen_readers_keep_original_replacement_images_and_undo() {
-    use crate::state::block_field::BlockField;
     use iroha_data_model::block::BlockHeader;
-    use mv::BlockRetirement as _;
     use std::num::NonZeroU64;
 
     // These are native storage-image controls, not governed activation fixtures.

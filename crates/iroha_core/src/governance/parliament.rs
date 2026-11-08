@@ -2848,7 +2848,7 @@ where
     for attempt in attempts {
         let attempt = attempt.borrow();
         if attempt.proposal_content_id()
-            != *proposal_content_id.get_or_insert(attempt.proposal_content_id())
+            != *proposal_content_id.get_or_insert_with(|| attempt.proposal_content_id())
             || attempt.randomness_redraws_before_attempt != expected_prefix
         {
             return Err(ParliamentReducerErrorV1::RandomnessRedrawLineageMismatch);

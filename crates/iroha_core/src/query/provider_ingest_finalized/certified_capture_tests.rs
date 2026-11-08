@@ -863,7 +863,7 @@ fn qualification_on_a_stale_view_retries_without_retiring_capture_points() {
     let archive =
         ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds()).unwrap();
     capture_through(&archive, &mut chain, &[2_000, 3_000]);
-    archive
+    let _ = archive
         .qualify_against_certified_tip(&chain.state().view(), chain.kura(), 0)
         .unwrap();
     let state = Arc::clone(chain.state());
@@ -932,7 +932,7 @@ fn qualification_rechecks_the_retained_frame_of_proved_coverage() {
     let archive =
         ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds()).unwrap();
     capture_through(&archive, &mut chain, &[2_000, 3_000]);
-    archive
+    let _ = archive
         .qualify_against_certified_tip(&chain.state().view(), chain.kura(), 0)
         .unwrap();
     chain.commit_at(4_000, Vec::new());
@@ -1000,7 +1000,7 @@ fn archive_insertion_reads_only_the_tip_record_and_the_audit_reads_the_rest() {
     let mut chain = chain();
     let archive = ProviderIngestFinalizedArchiveV1::try_open(&root, bounds()).unwrap();
     capture_through(&archive, &mut chain, &[2_000, 3_000]);
-    archive
+    let _ = archive
         .qualify_against_certified_tip(&chain.state().view(), chain.kura(), 0)
         .unwrap();
     let older = archive
@@ -1021,7 +1021,7 @@ fn archive_insertion_reads_only_the_tip_record_and_the_audit_reads_the_rest() {
             .unwrap(),
         ProviderIngestFinalizedArchiveInsertOutcomeV1::Inserted
     );
-    archive
+    let _ = archive
         .qualify_against_certified_tip(&chain.state().view(), chain.kura(), 0)
         .unwrap();
 
@@ -1120,7 +1120,7 @@ fn archive_tip_walk_is_retired_by_compaction_of_its_virtual_base() {
         .prepare_certified_compaction(&fence, &view, chain.kura())
         .unwrap();
     let authority = TestRetentionAuthority::new();
-    archive
+    let _ = archive
         .approve_and_install_certified_compaction(
             &proposal,
             &view,

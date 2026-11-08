@@ -170,20 +170,22 @@ impl ArchiveAuthentication {
     pub(crate) fn record_audit(&self, identity: ArchiveContentIdentity, through: u64) {
         {
             let mut anchors = self.anchors.lock();
-            let mut coverage = AnchorCoverage { identity, through };
-            if let Some(run) = anchors.run
-                && run.identity.network_id == identity.network_id
-                && run.identity.base == identity.base
-                && run.first <= through.saturating_add(1)
-                && run.last > through
-                && run.identity.generation.checked_sub(run.last - through)
-                    == Some(identity.generation)
-            {
-                coverage = AnchorCoverage {
-                    identity: run.identity,
-                    through: run.last,
-                };
-            }
+            let coverage = match anchors.run {
+                Some(run)
+                    if run.identity.network_id == identity.network_id
+                        && run.identity.base == identity.base
+                        && run.first <= through.saturating_add(1)
+                        && run.last > through
+                        && run.identity.generation.checked_sub(run.last - through)
+                            == Some(identity.generation) =>
+                {
+                    AnchorCoverage {
+                        identity: run.identity,
+                        through: run.last,
+                    }
+                }
+                _ => AnchorCoverage { identity, through },
+            };
             anchors.coverage = Some(coverage);
         }
         let retired = self.audit.lock().complete();

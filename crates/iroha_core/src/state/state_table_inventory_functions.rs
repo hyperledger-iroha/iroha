@@ -70,6 +70,18 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         UseOwner::Other(Use::Seed, DERIVED_SEED),
     ),
     function(
+        "crates/iroha_core/src/kagemusha_wallet_v1/artifacts.rs",
+        "installed_identity",
+        1,
+        UseOwner::Other(Use::Record, RECORD_IDENTITY),
+    ),
+    function(
+        "crates/iroha_core/src/kagemusha_wallet_v1/wsv.rs",
+        "suffix_installation",
+        1,
+        UseOwner::Other(Use::Record, RECORD_IDENTITY),
+    ),
+    function(
         "crates/iroha_core/src/kagemusha_wallet_v1/wsv.rs",
         "transaction_hash",
         1,
