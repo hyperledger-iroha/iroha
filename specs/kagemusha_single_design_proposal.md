@@ -71,7 +71,7 @@ implementation returns an explicit error rather than reporting a payment complet
 | R7 | Optional daily/monthly limits | Disabled by default; enforced through signed quotas and persistent counters when enabled (§7). |
 | R8 | Optional attestation expiry | Disabled by default; an enabled lease can require renewal before future sending (§7). |
 | R9 | Compact payment | Canonical binary Payment is at most 10,034 bytes, independent of history (§8). |
-| R10 | Stock OS in the proof | Every transition's issuer-signed credential, recording the platform evidence verified at enrollment or the last renewal, is verified natively by every party that consumes the package. In-circuit, the lineage proof verifies the credential and its certificate in the step that introduces the credential (Bootstrap and RefreshCredential), and Λ_recv verifies the quoted receiver credential of a Request issued before a renewal; every other step binds the credential digest and payment key by continuity from that verification (owner decision 2026-10-17, lean lineage). The step proof binds the credential digest (§§2.2, 3.2). Android: hardware key, locked bootloader, verified vendor boot, patch levels and app signing identity, as the attestation records them. iPhone: an App Attest key of this app on genuine Apple hardware, bound to the payment key; no boot, patch or jailbreak field exists. This proves recorded evidence, not live absence of compromise. Load finality has the explicit §6.1 native-verification carve-out: the released app on a stock uncompromised vendor OS verifies CommitQC and receipt inclusion before its hardware-backed payment key signs Advance; the lineage proof does not independently prove BLS finality. Other R10 credential and attestation obligations remain unchanged. |
+| R10 | Stock OS in the proof | Every transition's issuer-signed credential, recording the platform evidence verified at enrollment or the last renewal, is verified natively by every party that consumes the package. In-circuit, the lineage proof verifies the credential and its certificate in the step that introduces the credential (Bootstrap and RefreshCredential); every other step binds the credential digest and payment key by continuity from that verification (owner decision 2026-10-17, lean lineage). Λ_recv accepts the quoted receiver credential of a Request issued before a renewal by membership of its digest in the wallet's prior-credential array, which RefreshCredential extends with each credential it replaces, instead of re-verifying its signatures (owner decision 2026-11-08, credential continuity). The step proof binds the credential digest (§§2.2, 3.2). Android: hardware key, locked bootloader, verified vendor boot, patch levels and app signing identity, as the attestation records them. iPhone: an App Attest key of this app on genuine Apple hardware, bound to the payment key; no boot, patch or jailbreak field exists. This proves recorded evidence, not live absence of compromise. Load finality has the explicit §6.1 native-verification carve-out: the released app on a stock uncompromised vendor OS verifies CommitQC and receipt inclusion before its hardware-backed payment key signs Advance; the lineage proof does not independently prove BLS finality. Other R10 credential and attestation obligations remain unchanged. |
 
 For a payment from A to B, the following define completion:
 
@@ -600,7 +600,7 @@ owns one private state:
 
 ```text
 lifecycle: Active | Retiring
-scheme_id, asset_digest, wallet_id, credential digest
+scheme_id, asset_digest, wallet_id, credential digest, prior-credential root
 balance, burned_total
 sequence, next_send, next_load, next_redeem
 send_chain, recv_chain
@@ -615,7 +615,7 @@ The state commitment (the head commitment) is one canonical Fp value with two
 levels: `P(core ‖ P(rest))`, under distinct core and rest domains. The core
 holds every field that a step proof reads, changes or carries:
 lifecycle, `scheme_id`, `asset_digest`, `wallet_id`, credential digest,
-balance, burned_total, sequence, next_send, next_load, next_redeem, send_chain,
+prior-credential root, balance, burned_total, sequence, next_send, next_load, next_redeem, send_chain,
 recv_chain; the consumed-credit, pending-outgoing, load/redeem-recovery,
 fee-claim-recovery and quota-usage roots; the enabled-controls mask, quota
 windows root and quota share expiry, the regulatory policy's maximum anchor
@@ -786,16 +786,17 @@ check runs.
 - *[Λ, after Advance, in the background; required before Send, Unload or
   Retiring commits from that head (§3.1)]:*
   - scope, relation identity, operation tag and provider contract, and the
-    credential (R10): in-circuit at least at Bootstrap, RefreshCredential and
-    a Request's renewed receiver credential, and in every step whose route
-    still re-verifies it; a lean step (Load, Send, Unload and Retiring today) carries the credential
-    digest and payment key by continuity;
+    credential (R10): in-circuit at least at Bootstrap and RefreshCredential,
+    and in every step whose route still re-verifies it; a lean step (Load,
+    Send, Unload and Retiring today) carries the credential digest and payment
+    key by continuity, and Λ_recv binds a Request's pre-renewal receiver
+    credential by prior-credential membership (credential continuity, below);
   - the predecessor Ω and receipt, or the unique zero-state enrollment base
     case;
   - this step's σ, or for a lean step its transition relation proved directly
     in place of its own σ; its τ; and every input package's Ω, σ and τ;
-  - every signature it owns: the Request and receiver credential only in
-    Λ_recv; certificates and credentials in the step that introduces them and
+  - every signature it owns: the Request only in Λ_recv (never its receiver
+    credential, current or prior); certificates and credentials in the step that introduces them and
     in each step whose route still re-verifies them; and policy, time and
     credential updates in the step that consumes them;
   - in Λ_load, the exact ordinary receipt terms and replay insertion bound to
@@ -804,13 +805,22 @@ check runs.
   - the Request's account digests against the credential each belongs to:
     Λ_send checks the payer account digest against the payer's own
     credential, and Λ_recv checks the receiver account digest against the
-    receiver credential it verifies; each counterparty's digest is bound only
-    through `credit_id`;
+    receiver credential it binds (the current one by continuity, a prior one
+    by membership); each counterparty's digest is bound only through
+    `credit_id`;
   - for RefreshPolicy(QuotaShare), the quota-usage array rebuild (§7);
-  - credential continuity: a renewal's replacement credential, and the
-    receiver credential of a Request that Λ_recv verifies, bind the wallet's
-    `wallet_id` and `payment_key`, so a Request quoted before a renewal stays
-    receivable after it (§5.1);
+  - credential continuity: a renewal's replacement credential binds the
+    wallet's `wallet_id` and `payment_key`, and the RefreshCredential lineage
+    proof writes the replaced credential's digest into the prior-credential
+    array at that credential's `renewal_sequence`. Λ_recv binds a Request's receiver credential that is
+    either the current one (its digest is the core's) or a prior one: it
+    recomputes the quoted credential's digest, opens the array slot at its
+    `renewal_sequence`, and requires that slot to hold that digest, so no
+    signature is re-verified and a Request quoted before any number of
+    renewals stays receivable after them (§5.1). Every array entry was
+    verified in-circuit, with its certificate, by the step that introduced
+    it, and was the wallet's credential, so membership carries the same
+    assurance as re-verification;
   - exact map membership and nonmembership updates and every root transition,
     unchanged unrelated fields (opening the rest digest) and exact operation
     effects from §§5–7;
@@ -1370,7 +1380,8 @@ unrelated sends, receives and cleanup.
   Payment bytes for later delivery.
 - Receive does not depend on a still-open Request, the receiver's old head or
   the receiver credential that was current when the Request was signed. A
-  Request quoted before a renewal stays receivable after it (§3.2). Delayed
+  Request quoted before any number of renewals stays receivable after them; its
+  receiver credential is bound by prior-credential membership (§3.2). Delayed
   valid Payments remain receivable after other payments. If a Receive preparation
   was interrupted before Advance selected it, a later head does not strand that
   Payment: the native owner follows the §5.3 authenticated retirement procedure
@@ -2317,6 +2328,10 @@ genuine multi-hop proofs and physical carriers. It also covers:
 - a Request quoted before the receiver's credential renewal and received after
   it, with CreditStatus matched by `wallet_id` and `payment_key`, and a
   receiver credential with another `payment_key`, which is rejected;
+- a Request quoted before several renewals and received after them; a quoted
+  receiver credential absent from the prior-credential array, presented at
+  another `renewal_sequence` or with an altered byte, which is rejected; and a
+  RefreshCredential at the array's 2^16 capacity, which is refused;
 - a σ successor root that differs from the authenticated store, a stale native
   store against the head roots, and a receipt that fails self-verification;
 - crash and restore between commit and fold, and fold-witness loss;

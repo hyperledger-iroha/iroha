@@ -568,6 +568,7 @@ object-digest domains are in §1, and the others are:
 | `kgwcset1` | certificate-set digest (§3.1) | `kgwcsts1` | credit-status digest (`P_bytes`) |
 | `kgwpkg_1` | package digest | `kgwcrdd1` | credited digest (`P_bytes`) |
 | `kgwnull1` | unload nullifier | `kgwopid1` | `operation_id` |
+| `kgwpcrd1` | prior-credential leaf (§3.3) | `kgwpcrn1` | prior-credential node (§3.3) |
 
 **Indexed map trees.** The consumed-credit, pending-outgoing, load/redeem
 recovery and fee-claim maps and the lineage-level credit-digest tree
@@ -632,8 +633,9 @@ natively.
 capsule. Its frame is `{version, core, rest}`.
 
 - The *core* holds every field a step proof reads, changes or carries. Frame and
-  element order (29 elements): `lifecycle` (Active 1, Retiring 2), `scheme_id` (2),
-  `asset_digest` (2), `wallet_id` (2), `credential_digest`, `balance`,
+  element order (30 elements): `lifecycle` (Active 1, Retiring 2), `scheme_id` (2),
+  `asset_digest` (2), `wallet_id` (2), `credential_digest`, `prior_credential_root`,
+  `balance`,
   `burned_total`, `sequence`, `next_send`, `next_load`, `next_redeem` (`u128` each),
   `send_chain`, `recv_chain`, `consumed_credit_root`, `pending_outgoing_root`,
   `load_redeem_recovery_root`, `fee_claim_root`, `quota_usage_root`, `LE32
@@ -654,7 +656,8 @@ capsule. Its frame is `{version, core, rest}`.
   `P(kgwcore1, core elements ‖ P(kgwrest1, rest elements))`. Its transcript is the
   32-byte encoding; all-zero is only the Bootstrap predecessor.
 - Rules: nonzero identities; the four indexed map roots of the core, the quota-usage
-  array root and `state_nonce` are nonzero canonical values;
+  array root, the prior-credential array root and `state_nonce` are nonzero canonical
+  values;
   chains and the quota-windows root are canonical (zero is the empty chain
   or "none held"); the regulatory policy reassembled from the core and rest is valid and
   `enabled_controls` ⊆ its permitted controls. A scheme policy or quota share
@@ -665,7 +668,8 @@ capsule. Its frame is `{version, core, rest}`.
   windows (§3.3); `lease_expires_at_ms ≠ 0` iff the lease is permitted. Bootstrap state
   has zero balance, `burned_total`, ordinals, sequence and chains, the empty-tree root for
   every indexed map, the all-padding quota-usage array
-  root, and zero policy fields except the credential's regulatory policy and lease.
+  root, the all-padding prior-credential array root, and zero policy fields except the
+  credential's regulatory policy and lease.
 - The spendable value is `balance − burned_total` with the lineage-adjusted
   `burned_total` of the Ω recorded for the head, whose `head` must equal the state's
   computed commitment (§§3.2, 6.1 of the proposal); Send and Unload pre-checks use it.
@@ -852,6 +856,17 @@ RegulatoryPolicy-role key except the time anchor (TimeAnchor role). Each body's
   0, 0, 0])`; nodes are `P(kgwqusn1, [left, right])`, and the root is the core's
   `quota_usage_root`. A charge rewrites only its own slot's `used`; every other slot is
   unchanged. An opening is the leaf's four elements, its slot and exactly 6
+  siblings, height 0 first. The vectors pin the padding leaf and the all-padding root.
+- **Prior-credential array** (credential continuity, proposal §3.2). A depth-16 Poseidon
+  tree over 65,536 slots indexed by `renewal_sequence`: slot `i` holds
+  `P(kgwpcrd1, [credential_digest])` for the wallet credential with renewal sequence `i`
+  that a RefreshCredential replaced, and every other slot holds the padding leaf
+  `P(kgwpcrd1, [0])`; nodes are `P(kgwpcrn1, [left, right])`, and the root is the core's
+  `prior_credential_root`. RefreshCredential writes exactly the replaced credential's
+  slot, which must hold the padding leaf, and refuses a replaced credential whose
+  `renewal_sequence` is 65,536 or more. Λ_recv opens the slot at the quoted receiver
+  credential's `renewal_sequence` when that credential's digest differs from the core's
+  `credential_digest`. An opening is the leaf's element, its slot and exactly 16
   siblings, height 0 first. The vectors pin the padding leaf and the all-padding root.
 - **Time.** The local anchored time `{anchor, boot_id, LE64 request_monotonic_ms,
   LE64 receive_monotonic_ms}` gives, at monotonic reading `m` in the same boot,
