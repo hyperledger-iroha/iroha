@@ -689,6 +689,106 @@ fn require_cut(
     Ok(())
 }
 
+/// Derive only the explicitly qualified native storage paths through real catalog changes.
+///
+/// B is the baseline, G game partitions, K account signing keys, and A SoraFS authority.
+/// The endorsed-proposal addition is a required interface predecessor but adds no storage.
+/// Repair changes only the kernel, so its corresponding paths have the same schema. Neither
+/// Ironwood+A nor lifecycle+A is inferred. No subset/powerset of compiled tables is accepted.
+fn native_world_schema_selections_v1() -> Result<
+    Vec<(
+        &'static str,
+        iroha_data_model::runtime::definition::RootSelectionV1,
+    )>,
+    String,
+> {
+    use crate::runtime::catalog::additions::{
+        ACCOUNT_SIGNING_KEYS, ENDORSED_RUNTIME_UPGRADE_PROPOSAL, GAME_PARTITIONS, SORAFS_AUTHORITY,
+    };
+    use iroha_data_model::runtime::definition::{
+        DefinitionDescriptorV1, DefinitionId, RootSelectionV1,
+    };
+    type Definitions = std::collections::BTreeMap<DefinitionId, DefinitionDescriptorV1>;
+    let catalog = crate::runtime::release_catalog().map_err(|error| error.to_string())?;
+    let published: Definitions = catalog
+        .baseline_definitions
+        .iter()
+        .map(|id| {
+            catalog
+                .definitions
+                .get(id)
+                .cloned()
+                .map(|descriptor| (*id, descriptor))
+                .ok_or_else(|| format!("native baseline definition {id} is missing"))
+        })
+        .collect::<Result<_, _>>()?;
+    // These local values are used only to derive immutable selections. They are never signed,
+    // submitted, scheduled or returned as qualification/approval. Schema S excludes all of them.
+    let network = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(Hash::prehashed([0; 32])),
+    );
+    let advance = |current: &RootSelectionV1,
+                   published: &Definitions,
+                   module: &str|
+     -> Result<(RootSelectionV1, Definitions), String> {
+        let change = catalog
+            .activation(module, current, published, network, 1, [0; 32])
+            .map_err(|error| error.to_string())?;
+        let applied = change
+            .apply(current, published)
+            .map_err(|error| error.to_string())?;
+        let mut definitions = published.clone();
+        definitions.extend(applied.published);
+        applied
+            .selection
+            .check_closure(&definitions)
+            .map_err(|error| error.to_string())?;
+        if let Some(id) = catalog.unsupported(&applied.selection) {
+            return Err(format!(
+                "native schema path contains unsupported definition {id}"
+            ));
+        }
+        Ok((applied.selection, definitions))
+    };
+    catalog
+        .baseline
+        .check_closure(&published)
+        .map_err(|error| error.to_string())?;
+    let mut selections = vec![("B", catalog.baseline.clone())];
+    let (authority, _) = advance(&catalog.baseline, &published, SORAFS_AUTHORITY.module)?;
+    selections.push(("B+A", authority));
+    let (mut prefix, mut definitions) = advance(
+        &catalog.baseline,
+        &published,
+        ENDORSED_RUNTIME_UPGRADE_PROPOSAL.module,
+    )?;
+    // Exact dependency order, not arbitrary combinations of table identities.
+    for (module, plain, authority_name) in [
+        (GAME_PARTITIONS.module, "B+G", "B+G+A"),
+        (ACCOUNT_SIGNING_KEYS.module, "B+G+K", "B+G+K+A"),
+    ] {
+        (prefix, definitions) = advance(&prefix, &definitions, module)?;
+        selections.push((plain, prefix.clone()));
+        let (authority, _) = advance(&prefix, &definitions, SORAFS_AUTHORITY.module)?;
+        selections.push((authority_name, authority));
+    }
+    let ironwood = catalog
+        .ironwood
+        .as_ref()
+        .ok_or("native Ironwood schema is not compiled")?;
+    ironwood
+        .selection
+        .check_closure(&catalog.definitions)
+        .map_err(|error| error.to_string())?;
+    if let Some(id) = catalog.unsupported(&ironwood.selection) {
+        return Err(format!(
+            "native Ironwood schema contains unsupported definition {id}"
+        ));
+    }
+    selections.push(("Ironwood", ironwood.selection.clone()));
+    Ok(selections)
+}
+
 impl State {
     /// Capture one current names cut before doing certificate or attestation work.
     /// The complete World and native pre-tail journal are checked while the short
@@ -759,17 +859,24 @@ impl State {
     /// Readers select from this set using each proof's candidate schema, then authenticate the
     /// unchanged complete proof against the independently selected block at its own height.
     /// This supports both sides of activation without trusting a current/latest schema for history.
+    /// Recognition grants no activation authority: game, signing-key and SoraFS changes still
+    /// require their independent governed approval, qualification and activation checks.
     /// # Errors
     /// A compiled selection or its commitment profile is invalid.
     pub fn native_world_schema_hashes_v1() -> Result<Vec<Hash>, String> {
-        let catalog = crate::runtime::release_catalog().map_err(|error| error.to_string())?;
-        let mut schemas = vec![selection_schema(&catalog.baseline)?];
-        if let Some(ironwood) = &catalog.ironwood {
-            schemas.push(selection_schema(&ironwood.selection)?);
-        }
-        schemas.sort_unstable();
-        schemas.dedup();
-        Ok(schemas)
+        // Catalog construction and closure checking happen once, not for every proof read.
+        static SCHEMAS: std::sync::OnceLock<Result<Vec<Hash>, String>> = std::sync::OnceLock::new();
+        SCHEMAS
+            .get_or_init(|| {
+                let mut schemas = native_world_schema_selections_v1()?
+                    .iter()
+                    .map(|(_, selection)| selection_schema(selection))
+                    .collect::<Result<Vec<_>, _>>()?;
+                schemas.sort_unstable();
+                schemas.dedup();
+                Ok(schemas)
+            })
+            .clone()
     }
 
     /// Expand a qualified installation anchor only within this release's known native schema

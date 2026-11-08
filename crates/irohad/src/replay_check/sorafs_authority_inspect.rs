@@ -19,6 +19,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::{
     governance::{CanManageParliament, CanProposeRuntimeChangeSet},
     parameter::CanSetParameters,
+    role::CanManageRoles,
 };
 use std::io::{Read as _, Write as _};
 
@@ -29,13 +30,14 @@ const MAX_PACKAGE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: usize = 16 * 1024;
 const MAX_INVENTORY_ROWS: usize = 16 * 1024;
 const COMPLIANCE_ROLE: &str = "sorafs_gateway_compliance_operator";
-const AUTHORITY_PERMISSION_NAMES: [&str; 6] = [
+const AUTHORITY_PERMISSION_NAMES: [&str; 7] = [
     "CanCompleteSorafsReplicationOrder",
     "CanSetSorafsReservePolicy",
     "CanUpsertSorafsProviderCredit",
     "CanManageParliament",
     "CanProposeRuntimeChangeSet",
     "CanSetParameters",
+    "CanManageRoles",
 ];
 const AUTHORITY_LIMITS: &str = "Unsigned historical inspection only; not a State proof, qualification, governance approval, proposal admission, or activation permit. No draft or transaction is produced. Recheck current State before any later action; original replay inputs and independent build provenance remain necessary.";
 
@@ -176,15 +178,16 @@ fn push_inventory_row<T>(rows: &mut Vec<T>, row: T, remaining: &mut usize) -> Re
 }
 
 /// Project stored native rows from the same held view, never from request-supplied accounts.
-/// The three exact unit-token comparisons describe possession, not execution authorization.
+/// Exact unit-token comparisons describe possession, not execution authorization.
 fn inspect_authority<'a>(
     world: &'a impl WorldReadOnly,
     max_rows: usize,
 ) -> Result<AuthorityObservation<'a>, String> {
-    let administrative: [Permission; 3] = [
+    let administrative: [Permission; 4] = [
         CanManageParliament.into(),
         CanProposeRuntimeChangeSet.into(),
         CanSetParameters.into(),
+        CanManageRoles.into(),
     ];
     let compliance_role: RoleId = COMPLIANCE_ROLE
         .parse()
@@ -242,6 +245,7 @@ fn inspect_authority<'a>(
                 "CanManageParliament",
                 "CanProposeRuntimeChangeSet",
                 "CanSetParameters",
+                "CanManageRoles",
             ])
             .filter_map(|(required, name)| {
                 role.permissions()

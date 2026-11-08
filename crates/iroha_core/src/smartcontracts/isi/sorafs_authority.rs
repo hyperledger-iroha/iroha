@@ -937,6 +937,7 @@ pub(crate) fn validate_projection(
 mod tests {
     use super::terms::{SorafsAuthorityApprovalV1, SorafsAuthorityExecutionV1};
     use super::*;
+    use iroha_model_base::metadata::Metadata;
     use crate::{
         executor::Executor,
         kura::Kura,
@@ -1065,7 +1066,7 @@ mod tests {
         ] {
             assert!(
                 Executor::Initial
-                    .execute_instruction(&mut tx, &account(1), instruction)
+                    .execute_instruction(&mut tx, &account(1), &instruction)
                     .is_err()
             );
         }
@@ -1132,7 +1133,7 @@ mod tests {
             .execute_instruction(
                 &mut tx,
                 &account(1),
-                Grant::account_permission(ordinary.clone(), account(2)).into(),
+                &Grant::account_permission(ordinary.clone(), account(2)).into(),
             )
             .unwrap();
         assert!(
@@ -1155,7 +1156,7 @@ mod tests {
                 Revoke::account_permission(token.clone(), account(1)).into(),
             ] {
                 let error = executor
-                    .execute_instruction(&mut tx, &account(1), instruction)
+                    .execute_instruction(&mut tx, &account(1), &instruction)
                     .unwrap_err();
                 assert!(matches!(error,
                     ValidationFail::InstructionFailed(InstructionExecutionError::InvalidParameter(
@@ -1173,7 +1174,11 @@ mod tests {
             }
         }
         let error = executor
-            .execute_instruction(&mut tx, &account(1), Unregister::account(account(1)).into())
+            .execute_instruction(
+                &mut tx,
+                &account(1),
+                &Unregister::account(account(1)).into(),
+            )
             .unwrap_err();
         assert!(matches!(error,
             ValidationFail::InstructionFailed(InstructionExecutionError::InvalidParameter(
@@ -1196,7 +1201,7 @@ mod tests {
             .execute_instruction(
                 &mut tx,
                 &account(1),
-                Register::role(Role::new(ordinary_role.clone(), account(1))).into(),
+                &Register::role(Role::new(ordinary_role.clone(), account(1))).into(),
             )
             .unwrap();
         // Retain the native compliance projection as a component fixture.
@@ -1237,7 +1242,7 @@ mod tests {
             Unregister::role(COMPLIANCE_ROLE.clone()).into(),
         ] {
             let error = executor
-                .execute_instruction(&mut tx, &account(1), instruction)
+                .execute_instruction(&mut tx, &account(1), &instruction)
                 .unwrap_err();
             assert!(matches!(error,
                 ValidationFail::InstructionFailed(InstructionExecutionError::InvalidParameter(
@@ -1294,7 +1299,7 @@ mod tests {
         ] {
             assert!(
                 Executor::Initial
-                    .execute_instruction(&mut tx, &account(1), instruction)
+                    .execute_instruction(&mut tx, &account(1), &instruction)
                     .is_err()
             );
         }
@@ -1315,6 +1320,351 @@ mod tests {
             .build(&account(1));
         tx.world.roles.insert(other.clone(), role);
         assert!(guard_role_mutation(&tx.world, &other).is_err());
+    }
+
+    #[test]
+    fn delegated_trigger_cannot_exercise_selected_holder_credit_authority() {
+        use iroha_data_model::{
+            events::execute_trigger::ExecuteTriggerEventFilter,
+            isi::sorafs::UpsertProviderCredit,
+            sorafs::pricing::ProviderCreditRecord,
+            trigger::{
+                Trigger,
+                action::{Action, Repeats},
+            },
+        };
+        use iroha_executor_data_model::permission::trigger::{
+            CanExecuteTrigger, CanRegisterTrigger,
+        };
+        use iroha_primitives::numeric::Quantity;
+
+        for (selected, trigger_predates_activation) in [(false, false), (true, false), (true, true)]
+        {
+            let chain = custom_executor_chain();
+            let state = chain.state();
+            let mut block = state.block(header());
+            let mut tx = block.transaction_for_callback_testing();
+            let holder = account(1);
+            let caller = account(2);
+            let provider = ProviderId::new([0x73; 32]);
+            let trigger_id: TriggerId = "delegated_sorafs_credit".parse().unwrap();
+            if selected && !trigger_predates_activation {
+                activate(&mut tx);
+            }
+            // These are genuine ordinary capability grants and registration, including
+            // a capability and trigger retained from before the selected service began.
+            Executor::Initial
+                .execute_instruction(
+                    &mut tx,
+                    &holder,
+                    &Grant::account_permission(
+                        CanRegisterTrigger {
+                            authority: holder.clone(),
+                        },
+                        caller.clone(),
+                    )
+                    .into(),
+                )
+                .unwrap();
+            let credit = ProviderCreditRecord::new(
+                provider,
+                Quantity::from(2_u32),
+                Quantity::from(1_u32),
+                Quantity::zero(),
+                Quantity::zero(),
+                1,
+                1,
+                Metadata::default(),
+            );
+            let effect = UpsertProviderCredit {
+                expected_current: None,
+                record: credit.clone(),
+            };
+            let trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    vec![InstructionBox::from(effect.clone())],
+                    Repeats::Indefinitely,
+                    holder.clone(),
+                    ExecuteTriggerEventFilter::new(),
+                )
+                .unwrap(),
+            );
+            Executor::Initial
+                .execute_instruction(&mut tx, &caller, &Register::trigger(trigger).into())
+                .expect("ordinary trigger registration grants no operating authority");
+            Executor::Initial
+                .execute_instruction(
+                    &mut tx,
+                    &holder,
+                    &Grant::account_permission(
+                        CanExecuteTrigger {
+                            trigger: trigger_id.clone(),
+                        },
+                        caller.clone(),
+                    )
+                    .into(),
+                )
+                .unwrap();
+            if selected && trigger_predates_activation {
+                activate(&mut tx);
+            }
+            // Seed an existing authority projection and real owner-funded reserve custody.
+            // The regression exercises use-time nondelegation, not Parliament admission.
+            let permission: Permission = CanUpsertSorafsProviderCredit.into();
+            tx.world.add_account_permission(&holder, permission.clone());
+            tx.world.provider_owners.insert(provider, holder.clone());
+            super::super::sorafs_reserve::seed_verified_provider_bond_for_test(
+                &mut tx,
+                provider,
+                &holder,
+                1,
+                Quantity::from(1_u32),
+            )
+            .unwrap();
+            assert!(
+                !tx.world
+                    .account_contains_inherent_permission(&caller, &permission)
+            );
+            let permissions_before = tx.world.account_permissions().get(&holder).cloned();
+            let result = Executor::Initial.execute_instruction(
+                &mut tx,
+                &caller,
+                &ExecuteTrigger::new(trigger_id).into(),
+            );
+            if selected {
+                let error = result.expect_err("a caller may not borrow the holder's authority");
+                assert!(matches!(error,
+                    ValidationFail::InstructionFailed(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(message)
+                    )) if message.contains("nondelegable SoraFS operating authority")
+                ));
+                assert!(tx.world.provider_credit_ledger.get(&provider).is_none());
+                assert_eq!(
+                    tx.world.account_permissions().get(&holder),
+                    permissions_before.as_ref()
+                );
+                Executor::Initial
+                    .execute_instruction(&mut tx, &holder, &effect.into())
+                    .expect("the exact holder's direct instruction remains authorized");
+            } else {
+                result.expect("the predecessor's delegated trigger behavior is unchanged");
+            }
+            assert_eq!(
+                tx.world.provider_credit_ledger.get(&provider),
+                Some(&credit)
+            );
+            assert!(
+                !tx.world
+                    .account_contains_inherent_permission(&caller, &permission)
+            );
+        }
+    }
+
+    #[test]
+    fn predecessor_holders_can_surrender_exact_tokens_but_selected_owner_refuses() {
+        // Genuine genesis/root metadata reaches Initial executor authorization. Grants below
+        // are only the component's existing-inventory fixture, not voted projection records.
+        let chain = custom_executor_chain();
+        let state = chain.state();
+        let mut block = state.block(header());
+        let mut tx = block.transaction();
+        assert!(!active(&tx.world).unwrap());
+        let ordinary: Permission =
+            iroha_executor_data_model::permission::parameter::CanSetParameters.into();
+        let tokens = [
+            Permission::from(CanCompleteSorafsReplicationOrder {
+                provider_id: ProviderId::new([0x42; 32]),
+            }),
+            Permission::from(CanSetSorafsReservePolicy),
+            Permission::from(CanUpsertSorafsProviderCredit),
+        ];
+        tx.world
+            .add_account_permission(&account(1), ordinary.clone());
+        for token in &tokens {
+            tx.world.add_account_permission(&account(1), token.clone());
+        }
+        assert!(validate_activation_inventory(&tx.world).is_err());
+        for token in &tokens {
+            let before = tx.world.account_permissions().get(&account(1)).cloned();
+            let error = Executor::Initial
+                .execute_instruction(
+                    &mut tx,
+                    &account(2),
+                    &Revoke::account_permission(token.clone(), account(1)).into(),
+                )
+                .unwrap_err();
+            assert!(matches!(error, ValidationFail::NotPermitted(_)));
+            assert_eq!(
+                tx.world.account_permissions().get(&account(1)),
+                before.as_ref()
+            );
+            Executor::Initial
+                .execute_instruction(
+                    &mut tx,
+                    &account(1),
+                    &Revoke::account_permission(token.clone(), account(1)).into(),
+                )
+                .expect("exact holder may surrender under the predecessor selection");
+            assert!(
+                !tx.world
+                    .account_contains_inherent_permission(&account(1), token)
+            );
+            assert!(
+                tx.world
+                    .account_contains_inherent_permission(&account(1), &ordinary)
+            );
+            assert!(
+                !tx.world
+                    .account_contains_inherent_permission(&account(2), token)
+            );
+            assert!(
+                Executor::Initial
+                    .execute_instruction(
+                        &mut tx,
+                        &account(1),
+                        &Revoke::account_permission(token.clone(), account(1)).into(),
+                    )
+                    .is_err()
+            );
+        }
+        validate_activation_inventory(&tx.world).unwrap();
+        activate(&mut tx);
+        for token in &tokens {
+            // The active-owner refusal must be the native ownership guard, not an unrelated
+            // executor/root-metadata failure. No ordinary self-surrender exception is added.
+            tx.world.add_account_permission(&account(1), token.clone());
+            let before = tx.world.account_permissions().get(&account(1)).cloned();
+            let error = Executor::Initial
+                .execute_instruction(
+                    &mut tx,
+                    &account(1),
+                    &Revoke::account_permission(token.clone(), account(1)).into(),
+                )
+                .unwrap_err();
+            assert!(matches!(error,
+                ValidationFail::InstructionFailed(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(message)
+                )) if message.contains("SoraFS operating authority changes require a Parliament certificate")
+            ));
+            assert_eq!(
+                tx.world.account_permissions().get(&account(1)),
+                before.as_ref()
+            );
+        }
+    }
+
+    #[test]
+    fn predecessor_role_surrender_leaves_inventory_until_authorized_explicit_cleanup() {
+        let chain = custom_executor_chain();
+        let state = chain.state();
+        let mut block = state.block(header());
+        let mut tx = block.transaction();
+        let token: Permission = CanSetSorafsReservePolicy.into();
+        let ordinary: Permission =
+            iroha_executor_data_model::permission::parameter::CanSetParameters.into();
+        let role_id: RoleId = "authority_surrender_fixture".parse().unwrap();
+        let role = Role::new(role_id.clone(), account(1))
+            .add_permission_with_epoch(token.clone(), 1)
+            .add_permission_with_epoch(ordinary.clone(), 2)
+            .build(&account(1));
+        // Seed existing stored origins; no registration/grant authorization is being inferred.
+        tx.world.roles.insert(role_id.clone(), role.clone());
+        for member in [account(1), account(2)] {
+            tx.world
+                .account_roles
+                .insert(RoleIdWithOwner::new(member, role_id.clone()), ());
+        }
+        Executor::Initial
+            .execute_instruction(
+                &mut tx,
+                &account(1),
+                &Revoke::account_role(role_id.clone(), account(1)).into(),
+            )
+            .expect("existing member may surrender a role whose tokens it may revoke");
+        assert!(
+            tx.world
+                .account_roles()
+                .get(&RoleIdWithOwner::new(account(1), role_id.clone()))
+                .is_none()
+        );
+        assert_eq!(tx.world.roles().get(&role_id), Some(&role));
+        assert!(validate_activation_inventory(&tx.world).is_err());
+        assert!(
+            Executor::Initial
+                .execute_instruction(
+                    &mut tx,
+                    &account(1),
+                    &Revoke::role_permission(token.clone(), role_id.clone()).into(),
+                )
+                .is_err(),
+            "former membership grants no role-editing authority"
+        );
+        Executor::Initial
+            .execute_instruction(
+                &mut tx,
+                &account(2),
+                &Revoke::role_permission(token.clone(), role_id.clone()).into(),
+            )
+            .expect("remaining exact member may explicitly remove a contained token");
+        let remaining = tx.world.roles().get(&role_id).unwrap();
+        assert!(
+            !remaining
+                .permissions()
+                .any(|permission| permission == &token)
+        );
+        assert_eq!(remaining.permission_epoch(&token), None);
+        assert_eq!(remaining.permission_epoch(&ordinary), Some(2));
+        assert!(
+            tx.world
+                .account_roles()
+                .get(&RoleIdWithOwner::new(account(2), role_id))
+                .is_some()
+        );
+        validate_activation_inventory(&tx.world).unwrap();
+
+        let reserved = Role::new(COMPLIANCE_ROLE.clone(), account(2)).build(&account(2));
+        tx.world
+            .roles
+            .insert(COMPLIANCE_ROLE.clone(), reserved.clone());
+        tx.world.account_roles.insert(
+            RoleIdWithOwner::new(account(2), COMPLIANCE_ROLE.clone()),
+            (),
+        );
+        Executor::Initial
+            .execute_instruction(
+                &mut tx,
+                &account(2),
+                &Revoke::account_role(COMPLIANCE_ROLE.clone(), account(2)).into(),
+            )
+            .unwrap();
+        assert_eq!(tx.world.roles().get(&*COMPLIANCE_ROLE), Some(&reserved));
+        assert!(validate_activation_inventory(&tx.world).is_err());
+        let error = Executor::Initial
+            .execute_instruction(
+                &mut tx,
+                &account(2),
+                &Unregister::role(COMPLIANCE_ROLE.clone()).into(),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(error, ValidationFail::NotPermitted(message) if message.contains("Can't unregister role"))
+        );
+        assert_eq!(tx.world.roles().get(&*COMPLIANCE_ROLE), Some(&reserved));
+        // Existing manager authority is fixture input, not a post-genesis bootstrap mechanism.
+        tx.world.add_account_permission(
+            &account(1),
+            iroha_executor_data_model::permission::role::CanManageRoles.into(),
+        );
+        Executor::Initial
+            .execute_instruction(
+                &mut tx,
+                &account(1),
+                &Unregister::role(COMPLIANCE_ROLE.clone()).into(),
+            )
+            .expect("only an already-authorized role manager performs explicit deletion");
+        assert!(tx.world.roles().get(&*COMPLIANCE_ROLE).is_none());
+        validate_activation_inventory(&tx.world).unwrap();
     }
 
     #[test]

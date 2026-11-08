@@ -972,9 +972,10 @@ fn ironwood_schema_policy_selects_only_qualified_candidates_and_does_not_replace
 }
 
 #[test]
-fn ironwood_native_schema_policy_expands_only_qualified_installation_anchors() {
+fn native_schema_policy_expands_only_qualified_installation_anchors() {
     let family = super::native_world_schema_family_v1();
-    assert_eq!(family.len(), 2);
+    assert_eq!(family.len(), 7);
+    assert!(family.windows(2).all(|pair| pair[0] < pair[1]));
     for anchor in &family {
         assert_eq!(super::native_world_schemas_for_anchor_v1(*anchor), family);
     }
@@ -983,4 +984,35 @@ fn ironwood_native_schema_policy_expands_only_qualified_installation_anchors() {
         super::native_world_schemas_for_anchor_v1(foreign),
         vec![foreign]
     );
+}
+
+#[test]
+fn every_qualified_native_schema_still_requires_its_exact_certified_root_and_typed_value() {
+    let family = super::native_world_schema_family_v1();
+    let (original, asset, incarnation, _) = snapshot();
+    for schema in &family {
+        let mut proof = original.clone();
+        proof.schema_hash = *schema;
+        let block = certify(&proof);
+        family.as_slice().select_schema(proof.schema_hash).unwrap();
+        proof
+            .authenticate(&block)
+            .unwrap()
+            .verify_table_value("world.axt_asset_incarnations", &asset, &incarnation)
+            .unwrap();
+        for other in family.iter().filter(|other| *other != schema) {
+            let mut relabeled = proof.clone();
+            relabeled.schema_hash = *other;
+            assert!(relabeled.authenticate(&block).is_err());
+        }
+        let mut foreign = proof.clone();
+        foreign.schema_hash = Hash::new(b"foreign-complete-schema");
+        assert!(
+            family
+                .as_slice()
+                .select_schema(foreign.schema_hash)
+                .is_err()
+        );
+        assert!(foreign.authenticate(&block).is_err());
+    }
 }

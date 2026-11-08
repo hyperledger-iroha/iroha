@@ -2,7 +2,8 @@
 
 use crate::sumeragi::test_chain::{CertifiedTestChain, fixture_keys};
 use iroha_data_model::runtime::lifecycle::{
-    ChangeSetRecordV1, ChangeSetStatusV1, RuntimeNoticeV1, SupportAttestationV1, committee_digest,
+    ChangeSetRecordV1, ChangeSetStatusV1, ChangeSetV1, RuntimeNoticeV1, SupportAttestationV1,
+    committee_digest,
 };
 
 /// Stage the already-approved governance record in fixture World setup. The next block still
@@ -11,6 +12,18 @@ use iroha_data_model::runtime::lifecycle::{
 pub(crate) fn schedule(chain: &CertifiedTestChain, time_ms: u64) -> u64 {
     let height = chain.height() + 2;
     let change = super::activation_change_set(chain.network_id(), height, [0x69; 32]).unwrap();
+    schedule_change(chain, time_ms, change)
+}
+
+/// Component-only reuse of the original all-validator scheduling fixture for another exact
+/// catalog change. This stages approved fixture input; it never claims Parliament admission.
+pub(crate) fn schedule_change(
+    chain: &CertifiedTestChain,
+    time_ms: u64,
+    change: ChangeSetV1,
+) -> u64 {
+    let height = change.effective_height;
+    assert_eq!(height, chain.height() + 2);
     let id = change.id().unwrap();
     let committee: Vec<_> = chain
         .validators()

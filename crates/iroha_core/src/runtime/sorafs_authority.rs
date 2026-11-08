@@ -20,7 +20,7 @@ use super::catalog::{
 
 pub(crate) const SERVICE: &str = "sorafs_authority_governance";
 pub(crate) const SERVICE_CLOSURE: &[u8] =
-    b"iroha:sorafs:authority:paired-terms-64-epochs:cutoff-1-epoch:17-units-per-role:deadline-closure:controller-bound-http:v1";
+    b"iroha:sorafs:authority:paired-terms-64-epochs:cutoff-1-epoch:17-units-per-role:deadline-closure:controller-bound-http:signed-operating-effects:v1";
 
 fn failure(reason: impl Into<String>) -> CatalogError {
     CatalogError::Addition {

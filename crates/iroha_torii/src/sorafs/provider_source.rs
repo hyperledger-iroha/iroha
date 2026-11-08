@@ -8,7 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use iroha_core::query::provider_ingest_source::authorize_provider_source_v1;
-use iroha_core::state::{StateReadOnly as _, StateView, WorldReadOnly as _};
+use iroha_core::state::{StateView, WorldReadOnly as _};
 use iroha_data_model::sorafs::publication::SorafsAssignedSourceRequestV1;
 use sorafs_car::publisher::{
     PROVIDER_SOURCE_RESPONSE_MAX_BYTES_V1, ProviderSourceResponseV1, PublisherSourceHeaderV1,

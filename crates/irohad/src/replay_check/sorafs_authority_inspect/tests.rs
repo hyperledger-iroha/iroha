@@ -231,7 +231,7 @@ fn inspection_refuses_every_foreign_cut_and_nonmatched_report() {
     assert!(prepare_inspection(&owner, &request, 0).is_err());
     let empty = ReplayCheckReport {
         replayed_to: 0,
-        ..core
+        ..core.clone()
     };
     let owner = MatchedReplay {
         report: &empty,
@@ -371,6 +371,7 @@ fn authority_observation_retains_native_direct_role_and_membership_origins() {
     let mut config = TestChainConfig::new(World::new(), 1_000);
     let account = AccountId::new(config.genesis_key.public_key().clone());
     let management_role: RoleId = "inspection_management".parse().unwrap();
+    let cleanup_role: RoleId = "inspection_role_cleanup".parse().unwrap();
     let unrelated_role: RoleId = "inspection_unrelated".parse().unwrap();
     config.genesis_instructions.extend([
         Grant::account_permission(
@@ -388,6 +389,10 @@ fn authority_observation_retains_native_direct_role_and_membership_origins() {
         )
         .into(),
         Register::role(Role::new(COMPLIANCE_ROLE.parse().unwrap(), account.clone())).into(),
+        Register::role(
+            Role::new(cleanup_role.clone(), account.clone()).add_permission(CanManageRoles),
+        )
+        .into(),
         Register::role(Role::new(unrelated_role.clone(), account.clone())).into(),
     ]);
     let mut chain = CertifiedTestChain::start(config).unwrap();
@@ -397,6 +402,10 @@ fn authority_observation_retains_native_direct_role_and_membership_origins() {
     let world = view.world();
     let observation = inspect_authority(world, MAX_INVENTORY_ROWS).unwrap();
     assert!(observation.scan_complete);
+    assert_eq!(
+        observation.permission_names,
+        AUTHORITY_PERMISSION_NAMES.to_vec()
+    );
     assert_eq!(observation.executor.kind, "Initial");
     assert_eq!(
         observation.executor.semantic_hash,
@@ -497,9 +506,21 @@ fn authority_observation_retains_native_direct_role_and_membership_origins() {
             .iter()
             .any(|row| row.membership.0.id == unrelated_role)
     );
-    assert_eq!(observation.roles_scanned, 3);
-    assert_eq!(observation.role_permissions_scanned, 3);
-    assert_eq!(observation.memberships_scanned, 3);
+    let cleanup = observation
+        .roles
+        .iter()
+        .find(|row| row.id.0 == &cleanup_role)
+        .unwrap();
+    assert_eq!(cleanup.exact_administrative_tokens, vec!["CanManageRoles"]);
+    assert!(observation.memberships.iter().any(|row| {
+        row.membership.0.id == cleanup_role
+            && row.membership.0.account == account
+            && row.account_exists
+            && row.role_exists
+    }));
+    assert_eq!(observation.roles_scanned, 4);
+    assert_eq!(observation.role_permissions_scanned, 4);
+    assert_eq!(observation.memberships_scanned, 4);
     assert!(observation.accounts_scanned >= 1);
     // Local resource refusal cannot publish a truncated inventory with scan_complete=true.
     let row_count = observation.direct_grants.len()

@@ -1,5 +1,5 @@
-//! Signed committee, monetary staking and SCCP outbound authority across opaque execution
-//! boundaries.
+//! Signed committee, monetary staking, SCCP outbound and selected SoraFS authority across
+//! opaque execution boundaries.
 //!
 //! Validator committee preparation commands, monetary staking plans and outbound SCCP records
 //! (`RecordSccpMessage`, `specs/sccp.md` §4.4) must be signed instructions. An opaque deferred
@@ -9,6 +9,11 @@
 //! approval, so a quorum-approved `RecordSccpMessage` records from the multisig account. This
 //! authority check is independent of native fee accounting and runs before any deferred group
 //! executes.
+//!
+//! The selected nondelegable SoraFS service also requires its three protected operating
+//! effects to originate in signed instructions. A trigger's stored authority, or an opaque
+//! output produced under that identity, must not act as a transferable proxy for its holder.
+//! This additional boundary does not grant authority or replace either completion check.
 
 use crate::{
     execution_attempt::ExecutionAttemptError as Attempt,
@@ -42,6 +47,11 @@ enum OpaqueDeferredAuthorityError {
     SccpOutboundRecord {
         instruction_index: usize,
     },
+    SorafsOperatingAuthority {
+        instruction_index: usize,
+        instruction_wire_id: &'static str,
+    },
+    UnsupportedSorafsServices(String),
     UnresolvedMultisigApproval {
         account_id: String,
         proposal_id: String,
@@ -69,6 +79,16 @@ impl fmt::Display for OpaqueDeferredAuthorityError {
                 f,
                 "opaque deferred executable derived `RecordSccpMessage` at instruction {instruction_index}; an outbound SCCP record must be a signed transaction instruction or an instruction of a multisig proposal approved by signed transactions"
             ),
+            Self::SorafsOperatingAuthority {
+                instruction_index,
+                instruction_wire_id,
+            } => write!(
+                f,
+                "opaque deferred executable derived `{instruction_wire_id}` at instruction {instruction_index}; nondelegable SoraFS operating authority requires a signed transaction instruction or an instruction of a multisig proposal approved by signed transactions"
+            ),
+            Self::UnsupportedSorafsServices(reason) => {
+                write!(f, "unsupported SoraFS authority services: {reason}")
+            }
             Self::UnresolvedMultisigApproval {
                 account_id,
                 proposal_id,
@@ -96,8 +116,10 @@ impl fmt::Display for OpaqueDeferredAuthorityError {
 /// proposal cannot smuggle a command that its signers never reviewed as an instruction.
 ///
 /// # Errors
-/// Rejects nested committee, monetary staking or `RecordSccpMessage` instructions,
-/// unresolved live multisig approvals, and proposal graphs exceeding the traversal bound.
+/// Rejects nested committee, monetary staking or `RecordSccpMessage` instructions and, under
+/// the selected nondelegable SoraFS service, protected SoraFS operating instructions. Also
+/// rejects unsupported service selections, unresolved live multisig approvals, and proposal
+/// graphs exceeding the traversal bound.
 pub fn reject_opaque_instruction_authority<'a>(
     instructions: impl IntoIterator<Item = &'a InstructionBox>,
     state_transaction: &StateTransaction<'_, '_>,
@@ -142,6 +164,29 @@ fn monetary_staking_wire_id(instruction: &InstructionBox) -> Option<&'static str
         FinalizePublicLaneUnbond,
         SlashPublicLaneValidator,
         ClaimPublicLaneRewards,
+    );
+    None
+}
+
+/// Exact native effects protected by the selected nondelegable SoraFS service.
+fn sorafs_operating_wire_id(instruction: &InstructionBox) -> Option<&'static str> {
+    use iroha_data_model::isi::sorafs::{
+        CompleteReplicationOrder, SetSorafsReservePolicy, UpsertProviderCredit,
+    };
+    // Classify the native type, not a caller-provided wire label. Keep these identifiers in
+    // parity with the native registry; a missing registry entry must never turn a protected
+    // native instruction into an unclassified effect.
+    macro_rules! classify {
+        ($($ty:ty => $wire_id:literal),+ $(,)?) => {$(
+            if instruction.as_any().downcast_ref::<$ty>().is_some() {
+                return Some($wire_id);
+            }
+        )+};
+    }
+    classify!(
+        CompleteReplicationOrder => "iroha.instruction.v1::sorafs::CompleteReplicationOrder",
+        SetSorafsReservePolicy => "iroha.instruction.v1::sorafs::SetSorafsReservePolicy",
+        UpsertProviderCredit => "iroha.instruction.v1::sorafs::UpsertProviderCredit",
     );
     None
 }
@@ -272,8 +317,21 @@ where
     if depth > MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH {
         return Err(OpaqueDeferredAuthorityError::ProposalDepthExceeded.into());
     }
+    let sorafs_authority_selected =
+        crate::runtime::sorafs_authority_enabled(selection).map_err(|error| {
+            OpaqueDeferredAuthorityError::UnsupportedSorafsServices(error.to_string())
+        })?;
     for (index, instruction) in instructions.into_iter().enumerate() {
         reject_opaque_committee_operation(instruction, index)?;
+        if sorafs_authority_selected
+            && let Some(instruction_wire_id) = sorafs_operating_wire_id(instruction)
+        {
+            return Err(OpaqueDeferredAuthorityError::SorafsOperatingAuthority {
+                instruction_index: index,
+                instruction_wire_id,
+            }
+            .into());
+        }
         let multisig =
             match crate::runtime::ironwood::admission::multisig_instruction(instruction, selection)
             {
@@ -401,7 +459,7 @@ mod tests {
         iroha_data_model::isi::Log::new(iroha_data_model::Level::INFO, message.to_owned()).into()
     }
 
-    fn register_by_call_trigger(name: &str, instructions: Vec<InstructionBox>) -> InstructionBox {
+    fn register_by_call_trigger(name: &str, executable: impl Into<Executable>) -> InstructionBox {
         use iroha_data_model::{
             events::execute_trigger::ExecuteTriggerEventFilter,
             isi::Register,
@@ -413,7 +471,7 @@ mod tests {
         let authority = iroha_test_samples::ALICE_ID.clone();
         let id: TriggerId = name.parse().expect("trigger id");
         let action = Action::new(
-            instructions,
+            executable,
             Repeats::Exactly(1),
             authority.clone(),
             ExecuteTriggerEventFilter::new()
@@ -441,13 +499,263 @@ mod tests {
         instructions: &[InstructionBox],
         proposal: Option<&[InstructionBox]>,
     ) -> Result<(), Attempt<OpaqueDeferredAuthorityError>> {
+        check_selection(
+            instructions,
+            proposal,
+            &crate::runtime::release_catalog().unwrap().baseline,
+        )
+    }
+
+    fn check_selection(
+        instructions: &[InstructionBox],
+        proposal: Option<&[InstructionBox]>,
+        selection: &iroha_data_model::runtime::definition::RootSelectionV1,
+    ) -> Result<(), Attempt<OpaqueDeferredAuthorityError>> {
         reject_opaque_committee_operations_with(
             instructions,
             &mut std::collections::BTreeSet::new(),
             0,
             &mut |_| Ok(proposal.map(|body| (iroha_test_samples::ALICE_ID.clone(), body.to_vec()))),
-            &crate::runtime::release_catalog().unwrap().baseline,
+            selection,
         )
+    }
+
+    mod sorafs_authority {
+        use super::*;
+        use crate::state::{World, WorldReadOnly};
+        use iroha_data_model::{
+            asset::AssetDefinitionId,
+            isi::sorafs::{CompleteReplicationOrder, SetSorafsReservePolicy, UpsertProviderCredit},
+            runtime::definition::{DefinitionId, RootSelectionV1},
+            sorafs::{
+                capacity::ProviderId,
+                pin_registry::{
+                    ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
+                    ProviderIngestFinalizedAnchorV1, ReplicationOrderId,
+                },
+                pricing::ProviderCreditRecord,
+                reserve::{
+                    RESERVE_AUTHORITY_POLICY_VERSION_V1, ReserveAuthorityPolicyV1, ReservePolicyV1,
+                },
+            },
+            transaction::{IvmBytecode, IvmProved},
+        };
+        use iroha_model_base::{domain::DomainId, metadata::Metadata};
+        use iroha_primitives::numeric::Quantity;
+        use iroha_test_samples::{ALICE_ID, BOB_ID};
+        use sorafs_manifest::deal::XorQuantity;
+
+        fn selected() -> RootSelectionV1 {
+            let world = World::new();
+            crate::runtime::activate_additions_for_testing(
+                &world,
+                "iroha.sorafs.authority_governance.v1",
+            )
+            .unwrap();
+            let selection = world.view().runtime_selection().clone();
+            assert!(crate::runtime::sorafs_authority_enabled(&selection).unwrap());
+            selection
+        }
+
+        fn operating_effects() -> Vec<InstructionBox> {
+            let provider = ProviderId::new([2; 32]);
+            let completion = CompleteReplicationOrder::new(
+                ReplicationOrderId::new([1; 32]),
+                provider,
+                1,
+                ProviderIngestCompletionAuthorityV1::new(
+                    ALICE_ID.clone(),
+                    ALICE_ID.clone(),
+                    ProviderIngestCompletionSignerPolicyV1 {
+                        policy_id: [3; 32],
+                        revision: 1,
+                        predecessor_digest: None,
+                        policy_digest: [4; 32],
+                    },
+                ),
+                1,
+                ProviderIngestFinalizedAnchorV1 {
+                    height: 1,
+                    block_hash: [5; 32],
+                },
+            );
+            let policy = ReserveAuthorityPolicyV1 {
+                version: RESERVE_AUTHORITY_POLICY_VERSION_V1,
+                revision: 1,
+                predecessor_policy_digest: None,
+                economics: ReservePolicyV1::default(),
+                asset_definition: AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("sora", "universal").unwrap(),
+                    "xor".parse().unwrap(),
+                ),
+                custody_account: ALICE_ID.clone(),
+                treasury_account: BOB_ID.clone(),
+                operations_authority: ALICE_ID.clone(),
+                decision_authority: ALICE_ID.clone(),
+                grace_period_days: 7,
+                default_after_days: 30,
+                max_provider_debt: XorQuantity::try_from_micro(1_000_000_000).unwrap(),
+                max_pending_movements_per_provider: 4,
+                max_open_appeals_per_provider: 2,
+            };
+            policy.validate().unwrap();
+            let credit = UpsertProviderCredit::new(
+                None,
+                ProviderCreditRecord::new(
+                    provider,
+                    Quantity::zero(),
+                    Quantity::zero(),
+                    Quantity::zero(),
+                    Quantity::zero(),
+                    1,
+                    1,
+                    Metadata::default(),
+                ),
+            );
+            vec![
+                completion.into(),
+                SetSorafsReservePolicy::new(policy).into(),
+                credit.into(),
+            ]
+        }
+
+        fn approve(body: &[InstructionBox]) -> InstructionBox {
+            use iroha_executor_data_model::isi::multisig::{
+                MultisigProposalId, MultisigProposalNonce,
+            };
+            MultisigApprove::new(
+                ALICE_ID.clone(),
+                MultisigProposalId::derive(
+                    &iroha_data_model::NetworkId::from_genesis_hash(
+                        iroha_crypto::HashOf::from_untyped_unchecked(
+                            iroha_crypto::Hash::prehashed([0x41; 32]),
+                        ),
+                    ),
+                    &ALICE_ID.clone(),
+                    &MultisigProposalNonce::new([0x51; 32]).unwrap(),
+                ),
+                iroha_crypto::HashOf::new(&body.to_vec()),
+            )
+            .into()
+        }
+
+        fn assert_refused(
+            instructions: &[InstructionBox],
+            proposal: Option<&[InstructionBox]>,
+            selection: &RootSelectionV1,
+            instruction_index: usize,
+            instruction_wire_id: &'static str,
+        ) {
+            let error = OpaqueDeferredAuthorityError::SorafsOperatingAuthority {
+                instruction_index,
+                instruction_wire_id,
+            };
+            assert_eq!(
+                check_selection(instructions, proposal, selection)
+                    .map_err(crate::execution_attempt::expect_completed_rejection),
+                Err(error.clone())
+            );
+            assert!(
+                error
+                    .to_string()
+                    .contains("nondelegable SoraFS operating authority")
+            );
+        }
+
+        #[test]
+        fn protected_native_types_match_canonical_wire_ids() {
+            let registry = iroha_data_model::instruction_registry::default();
+            let native_types = [
+                core::any::type_name::<CompleteReplicationOrder>(),
+                core::any::type_name::<SetSorafsReservePolicy>(),
+                core::any::type_name::<UpsertProviderCredit>(),
+            ];
+            for (effect, native_type) in operating_effects().iter().zip(native_types) {
+                let wire_id = sorafs_operating_wire_id(effect).expect("protected native effect");
+                assert_eq!(registry.wire_id(native_type), Some(wire_id));
+            }
+            assert_eq!(sorafs_operating_wire_id(&log("ordinary")), None);
+            assert_eq!(sorafs_operating_wire_id(&sccp_record()), None);
+        }
+
+        #[test]
+        fn selected_operating_effects_are_refused_and_predecessor_is_unchanged() {
+            let selection = selected();
+            for effect in operating_effects() {
+                let wire_id = sorafs_operating_wire_id(&effect).unwrap();
+                let body = vec![log("first"), effect];
+                assert!(check(&body, None).is_ok());
+                assert_refused(&body, None, &selection, 1, wire_id);
+            }
+            let ordinary = vec![register_by_call_trigger(
+                "ordinary",
+                vec![propose(vec![log("ok")])],
+            )];
+            assert!(check_selection(&ordinary, None, &selection).is_ok());
+            let body = vec![log("ordinary approval")];
+            assert!(check_selection(&[approve(&body)], Some(&body), &selection).is_ok());
+        }
+
+        #[test]
+        fn selected_operating_effects_cannot_hide_in_trigger_or_multisig_graphs() {
+            let selection = selected();
+            for effect in operating_effects() {
+                let wire_id = sorafs_operating_wire_id(&effect).unwrap();
+                let body = vec![log("first"), effect];
+                let cases = [
+                    (vec![register_by_call_trigger("nested", body.clone())], None),
+                    (vec![propose(body.clone())], None),
+                    (vec![approve(&body)], Some(body.as_slice())),
+                    (vec![propose(vec![approve(&body)])], Some(body.as_slice())),
+                    (
+                        vec![register_by_call_trigger(
+                            "proposal",
+                            vec![propose(body.clone())],
+                        )],
+                        None,
+                    ),
+                ];
+                for (instructions, proposal) in cases {
+                    assert!(check(&instructions, proposal).is_ok());
+                    assert_refused(&instructions, proposal, &selection, 1, wire_id);
+                }
+            }
+        }
+
+        #[test]
+        fn selected_trigger_batches_and_proved_overlays_are_scanned() {
+            let selection = selected();
+            for effect in operating_effects() {
+                let wire_id = sorafs_operating_wire_id(&effect).unwrap();
+                let batch = Executable::Batch(
+                    vec![ExecutableBatchItem::Instruction(effect.clone())].into(),
+                );
+                let proved = Executable::IvmProved(IvmProved {
+                    bytecode: IvmBytecode::from_compiled(Vec::new()),
+                    overlay: vec![effect].into(),
+                    events_commitment: iroha_crypto::Hash::new(b"events"),
+                    gas_policy_commitment: iroha_crypto::Hash::new(b"gas"),
+                });
+                for executable in [batch, proved] {
+                    let instructions = vec![register_by_call_trigger("overlay", executable)];
+                    assert!(check(&instructions, None).is_ok());
+                    assert_refused(&instructions, None, &selection, 0, wire_id);
+                }
+            }
+        }
+
+        #[test]
+        fn unsupported_services_never_fall_back_to_predecessor_authority() {
+            let mut selection = selected();
+            selection.services_profile = DefinitionId([0xF3; 32]);
+            for body in [Vec::new(), vec![log("ordinary")], operating_effects()] {
+                assert!(matches!(
+                    check_selection(&body, None, &selection)
+                        .map_err(crate::execution_attempt::expect_completed_rejection),
+                    Err(OpaqueDeferredAuthorityError::UnsupportedSorafsServices(_))
+                ));
+            }
+        }
     }
 
     #[test]

@@ -1517,7 +1517,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha:runtime:definition:v1\0",
             r"iroha:runtime:ironwood:v1\0",
             r"iroha:runtime:selection:v1\0",
-            r"iroha:sorafs:authority:paired-terms-64-epochs:cutoff-1-epoch:17-units-per-role:deadline-closure:controller-bound-http:v1",
+            r"iroha:sorafs:authority:paired-terms-64-epochs:cutoff-1-epoch:17-units-per-role:deadline-closure:controller-bound-http:signed-operating-effects:v1",
         ],
     },
     OtherDomains {

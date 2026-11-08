@@ -159,6 +159,17 @@ recreation of the reserved role. Account deletion must not silently remove activ
 governed authorities; require their voted revocation first and retain subject
 revision tombstones. Audit every cleanup/mutation owner, not only Torii ingress.
 
+Use of the protected operating instructions is also nondelegable. Ordinary
+`CanRegisterTrigger` or `CanExecuteTrigger` grants must not let a different caller
+run `CompleteReplicationOrder`, `SetSorafsReservePolicy` or `UpsertProviderCredit`
+as the holder. Under the selected services, reject those effects at the common
+opaque-execution boundary before applying any instruction in the group. This
+covers existing triggers, contract/IVM output, proved overlays and recursively
+resolved deferred multisig proposals or approvals. Keep ordinary trigger
+capabilities and predecessor execution unchanged; they confer no exemption.
+Direct signed instructions and multisig instructions approved by signed quorum
+transactions retain the normal holder authorization and both completion checks.
+
 Gateway compliance HTTP operations and assigned provider source reads also require
 the account's controller signature or full controller witness once these services
 are selected. An otherwise valid request signed only by the account's registered
@@ -188,13 +199,27 @@ the block hook. Storage/resource deferral retries block-start execution at the
 same exact due height; it must not skip or reschedule enactment, or be misreported
 as a rejected vote.
 
-Activation needs an explicit deterministic reconciliation rule for existing
-direct grants, inherited grants and reserved-role contents. The initial Taira
-candidate should require an empty targeted-authority inventory and an absent
-reserved role, checked at the activation cut with bounded, funded validation.
-Do not infer emptiness from genesis alone or silently adopt existing authority
-as Parliament-voted. If that precondition is false, prepare a separately governed
-reconciliation design; do not delete or grandfather the grants automatically.
+The initial Taira candidate requires an empty targeted-authority inventory and
+an absent reserved role, checked completely at the actual activation cut with
+bounded, funded native validation. Do not infer emptiness from genesis alone or
+silently adopt existing authority as Parliament-voted.
+
+Before activation, explicitly authorized existing holders may voluntarily
+surrender valid grants through the currently selected ordinary `Revoke` policy.
+Retain the exact native inventory, instruction scope and signed transaction and
+certified-result evidence. This is ordinary holder surrender, not Parliament-voted
+revocation, and does not itself require a new retirement host. Removing a role
+membership leaves its protected role definition in the inventory; role-token
+removal affects every member. An existing reserved role requires explicit lawful
+unregistration, including existing `CanManageRoles` under the Initial executor.
+Do not infer that authority from role possession or operator custody.
+
+If existing lawful authority cannot clear the inventory, prepare a separate
+governed reconciliation design. Never remove or grandfather rows automatically.
+Surrender neither supplies missing runtime proposer/Parliament manager authority
+nor replaces governed upgrade approval. Both the provider-scoped completion
+permission and the provider owner's exact completion-signer policy remain required.
+After activation, protected authority changes use the selected Parliament host.
 
 ## Completion, retirement and evidence
 
@@ -238,7 +263,8 @@ a native roundtrip check. It produces no change set, certificate or transaction.
 
 The same view also exports the exact stored direct grants, role definitions and
 memberships for the protected SoraFS permissions, the reserved compliance role,
-and `CanManageParliament`, `CanProposeRuntimeChangeSet` and `CanSetParameters`.
+and `CanManageParliament`, `CanProposeRuntimeChangeSet`, `CanSetParameters` and
+`CanManageRoles`, including role-manager-only roles needed for explicit cleanup.
 Scan counts and executor kind/semantic identity accompany these records. Native
 unit-token comparisons distinguish exact administrative tokens from malformed
 payloads with the same name. This describes stored possession and its origin;

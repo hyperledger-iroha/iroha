@@ -1220,7 +1220,7 @@
       {"literal":"iroha:snapshot-bundle:v1\\0","owner":"root:state_snapshot_chunk_root","sources":{"crates/iroha_core/src/snapshot.rs":1}},
       {"literal":"iroha:sns:native-maintenance-source:v1","owner":"use:record","sources":{"crates/iroha_core/src/sns.rs":1}},
       {"literal":"iroha:soracloud:runtime-provenance:v1\\x00","owner":"use:record","sources":{"crates/iroha_data_model/src/soracloud.rs":1}},
-      {"literal":"iroha:sorafs:authority:paired-terms-64-epochs:cutoff-1-epoch:17-units-per-role:deadline-closure:controller-bound-http:v1","owner":"use:record","sources":{"crates/iroha_core/src/runtime/sorafs_authority.rs":1}},
+      {"literal":"iroha:sorafs:authority:paired-terms-64-epochs:cutoff-1-epoch:17-units-per-role:deadline-closure:controller-bound-http:signed-operating-effects:v1","owner":"use:record","sources":{"crates/iroha_core/src/runtime/sorafs_authority.rs":1}},
       {"literal":"iroha:sorafs:test-reserve-custody:v1","owner":"use:record","sources":{"crates/iroha_core/src/smartcontracts/isi/sorafs_reserve.rs":1}},
       {"literal":"iroha:state-canonical-composition-draft:descriptor-field:v1\\0","owner":"root:state_canonical_composition_draft","sources":{"crates/iroha_core/src/state/authority_registry/complete/composition.rs":1}},
       {"literal":"iroha:state-canonical-composition-draft:descriptor-finish:v1\\0","owner":"root:state_canonical_composition_draft","sources":{"crates/iroha_core/src/state/authority_registry/complete/composition.rs":1}},
@@ -2747,7 +2747,7 @@
         "iroha:runtime:definition:v1\\0",
         "iroha:runtime:ironwood:v1\\0",
         "iroha:runtime:selection:v1\\0",
-        "iroha:sorafs:authority:paired-terms-64-epochs:cutoff-1-epoch:17-units-per-role:deadline-closure:controller-bound-http:v1"
+        "iroha:sorafs:authority:paired-terms-64-epochs:cutoff-1-epoch:17-units-per-role:deadline-closure:controller-bound-http:signed-operating-effects:v1"
       ]},
       {"use":"record","reason":"Identities and signature domains of live-upgrade lifecycle records (specs/live_runtime_upgrades.md §6, §7, §13): change sets and the release signers' provenance endorsements of them, validator support attestations with the release digests and committees they bind, adoption trust anchors, and emergency containment with its panel endorsements. Each hashes or signs one canonical record or a release's build status and implemented definitions; none commits to State content","literals":[
         "iroha:runtime:adoption:v1\\0",

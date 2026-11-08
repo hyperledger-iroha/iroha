@@ -810,7 +810,8 @@ fn ironwood_reserve_account_proofs_interpret_the_schema_of_each_certified_height
     let catalog = crate::runtime::release_catalog().unwrap();
     let baseline = State::native_world_schema_hash_v1().unwrap();
     let schemas = State::native_world_schemas_for_anchor_v1(baseline).unwrap();
-    assert_eq!(schemas.len(), 2);
+    assert_eq!(schemas, State::native_world_schema_hashes_v1().unwrap());
+    assert!(schemas.contains(&baseline));
     let foreign = iroha_crypto::Hash::new(b"independently-qualified-foreign-schema");
     assert_eq!(
         State::native_world_schemas_for_anchor_v1(foreign).unwrap(),
