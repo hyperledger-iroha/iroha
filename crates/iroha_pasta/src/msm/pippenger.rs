@@ -591,23 +591,61 @@ pub(crate) struct Plan {
     pub(crate) bytes: usize,
 }
 
-/// Cost of the variable-base MSM with window `c` in multiplication units:
-/// `nw * (n * 6 + 2^(c-1) * 25)` (a batch-affine bucket addition costs about
-/// six multiplications; reducing one bucket about 25).
-fn model_cost(n: usize, bits: usize, c: usize) -> u128 {
-    let nw = num_windows(bits, c) as u128;
-    let n = n as u128;
-    nw * (n * 6 + (1u128 << (c - 1)) * 25)
+/// Cost-model constants in units of one batch-affine bucket addition: one
+/// shared field inversion, and reducing one bucket by summation by parts.
+/// Fitted to a Pixel 6 plan sweep (b04a57, 2026-11-08, `plan_sweep_experiment`,
+/// 497 measured plans over 16 workloads): the planner's picks came within a
+/// geometric mean of 7% of the fastest measured plan (19% before), and no
+/// measured workload became more than 2.2% slower.
+const INVERSION: u128 = 4;
+const REDUCTION: u128 = 3;
+
+/// Window groupings the planner considers, besides the even split across the
+/// workers and all windows in one task (the shapes the sweep measured).
+const GROUPINGS: [usize; 3] = [1, 2, 4];
+
+/// Point splits the planner considers for inputs of at least 8192 points,
+/// besides the split that gives every worker a task.
+const SPLITS: [usize; 3] = [1, 2, 4];
+
+/// Modelled cost of one plan per worker, in 1/1024 of a batch-affine bucket
+/// addition.
+///
+/// A task adds `ceil(n / chunks)` points to each of its windows and then
+/// reduces each window's buckets, so splitting the points repeats the
+/// reductions, and a batch shares one inversion over at most a quarter of the
+/// task's buckets. Claiming loops spread the total over `concurrency` workers.
+fn makespan(
+    n: usize,
+    c: usize,
+    nw: usize,
+    per_group: usize,
+    chunks: usize,
+    concurrency: usize,
+) -> u128 {
+    let nb_per = 1u128 << (c - 1);
+    let cap = (per_group as u128 * nb_per / 4).clamp(16, MAX_BATCH as u128);
+    let insert = 1024 + INVERSION * 1024 / cap;
+    let reduce = REDUCTION * 1024 * nb_per;
+    let total = nw as u128 * (n as u128 * insert + chunks as u128 * reduce);
+    total / concurrency as u128
 }
 
-/// Picks the window and task split for `n` scalars of at most `bits` bits on
-/// `threads` workers within `budget` bytes.
+/// The first occurrence of `value` among `options[..=index]`.
+fn first_of(options: &[usize], index: usize) -> bool {
+    !options[..index].contains(&options[index])
+}
+
+/// Picks the window, window grouping and point split for `n` scalars of at
+/// most `bits` bits on `threads` workers within `budget` bytes.
 ///
-/// For every window width the planner first splits windows across the
-/// workers (keeping one task's buckets near the L2 size), then lowers the
-/// number of concurrently live tasks until the bucket and digit scratch fits
-/// the budget. Among feasible widths it minimises the modelled cost divided by
-/// the achieved concurrency.
+/// For every window width it scores a small set of groupings (a task's buckets
+/// stay near the L2 size) and point splits (only from 8192 points), lowers the
+/// number of live tasks until the scratch fits the budget, and keeps the plan
+/// with the smallest modelled [`makespan`]. A one-window task is always among
+/// the groupings, so a width is feasible exactly when [`min_plan_bytes`] says
+/// so. Ties go to the larger grouping on one worker (fewer tasks) and to the
+/// smaller grouping on several (more tasks to balance unequal cores).
 pub(crate) fn plan(n: usize, bits: usize, threads: usize, budget: usize) -> Option<Plan> {
     let threads = threads.max(1);
     let mut best: Option<(u128, Plan)> = None;
@@ -618,44 +656,53 @@ pub(crate) fn plan(n: usize, bits: usize, threads: usize, budget: usize) -> Opti
         let Some(avail) = budget.checked_sub(fixed) else {
             continue;
         };
-        let max_windows_per_task = ((2usize << 20) / (nb_per * BUCKET_BYTES)).max(1);
-        let mut per_group = nw
-            .div_ceil(threads.min(nw))
-            .min(max_windows_per_task)
-            .max(1);
-        // Shrink tasks to one window if a single task would not fit.
-        while per_group > 1 && loop_bytes(nw, per_group, nb_per)? > avail {
-            per_group = per_group.div_ceil(2);
-        }
-        let loop_bytes = loop_bytes(nw, per_group, nb_per)?;
-        if loop_bytes > avail {
-            continue;
-        }
-        let groups = nw.div_ceil(per_group);
-        let chunks = if threads > groups && n >= 8192 {
-            threads.div_ceil(groups)
+        let largest = nw.min(((2usize << 20) / (nb_per * BUCKET_BYTES)).max(1));
+        let even = nw.div_ceil(threads.min(nw));
+        let [g1, g2, g4] = GROUPINGS;
+        let groupings: [usize; 5] = if threads == 1 {
+            [largest, g4, g2, g1, g1]
         } else {
-            1
+            [g1, g2, g4, even, largest]
         };
-        let concurrency = (groups * chunks)
-            .min(threads)
-            .min(avail / loop_bytes)
-            .max(1);
-        let bytes = concurrency * loop_bytes + fixed;
-        let cost = model_cost(n, bits, c) / (concurrency as u128);
-        if best.is_none_or(|(b, _)| cost < b) {
-            best = Some((
-                cost,
-                Plan {
-                    c,
-                    nw,
-                    groups,
-                    per_group,
-                    chunks,
-                    concurrency,
-                    bytes,
-                },
-            ));
+        for (index, &per_group) in groupings.iter().enumerate() {
+            if per_group > largest || !first_of(&groupings, index) {
+                continue;
+            }
+            let loop_bytes = loop_bytes(nw, per_group, nb_per)?;
+            if loop_bytes > avail {
+                continue;
+            }
+            let groups = nw.div_ceil(per_group);
+            let [s1, s2, s4] = SPLITS;
+            let splits: [usize; 4] = if threads == 1 || n < 8192 {
+                [s1; 4]
+            } else {
+                [s1, s2, s4, threads.div_ceil(groups)]
+            };
+            for (split, &chunks) in splits.iter().enumerate() {
+                if !first_of(&splits, split) || (chunks > 1 && groups * chunks > 4 * threads) {
+                    continue;
+                }
+                let concurrency = (groups * chunks)
+                    .min(threads)
+                    .min(avail / loop_bytes)
+                    .max(1);
+                let cost = makespan(n, c, nw, per_group, chunks, concurrency);
+                if best.is_none_or(|(b, _)| cost < b) {
+                    best = Some((
+                        cost,
+                        Plan {
+                            c,
+                            nw,
+                            groups,
+                            per_group,
+                            chunks,
+                            concurrency,
+                            bytes: concurrency * loop_bytes + fixed,
+                        },
+                    ));
+                }
+            }
         }
     }
     best.map(|(_, p)| p)
@@ -797,7 +844,31 @@ mod tests {
         assert!(min_plan_bytes(1 << 16, 255) > 1000);
         assert_eq!(min_plan_bytes(usize::MAX, 255), usize::MAX);
         assert_eq!(num_windows(255, 15), 18);
-        assert!(model_cost(1000, 255, 8) > 0);
+        assert!(makespan(1000, 8, num_windows(255, 8), 1, 1, 1) > 0);
+    }
+
+    /// The two costs the old model left out, on the shapes the Pixel 6 sweep
+    /// measured: 13-bit rows on one worker planned 7-bit windows whose batches
+    /// shared one inversion over 32 additions (1.32x the fastest plan), and
+    /// 11-bit rows on eight workers split 16,384 points into eight tasks that
+    /// each reduced 2,048 buckets for 2,048 points (2.1x the fastest plan).
+    #[test]
+    fn planner_counts_batch_inversions_and_repeated_reductions() {
+        let budget = crate::msm::MemoryBudget::DEFAULT.bytes();
+        let narrow = plan(16_384, 13, 1, budget).unwrap();
+        let cap = (narrow.per_group << (narrow.c - 1)) / 4;
+        assert!(cap >= 64, "{narrow:?}");
+        let split = plan(16_384, 11, 8, budget).unwrap();
+        assert!(
+            16_384_usize.div_ceil(split.chunks) > 1 << (split.c - 1),
+            "every task should add more points than it has buckets per window: {split:?}"
+        );
+        // Splitting the points repeats every window's reduction.
+        let nw = num_windows(255, 12);
+        assert!(makespan(16_384, 12, nw, 1, 8, 8) > makespan(16_384, 12, nw, 1, 1, 8));
+        // A larger batch amortises the shared inversion over more additions.
+        let nw = num_windows(13, 7);
+        assert!(makespan(16_384, 7, nw, 1, 1, 1) > makespan(16_384, 7, nw, 2, 1, 1));
     }
 
     #[test]
