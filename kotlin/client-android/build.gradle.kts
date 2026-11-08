@@ -1329,6 +1329,7 @@ abstract class CompileNativeBridgeTask @Inject constructor(
                         "--manifest-path",
                         irohaRoot.resolve("Cargo.toml").absolutePath,
                         "--release",
+                        "--verbose",
                         "-p",
                         "connect_norito_bridge",
                     ),

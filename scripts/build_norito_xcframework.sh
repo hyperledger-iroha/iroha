@@ -1528,7 +1528,7 @@ run_hermetic_apple_cargo() {
       "${platform_environment[@]}" \
       -- "$CARGO_BINARY" "$cargo_subcommand" \
       --manifest-path "$ROOT_DIR/Cargo.toml" \
-      --message-format=json-render-diagnostics "$@" > "$cargo_messages"; then
+      --verbose --message-format=json-render-diagnostics "$@" > "$cargo_messages"; then
     cargo_status=0
   else
     cargo_status=$?
