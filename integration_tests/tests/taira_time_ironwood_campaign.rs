@@ -122,6 +122,22 @@ fn applied(client: &Client, instruction: InstructionBox) -> Result<()> {
     Ok(())
 }
 
+/// Submit and require a state-resolved refusal that carries `reason`.
+fn refused(client: &Client, instruction: InstructionBox, reason: &str) -> Result<()> {
+    let outcome = client.submit(instruction, fee()).and_then(|hash| {
+        client.wait_for_transaction_applied(hash, TransactionWaitOptions::default())
+    });
+    let Err(error) = outcome else {
+        return Err(eyre!("expected a refusal naming `{reason}`"));
+    };
+    let error = format!("{error:?}");
+    ensure!(
+        error.contains(reason),
+        "refused for another reason: {error}"
+    );
+    Ok(())
+}
+
 fn wait_until(what: &str, limit: Duration, mut done: impl FnMut() -> Result<bool>) -> Result<()> {
     let deadline = Instant::now() + limit;
     loop {
@@ -692,24 +708,22 @@ fn four_peers_take_the_repair_and_the_activation_with_one_peer_restarted_across_
     // The peer that sat out loads the old store, catches up and agrees.
     let layers: Vec<_> = network.config_layers_for_peer(restarted).collect();
     rt.block_on(restarted.start_checked(layers.iter(), None))?;
-    let target = tip(&client)?;
-    wait_until("the restarted peer", Duration::from_secs(180), || {
-        Ok(tip(&restarted.client()).is_ok_and(|height| height >= target))
-    })?;
-    ensure!(
-        selection_id(restarted)? == activation.successor,
-        "the restarted peer selects the successor"
-    );
+    // Its status reports the network's height before it has fetched and applied those blocks, so
+    // only its own selection shows that it has crossed the boundary.
+    wait_until(
+        "the restarted peer to select the successor",
+        Duration::from_secs(300),
+        || Ok(selection_id(restarted).is_ok_and(|id| id == activation.successor)),
+    )?;
     same_block_everywhere(&network, activation.effective_height)?;
 
     // The retained certificate authorizes exactly its one pool, once.
-    let other = client.submit(BootstrapPrivacyIronwoodPoolV1::new(pool(0x51)?), fee())?;
-    ensure!(
-        client
-            .wait_for_transaction_applied(other, TransactionWaitOptions::default())
-            .is_err(),
-        "any other pool still needs the governance permission"
-    );
+    refused(
+        &client,
+        BootstrapPrivacyIronwoodPoolV1::new(pool(0x51)?).into(),
+        "CanEnactGovernance",
+    )
+    .wrap_err("any other pool still needs the governance permission")?;
     applied(&client, Register::account(Account::new(account(7))).into())
         .wrap_err("the reserve account")?;
     applied(
@@ -717,13 +731,12 @@ fn four_peers_take_the_repair_and_the_activation_with_one_peer_restarted_across_
         BootstrapPrivacyIronwoodPoolV1::new(pool(0x41)?).into(),
     )
     .wrap_err("the certified pool")?;
-    let repeat = client.submit(BootstrapPrivacyIronwoodPoolV1::new(pool(0x41)?), fee())?;
-    ensure!(
-        client
-            .wait_for_transaction_applied(repeat, TransactionWaitOptions::default())
-            .is_err(),
-        "a repeat refuses as already initialized"
-    );
+    refused(
+        &client,
+        BootstrapPrivacyIronwoodPoolV1::new(pool(0x41)?).into(),
+        "already initialized",
+    )
+    .wrap_err("a repeat refuses")?;
     let final_height = tip(&client)?;
     wait_until(
         "the last block on every peer",
