@@ -55,9 +55,30 @@ const WORKLOADS: [Workload; 16] = [
     w("serial", 16384, 88, 1, true),
 ];
 
+fn env_usize(key: &str) -> Option<usize> {
+    std::env::var(key).ok().and_then(|value| value.parse().ok())
+}
+
+/// `PLAN_SWEEP_LOOP_CAPS`, e.g. `4,2`: every candidate also runs with at most
+/// that many claiming loops (fewer loops than tasks), to test whether keeping
+/// work off a phone's slow cores pays.
+fn loop_caps() -> Vec<usize> {
+    std::env::var("PLAN_SWEEP_LOOP_CAPS")
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .filter_map(|cap| cap.trim().parse().ok())
+                .filter(|&cap| cap > 0)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Plans around the planner's choice: window widths `c - 1 ..= c + 3`, a few
-/// window groupings and point splits, every one within the default budget.
-fn candidates(n: usize, bits: usize, threads: usize, chosen: Plan) -> Vec<Plan> {
+/// window groupings and point splits, every one within the default budget,
+/// and each also with its loops capped by `caps`.
+fn candidates(n: usize, bits: usize, threads: usize, chosen: Plan, caps: &[usize]) -> Vec<Plan> {
     let budget = MemoryBudget::DEFAULT.bytes();
     let mut out = vec![chosen];
     for c in chosen.c.saturating_sub(1).max(MIN_WINDOW)..=(chosen.c + 3).min(MAX_WINDOW) {
@@ -90,6 +111,21 @@ fn candidates(n: usize, bits: usize, threads: usize, chosen: Plan) -> Vec<Plan> 
                 if bytes <= budget && !out.contains(&candidate) {
                     out.push(candidate);
                 }
+            }
+        }
+    }
+    for base in out.clone() {
+        let nb_per = 1usize << (base.c - 1);
+        for &cap in caps {
+            let concurrency = base.concurrency.min(cap);
+            let variant = Plan {
+                concurrency,
+                bytes: fixed_bytes(n, base.nw).unwrap()
+                    + concurrency * loop_bytes(base.nw, base.per_group, nb_per).unwrap(),
+                ..base
+            };
+            if !out.contains(&variant) {
+                out.push(variant);
             }
         }
     }
@@ -148,22 +184,30 @@ fn planner_sweep() {
         })
         .collect();
     let bases = crate::curve::batch_normalize(&projective);
+    // `PLAN_SWEEP_THREADS` replaces the worker count of the parallel workloads
+    // (for example 4 under `taskset` on the fast cores);
+    // `PLAN_SWEEP_PARALLEL_ONLY` skips the single-worker rows.
+    let parallel_threads = env_usize("PLAN_SWEEP_THREADS");
+    let parallel_only = std::env::var("PLAN_SWEEP_PARALLEL_ONLY").is_ok();
+    let caps = loop_caps();
     for work in &WORKLOADS {
+        if parallel_only && work.threads == 1 {
+            continue;
+        }
+        let threads = if work.threads > 1 {
+            parallel_threads.unwrap_or(work.threads)
+        } else {
+            1
+        };
         let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(work.threads)
+            .num_threads(threads)
             .build()
             .unwrap();
         let scalars: Vec<<Eq as PastaCurve>::ScalarExt> =
             (0..work.n).map(|_| below(&mut rng, work.bits)).collect();
         let bases = &bases[..work.n];
-        let chosen = plan(
-            work.n,
-            work.bits,
-            work.threads,
-            MemoryBudget::DEFAULT.bytes(),
-        )
-        .unwrap();
-        let plans = candidates(work.n, work.bits, work.threads, chosen);
+        let chosen = plan(work.n, work.bits, threads, MemoryBudget::DEFAULT.bytes()).unwrap();
+        let plans = candidates(work.n, work.bits, threads, chosen, &caps);
         let expected = pool.install(|| run(chosen, &scalars, bases, work.secret));
         let mut times = vec![Vec::with_capacity(rounds); plans.len()];
         for round in 0..rounds {
@@ -181,18 +225,23 @@ fn planner_sweep() {
             }
         }
         let mut best = (u128::MAX, 0);
+        let mut best_by_loops = std::collections::BTreeMap::<usize, u128>::new();
         for (index, (plan, samples)) in plans.iter().zip(&mut times).enumerate() {
             samples.sort_unstable();
             let median = samples[samples.len() / 2];
             if median < best.0 {
                 best = (median, index);
             }
+            best_by_loops
+                .entry(plan.concurrency)
+                .and_modify(|fastest| *fastest = (*fastest).min(median))
+                .or_insert(median);
             println!(
                 "PLAN_SWEEP workload={} n={} bits={} threads={} secret={} c={} nw={} per_group={} groups={} chunks={} tasks={} concurrency={} bytes={} chosen={} median_ns={median} min_ns={}",
                 work.name,
                 work.n,
                 work.bits,
-                work.threads,
+                threads,
                 work.secret,
                 plan.c,
                 plan.nw,
@@ -209,18 +258,31 @@ fn planner_sweep() {
         let chosen_median = times[0][times[0].len() / 2];
         let fastest = plans[best.1];
         println!(
-            "PLAN_SWEEP_BEST workload={} n={} bits={} threads={} secret={} chosen_ns={chosen_median} best_ns={} chosen_over_best_permille={} best_c={} best_per_group={} best_chunks={} candidates={}",
+            "PLAN_SWEEP_BEST workload={} n={} bits={} threads={} secret={} chosen_ns={chosen_median} best_ns={} chosen_over_best_permille={} best_c={} best_per_group={} best_chunks={} best_concurrency={} candidates={}",
             work.name,
             work.n,
             work.bits,
-            work.threads,
+            threads,
             work.secret,
             best.0,
             chosen_median * 1000 / best.0.max(1),
             fastest.c,
             fastest.per_group,
             fastest.chunks,
+            fastest.concurrency,
             plans.len(),
+        );
+        let by_loops: Vec<String> = best_by_loops
+            .iter()
+            .map(|(loops, ns)| format!("{loops}:{ns}"))
+            .collect();
+        println!(
+            "PLAN_SWEEP_LOOPS workload={} n={} bits={} threads={} best_ns_by_concurrency={}",
+            work.name,
+            work.n,
+            work.bits,
+            threads,
+            by_loops.join(",")
         );
     }
 }
