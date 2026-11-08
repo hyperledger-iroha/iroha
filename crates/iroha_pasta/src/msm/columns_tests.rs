@@ -201,6 +201,191 @@ fn columns_check_every_length_before_work_and_cancel() {
     ));
 }
 
+/// Bounds across a column set: zero, one bit, narrow chunks, limbs and full width.
+const BOUNDS: [usize; 6] = [0, 1, 13, 16, 88, 255];
+
+/// A canonical integer below `2^bits` (`bits < 255`), built limb by limb from
+/// the top: the bound's largest value, or a uniform one.
+fn below_bound<F: PastaField>(rng: &mut ChaCha20Rng, bits: usize, largest: bool) -> F {
+    use rand_core::Rng;
+    let shift = F::from(u64::MAX) + F::ONE;
+    let mut value = F::ZERO;
+    for limb in (0..bits.div_ceil(64)).rev() {
+        let kept = (bits - 64 * limb).min(64);
+        let mask = if kept == 64 {
+            u64::MAX
+        } else {
+            (1_u64 << kept) - 1
+        };
+        let word = if largest { mask } else { rng.next_u64() & mask };
+        value = value * shift + F::from(word);
+    }
+    value
+}
+
+fn bounded_column<C: PastaCurve>(n: usize, bits: usize, seed: u64) -> Vec<C::ScalarExt> {
+    let mut rng = ChaCha20Rng::seed_from_u64(seed);
+    let column: Vec<C::ScalarExt> = (0..n)
+        .map(|i| match (bits, i % 5) {
+            (0, _) | (_, 0) => C::ScalarExt::ZERO,
+            (255, 1) => -C::ScalarExt::ONE,
+            (255, _) => C::ScalarExt::random(&mut rng),
+            (_, 1) => below_bound(&mut rng, bits, true),
+            _ => below_bound(&mut rng, bits, false),
+        })
+        .collect();
+    // Every value satisfies its column's public bound.
+    assert!(BoundedSecretScalars::new(&column, bits, None).is_ok());
+    column
+}
+
+fn exact_bounded_columns<C: PastaCurve>() {
+    for n in [8, 9, 300, 4097] {
+        let (_, bases) = mixed_inputs::<C>(n, 23);
+        for count in [1, 2, 6, 7, 13] {
+            let columns: Vec<(Vec<C::ScalarExt>, usize)> = (0..count)
+                .map(|column| {
+                    let bits = BOUNDS[column % BOUNDS.len()];
+                    (bounded_column::<C>(n, bits, 200 + column as u64), bits)
+                })
+                .collect();
+            let bounded: Vec<BoundedSecretScalars<'_, C::ScalarExt>> = columns
+                .iter()
+                .map(|(scalars, bits)| BoundedSecretScalars::new(scalars, *bits, None).unwrap())
+                .collect();
+            let expected: Vec<C> = columns
+                .iter()
+                .map(|(scalars, _)| msm_naive::<C>(scalars, &bases))
+                .collect();
+            for threads in [1, 3, 8] {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build()
+                    .unwrap();
+                let shared = SharedMemoryBudget::new(PROCESS_MSM_SCRATCH_BYTES);
+                let sums = pool
+                    .install(|| {
+                        msm_secret_bounded_columns_cancellable::<C>(
+                            &bounded,
+                            &bases,
+                            MemoryBudget::DEFAULT,
+                            &shared,
+                            None,
+                        )
+                    })
+                    .unwrap();
+                assert_eq!(sums, expected, "n={n} columns={count} threads={threads}");
+                assert_eq!(shared.in_use_bytes(), 0);
+                assert!(shared.peak_bytes() <= shared.limit_bytes());
+            }
+        }
+    }
+}
+
+#[test]
+fn bounded_columns_equal_independent_sums_on_both_curves() {
+    exact_bounded_columns::<Ep>();
+    exact_bounded_columns::<Eq>();
+}
+
+fn bounded_columns_admit_the_largest_plan<C: PastaCurve>() {
+    let n = 4097;
+    let (_, bases) = mixed_inputs::<C>(n, 29);
+    let columns: Vec<(Vec<C::ScalarExt>, usize)> = (0..9)
+        .map(|column| {
+            let bits = [13, 255, 1][column % 3];
+            (bounded_column::<C>(n, bits, 300 + column as u64), bits)
+        })
+        .collect();
+    let bounded: Vec<BoundedSecretScalars<'_, C::ScalarExt>> = columns
+        .iter()
+        .map(|(scalars, bits)| BoundedSecretScalars::new(scalars, *bits, None).unwrap())
+        .collect();
+    let expected: Vec<C> = columns
+        .iter()
+        .map(|(scalars, _)| msm_naive::<C>(scalars, &bases))
+        .collect();
+    let largest = [13, 255, 1]
+        .into_iter()
+        .map(|bits| {
+            pippenger::plan(n, bits, 1, MemoryBudget::DEFAULT.bytes())
+                .unwrap()
+                .bytes
+        })
+        .max()
+        .unwrap();
+    // Room for exactly two of the largest single-task kernels.
+    let shared = SharedMemoryBudget::new(largest * 2 + largest / 2);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap();
+    let sums = pool
+        .install(|| {
+            msm_secret_bounded_columns_cancellable::<C>(
+                &bounded,
+                &bases,
+                MemoryBudget::DEFAULT,
+                &shared,
+                None,
+            )
+        })
+        .unwrap();
+    assert_eq!(sums, expected);
+    assert_eq!(shared.in_use_bytes(), 0);
+    assert!(
+        shared.peak_bytes() >= largest * 2,
+        "two lanes must be admitted together"
+    );
+    assert!(shared.peak_bytes() <= shared.limit_bytes());
+}
+
+#[test]
+fn bounded_columns_never_run_more_kernels_than_admitted() {
+    bounded_columns_admit_the_largest_plan::<Ep>();
+    bounded_columns_admit_the_largest_plan::<Eq>();
+}
+
+#[test]
+fn bounded_columns_check_lengths_before_work_and_cancel() {
+    let n = 300;
+    let (_, bases) = mixed_inputs::<Ep>(n, 31);
+    let columns: Vec<Vec<Fq>> = (0..4)
+        .map(|column| bounded_column::<Ep>(n, 16, 400 + column))
+        .collect();
+    let mut bounded: Vec<BoundedSecretScalars<'_, Fq>> = columns
+        .iter()
+        .map(|scalars| BoundedSecretScalars::new(scalars, 16, None).unwrap())
+        .collect();
+    bounded[3] = BoundedSecretScalars::new(&columns[3][..n - 1], 16, None).unwrap();
+    let shared = SharedMemoryBudget::new(PROCESS_MSM_SCRATCH_BYTES);
+    assert!(matches!(
+        msm_secret_bounded_columns_cancellable::<Ep>(
+            &bounded,
+            &bases,
+            MemoryBudget::DEFAULT,
+            &shared,
+            None
+        ),
+        Err(MsmError::LengthMismatch(_))
+    ));
+    assert_eq!(shared.peak_bytes(), 0);
+    bounded[3] = BoundedSecretScalars::new(&columns[3], 16, None).unwrap();
+    let token = CancellationToken::new();
+    token.cancel();
+    assert_eq!(
+        msm_secret_bounded_columns_cancellable::<Ep>(
+            &bounded,
+            &bases,
+            MemoryBudget::DEFAULT,
+            &shared,
+            Some(&token)
+        ),
+        Err(MsmError::Cancelled)
+    );
+    assert_eq!(shared.in_use_bytes(), 0);
+}
+
 fn windowed<C: PastaCurve>() {
     for n in [STACK_WINDOWED_MIN + 1, 100, 257, 1031] {
         let (scalars, bases) = mixed_inputs::<C>(n, 19 + n as u64);

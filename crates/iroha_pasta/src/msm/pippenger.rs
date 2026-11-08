@@ -76,6 +76,10 @@ mod inversion_lanes_tests;
 #[path = "scheduling_experiment.rs"]
 mod scheduling_experiment;
 
+#[cfg(test)]
+#[path = "plan_sweep_experiment.rs"]
+mod plan_sweep_experiment;
+
 /// Largest supported window: digits must fit `i16` with magnitude `2^(c-1)`.
 pub(crate) const MAX_WINDOW: usize = 15;
 /// Smallest window considered by the planner.
@@ -94,7 +98,8 @@ pub(crate) fn bucket_bytes(count: usize) -> Option<usize> {
     count.checked_mul(BUCKET_BYTES)?.checked_add(queued)
 }
 
-/// Scratch retained across waves: recoded digits, skip flags and window sums.
+/// Scratch retained for the whole MSM: recoded digits, skip flags and the
+/// merged window sums.
 fn fixed_bytes(n: usize, nw: usize) -> Option<usize> {
     n.checked_mul(nw)?
         .checked_mul(2)?
@@ -102,11 +107,17 @@ fn fixed_bytes(n: usize, nw: usize) -> Option<usize> {
         .checked_add(nw.checked_mul(96)?)
 }
 
-/// One live task's buckets, returned window sums and its slot in the wave.
+/// One live task's buckets, returned window sums and a result slot.
 fn task_bytes(windows: usize, buckets_per_window: usize) -> Option<usize> {
     bucket_bytes(windows.checked_mul(buckets_per_window)?)?
         .checked_add(windows.checked_mul(96)?)?
         .checked_add(size_of::<(usize, Vec<crate::Ep>)>())
+}
+
+/// One claiming loop of the planned kernel: its live task plus the loop's own
+/// accumulator of sums over all `nw` windows.
+fn loop_bytes(nw: usize, windows: usize, buckets_per_window: usize) -> Option<usize> {
+    task_bytes(windows, buckets_per_window)?.checked_add(nw.checked_mul(96)?)
 }
 
 /// Number of windows for scalars of at most `bits` bits with window `c`.
@@ -613,11 +624,11 @@ pub(crate) fn plan(n: usize, bits: usize, threads: usize, budget: usize) -> Opti
             .min(max_windows_per_task)
             .max(1);
         // Shrink tasks to one window if a single task would not fit.
-        while per_group > 1 && task_bytes(per_group, nb_per)? > avail {
+        while per_group > 1 && loop_bytes(nw, per_group, nb_per)? > avail {
             per_group = per_group.div_ceil(2);
         }
-        let task_bytes = task_bytes(per_group, nb_per)?;
-        if task_bytes > avail {
+        let loop_bytes = loop_bytes(nw, per_group, nb_per)?;
+        if loop_bytes > avail {
             continue;
         }
         let groups = nw.div_ceil(per_group);
@@ -628,9 +639,9 @@ pub(crate) fn plan(n: usize, bits: usize, threads: usize, budget: usize) -> Opti
         };
         let concurrency = (groups * chunks)
             .min(threads)
-            .min(avail / task_bytes)
+            .min(avail / loop_bytes)
             .max(1);
-        let bytes = concurrency * task_bytes + fixed;
+        let bytes = concurrency * loop_bytes + fixed;
         let cost = model_cost(n, bits, c) / (concurrency as u128);
         if best.is_none_or(|(b, _)| cost < b) {
             best = Some((
@@ -651,12 +662,14 @@ pub(crate) fn plan(n: usize, bits: usize, threads: usize, budget: usize) -> Opti
 }
 
 /// The smallest budget [`plan`] accepts: over every window width, the digits
-/// of all windows, skip flags and window sums, plus one task holding a single
-/// window's buckets and result, exactly the feasibility test of [`plan`].
+/// of all windows, skip flags and window sums, plus one claiming loop holding a
+/// single window's buckets and result and its accumulator, exactly the
+/// feasibility test of [`plan`].
 pub(crate) fn min_plan_bytes(n: usize, bits: usize) -> usize {
     (MIN_WINDOW..=MAX_WINDOW)
         .filter_map(|c| {
-            fixed_bytes(n, num_windows(bits, c))?.checked_add(task_bytes(1, 1usize << (c - 1))?)
+            let nw = num_windows(bits, c);
+            fixed_bytes(n, nw)?.checked_add(loop_bytes(nw, 1, 1usize << (c - 1))?)
         })
         .min()
         .unwrap_or(usize::MAX)

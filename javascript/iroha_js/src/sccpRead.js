@@ -88,10 +88,12 @@ function nil(value, context) {
   if (value !== null) fail(context, "null");
 }
 function hex(bytes) {
-  const pattern = new RegExp(`^[0-9a-f]{${bytes * 2}}$`);
+  // Norito [u8; N] JSON writers (including the bounded Torii writer) emit
+  // uppercase hexadecimal. Preserve those exact native bytes without coercion.
+  const pattern = new RegExp(`^[0-9A-F]{${bytes * 2}}$`);
   return (value, context) => {
     if (typeof value !== "string" || !pattern.test(value)) {
-      fail(context, `${bytes}-byte lowercase hex text`);
+      fail(context, `${bytes}-byte uppercase hex text`);
     }
   };
 }
@@ -260,7 +262,9 @@ function cursor(value, direction, context) {
     if (!/^(?:0|[1-9][0-9]{0,9})$/.test(parts[1])) fail(context, "a canonical outbound cursor");
     u32(BigInt(parts[1]), context);
   } else {
-    hash(parts[1], context);
+    // The native cursor_text formatter uses hex::encode_to_slice, unlike the
+    // Norito fixed-array writer used for message_id and the other JSON fields.
+    if (!/^[0-9a-f]{64}$/.test(parts[1])) fail(context, "a lowercase hex inbound cursor");
   }
 }
 

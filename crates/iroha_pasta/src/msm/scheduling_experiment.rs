@@ -1,8 +1,10 @@
 //! Bounded scheduling diagnostics over the unchanged MSM arithmetic kernels.
 //!
-//! A and its unchanged control use production waves; B changes only window
-//! grouping; C uses the same finer groups with a bounded number of claiming loops.
-//! All arms retain the original reservation. No production switch or phone claim.
+//! A and its unchanged control run the production kernel, which has used
+//! claiming loops instead of waves since 2026-11-08; B changes only window
+//! grouping; C uses the same finer groups with a bounded number of claiming
+//! loops that merge under one mutex. All arms retain the original reservation.
+//! No production switch or phone claim.
 
 use super::*;
 use crate::msm::{MsmError, ScratchReservation, SharedMemoryBudget};
@@ -467,7 +469,6 @@ fn bounded_schedules_handle_point_chunks_and_zero_scalars() {
 
 #[test]
 fn bounded_scheduling_plan_payload_stays_within_original_reservation() {
-    let mut rejected_dynamic_shapes = 0;
     for n in [17, 65, 4096, 65536] {
         for bits in [8, 255] {
             for workers in [1, 4, 8] {
@@ -476,20 +477,16 @@ fn bounded_scheduling_plan_payload_stays_within_original_reservation() {
                         let fine = fine_plan(n, original);
                         assert!(payload_bound(n, fine) <= original.bytes);
                         assert_eq!(fine.bytes, original.bytes);
-                        if dynamic_payload_bound(n, fine) > original.bytes {
-                            // Fine waves still fit; this exact reservation does
-                            // not admit C's mutex. No operation is launched.
-                            rejected_dynamic_shapes += 1;
-                        }
+                        // The production reservation charges every claiming
+                        // loop an accumulator over all windows (at least 96
+                        // bytes plus its slot), so it always covers C's one
+                        // 64-byte mutex.
+                        assert!(dynamic_payload_bound(n, fine) <= original.bytes);
                     }
                 }
             }
         }
     }
-    assert!(
-        rejected_dynamic_shapes > 0,
-        "tight shapes must not get an uncharged mutex"
-    );
     assert_eq!(size_of::<Ep>(), 96);
     assert_eq!(size_of::<Eq>(), 96);
     assert_eq!(size_of::<(usize, Vec<Ep>)>(), size_of::<(usize, Vec<Eq>)>());

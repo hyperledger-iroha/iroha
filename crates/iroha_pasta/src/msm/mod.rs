@@ -13,7 +13,9 @@
 //!   chosen from public protocol data and checked against every scalar before
 //!   planning. It does not choose a width from witness values.
 //! - [`msm_secret_columns_cancellable`]: one secret MSM per column over shared
-//!   bases, run as a bounded number of admitted single-task kernels.
+//!   bases, run as a bounded number of admitted single-task kernels;
+//!   [`msm_secret_bounded_columns_cancellable`] does the same with each column
+//!   planned for its own public bound.
 //! - [`FixedBaseTable`]: precomputed window multiples of a fixed commitment
 //!   key; one bucket set and no doublings per MSM.
 //!
@@ -224,8 +226,52 @@ pub fn msm_secret_columns_cancellable<C: PastaCurve>(
     shared: &SharedMemoryBudget,
     cancellation: Option<&CancellationToken>,
 ) -> Result<Vec<C>, MsmError> {
+    // Secret plans assume full-width scalars, never their values.
+    let columns: Vec<(&[C::ScalarExt], usize)> =
+        columns.iter().map(|column| (*column, 255)).collect();
+    secret_columns::<C>(&columns, bases, budget, shared, cancellation)
+}
+
+/// One secret MSM per bounded column over the same `bases`, returned in column
+/// order.
+///
+/// As [`msm_secret_columns_cancellable`], but each lane runs the single-task plan
+/// for its column's public bound (see [`BoundedSecretScalars`]), so narrow
+/// columns pay for their width only. The one reservation covers `lanes` copies
+/// of the largest of those plans. Plans depend on the public length and bounds,
+/// never on the scalar values. Every result is the exact group element that
+/// [`msm_secret_bounded_cancellable`] returns for its column.
+///
+/// # Errors
+/// As [`msm_secret_columns_cancellable`].
+pub fn msm_secret_bounded_columns_cancellable<C: PastaCurve>(
+    columns: &[BoundedSecretScalars<'_, C::ScalarExt>],
+    bases: &[C::AffineExt],
+    budget: MemoryBudget,
+    shared: &SharedMemoryBudget,
+    cancellation: Option<&CancellationToken>,
+) -> Result<Vec<C>, MsmError> {
+    let columns: Vec<(&[C::ScalarExt], usize)> = columns
+        .iter()
+        .map(|column| (column.scalars, column.bits))
+        .collect();
+    secret_columns::<C>(&columns, bases, budget, shared, cancellation)
+}
+
+/// The shared kernel of the column entry points: `(scalars, public bound)` per
+/// column.
+fn secret_columns<C: PastaCurve>(
+    columns: &[(&[C::ScalarExt], usize)],
+    bases: &[C::AffineExt],
+    budget: MemoryBudget,
+    shared: &SharedMemoryBudget,
+    cancellation: Option<&CancellationToken>,
+) -> Result<Vec<C>, MsmError> {
     CancellationToken::checkpoint(cancellation)?;
-    if let Some(column) = columns.iter().find(|column| column.len() != bases.len()) {
+    if let Some((column, _)) = columns
+        .iter()
+        .find(|(column, _)| column.len() != bases.len())
+    {
         return Err(MsmError::LengthMismatch(crate::LengthMismatch {
             left: column.len(),
             right: bases.len(),
@@ -235,20 +281,38 @@ pub fn msm_secret_columns_cancellable<C: PastaCurve>(
     if u32::try_from(n).is_err() {
         return Err(MsmError::TooLarge { n });
     }
-    let whole_pool = |column: &[C::ScalarExt]| {
-        msm_impl::<C, true>(column, bases, budget, shared, cancellation, None)
+    let whole_pool = |&(column, bits): &(&[C::ScalarExt], usize)| {
+        msm_impl::<C, true>(column, bases, budget, shared, cancellation, Some(bits))
     };
     let wanted = rayon::current_num_threads().min(columns.len());
-    // Secret plans assume full-width scalars, never their values.
+    // One single-task plan per distinct nonzero bound; a zero bound admits only
+    // zeros, whose sum is the identity.
+    let mut plans: Vec<(usize, pippenger::Plan)> = Vec::new();
     let admitted = if wanted < 2 || n <= SMALL_MSM {
         None
     } else {
-        pippenger::plan(n, 255, 1, budget.bytes()).and_then(|plan| {
-            admit_lanes(plan.bytes, wanted, shared).map(|(lanes, scratch)| (plan, lanes, scratch))
-        })
+        let mut feasible = true;
+        for &(_, bits) in columns {
+            if bits == 0 || plans.iter().any(|(planned, _)| *planned == bits) {
+                continue;
+            }
+            match pippenger::plan(n, bits, 1, budget.bytes()) {
+                Some(plan) => plans.push((bits, plan)),
+                None => {
+                    feasible = false;
+                    break;
+                }
+            }
+        }
+        let largest = plans.iter().map(|(_, plan)| plan.bytes).max().unwrap_or(0);
+        if feasible {
+            admit_lanes(largest, wanted, shared)
+        } else {
+            None
+        }
     };
-    let Some((plan, lanes, scratch)) = admitted else {
-        return columns.iter().map(|column| whole_pool(column)).collect();
+    let Some((lanes, scratch)) = admitted else {
+        return columns.iter().map(&whole_pool).collect();
     };
     let head = columns.len() - columns.len() % lanes;
     let next = AtomicUsize::new(0);
@@ -258,10 +322,15 @@ pub fn msm_secret_columns_cancellable<C: PastaCurve>(
             let mut done = Vec::new();
             loop {
                 let index = next.fetch_add(1, Ordering::Relaxed);
-                let Some(column) = columns[..head].get(index) else {
+                let Some(&(column, bits)) = columns[..head].get(index) else {
                     break;
                 };
-                let sum = run_plan::<C, true>(column, bases, plan, cancellation);
+                let sum = match plans.iter().find(|(planned, _)| *planned == bits) {
+                    Some(&(_, plan)) => run_plan::<C, true>(column, bases, plan, cancellation),
+                    None => CancellationToken::checkpoint(cancellation)
+                        .map(|()| C::identity())
+                        .map_err(MsmError::from),
+                };
                 let failed = sum.is_err();
                 done.push((index, sum));
                 if failed {
@@ -557,6 +626,14 @@ fn planned_msm<C: PastaCurve, const SECRET: bool>(
 
 /// The kernel of [`planned_msm`], for scratch its caller already holds. A plan
 /// with one concurrent task runs entirely on the calling thread.
+///
+/// `plan.concurrency` claiming loops take the next task until none is left, so
+/// at most that many tasks hold buckets at once (the planned bound) and a fast
+/// worker takes more tasks than a slow one. No loop waits for a whole group of
+/// tasks to finish: on cores of unequal speed the slowest core no longer sets
+/// the pace of every round. Each loop adds its tasks' window sums into its own
+/// accumulator; group addition is exact, so the result does not depend on
+/// which loop ran which task.
 fn run_plan<C: PastaCurve, const SECRET: bool>(
     scalars: &[C::ScalarExt],
     bases: &[C::AffineExt],
@@ -572,35 +649,51 @@ fn run_plan<C: PastaCurve, const SECRET: bool>(
         pippenger::Digits::new_cancellable(scalars, plan.c, plan.nw, cancellation)?
     };
     let tasks = plan.groups * plan.chunks;
-    // Waves of at most `plan.concurrency` tasks bound the live bucket memory.
-    let mut windows = Zeroizing::new(vec![C::identity(); plan.nw]);
-    for start in (0..tasks).step_by(plan.concurrency) {
-        CancellationToken::checkpoint(cancellation)?;
-        let mut results: Vec<(usize, Zeroizing<Vec<C>>)> = (start
-            ..(start + plan.concurrency).min(tasks))
-            .into_par_iter()
-            .map(|task| {
-                pippenger::run_task_cancellable::<C, SECRET>(
-                    bases,
-                    &skip,
-                    &digits,
-                    &plan,
-                    task / plan.chunks,
-                    task % plan.chunks,
-                    cancellation,
-                )
-            })
-            .collect();
-        CancellationToken::checkpoint(cancellation)?;
-        for (w0, sums) in &mut results {
+    let next = AtomicUsize::new(0);
+    let claim = || {
+        let mut sums_by_window = Zeroizing::new(vec![C::identity(); plan.nw]);
+        while CancellationToken::checkpoint(cancellation).is_ok() {
+            let task = next.fetch_add(1, Ordering::Relaxed);
+            if task >= tasks {
+                break;
+            }
+            // A cancelled task returns no sums; the checkpoint below reports it.
+            let (w0, sums) = pippenger::run_task_cancellable::<C, SECRET>(
+                bases,
+                &skip,
+                &digits,
+                &plan,
+                task / plan.chunks,
+                task % plan.chunks,
+                cancellation,
+            );
             for (k, s) in sums.iter().enumerate() {
-                windows[*w0 + k] += s;
+                sums_by_window[w0 + k] += s;
             }
-            if SECRET {
-                sums.zeroize();
-            }
+            // Dropping `sums` wipes the task's returned window sums.
+        }
+        sums_by_window
+    };
+    let loops = plan.concurrency.min(tasks);
+    // Production plans admit at least one live task.
+    assert!(
+        loops > 0,
+        "a planned kernel runs at least one claiming loop"
+    );
+    let partial: Vec<Zeroizing<Vec<C>>> = if loops == 1 {
+        vec![claim()]
+    } else {
+        (0..loops).into_par_iter().map(|_| claim()).collect()
+    };
+    CancellationToken::checkpoint(cancellation)?;
+    let mut windows = Zeroizing::new(vec![C::identity(); plan.nw]);
+    for sums in &partial {
+        for (window, s) in windows.iter_mut().zip(sums.iter()) {
+            *window += s;
         }
     }
+    // Dropping `partial` wipes every loop's accumulator.
+    drop(partial);
     let result = pippenger::combine(&windows, plan.c);
     if SECRET {
         windows.zeroize();

@@ -1,6 +1,6 @@
 /** Exact native JSON for the current public SCCP metadata routes. These records do not verify proofs. */
 export type SccpUnsignedIntegerV1 = number | bigint;
-/** Fixed-size native byte arrays are lowercase hex text without a prefix. */
+/** Fixed-size native byte arrays are uppercase hex text without a prefix. */
 export type SccpHexV1 = string;
 export type SccpExternalNetworkKeyV1 = "ethereum-mainnet" | "bsc-mainnet" | "ton-mainnet";
 export interface SccpExternalNetworkV1 {
@@ -12,7 +12,7 @@ export interface SccpRecentMessagesOptionsV1 extends SccpPublicReadOptionsV1 {
   /** Defaults to outbound. */
   direction?: "outbound" | "inbound";
   network?: SccpExternalNetworkKeyV1;
-  /** Native direction-specific next_before cursor returned by the preceding page. */
+  /** Native next_before cursor; inbound message-id suffixes use lowercase hex. */
   before?: string;
   /** Integer in 1..50; defaults to 50. */
   limit?: number;
