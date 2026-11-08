@@ -723,3 +723,427 @@ fn qualification_inventory_is_bounded_and_tracks_every_original_network_source()
     assert_eq!(qualification.kura_tip_height(), second.height());
     assert_eq!(qualification.lag_blocks(), 0);
 }
+
+// Capture this chain's tip, commit `times` more blocks, and capture each of them.
+fn capture_through(
+    archive: &ProviderIngestFinalizedArchiveV1,
+    chain: &mut CertifiedTestChain,
+    times: &[u64],
+) {
+    archive
+        .capture_certified_view(&chain.state().view(), chain.kura())
+        .unwrap();
+    for time in times {
+        chain.commit_at(*time, Vec::new());
+        archive
+            .capture_certified_view(&chain.state().view(), chain.kura())
+            .unwrap();
+    }
+}
+
+#[test]
+fn certified_capture_resumes_and_publishes_the_same_bytes_as_a_fresh_walk() {
+    let directory = physical_tempdir().unwrap();
+    let fresh_directory = physical_tempdir().unwrap();
+    let fresh_root = archive_root(&fresh_directory);
+    let mut chain = chain();
+    let archive =
+        ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds()).unwrap();
+    for time in [None, Some(2_000), Some(3_000), Some(4_000), Some(5_000)] {
+        if let Some(time) = time {
+            chain.commit_at(time, Vec::new());
+        }
+        archive
+            .capture_certified_view(&chain.state().view(), chain.kura())
+            .unwrap();
+        // Reopening discards every retained prefix, so this one walks from signed genesis.
+        ProviderIngestFinalizedArchiveV1::try_open(&fresh_root, bounds())
+            .unwrap()
+            .capture_certified_view(&chain.state().view(), chain.kura())
+            .unwrap();
+    }
+    assert_eq!(
+        archive.authentication.retained_heights_for_testing(),
+        [4, 5]
+    );
+    let fresh = ProviderIngestFinalizedArchiveV1::try_open(&fresh_root, bounds()).unwrap();
+    assert_eq!(
+        archive_namespace_snapshot(&archive.records),
+        archive_namespace_snapshot(&fresh.records)
+    );
+}
+
+#[test]
+fn certified_capture_survives_a_failed_publication_without_repeating_the_walk() {
+    let directory = physical_tempdir().unwrap();
+    let mut chain = chain();
+    let archive =
+        ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds()).unwrap();
+    capture_through(&archive, &mut chain, &[2_000, 3_000]);
+    assert_eq!(
+        archive.authentication.retained_heights_for_testing(),
+        [2, 3]
+    );
+    chain.commit_at(4_000, Vec::new());
+    let reader = archive.read_index().unwrap();
+    assert!(matches!(
+        archive.capture_certified_view(&chain.state().view(), chain.kura()),
+        Err(ProviderIngestFinalizedArchiveErrorV1::IndexBusy { .. })
+    ));
+    drop(reader);
+    assert_eq!(
+        archive.authentication.retained_heights_for_testing(),
+        [3, 4]
+    );
+    // Height 2 is now outside every retained point. A retry that walked would reject it.
+    chain.corrupt_local_quorum_for_test(2, Signers::BelowQuorum);
+    assert_eq!(
+        archive
+            .capture_certified_view(&chain.state().view(), chain.kura())
+            .unwrap(),
+        ProviderIngestFinalizedArchiveInsertOutcomeV1::Inserted
+    );
+    assert_eq!(
+        archive
+            .capture_certified_view(&chain.state().view(), chain.kura())
+            .unwrap(),
+        ProviderIngestFinalizedArchiveInsertOutcomeV1::ExactReplay,
+        "a same-height retry verifies again from the retained predecessor"
+    );
+}
+
+#[test]
+fn qualification_audit_finds_a_changed_history_frame_that_capture_does_not_read() {
+    let directory = physical_tempdir().unwrap();
+    let mut chain = chain();
+    let archive =
+        ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds()).unwrap();
+    capture_through(&archive, &mut chain, &[2_000, 3_000, 4_000]);
+    let first = archive
+        .qualify_against_certified_tip(&chain.state().view(), chain.kura(), 0)
+        .unwrap();
+    assert_eq!(first.archive_tip().height, 4);
+
+    chain.corrupt_local_quorum_for_test(2, Signers::BelowQuorum);
+    chain.commit_at(5_000, Vec::new());
+    assert_eq!(
+        archive
+            .capture_certified_view(&chain.state().view(), chain.kura())
+            .unwrap(),
+        ProviderIngestFinalizedArchiveInsertOutcomeV1::Inserted
+    );
+    let proved = archive
+        .qualify_against_certified_tip(&chain.state().view(), chain.kura(), 0)
+        .unwrap();
+    assert_eq!(proved.archive_tip().height, 5);
+
+    archive.authentication.expire_audit_for_testing();
+    for _ in 0..2 {
+        assert!(
+            archive
+                .qualify_against_certified_tip(&chain.state().view(), chain.kura(), 0)
+                .is_err(),
+            "a due audit reaches the frame, then readers keep refusing from a fresh walk"
+        );
+    }
+    // Readers fail closed, but commits do not stop: capture still resumes above the fault.
+    chain.commit_at(6_000, Vec::new());
+    assert_eq!(
+        archive
+            .capture_certified_view(&chain.state().view(), chain.kura())
+            .unwrap(),
+        ProviderIngestFinalizedArchiveInsertOutcomeV1::Inserted
+    );
+}
+
+#[test]
+fn qualification_on_a_stale_view_retries_without_retiring_capture_points() {
+    let directory = physical_tempdir().unwrap();
+    let mut chain = chain();
+    let archive =
+        ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds()).unwrap();
+    capture_through(&archive, &mut chain, &[2_000, 3_000]);
+    archive
+        .qualify_against_certified_tip(&chain.state().view(), chain.kura(), 0)
+        .unwrap();
+    let state = Arc::clone(chain.state());
+    let stale = state.view();
+    chain.commit_at(4_000, Vec::new());
+    archive
+        .capture_certified_view(&state.view(), state.kura())
+        .unwrap();
+    assert_eq!(
+        archive.authentication.retained_heights_for_testing(),
+        [3, 4]
+    );
+    assert!(matches!(
+        archive.qualify_against_certified_tip(&stale, state.kura(), 8),
+        Err(ProviderIngestFinalizedArchiveErrorV1::QualificationBoundaryChanged { .. })
+    ));
+    assert_eq!(
+        archive.authentication.retained_heights_for_testing(),
+        [3, 4],
+        "a reader that lost a race must not push the next commit back to a walk"
+    );
+    drop(stale);
+    let current = archive
+        .qualify_against_certified_tip(&state.view(), state.kura(), 0)
+        .unwrap();
+    assert_eq!(current.archive_tip().height, 4);
+}
+
+#[test]
+fn a_full_walk_overtaken_by_captures_still_establishes_coverage() {
+    let directory = physical_tempdir().unwrap();
+    let mut chain = chain();
+    let archive =
+        ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds()).unwrap();
+    capture_through(&archive, &mut chain, &[2_000, 3_000]);
+    let state = Arc::clone(chain.state());
+    let view = state.view();
+    let result =
+        archive.qualify_against_certified_tip_observed(&view, state.kura(), 8, |released| {
+            assert!(released);
+            // A commit and its capture land after selection, as they do every few seconds
+            // while a long walk runs.
+            chain.commit_at(4_000, Vec::new());
+            archive
+                .capture_certified_view(&state.view(), state.kura())
+                .map(drop)
+        });
+    assert!(matches!(
+        result,
+        Err(ProviderIngestFinalizedArchiveErrorV1::QualificationBoundaryChanged { .. })
+    ));
+    drop(view);
+    // Coverage reached the capture's height, so this does not walk: a frame below every
+    // retained point has changed, and a walk would reject it.
+    chain.corrupt_local_quorum_for_test(2, Signers::BelowQuorum);
+    let current = archive
+        .qualify_against_certified_tip(&state.view(), state.kura(), 0)
+        .unwrap();
+    assert_eq!(current.archive_tip().height, 4);
+}
+
+#[test]
+fn qualification_rechecks_the_retained_frame_of_proved_coverage() {
+    let directory = physical_tempdir().unwrap();
+    let mut chain = chain();
+    let archive =
+        ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds()).unwrap();
+    capture_through(&archive, &mut chain, &[2_000, 3_000]);
+    archive
+        .qualify_against_certified_tip(&chain.state().view(), chain.kura(), 0)
+        .unwrap();
+    chain.commit_at(4_000, Vec::new());
+    chain.corrupt_local_quorum_for_test(3, Signers::BelowQuorum);
+    assert!(
+        archive
+            .qualify_against_certified_tip(&chain.state().view(), chain.kura(), 1)
+            .is_err(),
+        "the archive tip's changed certificate is visible on the very next tick"
+    );
+    assert_eq!(
+        archive.authentication.retained_heights_for_testing(),
+        [2, 3],
+        "a reader's recheck retires nothing"
+    );
+    assert!(
+        archive
+            .capture_certified_view(&chain.state().view(), chain.kura())
+            .is_err(),
+        "the commit path's own recheck refuses the changed frame"
+    );
+    assert!(
+        archive
+            .authentication
+            .retained_heights_for_testing()
+            .is_empty()
+    );
+}
+
+#[test]
+fn reopening_lets_the_next_commit_continue_from_the_opening_walk() {
+    let directory = physical_tempdir().unwrap();
+    let root = archive_root(&directory);
+    let mut chain = chain();
+    let archive = ProviderIngestFinalizedArchiveV1::try_open(&root, bounds()).unwrap();
+    capture_through(&archive, &mut chain, &[2_000, 3_000]);
+    drop(archive);
+    let reopened = ProviderIngestFinalizedArchiveV1::try_open(&root, bounds()).unwrap();
+    let older = {
+        let index = reopened.read_index().unwrap();
+        let tip = index.by_height.get(&(chain.network_id(), 3)).unwrap();
+        assert!(index.tip_walk(tip).is_some());
+        index
+            .by_height
+            .get(&(chain.network_id(), 2))
+            .unwrap()
+            .path
+            .clone()
+    };
+    // A record below the tip changes after opening. Only a whole-history insertion reads it.
+    fs::write(&older, [0_u8]).unwrap();
+    chain.commit_at(4_000, Vec::new());
+    assert_eq!(
+        reopened
+            .capture_certified_view(&chain.state().view(), chain.kura())
+            .unwrap(),
+        ProviderIngestFinalizedArchiveInsertOutcomeV1::Inserted
+    );
+}
+
+#[test]
+fn archive_insertion_reads_only_the_tip_record_and_the_audit_reads_the_rest() {
+    let directory = physical_tempdir().unwrap();
+    let root = archive_root(&directory);
+    let mut chain = chain();
+    let archive = ProviderIngestFinalizedArchiveV1::try_open(&root, bounds()).unwrap();
+    capture_through(&archive, &mut chain, &[2_000, 3_000]);
+    archive
+        .qualify_against_certified_tip(&chain.state().view(), chain.kura(), 0)
+        .unwrap();
+    let older = archive
+        .read_index()
+        .unwrap()
+        .by_height
+        .get(&(chain.network_id(), 2))
+        .unwrap()
+        .path
+        .clone();
+    let original = fs::read(&older).unwrap();
+    fs::write(&older, [0_u8]).unwrap();
+
+    chain.commit_at(4_000, Vec::new());
+    assert_eq!(
+        archive
+            .capture_certified_view(&chain.state().view(), chain.kura())
+            .unwrap(),
+        ProviderIngestFinalizedArchiveInsertOutcomeV1::Inserted
+    );
+    archive
+        .qualify_against_certified_tip(&chain.state().view(), chain.kura(), 0)
+        .unwrap();
+
+    archive.authentication.expire_audit_for_testing();
+    assert!(matches!(
+        archive.qualify_against_certified_tip(&chain.state().view(), chain.kura(), 0),
+        Err(ProviderIngestFinalizedArchiveErrorV1::InvalidStorage { .. })
+    ));
+    drop(archive);
+    assert!(
+        ProviderIngestFinalizedArchiveV1::try_open(&root, bounds()).is_err(),
+        "reopening reads every retained record"
+    );
+    fs::write(&older, original).unwrap();
+    let reopened = ProviderIngestFinalizedArchiveV1::try_open(&root, bounds()).unwrap();
+    assert_eq!(
+        reopened
+            .qualify_against_certified_tip(&chain.state().view(), chain.kura(), 0)
+            .unwrap()
+            .archive_tip()
+            .height,
+        4
+    );
+}
+
+#[test]
+fn archive_insertion_still_refuses_a_changed_tip_record() {
+    let directory = physical_tempdir().unwrap();
+    let mut chain = chain();
+    let archive =
+        ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds()).unwrap();
+    capture_through(&archive, &mut chain, &[2_000]);
+    let tip = archive
+        .read_index()
+        .unwrap()
+        .by_height
+        .get(&(chain.network_id(), 2))
+        .unwrap()
+        .path
+        .clone();
+    fs::write(&tip, [0_u8]).unwrap();
+    chain.commit_at(3_000, Vec::new());
+    assert!(
+        archive
+            .capture_certified_view(&chain.state().view(), chain.kura())
+            .is_err()
+    );
+}
+
+#[test]
+fn archive_tip_walk_matches_the_complete_walk_after_each_insertion() {
+    let directory = physical_tempdir().unwrap();
+    let archive =
+        ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds()).unwrap();
+    let mut current = projection(7);
+    let network_id = current.key.network_id;
+    archive.insert(current.clone()).unwrap();
+    for height in 8..12 {
+        current = advance_projection(&current, height);
+        archive.insert(current.clone()).unwrap();
+        let index = archive.read_index().unwrap();
+        let mut complete = ProviderCoverageWalkV1::start(None).unwrap();
+        for (_, entry) in &index.by_height {
+            complete
+                .step(&index, network_id, entry, false, bounds())
+                .unwrap();
+        }
+        assert_eq!(
+            format!("{:?}", index.tip_walks.get(&network_id).unwrap()),
+            format!("{complete:?}"),
+            "one retained step equals replaying every record"
+        );
+        assert_eq!(
+            tip_or_reconstructed_projection(&index, &current.key, bounds()).unwrap(),
+            reconstruct_projection(&index, &current.key, bounds()).unwrap()
+        );
+    }
+}
+
+#[test]
+fn archive_tip_walk_is_retired_by_compaction_of_its_virtual_base() {
+    let directory = physical_tempdir().unwrap();
+    let mut chain = chain();
+    let archive =
+        ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds()).unwrap();
+    capture_through(&archive, &mut chain, &[2_000]);
+    let view = chain.state().view();
+    let key = authenticate_capture_view(&view, chain.kura()).unwrap();
+    let fence = ProviderIngestFinalizedArchiveRetentionFenceV1::try_new(
+        key,
+        *chain.committed(2).id().0.as_ref(),
+        archive.health_generation().unwrap(),
+    )
+    .unwrap();
+    let proposal = archive
+        .prepare_certified_compaction(&fence, &view, chain.kura())
+        .unwrap();
+    let authority = TestRetentionAuthority::new();
+    archive
+        .approve_and_install_certified_compaction(
+            &proposal,
+            &view,
+            chain.kura(),
+            &authority.binding(),
+            &authority,
+        )
+        .unwrap();
+    drop(view);
+    chain.commit_at(3_000, Vec::new());
+    assert_eq!(
+        archive
+            .capture_certified_view(&chain.state().view(), chain.kura())
+            .unwrap(),
+        ProviderIngestFinalizedArchiveInsertOutcomeV1::Inserted
+    );
+    chain.commit_at(4_000, Vec::new());
+    archive
+        .capture_certified_view(&chain.state().view(), chain.kura())
+        .unwrap();
+    let qualification = archive
+        .qualify_against_certified_tip(&chain.state().view(), chain.kura(), 0)
+        .unwrap();
+    assert_eq!(qualification.activation_floor(), &key);
+    assert_eq!(qualification.archive_tip().height, 4);
+}

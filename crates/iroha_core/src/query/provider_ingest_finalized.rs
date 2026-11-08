@@ -24,7 +24,10 @@ type OrderProjection<'a> = (
     BTreeSet<ProviderId>,
 );
 
-use super::archive_finality::{ArchiveFinalityError, CertifiedArchiveView};
+use super::archive_finality::{
+    ArchiveAuthentication, ArchiveContentIdentity, ArchiveFinalityError, CertifiedArchiveView,
+    RetainedPrefixCheck,
+};
 use super::archive_index::{
     ArchiveIndexLock, ArchiveIndexLockError, ArchiveIndexReadGuard, ArchiveIndexWriteGuard,
 };
@@ -1365,6 +1368,53 @@ struct ArchiveIndexV1 {
     virtual_bases: BTreeMap<NetworkId, ArchiveVirtualBaseV1>,
     total_bytes: u64,
     generation: u64,
+    // The completed coverage walk at each network's tip, so one insertion validates only
+    // its own successor. Absent or stale entries select the complete walk.
+    tip_walks: BTreeMap<NetworkId, ProviderCoverageWalkV1>,
+}
+impl ArchiveIndexV1 {
+    // A walk serves only the exact retained tip and virtual base that it covered.
+    fn tip_walk(&self, tip: &ArchiveRecordEntryV1) -> Option<&ProviderCoverageWalkV1> {
+        let network_id = tip.record.material.key.network_id;
+        self.tip_walks.get(&network_id).filter(|walk| {
+            walk.previous_key.as_ref() == Some(&tip.record.material.key)
+                && walk.previous_digest == Some(tip.record.record_digest)
+                && walk.base_digest
+                    == self
+                        .virtual_bases
+                        .get(&network_id)
+                        .map(|base| base.checkpoint.checkpoint_digest)
+        })
+    }
+
+    // The newest retained anchor, including a virtual base with no records above it.
+    fn tip_height(&self, network_id: &NetworkId) -> Option<u64> {
+        self.by_height
+            .range((
+                std::ops::Bound::Included((*network_id, 0)),
+                std::ops::Bound::Included((*network_id, u64::MAX)),
+            ))
+            .next_back()
+            .map_or_else(
+                || {
+                    self.virtual_bases
+                        .get(network_id)
+                        .map(|base| base.checkpoint.material.retention_floor.height)
+                },
+                |((_, height), _)| Some(*height),
+            )
+    }
+
+    fn content_identity(&self, network_id: &NetworkId) -> ArchiveContentIdentity {
+        ArchiveContentIdentity {
+            network_id: *network_id,
+            generation: self.generation,
+            base: self
+                .virtual_bases
+                .get(network_id)
+                .map(|base| base.checkpoint.checkpoint_digest),
+        }
+    }
 }
 // A short-lived source inventory, not an authenticated archive or cached result.
 // Paths are copied fallibly; variable provider/order/retention DTOs are never cloned.
@@ -1450,25 +1500,38 @@ impl QualificationInventory {
         &self,
         network_id: &NetworkId,
         certified: &CertifiedArchiveView<'_, V>,
+        proved: bool,
     ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
         if let Some(base) = self
             .bases
             .iter()
             .find(|base| &base.network_id == network_id)
         {
-            authenticate_qualification_base(
-                &base.key,
-                base.certified_block_id,
-                network_id,
-                certified,
-            )?;
+            if proved {
+                certified
+                    .require_journal_anchor(base.key.height, &base.key.block_hash)
+                    .map_err(certified_authentication_error)?;
+            } else {
+                authenticate_qualification_base(
+                    &base.key,
+                    base.certified_block_id,
+                    network_id,
+                    certified,
+                )?;
+            }
         }
         for entry in self
             .records
             .iter()
             .filter(|entry| &entry.subject.0 == network_id)
         {
-            authenticate_archive_anchor(&entry.key, network_id, certified)?;
+            if proved {
+                certified
+                    .require_journal_anchor(entry.key.height, &entry.key.block_hash)
+                    .map_err(certified_authentication_error)?;
+            } else {
+                authenticate_archive_anchor(&entry.key, network_id, certified)?;
+            }
         }
         Ok(())
     }
@@ -1513,6 +1576,13 @@ impl QualificationInventory {
         }
         Ok(())
     }
+}
+// Whether a closing check found only that the source advanced, never that it is damaged.
+fn only_moved(exit: &Result<(), ProviderIngestFinalizedArchiveErrorV1>) -> bool {
+    matches!(
+        exit,
+        Ok(()) | Err(ProviderIngestFinalizedArchiveErrorV1::QualificationBoundaryChanged { .. })
+    )
 }
 fn qualification_allocation_error() -> ProviderIngestFinalizedArchiveErrorV1 {
     ProviderIngestFinalizedArchiveErrorV1::ProjectionAllocation {
@@ -1560,6 +1630,8 @@ pub struct ProviderIngestFinalizedArchiveV1 {
     native: NativeArchive,
     writer_lock: fs::File,
     index: ArchiveIndexLock<ArchiveIndexV1>,
+    // Process-local: what this open archive has proved against certified history.
+    authentication: ArchiveAuthentication,
 }
 struct PreparedProviderRecord {
     entry: ArchiveRecordEntryV1,
@@ -1571,6 +1643,8 @@ struct PreparedProviderRecord {
 struct ProviderInsertionPlan {
     key: ProviderIngestFinalizedArchiveKeyV1,
     record: Option<PreparedProviderRecord>,
+    // The coverage walk at this record, installed with the record itself.
+    next_walk: Option<ProviderCoverageWalkV1>,
 }
 impl ProviderInsertionPlan {
     fn persist(
@@ -1582,7 +1656,7 @@ impl ProviderInsertionPlan {
         let Some(prepared) = &self.record else {
             archive.verify_storage_boundaries()?;
             // Reauthenticate existing immutable files; this is storage integrity, not admission.
-            reconstruct_projection(index, &self.key, archive.bounds)?;
+            tip_or_reconstructed_projection(index, &self.key, archive.bounds)?;
             return Ok(ProviderIngestFinalizedArchiveInsertOutcomeV1::ExactReplay);
         };
         archive.verify_storage_boundaries()?;
@@ -1610,6 +1684,14 @@ impl ProviderInsertionPlan {
         );
         index.total_bytes = prepared.total_bytes;
         index.generation = prepared.generation;
+        match self.next_walk.take() {
+            Some(walk) => {
+                index.tip_walks.insert(self.key.network_id, walk);
+            }
+            None => {
+                index.tip_walks.remove(&self.key.network_id);
+            }
+        }
         self.record = None;
         Ok(ProviderIngestFinalizedArchiveInsertOutcomeV1::Inserted)
     }
@@ -1643,7 +1725,7 @@ impl ProviderIngestFinalizedArchiveV1 {
         {
             let mut index = archive.write_index()?;
             refresh_archive_accounting(&mut index, bounds)?;
-            validate_index_coverage(&index, bounds)?;
+            install_validated_tip_walks(&mut index, bounds)?;
         }
         archive.verify_storage_boundaries()?;
         Ok(archive)
@@ -1781,6 +1863,7 @@ impl ProviderIngestFinalizedArchiveV1 {
             #[cfg(windows)]
             native,
             index: ArchiveIndexLock::new(index),
+            authentication: ArchiveAuthentication::default(),
         };
         archive.verify_storage_boundaries()?;
         Ok((archive, checkpoint_candidates))
@@ -1806,7 +1889,7 @@ impl ProviderIngestFinalizedArchiveV1 {
             }
             let mut index = self.write_index()?;
             refresh_archive_accounting(&mut index, self.bounds)?;
-            validate_index_coverage(&index, self.bounds)?;
+            install_validated_tip_walks(&mut index, self.bounds)?;
             return Ok(());
         };
         validate_retention_approval_record(&approval, binding, network_id)?;
@@ -1844,7 +1927,7 @@ impl ProviderIngestFinalizedArchiveV1 {
                 &mut index,
             )?;
             refresh_archive_accounting(&mut index, self.bounds)?;
-            validate_index_coverage(&index, self.bounds)?;
+            install_validated_tip_walks(&mut index, self.bounds)?;
             return Ok(());
         }
         if checkpoint_candidates.is_empty() {
@@ -1852,7 +1935,7 @@ impl ProviderIngestFinalizedArchiveV1 {
                 return Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityRollback);
             }
             refresh_archive_accounting(&mut index, self.bounds)?;
-            validate_index_coverage(&index, self.bounds)?;
+            install_validated_tip_walks(&mut index, self.bounds)?;
         } else {
             install_virtual_bases(&mut index, checkpoint_candidates, self.bounds)?;
             if index
@@ -1875,7 +1958,7 @@ impl ProviderIngestFinalizedArchiveV1 {
                 &mut index,
             )?;
             refresh_archive_accounting(&mut index, self.bounds)?;
-            validate_index_coverage(&index, self.bounds)?;
+            install_validated_tip_walks(&mut index, self.bounds)?;
         }
         authenticate_retention_prefix(
             &index,
@@ -2048,11 +2131,15 @@ impl ProviderIngestFinalizedArchiveV1 {
     }
     /// Qualify contiguous immutable coverage against Kura's exact durable tip.
     ///
-    /// Every represented anchor is reauthenticated against its result-bearing
-    /// block and current commit certificate. The archive and Kura generations are
-    /// reread after validation so concurrent boundary changes fail closed. Without an active
-    /// Norito budget, only certified ancestry verification releases the physical index reader;
-    /// a bounded all-network source inventory also detects same-tip retention changes.
+    /// The first qualification of an open archive reauthenticates every represented anchor
+    /// against its result-bearing block and current commit certificate, walking from signed
+    /// genesis. After that this archive's captures keep those anchors proved, so a call
+    /// rechecks the retained tip frame, the tip record and every anchor's hash in the durable
+    /// journal, and advances the periodic audit by one bounded slice. The archive and Kura
+    /// generations are reread after validation so concurrent boundary changes fail closed.
+    /// Without an active Norito budget, only certified ancestry verification releases the
+    /// physical index reader; a bounded all-network source inventory also detects same-tip
+    /// retention changes. An active Norito budget always takes the complete walk.
     ///
     /// # Errors
     ///
@@ -2113,16 +2200,33 @@ impl ProviderIngestFinalizedArchiveV1 {
     ) -> Result<ProviderIngestFinalizedArchiveQualificationV1, ProviderIngestFinalizedArchiveErrorV1>
     {
         let network_id = state_ro.network_id();
-        let certified =
-            CertifiedArchiveView::new(state_ro, kura).map_err(certified_authentication_error)?;
+        let certified = CertifiedArchiveView::resuming(state_ro, kura, &self.authentication)
+            .map_err(certified_authentication_error)?;
         if network_id.as_bytes()[31] & 1 != 1 {
             return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
                 reason: "network id must be an exact genesis-derived identity",
             });
         }
+        let limited = norito::core::decode_limits_active();
+        // Recheck proved coverage's retained frame before taking the reader that capture needs.
+        let proved = if limited {
+            None
+        } else {
+            self.confirmed_coverage(network_id, &certified)?
+        };
         let generation = self.health_generation()?;
         let index = self.read_index()?;
-        if norito::core::decode_limits_active() {
+        let identity = index.content_identity(network_id);
+        if proved.is_some_and(|proved| proved != identity) {
+            // A capture landed since the recheck, and this view predates it. Retrying with a
+            // fresh view costs a few reads; falling through would walk the whole chain.
+            return Err(
+                ProviderIngestFinalizedArchiveErrorV1::QualificationBoundaryChanged {
+                    boundary: "archive",
+                },
+            );
+        }
+        if limited {
             // Preserve the caller's physical read/decode order and early refusals.
             #[cfg(any(test, feature = "iroha-core-tests"))]
             after_selection(false)?;
@@ -2133,6 +2237,7 @@ impl ProviderIngestFinalizedArchiveV1 {
                 maximum_kura_tip_lag_blocks,
                 generation,
                 true,
+                false,
             )?;
             certified
                 .verify_unchanged()
@@ -2147,10 +2252,15 @@ impl ProviderIngestFinalizedArchiveV1 {
             }
             return Ok(qualification);
         }
+        let proved = proved.is_some();
+        if !proved {
+            certified.audit_from_genesis();
+        }
 
         // This is only a bounded inventory of the exact original source identities. It
-        // contains no decoded projections or validation verdict. All canonical physical
-        // reads and complete cross-network coverage checks still run under this reader.
+        // contains no decoded projections or validation verdict. Canonical physical reads and
+        // complete cross-network coverage checks of anything not yet proved run under this
+        // reader; the periodic audit rereads proved history's frames and this network's records.
         let prepared = QualificationInventory::capture(&index, self.bounds).map(|inventory| {
             let selection = self.qualify_index(
                 &index,
@@ -2159,6 +2269,7 @@ impl ProviderIngestFinalizedArchiveV1 {
                 maximum_kura_tip_lag_blocks,
                 generation,
                 false,
+                proved,
             );
             (inventory, selection)
         });
@@ -2170,7 +2281,7 @@ impl ProviderIngestFinalizedArchiveV1 {
                 #[cfg(not(any(test, feature = "iroha-core-tests")))]
                 let observed: Result<(), ProviderIngestFinalizedArchiveErrorV1> = Ok(());
                 let result = observed.and(selection).and_then(|qualification| {
-                    inventory.authenticate(network_id, &certified)?;
+                    inventory.authenticate(network_id, &certified, proved)?;
                     Ok(qualification)
                 });
                 (Some(inventory), result)
@@ -2197,13 +2308,107 @@ impl ProviderIngestFinalizedArchiveV1 {
         let certified_exit = certified
             .verify_unchanged()
             .map_err(certified_authentication_error);
+        if !proved
+            && let Ok(qualification) = &result
+            && only_moved(&archive_exit)
+            && only_moved(&certified_exit)
+        {
+            // The whole selected history just passed from signed genesis. That stands even if
+            // captures or commits advanced the sources meanwhile, and without this a walk could
+            // never finish ahead of steady traffic.
+            certified.retain_verified_prefix();
+            self.authentication
+                .record_audit(identity, qualification.archive_tip().height);
+        }
         archive_exit?;
         certified_exit?;
-        result
+        let qualification = result?;
+        if proved {
+            self.advance_audit(network_id, &certified, qualification.archive_tip().height)?;
+        }
+        Ok(qualification)
+    }
+
+    // Proved coverage of the current tip whose retained frame still holds.
+    //
+    // Identity and coverage are read under one reader, because captures extend coverage under
+    // the writer. A view that predates a concurrent capture retries; only an actual change
+    // walks from signed genesis, which then owns the diagnosis.
+    fn confirmed_coverage<V: StateReadOnly + ?Sized>(
+        &self,
+        network_id: &NetworkId,
+        certified: &CertifiedArchiveView<'_, V>,
+    ) -> Result<Option<ArchiveContentIdentity>, ProviderIngestFinalizedArchiveErrorV1> {
+        let (identity, through) = {
+            let index = self.read_index()?;
+            let identity = index.content_identity(network_id);
+            let through = self
+                .authentication
+                .covered_through(&identity)
+                .filter(|through| index.tip_height(network_id) == Some(*through));
+            (identity, through)
+        };
+        let Some(through) = through else {
+            return Ok(None);
+        };
+        match certified
+            .confirm_retained(through)
+            .map_err(certified_authentication_error)?
+        {
+            RetainedPrefixCheck::Confirmed => Ok(Some(identity)),
+            RetainedPrefixCheck::Stale => Err(
+                ProviderIngestFinalizedArchiveErrorV1::QualificationBoundaryChanged {
+                    boundary: "archive",
+                },
+            ),
+            RetainedPrefixCheck::Missing | RetainedPrefixCheck::Changed => Ok(None),
+        }
+    }
+
+    // One bounded slice of the periodic audit, on this reader's thread and outside every
+    // lock. A fault fails this reader and every later one until a fresh walk passes, while
+    // commit capture keeps its retained prefix.
+    fn advance_audit<V: StateReadOnly + ?Sized>(
+        &self,
+        network_id: &NetworkId,
+        certified: &CertifiedArchiveView<'_, V>,
+        through: u64,
+    ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
+        let slice = match certified.audit_next_slice(&self.authentication, through) {
+            Ok(slice) => slice,
+            Err(ArchiveFinalityError::Deferred(_)) => return Ok(()),
+            Err(error) => {
+                self.authentication.forget_coverage();
+                return Err(certified_authentication_error(error));
+            }
+        };
+        let Some((after, end)) = slice else {
+            return Ok(());
+        };
+        let entries = self
+            .read_index()?
+            .by_height
+            .range((
+                std::ops::Bound::Excluded((*network_id, after)),
+                std::ops::Bound::Included((*network_id, end)),
+            ))
+            .map(|(_, entry)| entry.clone())
+            .collect::<Vec<_>>();
+        for entry in &entries {
+            verify_record_entry(entry, self.bounds).inspect_err(|_| {
+                self.authentication.forget_coverage();
+            })?;
+        }
+        Ok(())
     }
 
     // One canonical physical/coverage recipe. Only certificate placement changes;
     // caller-active Norito scopes retain the original interleaving under the reader.
+    // `proved` limits the physical recipe to the tip for history this archive already proved.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Each input is one exact facet of a single qualification; a parameter struct would only rename them."
+    )]
     fn qualify_index<V: StateReadOnly + ?Sized>(
         &self,
         index: &ArchiveIndexV1,
@@ -2212,10 +2417,13 @@ impl ProviderIngestFinalizedArchiveV1 {
         maximum_kura_tip_lag_blocks: u64,
         generation: u64,
         authenticate_in_place: bool,
+        proved: bool,
     ) -> Result<ProviderIngestFinalizedArchiveQualificationV1, ProviderIngestFinalizedArchiveErrorV1>
     {
         self.verify_storage_boundaries()?;
-        validate_index_coverage(index, self.bounds)?;
+        if !proved {
+            validate_index_coverage(index, self.bounds)?;
+        }
         let network_range = (
             std::ops::Bound::Included((*network_id, 0)),
             std::ops::Bound::Included((*network_id, u64::MAX)),
@@ -2259,6 +2467,9 @@ impl ProviderIngestFinalizedArchiveV1 {
             }
         }
         for (_, entry) in index.by_height.range(network_range) {
+            if proved && entry.record.material.key != archive_tip {
+                continue;
+            }
             verify_record_entry(entry, self.bounds)?;
             if authenticate_in_place {
                 authenticate_archive_anchor(&entry.record.material.key, network_id, certified)?;
@@ -2301,7 +2512,7 @@ impl ProviderIngestFinalizedArchiveV1 {
                 reason: "startup state has no committed block to reconcile",
             });
         }
-        let expected_state_tip = authenticate_capture_view(state_ro, kura)?;
+        let expected_state_tip = self.authenticate_capture_tip(state_ro, kura)?;
         let activation_floor_before = self.activation_floor(state_ro.network_id())?;
         let insertion = self.capture_certified_view(state_ro, kura)?;
         let qualification = self.qualify_against_certified_tip(state_ro, kura, 0)?;
@@ -2332,16 +2543,46 @@ impl ProviderIngestFinalizedArchiveV1 {
     ) -> Result<ProviderIngestFinalizedArchiveInsertOutcomeV1, ProviderIngestFinalizedArchiveErrorV1>
     {
         let key = committed_capture_key(state_ro, kura)?;
-        let certified =
-            CertifiedArchiveView::new(state_ro, kura).map_err(certified_authentication_error)?;
+        // The executor's committed State view is held here, so this authentication resumes
+        // from this archive's verified prefix instead of walking from signed genesis.
+        let certified = CertifiedArchiveView::resuming(state_ro, kura, &self.authentication)
+            .map_err(certified_authentication_error)?;
         authenticate_archive_anchor(&key, state_ro.network_id(), &certified)?;
         let projection = capture_projection(state_ro, key, self.bounds)?;
         certified
             .verify_unchanged()
             .map_err(certified_authentication_error)?;
+        certified.retain_verified_prefix();
         let mut index = self.index.try_write().map_err(Self::index_lock_error)?;
-        self.prepare_insert_locked(&projection, &index)?
-            .persist(self, &mut index)
+        let before = index.content_identity(&key.network_id);
+        let outcome = self
+            .prepare_insert_locked(&projection, &index)?
+            .persist(self, &mut index)?;
+        // Only this capture's authenticated, durably published anchor extends proved coverage.
+        self.authentication.note_capture(
+            &before,
+            index.content_identity(&key.network_id),
+            key.height,
+        );
+        Ok(outcome)
+    }
+
+    // The same anchor check as `authenticate_capture_view`, keeping the verified prefix so
+    // startup's following capture does not repeat the walk.
+    fn authenticate_capture_tip(
+        &self,
+        state_ro: &impl StateReadOnly,
+        kura: &Kura,
+    ) -> Result<ProviderIngestFinalizedArchiveKeyV1, ProviderIngestFinalizedArchiveErrorV1> {
+        let key = committed_capture_key(state_ro, kura)?;
+        let certified = CertifiedArchiveView::resuming(state_ro, kura, &self.authentication)
+            .map_err(certified_authentication_error)?;
+        authenticate_archive_anchor(&key, state_ro.network_id(), &certified)?;
+        certified
+            .verify_unchanged()
+            .map_err(certified_authentication_error)?;
+        certified.retain_verified_prefix();
+        Ok(key)
     }
     /// Prepare the exact canonical checkpoint proposed for sealed retention.
     ///
@@ -2457,7 +2698,11 @@ impl ProviderIngestFinalizedArchiveV1 {
         if readback.as_ref() != Some(&next) {
             return Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityEquivocation);
         }
-        self.publish_prepared_compaction(&mut index, prepared, || {}, &mut |_| {})
+        let before = index.content_identity(network_id);
+        let outcome = self.publish_prepared_compaction(&mut index, prepared, || {}, &mut |_| {})?;
+        self.authentication
+            .note_compaction(&before, index.content_identity(network_id));
+        Ok(outcome)
     }
     #[cfg(test)]
     fn compact_prefix_locked<AfterPublish, AfterUnlink>(
@@ -2613,6 +2858,7 @@ impl ProviderIngestFinalizedArchiveV1 {
                     return Ok(ProviderInsertionPlan {
                         key: projection.key,
                         record: None,
+                        next_walk: None,
                     });
                 }
                 return Err(
@@ -2630,11 +2876,13 @@ impl ProviderIngestFinalizedArchiveV1 {
                     height: projection.key.height,
                 });
             }
-            let reconstructed = reconstruct_projection(index, &projection.key, self.bounds)?;
+            let reconstructed =
+                tip_or_reconstructed_projection(index, &projection.key, self.bounds)?;
             if &reconstructed == projection {
                 return Ok(ProviderInsertionPlan {
                     key: projection.key,
                     record: None,
+                    next_walk: None,
                 });
             }
             return Err(
@@ -2652,8 +2900,14 @@ impl ProviderIngestFinalizedArchiveV1 {
             ))
             .next_back()
             .map(|(_, entry)| entry.clone());
+        // A commit holds its State view through this insertion, so with a completed walk at
+        // the tip it validates only its own successor. The record files below the tip stay
+        // covered by reopening and by background qualification's periodic audit.
+        let tip_walk = previous_entry
+            .as_ref()
+            .and_then(|entry| index.tip_walk(entry));
         let previous_projection = if let Some(entry) = previous_entry.as_ref() {
-            Some(reconstruct_projection(
+            Some(tip_or_reconstructed_projection(
                 index,
                 &entry.record.material.key,
                 self.bounds,
@@ -2681,8 +2935,12 @@ impl ProviderIngestFinalizedArchiveV1 {
             }
             validate_projection_transition(previous, projection)?;
         }
-        validate_historical_policy_transition(index, projection, self.bounds)?;
-        validate_historical_order_transition(index, projection, self.bounds)?;
+        if let Some(walk) = tip_walk {
+            walk.validate_candidate_history(projection)?;
+        } else {
+            validate_historical_policy_transition(index, projection, self.bounds)?;
+            validate_historical_order_transition(index, projection, self.bounds)?;
+        }
         validate_projection_completion_anchors_before_insert(index, projection)?;
         let deltas = build_provider_deltas(previous_projection.as_ref(), projection);
         let provider_state_root = provider_state_root(&projection.providers)?;
@@ -2733,7 +2991,15 @@ impl ProviderIngestFinalizedArchiveV1 {
                 maximum: self.bounds.max_archive_entries(),
             },
         )?;
-        validate_index_coverage_with_successor(index, self.bounds, Some(&entry), total_bytes)?;
+        let next_walk = if let Some(walk) = tip_walk {
+            validate_successor_from_tip_walk(index, self.bounds, walk, &entry, total_bytes)?
+        } else {
+            validate_index_walks(index, self.bounds, Some(&entry), total_bytes)?
+                .remove(&projection.key.network_id)
+                .ok_or(ProviderIngestFinalizedArchiveErrorV1::InvalidRecord {
+                    reason: "coverage walk omitted its own successor network",
+                })?
+        };
         Ok(ProviderInsertionPlan {
             key: projection.key,
             record: Some(PreparedProviderRecord {
@@ -2742,6 +3008,7 @@ impl ProviderIngestFinalizedArchiveV1 {
                 total_bytes,
                 generation,
             }),
+            next_walk: Some(next_walk),
         })
     }
     /// Read one bounded provider-indexed page at an exact finalized anchor.
@@ -3535,7 +3802,7 @@ fn validate_projection_transition(
     }
     Ok(())
 }
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct ProviderPolicyHistoryV1 {
     last: ProviderIngestCompletionAuthorityV1,
     active: bool,
@@ -5001,6 +5268,28 @@ fn reconstruct_provider_projection(
     }
     Ok(provider)
 }
+// The retained tip projection without replaying history, or the complete reconstruction when
+// `key` is not a tip with a completed walk. Only the tip's own record file is reread here.
+fn tip_or_reconstructed_projection(
+    index: &ArchiveIndexV1,
+    key: &ProviderIngestFinalizedArchiveKeyV1,
+    bounds: ProviderIngestFinalizedArchiveBoundsV1,
+) -> Result<ProviderIngestFinalizedProjectionV1, ProviderIngestFinalizedArchiveErrorV1> {
+    let tip = index
+        .by_height
+        .get(&(key.network_id, key.height))
+        .and_then(|entry| index.tip_walk(entry).map(|walk| (entry, walk)));
+    let Some((entry, walk)) = tip else {
+        return reconstruct_projection(index, key, bounds);
+    };
+    verify_record_entry(entry, bounds)?;
+    let projection = walk.projection(*key);
+    if provider_state_root(&projection.providers)? != entry.record.material.provider_state_root {
+        return Err(ProviderIngestFinalizedArchiveErrorV1::ProviderStateRootMismatch);
+    }
+    projection.validate(bounds)?;
+    Ok(projection)
+}
 fn reconstruct_projection(
     index: &ArchiveIndexV1,
     key: &ProviderIngestFinalizedArchiveKeyV1,
@@ -5093,16 +5382,25 @@ fn validate_index_coverage(
     index: &ArchiveIndexV1,
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-    validate_index_coverage_with_successor(index, bounds, None, index.total_bytes)
+    validate_index_walks(index, bounds, None, index.total_bytes).map(drop)
 }
-fn validate_index_coverage_with_successor(
+// Opening already walks every record, so the first commit afterward continues from that walk
+// instead of repeating it under its State view and this archive's writer.
+fn install_validated_tip_walks(
+    index: &mut ArchiveIndexV1,
+    bounds: ProviderIngestFinalizedArchiveBoundsV1,
+) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
+    index.tip_walks = validate_index_walks(index, bounds, None, index.total_bytes)?;
+    Ok(())
+}
+fn validate_coverage_capacity(
     index: &ArchiveIndexV1,
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
-    successor: Option<&ArchiveRecordEntryV1>,
+    has_successor: bool,
     total_bytes: u64,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
     let retained_entries =
-        retained_archive_entries(index).saturating_add(usize::from(successor.is_some()));
+        retained_archive_entries(index).saturating_add(usize::from(has_successor));
     if retained_entries > bounds.max_archive_entries() {
         return Err(
             ProviderIngestFinalizedArchiveErrorV1::ArchiveCapacityExceeded {
@@ -5119,6 +5417,17 @@ fn validate_index_coverage_with_successor(
             },
         );
     }
+    Ok(())
+}
+// Validate the complete retained chain of every network, returning each network's completed
+// walk, which can validate that network's next insertion by itself.
+fn validate_index_walks(
+    index: &ArchiveIndexV1,
+    bounds: ProviderIngestFinalizedArchiveBoundsV1,
+    successor: Option<&ArchiveRecordEntryV1>,
+    total_bytes: u64,
+) -> Result<BTreeMap<NetworkId, ProviderCoverageWalkV1>, ProviderIngestFinalizedArchiveErrorV1> {
+    validate_coverage_capacity(index, bounds, successor.is_some(), total_bytes)?;
     let network_ids = index
         .by_height
         .keys()
@@ -5126,43 +5435,13 @@ fn validate_index_coverage_with_successor(
         .chain(index.virtual_bases.keys().copied())
         .chain(successor.map(|entry| entry.record.material.key.network_id))
         .collect::<BTreeSet<_>>();
+    let mut walks = BTreeMap::new();
     for network_id in network_ids {
         let virtual_base = index.virtual_bases.get(&network_id);
         if let Some(base) = virtual_base {
             verify_checkpoint_entry(base, bounds)?;
         }
-        let mut previous_key = virtual_base.map(|base| base.checkpoint.material.retention_floor);
-        let mut previous_digest =
-            virtual_base.map(|base| base.checkpoint.material.original_terminal_record_digest);
-        let mut providers = virtual_base.map_or_else(BTreeMap::new, |base| {
-            base.checkpoint
-                .material
-                .projection
-                .providers
-                .iter()
-                .map(|provider| (provider.provider_id, provider.clone()))
-                .collect()
-        });
-        let mut policy_history = virtual_base
-            .map(|base| policy_history_from_checkpoint(&base.checkpoint.material.policy_history))
-            .transpose()?
-            .unwrap_or_default();
-        let mut active_orders = virtual_base.map_or_else(BTreeSet::new, |base| {
-            base.checkpoint
-                .material
-                .active_order_ids
-                .iter()
-                .copied()
-                .collect()
-        });
-        let mut seen_orders = virtual_base.map_or_else(BTreeSet::new, |base| {
-            base.checkpoint
-                .material
-                .seen_order_ids
-                .iter()
-                .copied()
-                .collect()
-        });
+        let mut walk = ProviderCoverageWalkV1::start(virtual_base)?;
         let entries = index.by_height.range((
             std::ops::Bound::Included((network_id, 0)),
             std::ops::Bound::Included((network_id, u64::MAX)),
@@ -5171,85 +5450,202 @@ fn validate_index_coverage_with_successor(
             .map(|(_, entry)| entry)
             .chain(successor.filter(|entry| entry.record.material.key.network_id == network_id));
         for entry in entries {
-            entry.record.validate()?;
-            match previous_key.as_ref() {
-                None if entry.record.material.predecessor.is_some() => {
-                    return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidRecord {
-                        reason: "activation-floor record has a predecessor",
+            let is_successor = successor.is_some_and(|candidate| std::ptr::eq(candidate, entry));
+            walk.step(index, network_id, entry, is_successor, bounds)?;
+        }
+        walks.insert(network_id, walk);
+    }
+    Ok(walks)
+}
+// The same checks as one final step of the complete walk, continued from its retained state.
+fn validate_successor_from_tip_walk(
+    index: &ArchiveIndexV1,
+    bounds: ProviderIngestFinalizedArchiveBoundsV1,
+    walk: &ProviderCoverageWalkV1,
+    successor: &ArchiveRecordEntryV1,
+    total_bytes: u64,
+) -> Result<ProviderCoverageWalkV1, ProviderIngestFinalizedArchiveErrorV1> {
+    validate_coverage_capacity(index, bounds, true, total_bytes)?;
+    let network_id = successor.record.material.key.network_id;
+    if let Some(base) = index.virtual_bases.get(&network_id) {
+        verify_checkpoint_entry(base, bounds)?;
+    }
+    let mut next = walk.clone();
+    next.step(index, network_id, successor, true, bounds)?;
+    Ok(next)
+}
+/// Everything the coverage check of one network's next record needs from all earlier ones.
+///
+/// Process-local derived state over records that already passed these same checks. It is
+/// never persisted and never replaces a record's own validation.
+#[derive(Clone, Debug)]
+struct ProviderCoverageWalkV1 {
+    base_digest: Option<[u8; 32]>,
+    previous_key: Option<ProviderIngestFinalizedArchiveKeyV1>,
+    previous_digest: Option<[u8; 32]>,
+    providers: BTreeMap<ProviderId, ProviderIngestFinalizedProviderProjectionV1>,
+    policy_history: BTreeMap<ProviderId, ProviderPolicyHistoryV1>,
+    active_orders: BTreeSet<ReplicationOrderId>,
+    seen_orders: BTreeSet<ReplicationOrderId>,
+}
+impl ProviderCoverageWalkV1 {
+    fn start(
+        virtual_base: Option<&ArchiveVirtualBaseV1>,
+    ) -> Result<Self, ProviderIngestFinalizedArchiveErrorV1> {
+        Ok(Self {
+            base_digest: virtual_base.map(|base| base.checkpoint.checkpoint_digest),
+            previous_key: virtual_base.map(|base| base.checkpoint.material.retention_floor),
+            previous_digest: virtual_base
+                .map(|base| base.checkpoint.material.original_terminal_record_digest),
+            providers: virtual_base.map_or_else(BTreeMap::new, |base| {
+                base.checkpoint
+                    .material
+                    .projection
+                    .providers
+                    .iter()
+                    .map(|provider| (provider.provider_id, provider.clone()))
+                    .collect()
+            }),
+            policy_history: virtual_base
+                .map(|base| {
+                    policy_history_from_checkpoint(&base.checkpoint.material.policy_history)
+                })
+                .transpose()?
+                .unwrap_or_default(),
+            active_orders: virtual_base.map_or_else(BTreeSet::new, |base| {
+                base.checkpoint
+                    .material
+                    .active_order_ids
+                    .iter()
+                    .copied()
+                    .collect()
+            }),
+            seen_orders: virtual_base.map_or_else(BTreeSet::new, |base| {
+                base.checkpoint
+                    .material
+                    .seen_order_ids
+                    .iter()
+                    .copied()
+                    .collect()
+            }),
+        })
+    }
+
+    fn step(
+        &mut self,
+        index: &ArchiveIndexV1,
+        network_id: NetworkId,
+        entry: &ArchiveRecordEntryV1,
+        is_successor: bool,
+        bounds: ProviderIngestFinalizedArchiveBoundsV1,
+    ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
+        entry.record.validate()?;
+        match self.previous_key.as_ref() {
+            None if entry.record.material.predecessor.is_some() => {
+                return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidRecord {
+                    reason: "activation-floor record has a predecessor",
+                });
+            }
+            Some(previous) => {
+                let expected_height = previous.height.checked_add(1).ok_or(
+                    ProviderIngestFinalizedArchiveErrorV1::ArchiveCoverageGap {
+                        network_id,
+                        missing_height: u64::MAX,
+                        observed_height: entry.record.material.key.height,
+                    },
+                )?;
+                if entry.record.material.key.height != expected_height {
+                    return Err(ProviderIngestFinalizedArchiveErrorV1::ArchiveCoverageGap {
+                        network_id,
+                        missing_height: expected_height,
+                        observed_height: entry.record.material.key.height,
                     });
                 }
-                Some(previous) => {
-                    let expected_height = previous.height.checked_add(1).ok_or(
-                        ProviderIngestFinalizedArchiveErrorV1::ArchiveCoverageGap {
-                            network_id,
-                            missing_height: u64::MAX,
-                            observed_height: entry.record.material.key.height,
+                let expected = ProviderIngestFinalizedArchivePredecessorV1 {
+                    key: *previous,
+                    record_digest: self.previous_digest.ok_or(
+                        ProviderIngestFinalizedArchiveErrorV1::InvalidCheckpoint {
+                            reason: "virtual predecessor digest is absent",
                         },
-                    )?;
-                    if entry.record.material.key.height != expected_height {
-                        return Err(ProviderIngestFinalizedArchiveErrorV1::ArchiveCoverageGap {
+                    )?,
+                };
+                if entry.record.material.predecessor.as_ref() != Some(&expected) {
+                    return Err(
+                        ProviderIngestFinalizedArchiveErrorV1::PredecessorSubstitution {
                             network_id,
-                            missing_height: expected_height,
-                            observed_height: entry.record.material.key.height,
-                        });
-                    }
-                    let expected = ProviderIngestFinalizedArchivePredecessorV1 {
-                        key: *previous,
-                        record_digest: previous_digest.ok_or(
-                            ProviderIngestFinalizedArchiveErrorV1::InvalidCheckpoint {
-                                reason: "virtual predecessor digest is absent",
-                            },
-                        )?,
-                    };
-                    if entry.record.material.predecessor.as_ref() != Some(&expected) {
-                        return Err(
-                            ProviderIngestFinalizedArchiveErrorV1::PredecessorSubstitution {
-                                network_id,
-                                height: entry.record.material.key.height,
-                            },
-                        );
-                    }
+                            height: entry.record.material.key.height,
+                        },
+                    );
                 }
-                None => {}
             }
-            let before = ProviderIngestFinalizedProjectionV1 {
-                key: previous_key.unwrap_or(entry.record.material.key),
-                providers: providers.values().cloned().collect(),
-            };
-            validate_delta_minimality(&providers, &entry.record.material.deltas)?;
-            apply_provider_deltas(&mut providers, &entry.record.material.deltas);
-            let current = ProviderIngestFinalizedProjectionV1 {
-                key: entry.record.material.key,
-                providers: providers.values().cloned().collect(),
-            };
-            current.validate(bounds)?;
-            if provider_state_root(&current.providers)? != entry.record.material.provider_state_root
-            {
-                return Err(ProviderIngestFinalizedArchiveErrorV1::ProviderStateRootMismatch);
-            }
-            if previous_key.is_some() {
-                validate_projection_transition(&before, &current)?;
-                observe_policy_history(&providers, &mut policy_history)?;
-                observe_order_history(
-                    provider_order_ids(providers.values()),
-                    &mut active_orders,
-                    &mut seen_orders,
-                )?;
-            } else {
-                seed_policy_history(&providers, &mut policy_history);
-                active_orders = provider_order_ids(providers.values());
-                seen_orders = active_orders.clone();
-            }
-            if successor.is_some_and(|candidate| std::ptr::eq(candidate, entry)) {
-                validate_projection_completion_anchors_before_insert(index, &current)?;
-            } else {
-                validate_completion_anchors(index, &current)?;
-            }
-            previous_key = Some(entry.record.material.key);
-            previous_digest = Some(entry.record.record_digest);
+            None => {}
+        }
+        let before = ProviderIngestFinalizedProjectionV1 {
+            key: self.previous_key.unwrap_or(entry.record.material.key),
+            providers: self.providers.values().cloned().collect(),
+        };
+        validate_delta_minimality(&self.providers, &entry.record.material.deltas)?;
+        apply_provider_deltas(&mut self.providers, &entry.record.material.deltas);
+        let current = ProviderIngestFinalizedProjectionV1 {
+            key: entry.record.material.key,
+            providers: self.providers.values().cloned().collect(),
+        };
+        current.validate(bounds)?;
+        if provider_state_root(&current.providers)? != entry.record.material.provider_state_root {
+            return Err(ProviderIngestFinalizedArchiveErrorV1::ProviderStateRootMismatch);
+        }
+        if self.previous_key.is_some() {
+            validate_projection_transition(&before, &current)?;
+            observe_policy_history(&self.providers, &mut self.policy_history)?;
+            observe_order_history(
+                provider_order_ids(self.providers.values()),
+                &mut self.active_orders,
+                &mut self.seen_orders,
+            )?;
+        } else {
+            seed_policy_history(&self.providers, &mut self.policy_history);
+            self.active_orders = provider_order_ids(self.providers.values());
+            self.seen_orders = self.active_orders.clone();
+        }
+        if is_successor {
+            validate_projection_completion_anchors_before_insert(index, &current)?;
+        } else {
+            validate_completion_anchors(index, &current)?;
+        }
+        self.previous_key = Some(entry.record.material.key);
+        self.previous_digest = Some(entry.record.record_digest);
+        Ok(())
+    }
+
+    // The projection this walk covered, under the caller's exact tip key.
+    fn projection(
+        &self,
+        key: ProviderIngestFinalizedArchiveKeyV1,
+    ) -> ProviderIngestFinalizedProjectionV1 {
+        ProviderIngestFinalizedProjectionV1 {
+            key,
+            providers: self.providers.values().cloned().collect(),
         }
     }
-    Ok(())
+
+    // A candidate's policy and order history, checked before its record is built so these
+    // refusals keep their precedence over later encoding and capacity refusals.
+    fn validate_candidate_history(
+        &self,
+        projection: &ProviderIngestFinalizedProjectionV1,
+    ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
+        let projected = projection
+            .providers
+            .iter()
+            .map(|provider| (provider.provider_id, provider.clone()))
+            .collect::<BTreeMap<_, _>>();
+        observe_policy_history(&projected, &mut self.policy_history.clone())?;
+        observe_order_history(
+            provider_order_ids(projection.providers.iter()),
+            &mut self.active_orders.clone(),
+            &mut self.seen_orders.clone(),
+        )
+    }
 }
 fn validate_delta_minimality(
     providers: &BTreeMap<ProviderId, ProviderIngestFinalizedProviderProjectionV1>,
@@ -5378,6 +5774,7 @@ fn authenticate_archive_anchor<V: StateReadOnly + ?Sized>(
     }
     Ok(block)
 }
+#[cfg(test)]
 fn authenticate_capture_view(
     state_ro: &impl StateReadOnly,
     kura: &Kura,

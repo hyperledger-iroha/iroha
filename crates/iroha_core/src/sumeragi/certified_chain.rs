@@ -105,8 +105,10 @@ use iroha_model_base::chain::ChainId;
 const MAX_PROPOSAL_BYTES: usize = 64 * 1024 * 1024;
 
 mod amx_initialization;
+mod archive_prefix;
 pub(in crate::sumeragi) mod artifacts;
 mod native_acquisition;
+pub(crate) use archive_prefix::{ArchiveCapturePrefix, ArchivePrefixPoint};
 mod successor_context;
 pub(crate) use successor_context::SuccessorContextPreparation;
 mod prefix_checkpoints;

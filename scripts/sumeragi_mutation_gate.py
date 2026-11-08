@@ -932,6 +932,8 @@ CORE_MUTATIONS = [
       ["state::asset_uid::binding_custody::retry::tests::native_binding_finish_notifies_original_pool_only_after_bank_unlock"],
       causes=(ExpectedFailure("binding completion callbacks must run after the original bank mutex unlocks",
           "crates/iroha_core/src/state/asset_uid/binding_custody/retry_tests.rs"),)),
+    m("HC984", "archive prefix resume: trust a retained point without rechecking its frame",
+      ['query::archive_finality::tests::archive_prefix_refuses_a_changed_retained_frame_before_trusting_it']),
     m("HC980", "World control admission: allocate the refund scope before the complete field demand",
       ["state::world_acquisition::admission_tests::world_control_capacity_refusal_stays_pending_until_original_external_release"],
       causes=(ExpectedFailure("World control admission must not satisfy its own original release wait",
