@@ -5,8 +5,8 @@ PATH=/usr/bin:/bin
 export PATH
 # One independently selected public signer root is embedded in every Native slice.
 WALLET_RUNTIME_AUTHORITY="${MOBILE_SDK_WALLET_RUNTIME_AUTHORITY:-}"
-case "$WALLET_RUNTIME_AUTHORITY" in bpng-taira-v7|cbsi-release-v1|application-release-v1) ;; *)
-  echo "[-] MOBILE_SDK_WALLET_RUNTIME_AUTHORITY must be bpng-taira-v7, cbsi-release-v1, or application-release-v1" >&2
+case "$WALLET_RUNTIME_AUTHORITY" in bpng-taira-v7|boi-taira-v1|cbsi-release-v1|application-release-v1) ;; *)
+  echo "[-] MOBILE_SDK_WALLET_RUNTIME_AUTHORITY must be bpng-taira-v7, boi-taira-v1, cbsi-release-v1, or application-release-v1" >&2
   exit 1
   ;;
 esac
@@ -1528,7 +1528,7 @@ run_hermetic_apple_cargo() {
       "${platform_environment[@]}" \
       -- "$CARGO_BINARY" "$cargo_subcommand" \
       --manifest-path "$ROOT_DIR/Cargo.toml" \
-      --message-format=json-render-diagnostics "$@" > "$cargo_messages"; then
+      --verbose --message-format=json-render-diagnostics "$@" > "$cargo_messages"; then
     cargo_status=0
   else
     cargo_status=$?

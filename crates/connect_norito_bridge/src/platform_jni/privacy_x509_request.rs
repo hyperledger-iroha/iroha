@@ -3,7 +3,7 @@
 use super::{SubmitPrivacyZkX509CertificateV1, catch_unwind_to_java};
 use iroha_data_model::{
     privacy::{
-        PrivacyConsensusLimitsV1, PrivacyRuntimeStatementV1,
+        PrivacyConsensusLimitsV1, PrivacyStatementV1,
         TAIRA_PRIVACY_MAX_STATEMENT_AND_ENCRYPTED_OUTPUT_BYTES_PER_TRANSACTION_V1,
     },
     transaction::signed_attachments::{
@@ -56,12 +56,14 @@ fn create_request(statement: &[u8], attachment_action_index: i64) -> Option<Vec<
     {
         return None;
     }
-    let tagged = norito::decode_canonical_with_limits::<PrivacyRuntimeStatementV1>(
+    // The SDK boundary uses the frozen Exact12 statement schema, as do its
+    // shared fixtures and Kotlin consumers. It does not accept the runtime enum.
+    let tagged = norito::decode_canonical_with_limits::<PrivacyStatementV1>(
         statement,
         decode_limits(statement.len()),
     )
     .ok()?;
-    let PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement) = tagged else {
+    let PrivacyStatementV1::IrohaZkX509StarkP256V1(statement) = tagged else {
         return None;
     };
     let request = SubmitPrivacyZkX509CertificateV1::new(
@@ -111,10 +113,7 @@ fn materialize_statement(request: &[u8], action: &[u8], intent: &[u8]) -> Option
     let statement = request
         .materialize_statement_v1(&action, intent, &PrivacyConsensusLimitsV1::taira_default())
         .ok()?;
-    norito::encode_canonical(&PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(
-        statement,
-    ))
-    .ok()
+    norito::encode_canonical(&PrivacyStatementV1::IrohaZkX509StarkP256V1(statement)).ok()
 }
 
 fn read_bounded(

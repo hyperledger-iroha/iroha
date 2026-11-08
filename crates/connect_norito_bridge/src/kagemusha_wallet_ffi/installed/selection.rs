@@ -29,6 +29,8 @@ const APP_FIELDS: &[&str] = &[
     "toolchain_closure",
 ];
 
+mod boi;
+mod boi_registry;
 mod bpng;
 mod cbsi;
 mod session;
@@ -42,6 +44,7 @@ pub(crate) use session::Session;
 )]
 enum RuntimeAuthority {
     BpngTairaV7,
+    BoiTairaV1,
     CbsiReleaseV1,
     ApplicationReleaseV1,
 }
@@ -119,6 +122,9 @@ enum ApplicationBinding {
     BpngTairaV7 {
         _wallet_runtime_sha256: [u8; 32],
     },
+    Boi {
+        _wallet_runtime_sha256: [u8; 32],
+    },
 }
 
 /// Authenticated application/root and shared financial selection, independent of any asset.
@@ -150,6 +156,7 @@ pub(super) struct Selection {
     enrollment_certificate: KagemushaWalletSignerCertificateV1,
     fi_sessions: Vec<session::FiAuthority>,
     bpng_session: Option<session::BpngAuthority>,
+    boi_sessions: Vec<session::BoiAuthority>,
     pub apple_app_policy: [u8; 32],
 }
 
@@ -300,6 +307,12 @@ fn signed_app(trust: &RuntimeTrust, manifest: &[u8], envelope: &[u8]) -> Result<
             "signatureBase64",
             &STANDARD,
         ),
+        RuntimeAuthority::BoiTairaV1 => (
+            "boi.taira-app-runtime-manifest-signature.v1",
+            "boi:taira-app-runtime-manifest:v1",
+            "signatureBase64Url",
+            &URL_SAFE_NO_PAD,
+        ),
         RuntimeAuthority::BpngTairaV7 => (
             "bpng.taira-app-runtime-manifest-signature.v7",
             "bpng:taira-app-runtime-manifest:v7",
@@ -352,6 +365,11 @@ fn signed_app(trust: &RuntimeTrust, manifest: &[u8], envelope: &[u8]) -> Result<
         RuntimeAuthority::CbsiReleaseV1 => {
             let document = cbsi::signed_document(manifest)?;
             cbsi::application(&document)?;
+            document
+        }
+        RuntimeAuthority::BoiTairaV1 => {
+            let document = json(manifest, APP_MANIFEST_MAX, true)?;
+            boi::application(&document)?;
             document
         }
         RuntimeAuthority::BpngTairaV7 => {
@@ -443,6 +461,17 @@ impl Selection {
                     }),
                 )
             }
+            RuntimeAuthority::BoiTairaV1 => {
+                let app = boi::application(&document)?;
+                let (digest, financial) = boi::require_runtime(app, input)?;
+                (
+                    app,
+                    ApplicationBinding::Boi {
+                        _wallet_runtime_sha256: digest,
+                    },
+                    financial,
+                )
+            }
             RuntimeAuthority::BpngTairaV7 => {
                 let app = bpng::application(&document)?;
                 let (digest, financial) = bpng::require_runtime(app, input)?;
@@ -474,6 +503,17 @@ impl Selection {
         let runtime_schema = match trust.authority {
             RuntimeAuthority::ApplicationReleaseV1 => return Err(invalid()),
             RuntimeAuthority::CbsiReleaseV1 => "cbsi.kagemusha.wallet-runtime.v1",
+            RuntimeAuthority::BoiTairaV1 => {
+                runtime_fields.extend([
+                    "enrollment_sessions",
+                    "eligibility_template_hex",
+                    "python_path",
+                    "python_sha256",
+                    "openssl_path",
+                    "openssl_sha256",
+                ]);
+                "boi.current-wallet-core-runtime.v1"
+            }
             RuntimeAuthority::BpngTairaV7 => {
                 runtime_fields.extend([
                     "enrollment_session",
@@ -492,8 +532,10 @@ impl Selection {
         {
             return Err(invalid());
         }
-        if trust.authority == RuntimeAuthority::BpngTairaV7 {
-            bpng::runtime_tools(runtime)?;
+        match trust.authority {
+            RuntimeAuthority::BpngTairaV7 => bpng::runtime_tools(runtime)?,
+            RuntimeAuthority::BoiTairaV1 => boi::runtime_tools(runtime)?,
+            _ => {}
         }
         if !field(runtime, "challenge_lifetime_ms")?
             .as_u64()
@@ -510,7 +552,10 @@ impl Selection {
             &sha(text(runtime, "scheme_id")?)?,
         )
         .map_err(|_| invalid())?;
-        if trust.authority == RuntimeAuthority::BpngTairaV7 {
+        if matches!(
+            trust.authority,
+            RuntimeAuthority::BpngTairaV7 | RuntimeAuthority::BoiTairaV1
+        ) {
             use iroha_data_model::kagemusha::{
                 KAGEMUSHA_ELIGIBILITY_MAX_BYTES_V1, KagemushaEligibilityPolicyTemplateV1,
             };
@@ -602,7 +647,10 @@ impl Selection {
                 "app_policy_original_base64",
                 "enrollment_policy_original_base64",
             ];
-            if trust.authority == RuntimeAuthority::BpngTairaV7 {
+            if matches!(
+                trust.authority,
+                RuntimeAuthority::BpngTairaV7 | RuntimeAuthority::BoiTairaV1
+            ) {
                 fields.push("verifier_configuration_path");
                 // Android roots are pinned by SPKI in the policy and a KeyMint chain carries
                 // its own root; only the Apple App Attestation root is a selected DER original.
@@ -611,9 +659,11 @@ impl Selection {
                 }
             }
             let platform = exact(field(runtime, name)?, &fields)?;
-            if trust.authority == RuntimeAuthority::BpngTairaV7
-                && text(platform, "verifier_configuration_path")?
-                    != format!("srv/etc/kagemusha/wallet-e1-{name}.json")
+            if matches!(
+                trust.authority,
+                RuntimeAuthority::BpngTairaV7 | RuntimeAuthority::BoiTairaV1
+            ) && text(platform, "verifier_configuration_path")?
+                != format!("srv/etc/kagemusha/wallet-e1-{name}.json")
             {
                 return Err(invalid());
             }
@@ -629,10 +679,28 @@ impl Selection {
                 KagemushaWalletEnrollmentPolicyV1::decode_canonical(&original, &scheme.scheme_id())
                     .map_err(|_| invalid())?;
             enrollment.validate_for_app(&app).map_err(|_| invalid())?;
+            if trust.authority == RuntimeAuthority::BoiTairaV1 {
+                use iroha_data_model::kagemusha::KagemushaWalletAppIdentityV1;
+                let identity_matches = match &app.identity {
+                    KagemushaWalletAppIdentityV1::Android { package_name, .. } => {
+                        name == "android" && package_name == boi_registry::BOI_ANDROID_PACKAGE
+                    }
+                    KagemushaWalletAppIdentityV1::Apple { app_id } => {
+                        name == "apple" && app_id == boi_registry::BOI_IOS_APP_ID
+                    }
+                };
+                if !identity_matches {
+                    return Err(invalid());
+                }
+            }
             // A policy naming an unimplemented or unqualified vendor adapter fails
             // configuration here, before any session or challenge can select it.
             require_qualified_adapters(&enrollment.platform)?;
-            if trust.authority == RuntimeAuthority::BpngTairaV7 && name == "apple" {
+            if matches!(
+                trust.authority,
+                RuntimeAuthority::BpngTairaV7 | RuntimeAuthority::BoiTairaV1
+            ) && name == "apple"
+            {
                 let root = raw(platform, "attestation_root_der_base64", 16_384)?;
                 if BlobV1::of(&root).sha256 != apple_root_pin(&enrollment)? {
                     return Err(invalid());
@@ -687,11 +755,28 @@ impl Selection {
         if trust.authority == RuntimeAuthority::CbsiReleaseV1 {
             consensus_fields.push("finalityVerifierSha256");
         }
+        // BOI signs the deployed validator source separately from the client source.
+        // It remains authenticated provenance DATA, not a finality trust override.
+        if trust.authority == RuntimeAuthority::BoiTairaV1 {
+            consensus_fields.push("nodeSourceCommit");
+        }
         let consensus = exact(field(app, "consensus")?, &consensus_fields)?;
+        if trust.authority == RuntimeAuthority::BoiTairaV1 {
+            let commit = text(consensus, "nodeSourceCommit")?;
+            if commit.len() != 40
+                || !commit
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(invalid());
+            }
+        }
         sha(text(consensus, "signedGenesisSha256")?)?;
         sha(text(consensus, "genesisBlockHash")?)?;
         if trust.authority == RuntimeAuthority::BpngTairaV7 {
             bpng::checkpoint(consensus)?;
+        } else if trust.authority == RuntimeAuthority::BoiTairaV1 {
+            boi::checkpoint(consensus)?;
         } else {
             sha(text(consensus, "finalityVerifierSha256")?)?;
             sha(text(consensus, "checkpointSha256")?)?;
@@ -739,8 +824,8 @@ impl Selection {
         // Each independently selected application format owns its exact mode label.
         // The BPNG v7 renderer signs short labels; CBSI signs protocol tags.
         let mode = match (trust.authority, epoch.mode.is_permissioned()) {
-            (RuntimeAuthority::BpngTairaV7, true) => "permissioned",
-            (RuntimeAuthority::BpngTairaV7, false) => "npos",
+            (RuntimeAuthority::BpngTairaV7 | RuntimeAuthority::BoiTairaV1, true) => "permissioned",
+            (RuntimeAuthority::BpngTairaV7 | RuntimeAuthority::BoiTairaV1, false) => "npos",
             (_, true) => "iroha3-consensus::permissioned-sumeragi@v1",
             (_, false) => "iroha3-consensus::npos-sumeragi@v1",
         };
@@ -794,6 +879,7 @@ impl Selection {
                 &["assetAlias", "assetDefinitionId", "scale"],
             )?,
             RuntimeAuthority::BpngTairaV7 => bpng::asset(app)?,
+            RuntimeAuthority::BoiTairaV1 => boi::asset(app)?,
         };
         if AssetDefinitionId::from_str(text(selected_asset, "assetDefinitionId")?)
             .map_err(|_| invalid())?
@@ -811,7 +897,7 @@ impl Selection {
                 service_release_scope,
                 &apple.1,
             )?,
-            ApplicationBinding::BpngTairaV7 { .. } => Vec::new(),
+            ApplicationBinding::BpngTairaV7 { .. } | ApplicationBinding::Boi { .. } => Vec::new(),
             ApplicationBinding::ApplicationReleaseV1 { .. } => return Err(invalid()),
         };
         let bpng_session = match &application {
@@ -824,12 +910,25 @@ impl Selection {
                     16_384,
                 )?,
             )?),
-            ApplicationBinding::CbsiReleaseV1 { .. } => None,
+            ApplicationBinding::CbsiReleaseV1 { .. } | ApplicationBinding::Boi { .. } => None,
             ApplicationBinding::ApplicationReleaseV1 { .. } => return Err(invalid()),
+        };
+        let boi_sessions = match &application {
+            ApplicationBinding::Boi { .. } => session::boi_authorities(
+                field(runtime, "enrollment_sessions")?,
+                input.app_manifest,
+                raw(
+                    object(field(runtime, "apple")?)?,
+                    "attestation_root_der_base64",
+                    16_384,
+                )?,
+            )?,
+            _ => Vec::new(),
         };
         Ok(Self {
             fi_sessions,
             bpng_session,
+            boi_sessions,
             enrollment_certificate,
             application,
             base: Arc::new(AuthenticatedBase {

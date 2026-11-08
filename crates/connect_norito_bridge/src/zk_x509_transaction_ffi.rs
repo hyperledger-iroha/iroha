@@ -323,7 +323,8 @@ impl Owner {
             0 => Ok(self.plan.intent.as_bytes().to_vec()),
             1 => Ok(self.plan.action_digest.as_bytes().to_vec()),
             2 => norito::encode_canonical(&self.plan.action).map_err(|_| INTERNAL),
-            3 => norito::encode_canonical(&PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(
+            // Foreign-language holders consume the frozen Exact12 statement schema.
+            3 => norito::encode_canonical(&PrivacyStatementV1::IrohaZkX509StarkP256V1(
                 self.plan.materialized.clone(),
             ))
             .map_err(|_| INTERNAL),
@@ -833,10 +834,19 @@ mod tests {
     fn projection_copies_cannot_substitute_the_original_tagged_statement() {
         let owner = structural_owner();
         let mut copied = owner.projection(3).unwrap();
-        let decoded: PrivacyRuntimeStatementV1 = norito::decode_canonical(&copied).unwrap();
+        let decoded: PrivacyStatementV1 = norito::decode_canonical(&copied).unwrap();
         assert_eq!(
             decoded,
-            PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(owner.plan.materialized.clone())
+            PrivacyStatementV1::IrohaZkX509StarkP256V1(owner.plan.materialized.clone())
+        );
+        let prepared = crate::zk_x509_holder_ffi::prepare(&copied)
+            .expect("the exported statement enters the holder signing boundary unchanged");
+        assert_eq!(
+            prepared.message,
+            iroha_core_privacy::privacy_engines::zk_x509::holder::ownership_signing_message_v1(
+                &owner.plan.materialized,
+            )
+            .unwrap(),
         );
         copied.fill(0);
         assert_ne!(copied, owner.projection(3).unwrap());

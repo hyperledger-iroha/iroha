@@ -281,5 +281,6 @@ fn load_with_registration(
         apple_enrollment: apple,
         fi_sessions: sessions,
         bpng_session: None,
+        boi_sessions: Vec::new(),
     })
 }

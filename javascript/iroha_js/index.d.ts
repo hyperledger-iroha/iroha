@@ -1,4 +1,8 @@
+import type { KagemushaWalletLoadSelectionV1, KagemushaWalletLedgerSelectionV1, KagemushaWalletEpochSelectionV1, KagemushaWalletReadOptionsV1, KagemushaWalletOriginalV1 } from "./kagemusha-wallet-read.js";
+export type * from "./kagemusha-wallet-read.js";
 import type { Buffer } from "buffer";
+import type { SccpCapabilitiesV1, SccpRouteV1, SccpRecentMessagesV1, SccpPublicReadOptionsV1, SccpRecentMessagesOptionsV1 } from "./sccp-read.js";
+export type * from "./sccp-read.js";
 import type { BrowserFeePayment } from "./transaction-codec.js";
 import { OperatorSigningContext } from "./operator-request.js";
 import type { RepoAgreementLifecycleFields } from "./repo-agreement.js";
@@ -10360,6 +10364,8 @@ export declare class ToriiBrowserClient {
   /** Public capability advert (`GET /v1/node/capabilities`); no credentials are sent. */
   getNodeCapabilities(options?: { signal?: AbortSignal }): Promise<ToriiBrowserNodeCapabilities>;
   getAccountCapabilities(options?: { signal?: AbortSignal }): Promise<AccountCapabilitiesV1>;
+  /** Public native SCCP metadata; no credentials, proof verification or write authority. */
+  getSccpCapabilitiesV1(options?: SccpPublicReadOptionsV1): Promise<SccpCapabilitiesV1>;
   /** Every native bond record (`GET /v1/bonds`). */
   listBonds(options?: BondRecordPageOptions): Promise<BondRecordPage>;
   /** One native bond record (`GET /v1/bonds/{bond_id}`); null when the bond is not registered. */
@@ -10608,6 +10614,17 @@ export interface ValidationFeePolicyProofCatchUpV1
 }
 
 export declare class ToriiClient {
+  /** Bounded, unverified original bytes. Requires independent native verification before trust. */
+  getKagemushaWalletLoadIssuanceOriginalV1(selection: KagemushaWalletLoadSelectionV1, options: KagemushaWalletReadOptionsV1): Promise<KagemushaWalletOriginalV1<KagemushaWalletLoadSelectionV1>>;
+  /** Bounded, unverified original bytes. Requires independent native verification before trust. */
+  getKagemushaWalletLoadFinalityOriginalV1(selection: KagemushaWalletLoadSelectionV1, options: KagemushaWalletReadOptionsV1): Promise<KagemushaWalletOriginalV1<KagemushaWalletLoadSelectionV1>>;
+  /** Bounded, unverified original bytes. Requires independent native verification before trust. */
+  getKagemushaWalletLoadEpochOriginalV1(selection: KagemushaWalletEpochSelectionV1<KagemushaWalletLoadSelectionV1>, options: KagemushaWalletReadOptionsV1): Promise<KagemushaWalletOriginalV1<KagemushaWalletEpochSelectionV1<KagemushaWalletLoadSelectionV1>>>;
+  /** Bounded, unverified original bytes. Requires independent native verification before trust. */
+  getKagemushaWalletLedgerFinalityOriginalV1(selection: KagemushaWalletLedgerSelectionV1, options: KagemushaWalletReadOptionsV1): Promise<KagemushaWalletOriginalV1<KagemushaWalletLedgerSelectionV1>>;
+  /** Bounded, unverified original bytes. Requires independent native verification before trust. */
+  getKagemushaWalletLedgerEpochOriginalV1(selection: KagemushaWalletEpochSelectionV1<KagemushaWalletLedgerSelectionV1>, options: KagemushaWalletReadOptionsV1): Promise<KagemushaWalletOriginalV1<KagemushaWalletEpochSelectionV1<KagemushaWalletLedgerSelectionV1>>>;
+
   constructor(baseUrl: string, options?: ToriiClientOptions);
   /** Domains (`POST /v1/domains/query`). */
   readonly domains: ToriiCollection<ToriiDomainRow, ToriiCollectionRequestOptions>;
@@ -10736,6 +10753,10 @@ export declare class ToriiClient {
   listIdentifierPolicies(options?: {
     signal?: AbortSignal;
   }): Promise<IdentifierPolicyListResponse>;
+  /** Public native SCCP metadata; no credentials, proof verification or write authority. */
+  getSccpCapabilitiesV1(options?: SccpPublicReadOptionsV1): Promise<SccpCapabilitiesV1>;
+  getSccpRegistryV1(options?: SccpPublicReadOptionsV1): Promise<SccpRouteV1[]>;
+  listSccpRecentMessagesV1(options?: SccpRecentMessagesOptionsV1): Promise<SccpRecentMessagesV1>;
   /** Every native bond record (`GET /v1/bonds`): terms, schedule, lifecycle and servicing state. */
   listBonds(options?: BondRecordPageOptions): Promise<BondRecordPage>;
   /** One native bond record (`GET /v1/bonds/{bond_id}`); null when the bond is not registered. */

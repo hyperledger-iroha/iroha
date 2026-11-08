@@ -6,7 +6,9 @@ use p256::{
 };
 use zeroize::Zeroizing;
 
+mod boi;
 mod bpng;
+pub(super) use boi::{Authority as BoiAuthority, authorities as boi_authorities};
 pub(super) use bpng::{Authority as BpngAuthority, authority as bpng_authority};
 
 const FIS: [&str; 6] = ["anz", "bred", "bsp", "ezipei", "m-selen", "pob"];
@@ -381,6 +383,9 @@ impl Selection {
     ) -> Result<Session> {
         if let Some(selected) = &self.bpng_session {
             return bpng::authenticate(self, selected, android, originals);
+        }
+        if !self.boi_sessions.is_empty() {
+            return boi::authenticate(self, &self.boi_sessions, android, originals);
         }
         let [token, proof, root] = originals;
         let (h, c, s) = compact(token, 16_384)?;

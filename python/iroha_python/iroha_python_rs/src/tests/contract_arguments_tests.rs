@@ -295,6 +295,63 @@ fn contract_argument_python_boundary_requires_exact_types_and_returns_immutable_
 }
 
 #[test]
+fn contract_argument_encoding_releases_the_gil() {
+    use std::sync::{
+        Arc, Barrier,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+    Python::initialize();
+    let attached = Arc::new(AtomicUsize::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    let ready = Arc::new(Barrier::new(2));
+    let helper = {
+        let (attached, stop, ready) = (attached.clone(), stop.clone(), ready.clone());
+        std::thread::spawn(move || {
+            ready.wait();
+            while !stop.load(Ordering::SeqCst) {
+                // Blocks while another thread holds the GIL.
+                Python::attach(|_| attached.fetch_add(1, Ordering::SeqCst));
+            }
+        })
+    };
+    let during = Python::attach(|py| {
+        let function = pyo3::wrap_pyfunction!(encode_contract_arguments_v1_py, py).unwrap();
+        let kwargs = PyDict::new(py);
+        kwargs
+            .set_item("expected_code_hash_hex", &fixture().code_hash)
+            .unwrap();
+        kwargs
+            .set_item("expected_abi_hash_hex", &fixture().abi_hash)
+            .unwrap();
+        kwargs.set_item("chain_discriminant", 369).unwrap();
+        let artifact = PyBytes::new(py, &fixture().artifact);
+        let text = payload(31, 369, "12.5");
+        let expected = encode(request(Some(&text))).unwrap().unwrap();
+        attached.store(0, Ordering::SeqCst);
+        ready.wait();
+        // This closure keeps the GIL except inside the encoder's detached section,
+        // so any attach counted here happened while an encoding ran. Repeated
+        // calls bound the scheduling race of the helper's wake-up.
+        for _ in 0..2_000 {
+            let value = function
+                .call((&artifact, "quote", &text), Some(&kwargs))
+                .unwrap();
+            assert_eq!(value.cast::<PyBytes>().unwrap().as_bytes(), expected);
+            if attached.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+        }
+        attached.load(Ordering::SeqCst)
+    });
+    stop.store(true, Ordering::SeqCst);
+    helper.join().unwrap();
+    assert!(
+        during > 0,
+        "another thread could not attach while the encoder verified the artifact"
+    );
+}
+
+#[test]
 fn contract_argument_encoder_is_registered_on_the_native_module() {
     Python::initialize();
     Python::attach(|py| {

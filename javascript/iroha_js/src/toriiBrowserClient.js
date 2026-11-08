@@ -27,6 +27,9 @@ import {
   explorerTransactionProofHash,
 } from "./explorerTransactionProof.js";
 import { readAccountCapabilitiesResponseV1 } from "./accountCapabilities.js";
+import {
+  SCCP_CAPABILITIES_MAX_BYTES, normalizeSccpCapabilitiesV1,
+} from "./sccpRead.js";
 import { isExactJsonMediaType } from "./toriiBoundedResponse.js";
 import { inspectToriiAccountIdentityViaNativeTransport, requireToriiNativeIdentity } from "./nativeAccountInspection.js";
 import {
@@ -2198,6 +2201,31 @@ export class ToriiBrowserClient {
         );
       },
     });
+  }
+
+  /** Public SCCP metadata uses a transport without inherited account/API credentials. */
+  async #sccpPublicJson(path, maximumBodyBytes, signal, params) {
+    const publicClient = new ToriiBrowserClient(this.#baseUrl, {
+      networkId: this.#networkId, fetchImpl: this.#fetchImpl, timeoutMs: this.#timeoutMs,
+    });
+    return publicClient._json("GET", path, {
+      signal, params, maximumBodyBytes, omitCredentials: true, oneShot: true,
+      successStatuses: [200],
+      responseObserver: (response) => {
+        if (!isExactJsonMediaType(response.headers.get("content-type"))) {
+          rejectType("SCCP response must use application/json");
+        }
+      },
+      jsonParser: (text) => parseStrictLosslessIntegerJson(text, "SCCP response"),
+    });
+  }
+
+  /** Read native SCCP capability metadata; this does not authenticate the advertised identity. */
+  async getSccpCapabilitiesV1(options = {}) {
+    const opts = signalOnlyOptions(options, "getSccpCapabilitiesV1 options");
+    return normalizeSccpCapabilitiesV1(await this.#sccpPublicJson(
+      "/v1/sccp/capabilities", SCCP_CAPABILITIES_MAX_BYTES, signalFrom(opts),
+    ));
   }
 
   /**

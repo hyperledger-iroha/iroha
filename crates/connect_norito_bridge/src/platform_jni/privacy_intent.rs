@@ -88,12 +88,10 @@ mod tests {
                     Some(norito::encode_canonical(&typed).unwrap())
                 );
                 assert!(project_instruction(&input).is_none());
-                let envelope: iroha_data_model::privacy::PrivacyRuntimeProofEnvelopeV1 =
+                let envelope: iroha_data_model::privacy::PrivacyProofEnvelopeV1 =
                     norito::decode_canonical(&row.envelope_norito).unwrap();
-                let retired = norito::encode_canonical(&SubmitPrivacyProofV1::new(
-                    (envelope).try_into().expect("frozen Exact12 test input"),
-                ))
-                .unwrap();
+                let retired =
+                    norito::encode_canonical(&SubmitPrivacyProofV1::new(envelope)).unwrap();
                 assert!(project_instruction(&retired).is_none());
             } else {
                 let typed = norito::decode_canonical::<SubmitPrivacyProofV1>(&input)
@@ -136,10 +134,8 @@ mod tests {
             .iter()
             .find(|row| row.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1)
             .unwrap();
-        let x509: iroha_data_model::privacy::PrivacyRuntimeProofEnvelopeV1 =
-            norito::decode_canonical(&x509.envelope_norito).unwrap();
         let x509: iroha_data_model::privacy::PrivacyProofEnvelopeV1 =
-            x509.try_into().expect("frozen Exact12 test input");
+            norito::decode_canonical(&x509.envelope_norito).unwrap();
         let generic: SubmitPrivacyProofV1 =
             norito::decode_canonical(&fixtures.rows[0].submit_proof_instruction_norito).unwrap();
         for component in 0..3 {
@@ -173,11 +169,7 @@ mod tests {
             norito::canonical_frame_len(&envelope).unwrap(),
             envelope_limit
         );
-        let instruction = SubmitPrivacyProofV1::new(
-            (envelope.clone())
-                .try_into()
-                .expect("frozen Exact12 test input"),
-        );
+        let instruction = SubmitPrivacyProofV1::new(envelope.clone());
         let exact = norito::encode_canonical(&instruction).expect("ceiling instruction");
         assert_eq!(
             exact.len(),
@@ -185,10 +177,8 @@ mod tests {
         );
         assert!(project_instruction(&exact).is_some());
         envelope.proof.bytes_mut().bytes.push(0x5a);
-        let one_over = norito::encode_canonical(&SubmitPrivacyProofV1::new(
-            (envelope).try_into().expect("frozen Exact12 test input"),
-        ))
-        .expect("one-over instruction");
+        let one_over = norito::encode_canonical(&SubmitPrivacyProofV1::new(envelope))
+            .expect("one-over instruction");
         assert_eq!(one_over.len(), exact.len() + 1);
         assert!(project_instruction(&one_over).is_none());
     }
