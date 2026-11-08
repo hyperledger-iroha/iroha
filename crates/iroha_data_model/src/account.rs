@@ -30,6 +30,7 @@ pub use prepared_decode::{AccountLiteralAdmissionError, ChargedAccount};
 mod i105_json;
 pub mod recovery;
 pub mod rekey;
+pub mod signing_key;
 use crate::{
     HasMetadata, Identifiable, IntoKeyValue, Registered, Registrable,
     common::{Owned, Ref},

@@ -18,6 +18,8 @@ import {
   NetworkId,
   TORII_CANONICAL_REQUEST_DOMAIN_TAG,
   buildConnectTokenProtocol,
+  buildOffchainSigningMessageV1,
+  offchainPurposeForConnectRawTag,
   buildConnectWebSocketUrl,
   createConnectAppSession,
   createConnectCanonicalRequestAuth,
@@ -566,6 +568,36 @@ function makeAccount() {
   return { accountId, privateKey, publicKey };
 }
 
+const SIGNING_PRIVATE_KEY = new Uint8Array(32).fill(0x31);
+
+/** The account's separate off-chain signing key, as Torii would report it. */
+function makeSigningKey(generation = 1) {
+  return { privateKey: SIGNING_PRIVATE_KEY, publicKey: ed25519.getPublicKey(SIGNING_PRIVATE_KEY), generation };
+}
+
+function signingKeyResolver(signingKey) {
+  return async () => (signingKey === null ? null : { publicKey: signingKey.publicKey, generation: signingKey.generation });
+}
+
+/** The off-chain envelope the account's signing key signs for a raw request. */
+function rawEnvelope(account, signingKey, domainTag, bytes, networkId = CANONICAL_NETWORK_ID) {
+  return buildOffchainSigningMessageV1({
+    purpose: offchainPurposeForConnectRawTag(domainTag),
+    networkId,
+    ...(account.canonicalHex === undefined
+      ? { accountId: account.accountId }
+      : { accountCanonicalBytes: Buffer.from(account.canonicalHex.slice(2), "hex") }),
+    generation: signingKey.generation,
+    domainTag,
+    bytes,
+  });
+}
+
+/** Let the session resolve the signing key and send its raw request. */
+function flushMicrotasks() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 function makeNativeInspectionFixtureAccount() {
   // Use the canonical native fixture verbatim: browser transport tests must
   // not require a local native codec just to prepare the inspection response.
@@ -583,7 +615,13 @@ function makeNativeInspectionFixtureAccount() {
   };
 }
 
-async function createApprovedTestSession({ permissions = null, nativeInspection = false } = {}) {
+async function createApprovedTestSession({
+  permissions = null,
+  nativeInspection = false,
+  signingKey = makeSigningKey(),
+  resolveAccountSigningKey = signingKeyResolver(signingKey),
+  fetchImpl,
+} = {}) {
   RecordingWebSocket.instances.length = 0;
   const preview = makePreview();
   const account = nativeInspection ? makeNativeInspectionFixtureAccount() : makeAccount();
@@ -601,6 +639,9 @@ async function createApprovedTestSession({ permissions = null, nativeInspection 
     },
     permissions,
     webSocketImpl: RecordingWebSocket,
+    // `null` leaves the session's default Torii resolver in place.
+    ...(resolveAccountSigningKey === null ? {} : { resolveAccountSigningKey }),
+    ...(fetchImpl === undefined ? {} : { fetchImpl }),
     inspectAccountIdentity: nativeInspection ? async () => inspectToriiAccountIdentityViaNativeTransport({
       networkId: preview.networkId, baseUrl: "https://taira.sora.org", accountId: account.accountId,
     }, async ({ body }) => ({
@@ -628,7 +669,7 @@ async function createApprovedTestSession({ permissions = null, nativeInspection 
     }),
   );
   await session.waitForApproval();
-  return { account, keys, preview, session, socket };
+  return { account, keys, preview, session, socket, signingKey };
 }
 
 test("createConnectSessionPreview is deterministic with fixed nonce and keypair", () => {
@@ -1187,7 +1228,7 @@ test("createConnectAppSession rejects a mixed-torsion approval signature", async
 });
 
 test("createConnectAppSession requests sign_raw permission and signs raw bytes under the exact domain", async () => {
-  const { account, keys, preview, session, socket } = await createApprovedTestSession({
+  const { account, keys, preview, session, socket, signingKey } = await createApprovedTestSession({
     permissions: {
       methods: ["sign_raw"],
       resources: [TORII_CANONICAL_REQUEST_DOMAIN_TAG],
@@ -1201,13 +1242,17 @@ test("createConnectAppSession requests sign_raw permission and signs raw bytes u
 
   const message = Buffer.from("POST\n/v1/multisig/spec\n\nbody-hash\n123\nnonce", "utf8");
   const signPromise = session.signRaw(TORII_CANONICAL_REQUEST_DOMAIN_TAG, message);
-  await Promise.resolve();
+  await flushMicrotasks();
   const signRequest = decodeAppSignRequest(preview, keys, socket.sent[1]);
   assert.equal(signRequest.kind, "raw");
   assert.equal(signRequest.domainTag, TORII_CANONICAL_REQUEST_DOMAIN_TAG);
   assert.deepEqual(signRequest.bytes, message);
 
-  const signature = ed25519.sign(message, account.privateKey);
+  // The wallet signs the off-chain envelope with the account's signing key.
+  const signature = ed25519.sign(
+    rawEnvelope(account, signingKey, TORII_CANONICAL_REQUEST_DOMAIN_TAG, message),
+    signingKey.privateKey,
+  );
   socket.receive(encodeSignResultOk(preview, keys, signRequest.seq, signature));
   assert.deepEqual(Buffer.from(await signPromise), Buffer.from(signature));
 });
@@ -1216,7 +1261,7 @@ test("createConnectAppSession rejects a raw signature that is not bound to the a
   const { keys, preview, session, socket } = await createApprovedTestSession();
   const message = Buffer.from("canonical request", "utf8");
   const signPromise = session.signRaw(TORII_CANONICAL_REQUEST_DOMAIN_TAG, message);
-  await Promise.resolve();
+  await flushMicrotasks();
   const signRequest = decodeAppSignRequest(preview, keys, socket.sent[1]);
   const otherPrivateKey = new Uint8Array(32).fill(0x42);
   socket.receive(
@@ -1236,17 +1281,20 @@ test("createConnectAppSession rejects a raw signature that is not bound to the a
 });
 
 test("createConnectAppSession rejects a mixed-torsion raw signature", async () => {
-  const { account, keys, preview, session, socket } = await createApprovedTestSession();
+  const { account, keys, preview, session, socket, signingKey } = await createApprovedTestSession();
   const message = Buffer.from("canonical request", "utf8");
   const signPromise = session.signRaw(TORII_CANONICAL_REQUEST_DOMAIN_TAG, message);
-  await Promise.resolve();
+  await flushMicrotasks();
   const signRequest = decodeAppSignRequest(preview, keys, socket.sent[1]);
   socket.receive(
     encodeSignResultOk(
       preview,
       keys,
       signRequest.seq,
-      mixedTorsionSignature(message, account.privateKey),
+      mixedTorsionSignature(
+        rawEnvelope(account, signingKey, TORII_CANONICAL_REQUEST_DOMAIN_TAG, message),
+        signingKey.privateKey,
+      ),
     ),
   );
 
@@ -1261,6 +1309,7 @@ test("createConnectAppSession shares one stable in-flight gate before approval",
   RecordingWebSocket.instances.length = 0;
   const preview = makePreview();
   const account = makeAccount();
+  const signingKey = makeSigningKey();
   const relayToken = "relay-token";
   const walletPrivateKey = new Uint8Array(32).fill(0x55);
   const walletPublicKey = x25519.getPublicKey(walletPrivateKey);
@@ -1274,6 +1323,7 @@ test("createConnectAppSession shares one stable in-flight gate before approval",
       token_relay: relayToken,
     },
     webSocketImpl: RecordingWebSocket,
+    resolveAccountSigningKey: signingKeyResolver(signingKey),
   });
   const socket = RecordingWebSocket.instances[0];
   socket.open();
@@ -1303,14 +1353,14 @@ test("createConnectAppSession shares one stable in-flight gate before approval",
     }),
   );
   await session.waitForApproval();
-  await Promise.resolve();
+  await flushMicrotasks();
   const signRequest = decodeAppSignRequest(preview, keys, socket.sent[1]);
   socket.receive(
     encodeSignResultOk(
       preview,
       keys,
       signRequest.seq,
-      ed25519.sign(message, account.privateKey),
+      ed25519.sign(rawEnvelope(account, signingKey, TORII_CANONICAL_REQUEST_DOMAIN_TAG, message), signingKey.privateKey),
     ),
   );
   await rawPromise;
@@ -1327,14 +1377,18 @@ test("createConnectAppSession rejects padded raw-sign domain tags before sending
 
 test("createConnectCanonicalRequestAuth signs the exact canonical message with the approved identity", async () => {
   const account = makeAccount();
+  const signingKey = makeSigningKey();
   let captured = null;
   const auth = await createConnectCanonicalRequestAuth({
     async waitForApproval() {
-      return { accountId: account.accountId };
+      return { accountId: account.accountId, networkId: CANONICAL_NETWORK_ID };
+    },
+    async accountSigningKey() {
+      return { publicKey: signingKey.publicKey, generation: signingKey.generation };
     },
     async signRaw(domainTag, bytes) {
       captured = { domainTag, bytes: Uint8Array.from(bytes) };
-      return ed25519.sign(bytes, account.privateKey);
+      return ed25519.sign(rawEnvelope(account, signingKey, domainTag, bytes), signingKey.privateKey);
     },
   });
   assert.equal(Object.isFrozen(auth), true);
@@ -1363,17 +1417,56 @@ test("createConnectCanonicalRequestAuth signs the exact canonical message with t
   });
   assert.equal(captured.domainTag, TORII_CANONICAL_REQUEST_DOMAIN_TAG);
   assert.deepEqual(Buffer.from(captured.bytes), expectedMessage);
+  // Torii verifies the account's signing key over the envelope of the canonical message.
   assert.equal(
     request.headers["X-Iroha-Signature"],
-    Buffer.from(ed25519.sign(expectedMessage, account.privateKey)).toString("base64"),
+    Buffer.from(ed25519.sign(
+      rawEnvelope(account, signingKey, TORII_CANONICAL_REQUEST_DOMAIN_TAG, expectedMessage),
+      signingKey.privateKey,
+    )).toString("base64"),
+  );
+});
+
+test("createConnectCanonicalRequestAuth refuses the account's transaction-key signature", async () => {
+  const account = makeAccount();
+  const signingKey = makeSigningKey();
+  const auth = await createConnectCanonicalRequestAuth({
+    async waitForApproval() {
+      return { accountId: account.accountId, networkId: CANONICAL_NETWORK_ID };
+    },
+    async accountSigningKey() {
+      return { publicKey: signingKey.publicKey, generation: signingKey.generation };
+    },
+    async signRaw(domainTag, bytes) {
+      return ed25519.sign(rawEnvelope(account, signingKey, domainTag, bytes), account.privateKey);
+    },
+  });
+  await assert.rejects(
+    auth.sign({ message: Buffer.from("canonical request", "utf8") }),
+    (error) => error instanceof ConnectSignRequestError && error.code === "INVALID_SIGNATURE",
+  );
+  await assert.rejects(
+    createConnectCanonicalRequestAuth({
+      async waitForApproval() {
+        return { accountId: account.accountId, networkId: CANONICAL_NETWORK_ID };
+      },
+      async signRaw() {
+        assert.fail("a session without an account signing key never signs");
+      },
+    }),
+    /accountSigningKey must be a function/u,
   );
 });
 
 test("createConnectCanonicalRequestAuth rejects invalid wallet signatures", async () => {
   const account = makeAccount();
+  const signingKey = makeSigningKey();
   const auth = await createConnectCanonicalRequestAuth({
     async waitForApproval() {
-      return { accountId: account.accountId };
+      return { accountId: account.accountId, networkId: CANONICAL_NETWORK_ID };
+    },
+    async accountSigningKey() {
+      return { publicKey: signingKey.publicKey, generation: signingKey.generation };
     },
     async signRaw() {
       return new Uint8Array(64);
@@ -1391,12 +1484,16 @@ test("createConnectCanonicalRequestAuth rejects invalid wallet signatures", asyn
 
 test("createConnectCanonicalRequestAuth rejects mixed-torsion wallet signatures", async () => {
   const account = makeAccount();
+  const signingKey = makeSigningKey();
   const auth = await createConnectCanonicalRequestAuth({
     async waitForApproval() {
-      return { accountId: account.accountId };
+      return { accountId: account.accountId, networkId: CANONICAL_NETWORK_ID };
     },
-    async signRaw(_domainTag, message) {
-      return mixedTorsionSignature(message, account.privateKey);
+    async accountSigningKey() {
+      return { publicKey: signingKey.publicKey, generation: signingKey.generation };
+    },
+    async signRaw(domainTag, message) {
+      return mixedTorsionSignature(rawEnvelope(account, signingKey, domainTag, message), signingKey.privateKey);
     },
   });
   await assert.rejects(
@@ -1652,7 +1749,7 @@ test("createConnectAppSession surfaces encrypted close frames", async () => {
   assert.equal(socket.closeCalls, 1);
 });
 
-test("createConnectCanonicalRequestAuth rejects valid multisig and non-Ed25519 accounts before signing", async () => {
+test("createConnectCanonicalRequestAuth authenticates multisig and non-Ed25519 accounts through their Ed25519 signing key", async () => {
   const vectors = JSON.parse(
     readFileSync(new URL("../../../fixtures/account/address_vectors.json", import.meta.url), "utf8"),
   );
@@ -1679,27 +1776,33 @@ test("createConnectCanonicalRequestAuth rejects valid multisig and non-Ed25519 a
       Buffer.from(address.canonicalBytes()),
       `${kind}: native-admitted canonical account`,
     );
-    let approvalCalls = 0;
+    // Off-chain authentication no longer depends on the controller: the
+    // account's registered Ed25519 signing key signs for any controller.
+    const signingKey = makeSigningKey(2);
+    const account = { accountId };
     let signCalls = 0;
-    await assert.rejects(
-      createConnectCanonicalRequestAuth({
-        async waitForApproval() {
-          approvalCalls += 1;
-          return { accountId };
-        },
-        async signRaw() {
-          signCalls += 1;
-          assert.fail(`${kind}: unsupported account must reject before signing`);
-        },
-      }),
-      {
-        name: "Error",
-        message: "Connect approval account id must be a canonical single-key Ed25519 I105 address",
+    const auth = await createConnectCanonicalRequestAuth({
+      async waitForApproval() {
+        return { accountId, networkId: CANONICAL_NETWORK_ID };
       },
+      async accountSigningKey() {
+        return { publicKey: signingKey.publicKey, generation: signingKey.generation };
+      },
+      async signRaw(domainTag, bytes) {
+        signCalls += 1;
+        return ed25519.sign(rawEnvelope(account, signingKey, domainTag, bytes), signingKey.privateKey);
+      },
+    });
+    const message = Buffer.from(`${kind} canonical request`, "utf8");
+    assert.deepEqual(
+      Buffer.from(await auth.sign({ message })),
+      Buffer.from(ed25519.sign(
+        rawEnvelope(account, signingKey, TORII_CANONICAL_REQUEST_DOMAIN_TAG, message),
+        signingKey.privateKey,
+      )),
       kind,
     );
-    assert.equal(approvalCalls, 1, kind);
-    assert.equal(signCalls, 0, kind);
+    assert.equal(signCalls, 1, kind);
   }
 });
 
@@ -1721,6 +1824,7 @@ function nativeInspectedTestSession(inspectAccountIdentity) {
     baseUrl: "https://taira.sora.org", preview,
     session: { sid: preview.sidBase64Url, token_app: "token-app", token_relay: "relay-token" },
     webSocketImpl: RecordingWebSocket, inspectAccountIdentity,
+    resolveAccountSigningKey: signingKeyResolver(makeSigningKey()),
   });
   const socket = RecordingWebSocket.instances[0];
   socket.open();
@@ -1823,11 +1927,13 @@ test("browser-only Connect verifies approval and raw signature using native Tori
     }), { headers: { "content-type": "application/json" } }),
   });
   RecordingWebSocket.instances.length = 0;
+  const signingKey = makeSigningKey();
   const session = browser.createConnectAppSession({
     baseUrl: "https://taira.sora.org", preview,
     session: { sid: preview.sidBase64Url, token_app: "token-app", token_relay: "relay-token" },
     webSocketImpl: RecordingWebSocket,
     inspectAccountIdentity: (accountId, options) => publicClient.inspectAccountIdentity(accountId, options),
+    resolveAccountSigningKey: signingKeyResolver(signingKey),
   });
   const socket = RecordingWebSocket.instances[0];
   const walletPrivateKey = new Uint8Array(32).fill(0x55);
@@ -1841,10 +1947,91 @@ test("browser-only Connect verifies approval and raw signature using native Tori
   const auth = await browser.createConnectCanonicalRequestAuth(session);
   const message = Uint8Array.of(1, 2, 3);
   const signature = auth.sign({ message });
-  await Promise.resolve();
+  await flushMicrotasks();
   const keys = deriveKeys(preview, walletPrivateKey);
   const request = decodeAppSignRequest(preview, keys, socket.sent[1]);
-  socket.receive(encodeSignResultOk(preview, keys, request.seq, ed25519.sign(message, account.privateKey)));
-  assert.deepEqual(await signature, ed25519.sign(message, account.privateKey));
+  const enveloped = ed25519.sign(
+    rawEnvelope(
+      { canonicalHex: AccountAddress.fromI105(account.accountId).canonicalHex().toLowerCase() },
+      signingKey,
+      TORII_CANONICAL_REQUEST_DOMAIN_TAG,
+      message,
+      preview.networkId,
+    ),
+    signingKey.privateKey,
+  );
+  socket.receive(encodeSignResultOk(preview, keys, request.seq, enveloped));
+  assert.deepEqual(await signature, enveloped);
   session.close();
+});
+
+test("raw requests verify only under the account's signing key, never its transaction key", async () => {
+  const message = Buffer.from("iroha-connect login challenge", "utf8");
+  const tag = "iroha-connect/v1/login";
+  const cases = [
+    ["transaction key over the envelope", (account, signingKey) => ed25519.sign(rawEnvelope(account, signingKey, tag, message), account.privateKey), false],
+    ["signing key over the bare bytes", (_account, signingKey) => ed25519.sign(message, signingKey.privateKey), false],
+    ["signing key over another tag's envelope", (account, signingKey) => ed25519.sign(rawEnvelope(account, signingKey, "iroha-connect/v1/other", message), signingKey.privateKey), false],
+    ["signing key over the envelope", (account, signingKey) => ed25519.sign(rawEnvelope(account, signingKey, tag, message), signingKey.privateKey), true],
+  ];
+  for (const [label, sign, accepted] of cases) {
+    const { account, keys, preview, session, socket, signingKey } = await createApprovedTestSession({ nativeInspection: true });
+    const pending = session.signRaw(tag, message);
+    await flushMicrotasks();
+    const request = decodeAppSignRequest(preview, keys, socket.sent[1]);
+    assert.equal(request.domainTag, tag, label);
+    socket.receive(encodeSignResultOk(preview, keys, request.seq, sign(account, signingKey)));
+    if (accepted) {
+      assert.deepEqual(Buffer.from(await pending), Buffer.from(sign(account, signingKey)), label);
+    } else {
+      await assert.rejects(pending, (error) => error instanceof ConnectSignRequestError && error.code === "INVALID_SIGNATURE", label);
+    }
+    session.close();
+  }
+});
+
+test("an account without a signing key is refused before the wallet is asked", async () => {
+  const { session, socket } = await createApprovedTestSession({ nativeInspection: true, signingKey: null });
+  await assert.rejects(
+    session.signRaw("iroha-connect/v1/login", Buffer.from("challenge")),
+    (error) => error instanceof ConnectSignRequestError && error.code === "SIGNING_KEY_REQUIRED",
+  );
+  assert.equal(socket.sent.length, 1, "no raw request reaches the wallet");
+  await assert.rejects(session.accountSigningKey(), (error) => error.code === "SIGNING_KEY_REQUIRED");
+  session.close();
+});
+
+test("the default resolver reads the account signing key from Torii", async () => {
+  const signingKey = makeSigningKey(5);
+  const requested = [];
+  const fetchImpl = async (url, init) => {
+    requested.push({ url, init });
+    return new Response(JSON.stringify({
+      public_key: `ed0120${Buffer.from(signingKey.publicKey).toString("hex").toUpperCase()}`,
+      generation: signingKey.generation,
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const { account, keys, preview, session, socket } = await createApprovedTestSession({
+    nativeInspection: true, resolveAccountSigningKey: null, fetchImpl,
+  });
+  assert.deepEqual(await session.accountSigningKey(), { publicKey: signingKey.publicKey, generation: 5 });
+  const message = Buffer.from("challenge", "utf8");
+  const pending = session.signRaw("iroha-connect/v1/login", message);
+  await flushMicrotasks();
+  const request = decodeAppSignRequest(preview, keys, socket.sent[1]);
+  const signature = ed25519.sign(rawEnvelope(account, signingKey, "iroha-connect/v1/login", message), signingKey.privateKey);
+  socket.receive(encodeSignResultOk(preview, keys, request.seq, signature));
+  assert.deepEqual(Buffer.from(await pending), Buffer.from(signature));
+  assert.equal(requested.length, 1, "one lookup per session");
+  assert.equal(requested[0].url, `https://taira.sora.org/v1/accounts/${encodeURIComponent(account.accountId)}/signing-key`);
+  assert.equal(requested[0].init.method, "GET");
+  session.close();
+
+  const missing = await createApprovedTestSession({
+    nativeInspection: true,
+    resolveAccountSigningKey: null,
+    fetchImpl: async () => new Response(JSON.stringify({ code: "account_signing_key_not_found" }), { status: 404 }),
+  });
+  await assert.rejects(missing.session.signRaw("iroha-connect/v1/login", message), (error) => error.code === "SIGNING_KEY_REQUIRED");
+  missing.session.close();
 });

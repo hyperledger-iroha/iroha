@@ -44,6 +44,7 @@ use iroha_fold::{
         FoldVerifierChips, FoldVerifierConfig,
         ivc::{assert_equal_unless, fold_frame, frame_outputs},
     },
+    decider_v2::STEP_RUNS,
     fold::fresh_instance,
     ivc::{ChainSide, FrameWitness, Fresh, Kept, embed, ivc_hash, prepare_step, step_public},
     relation::FoldShape,
@@ -464,6 +465,8 @@ pub fn spec(rel: &Relations) -> Arc<WrapSpec> {
         q_state: 0,
         lineage: core::array::from_fn(|i| i),
         boundary: vec![A_CONTEXT, A_PC],
+        q_step_runs: STEP_RUNS,
+        a_step_runs: STEP_RUNS,
     })
 }
 
@@ -766,7 +769,8 @@ pub fn wrap(
         }
     }
     let now = Instant::now();
-    let (s_proof, s_opening) = native::prove_s(&keys.plans, &keys.s_key, &prepared).expect("S proof");
+    let (s_proof, s_opening) =
+        native::prove_s(&keys.plans, &keys.s_key, &prepared).expect("S proof");
     println!("S proof ({} bytes): {:.1?}", s_proof.len(), now.elapsed());
     let stage = native::r_stage(&keys.plans, prepared, s_proof, &s_opening).expect("R stage");
     // R (S's proving recorded S's rows again).

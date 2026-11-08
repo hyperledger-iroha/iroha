@@ -86,6 +86,8 @@ pub type CellInstaller = fn(&mut WorldTransaction<'_, '_>, &[u8]) -> Result<(), 
 pub const ADDITIONS: &[Addition] = &[
     ENDORSED_RUNTIME_UPGRADE_PROPOSAL,
     GAME_PARTITIONS,
+    // Keep account signing keys independent of the Taira-only repair boundary.
+    ACCOUNT_SIGNING_KEYS,
     SORAFS_REPAIR,
 ];
 
@@ -133,6 +135,27 @@ pub const GAME_PARTITIONS: Addition = Addition {
     ],
     rebinds: &[],
     storage: &[StorageAddition::Table("world.game_partitions")],
+};
+
+/// Off-chain signing keys of accounts (`crate::smartcontracts::isi::account_signing_key`,
+/// `specs/account_signing_keys.md`): `SetAccountSigningKeyV1` installs, rotates and revokes
+/// the key an account signs off-chain messages with, separate from the controller that signs
+/// its transactions, with the `world.account_signing_keys` table and the
+/// `world.account_signing_key_reservations` table of keys that can never be reused. Until a
+/// change set activates it the instruction stays inactive, both tables stay empty and out of
+/// snapshots, and Torii authenticates every account with its controller exactly as before.
+///
+/// Rekey and recovery need no rebind. A signing key is bound to the `AccountId`, which is the
+/// controller, so a controller change yields an account without a signing key, while the old
+/// key stays reserved.
+pub const ACCOUNT_SIGNING_KEYS: Addition = Addition {
+    module: "iroha.account.signing_key.v1",
+    instructions: &["iroha.account.signing_key.set.v1"],
+    rebinds: &[],
+    storage: &[
+        StorageAddition::Table("world.account_signing_keys"),
+        StorageAddition::Table("world.account_signing_key_reservations"),
+    ],
 };
 
 /// Additions of a hypothetical later release, claiming compiled items the real baseline holds.

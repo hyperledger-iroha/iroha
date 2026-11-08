@@ -8,7 +8,7 @@
 //! wrap's rows per lane against the k16 limit and its public rows, and
 //! requires all four to fit.
 //!
-//! The second test wraps the genuine Receive after its eight half-steps:
+//! The second test wraps the genuine Receive after its ten half-steps:
 //! S, R, P and Omega are checked strictly and proved, Omega verifies
 //! natively, and its opening, `acc_V` and `acc_P` decide.
 //!
@@ -33,8 +33,10 @@ mod fold_wrap_toy;
 use std::{sync::Arc, time::Instant};
 
 use fold_receive_chain::{
-    Chain, HalfStep, ReceiveRelations, full_receive, receive_keys, receive_relations, run_chain,
+    Chain, HalfStep, ReceiveRelations, SCHEDULE, full_receive, receive_keys, receive_relations,
+    run_chain,
 };
+use iroha_fold::decider_v2::STEP_RUNS;
 use iroha_kagemusha_proof::{
     fold_lineage::{
         A_CONTEXT, A_PC, AKind, BASE, CLAIM_A, CLAIM_Q, FOLD_A, FOLD_Q, IVC_A, IVC_Q, Q_STATE,
@@ -45,6 +47,11 @@ use iroha_kagemusha_proof::{
     },
 };
 use iroha_pasta::{Fp, Fq};
+
+/// The A-side step-run bound of the wraps' deciders. The scheme's
+/// `A_STEP_RUNS` (128) puts P's glue at 101% with the Rebase kind (the wraps'
+/// deciders are their own, so their bound need not equal `decide_chain`'s).
+const WRAP_A_STEP_RUNS: usize = 80;
 
 /// Usable rows of a k16 circuit (2^16 less the blinding rows).
 const K16_ROWS: usize = 65_529;
@@ -75,11 +82,13 @@ fn spec(rel: &ReceiveRelations) -> Arc<WrapSpec> {
         q_state: Q_STATE,
         lineage: core::array::from_fn(|i| i),
         boundary: vec![A_CONTEXT, A_PC],
+        q_step_runs: STEP_RUNS,
+        a_step_runs: WRAP_A_STEP_RUNS,
     })
 }
 
-/// The finished chain the wraps take: the Receive after its eight
-/// half-steps, which A5 (step 8) closes after Q's Frame (step 7). Q keeps no
+/// The finished chain the wraps take: the Receive's segment after its ten
+/// half-steps (Rebase first), which A5 closes after Q's Frame. Q keeps no
 /// state.
 fn final_chain(chain: Chain) -> FinalChain {
     assert!(
@@ -87,7 +96,7 @@ fn final_chain(chain: Chain) -> FinalChain {
         "the Receive ends with A5"
     );
     FinalChain {
-        step: 8,
+        step: SCHEDULE.len() as u64,
         a_state: chain.a_state,
         q_state: Vec::new(),
         u_q: chain
@@ -148,17 +157,17 @@ fn the_wraps_size_on_the_real_receive_relations() {
 }
 
 #[test]
-#[ignore = "the real eight-half-step Receive, four k16 keygens, checks and proofs; run optimized"]
+#[ignore = "the real ten-half-step Receive, four k16 keygens, checks and proofs; run optimized"]
 fn the_wraps_finish_the_real_receive_into_an_omega_that_decides() {
     let _serial = fold_wrap_toy::serial();
     let started = Instant::now();
     let keys = receive_keys();
     let full = full_receive(&keys, None);
     let rel = receive_relations(&keys, &full);
-    let chain = final_chain(run_chain(&keys, &rel, &full, 8));
+    let chain = final_chain(run_chain(&keys, &rel, &full, SCHEDULE.len()));
     assert_eq!(Q_STATE, 0, "Q keeps no state");
     println!(
-        "keys, fixture, relations and eight half-steps: {:.1?}",
+        "keys, fixture, relations and ten half-steps: {:.1?}",
         started.elapsed()
     );
     let now = Instant::now();
@@ -184,9 +193,9 @@ fn the_real_receive_proves_with_one_wrap_key_at_a_time() {
             started.elapsed()
         );
         let now = Instant::now();
-        let chain = run_chain(&keys, &rel, &full, 8);
+        let chain = run_chain(&keys, &rel, &full, SCHEDULE.len());
         println!(
-            "eight half-steps, each checked strictly, committed and folded: {:.1?}",
+            "ten half-steps, each checked strictly, committed and folded: {:.1?}",
             now.elapsed()
         );
         (spec(&rel), final_chain(chain))

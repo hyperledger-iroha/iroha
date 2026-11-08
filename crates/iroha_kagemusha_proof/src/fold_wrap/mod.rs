@@ -154,6 +154,11 @@ pub struct WrapSpec {
     /// The positions in `z_A` that are zero between operations (the step
     /// context and the program counter): P accepts only such a state.
     pub boundary: Vec<usize>,
+    /// The step-run bound of the Q-side decider plans
+    /// (`iroha_fold::decider_v2::STEP_RUNS` by default).
+    pub q_step_runs: usize,
+    /// The step-run bound of the A-side decider plans.
+    pub a_step_runs: usize,
 }
 
 /// The instance copy term `I` of an accumulator on its commitment side, in

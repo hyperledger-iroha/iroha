@@ -9,6 +9,7 @@ fn verified_principal_for_request(
         account: ALICE_ID.clone(),
         signer: signer.clone(),
         verified_signers: vec![signer],
+        offchain_signing_key: false,
     }
 }
 #[test]
@@ -31,6 +32,7 @@ fn authenticated_da_principal_rejects_unrelated_submitter() {
         account: ALICE_ID.clone(),
         signer: unrelated.public_key().clone(),
         verified_signers: vec![unrelated.public_key().clone()],
+        offchain_signing_key: false,
     };
     let err = authenticate_da_ingest_request(
         &request,
@@ -99,4 +101,47 @@ fn authenticated_da_principal_rejects_same_label_different_genesis() {
         .expect_err("a valid request for a same-label foreign genesis must fail closed");
     assert_eq!(err.0, StatusCode::FORBIDDEN);
     assert_eq!(err.1, "DA ingest request targets a different network");
+}
+#[test]
+fn a_signing_key_principal_submits_its_controller_signed_da_authorization() {
+    let mut request = sample_request();
+    let controller = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
+    request.owner = AccountId::new(controller.public_key().clone());
+    resign_sample_request(&mut request);
+    let signing_key = checked_fixture_ed25519_keypair(0x51);
+    let principal = crate::app_auth::VerifiedCanonicalRequest {
+        account: request.owner.clone(),
+        signer: signing_key.public_key().clone(),
+        verified_signers: vec![signing_key.public_key().clone()],
+        offchain_signing_key: true,
+    };
+    let owner = authenticate_da_ingest_request(
+        &request,
+        &principal,
+        &crate::signed_query_test_network_id(),
+    )
+    .expect("the account's signing key authenticates; its controller signs the DA authorization");
+    assert_eq!(owner, request.owner);
+}
+#[test]
+fn a_signing_key_principal_cannot_carry_signatures_outside_its_controller() {
+    let request = sample_request();
+    let signing_key = checked_fixture_ed25519_keypair(0x51);
+    let principal = crate::app_auth::VerifiedCanonicalRequest {
+        account: ALICE_ID.clone(),
+        signer: signing_key.public_key().clone(),
+        verified_signers: vec![signing_key.public_key().clone()],
+        offchain_signing_key: true,
+    };
+    let err = authenticate_da_ingest_request(
+        &request,
+        &principal,
+        &crate::signed_query_test_network_id(),
+    )
+    .expect_err("DA signatures of a key outside the owner's controller stay refused");
+    assert_eq!(err.0, StatusCode::FORBIDDEN);
+    assert_eq!(
+        err.1,
+        "DA ingest authorization includes a signer outside the authenticated account witness"
+    );
 }

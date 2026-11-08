@@ -7,9 +7,16 @@
 //!     --token <`token_wallet`> --relay <`token_relay`> \
 //!     [--action ok|reject|close]
 //!
-//! Supply the signing seed at runtime through
-//! `IROHA_CONNECT_ACCOUNT_SEED_HEX=<32-byte-ed25519-seed>`; never persist it in
-//! source, shell history, or a checked-in configuration file.
+//! Supply both seeds at runtime; never persist them in source, shell history, or a
+//! checked-in configuration file:
+//!
+//! - `IROHA_CONNECT_ACCOUNT_SEED_HEX=<32-byte-ed25519-seed>`: the account's transaction key.
+//!   It signs only the transaction payloads of `SignRequestTx`, after decoding them.
+//! - `IROHA_CONNECT_SIGNING_SEED_HEX=<32-byte-ed25519-seed>`: the account's separate
+//!   off-chain signing key, registered with `SetAccountSigningKeyV1`, and
+//!   `IROHA_CONNECT_SIGNING_KEY_GENERATION=<u32>` its registered generation. It signs
+//!   `SignRequestRaw` inside the off-chain envelope, never raw bytes, so a dApp cannot obtain
+//!   a transaction signature through a raw request.
 #[cfg(feature = "connect")]
 use anyhow::Context;
 #[cfg(feature = "connect")]
@@ -78,7 +85,23 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("account seed must be exactly 32 nonzero bytes");
     }
     let account_key_pair = KeyPair::try_from_seed(account_seed, Algorithm::Ed25519)?;
-    let account_id = AccountId::new(account_key_pair.public_key().clone()).to_string();
+    let signing_seed = hex::decode(
+        std::env::var("IROHA_CONNECT_SIGNING_SEED_HEX")
+            .context("set runtime-only IROHA_CONNECT_SIGNING_SEED_HEX")?,
+    )?;
+    if signing_seed.len() != 32 || signing_seed.iter().all(|byte| *byte == 0) {
+        anyhow::bail!("signing seed must be exactly 32 nonzero bytes");
+    }
+    let signing_key_pair = KeyPair::try_from_seed(signing_seed, Algorithm::Ed25519)?;
+    if signing_key_pair.public_key() == account_key_pair.public_key() {
+        anyhow::bail!("the off-chain signing key must differ from the account's transaction key");
+    }
+    let signing_key_generation: u32 = std::env::var("IROHA_CONNECT_SIGNING_KEY_GENERATION")
+        .context("set IROHA_CONNECT_SIGNING_KEY_GENERATION to the registered generation")?
+        .parse()
+        .context("IROHA_CONNECT_SIGNING_KEY_GENERATION must be a decimal u32")?;
+    let account = AccountId::new(account_key_pair.public_key().clone());
+    let account_id = account.to_string();
     // Connect WS as wallet
     let ws_url = format!(
         "{}/v1/connect/ws?sid={}&role=wallet",
@@ -163,15 +186,14 @@ async fn main() -> anyhow::Result<()> {
         _ => anyhow::bail!("expected ciphertext"),
     };
     log_wallet_payload(&env);
-    send_wallet_action(
-        &mut ws,
-        &k_wallet,
-        &sid,
-        &env,
-        &account_key_pair,
-        action.as_str(),
-    )
-    .await?;
+    let keys = WalletKeys {
+        network_id,
+        account,
+        transaction_key: account_key_pair,
+        signing_key: signing_key_pair,
+        signing_key_generation,
+    };
+    send_wallet_action(&mut ws, &k_wallet, &sid, &env, &keys, action.as_str()).await?;
     Ok(())
 }
 #[cfg(feature = "connect")]
@@ -249,27 +271,66 @@ fn log_wallet_payload(env: &proto::EnvelopeV1) {
         }
     }
 }
+/// The keys of the account the example wallet acts for.
+#[cfg(feature = "connect")]
+struct WalletKeys {
+    network_id: NetworkId,
+    account: AccountId,
+    /// Signs only decoded transaction payloads.
+    transaction_key: KeyPair,
+    /// Signs every off-chain request, inside the off-chain envelope.
+    signing_key: KeyPair,
+    signing_key_generation: u32,
+}
+/// Sign one Connect signing request with the key its kind calls for.
+#[cfg(feature = "connect")]
+fn sign_request(
+    keys: &WalletKeys,
+    payload: &proto::ConnectPayloadV1,
+) -> anyhow::Result<proto::WalletSignatureV1> {
+    match payload {
+        proto::ConnectPayloadV1::SignRequestTx { tx_bytes } => {
+            // Decode the payload and sign its hash, exactly as a transaction signature; refuse
+            // a payload of another authority instead of signing bytes the wallet cannot read.
+            let builder =
+                iroha_data_model::transaction::TransactionBuilder::decode_payload(tx_bytes)
+                    .context("SignRequestTx must carry a canonical transaction payload")?;
+            let signed = builder
+                .try_sign(keys.transaction_key.private_key())
+                .context("the transaction is not this account's to sign")?;
+            Ok(proto::WalletSignatureV1::new(
+                Algorithm::Ed25519,
+                Signature::from(signed.signature().0.clone()),
+            ))
+        }
+        proto::ConnectPayloadV1::SignRequestRaw { domain_tag, bytes } => {
+            // TODO: a real wallet shows the request and, for the Torii canonical-request tag,
+            // checks that `bytes` are a canonical request before signing.
+            Ok(sdk::sign_raw_request(
+                &keys.signing_key,
+                &keys.network_id,
+                &keys.account,
+                keys.signing_key_generation,
+                domain_tag,
+                bytes,
+            )?)
+        }
+        _ => anyhow::bail!("ok action requires a signing request"),
+    }
+}
 #[cfg(feature = "connect")]
 async fn send_wallet_action(
     ws: &mut WalletWebSocket,
     k_wallet: &[u8; 32],
     sid: &[u8; 32],
     request: &proto::EnvelopeV1,
-    account_key_pair: &KeyPair,
+    keys: &WalletKeys,
     action: &str,
 ) -> anyhow::Result<()> {
     match action {
         "ok" => {
-            let message = match &request.payload {
-                proto::ConnectPayloadV1::SignRequestTx { tx_bytes } => tx_bytes.as_slice(),
-                proto::ConnectPayloadV1::SignRequestRaw { bytes, .. } => bytes.as_slice(),
-                _ => anyhow::bail!("ok action requires a signing request"),
-            };
             let reply = proto::ConnectPayloadV1::SignResultOk {
-                signature: proto::WalletSignatureV1::new(
-                    Algorithm::Ed25519,
-                    Signature::try_new(account_key_pair.private_key(), message)?,
-                ),
+                signature: sign_request(keys, &request.payload)?,
             };
             let frame =
                 sdk::seal_envelope_current(k_wallet, sid, proto::Dir::WalletToApp, 2, reply);

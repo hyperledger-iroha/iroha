@@ -833,6 +833,10 @@
     "scope": "out",
     "reason": "Native independent-root game units execute directly in IVM. Imports authenticate Sumeragi-certified source blocks and write-set membership through the native AMX tracker (crates/iroha_core/src/smartcontracts/isi/game_partition.rs), not a ZK or FHE relation."
    },
+   "account_signing_key": {
+    "scope": "out",
+    "reason": "Off-chain signing key install, rotation and revocation (crates/iroha_core/src/smartcontracts/isi/account_signing_key.rs, specs/account_signing_keys.md). The account itself authorizes it in an ordinary controller-signed transaction; it verifies no proof and carries no ZK or FHE relation."
+   },
    "governance": {
     "scope": "partial",
     "pattern": "Ballot|Conviction|Parliament",

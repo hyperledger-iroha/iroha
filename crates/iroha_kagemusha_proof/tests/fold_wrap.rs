@@ -133,7 +133,10 @@ fn the_toy_chain_proves_with_one_wrap_key_at_a_time() {
     let spec = fold_wrap_toy::spec(&relations);
     let chain = fold_wrap_toy::chain(&relations, 8, &lineage(9));
     drop(relations);
-    println!("toy relations and eight half-steps: {:.1?}", started.elapsed());
+    println!(
+        "toy relations and eight half-steps: {:.1?}",
+        started.elapsed()
+    );
     fold_wrap_toy::prove_one_key_at_a_time(spec, chain, 13);
     println!("total: {:.1?}", started.elapsed());
 }

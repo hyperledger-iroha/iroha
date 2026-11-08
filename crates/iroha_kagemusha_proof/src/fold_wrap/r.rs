@@ -103,7 +103,10 @@ impl RPlan {
         let a_plans = spec
             .a
             .iter()
-            .map(|r| DeciderV2Plan::new(r.clone(), &spec.key_a).map(Arc::new))
+            .map(|r| {
+                DeciderV2Plan::with_step_runs(r.clone(), &spec.key_a, spec.a_step_runs)
+                    .map(Arc::new)
+            })
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| WrapError::Input)?;
         if a_plans

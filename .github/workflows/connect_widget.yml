@@ -1,0 +1,54 @@
+name: IrohaConnect widget
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "javascript/iroha_connect_widget/**"
+      - "javascript/iroha_js/src/**"
+      - "javascript/iroha_js/*.d.ts"
+      - "javascript/iroha_js/package.json"
+      - "javascript/iroha_js/package-lock.json"
+      - ".github/workflows/connect_widget.yml"
+  push:
+    branches: [main]
+    paths:
+      - "javascript/iroha_connect_widget/**"
+      - "javascript/iroha_js/src/**"
+      - "javascript/iroha_js/*.d.ts"
+      - "javascript/iroha_js/package.json"
+      - "javascript/iroha_js/package-lock.json"
+      - ".github/workflows/connect_widget.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: connect-widget-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  widget:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            javascript/iroha_js/package-lock.json
+            javascript/iroha_connect_widget/package-lock.json
+      - name: Build the SDK distribution the widget links
+        working-directory: javascript/iroha_js
+        run: |
+          npm ci --ignore-scripts
+          npm run build:dist
+      - name: Install widget dependencies
+        working-directory: javascript/iroha_connect_widget
+        run: npm ci --ignore-scripts
+      - name: Lint, type-check, test and build
+        working-directory: javascript/iroha_connect_widget
+        run: npm run check

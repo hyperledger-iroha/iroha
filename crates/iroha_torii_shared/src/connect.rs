@@ -873,10 +873,14 @@ pub enum ConnectPayloadV1 {
     /// Encrypted control messages post-approval (e.g., Close/Reject).
     Control(ControlAfterKeyV1),
     /// Request the wallet to sign opaque bytes under a domain separation tag.
+    ///
+    /// The wallet signs the off-chain envelope of `domain_tag` and `bytes`
+    /// (`iroha_data_model::account::signing_key`) with the account's off-chain signing key,
+    /// never the bare bytes with its transaction key (`connect_sdk::sign_raw_request`).
     SignRequestRaw {
-        /// Domain separation tag for the signature prompt.
+        /// Domain separation tag, shown in the prompt and bound into the signed envelope.
         domain_tag: String,
-        /// Opaque bytes to sign.
+        /// Opaque bytes to sign inside the envelope.
         bytes: Vec<u8>,
     },
     /// Request the wallet to sign a canonical Iroha transaction payload.

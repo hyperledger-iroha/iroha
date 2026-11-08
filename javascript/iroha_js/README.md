@@ -1590,9 +1590,17 @@ native verifier's 32 MiB carrier bound. Explorer/header JSON and
 
 `createConnectCanonicalRequestAuth()` passes the exact canonical request
 message (including its timestamp and nonce) to `signRaw()` under
-`iroha:torii:canonical-request:v1`, binds `authAccountId` to the approved
-identity, and verifies the returned Ed25519 signature locally. The domain tag
-is wallet policy/prompt context and is not prepended to the signed bytes.
+`iroha:torii:canonical-request:v1` and binds `authAccountId` to the approved
+identity. An account's transaction key signs only transactions: the wallet signs
+every raw request with the account's separate off-chain signing key, over the
+off-chain envelope of the domain tag and bytes
+(`buildOffchainSigningMessageV1`, `specs/account_signing_keys.md`). The session
+reads that key from committed state, by default from Torii
+`GET /v1/accounts/{account_id}/signing-key` (override with
+`resolveAccountSigningKey`), before it sends the request, and verifies the
+returned Ed25519 signature locally; a signature of the transaction key, or of
+the bare bytes, is refused with `INVALID_SIGNATURE`. An account without a
+registered signing key cannot sign raw requests (`SIGNING_KEY_REQUIRED`).
 Private keys never enter the dApp, and `signTransaction()` must not be used as
 a substitute for signing canonical request bytes. A session permits only one
 transaction or raw signature request in flight at a time; concurrent calls

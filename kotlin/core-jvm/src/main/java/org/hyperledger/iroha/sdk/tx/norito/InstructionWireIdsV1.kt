@@ -22,6 +22,7 @@ internal object InstructionWireIdsV1 {
         "iroha.account.recovery.policy.clear",
         "iroha.account.recovery.policy.set",
         "iroha.account.recovery.propose",
+        "iroha.account.signing_key.set.v1",
         "iroha.alias.auto_renew.configure",
         "iroha.alias.ensure",
         "iroha.alias.lease.renew",

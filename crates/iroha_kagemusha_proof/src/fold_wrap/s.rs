@@ -74,7 +74,10 @@ impl SPlan {
         let q_plans = spec
             .q
             .iter()
-            .map(|r| DeciderV2Plan::new(r.clone(), &spec.key_q).map(Arc::new))
+            .map(|r| {
+                DeciderV2Plan::with_step_runs(r.clone(), &spec.key_q, spec.q_step_runs)
+                    .map(Arc::new)
+            })
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| WrapError::Input)?;
         // Every member's public columns stay with its digest: the field side

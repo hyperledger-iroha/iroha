@@ -627,7 +627,14 @@ fn a_baseline_world_installs_every_member_but_the_fields_additions_add() {
         })
         .collect();
     added.sort_unstable();
-    assert_eq!(added, ["game_partitions"]);
+    assert_eq!(
+        added,
+        [
+            "account_signing_key_reservations",
+            "account_signing_keys",
+            "game_partitions"
+        ]
+    );
     let mut uninstalled: Vec<String> =
         crate::runtime::uninstalled_world_members(world.runtime_selection.view().get())
             .expect("uninstalled members")

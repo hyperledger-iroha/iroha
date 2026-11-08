@@ -286,6 +286,7 @@ impl_direct_instruction_box!(crate::isi::asset_fi_context::AssertAssetFiTransfer
 
 impl_direct_instruction_box!(crate::isi::retail_daily_limit::BindRetailIdentityV1);
 impl_direct_instruction_box!(crate::isi::retail_daily_limit::RetailMonetaryMovementV1);
+impl_direct_instruction_box!(crate::isi::account_signing_key::SetAccountSigningKeyV1);
 impl_direct_instruction_box!(
     crate::isi::game_partition::InstallGamePartitionV1,
     crate::isi::game_partition::RegisterGamePartitionPeerV1,
@@ -2157,6 +2158,8 @@ macro_rules! enum_type {
 }
 /// Native account controller replacement and social recovery instructions.
 pub mod account_recovery;
+/// Off-chain signing key install, rotation and revocation.
+pub mod account_signing_key;
 /// Declarative alias setup and explicit alias lifecycle instructions.
 pub mod alias_setup;
 /// Asset-definition alias binding instructions.
