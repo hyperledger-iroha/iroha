@@ -62,8 +62,8 @@ private object NativeBridgeBuildContract {
     const val hermeticRunnerSchema = "iroha.mobile-hermetic-command.v1"
     const val walletRuntimeAuthorityInput = "MOBILE_SDK_WALLET_RUNTIME_AUTHORITY"
     fun validateWalletRuntimeAuthority(value: String?): String {
-        require(value == "bpng-taira-v7" || value == "cbsi-release-v1" || value == "application-release-v1") {
-            "$walletRuntimeAuthorityInput must be bpng-taira-v7, cbsi-release-v1, or application-release-v1"
+        require(value == "bpng-taira-v7" || value == "boi-taira-v1" || value == "cbsi-release-v1" || value == "application-release-v1") {
+            "$walletRuntimeAuthorityInput must be bpng-taira-v7, boi-taira-v1, cbsi-release-v1, or application-release-v1"
         }
         return value
     }
@@ -2211,7 +2211,7 @@ tasks.register("verifyNativeRuntimeTrustContract") {
     doLast {
         val publicRoot = "3".repeat(64)
         NativeBridgeBuildContract.validateWalletRuntimeSelection(null, null)
-        for (authority in listOf("bpng-taira-v7", "cbsi-release-v1", "application-release-v1")) {
+        for (authority in listOf("bpng-taira-v7", "boi-taira-v1", "cbsi-release-v1", "application-release-v1")) {
             check(NativeBridgeBuildContract.validateWalletRuntimeAuthority(authority) == authority)
             NativeBridgeBuildContract.validateWalletRuntimeSelection(authority, publicRoot)
         }

@@ -778,10 +778,10 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
 
     def test_application_authority_is_exact_closed_build_data(self):
         environment = self.payload["build_environment"]
-        for authority in ["bpng-taira-v7", "cbsi-release-v1", "application-release-v1"]:
+        for authority in ["bpng-taira-v7", "boi-taira-v1", "cbsi-release-v1", "application-release-v1"]:
             environment["wallet_runtime_authority"] = authority
             validator._validate_build_environment(ROOT, environment)
-        for authority in [None, "", "bpng", "bpng-taira-v6", "BPNG-TAIRA-V7", "bpng-taira-v7\n", "application", "ApplicationReleaseV1", "APPLICATION-RELEASE-V1", "application-release-v1\n", " application-release-v1", 1, True, {}, []]:
+        for authority in [None, "", "bpng", "bpng-taira-v6", "boi", "BOI-TAIRA-V1", "boi-taira-v1\n", " boi-taira-v1", "BPNG-TAIRA-V7", "bpng-taira-v7\n", "application", "ApplicationReleaseV1", "APPLICATION-RELEASE-V1", "application-release-v1\n", " application-release-v1", 1, True, {}, []]:
             environment["wallet_runtime_authority"] = authority
             with self.assertRaises(validator.ValidationError):
                 validator._validate_build_environment(ROOT, environment)

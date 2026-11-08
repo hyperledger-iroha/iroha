@@ -1305,4 +1305,5 @@ fn android_policy_naming_an_unqualified_or_unknown_vendor_adapter_fails_configur
     fixture.load().unwrap();
 }
 
+mod boi_tests;
 mod universal_tests;

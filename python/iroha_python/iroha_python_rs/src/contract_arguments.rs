@@ -149,15 +149,21 @@ pub(super) fn encode_contract_arguments_v1_py(
         .transpose()?;
     let expected_code_hash_hex = exact_text(expected_code_hash_hex, "expected_code_hash_hex", 64)?;
     let expected_abi_hash_hex = exact_text(expected_abi_hash_hex, "expected_abi_hash_hex", 64)?;
-    let result = encode(ArgumentEncodingRequest {
-        artifact,
-        entrypoint: &entrypoint,
-        payload_json: payload_json.as_deref(),
-        expected_code_hash_hex: &expected_code_hash_hex,
-        expected_abi_hash_hex: &expected_abi_hash_hex,
-        chain_discriminant,
-    })
-    .map_err(PyValueError::new_err)?;
+    // Pure Rust over immutable bytes and strings that the arguments keep alive:
+    // release the GIL so other Python threads run while the artifact verifies.
+    // The chain discriminant override is thread-local and detach keeps the thread.
+    let result = py
+        .detach(|| {
+            encode(ArgumentEncodingRequest {
+                artifact,
+                entrypoint: &entrypoint,
+                payload_json: payload_json.as_deref(),
+                expected_code_hash_hex: &expected_code_hash_hex,
+                expected_abi_hash_hex: &expected_abi_hash_hex,
+                chain_discriminant,
+            })
+        })
+        .map_err(PyValueError::new_err)?;
     Ok(result.map(|bytes| PyBytes::new(py, &bytes).unbind()))
 }
 
