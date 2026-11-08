@@ -90,6 +90,28 @@ pub struct NativeResourceNamesStateV1 {
     pub dataspace_names: Vec<NativeDataspaceSnsOriginalV1>,
 }
 
+/// Decode budget for one complete native names carrier.
+///
+/// The carrier nests every World row, smart-contract key and SNS original several
+/// length-delimited frames deep, and the canonical decoder charges each frame's length
+/// to the allocation budget again at every level. The generic
+/// [`norito::canonical_decode_limits`] allowance (the encoded length plus at most
+/// 256 MiB) therefore refuses honest carriers far below
+/// [`NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1`]. Allow eight wire bounds of decode
+/// accounting instead. The wire bound stays the hard input limit, and the per-field,
+/// per-sequence, total-element and nesting limits keep their generic values.
+#[must_use]
+pub const fn native_resource_names_state_decode_limits() -> norito::DecodeLimits {
+    let wire = NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1;
+    norito::DecodeLimits::new(
+        wire.saturating_mul(8),
+        wire,
+        wire.saturating_mul(8),
+        wire.saturating_mul(8),
+        norito::core::MAX_VALUE_NESTING_DEPTH,
+    )
+}
+
 /// Decode only bounded exact canonical data; authentication remains the consumer's job.
 ///
 /// # Errors
@@ -102,10 +124,7 @@ pub fn decode_unverified_native_resource_names_state_v1(
             "native resource names state exceeds reader bound".into(),
         ));
     }
-    norito::decode_canonical_with_limits(
-        bytes,
-        norito::canonical_decode_limits(NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1),
-    )
+    norito::decode_canonical_with_limits(bytes, native_resource_names_state_decode_limits())
 }
 
 /// Borrowed canonical binding wire without a replacement owned allocation.

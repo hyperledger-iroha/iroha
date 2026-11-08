@@ -3,7 +3,7 @@
 use super::*;
 use iroha_torii_shared::resource_names_state::{
     NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1, NATIVE_RESOURCE_NAMES_STATE_ROUTE_PREFIX_V1,
-    NativeResourceNamesStateV1,
+    NativeResourceNamesStateV1, decode_unverified_native_resource_names_state_v1,
 };
 
 /// HTTP rejection from a native-originals read, without private response data.
@@ -128,11 +128,12 @@ impl Client {
         if wire.is_empty() || wire.len() > NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1 {
             return Err(eyre!("native resource names response exceeds reader bound"));
         }
-        let original: NativeResourceNamesStateV1 = norito::decode_canonical_with_limits(
-            &wire,
-            norito::canonical_decode_limits(wire.len()),
-        )
-        .map_err(|_| eyre!("native resource names response is not exact bounded canonical data"))?;
+        // The shared carrier budget, not the generic per-length allowance: the nested
+        // frames are charged at every level, so honest carriers exceed the latter.
+        let original: NativeResourceNamesStateV1 =
+            decode_unverified_native_resource_names_state_v1(&wire).map_err(|error| {
+                eyre!("native resource names response is not exact bounded canonical data: {error}")
+            })?;
         if original.attestation.body.network_id != self.network_id
             || original.attestation.body.challenge != challenge
         {
@@ -144,8 +145,10 @@ impl Client {
         original
             .attestation
             .verify(root_scope.into())
-            .map_err(|_| {
-                eyre!("native resource names node statement has invalid structure/signature")
+            .map_err(|error| {
+                eyre!(
+                    "native resource names node statement has invalid structure/signature: {error}"
+                )
             })?;
         Ok(wire)
     }
