@@ -1147,3 +1147,67 @@ fn archive_tip_walk_is_retired_by_compaction_of_its_virtual_base() {
     assert_eq!(qualification.activation_floor(), &key);
     assert_eq!(qualification.archive_tip().height, 4);
 }
+
+#[test]
+fn provider_page_at_the_tip_reads_only_the_tip_record() {
+    let directory = physical_tempdir().unwrap();
+    let archive =
+        ProviderIngestFinalizedArchiveV1::try_open(archive_root(&directory), bounds()).unwrap();
+    let first = projection(7);
+    archive.insert(first.clone()).unwrap();
+    let second = advance_projection(&first, 8);
+    archive.insert(second.clone()).unwrap();
+    let tip = advance_projection(&second, 9);
+    archive.insert(tip.clone()).unwrap();
+    let before = format!(
+        "{:?}",
+        archive
+            .read_provider_page(&tip.key, PROVIDER_A, None, 1)
+            .unwrap()
+    );
+    // The replayed answer at the same key, for comparison with the retained walk's.
+    let replayed = reconstruct_provider_projection(
+        &ArchiveIndexV1 {
+            by_height: archive.read_index().unwrap().by_height.clone(),
+            ..ArchiveIndexV1::default()
+        },
+        &tip.key,
+        PROVIDER_A,
+        bounds(),
+    )
+    .unwrap();
+    assert_eq!(
+        reconstruct_provider_projection(
+            &archive.read_index().unwrap(),
+            &tip.key,
+            PROVIDER_A,
+            bounds()
+        )
+        .unwrap(),
+        replayed
+    );
+    fs::write(archive.record_path(&first.key).unwrap(), [0_u8]).unwrap();
+    assert_eq!(
+        format!(
+            "{:?}",
+            archive
+                .read_provider_page(&tip.key, PROVIDER_A, None, 1)
+                .unwrap()
+        ),
+        before,
+        "a worker tick at the tip does not read older records"
+    );
+    assert!(
+        archive
+            .read_provider_page(&second.key, PROVIDER_A, None, 1)
+            .is_err(),
+        "an older key still replays its history and fails closed"
+    );
+    fs::write(archive.record_path(&tip.key).unwrap(), [0_u8]).unwrap();
+    assert!(
+        archive
+            .read_provider_page(&tip.key, PROVIDER_A, None, 1)
+            .is_err(),
+        "the tip's own record is still read"
+    );
+}

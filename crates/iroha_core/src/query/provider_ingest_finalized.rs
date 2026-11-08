@@ -5205,6 +5205,15 @@ fn reconstruct_provider_projection(
     Option<ProviderIngestFinalizedProviderProjectionV1>,
     ProviderIngestFinalizedArchiveErrorV1,
 > {
+    // Worker ticks read at the tip while holding the reader a capture needs, so the retained
+    // walk answers from the tip's own record. Older keys still replay and check their history.
+    if let Some(entry) = index.by_height.get(&(key.network_id, key.height))
+        && &entry.record.material.key == key
+        && let Some(walk) = index.tip_walk(entry)
+    {
+        verify_record_entry(entry, bounds)?;
+        return Ok(walk.providers.get(&provider_id).cloned());
+    }
     let floor = activation_floor_from_index(index, &key.network_id)?.ok_or(
         ProviderIngestFinalizedArchiveErrorV1::ArchiveUnavailable {
             reason: "requested network has no archived anchors",
