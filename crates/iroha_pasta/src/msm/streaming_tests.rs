@@ -266,8 +266,9 @@ fn unwind<C: PastaCurve>() {
     let shared = SharedMemoryBudget::new(1 << 20);
     let mut plan = pippenger::plan(scalars.len(), 255, 1, shared.limit_bytes()).unwrap();
     let permit = shared.try_reserve(plan.bytes).unwrap();
-    // An internal invalid plan deliberately panics at step_by after digit and
-    // window allocation. Production plans never have zero concurrency.
+    // An internal invalid plan deliberately panics at the claiming-loop
+    // assertion after digit allocation. Production plans never have zero
+    // concurrency.
     plan.concurrency = 0;
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         planned_msm::<C, true>(&scalars, &bases, plan, permit, None)
