@@ -4087,12 +4087,14 @@ pub mod application_api {
     macro_rules! declare_routes {
         ($(
             $(#[doc = $doc:literal])*
-            $name:ident => $factory:ident($id:literal, $path:literal);
+            $name:ident => $factory:ident($id:literal, $path:literal)
+                $(.with_projections($projections:expr))?;
         )+) => {
             $(
                 #[doc = concat!("Descriptor for `", $path, "`.")]
                 $(#[doc = $doc])*
-                pub const $name: RouteDescriptor = $factory($id, $path);
+                pub const $name: RouteDescriptor = $factory($id, $path)
+                    $(.with_projections($projections))?;
             )+
             /// Complete application API route family.
             pub const ROUTES: &[RouteDescriptor] = &[$($name),+];
@@ -4318,9 +4320,9 @@ pub mod application_api {
         EXPLORER_TRANSACTIONS_BY_HASH_PROOF_GET => dataspace_get("application.explorer_transactions_by_hash_proof_get", "/v1/explorer/transactions/{hash}/proof");
         EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_GET => dataspace_get("application.explorer_instructions_by_hash_by_index_get", "/v1/explorer/instructions/{hash}/{index}");
         EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_CONTRACT_VIEW_GET => dataspace_sdk_get("application.explorer_instructions_by_hash_by_index_contract_view_get", "/v1/explorer/instructions/{hash}/{index}/contract-view");
-        KAIGI_CALLS_BY_CALL_ID_GET => app_sdk_get("application.kaigi_calls_by_call_id_get", "/v1/kaigi/calls/{call_id}");
+        KAIGI_CALLS_BY_CALL_ID_GET => app_sdk_get("application.kaigi_calls_by_call_id_get", "/v1/kaigi/calls/{call_id}").with_projections(RouteProjections::OPENAPI_AND_SDK);
         KAIGI_CALLS_BY_CALL_ID_PARTICIPATION_GET => account_private_sdk_get("application.kaigi_calls_by_call_id_participation_get", "/v1/kaigi/calls/{call_id}/participation");
-        KAIGI_CALLS_BY_CALL_ID_SIGNALS_GET => account_compute_sdk_get("application.kaigi_calls_by_call_id_signals_get", "/v1/kaigi/calls/{call_id}/signals");
+        KAIGI_CALLS_BY_CALL_ID_SIGNALS_GET => account_compute_sdk_get("application.kaigi_calls_by_call_id_signals_get", "/v1/kaigi/calls/{call_id}/signals").with_projections(RouteProjections::OPENAPI_AND_SDK);
         KAIGI_CALLS_BY_CALL_ID_EVENTS_GET => app_unprojected_protocol_get("application.kaigi_calls_by_call_id_events_get", "/v1/kaigi/calls/{call_id}/events");
         KAIGI_RELAYS_GET => operator_expensive_get("application.kaigi_relays_get", "/v1/kaigi/relays");
         KAIGI_RELAYS_BY_RELAY_ID_GET => operator_signed_get("application.kaigi_relays_by_relay_id_get", "/v1/kaigi/relays/{relay_id}");
@@ -4466,10 +4468,12 @@ pub mod contracts_and_verification_keys {
         app_unprojected_protocol_get(id, path).with_transport(RouteTransport::WebSocket)
     }
     macro_rules! declare_routes {
-        ($($name:ident => $factory:ident($id:literal, $path:literal);)+) => {
+        ($($name:ident => $factory:ident($id:literal, $path:literal)
+            $(.with_projections($projections:expr))?;)+) => {
             $(
                 #[doc = concat!("Descriptor for `", $path, "`.")]
-                pub const $name: RouteDescriptor = $factory($id, $path);
+                pub const $name: RouteDescriptor = $factory($id, $path)
+                    $(.with_projections($projections))?;
             )+
             /// Complete contract and verification-key route family.
             pub const ROUTES: &[RouteDescriptor] = &[$($name),+];
@@ -4529,11 +4533,11 @@ pub mod contracts_and_verification_keys {
         SORAFS_RESERVE_POLICY_PROOF_GET => app_account_read_sdk_get("contracts.sorafs_reserve_policy_proof_get", "/v1/sorafs/reserve/policy/{height}");
         AMX_DEBIT_APPROVAL_PROOF_POST => app_account_read_post("contracts.amx_debit_approval_proof_post", "/v1/amx/debit-approval/{height}");
         KAGEMUSHA_ENROLLMENT_POST => app_account_mutation_post("contracts.kagemusha_enrollment_post", "/v1/kagemusha/enrollment");
-        KAGEMUSHA_LOAD_ISSUANCE_GET => app_account_read_sdk_get("contracts.kagemusha_load_issuance_get", "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}");
-        KAGEMUSHA_LOAD_FINALITY_GET => app_account_read_sdk_get("contracts.kagemusha_load_finality_get", "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/finality");
-        KAGEMUSHA_LOAD_EPOCH_GET => app_account_read_sdk_get("contracts.kagemusha_load_epoch_get", "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/epochs/{boundary}");
-        KAGEMUSHA_LEDGER_FINALITY_GET => app_account_read_sdk_get("contracts.kagemusha_ledger_finality_get", "/v1/kagemusha/{scheme}/wallets/{wallet}/ledger/{entrypoint}/finality");
-        KAGEMUSHA_LEDGER_EPOCH_GET => app_account_read_sdk_get("contracts.kagemusha_ledger_epoch_get", "/v1/kagemusha/{scheme}/wallets/{wallet}/ledger/{entrypoint}/epochs/{boundary}");
+        KAGEMUSHA_LOAD_ISSUANCE_GET => app_account_read_sdk_get("contracts.kagemusha_load_issuance_get", "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}").with_projections(RouteProjections::OPENAPI_AND_SDK);
+        KAGEMUSHA_LOAD_FINALITY_GET => app_account_read_sdk_get("contracts.kagemusha_load_finality_get", "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/finality").with_projections(RouteProjections::OPENAPI_AND_SDK);
+        KAGEMUSHA_LOAD_EPOCH_GET => app_account_read_sdk_get("contracts.kagemusha_load_epoch_get", "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/epochs/{boundary}").with_projections(RouteProjections::OPENAPI_AND_SDK);
+        KAGEMUSHA_LEDGER_FINALITY_GET => app_account_read_sdk_get("contracts.kagemusha_ledger_finality_get", "/v1/kagemusha/{scheme}/wallets/{wallet}/ledger/{entrypoint}/finality").with_projections(RouteProjections::OPENAPI_AND_SDK);
+        KAGEMUSHA_LEDGER_EPOCH_GET => app_account_read_sdk_get("contracts.kagemusha_ledger_epoch_get", "/v1/kagemusha/{scheme}/wallets/{wallet}/ledger/{entrypoint}/epochs/{boundary}").with_projections(RouteProjections::OPENAPI_AND_SDK);
         SORAFS_RESERVE_ACCOUNT_PROOF_GET => app_account_read_sdk_get("contracts.sorafs_reserve_account_proof_get", "/v1/sorafs/reserve/providers/{provider_id}/proof/{height}");
         SORAFS_RESERVE_PROVIDERS_GET => app_account_read_sdk_get("contracts.sorafs_reserve_providers_get", "/v1/sorafs/reserve/providers");
         SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET => app_account_read_sdk_get("contracts.sorafs_reserve_providers_by_provider_id_hex_get", "/v1/sorafs/reserve/providers/{provider_id_hex}");

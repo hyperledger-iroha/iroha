@@ -468,4 +468,6 @@ impl FsyncTelemetry {
 #[derive(Debug)]
 struct ChainValidation {
     hashes: Vec<HashOf<BlockHeader>>,
+    /// Structural locators reconstructed from the exact frames audited at startup.
+    transaction_entrypoint_index: TransactionEntrypointIndex,
 }

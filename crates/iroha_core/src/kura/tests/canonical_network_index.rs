@@ -274,13 +274,10 @@ fn canonical_network_index_refuses_whole_malformed_carrier_before_membership() {
 fn canonical_network_index_rebuild_missing_body_and_replacement_stay_explicit() {
     let first = network_index_block_at(1, vec![network_index_signal_input(1)]);
     let second = network_index_block_at(2, vec![network_index_signal_input(2)]);
-    let data: BlockData = [
-        (first.hash(), Some(share_storage_fixture(first))),
-        (second.hash(), None),
-    ]
-    .into_iter()
-    .collect();
-    let mut index = Kura::build_transaction_entrypoint_index(&data);
+    let mut index = super::TransactionEntrypointIndex::complete_empty();
+    Kura::insert_transaction_entrypoint_heights(&mut index, nonzero!(1_usize), &first);
+    index.incomplete_heights.insert(nonzero!(2_usize));
+    index.complete = false;
     assert!(!index.complete);
     assert_eq!(index.indexed_heights, BTreeSet::from([nonzero!(1_usize)]));
     assert!(index.incomplete_heights.contains(&nonzero!(2_usize)));

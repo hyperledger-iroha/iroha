@@ -625,6 +625,87 @@ fn native_storage_original_frames_and_certificates_survive_strict_restart() {
 }
 
 #[test]
+fn native_kaigi_signal_index_survives_strict_restart_and_keeps_fast_unavailable() {
+    use iroha_model_base::metadata::Metadata;
+    use iroha_primitives::json::Json;
+
+    let setup = TestChainConfig::new(World::new(), 1_000);
+    let signer = setup.genesis_key.clone();
+    let mut chain = CertifiedTestChain::start(setup).unwrap();
+    let call = kaigi_signal_test_call("native-restart");
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        "kaigi_signal".parse().unwrap(),
+        Json::new(norito::json!({
+            "schema": "iroha-demo-kaigi-chain-signal/v1",
+            "callId": (call.to_string())
+        })),
+    );
+    let mut builder = TransactionBuilder::new(
+        chain.network_id(),
+        chain.genesis_account().clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
+    builder.set_creation_time(Duration::from_millis(1_001));
+    let transaction = builder
+        .with_instructions([Log::new(Level::INFO, "native restart signal".to_owned())])
+        .with_metadata(metadata)
+        .sign(signer.private_key());
+    let expected_entrypoint = transaction.hash_as_entrypoint();
+    assert_eq!(chain.commit(vec![transaction]), vec![true]);
+    let directory = TempDir::new().unwrap();
+    let config = kura_config_for_dir(&directory, BLOCKS_IN_MEMORY);
+    let lanes = RuntimeLaneConfig::default();
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lanes);
+    for height in 1..=2 {
+        kura.store_block(chain.committed(height).block().clone())
+            .unwrap();
+    }
+    kura.block_store.lock().flush_pending_fsync(true).unwrap();
+    let before = kura
+        .get_kaigi_signal_candidate_locators(&call, 2, None, nonzero!(10_usize))
+        .unwrap();
+    assert_eq!(before.candidates.len(), 1);
+    assert_eq!(
+        before.candidates[0].position.entrypoint_hash(),
+        expected_entrypoint
+    );
+    drop(kura);
+
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lanes).unwrap();
+    assert_eq!(
+        reopened
+            .get_kaigi_signal_candidate_locators(&call, 2, None, nonzero!(10_usize))
+            .unwrap(),
+        before
+    );
+    chain.commit(Vec::new());
+    reopened
+        .store_block(chain.committed(3).block().clone())
+        .unwrap();
+    assert_eq!(
+        reopened
+            .get_kaigi_signal_candidate_locators(&call, 3, None, nonzero!(10_usize))
+            .unwrap(),
+        before
+    );
+    reopened
+        .block_store
+        .lock()
+        .flush_pending_fsync(true)
+        .unwrap();
+    drop(reopened);
+
+    let mut fast_config = config;
+    fast_config.init_mode = InitMode::Fast;
+    let (fast, _) = Kura::open_test_kura_with_configured_lane_config(&fast_config, &lanes).unwrap();
+    assert_eq!(
+        fast.get_kaigi_signal_candidate_locators(&call, 3, None, nonzero!(10_usize)),
+        Err(super::KaigiSignalCandidateIndexError::Unavailable)
+    );
+}
+
+#[test]
 fn native_storage_reads_preserve_original_bytes_when_recovery_or_poison_blocks_access() {
     let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
     chain.commit(Vec::new());
