@@ -5,6 +5,8 @@ Taira's existing ledger must never be reset. See `ironwood_runtime_transition.md
 immutable definitions and the mandatory decoder rollout gate. Concrete network,
 asset, accounts, pool ID, height, notices and signatures are operator-selected
 committed inputs; this document does not invent Taira values or permissions.
+Taira has no account able to propose, so its one owner-authorized route is the
+[certified activation](runtime/taira_time_ironwood_v1.md), not the sequence below.
 
 ## Authority and exact transaction sequence
 

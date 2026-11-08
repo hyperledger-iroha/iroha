@@ -224,35 +224,24 @@ lifecycle-witness and release qualification remain open.
 
 ## Deployment state
 
-Taira is live at <https://taira.sora.org> on daemon source
-`c30e0b18cd7f5b9e1d680abe6478aea7f37ea5b9`, network
-`hash:47F0D781D98B119DB3DD130755BD806E08A5F81B1B5F4053601E9AD34D824297#9066`.
-The fresh deployment's authenticated cutover and cleanup completed. October 8
-02:52 UTC checks found all four validators at height 16, each with three peers
-and an empty queue. Public and direct readiness returned HTTP 200; the matching
-native client's basic doctor passed all fifteen checks, and authenticated
-consensus reported committed/applied height 16 with a ready beacon provider.
-The public MCP health call passed and exposed 164 tools. Idle chains create no
-empty blocks. The network-time enforcement mode remains `warn`.
+Taira is live on chain `fc56984b-2be7-431d-840e-21514d1883f0`, network
+`hash:4978D0BD15FC32B834672B27BBD8A03653B1DF060A1EEE7E9374D29AF3886D91#6774`, with four
+validators on one OVH host. As of 2026-11-08 23:00 UTC it was at height 12517 on selection
+`f4f73c12…`, the repaired SoraFS selection. All four run source `59db2e29` with the same wire
+hash, on three binaries: seat 1 `77c236e7` (with wallet read routes and the Kaigi index
+repair), seats 2-3 `4d1c295e`, seat 4 `f56180e1`. Stopping one seat takes the others'
+network time unhealthy and blocks writes for about 25 minutes. Idle chains create no empty
+blocks.
 
-The preserved BPNG owner and direct `bpng` dataspace allocation are restored;
-the corrected Kina registration committed at height 16. Obsolete staged public binary
-copies were removed while preserving the current deployment and private state;
-guest filesystem space available after cleanup was 4.31 GB.
+The [certified Time and Ironwood activation](specs/runtime/taira_time_ironwood_v1.md) is
+implemented and has not run on Taira. A keyless replay of a copied store activated in a
+discarded overlay, and a four-peer campaign on a daemon patched only in its deployment check
+passed end to end. Its validator roll and final signing, and consumer decoder releases, remain
+open.
 
-Current source initializes fresh safety records before first startup and retires
-completed execution after successful replay before strict native archive
-attachment. Deployment preparation, transfer and the routine updater accept an
-authenticated build-only candidate without a full regression gate. On-chain
-governance owns deployment policy; no fixed 24-hour fault test is a prerequisite
-for testnet or production. Release qualification remains open.
-
-Current-source release qualification remains open; the live testnet observation
-above applies to the deployed c30 candidate. BPNG application account/alias
-restoration and newer wallet ordinary-Load finality commissioning remain open.
-Private DPN, paid `dpn`/`admin@dpn` and clean-client completion remain open.
-Validators run in a Linux guest on MacStadium in Dublin; use the approved
-deployment tooling. Retained incident records describe the
+Current-source release qualification remains open. Private DPN, paid `dpn`/`admin@dpn`,
+clean-client completion and newer wallet ordinary-Load finality commissioning remain open.
+Retained incident records describe the
 [previous readiness failure](docs/incidents/2026-09-30-taira-readiness.md).
 
 
