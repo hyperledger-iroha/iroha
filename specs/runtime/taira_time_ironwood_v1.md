@@ -55,6 +55,13 @@ Every current validator then attests with the ordinary `AttestRuntimeSupportV1`.
 effective height `change_set::activate_due` activates the change set if all four attested, its notice
 elapsed and it still applies; otherwise it lapses and never applies.
 
+The universal root's runtime-upgrade lane policy refuses these instructions without a Parliament
+module, and Taira's consensus configuration names none on its universal lanes. Naming one would change
+that configuration, which this authorization does not cover. The retained certificate takes the
+module's place for attestations of its own change set, and nothing else; each attestation is still
+verified against the committee at activation. Before a certificate is retained every release refuses
+the same way, so mixed validators cannot diverge on this.
+
 A lapse selects nothing, so it leaves the activation open: a new certificate, with a later height and
 all four signatures again, may replace the lapsed receipt. Nothing else reopens it. While a change set
 is scheduled, activated or cancelled, every other certificate is refused, and once the successor is

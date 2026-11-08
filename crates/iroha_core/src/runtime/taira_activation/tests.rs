@@ -248,7 +248,7 @@ fn asset_definition() -> AssetDefinitionId {
 }
 
 fn plan(fixture: &Fixture) -> TairaActivationPlanV1 {
-    let height = fixture.chain.height() + 3;
+    let height = fixture.chain.height() + 5;
     let view = fixture.chain.state().view();
     let change_set = ironwood::taira_time_ironwood_change_set(
         fixture.chain.network_id(),
@@ -682,6 +682,16 @@ fn the_rehearsal_activates_in_a_discarded_overlay_and_changes_nothing() {
     );
     assert!(report.published_definitions > 0);
     assert_eq!(report.published_digest.len(), 64);
+    assert_eq!(report.lane_policy_schedule, "admitted");
+    assert!(
+        report
+            .lane_policy_attestation_unscheduled
+            .contains("requires a governance module"),
+        "{}",
+        report.lane_policy_attestation_unscheduled,
+    );
+    assert_eq!(report.lane_policy_attestation_scheduled, "admitted");
+    assert_eq!(report.lane_policy_pool, "admitted");
     assert_eq!(report.trigger_capture_error, None);
     assert!(report.trigger_capture.is_some());
     assert!(!report.reserve_registered_in_overlay);
@@ -712,6 +722,111 @@ fn the_rehearsal_activates_in_a_discarded_overlay_and_changes_nothing() {
         LIVE_REPAIRED_SELECTION,
     );
     assert!(retained_certificate(view.world()).unwrap().is_none());
+}
+
+/// The universal root's lane policy refuses runtime-upgrade instructions without a Parliament
+/// module, and no such module is configured here, as on Taira. Only an attestation of the change
+/// set the retained certificate scheduled is admitted, through ordinary signed transactions.
+#[test]
+fn validators_attest_only_the_certified_change_set_by_ordinary_transactions() {
+    use crate::runtime::attestation::sign_support;
+    use iroha_data_model::{
+        isi::runtime_upgrade::AttestRuntimeSupportV1, runtime::lifecycle::ChangeSetId,
+    };
+
+    let mut fixture = repaired_chain();
+    let chain_id = fixture.chain.state().view().chain_id.clone();
+    fixture_deployment::allow(&chain_id, fixture.chain.network_id());
+    let certificate = sign(plan(&fixture));
+    let change = certificate.plan.change_set.clone();
+    let id = change.id().unwrap();
+    let attest_with = |fixture: &mut Fixture, attestation, time: u64| {
+        fixture.chain.sign(
+            &key(6),
+            [AttestRuntimeSupportV1 { attestation }.into()],
+            time - 1,
+        )
+    };
+    let committee: Vec<_> = fixture
+        .chain
+        .validators()
+        .iter()
+        .map(|(peer, _)| peer.public_key().clone())
+        .collect();
+
+    // Before a certificate is retained the policy refuses, as every older release does.
+    let forged = SupportAttestationV1 {
+        network: change.network,
+        root: change.root,
+        change_set: id,
+        predecessor: change.predecessor,
+        successor: change.successor,
+        committee: committee_digest(&committee).unwrap(),
+        tested_checkpoint: fixture.chain.height(),
+        valid_from: change.effective_height,
+        valid_until: change.effective_height + 1,
+        release: [0x46; 32],
+        validator: committee[0].clone(),
+    }
+    .sign(fixture_keys()[0].private_key())
+    .unwrap();
+    let time = fixture.next_time_ms();
+    let early = attest_with(&mut fixture, forged, time);
+    assert_eq!(fixture.chain.commit_at(time, vec![early]), [false]);
+
+    let (time, good) = schedule_transaction(&mut fixture, certificate.clone());
+    assert_eq!(fixture.chain.commit_at(time, vec![good]), [true]);
+
+    // An attestation of any other change set is still refused.
+    let other_id = ChangeSetId([0x77; 32]);
+    let other = SupportAttestationV1 {
+        network: change.network,
+        root: change.root,
+        change_set: other_id,
+        predecessor: change.predecessor,
+        successor: change.successor,
+        committee: committee_digest(&committee).unwrap(),
+        tested_checkpoint: fixture.chain.height(),
+        valid_from: change.effective_height,
+        valid_until: change.effective_height + 1,
+        release: [0x46; 32],
+        validator: committee[0].clone(),
+    }
+    .sign(fixture_keys()[0].private_key())
+    .unwrap();
+    let time = fixture.next_time_ms();
+    let unrelated = attest_with(&mut fixture, other, time);
+    assert_eq!(fixture.chain.commit_at(time, vec![unrelated]), [false]);
+
+    // All four validators' own attestations commit as ordinary transactions and it activates.
+    let height = fixture.chain.height();
+    let time = fixture.next_time_ms();
+    let mut attestations = Vec::new();
+    for validator in fixture_keys() {
+        let signed = {
+            let view = fixture.chain.state().view();
+            sign_support(view.world(), &committee, height, id, &validator, [0x46; 32])
+                .expect("the validator supports the scheduled change set")
+        };
+        attestations.push(attest_with(&mut fixture, signed, time));
+    }
+    assert_eq!(
+        fixture.chain.commit_at(time, attestations),
+        [true, true, true, true],
+    );
+    while fixture.chain.height() < change.effective_height {
+        let time = fixture.next_time_ms();
+        fixture.chain.commit_at(time, Vec::new());
+    }
+    let view = fixture.chain.state().view();
+    assert_eq!(
+        view.world().runtime_change_sets().get(&id).unwrap().status,
+        ChangeSetStatusV1::Activated(change.effective_height),
+    );
+    assert_eq!(
+        view.world().runtime_selection().id().unwrap(),
+        change.successor
+    );
 }
 
 fn schedule_transaction(

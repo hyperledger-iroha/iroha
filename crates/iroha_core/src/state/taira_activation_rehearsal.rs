@@ -25,8 +25,8 @@ use iroha_data_model::{
     account::{AccountId, NewAccount},
     block::BlockHeader,
     isi::{
-        Register, privacy::BootstrapPrivacyIronwoodPoolV1,
-        taira_activation::ScheduleTairaTimeIronwoodV1,
+        InstructionBox, Register, privacy::BootstrapPrivacyIronwoodPoolV1,
+        runtime_upgrade::AttestRuntimeSupportV1, taira_activation::ScheduleTairaTimeIronwoodV1,
     },
     privacy::PrivacyIronwoodPoolBootstrapV1,
     runtime::{
@@ -35,6 +35,7 @@ use iroha_data_model::{
             TAIRA_ACTIVATION_VERSION_V1, TairaActivationCertificateV1, TairaActivationPlanV1,
         },
     },
+    transaction::{FeePaymentIntent, TransactionBuilder},
     trigger::Trigger,
 };
 use mv::storage::StorageReadOnly as _;
@@ -76,6 +77,14 @@ pub struct TairaActivationRehearsalReport {
     pub trigger_capture: Option<LifecyclePreflightReport>,
     /// Why the capture sizing could not be produced.
     pub trigger_capture_error: Option<String>,
+    /// Lane policy verdict on this State's own configuration for the signed schedule.
+    pub lane_policy_schedule: String,
+    /// Verdict for a validator's attestation before any certificate is retained.
+    pub lane_policy_attestation_unscheduled: String,
+    /// Verdict for the same attestation once the certificate is retained.
+    pub lane_policy_attestation_scheduled: String,
+    /// Verdict for the plan's pool bootstrap once the successor is selected.
+    pub lane_policy_pool: String,
     /// Cold World commitment before the attempt.
     pub committed_world_before: String,
     /// Cold World commitment of the overlay once the successor is selected.
@@ -201,7 +210,40 @@ impl State {
             time_ms,
             0,
         );
+        let verdict = |result: Result<(), String>| match result {
+            Ok(()) => "admitted".to_owned(),
+            Err(reason) => format!("refused: {reason}"),
+        };
+        let signed_by_first_key = |instructions: [InstructionBox; 1]| {
+            TransactionBuilder::new(
+                network,
+                AccountId::new(keys[0].public_key().clone()),
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions(instructions)
+            .sign(keys[0].private_key())
+        };
+        let support = |key: &KeyPair| {
+            SupportAttestationV1 {
+                network,
+                root: change_set.root,
+                change_set: id,
+                predecessor: change_set.predecessor,
+                successor: change_set.successor,
+                committee: digest,
+                tested_checkpoint: tip.height(),
+                valid_from: tip.height(),
+                valid_until: effective_height.saturating_add(1),
+                release: [0x56; 32],
+                validator: key.public_key().clone(),
+            }
+            .sign(key.private_key())
+            .map_err(|error| error.to_string())
+        };
         let attempted = (|| -> Result<_, String> {
+            let lane_policy_schedule;
+            let lane_policy_attestation_unscheduled;
+            let lane_policy_attestation_scheduled;
             let (mut block, ()) = self
                 .block_with_owned_start_stages(
                     header,
@@ -214,10 +256,25 @@ impl State {
                 let mut tx = block
                     .try_transaction()
                     .map_err(|error| format!("transaction admission refused: {error:?}"))?;
+                lane_policy_schedule = verdict(crate::tx::lane_policy_verdict(
+                    &signed_by_first_key([ScheduleTairaTimeIronwoodV1 {
+                        certificate: certificate.clone(),
+                    }
+                    .into()]),
+                    &tx,
+                ));
+                let first_attestation = signed_by_first_key([AttestRuntimeSupportV1 {
+                    attestation: support(&keys[0])?,
+                }
+                .into()]);
+                lane_policy_attestation_unscheduled =
+                    verdict(crate::tx::lane_policy_verdict(&first_attestation, &tx));
                 tx.taira_activation_entrypoint = Some(plan_id);
                 (ScheduleTairaTimeIronwoodV1 { certificate })
                     .execute(&authority, &mut tx)
                     .map_err(|error| format!("schedule refused: {error}"))?;
+                lane_policy_attestation_scheduled =
+                    verdict(crate::tx::lane_policy_verdict(&first_attestation, &tx));
                 let mut record = tx
                     .world
                     .runtime_change_sets
@@ -225,22 +282,7 @@ impl State {
                     .cloned()
                     .ok_or("the schedule recorded nothing")?;
                 for key in &keys {
-                    let signed = SupportAttestationV1 {
-                        network,
-                        root: change_set.root,
-                        change_set: id,
-                        predecessor: change_set.predecessor,
-                        successor: change_set.successor,
-                        committee: digest,
-                        tested_checkpoint: tip.height(),
-                        valid_from: tip.height(),
-                        valid_until: effective_height.saturating_add(1),
-                        release: [0x56; 32],
-                        validator: key.public_key().clone(),
-                    }
-                    .sign(key.private_key())
-                    .map_err(|error| error.to_string())?;
-                    record_attestation(&mut record, signed);
+                    record_attestation(&mut record, support(key)?);
                 }
                 tx.world.runtime_change_sets.insert(id, record);
                 tx.apply();
@@ -292,10 +334,17 @@ impl State {
                     .map_err(|error| format!("reserve registration refused: {error}"))?;
                 tx.apply();
             }
+            let lane_policy_pool;
             let pool_bootstrap = {
                 let mut tx = block
                     .try_transaction()
                     .map_err(|error| format!("transaction admission refused: {error:?}"))?;
+                lane_policy_pool = verdict(crate::tx::lane_policy_verdict(
+                    &signed_by_first_key(
+                        [BootstrapPrivacyIronwoodPoolV1::new(pool.clone()).into()],
+                    ),
+                    &tx,
+                ));
                 let result = BootstrapPrivacyIronwoodPoolV1::new(pool).execute(&authority, &mut tx);
                 match result {
                     Ok(()) => {
@@ -317,6 +366,10 @@ impl State {
                 lifecycle_lineage,
                 activated_world,
                 reserve_registered_in_overlay,
+                lane_policy_schedule,
+                lane_policy_attestation_unscheduled,
+                lane_policy_attestation_scheduled,
+                lane_policy_pool,
                 pool_bootstrap,
                 bootstrapped_world,
             })
@@ -353,6 +406,10 @@ impl State {
             lifecycle_lineage: outcome.lifecycle_lineage,
             trigger_capture,
             trigger_capture_error,
+            lane_policy_schedule: outcome.lane_policy_schedule,
+            lane_policy_attestation_unscheduled: outcome.lane_policy_attestation_unscheduled,
+            lane_policy_attestation_scheduled: outcome.lane_policy_attestation_scheduled,
+            lane_policy_pool: outcome.lane_policy_pool,
             committed_world_before: before.to_string(),
             activated_world: outcome.activated_world,
             reserve_registered_in_overlay: outcome.reserve_registered_in_overlay,
@@ -373,6 +430,10 @@ struct AttemptOutcome {
     lifecycle_lineage: String,
     activated_world: String,
     reserve_registered_in_overlay: bool,
+    lane_policy_schedule: String,
+    lane_policy_attestation_unscheduled: String,
+    lane_policy_attestation_scheduled: String,
+    lane_policy_pool: String,
     pool_bootstrap: String,
     bootstrapped_world: String,
 }

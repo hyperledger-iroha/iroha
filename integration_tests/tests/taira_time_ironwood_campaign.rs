@@ -619,13 +619,7 @@ fn four_peers_take_the_repair_and_the_activation_with_one_peer_restarted_across_
         .with_block_cadence(Duration::from_secs(1))
         .with_genesis_instruction(SetParameter::new(
             iroha_data_model::parameter::Parameter::Custom(fees.into_custom_parameter()?),
-        ))
-        .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
-            asset_definition()?,
-            "Ironwood campaign".to_owned(),
-            AssetBalancePolicy::Global,
-            Some(DomainId::try_new("wonderland", "universal")?),
-        )));
+        ));
     for seed in 1..=5 {
         builder = builder.with_genesis_instruction(Register::account(Account::new(account(seed))));
     }
@@ -635,10 +629,17 @@ fn four_peers_take_the_repair_and_the_activation_with_one_peer_restarted_across_
     let client = network.peers()[0].client();
 
     // Stand where Taira stands: a certified parent above genesis, then the real repair.
-    tick(&client)?;
-    wait_until("a block above genesis", Duration::from_secs(60), || {
-        Ok(tip(&client)? >= 2)
-    })?;
+    applied(
+        &client,
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_definition()?,
+            "Ironwood campaign".to_owned(),
+            AssetBalancePolicy::Global,
+            Some(DomainId::try_new("wonderland", "universal")?),
+        ))
+        .into(),
+    )
+    .wrap_err("the campaign asset")?;
     apply_repair(&network, &client)?;
     let repair_height = tip(&client)?;
     same_block_everywhere(&network, repair_height)?;

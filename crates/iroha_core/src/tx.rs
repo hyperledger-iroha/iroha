@@ -4522,6 +4522,31 @@ fn publishes_only_space_directory_manifests(tx: &SignedTransaction) -> bool {
         _ => false,
     }
 }
+/// The lane policy verdict block execution would reach for `tx`, from this overlay's own routing
+/// and catalogs. Rehearsal evidence only: it executes nothing.
+pub(crate) fn lane_policy_verdict(
+    tx: &SignedTransaction,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<(), String> {
+    let nexus = &state_transaction.nexus;
+    let accepted = AcceptedTransaction::new_unchecked(std::borrow::Cow::Borrowed(tx));
+    let decision = crate::queue::evaluate_policy_with_catalog_and_world_at(
+        &nexus.routing_policy,
+        &nexus.lane_catalog,
+        &nexus.dataspace_catalog,
+        &accepted,
+        &*state_transaction.world,
+        state_transaction.block_unix_timestamp_ms(),
+    )
+    .map_err(|error| format!("routing: {error:?}"))?;
+    let assignment = LaneAssignment {
+        lane_id: decision.lane_id,
+        dataspace_id: decision.dataspace_id,
+        dataspace_catalog: &nexus.dataspace_catalog,
+    };
+    enforce_lane_policies(tx, state_transaction, &assignment).map_err(|error| format!("{error:?}"))
+}
+
 fn enforce_lane_policies(
     tx: &SignedTransaction,
     state_transaction: &StateTransaction<'_, '_>,
@@ -4622,7 +4647,9 @@ fn enforce_lane_policies(
     if !runtime_upgrade_present {
         runtime_upgrade_present = contains_runtime_upgrade_instruction(tx);
     }
-    if runtime_upgrade_present {
+    if runtime_upgrade_present
+        && !crate::runtime::taira_activation::attests_certified_change_set(state_transaction, tx)
+    {
         let module_name = manifest_status
             .as_ref()
             .and_then(|status| status.governance.as_deref());

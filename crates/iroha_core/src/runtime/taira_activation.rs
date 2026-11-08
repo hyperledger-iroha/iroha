@@ -10,7 +10,10 @@
 use iroha_crypto::PublicKey;
 use iroha_data_model::{
     NetworkId, ValidationFail,
-    isi::{error::InstructionExecutionError, taira_activation::ScheduleTairaTimeIronwoodV1},
+    isi::{
+        error::InstructionExecutionError, runtime_upgrade::AttestRuntimeSupportV1,
+        taira_activation::ScheduleTairaTimeIronwoodV1,
+    },
     privacy::PrivacyIronwoodPoolBootstrapV1,
     runtime::{
         lifecycle::{ChangeSetStatusV1, RuntimeUpgradeActionV1},
@@ -319,6 +322,39 @@ impl Execute for ScheduleTairaTimeIronwoodV1 {
             .insert(certificate_path(), frame);
         Ok(())
     }
+}
+
+/// Whether `signed` does nothing but attest the change set this chain's retained certificate
+/// scheduled.
+///
+/// The universal root's runtime-upgrade lane policy asks for a Parliament module, and this
+/// deployment's consensus configuration never named one. The certificate takes Parliament's place
+/// for this one change set, and nothing else: the attestation is still verified against the
+/// committee at activation. Without a retained certificate every release refuses the same way.
+pub(crate) fn attests_certified_change_set(
+    state: &StateTransaction<'_, '_>,
+    signed: &SignedTransaction,
+) -> bool {
+    let Executable::Instructions(instructions) = signed.instructions() else {
+        return false;
+    };
+    if instructions.len() != 1 {
+        return false;
+    }
+    let Some(attest) = instructions[0]
+        .as_any()
+        .downcast_ref::<AttestRuntimeSupportV1>()
+    else {
+        return false;
+    };
+    let Ok(Some(certificate)) = retained_certificate(&*state.world) else {
+        return false;
+    };
+    certificate
+        .plan
+        .change_set
+        .id()
+        .is_ok_and(|id| id == attest.attestation.attestation.change_set)
 }
 
 /// Whether the retained certificate authorizes bootstrapping exactly `pool` now: the certified
