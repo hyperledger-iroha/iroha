@@ -1,7 +1,7 @@
 //! Hash-only inventory of retained suffix obligations after complete native replay.
 
 use super::*;
-use iroha_core::state::{StateReadOnly as _, StorageReadOnly as _, WorldReadOnly as _};
+use iroha_core::state::{StorageReadOnly as _, WorldReadOnly as _};
 use iroha_crypto::Hash;
 use iroha_data_model::kagemusha::KagemushaWalletLedgerKeyV1;
 

@@ -147,7 +147,7 @@ struct ExecutorObservation {
 struct AuthorityObservation<'a> {
     interpretation: &'static str,
     direct_grant_epochs: &'static str,
-    permission_names: [&'static str; 6],
+    permission_names: Vec<&'static str>,
     reserved_role_name: &'static str,
     scan_complete: bool,
     accounts_scanned: usize,
@@ -297,7 +297,7 @@ fn inspect_authority<'a>(
     Ok(AuthorityObservation {
         interpretation: "Complete stored-row observation for the named permissions and reserved role at this replay cut. Exact administrative-token flags compare canonical native Permission values. Scoped SoraFS token validity is not asserted. Role origins and direct grants are retained separately; neither token possession nor executor identity grants execution authority, and UserProvided executor authorization has not been evaluated.",
         direct_grant_epochs: "The native direct-grant table stores Permission sets without grant epochs; no epoch is invented. Role permission epochs are retained separately from Role JSON.",
-        permission_names: AUTHORITY_PERMISSION_NAMES,
+        permission_names: AUTHORITY_PERMISSION_NAMES.to_vec(),
         reserved_role_name: COMPLIANCE_ROLE,
         scan_complete: true,
         accounts_scanned: world.accounts().iter().count(),
