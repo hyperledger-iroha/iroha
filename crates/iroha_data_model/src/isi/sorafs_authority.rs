@@ -520,6 +520,30 @@ mod tests {
     }
 
     #[test]
+    fn authority_instructions_box_and_roundtrip_their_registered_wire_envelopes() {
+        let proposal = proposal();
+        let propose: crate::isi::InstructionBox = ProposeSorafsAuthorityGovernanceV1 {
+            proposal: proposal.clone(),
+        }
+        .into();
+        let attempt: crate::isi::InstructionBox = CreateSorafsAuthorityParliamentAttemptV1 {
+            proposal,
+            attempt_sequence: 0,
+        }
+        .into();
+        for (instruction, wire) in [
+            (propose, ProposeSorafsAuthorityGovernanceV1::WIRE_ID),
+            (attempt, CreateSorafsAuthorityParliamentAttemptV1::WIRE_ID),
+        ] {
+            assert_eq!(crate::isi::instruction_wire_id(&instruction), Some(wire));
+            let encoded = norito::encode_canonical(&instruction).unwrap();
+            let decoded: crate::isi::InstructionBox = norito::decode_canonical(&encoded).unwrap();
+            assert_eq!(decoded, instruction);
+            assert!(decoded.as_opaque().is_none());
+        }
+    }
+
+    #[test]
     fn authority_additions_preserve_malformed_envelopes_for_unselected_peers() {
         for wire in [
             ProposeSorafsAuthorityGovernanceV1::WIRE_ID,

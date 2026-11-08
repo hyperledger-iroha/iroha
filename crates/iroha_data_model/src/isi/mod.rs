@@ -662,6 +662,10 @@ impl_direct_instruction_box!(crate::isi::governance::ProposeRuntimeUpgradePropos
 impl_direct_instruction_box!(crate::isi::governance::ProposeEndorsedRuntimeUpgradeProposal);
 impl_direct_instruction_box!(crate::isi::governance::ProposeSccpRouteGovernance);
 impl_direct_instruction_box!(crate::isi::governance::ProposeSorafsProviderGovernance);
+impl_direct_instruction_box!(crate::isi::sorafs_authority::ProposeSorafsAuthorityGovernanceV1);
+impl_direct_instruction_box!(
+    crate::isi::sorafs_authority::CreateSorafsAuthorityParliamentAttemptV1
+);
 impl_direct_instruction_box!(crate::isi::governance::ProposeValidationFeePolicy);
 impl_direct_instruction_box!(crate::isi::governance::ProposeValidationFeePayoutLifecycle);
 impl_direct_instruction_box!(crate::isi::governance::CreateParliamentGovernanceAttemptV1);
