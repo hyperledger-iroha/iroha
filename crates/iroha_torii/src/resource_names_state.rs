@@ -225,9 +225,10 @@ async fn handle(
         .ok_or_else(capacity)?;
     let memory = QueryFanoutMemoryReservation::new(memory);
     let budget = AllocationBudget::new(bytes);
-    let max_response = app
-        .torii_proxy_max_response_bytes
-        .min(NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1);
+    // The names state carries every certified World row and contract-state key,
+    // so it grows with the World, not with request bodies. Bound it by its own
+    // wire limit, which every reader enforces, not by the proxy content length.
+    let max_response = NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1;
     let driver = app
         .sumeragi
         .as_ref()
@@ -410,13 +411,14 @@ async fn handle(
     // Authorization is current, not an archived grant. A revocation while
     // work was queued or encoded refuses before any private body is delivered.
     require_permission(&app, &account)?;
-    let mut response = proof_response_with_exact_egress(
+    let mut response = proof_response_with_exact_egress_bounded(
         app.as_ref(),
         &headers,
         Some(remote.ip()),
         ROUTE,
         response,
         true,
+        NATIVE_RESOURCE_NAMES_STATE_MAX_BYTES_V1,
     )
     .await?;
     require_permission(&app, &account)?;

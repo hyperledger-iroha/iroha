@@ -8181,8 +8181,30 @@ async fn proof_response_with_exact_egress(
     response: axum::response::Response,
     enforce_rate: bool,
 ) -> Result<axum::response::Response, Error> {
+    proof_response_with_exact_egress_bounded(
+        app,
+        headers,
+        remote,
+        hint,
+        response,
+        enforce_rate,
+        app.torii_proxy_max_response_bytes,
+    )
+    .await
+}
+/// [`proof_response_with_exact_egress`] for a route whose own wire format
+/// fixes its maximum size independently of the proxy content length.
+async fn proof_response_with_exact_egress_bounded(
+    app: &AppState,
+    headers: &axum::http::HeaderMap,
+    remote: Option<IpAddr>,
+    hint: &'static str,
+    response: axum::response::Response,
+    enforce_rate: bool,
+    max_response_bytes: usize,
+) -> Result<axum::response::Response, Error> {
     let (parts, body) = response.into_parts();
-    let max_response_bytes = app.torii_proxy_max_response_bytes.max(1);
+    let max_response_bytes = max_response_bytes.max(1);
     let body = axum::body::to_bytes(body, max_response_bytes)
         .await
         .map_err(|error| {
