@@ -4,8 +4,9 @@
 //! accept and both burn fixtures of today's map component test and on the same
 //! mutations, the folded step is satisfied exactly when today's owners, laid
 //! out directly, accept), the Q Sigma and Q Signature leaves, and the A3, A4
-//! and A5 bodies. The chain test folds one genuine Receive through its eight
-//! half-steps and decides everything the chain leaves to the compression
+//! and A5 bodies, and the segment rebase. The chain test rebases a segment on
+//! the receiver's last Omega, folds one genuine Receive through it (ten
+//! half-steps) and decides everything the chain leaves to the compression
 //! (`support/fold_receive_chain.rs`). Heavy: k16 circuits; run optimized.
 
 #[path = "support/fold_receive_chain.rs"]
@@ -15,8 +16,9 @@ use std::sync::Arc;
 
 use ff::Field;
 use fold_receive_chain::{
-    FullReceive, HalfStep, K, ReceiveKeys, SCHEDULE, active_commitment, bootstrap_objects, common, decide_chain,
-    exact_commitment, framed, full_receive, load_objects, p256_signature, payment_transcript, plan, receipt, receive_keys,
+    FullReceive, HalfStep, K, ReceiveKeys, ReceiveRelations, SCHEDULE, active_commitment, bootstrap_objects, common, decide_chain,
+    exact_commitment, framed, full_receive, full_receive_with, load_objects, p256_signature, payment_transcript, plan,
+    receipt, receive_keys,
     receive_objects, receive_relations, run_chain, send_objects, signed_digest, trivial_claims, undecidable_claims,
 };
 use iroha_fold::{
@@ -30,7 +32,10 @@ use iroha_kagemusha_proof::{
     PrefixMode, RelationShape, SigmaRelation,
     a_relation::{
         LineagePublicCells,
-        fold::receive::{ReceiveFoldPlan, ReceiveFoldSource, ReceiveFoldStep, ReceiveStepWitness, pc_before},
+        fold::{
+            rebase::{RebaseFoldStep, RebaseSource, RebaseStepWitness},
+            receive::{ReceiveFoldPlan, ReceiveFoldSource, ReceiveFoldStep, ReceiveStepWitness, pc_before},
+        },
         native::receive::{IncomingWitness, Transition},
         own::OwnPolicy,
         receive::ReceiveStagePlan,
@@ -41,10 +46,10 @@ use iroha_kagemusha_proof::{
     a_relation::schedule::sigma_selector,
     fold_lineage::{
         A_CLAIM_SLOT, A_CONTEXT, A_DIGESTS, A_PC, AKind, BASE, CLAIM_A, CLAIM_Q, FOLD_A, FOLD_Q, Q_CLAIM_SLOT, Q_DIGESTS,
-        ClaimFolds, QFrameStep, QKind, claim_of, fold_claims,
+        A_STEP_RUNS, ClaimFolds, QFrameStep, QFrameStepWitness, QKind, claim_of, fold_claims, segment_base, segment_start,
         sigma::{QSigmaStep, QSigmaStepWitness, fold_selected},
         signature::QSignatureStep,
-        start_passthrough,
+        start_passthrough, trivial_export, trivial_vesta,
     },
     operation_relation::{
         map_effects::{CONSUMED_DOMAIN, InsertCells, MapEffectsChip, MapState, MapTransition, ReceiveMapWitness},
@@ -197,7 +202,7 @@ fn relations(plan: &Arc<ReceiveFoldPlan>) -> Relations {
             .expect("A1 relation")
     };
     let first = a_relation(placeholder);
-    let q = q_relation(first.shape(), Fq::ZERO);
+    let q = q_relation(first.shape());
     let a1 = a_relation(q.shape());
     assert_eq!(a1.shape(), first.shape(), "an A step's shape does not depend on the shape it folds");
     eprintln!("FOLD_RECEIVE A1 relation {:?}", a1.summary());
@@ -209,8 +214,8 @@ fn relations(plan: &Arc<ReceiveFoldPlan>) -> Relations {
     }
 }
 
-fn q_relation(a_shape: FoldShape, start: Fq) -> FoldedRelation<Fq> {
-    let step = QFrameStep { shape: a_shape, start, witness: None };
+fn q_relation(a_shape: FoldShape) -> FoldedRelation<Fq> {
+    let step = QFrameStep { shape: a_shape, witness: None };
     FoldedRelation::<Fq>::from_synthesized(&synthesize(&step, K, None).expect("Q layout")).expect("Q relation")
 }
 
@@ -221,6 +226,17 @@ struct Segment {
     public: Vec<Vec<Fp>>,
     kept: iroha_fold::ivc::Kept<Ep>,
     q: FoldedRelation<Fq>,
+}
+
+/// The staged public columns of a Q step opening a segment, opened at the A
+/// state `base` instead. Every segment opens at the segment base, which only a
+/// Rebase leaves; a step test opens its own segment at the state its A step
+/// requires by replacing the Q instance's passthrough (A's base hash over
+/// `base`). That instance then no longer satisfies its Q relation, so the step
+/// tests decide only A's side; the chain test decides both.
+fn opened_at(base: &[Fp], mut public: Vec<Vec<Fq>>) -> Vec<Vec<Fq>> {
+    public[0][0] = start_passthrough(base);
+    public
 }
 
 fn build_segment(rel: &Relations, plan: &Arc<ReceiveFoldPlan>, source: &ReceiveFoldSource, base: &[Fp]) -> Segment {
@@ -235,17 +251,23 @@ fn build_segment_of(
     base: &[Fp],
 ) -> Segment {
     let mut rng = ChaCha20Rng::seed_from_u64(29);
-    let start = start_passthrough(base);
-    let q = q_relation(rel.a1.shape(), start);
-    // The segment's first step has no predecessor (its slot is unused).
+    let q = q_relation(rel.a1.shape());
+    // The segment's first step has no predecessor (its slot is unused); its
+    // placeholder carries the trivial export, whose claim starts Q's claims.
     let q_chain = QKind::Frame.chain(AKind::Receive5);
-    let prepared =
-        prepare_step(&q_chain, 1, &rel.a1, None, None, vec![], vec![Fq::ZERO; Q_DIGESTS], start).expect("prepare Q");
-    let public = vec![step_public(&q_chain, 1, Fq::from(BASE), prepared.passthrough, &[], &prepared.digests, &[])];
-    let step = QFrameStep { shape: rel.a1.shape(), start, witness: Some(prepared.witness) };
+    let mut prepared = prepare_step(&q_chain, 1, &rel.a1, None, None, vec![], vec![Fq::ZERO; Q_DIGESTS], segment_start())
+        .expect("prepare Q");
+    prepared.witness.fresh.public[1] = trivial_export();
+    let selected = trivial_vesta();
+    let (claims, _, folds) = fold_claims(&CLAIM_Q, None, &[claim_of(&selected)]).expect("Q claim fold");
+    let mut digests = prepared.digests.clone();
+    digests[Q_CLAIM_SLOT] = claims.digest(&CLAIM_Q);
+    let public = vec![step_public(&q_chain, 1, Fq::from(BASE), prepared.passthrough, &[], &digests, &[])];
+    let witness = QFrameStepWitness { frame: prepared.witness, selected, claims: folds };
+    let step = QFrameStep { shape: rel.a1.shape(), witness: Some(witness) };
     assert!(check_circuit(&step, K, &public, CheckMode::Strict).expect("Q synthesis").is_satisfied());
     let (advice, public) = q.stage_witness(&synthesize(&step, K, Some(&public)).expect("Q witness")).expect("stage");
-    let fresh = fresh_instance(&q, &rel.key_q, &FOLD_Q, advice, public, &mut rng).expect("Q instance");
+    let fresh = fresh_instance(&q, &rel.key_q, &FOLD_Q, advice, opened_at(base, public), &mut rng).expect("Q instance");
 
     let a_chain = kind.chain();
     let prepared = prepare_step(&a_chain, 2, &q, None, Some(&fresh), base.to_vec(), vec![Fp::ZERO; A_DIGESTS], Fp::ZERO)
@@ -517,8 +539,13 @@ fn folded_a1_binds_the_a_state_and_decides() {
     let (instance, witness) =
         fresh_instance(&rel.a1, &rel.key_a, &FOLD_A, advice, public, &mut rng).expect("A1 instance");
     decide_fresh(&rel.a1, &rel.key_a, &FOLD_A, &instance, &witness).expect("A1 decides");
-    let (acc, acc_witness) = &segment.kept;
-    decide(&segment.q, &rel.key_q, acc, acc_witness).expect("the Q accumulator decides");
+    // At the segment base the Frame instance opening the segment is genuine and
+    // the Q accumulator A1 starts decides, but A1 refuses that state: only a
+    // Rebase follows a segment's first instance.
+    let at_base = build_segment(&rel, &plan, &source, &segment_base());
+    let (acc, acc_witness) = &at_base.kept;
+    decide(&at_base.q, &rel.key_q, acc, acc_witness).expect("the Q accumulator decides");
+    assert!(!satisfied(&at_base.circuit, &at_base.public), "A1 accepted the segment base");
     // A1 opens the Receive: the A state must carry the predecessor's lineage, no
     // context and no sub-step done; any other state lays out a consistent
     // frame that the body refuses.
@@ -602,7 +629,7 @@ fn folded_q_sigma_step_verifies_sigma_and_folds_its_claim() {
         // (the chain test folds A1 here). The placeholder A1 instance carries
         // A1's export of a Receive with trivial transported claims.
         let chain = QKind::Sigma.chain(AKind::Receive1);
-        let start = Fq::from(7);
+        let start = segment_start();
         let mut prepared = prepare_step(&chain, 1, &rel.a1, None, None, vec![], vec![Fq::ZERO; Q_DIGESTS], start)
             .expect("prepare");
         let receive = source(&plan, true, true);
@@ -616,7 +643,6 @@ fn folded_q_sigma_step_verifies_sigma_and_folds_its_claim() {
         let step = QSigmaStep {
             leaf: folded.circuit.clone(),
             shape: rel.a1.shape(),
-            start,
             witness: Some(QSigmaStepWitness {
                 frame: prepared.witness,
                 selected: folded.selected.clone(),
@@ -690,7 +716,7 @@ fn folded_q_signature_step_keeps_the_own_slot_hard_and_incoming_slots_soft() {
     let own = 0x5eed_0001;
     let genuine = vec![p256_signature(0x1111, own, 0xa1), p256_signature(0x2222, 0x5eed_1000, 0xa2), p256_signature(0x3333, own, 0xa3)];
     let chain = QKind::Signature.chain(AKind::Receive3);
-    let start = Fq::from(9);
+    let start = segment_start();
     let step = |witnesses: Vec<SignatureWitness>, verdicts: Option<Vec<Fq>>| {
         let leaf = QSignatureCircuit::new(schema.clone(), witnesses.clone()).expect("leaf");
         let prepared =
@@ -706,7 +732,7 @@ fn folded_q_signature_step_keeps_the_own_slot_hard_and_incoming_slots_soft() {
             }
         }
         public.push(column);
-        (QSignatureStep { leaf, shape: rel.a1.shape(), start, frame: Some(prepared.witness) }, public)
+        (QSignatureStep { leaf, shape: rel.a1.shape(), frame: Some(prepared.witness) }, public)
     };
     let satisfied = |circuit: &QSignatureStep, public: &[Vec<Fq>]| {
         check_circuit(circuit, K, public, CheckMode::Strict).expect("synthesis").is_satisfied()
@@ -883,20 +909,19 @@ fn signature_segment(
     let mut rng = ChaCha20Rng::seed_from_u64(37);
     let schema = plan.stage().signature_schema(ReceiveStagePlan::SIGNATURE_Q).expect("schema").clone();
     let leaf = QSignatureCircuit::new(schema.clone(), signatures.to_vec()).expect("leaf");
-    let start = start_passthrough(base);
     let q_chain = QKind::Signature.chain(AKind::Receive3);
-    let prepared =
-        prepare_step(&q_chain, 1, &rel.a1, None, None, vec![], vec![Fq::ZERO; Q_DIGESTS], start).expect("prepare Q");
+    let prepared = prepare_step(&q_chain, 1, &rel.a1, None, None, vec![], vec![Fq::ZERO; Q_DIGESTS], segment_start())
+        .expect("prepare Q");
     // The Q step exports its leaf's own column; the context may claim another.
     let [column] = schema.native_instances(signatures).expect("Q1 column");
     let mut public = vec![step_public(&q_chain, 1, Fq::from(BASE), prepared.passthrough, &[], &prepared.digests, &[])];
     public.push(column);
-    let step = QSignatureStep { leaf, shape: rel.a1.shape(), start, frame: Some(prepared.witness) };
+    let step = QSignatureStep { leaf, shape: rel.a1.shape(), frame: Some(prepared.witness) };
     let q = FoldedRelation::<Fq>::from_synthesized(&synthesize(&step.without_witnesses(), K, None).expect("Q layout"))
         .expect("Q signature relation");
     assert!(check_circuit(&step, K, &public, CheckMode::Strict).expect("Q synthesis").is_satisfied());
     let (advice, public) = q.stage_witness(&synthesize(&step, K, Some(&public)).expect("Q witness")).expect("stage");
-    let fresh = fresh_instance(&q, &rel.key_q, &FOLD_Q, advice, public, &mut rng).expect("Q instance");
+    let fresh = fresh_instance(&q, &rel.key_q, &FOLD_Q, advice, opened_at(base, public), &mut rng).expect("Q instance");
     let kind = AKind::Receive4;
     let a_chain = kind.chain();
     let prepared = prepare_step(&a_chain, 2, &q, None, Some(&fresh), base.to_vec(), vec![Fp::ZERO; A_DIGESTS], Fp::ZERO)
@@ -960,10 +985,9 @@ fn folded_a4_authorizes_the_own_receipt_and_checks_incoming_signatures() {
 fn sigma_segment(rel: &Relations, keys: &ReceiveKeys, full: &FullReceive, source: &ReceiveFoldSource, base: &[Fp]) -> Segment {
     let mut rng = ChaCha20Rng::seed_from_u64(43);
     let plan = &keys.plan;
-    let start = start_passthrough(base);
     let q_chain = QKind::Sigma.chain(AKind::Receive1);
-    let mut prepared =
-        prepare_step(&q_chain, 1, &rel.a1, None, None, vec![], vec![Fq::ZERO; Q_DIGESTS], start).expect("prepare Q");
+    let mut prepared = prepare_step(&q_chain, 1, &rel.a1, None, None, vec![], vec![Fq::ZERO; Q_DIGESTS], segment_start())
+        .expect("prepare Q");
     prepared.witness.fresh.public[1] = plan.export(AKind::Receive1, source);
     let incoming = plan.incoming_vesta_claim(source).expect("incoming acc_V");
     let (claims, _, folds) = fold_selected(None, &full.sigma.selected, &incoming).expect("claim folds");
@@ -972,12 +996,12 @@ fn sigma_segment(rel: &Relations, keys: &ReceiveKeys, full: &FullReceive, source
     let mut public = vec![step_public(&q_chain, 1, Fq::from(BASE), prepared.passthrough, &[], &digests, &[])];
     public.extend(full.sigma.instances.clone());
     let witness = QSigmaStepWitness { frame: prepared.witness, selected: full.sigma.selected.clone(), incoming, claims: folds };
-    let step = QSigmaStep { leaf: full.sigma.circuit.clone(), shape: rel.a1.shape(), start, witness: Some(witness) };
+    let step = QSigmaStep { leaf: full.sigma.circuit.clone(), shape: rel.a1.shape(), witness: Some(witness) };
     let q = FoldedRelation::<Fq>::from_synthesized(&synthesize(&step.without_witnesses(), K, None).expect("Q layout"))
         .expect("Q sigma relation");
     assert!(check_circuit(&step, K, &public, CheckMode::Strict).expect("Q synthesis").is_satisfied());
     let (advice, public) = q.stage_witness(&synthesize(&step, K, Some(&public)).expect("Q witness")).expect("stage");
-    let fresh = fresh_instance(&q, &rel.key_q, &FOLD_Q, advice, public, &mut rng).expect("Q instance");
+    let fresh = fresh_instance(&q, &rel.key_q, &FOLD_Q, advice, opened_at(base, public), &mut rng).expect("Q instance");
     let kind = AKind::Receive3;
     let prepared = prepare_step(&kind.chain(), 2, &q, None, Some(&fresh), base.to_vec(), vec![Fp::ZERO; A_DIGESTS], Fp::ZERO)
         .expect("prepare A3");
@@ -1022,21 +1046,15 @@ fn folded_a3_verifies_the_incoming_omega_and_the_payment_objects() {
     eprintln!("FOLD_RECEIVE_A3 rows={rows:?} relation={:?} decider_keys={keys} copy_columns={copy_columns}", relation.summary());
 }
 
-/// One genuine Receive folded through its eight half-steps, as the wraps take
-/// it: Q Frame, A1, Q Sigma, A3, Q Signature, A4, Q Frame, A5, each checked
-/// strictly, committed under the monomial keys and folded by the next. Then
-/// everything the chain leaves to the compression decides: A's accumulators of
-/// Frame (two instances), Sigma and Signature; Q's of A1, A3 and A4 with A5
-/// started into its own; A's claim accumulator (the incoming `acc_P` and the
-/// Omega opening) and Q's (sigma's opening and the incoming `acc_V`).
-///
-/// Transported claims that do not decide pass every step (the circuits can't
-/// decide claims) and are refused exactly by the claim decider of their curve:
-/// a bad `acc_P` by A's at the end of the chain, a bad `acc_V` by Q's after
-/// the Q Sigma step.
+/// The genuine segment: a Rebase on the receiver's last Omega, then one Receive
+/// (ten half-steps), each checked strictly, committed and folded; everything
+/// the chain leaves decides. Transported claims that do not decide (the
+/// incoming Omega's or the predecessor's) pass every step and are refused only
+/// by their curve's claim decider: `acc_P` by A's at the end of the chain,
+/// `acc_V` by Q's after the step that folds it.
 #[test]
-#[ignore = "k16 folded Receive chain (eight half-steps, decider v2); run optimized"]
-fn a_folded_receive_folds_its_eight_half_steps_and_everything_it_leaves_decides() {
+#[ignore = "k16 folded segment chain (ten half-steps, decider v2); run optimized"]
+fn a_rebased_segment_folds_a_receive_and_everything_it_leaves_decides() {
     let keys = receive_keys();
     let full = full_receive(&keys, None);
     let rel = receive_relations(&keys, &full);
@@ -1048,16 +1066,17 @@ fn a_folded_receive_folds_its_eight_half_steps_and_everything_it_leaves_decides(
     }
     let started = std::time::Instant::now();
     let chain = run_chain(&keys, &rel, &full, SCHEDULE.len());
-    eprintln!("FOLD_RECEIVE_CHAIN eight half-steps (checked, committed, folded) {:.1}s", started.elapsed().as_secs_f64());
+    eprintln!("FOLD_RECEIVE_CHAIN ten half-steps (checked, committed, folded) {:.1}s", started.elapsed().as_secs_f64());
     // The Receive closes: the successor's lineage, no context, no sub-step.
     let mut expected = full.source.transition.after.lineage.to_vec();
     expected.extend([Fp::ZERO, Fp::ZERO]);
     assert_eq!(chain.a_state, expected);
     assert_eq!(chain.last, Some(HalfStep::A(AKind::Receive5)));
-    // A keeps every Q kind and its claims; Q keeps A1, A3, A4 and its claims
-    // (A5 is the next fold's).
+    // A keeps every Q kind and its claims; Q keeps A1, A3, A4, the Rebase and
+    // its claims (A5 is the next fold's).
     assert!(chain.a_kept.iter().all(Option::is_some));
-    assert!(chain.q_kept[..3].iter().all(Option::is_some) && chain.q_kept[3].is_none());
+    let kept = |kind: AKind| chain.q_kept[kind as usize].is_some();
+    assert!([AKind::Receive1, AKind::Receive3, AKind::Receive4, AKind::Rebase].into_iter().all(kept) && !kept(AKind::Receive5));
     let (claims_a, _) = chain.claims_a.as_ref().expect("A's claims");
     let (claims_q, _) = chain.claims_q.as_ref().expect("Q's claims");
     assert_eq!(chain.a_digests[A_CLAIM_SLOT], claims_a.digest(&CLAIM_A));
@@ -1070,15 +1089,132 @@ fn a_folded_receive_folds_its_eight_half_steps_and_everything_it_leaves_decides(
     let (bad_p, bad_v) = undecidable_claims();
     let (p, v) = trivial_claims();
     let trivial_p = AccumulatorT::new(*p.g(), *p.challenges()).expect("claim");
-    // A bad transported acc_P: every step holds, A's claim accumulator refuses.
-    let bad = full_receive(&keys, Some((bad_p, v)));
-    let chain = run_chain(&keys, &rel, &bad, SCHEDULE.len());
-    let decision = decide_chain(&rel, &chain);
-    assert!(decision.q.is_ok() && decision.a.is_ok() && decision.claims_q.is_ok(), "{decision:?}");
-    assert!(decision.claims_a.is_err(), "a bad acc_P decided: {decision:?}");
-    // A bad transported acc_V: Q's claim accumulator refuses after Q Sigma.
-    let bad = full_receive(&keys, Some((trivial_p, bad_v)));
-    let chain = run_chain(&keys, &rel, &bad, 3);
-    let (acc, s) = chain.claims_q.as_ref().expect("Q's claims");
-    assert!(iroha_fold::claims::decide_claims(rel.params_a.params().g(), acc, s).is_err(), "a bad acc_V decided");
+    // A bad transported acc_P, incoming or the predecessor's: every step holds
+    // and A's claim accumulator refuses.
+    for bad in [full_receive(&keys, Some((bad_p.clone(), v.clone()))), full_receive_with(&keys, None, Some((bad_p, v)))] {
+        let chain = run_chain(&keys, &rel, &bad, SCHEDULE.len());
+        let decision = decide_chain(&rel, &chain);
+        assert!(decision.q.is_ok() && decision.a.is_ok() && decision.claims_q.is_ok(), "{decision:?}");
+        assert!(decision.claims_a.is_err(), "a bad acc_P decided: {decision:?}");
+    }
+    // A bad transported acc_V: Q's claim accumulator refuses after the step
+    // that folds it (the Frame folding the Rebase for the predecessor's, Q
+    // Sigma for the incoming one).
+    for (bad, steps) in [
+        (full_receive_with(&keys, None, Some((trivial_p.clone(), bad_v.clone()))), 3),
+        (full_receive(&keys, Some((trivial_p, bad_v))), 5),
+    ] {
+        let chain = run_chain(&keys, &rel, &bad, steps);
+        let (acc, s) = chain.claims_q.as_ref().expect("Q's claims");
+        assert!(iroha_fold::claims::decide_claims(rel.params_a.params().g(), acc, s).is_err(), "a bad acc_V decided");
+    }
+}
+
+/// The Frame instance opening a segment at the A state `base` under the chain's
+/// relations: genuine at the segment base, its passthrough replaced otherwise
+/// (see [`opened_at`]).
+fn opening_frame(rel: &ReceiveRelations, base: &[Fp]) -> iroha_fold::ivc::Fresh<Ep> {
+    let mut rng = ChaCha20Rng::seed_from_u64(47);
+    let q_chain = QKind::Frame.chain(AKind::Receive5);
+    let a = &rel.a[AKind::Receive5 as usize];
+    let mut prepared =
+        prepare_step(&q_chain, 1, a, None, None, vec![], vec![Fq::ZERO; Q_DIGESTS], segment_start()).expect("prepare Q");
+    prepared.witness.fresh.public[1] = trivial_export();
+    let selected = trivial_vesta();
+    let (claims, _, folds) = fold_claims(&CLAIM_Q, None, &[claim_of(&selected)]).expect("Q claim fold");
+    let mut digests = prepared.digests.clone();
+    digests[Q_CLAIM_SLOT] = claims.digest(&CLAIM_Q);
+    let public = vec![step_public(&q_chain, 1, Fq::from(BASE), prepared.passthrough, &[], &digests, &[])];
+    let witness = QFrameStepWitness { frame: prepared.witness, selected, claims: folds };
+    let step = QFrameStep { shape: rel.a_shape.clone(), witness: Some(witness) };
+    assert!(check_circuit(&step, K, &public, CheckMode::Strict).expect("Q synthesis").is_satisfied());
+    let relation = &rel.q[QKind::Frame as usize];
+    let (advice, public) = relation.stage_witness(&synthesize(&step, K, Some(&public)).expect("Q witness")).expect("stage");
+    fresh_instance(relation, &rel.key_q, &FOLD_Q, advice, opened_at(base, public), &mut rng).expect("Q instance")
+}
+
+/// The Rebase opens a segment only at the segment base, and only on an Omega
+/// it hard-verifies: another lineage, proof or transported `acc_V` than the
+/// Omega's, or a state other than the segment base, is refused. A1 refuses the
+/// segment base. Prints the Rebase's rows and the decider batches with it.
+#[test]
+#[ignore = "k16 folded segment rebase; run optimized"]
+fn the_rebase_opens_a_segment_only_at_the_base_and_on_its_last_omega() {
+    let keys = receive_keys();
+    let full = full_receive(&keys, None);
+    let rel = receive_relations(&keys, &full);
+    let frame = QKind::Frame as usize;
+    let side = AKind::Rebase.chain();
+    let at_base = opening_frame(&rel, &segment_base());
+    // The Rebase at step 2 on `source` from the A state `state` (the Frame
+    // instance opening the segment opens it at `state`, so that only the
+    // Rebase's own rules refuse a state other than the segment base).
+    let rebase = |source: &RebaseSource, state: &[Fp]| -> (RebaseFoldStep, Vec<Vec<Fp>>) {
+        let last_q = if state == segment_base() { at_base.clone() } else { opening_frame(&rel, state) };
+        let prepared = prepare_step(&side, 2, &rel.q[frame], None, Some(&last_q), state.to_vec(), vec![Fp::ZERO; A_DIGESTS], Fp::ZERO)
+            .expect("prepare Rebase");
+        let claims = source.pallas_claims().map(|c| claim_of(&c));
+        let (acc, _, folds) = fold_claims(&CLAIM_A, None, &claims).expect("A claim folds");
+        let mut digests = prepared.digests.clone();
+        digests[A_CLAIM_SLOT] = acc.digest(&CLAIM_A);
+        let public = vec![step_public(&side, 2, Fp::from(BASE), prepared.passthrough, &source.next_state(), &digests, &[]), source.export()];
+        let witness = RebaseStepWitness { source: Arc::new(source.clone()), frame: prepared.witness, claims: folds };
+        (RebaseFoldStep::new(keys.plan.clone(), rel.q[frame].shape(), Some(witness)), public)
+    };
+    let genuine = &full.rebase;
+    let (step, public) = rebase(genuine, &segment_base());
+    assert!(satisfied(&step, &public), "the genuine rebase");
+    let synthesized = synthesize(&step, K, Some(&public)).expect("Rebase witness");
+    let rows = synthesized.tables.advice_assigned().iter().map(|c| c.iter().rposition(|v| *v).map_or(0, |r| r + 1)).max();
+    let unknown = synthesize(&step.without_witnesses(), K, None).expect("Rebase layout");
+    assert_eq!(synthesized.tables.fixed(), unknown.tables.fixed());
+    assert_eq!(synthesized.tables.permutation(), unknown.tables.permutation());
+    assert_eq!(synthesized.tables.advice_assigned(), unknown.tables.advice_assigned());
+    let mut other = genuine.clone();
+    other.lineage[6] += Fp::ONE;
+    let (step, public) = rebase(&other, &segment_base());
+    assert!(!satisfied(&step, &public), "a lineage the Omega does not prove");
+    let mut other = genuine.clone();
+    other.proof[100] ^= 1;
+    let (step, public) = rebase(&other, &segment_base());
+    assert!(!satisfied(&step, &public), "a tampered Omega proof");
+    let mut other = genuine.clone();
+    other.vesta = undecidable_claims().1;
+    let (step, public) = rebase(&other, &segment_base());
+    assert!(!satisfied(&step, &public), "an acc_V other than the Omega's");
+    let (step, public) = rebase(genuine, &genuine.next_state());
+    assert!(!satisfied(&step, &public), "a rebase mid-segment");
+    // A1 refuses the segment base.
+    let prepared = prepare_step(&AKind::Receive1.chain(), 2, &rel.q[frame], None, Some(&at_base), segment_base(), vec![Fp::ZERO; A_DIGESTS], Fp::ZERO)
+        .expect("prepare A1");
+    let mut next = vec![Fp::ZERO; 18];
+    next.extend([keys.plan.context_digest(&full.source).expect("digest"), Fp::ONE]);
+    let public = vec![
+        step_public(&AKind::Receive1.chain(), 2, Fp::from(BASE), prepared.passthrough, &next, &prepared.digests, &[]),
+        keys.plan.export(AKind::Receive1, &full.source),
+    ];
+    let witness = ReceiveStepWitness { source: Arc::new(full.source.clone()), frame: prepared.witness, claims: None };
+    let a1 = ReceiveFoldStep::new(keys.plan.clone(), AKind::Receive1, rel.q[frame].shape(), Some(witness)).expect("A1 step");
+    assert!(!satisfied(&a1, &public), "A1 accepted the segment base");
+    // The decider batches the wraps decide, with the Rebase and the Frame
+    // that folds export claims.
+    let a_plans: Vec<_> = rel
+        .a
+        .iter()
+        .map(|r| iroha_fold::decider_v2::DeciderV2Plan::with_step_runs(r.clone(), &rel.key_a, A_STEP_RUNS).expect("plan"))
+        .collect();
+    let q_plans: Vec<_> = rel.q.iter().map(|r| iroha_fold::decider_v2::DeciderV2Plan::new(r.clone(), &rel.key_q).expect("plan")).collect();
+    let receive: Vec<_> = a_plans[..4].iter().collect();
+    let all: Vec<_> = a_plans.iter().collect();
+    let q: Vec<_> = q_plans.iter().collect();
+    let rebase_plan = &a_plans[AKind::Rebase as usize];
+    eprintln!(
+        "FOLD_RECEIVE_REBASE rows={rows:?} relation={:?} opened={:?} A batch (claims, absorbed, degree) without Rebase {:?} with {:?}; Q batch {:?}; Frame opened {:?}",
+        rel.a[AKind::Rebase as usize].summary(),
+        rebase_plan.verifier_profile().2,
+        iroha_fold::decider_v2::DeciderV2Plan::batch_profile(&receive),
+        iroha_fold::decider_v2::DeciderV2Plan::batch_profile(&all),
+        iroha_fold::decider_v2::DeciderV2Plan::batch_profile(&q),
+        q_plans[frame].verifier_profile().2,
+    );
 }

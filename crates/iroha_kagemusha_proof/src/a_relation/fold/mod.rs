@@ -11,6 +11,7 @@
 //! and the W continuations (sub-steps share the context digest through the A
 //! state).
 
+pub mod rebase;
 pub mod receive;
 
 use core::fmt;
@@ -18,12 +19,15 @@ use core::fmt;
 use ff::PrimeField;
 use iroha_pasta::{Ep, Eq, Fp, Fq};
 use iroha_plonk::{
+    VerifyingKey,
     cs::{Column, ConstraintSystem, Instance},
     frontend::{Error as SynthesisError, Region, Value},
+    transcript::TranscriptRepr,
 };
 use iroha_plonk_gadgets::{
     GlueChip, UintChip, Word,
     bytes::{
+        element::LeElement,
         tape::{BytesChip, BytesConfig, SegmentSpec},
         variable::ActiveBytes,
     },
@@ -34,10 +38,12 @@ use iroha_plonk_recursion::{
     AccumulatorT, FoldInput,
     accumulation_circuit::FoldInputCells,
     codec::ScalarCells,
-    verifier::{VerifierChip, VerifierConfig},
+    verifier::{VerifierChip, VerifierConfig, VerifierKeyCells},
 };
 
-use super::{LINEAGE_FIELDS, LineagePublicCells, VestaClaimCells, native::receive::INTERNAL_RANGE_BUSES};
+use super::{
+    LINEAGE_FIELDS, LineagePublicCells, ProofMessageCells, VestaClaimCells, native::receive::INTERNAL_RANGE_BUSES,
+};
 use crate::{
     admin_sigma::StateWitness,
     fold_lineage::{A_EXPORT, A_FRAME},
@@ -188,6 +194,49 @@ impl Assign {
     ) -> Result<ActiveBytes<Fp>, SynthesisError> {
         let values = if self.known { Value::known(raw.to_vec()) } else { Value::unknown() };
         ActiveBytes::assign(&mut chip.uint(), bytes, region, capacity, &values, segments)
+    }
+
+    /// The scheme's Omega key as verifier key cells (witnessed, as today's
+    /// stages do; the owner verifying an Omega binds its digest to the
+    /// lineage's).
+    pub(crate) fn omega_key(
+        self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        key: &VerifyingKey<Ep>,
+    ) -> Result<VerifierKeyCells<Ep>, SynthesisError> {
+        let TranscriptRepr::Base(representation) = *key.transcript_repr() else {
+            return Err(SynthesisError::Synthesis);
+        };
+        let points = |points: &[iroha_pasta::EpAffine]| points.iter().map(|p| self.value(Ep::from(*p))).collect::<Vec<_>>();
+        chip.witness_key(
+            region,
+            self.value(representation),
+            &points(key.fixed_commitments()),
+            &points(key.permutation_commitments()),
+        )
+    }
+
+    /// A proof's bytes as checked 256-bit messages and their length (as
+    /// today's stages assign a predecessor proof).
+    pub(crate) fn proof(
+        self,
+        chip: &mut VerifierChip<Ep>,
+        region: &mut Region<'_, Fp>,
+        raw: &[u8],
+    ) -> Result<ProofMessageCells, SynthesisError> {
+        if !raw.len().is_multiple_of(32) {
+            return Err(SynthesisError::Synthesis);
+        }
+        let length = u128::try_from(raw.len()).map_err(|_| SynthesisError::BoundsFailure)?;
+        let length = chip.uint().assign::<32>(region, self.value(length))?;
+        let messages = raw
+            .as_chunks::<32>()
+            .0
+            .iter()
+            .map(|chunk| LeElement::assign(&mut chip.uint(), region, self.value(*chunk)))
+            .collect::<Result<Vec<_>, _>>()?;
+        ProofMessageCells::from_messages(messages, length)
     }
 
     /// An authenticated insertion route (low leaf and slot paths).

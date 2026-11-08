@@ -52,7 +52,7 @@ use iroha_plonk_recursion::{
     accumulation_circuit::FoldInputCells,
     codec::{GeneratorPoint, ScalarCells},
     obligation::{ModeCells, ledger::Variant},
-    verifier::{VerifierChip, VerifierKeyCells},
+    verifier::VerifierChip,
 };
 
 use super::{AStateCells, AStepConfig, Assign, Error, pin_pallas, pin_vesta, push_pallas, vesta_words};
@@ -76,7 +76,10 @@ use crate::{
         transition::TransitionInputs,
     },
     circuit::{PrefixMode, RelationShape},
-    fold_lineage::{A_CLAIM_SLOT, A_EXPORT, A_STATE, AKind, BASE, CLAIM_A, ClaimFolds, claim_cells, fold_claims_cells},
+    fold_lineage::{
+        A_CLAIM_SLOT, A_EXPORT, A_STATE, AKind, BASE, CLAIM_A, ClaimFolds, REBASE_PC, claim_cells, fold_claims_cells,
+        trivial_export,
+    },
     operation_relation::{
         incoming_statement::{IncomingStatementCells, StatementView},
         map_effects::{CONSUMED_DOMAIN, ReceiveMapWitness},
@@ -97,19 +100,22 @@ pub const FOLD_SCHEMA_DOMAIN: u64 = u64::from_le_bytes(*b"kgwfsch1");
 /// in stage A4. Folding binds Q0 in A3 and Q1 in A4.
 const Q_PARTITIONS: [&[usize]; 5] = [&[], &[0], &[], &[1], &[]];
 
-/// Today's stage whose tasks a folded Receive A kind runs.
+/// Today's stage whose tasks a folded Receive A kind runs (`None` for a kind
+/// outside the Receive).
 #[must_use]
-pub const fn stage_of(kind: AKind) -> usize {
+pub const fn stage_of(kind: AKind) -> Option<usize> {
     match kind {
-        AKind::Receive1 => 0,
-        AKind::Receive3 => 2,
-        AKind::Receive4 => 3,
-        AKind::Receive5 => 4,
+        AKind::Receive1 => Some(0),
+        AKind::Receive3 => Some(2),
+        AKind::Receive4 => Some(3),
+        AKind::Receive5 => Some(4),
+        AKind::Rebase => None,
     }
 }
 
-/// The program counter a folded Receive A kind requires (the number of the
-/// Receive's A sub-steps done before it).
+/// The program counter an A kind requires: for a Receive kind the number of
+/// the Receive's A sub-steps done before it, for the Rebase the segment base's
+/// [`REBASE_PC`].
 #[must_use]
 pub const fn pc_before(kind: AKind) -> u64 {
     match kind {
@@ -117,7 +123,13 @@ pub const fn pc_before(kind: AKind) -> u64 {
         AKind::Receive3 => 1,
         AKind::Receive4 => 2,
         AKind::Receive5 => 3,
+        AKind::Rebase => REBASE_PC,
     }
+}
+
+fn receive_stage(kind: AKind) -> Result<u32, SynthesisError> {
+    let stage = stage_of(kind).ok_or(SynthesisError::Synthesis)?;
+    u32::try_from(stage).map_err(|_| SynthesisError::BoundsFailure)
 }
 
 /// The immutable plan of the folded Receive A steps: today's Receive stage
@@ -171,8 +183,23 @@ impl ReceiveFoldPlan {
         &self.stage
     }
 
-    fn context(&self) -> &ContextPlan {
+    pub(super) fn context(&self) -> &ContextPlan {
         self.stage.context()
+    }
+
+    /// The scheme's Omega key.
+    pub(super) const fn omega_key(&self) -> &VerifyingKey<Ep> {
+        &self.omega_key
+    }
+
+    /// The pinned trivial Pallas claim.
+    pub(super) const fn trivial_pallas(&self) -> &FoldInput<Ep> {
+        &self.trivial_pallas
+    }
+
+    /// The pinned trivial Vesta claim.
+    pub(super) const fn trivial_vesta(&self) -> &AccumulatorT<Eq> {
+        &self.trivial_vesta
     }
 
     /// The step-context digest every A sub-step of `source` recomputes
@@ -234,6 +261,7 @@ impl ReceiveFoldPlan {
                 next.extend([Fp::ZERO, Fp::ZERO]);
                 next
             }
+            AKind::Rebase => return Err(Error::Artifact),
         })
     }
 
@@ -247,19 +275,20 @@ impl ReceiveFoldPlan {
         let mut state = source.transition.before.lineage.to_vec();
         match kind {
             AKind::Receive1 => state.extend([Fp::ZERO, Fp::ZERO]),
+            AKind::Rebase => return Err(Error::Artifact),
             _ => state.extend([self.context_digest(source)?, Fp::from(pc_before(kind))]),
         }
         Ok(state)
     }
 
-    /// The export column of a sub-step of `kind` ([`A_EXPORT`]): for A1,
-    /// today's A-frame incoming Vesta words (the transported `acc_V`'s
+    /// The export column of a Receive sub-step of `kind` ([`A_EXPORT`]): for
+    /// A1, today's A-frame incoming Vesta words (the transported `acc_V`'s
     /// coordinate limbs and challenges, its mode, the correction's coordinate
-    /// limbs); zeros otherwise.
+    /// limbs); [`trivial_export`] otherwise.
     #[must_use]
     pub fn export(&self, kind: AKind, source: &ReceiveFoldSource) -> Vec<Fp> {
         if kind != AKind::Receive1 {
-            return vec![Fp::ZERO; A_EXPORT];
+            return trivial_export();
         }
         let incoming = &source.incoming;
         let mut words = vesta_words(&incoming.vesta.as_input());
@@ -696,17 +725,21 @@ pub struct ReceiveFoldStep {
 }
 
 impl ReceiveFoldStep {
-    /// The step of `kind` folding instances of the Q relation of `shape`
-    /// (`kind.folds()`).
+    /// The step of the Receive kind `kind` folding instances of the Q relation
+    /// of `shape` (`kind.folds()`).
     ///
     /// # Errors
-    /// [`Error::Artifact`] for a kind not folded yet.
+    /// [`Error::Artifact`] for a kind outside the Receive (the Rebase is
+    /// [`super::rebase::RebaseFoldStep`]).
     pub fn new(
         plan: Arc<ReceiveFoldPlan>,
         kind: AKind,
         shape: FoldShape,
         witness: Option<ReceiveStepWitness>,
     ) -> Result<Self, Error> {
+        if stage_of(kind).is_none() {
+            return Err(Error::Artifact);
+        }
         Ok(Self { plan, kind, shape, witness })
     }
 
@@ -753,6 +786,7 @@ impl ReceiveFoldStep {
                 context.q_instances[index] = q_cells(chip, region, &frame.public, lengths)?;
             }
             AKind::Receive1 | AKind::Receive5 => {}
+            AKind::Rebase => return Err(SynthesisError::Synthesis),
         }
         let input = context.inputs();
         // The program counter orders the sub-steps; the context digest binds
@@ -771,6 +805,7 @@ impl ReceiveFoldStep {
             AKind::Receive3 => self.receive3(assign, chip, bytes, region, &context, &input, source)?,
             AKind::Receive4 => self.receive4(assign, chip, bytes, region, &context, &input, source)?,
             AKind::Receive5 => self.receive5(assign, chip, bytes, region, &context, &input, source)?,
+            AKind::Rebase => return Err(SynthesisError::Synthesis),
         }
         let next = if self.kind == AKind::Receive5 {
             // The Receive is complete: the successor's lineage, no context.
@@ -812,7 +847,9 @@ impl ReceiveFoldStep {
 
     /// The export column ([`A_EXPORT`]): A1 hands the incoming `acc_V`, its
     /// mode (the third, after the two Pallas modes) and its correction to the
-    /// Q Sigma step, in today's A-frame order; every other kind exports zeros.
+    /// Q Sigma step, in today's A-frame order; every other kind exports the
+    /// trivial claim in mode Trivial ([`trivial_export`]), which the Frame step
+    /// folding A4 or A5 folds.
     fn export(
         &self,
         chip: &mut VerifierChip<Ep>,
@@ -828,7 +865,10 @@ impl ReceiveFoldStep {
             }
             words
         } else {
-            vec![chip.uint().glue().constant(region, Fp::ZERO)?; A_EXPORT]
+            trivial_export()
+                .into_iter()
+                .map(|value| chip.uint().glue().constant(region, value))
+                .collect::<Result<Vec<_>, _>>()?
         };
         if words.len() == A_EXPORT { Ok(words) } else { Err(SynthesisError::Synthesis) }
     }
@@ -922,8 +962,8 @@ impl ReceiveFoldStep {
             },
         )?;
         let sources = ReceiveProofSources::from_active_omega(&transport, &sigma)?;
-        let omega_key = self.omega_key(assign, chip, region)?;
-        let stage = u32::try_from(stage_of(self.kind)).map_err(|_| SynthesisError::BoundsFailure)?;
+        let omega_key = assign.omega_key(chip, region, &self.plan.omega_key)?;
+        let stage = receive_stage(self.kind)?;
         self.plan.stage.constrain_stage(
             chip,
             region,
@@ -941,27 +981,6 @@ impl ReceiveFoldStep {
             },
         )?;
         Ok(())
-    }
-
-    /// The scheme's Omega key as verifier key cells (witnessed, as today's
-    /// stages do; the Proofs owner binds its digest to the lineage's).
-    fn omega_key(
-        &self,
-        assign: Assign,
-        chip: &mut VerifierChip<Ep>,
-        region: &mut Region<'_, Fp>,
-    ) -> Result<VerifierKeyCells<Ep>, SynthesisError> {
-        let key = &self.plan.omega_key;
-        let iroha_plonk::transcript::TranscriptRepr::Base(representation) = *key.transcript_repr() else {
-            return Err(SynthesisError::Synthesis);
-        };
-        let points = |points: &[iroha_pasta::EpAffine]| points.iter().map(|p| assign.value(Ep::from(*p))).collect::<Vec<_>>();
-        chip.witness_key(
-            region,
-            assign.value(representation),
-            &points(key.fixed_commitments()),
-            &points(key.permutation_commitments()),
-        )
     }
 
     /// Stage A4's tasks: the hard own receipt (Authorization) and the soft
@@ -1005,7 +1024,7 @@ impl ReceiveFoldStep {
         };
         let schema = self.plan.stage.signature_schema(index).ok_or(SynthesisError::Synthesis)?;
         let own = bind_signature_q(chip, region, operation, index, schema, &verified)?;
-        let stage = u32::try_from(stage_of(self.kind)).map_err(|_| SynthesisError::BoundsFailure)?;
+        let stage = receive_stage(self.kind)?;
         let incoming =
             ReceiveSignatureQProjection::from_context(chip, region, self.plan.context(), stage, self.plan.policy, input)?;
         self.plan.stage.constrain_stage(
@@ -1048,7 +1067,7 @@ impl ReceiveFoldStep {
         let proof_digest =
             ReceiveProofDigest::from_active(chip, region, &omega, &sigma, context.objects[5].authenticated_digest())?;
         let nonmembership = assign.insertion(&mut chip.uint(), region, &source.transition.consumed)?.low;
-        let stage = u32::try_from(stage_of(self.kind)).map_err(|_| SynthesisError::BoundsFailure)?;
+        let stage = receive_stage(self.kind)?;
         self.plan.stage.constrain_stage(
             chip,
             region,
@@ -1092,7 +1111,7 @@ impl ReceiveFoldStep {
             insert,
             payment_digest: context.objects[3].authenticated_digest().clone(),
         };
-        let stage = u32::try_from(stage_of(self.kind)).map_err(|_| SynthesisError::BoundsFailure)?;
+        let stage = receive_stage(self.kind)?;
         let shape = RelationShape::new(SigmaRelation::RECEIVE, PrefixMode::Absorbed);
         self.plan.stage.constrain_stage(
             chip,

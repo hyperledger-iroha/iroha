@@ -40,7 +40,7 @@ use iroha_plonk_recursion::{
 
 use super::{
     A_EXPORT, AKind, BASE, CLAIM_Q, ClaimFolds, Q_CLAIM_SLOT, Q_FRAME, Q_STATE, QKind, claim_cells, claim_of, fold_claims,
-    fold_claims_cells,
+    fold_claims_cells, segment_start,
 };
 use crate::q_sigma::QSigmaCircuit;
 
@@ -79,9 +79,6 @@ pub struct QSigmaStep {
     pub leaf: QSigmaCircuit,
     /// The shape of the A relations it folds.
     pub shape: FoldShape,
-    /// The passthrough of a segment's first instance
-    /// ([`super::start_passthrough`]).
-    pub start: Fq,
     /// The step witness (`None` at key generation; the leaf then has none either).
     pub witness: Option<QSigmaStepWitness>,
 }
@@ -153,7 +150,7 @@ impl QSigmaStep {
                 &chain,
                 &self.shape,
                 Fq::from(BASE),
-                self.start,
+                segment_start(),
                 Q_STATE,
                 witness.map(|w| &w.frame),
             )?;

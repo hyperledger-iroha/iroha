@@ -20,7 +20,7 @@ use iroha_plonk::{
     frontend::{Circuit, Error, Layouter, SimpleFloorPlanner},
 };
 
-use super::{AKind, BASE, Q_FRAME, Q_STATE, QKind};
+use super::{AKind, BASE, Q_FRAME, Q_STATE, QKind, segment_start};
 use crate::q_signature::{QSignatureCircuit, QSignatureConfig};
 
 /// The Q Signature step.
@@ -30,9 +30,6 @@ pub struct QSignatureStep {
     pub leaf: QSignatureCircuit,
     /// The shape of the A relations it folds.
     pub shape: FoldShape,
-    /// The passthrough of a segment's first instance
-    /// ([`super::start_passthrough`]).
-    pub start: Fq,
     /// The frame witness (`None` at key generation).
     pub frame: Option<FrameWitness<Eq>>,
 }
@@ -85,7 +82,7 @@ impl Circuit<Fq> for QSignatureStep {
                     &chain,
                     &self.shape,
                     Fq::from(BASE),
-                    self.start,
+                    segment_start(),
                     Q_STATE,
                     self.frame.as_ref(),
                 )?;
