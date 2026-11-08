@@ -529,6 +529,57 @@ pub fn run_check_repair_rehearsal(
     }
 }
 
+/// Replay evidence plus one discarded, keyless Time and Ironwood activation.
+#[derive(Debug, JsonSerialize)]
+struct ActivationRehearsalReportV1 {
+    replay: ReplayCheckReportV1,
+    rehearsal: Option<iroha_core::state::TairaActivationRehearsalReport>,
+}
+
+/// Run finite authenticated replay followed by a discarded activation on the temporary State.
+///
+/// # Errors
+/// Refuses incomplete historical replay, an invalid pool file, or a selection other than the exact
+/// repaired one, and fails when the change set does not activate.
+pub fn run_check_activation_rehearsal(
+    config: &Config,
+    pool_path: &std::path::Path,
+) -> ReportResult<(), MainError> {
+    const MAX_POOL_BYTES: u64 = 64 * 1024;
+    let metadata = std::fs::metadata(pool_path)
+        .map_err(|error| failure(format!("cannot read the pool file: {error}")))?;
+    if !metadata.is_file() || metadata.len() > MAX_POOL_BYTES {
+        return Err(failure("the pool file is not a small regular file"));
+    }
+    let bytes = std::fs::read(pool_path)
+        .map_err(|error| failure(format!("cannot read the pool file: {error}")))?;
+    let pool: iroha_data_model::privacy::PrivacyIronwoodPoolBootstrapV1 =
+        norito::json::from_slice(&bytes)
+            .map_err(|error| failure(format!("invalid pool file: {error}")))?;
+    let mut rehearsal = None;
+    let replay = check_replay_then(config, |state| {
+        rehearsal = Some(state.rehearse_taira_activation(pool).map_err(failure)?);
+        Ok(())
+    })?;
+    let report = ActivationRehearsalReportV1 { replay, rehearsal };
+    println!(
+        "{}",
+        norito::json::to_json(&report).map_err(|error| failure(error.to_string()))?
+    );
+    if report.replay.is_ok()
+        && report
+            .rehearsal
+            .as_ref()
+            .is_some_and(|r| r.activated && !r.state_published)
+    {
+        Ok(())
+    } else {
+        Err(failure(
+            "the activation rehearsal did not activate; inspect the report",
+        ))
+    }
+}
+
 /// Run `--check-replay`: print the report as Norito JSON and fail unless every block matched.
 ///
 /// # Errors

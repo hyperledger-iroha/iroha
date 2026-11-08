@@ -642,6 +642,13 @@ fn selection_change_set(
     publish: Vec<Descriptor>,
 ) -> Result<ChangeSetV1, CatalogError> {
     let mut transitions = Vec::new();
+    for binding in previous.bindings.iter().filter(|binding| {
+        next.bindings
+            .binary_search_by(|other| other.wire_id.cmp(&binding.wire_id))
+            .is_err()
+    }) {
+        transitions.push(SelectionTransitionV1::Unbind(binding.wire_id.clone()));
+    }
     for id in previous
         .active
         .iter()
@@ -939,6 +946,70 @@ fn activation_change_set_in_catalog(
         .filter(|(id, _)| !published.contains_key(id))
         .map(|(_, value)| value.clone())
         .collect();
+    selection_change_set(network, height, qualification, previous, &next, publish)
+}
+
+/// The one owner-authorized Taira change set: from the compiled repair successor of the frozen
+/// baseline to the compiled Time and Ironwood composition.
+///
+/// The successor keeps the repair kernel and otherwise equals the compiled composition, so its
+/// services profile, implementation and storage set are the identities readers already know. The
+/// spent repair instruction is unbound and deactivated. This constructs a change set and approves
+/// nothing (`specs/runtime/taira_time_ironwood_v1.md`).
+///
+/// # Errors
+/// `previous` is not the exact repaired selection, or the composition cannot be constructed.
+pub fn taira_time_ironwood_change_set(
+    network: NetworkId,
+    height: u64,
+    qualification: [u8; 32],
+    previous: &RootSelectionV1,
+    published: &impl iroha_data_model::runtime::definition::DefinitionLookup,
+) -> Result<ChangeSetV1, CatalogError> {
+    let invalid = |message: String| CatalogError::Parameters(message);
+    let base = super::release_catalog()?;
+    let extension = base.ironwood.as_ref().expect("compiled Ironwood");
+    let baseline_definitions: BTreeMap<DefinitionId, Descriptor> = base
+        .baseline_definitions
+        .iter()
+        .map(|id| (*id, base.definitions[id].clone()))
+        .collect();
+    let repaired = base
+        .sorafs_repair_activation(
+            &base.baseline,
+            &baseline_definitions,
+            network,
+            height,
+            qualification,
+        )?
+        .apply(&base.baseline, &baseline_definitions)
+        .map_err(|error| invalid(error.to_string()))?
+        .selection;
+    if previous != &repaired {
+        return Err(invalid(
+            "Taira activation requires the exact repaired selection".into(),
+        ));
+    }
+    let mut builder = base.clone();
+    let mut next = builder.lifecycle_successor(&extension.selection)?;
+    next.kernel = previous.kernel;
+    let mut needed: std::collections::BTreeSet<DefinitionId> =
+        next.active.iter().copied().collect();
+    needed.extend(next.installed_storage.iter().copied());
+    needed.insert(next.services_profile);
+    needed.insert(extension.migration);
+    let mut publish = Vec::new();
+    for id in needed {
+        if published.definition(&id).is_some() {
+            continue;
+        }
+        let descriptor = builder
+            .definitions
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| invalid(format!("composition definition {id} is not compiled")))?;
+        publish.push(descriptor);
+    }
     selection_change_set(network, height, qualification, previous, &next, publish)
 }
 

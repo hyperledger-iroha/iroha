@@ -387,6 +387,7 @@ define_instruction_handlers! {
     dispatch_instruction::<runtime_upgrade::AttestRuntimeSupportV1>,
     dispatch_instruction::<runtime_upgrade::ContainRuntimeV1>,
     dispatch_instruction::<iroha_data_model::isi::sorafs_repair::ApplySorafsRepairV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::taira_activation::ScheduleTairaTimeIronwoodV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<Mint<Quantity, Asset>>,
     dispatch_instruction::<Burn<Quantity, Asset>>,
     dispatch_instruction::<Transfer<Asset, Quantity, Account>>,
@@ -946,12 +947,17 @@ pub(crate) fn execute_borrowed_instruction(
     authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
-    let implementation = crate::runtime::envelope::resolve_envelope(
-        state_transaction.world.runtime_selection.get(),
-        state_transaction._curr_block.height().get(),
-        instruction,
-        || crate::runtime::obligations::step(instruction, &state_transaction.world),
-    )?;
+    let implementation =
+        if crate::runtime::taira_activation::admitted_by_boundary(state_transaction, instruction) {
+            None
+        } else {
+            crate::runtime::envelope::resolve_envelope(
+                state_transaction.world.runtime_selection.get(),
+                state_transaction._curr_block.height().get(),
+                instruction,
+                || crate::runtime::obligations::step(instruction, &state_transaction.world),
+            )?
+        };
     crate::executor::root_scope::ensure_instruction_scope(instruction, state_transaction)
         .map_err(|error| Error::from(error.to_string()))?;
     iroha_logger::debug!(isi=%instruction, "Executing");

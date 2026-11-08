@@ -107,6 +107,19 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
         literals: &[r"iroha:kagemusha:wallet:suffix-unload:v1:"],
     },
     OtherDomains {
+        usage: Use::Name,
+        reason: "Wire identity of the one certified Taira activation; no selection binds it and it hashes no State content.",
+        literals: &[r"iroha.runtime.taira_time_ironwood.schedule.v1"],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Content identity of one Taira activation plan and the domain of its signatures: both cover that supplied plan, not a State table.",
+        literals: &[
+            r"iroha:runtime:taira-time-ironwood:plan:v1\0",
+            r"iroha:runtime:taira-time-ironwood:signature:v1\0",
+        ],
+    },
+    OtherDomains {
         usage: Use::Record,
         reason: "Content identity of one SoraFS repair plan and the domain of its signatures: both cover that supplied plan, not a State table.",
         literals: &[

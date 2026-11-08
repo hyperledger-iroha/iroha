@@ -3373,15 +3373,21 @@ impl StateBlock<'_> {
                 .map_err(|error| {
                     ExecutionAttemptError::from(TransactionRejectionReason::Validation(error))
                 })?;
+            crate::runtime::taira_activation::prepare_signed_boundary(state_transaction, signed)
+                .map_err(|error| {
+                    ExecutionAttemptError::from(TransactionRejectionReason::Validation(error))
+                })?;
         }
-        crate::runtime::envelope::admit_envelopes(
-            state_transaction.world.runtime_selection.get(),
-            state_transaction.block_height(),
-            signed.instructions(),
-        )
-        .map_err(|error| {
-            ExecutionAttemptError::from(TransactionRejectionReason::Validation(error))
-        })?;
+        if state_transaction.taira_activation_entrypoint.is_none() {
+            crate::runtime::envelope::admit_envelopes(
+                state_transaction.world.runtime_selection.get(),
+                state_transaction.block_height(),
+                signed.instructions(),
+            )
+            .map_err(|error| {
+                ExecutionAttemptError::from(TransactionRejectionReason::Validation(error))
+            })?;
+        }
         let admission = Self::validate_stateful_admission(
             signed,
             state_transaction,

@@ -271,12 +271,12 @@ fn check_input_size(bytes: &[u8]) -> Result<(), SorafsRepairErrorV1> {
 
 // Norito's general JSON array implementation is byte-specific. Keep the binary and Rust
 // representations fixed at four, and reject a different JSON arity before parsing any item.
-mod four_items_json {
+pub(crate) mod four_items_json {
     use norito::json::{
         BoundedJsonError, Error, JsonDeserialize, JsonSerialize, JsonWriteSink, Parser,
     };
 
-    pub(super) fn serialize<T: JsonSerialize>(values: &[T; 4], out: &mut String) {
+    pub(crate) fn serialize<T: JsonSerialize>(values: &[T; 4], out: &mut String) {
         out.push('[');
         for (index, value) in values.iter().enumerate() {
             if index != 0 {
@@ -287,7 +287,7 @@ mod four_items_json {
         out.push(']');
     }
 
-    pub(super) fn serialize_bounded<T: JsonSerialize>(
+    pub(crate) fn serialize_bounded<T: JsonSerialize>(
         values: &[T; 4],
         out: &mut dyn JsonWriteSink,
     ) -> Result<(), BoundedJsonError> {
@@ -306,14 +306,14 @@ mod four_items_json {
         result
     }
 
-    pub(super) fn deserialize<T: JsonDeserialize>(
+    pub(crate) fn deserialize<T: JsonDeserialize>(
         parser: &mut Parser<'_>,
     ) -> Result<[T; 4], Error> {
         let (items, _) = parser.parse_array_with(
             |count| {
                 if count != 4 {
                     return Err(Error::Message(
-                        "SoraFS repair requires exactly four roster items".into(),
+                        "a certified plan requires exactly four roster items".into(),
                     ));
                 }
                 Ok(([None, None, None, None], 0usize))
@@ -325,7 +325,7 @@ mod four_items_json {
             },
         )?;
         let [first, second, third, fourth] = items;
-        let missing = || Error::Message("SoraFS repair roster item is missing".into());
+        let missing = || Error::Message("a certified plan roster item is missing".into());
         Ok([
             first.ok_or_else(missing)?,
             second.ok_or_else(missing)?,

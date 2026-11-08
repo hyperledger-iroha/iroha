@@ -19,6 +19,7 @@ pub(crate) mod obligations;
 pub(crate) mod sorafs_authority;
 /// The owner-authorized, all-four-certified one-time Taira SoraFS transition.
 pub mod sorafs_repair;
+pub mod taira_activation;
 
 use iroha_data_model::runtime::{
     definition::{DefinitionDescriptorV1, DefinitionId, RestrictionV1, RootSelectionV1},

@@ -1398,6 +1398,8 @@ pub struct ChangeSetRecordV1 {
     Debug,
     PartialEq,
     Eq,
+    PartialOrd,
+    Ord,
     Encode,
     Decode,
     iroha_schema::IntoSchema,

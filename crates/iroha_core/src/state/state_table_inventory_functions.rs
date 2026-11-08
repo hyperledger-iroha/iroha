@@ -184,6 +184,18 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         ),
     ),
     function(
+        "crates/iroha_core/src/runtime/taira_activation.rs",
+        "validate_boundary",
+        1,
+        UseOwner::Other(Use::Record, RECORD_IDENTITY),
+    ),
+    function(
+        "crates/iroha_core/src/runtime/taira_activation.rs",
+        "validate_context",
+        1,
+        UseOwner::Other(Use::Record, RECORD_IDENTITY),
+    ),
+    function(
         "crates/iroha_core/src/smartcontracts/code.rs",
         "fetch_instance_binding",
         1,

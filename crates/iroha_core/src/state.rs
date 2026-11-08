@@ -371,7 +371,9 @@ mod fastpq_source_inventory;
 pub(crate) use fastpq_source_inventory::native_capture_fixture;
 pub(crate) mod network_policy_routes;
 mod output_capacity;
-pub use output_capacity::{SorafsRepairRehearsalReport, SorafsRepairWorldChange};
+pub use output_capacity::{
+    SorafsRepairRehearsalReport, SorafsRepairWorldChange, TairaActivationRehearsalReport,
+};
 mod output_publication;
 pub(crate) use output_capacity::{
     ExecutionOutputAttemptError, ExecutionOutputSealError, ExecutionOutputSealMetadata,
@@ -14416,6 +14418,9 @@ pub struct StateTransaction<'block, 'state> {
     /// Exact signed repair plan admitted by the owner-authorized exceptional kernel boundary.
     /// Ephemeral transaction custody; never serialized or inherited by contract callbacks.
     pub(crate) sorafs_repair_entrypoint: Option<[u8; 32]>,
+    /// Exact signed activation plan admitted by the owner-authorized Taira boundary.
+    /// Ephemeral transaction custody; never serialized or inherited by contract callbacks.
+    pub(crate) taira_activation_entrypoint: Option<[u8; 32]>,
     /// Mutable counter shared with the parent [`StateBlock`] recording committed fragments.
     committed_fragments: &'block mut usize,
     /// Lanes whose state was touched in this transaction.
@@ -39681,6 +39686,7 @@ impl<'state> StateBlock<'state> {
             canonical_runtime: fields.canonical_runtime.transaction(),
             native_execution_tip: *fields.native_execution_tip.get(),
             sorafs_repair_entrypoint: None,
+            taira_activation_entrypoint: None,
             committed_fragments: &mut fields.committed_fragments,
             touched_lanes: &mut fields.touched_lanes,
             world,
@@ -43794,6 +43800,7 @@ impl StateTransaction<'_, '_> {
             canonical_runtime,
             native_execution_tip: _,
             sorafs_repair_entrypoint: _,
+            taira_activation_entrypoint: _,
             committed_fragments,
             touched_lanes,
             mut world,

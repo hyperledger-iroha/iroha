@@ -153,15 +153,19 @@ impl AdditionDefinitions {
 
 /// Whether a wire ID belongs to the immutable foundation roster.
 pub(crate) fn is_baseline_instruction(wire_id: &str) -> bool {
-    use iroha_data_model::isi::privacy::{
-        BootstrapPrivacyIronwoodPoolV1, SchedulePrivacyIronwoodLimitsUpdateV1,
-        SubmitPrivacyIronwoodProofV1,
+    use iroha_data_model::isi::{
+        privacy::{
+            BootstrapPrivacyIronwoodPoolV1, SchedulePrivacyIronwoodLimitsUpdateV1,
+            SubmitPrivacyIronwoodProofV1,
+        },
+        taira_activation::ScheduleTairaTimeIronwoodV1,
     };
     !matches!(
         wire_id,
         BootstrapPrivacyIronwoodPoolV1::WIRE_ID
             | SubmitPrivacyIronwoodProofV1::WIRE_ID
             | SchedulePrivacyIronwoodLimitsUpdateV1::WIRE_ID
+            | ScheduleTairaTimeIronwoodV1::WIRE_ID
     )
 }
 

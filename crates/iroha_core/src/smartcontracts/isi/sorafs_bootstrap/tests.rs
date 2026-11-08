@@ -48,7 +48,7 @@ const ENVELOPE: &[u8] = include_bytes!(concat!(
     "/../../fixtures/sorafs_manifest/provider_admission/envelope_v1.to"
 ));
 
-fn account(seed: u8) -> AccountId {
+pub(crate) fn account(seed: u8) -> AccountId {
     AccountId::new(key(seed).public_key().clone())
 }
 
@@ -65,7 +65,7 @@ impl Fixture {
         Self::with_world(World::new())
     }
 
-    fn with_world(mut world: World) -> Self {
+    pub(crate) fn with_world(mut world: World) -> Self {
         for seed in 1..=6 {
             let id = account(seed);
             let (id, account) = Account::new(id.clone()).build(&id).into_key_value();
@@ -81,7 +81,7 @@ impl Fixture {
         }
     }
 
-    fn next_time_ms(&mut self) -> u64 {
+    pub(crate) fn next_time_ms(&mut self) -> u64 {
         self.time += 1;
         self.time * 1000
     }
@@ -212,7 +212,7 @@ impl Fixture {
     /// Apply the authenticated selected handler in a rollback-owned fixture transaction.
     /// Rejected transactions and their entire block overlay are discarded. This is not full
     /// signed transaction admission: the test seam changes only the expected deployment scope.
-    fn submit(&mut self, certificate: SorafsRepairCertificateV1) -> Option<String> {
+    pub(crate) fn submit(&mut self, certificate: SorafsRepairCertificateV1) -> Option<String> {
         let time = self.next_time_ms();
         let state = std::sync::Arc::clone(self.chain.state());
         let view = state.view();

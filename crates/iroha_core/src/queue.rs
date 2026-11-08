@@ -1309,7 +1309,8 @@ impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
             | TransactionEntrypoint::AnonymousBallot(_) => return None,
         };
         if matches!(transaction.entrypoint(), TransactionEntrypoint::External(_))
-            && crate::runtime::sorafs_repair::queue_admits(self.view, signed)
+            && (crate::runtime::sorafs_repair::queue_admits(self.view, signed)
+                || crate::runtime::taira_activation::queue_admits(self.view, signed))
         {
             return None;
         }

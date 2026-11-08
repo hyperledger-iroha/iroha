@@ -468,6 +468,10 @@ mod network;
 mod repair_rehearsal;
 pub use repair_rehearsal::{SorafsRepairRehearsalReport, SorafsRepairWorldChange};
 
+#[path = "taira_activation_rehearsal.rs"]
+mod taira_activation_rehearsal;
+pub use taira_activation_rehearsal::TairaActivationRehearsalReport;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg(test)]
 enum NetworkSuccessDisposition {
