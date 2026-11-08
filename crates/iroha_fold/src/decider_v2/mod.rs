@@ -69,7 +69,7 @@ use iroha_plonk::pcs::{
     mle::{self as pcs_mle, BatchOpening, MleClaim, open_batch_bound, verify_batch_bound},
 };
 
-pub use plan::DeciderV2Plan;
+pub use plan::{DeciderV2Plan, STEP_RUNS};
 use plan::{Committed, CopyColumn, Source, Support, Weight};
 
 use crate::{

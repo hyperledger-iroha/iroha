@@ -2,9 +2,9 @@
 //! weighted terms, its key polynomials and its copy permutation.
 //!
 //! Key polynomials are shared by equal contents. A key polynomial with at most
-//! [`STEP_RUNS`] constant runs is a step function the verifier evaluates
-//! ([`Steps`]); every other one is committed and opened. One copy helper covers
-//! [`COPY_GROUP`] copy columns.
+//! the plan's step bound of constant runs ([`STEP_RUNS`] unless chosen) is a
+//! step function the verifier evaluates ([`Steps`]); every other one is
+//! committed and opened. One copy helper covers [`COPY_GROUP`] copy columns.
 
 use std::{
     collections::{HashMap, hash_map::DefaultHasher},
@@ -26,12 +26,14 @@ use crate::{
     relation::{Cell, FoldedRelation},
 };
 
-/// A key polynomial with at most this many maximal constant runs (counted
-/// cyclically) is evaluated by the verifier as a step function instead of
-/// being committed and opened: each change of value costs one prefix
-/// indicator (`O(mu)` field operations), against an opened commitment and its
-/// claimed values.
-pub(crate) const STEP_RUNS: usize = 16;
+/// The step bound of [`DeciderV2Plan::new`]: a key polynomial with at most this
+/// many maximal constant runs (counted cyclically) is evaluated by the verifier
+/// as a step function instead of being committed and opened. Each change of
+/// value costs one prefix indicator (`O(mu)` field operations, shared between
+/// boundaries) against an opened commitment and its claimed values; a verifier
+/// with field-side room for more takes a larger bound
+/// ([`DeciderV2Plan::with_step_runs`]).
+pub const STEP_RUNS: usize = 16;
 
 /// Copy columns per copy helper. A helper sums the copy terms of its columns,
 /// and its row constraint has degree `2 COPY_GROUP + 2` (six).
@@ -180,6 +182,9 @@ pub struct DeciderV2Plan<C: PastaCurve> {
     pub(crate) relation: FoldedRelation<C::ScalarExt>,
     pub(crate) key: CommitKey<C>,
     pub(crate) mu: usize,
+    /// The step bound: key polynomials of at most this many runs are step
+    /// tables.
+    pub(crate) step_runs: usize,
     pub(crate) sources: Vec<Source>,
     /// The step function of each [`Source::Steps`] table (`None` for every
     /// other source), in source order.
@@ -237,6 +242,7 @@ struct Builder<'a, F> {
     contents: HashMap<u64, Vec<usize>>,
     named: HashMap<KeyName, usize>,
     sparse: HashMap<Vec<(u32, [u64; 4])>, usize>,
+    step_runs: usize,
     cells: Vec<(usize, usize)>,
     cell_index: HashMap<(usize, usize), usize>,
     scalars: Scalars,
@@ -279,7 +285,7 @@ impl<F: PastaField> Builder<'_, F> {
         }
         let index = self.key_polys.len();
         candidates.push(index);
-        self.stepped.push(cyclic_runs(&values) <= STEP_RUNS);
+        self.stepped.push(cyclic_runs(&values) <= self.step_runs);
         self.key_polys.push(values);
         index
     }
@@ -393,13 +399,24 @@ fn root(parent: &mut HashMap<u64, u64>, mut id: u64) -> u64 {
 impl<C: PastaCurve> DeciderV2Plan<C> {
     /// The v2 decider plan of `relation`, whose accumulators commit under `key`
     /// (the monomial generators: a claim opens as an inner product with an
-    /// `eq` tensor). Commits the key polynomials.
+    /// `eq` tensor), with the step bound [`STEP_RUNS`]. Commits the key
+    /// polynomials.
+    ///
+    /// # Errors
+    /// As [`Self::with_step_runs`].
+    pub fn new(relation: FoldedRelation<C::ScalarExt>, key: &CommitKey<C>) -> Result<Self, Error> {
+        Self::with_step_runs(relation, key, STEP_RUNS)
+    }
+
+    /// [`Self::new`] with key polynomials of at most `step_runs` constant runs
+    /// evaluated by the verifier. The decider's prover and verifier must use
+    /// the same bound.
     ///
     /// # Errors
     /// [`Error::Shape`] for a basis shorter than the domain, [`Error::Degree`]
     /// for a term of degree above 15, [`Error::Msm`].
     #[allow(clippy::too_many_lines)]
-    pub fn new(relation: FoldedRelation<C::ScalarExt>, key: &CommitKey<C>) -> Result<Self, Error> {
+    pub fn with_step_runs(relation: FoldedRelation<C::ScalarExt>, key: &CommitKey<C>, step_runs: usize) -> Result<Self, Error> {
         type S<C> = <C as PastaCurve>::ScalarExt;
         let n = relation.n;
         if key.len() < n {
@@ -416,6 +433,7 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
             contents: HashMap::new(),
             named: HashMap::new(),
             sparse: HashMap::new(),
+            step_runs,
             cells: Vec::new(),
             cell_index: HashMap::new(),
             scalars,
@@ -632,6 +650,7 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
             relation,
             key: key.clone(),
             mu,
+            step_runs,
             sources,
             steps,
             key_polys,
@@ -649,6 +668,14 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
     #[must_use]
     pub fn key_commitments(&self) -> &[C::AffineExt] {
         &self.key_commitments
+    }
+
+    /// The step bound: key polynomials of at most this many constant runs are
+    /// evaluated by the verifier (the prover and the verifier of a decider must
+    /// use the same).
+    #[must_use]
+    pub const fn step_runs(&self) -> usize {
+        self.step_runs
     }
 
     /// The degree of the zero-check's round polynomials.

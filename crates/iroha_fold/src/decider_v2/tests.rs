@@ -125,7 +125,7 @@ fn multilinear_primitives_match_their_definitions() {
 }
 
 /// What every plan keeps: key polynomials pairwise distinct, step tables exactly
-/// for keys of at most [`STEP_RUNS`] runs (and every one of them evaluated
+/// for keys of at most its step bound of runs (and every one of them evaluated
 /// correctly), copy helpers grouping the copy columns in order.
 fn assert_plan_invariants(plan: &DeciderV2Plan<Ep>) {
     for (i, a) in plan.key_polys.iter().enumerate() {
@@ -137,12 +137,12 @@ fn assert_plan_invariants(plan: &DeciderV2Plan<Ep>) {
     for (index, source) in plan.sources.iter().enumerate() {
         match *source {
             Source::Steps(key, k) => {
-                assert!(runs[key].0 <= STEP_RUNS, "a step key has {} runs", runs[key].0);
+                assert!(runs[key].0 <= plan.step_runs, "a step key has {} runs", runs[key].0);
                 let steps = plan.steps[index].as_ref().expect("step table");
                 assert_eq!(steps.eval(&x), evaluate(&mle::rotated(&plan.key_polys[key], k), &x));
             }
             Source::Key(key, _) => {
-                assert!(runs[key].0 > STEP_RUNS, "a committed key has {} runs", runs[key].0);
+                assert!(runs[key].0 > plan.step_runs, "a committed key has {} runs", runs[key].0);
                 assert!(plan.steps[index].is_none());
             }
             _ => assert!(plan.steps[index].is_none()),
@@ -376,6 +376,35 @@ fn honest_accumulators_reduce_to_claims_that_open() {
     let (instance, w) = fresh(&s, Mini { seed: 9, broken: false }, &mut rng);
     let fresh_acc = Accumulator::from_fresh(&s.relation, &DOMAIN, instance).expect("accumulator");
     decides(&s, &fresh_acc, &w).expect("fresh accumulator");
+}
+
+/// Whether `plan`'s decider accepts (as [`decides`] for the setup's plan).
+fn decides_with(s: &Setup, plan: &DeciderV2Plan<Ep>, acc: &Accumulator<Ep>, witness: &Witness<Fq>) -> Result<(), Error> {
+    let mut proved = prove(plan, &DOMAIN, acc, witness)?;
+    let (opening, _) = open(s.params.params(), &mut proved)?;
+    let mut verified = verify(plan, &DOMAIN, acc, &proved.proof)?;
+    let claim = verify_opening(s.params.params(), &mut verified, &opening)?;
+    claim.decide(&s.params, MemoryBudget::DEFAULT).map_err(|_| Error::Rejected("generator claim"))
+}
+
+#[test]
+fn a_larger_step_bound_opens_fewer_keys_and_still_decides() {
+    let s = setup();
+    assert_eq!(s.plan.step_runs, STEP_RUNS);
+    // At 64 runs the copy permutations of the 32-row domain are step tables too.
+    let plan = DeciderV2Plan::with_step_runs(s.relation.clone(), &s.key, 64).expect("plan");
+    assert_plan_invariants(&plan);
+    let keys = |plan: &DeciderV2Plan<Ep>| plan.committed.iter().filter(|poly| matches!(poly, Committed::Key(_))).count();
+    assert_eq!((keys(&s.plan), keys(&plan)), (4, 0));
+    let (acc, witness) = accumulator(&s);
+    decides_with(&s, &plan, &acc, &witness).expect("the larger bound decides");
+    let mut rng = ChaCha20Rng::seed_from_u64(16);
+    let (instance, w) = fresh(&s, Mini { seed: 2, broken: true }, &mut rng);
+    let broken = Accumulator::from_fresh(&s.relation, &DOMAIN, instance).expect("accumulator");
+    assert_eq!(decides_with(&s, &plan, &broken, &w), Err(Error::Rejected("zero-check")));
+    // The bound is part of the plan: a proof under one does not verify under the other.
+    let proved = prove(&plan, &DOMAIN, &acc, &witness).expect("prove");
+    assert!(verify(&s.plan, &DOMAIN, &acc, &proved.proof).is_err());
 }
 
 #[test]
@@ -819,6 +848,23 @@ fn the_field_side_decider_circuit_verifies_a_batch_whose_members_share_keys() {
     // The members in another order: unsatisfied.
     let swapped = vec![members[1].clone(), members[0].clone(), members[2].clone()];
     assert!(!satisfied(&proved.proof, &swapped));
+    // A larger step bound: the copy permutations (about 30 changes each) are
+    // evaluated in circuit too.
+    let plan64 = Arc::new(DeciderV2Plan::with_step_runs(s.relation.clone(), &s.key, 64).expect("plan"));
+    let proved = prove(&plan64, &DOMAIN, &acc1, &w1).expect("prove");
+    let verified = verify(&plan64, &DOMAIN, &acc1, &proved.proof).expect("verify");
+    let value = proved.proof.at_sigma.iter().rev().fold(Fq::ZERO, |acc, v| acc * alpha + v);
+    let folded = pcs_mle::folded_eq(&verified.point, &u).expect("lengths");
+    let circuit = FieldDeciderCircuit {
+        members: vec![member(&plan64, &s.relation, &acc1)],
+        import_terms: false,
+        proof: Some(proved.proof.clone()),
+        helpers: Some(helper_digest::<Ep>(&DOMAIN, &proved.proof.helpers)),
+        alpha: Some(alpha),
+        u: Some(u.clone()),
+    };
+    let public = vec![verified.field_digest, value, folded];
+    assert!(check_circuit(&circuit, 16, &[public], CheckMode::Strict).expect("synthesis").is_satisfied());
 }
 
 /// The commitment side's decider pieces: the helper digest and the opening
