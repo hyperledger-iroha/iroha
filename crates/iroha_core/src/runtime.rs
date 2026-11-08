@@ -16,6 +16,7 @@ pub mod lifecycle_activation;
 pub mod lifecycle_preflight;
 pub(crate) mod lifecycle_support;
 pub(crate) mod obligations;
+pub(crate) mod sorafs_authority;
 /// The owner-authorized, all-four-certified one-time Taira SoraFS transition.
 pub mod sorafs_repair;
 
@@ -52,7 +53,8 @@ pub(crate) fn founded_selection() -> Result<RootSelectionV1, CatalogError> {
 /// Activate this release's additions on `world`'s universal root, in declaration order, up to and
 /// including `through`, as their governed change sets do at block start: publish each addition's
 /// definitions, install its storage (a cell at its published initial value) and move the
-/// selection. An addition already active stays as it is.
+/// selection. The independent authority addition activates alone. An addition already active
+/// stays as it is.
 ///
 /// Fixtures only. A network activates an addition through a governed change set
 /// (`specs/runtime_upgrades.md`); no production World is founded on one.
@@ -75,9 +77,17 @@ pub fn activate_additions_for_testing(
         iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0; 32])),
     );
     let mut block = world.block();
-    for addition in &catalog.additions[..=last] {
+    let additions = if through == catalog::additions::SORAFS_AUTHORITY.module {
+        &catalog.additions[last..=last]
+    } else {
+        &catalog.additions[..=last]
+    };
+    for addition in additions {
         let current = block.runtime_selection.get().clone();
-        if current.active.contains(&addition.implementation) {
+        if current.active.contains(&addition.implementation)
+            || (addition.module == catalog::additions::SORAFS_AUTHORITY.module
+                && sorafs_authority_enabled(&current).map_err(|error| error.to_string())?)
+        {
             continue;
         }
         let published = change_set::PublishedDefinitions(&block.runtime_definitions);
@@ -445,6 +455,32 @@ fn blocking_restriction(
         | RestrictionV1::CompletionOnly(from)
         | RestrictionV1::Disabled(from) => (from <= height).then_some(restriction),
     }
+}
+
+/// Whether the root selected this release's exact nondelegable SoraFS services.
+///
+/// # Errors
+/// The selected services profile is unsupported.
+pub fn sorafs_authority_enabled(selection: &RootSelectionV1) -> Result<bool, CatalogError> {
+    release_catalog()?.service_enabled(
+        selection.services_profile,
+        sorafs_authority::SERVICE,
+        iroha_crypto::Hash::new(sorafs_authority::SERVICE_CLOSURE).into(),
+    )
+}
+
+/// Check the unchanged native inventory precondition for the SoraFS authority addition.
+///
+/// This read-only observation neither authorizes a change set nor establishes governance
+/// approval, qualification or activation readiness. Activation itself repeats the same check
+/// on its actual World. No query permission or runtime selection is changed by this call.
+///
+/// # Errors
+/// Returns the exact original native activation-inventory failure without reinterpretation.
+pub fn validate_sorafs_authority_activation_inventory(
+    world: &impl crate::state::WorldReadOnly,
+) -> Result<(), String> {
+    crate::smartcontracts::isi::sorafs_authority::validate_activation_inventory(world)
 }
 
 #[cfg(test)]

@@ -10,6 +10,8 @@
 //! Notes
 //! - JSON parsing uses Norito's serde wrappers via the `NoritoJson` extractor.
 //! - Keep responses stable and explicit; map input errors to 400.
+pub(crate) mod sorafs_authority;
+
 use crate::{
     JsonBody, NoritoJson, NoritoJsonWithBytes,
     json_macros::{JsonDeserialize, JsonSerialize},
@@ -273,6 +275,20 @@ fn is_stored_typed_proposal_fingerprint(world: &impl WorldReadOnly, selector: &s
         return false;
     };
     world.governance_proposals().get(&proposal_id).is_some()
+        || selected_sorafs_authority_proposal(
+            world.runtime_selection(),
+            world
+                .sorafs_authority_proposals()
+                .get(&proposal_id)
+                .is_some(),
+        )
+}
+
+fn selected_sorafs_authority_proposal(
+    selection: &iroha_data_model::runtime::definition::RootSelectionV1,
+    hosted: bool,
+) -> bool {
+    hosted && iroha_core::runtime::sorafs_authority_enabled(selection).ok() == Some(true)
 }
 
 fn reject_typed_proposal_ballot_selector(
@@ -735,6 +751,9 @@ pub async fn handle_gov_capabilities(
             "/v1/gov/parliament/attempts/{governance_attempt_id}".to_owned(),
             "/v1/gov/parliament/attempts/{governance_attempt_id}/plan".to_owned(),
             "/v1/gov/parliament/transitions/draft".to_owned(),
+            "/v1/gov/sorafs/authority/proposals/{id}".to_owned(),
+            "/v1/gov/sorafs/authority/heads/{id}".to_owned(),
+            "/v1/gov/sorafs/authority/leases/{id}".to_owned(),
             "/v1/gov/ballots/plain".to_owned(),
             "/v1/validation-fee/proposals".to_owned(),
             "/v1/validation-fee/proposals/{proposal_id}".to_owned(),
@@ -1329,6 +1348,11 @@ pub async fn handle_gov_get_proposal(
 ) -> Result<JsonBody<ProposalGetResponse>, crate::Error> {
     let id_arr = parse_exact_lower_hex32_path("proposal id", &id.0)?;
     let world = state.world_view();
+    if world.sorafs_authority_proposals().get(&id_arr).is_some() {
+        return Err(crate::routing::conversion_error(
+            "hosted SoraFS authority proposal: use /v1/gov/sorafs/authority/proposals/{id}".into(),
+        ));
+    }
     let found = world.governance_proposals().get(&id_arr).cloned();
     Ok(JsonBody(ProposalGetResponse {
         found: found.is_some(),

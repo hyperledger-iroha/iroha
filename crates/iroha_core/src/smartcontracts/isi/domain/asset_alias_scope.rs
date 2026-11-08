@@ -1413,6 +1413,10 @@ impl Execute for Unregister<Account> {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let account_id = self.object().clone();
+        crate::smartcontracts::isi::sorafs_authority::guard_account_removal(
+            &state_transaction.world,
+            &account_id,
+        )?;
         crate::smartcontracts::isi::asset::isi::ensure_account_not_retained_by_retail_daily_limit(
             state_transaction,
             &account_id,

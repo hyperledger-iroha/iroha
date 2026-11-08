@@ -495,11 +495,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        // The 410 baseline instructions and the eleven this release adds after them: six game
-        // partition, three Ironwood, the endorsed runtime-upgrade proposal and the account signing
-        // key instructions.
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 421;
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 421;
+        // The 410 baseline instructions and fourteen additions: six game partition,
+        // three Ironwood, the endorsed runtime-upgrade proposal, account signing keys,
+        // the Taira repair, and two SoraFS authority instructions.
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 424;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 424;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -647,6 +647,9 @@ mod tests {
                 privacy::BootstrapPrivacyIronwoodPoolV1::WIRE_ID,
                 privacy::SchedulePrivacyIronwoodLimitsUpdateV1::WIRE_ID,
                 privacy::SubmitPrivacyIronwoodProofV1::WIRE_ID,
+                "iroha.sorafs.authority.attempt.create.v1",
+                "iroha.sorafs.authority.propose.v1",
+                "iroha.sorafs.bootstrap.repair.apply.v1",
             ],
             "instructions added after the frozen baseline changed"
         );

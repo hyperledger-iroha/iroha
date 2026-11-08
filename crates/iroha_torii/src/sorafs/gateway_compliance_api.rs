@@ -6,6 +6,7 @@
 //! Catalog, gateway acknowledgement, and rollback signatures are verified again by the controller
 //! before any durable transition commits.
 
+use super::authority_auth::{AuthorityRequestRejection, require_controller_authority};
 use super::gateway::{
     GatewayComplianceCheckpointV1, GatewayComplianceController, GatewayComplianceError,
     GatewayComplianceHistoryRecordV1, GatewayComplianceMutationBindingV1,
@@ -709,6 +710,34 @@ fn authorize_gateway_compliance_request(
         }
     };
     let world = state.state.world_view();
+    authorize_gateway_compliance_world(&world, &verified)
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "HTTP rejections retain the complete Axum response at this transport boundary."
+)]
+fn authorize_gateway_compliance_world(
+    world: &impl WorldReadOnly,
+    verified: &crate::app_auth::VerifiedCanonicalRequest,
+) -> Result<(), Response> {
+    match require_controller_authority(world.runtime_selection(), verified) {
+        Ok(()) => {}
+        Err(AuthorityRequestRejection::UnsupportedSelection) => {
+            return Err(gateway_compliance_request_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "unsupported_runtime_selection",
+                "this node cannot evaluate the selected SoraFS authority service",
+            ));
+        }
+        Err(AuthorityRequestRejection::DelegatedSigningKey) => {
+            return Err(gateway_compliance_request_error(
+                StatusCode::FORBIDDEN,
+                "controller_authentication_required",
+                "the selected SoraFS authority requires native account controller or witness authentication",
+            ));
+        }
+    }
     if world
         .account_roles_iter(&verified.account)
         .any(|role| role == &*GATEWAY_COMPLIANCE_OPERATOR_ROLE_ID)
@@ -1249,6 +1278,50 @@ mod tests {
         GATEWAY_COMPLIANCE_APPROVAL_VERSION_V1, GATEWAY_COMPLIANCE_CATALOG_VERSION_V1,
         GatewayComplianceCatalogApprovalV1, GatewayComplianceCatalogPayloadV1,
     };
+    #[test]
+    fn gateway_compliance_selected_authority_requires_controller_and_governed_role() {
+        use iroha_core::state::World;
+        use iroha_data_model::{Registrable as _, account::Account};
+
+        let account = iroha_test_samples::ALICE_ID.clone();
+        let signer = iroha_test_samples::ALICE_KEYPAIR.public_key().clone();
+        let mut verified = crate::app_auth::VerifiedCanonicalRequest {
+            account: account.clone(),
+            signer: signer.clone(),
+            verified_signers: vec![signer],
+            offchain_signing_key: true,
+        };
+        for selected in [false, true] {
+            let mut world = World::with([], [Account::new(account.clone()).build(&account)], []);
+            if selected {
+                iroha_core::runtime::activate_additions_for_testing(
+                    &world,
+                    "iroha.sorafs.authority_governance.v1",
+                )
+                .unwrap();
+            }
+            // A native controller signature alone never supplies the governed role.
+            verified.offchain_signing_key = false;
+            assert_eq!(
+                authorize_gateway_compliance_world(&world.view(), &verified)
+                    .unwrap_err()
+                    .status(),
+                StatusCode::FORBIDDEN
+            );
+            world
+                .grant_role_for_tests(account.clone(), GATEWAY_COMPLIANCE_OPERATOR_ROLE_ID.clone());
+            authorize_gateway_compliance_world(&world.view(), &verified)
+                .expect("controller authentication and the stored role pass both checks");
+            verified.offchain_signing_key = true;
+            let delegated = authorize_gateway_compliance_world(&world.view(), &verified);
+            if selected {
+                assert_eq!(delegated.unwrap_err().status(), StatusCode::FORBIDDEN);
+            } else {
+                delegated.expect("the inactive predecessor retains its authentication rules");
+            }
+        }
+    }
+
     #[test]
     fn gateway_compliance_auth_rejects_foreign_exact_network() {
         let _guard = crate::tests_runtime_handlers::app_auth_test_guard(

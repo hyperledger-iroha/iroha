@@ -3015,6 +3015,21 @@ pub mod runtime_governance {
         "governance.proposal.sccp_route_governance",
         "/v1/gov/proposals/sccp-route-governance",
     );
+    /// Read one exact hosted SoraFS authority proposal.
+    pub const GOV_SORAFS_AUTHORITY_PROPOSAL: RouteDescriptor = app_signed_get(
+        "governance.sorafs.authority.proposal.read",
+        "/v1/gov/sorafs/authority/proposals/{id}",
+    );
+    /// Read one exact monotonic SoraFS authority head.
+    pub const GOV_SORAFS_AUTHORITY_HEAD: RouteDescriptor = app_signed_get(
+        "governance.sorafs.authority.head.read",
+        "/v1/gov/sorafs/authority/heads/{id}",
+    );
+    /// Read exact SoraFS lease authorizations and execution receipts.
+    pub const GOV_SORAFS_AUTHORITY_LEASE: RouteDescriptor = app_signed_get(
+        "governance.sorafs.authority.lease.read",
+        "/v1/gov/sorafs/authority/leases/{id}",
+    );
     /// Read authenticated governance readiness and policy capabilities.
     pub const GOV_CAPABILITIES: RouteDescriptor =
         app_signed_get("governance.capabilities.read", "/v1/gov/capabilities");
@@ -3200,6 +3215,9 @@ pub mod runtime_governance {
         MINISTRY_AGENDA_GET,
         GOV_PROPOSE_DEPLOY,
         GOV_PROPOSE_SCCP,
+        GOV_SORAFS_AUTHORITY_PROPOSAL,
+        GOV_SORAFS_AUTHORITY_HEAD,
+        GOV_SORAFS_AUTHORITY_LEASE,
         GOV_CAPABILITIES,
         GOV_CITIZEN_DRAFT,
         GOV_PARLIAMENT_ATTEMPT_DRAFT,

@@ -10762,9 +10762,14 @@ pub mod executor_norito {
         norito::codec::encode_adaptive_into(&borrowed, &mut writer).map(|_| ())
     }
 
-    /// Hash the executor's borrowed semantic payload for the private World delta.
-    /// Loaded VM variants, caches and pool history are not State values.
-    pub(crate) fn net_state_hash(executor: &Executor) -> Result<iroha_crypto::Hash, String> {
+    /// Hash the executor's borrowed semantic payload for the private World delta
+    /// and read-only inspection of that same native State value.
+    /// Loaded VM variants, caches and pool history are not State values. This
+    /// identity does not establish the executor's authorization policy or finality.
+    ///
+    /// # Errors
+    /// Returns the native semantic-payload hashing error without cloning raw code.
+    pub fn net_state_hash(executor: &Executor) -> Result<iroha_crypto::Hash, String> {
         const DOMAIN: &[u8] = b"iroha:world-net-delta:executor:v1\0";
         match executor {
             Executor::Initial => Ok(iroha_crypto::Hash::new_from_chunks(&[DOMAIN, &[0]])),

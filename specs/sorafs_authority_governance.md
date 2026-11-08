@@ -1,8 +1,9 @@
 # Parliament-voted SoraFS operating authorities
 
-Status: proposed design, 2026-11-06. Reviewed against `optimizations` at
-`11470b6a77`. This is an implementation plan, not an implemented addition or a
-Taira qualification result. It refines the Claude design discussion
+Status: implemented candidate, 2026-11-08, on `optimizations`, descended from
+Taira's deployed `59db2e29177c68f59da81d2cc228e2eb7dcc882e`. The combined candidate still requires
+native validation, copied-history replay and genuine governed activation; it is
+not active on Taira. It refines the Claude design discussion
 “Parliament-voted SoraFS authority grants on Taira”.
 
 ## Recommendation
@@ -38,10 +39,12 @@ plugin system is unnecessary.
 1. Publish new tolerant instruction IDs for proposing an authority action and
    creating its Parliament attempt. Neither accepts an arbitrary instruction,
    permission token, role payload, privileged account or execution flag.
-2. Install two new top-level World tables, initially empty:
+2. Install three new top-level World tables, initially empty:
    `world.sorafs_authority_proposals` for immutable content/proposer plus lifecycle
    status, and `world.sorafs_authority_heads` for per-subject revision, grant state
-   and exact enactment receipt. Register both in the canonical State field,
+   and exact enactment receipt; `world.sorafs_authority_leases` retains the paired
+   term approvals and their actual start and termination receipts. Register all
+   three in the canonical State field,
    commitment, snapshot and restore inventories.
 3. Keep all attempts in `world.parliament_attempts` and use
    `put_parliament_attempt`. Preserve its derived counts, member references,
@@ -62,8 +65,10 @@ plugin system is unnecessary.
    table presence, module name or local configuration is not a feature switch.
 6. Extend the canonical addition draft builder to emit one closed change set for
    these services, implementations, bindings and tables. Preserve any existing
-   Ironwood/lifecycle services and restrictions. Compile and test each supported
-   composition; reject unsupported combinations. Retain old definitions for
+   services and restrictions. The present implementation supports the baseline
+   services profile, including the already selected SoraFS repair kernel, without
+   rerunning repair or changing its kernel. Ironwood and lifecycle service
+   compositions are refused until explicitly implemented and qualified. Retain old definitions for
    historical selections until the ordinary retirement floor permits deletion.
 
 Use explicit dependencies for this new addition on the baseline and the actual
@@ -73,7 +78,8 @@ The new declaration/draft path must not activate game partitions as a side effec
 
 ## Exact action and head
 
-The new typed proposal has a canonical target `AccountId`, `Grant | Revoke`,
+The new typed proposal has a canonical target `AccountId`,
+`Grant | AuthorizeTerminalRevoke | Revoke`, a term on the committed epoch grid,
 `expected_revision`, and exactly one authority:
 
 | Authority | Scope/effect |
@@ -106,12 +112,35 @@ possible after a provider is removed or its signer policy changes; do not apply
 grant-eligibility preconditions to revocation. Owner rotation does not silently
 create or transfer a Parliament grant.
 
-The grant itself remains scoped to account and provider until voted revocation;
+The grant itself remains scoped to account and provider until its approved term
+ends or a separate early-revocation decision enacts;
 the captured owner/policy is an admission and enactment precondition, not its
 lifetime identity. A later owner-approved policy can use the same approved signer,
 including returning to it after a rotation. Binding the grant's entire lifetime
 to one policy would instead require new policy-aware consumer checks and is not
 part of this proposal.
+
+## Paired term approvals
+
+One term lasts 64 committed native epochs on the height-one anchored grid. Its
+approval window opens one term before its start and closes one epoch before the
+start. The proposal's epoch length must equal the committed NPoS cadence; callers
+cannot supply arbitrary start, cutoff or end heights.
+
+Grant and terminal revocation are separate immutable proposals and certificates
+for one action-normalized plan. Both must enact before the cutoff. Neither
+approval alone installs authority. At the exact term start the native owner
+rechecks the pair, current head, account and completion-policy preconditions,
+then installs the grant once and captures its completion implementation and
+services profile. At the term end that retained terminal mandate removes the
+authority. A separately voted early revocation may complete the same lease
+earlier; completion cannot run twice. Each decision role shares a 17-unit fresh
+randomness allowance across its term family, including retries.
+
+The grant and terminal approvals, actual grant, and actual removal are distinct
+records. Pending approvals close deterministically at their cutoff. A refusal at
+the one permitted start does not reschedule or silently extend the term. Native
+obligation checks retain the selected completion closure while a lease needs it.
 
 ## Nondelegation and atomic effects
 
@@ -129,6 +158,18 @@ cross-instruction calls. Prevent ordinary precreation, mutation, removal or
 recreation of the reserved role. Account deletion must not silently remove active
 governed authorities; require their voted revocation first and retain subject
 revision tombstones. Audit every cleanup/mutation owner, not only Torii ingress.
+
+Gateway compliance HTTP operations and assigned provider source reads also require
+the account's controller signature or full controller witness once these services
+are selected. An otherwise valid request signed only by the account's registered
+off-chain signing key is refused: installing a separately held key must not confer
+the governed role's API powers or the exact completion signer's source access.
+The HTTP handlers check the selected services alongside their existing current
+role or native source-policy checks; source reads repeat the checks after I/O.
+Unsupported services fail closed. This does not change predecessor HTTP behavior,
+general account-signing-key semantics, or the two native completion checks. An
+account with an active off-chain key must revoke it through the normal signed
+transaction path before using controller-authenticated protected HTTP operations.
 
 The first successful compliance grant registers exactly the empty role and its
 target membership atomically. Later grants verify its exact reserved shape;
@@ -172,10 +213,50 @@ content; it must not falsely report an admitted hosted proposal as absent.
 
 ## Implementation and acceptance
 
-Implement in three reviewable changes: selected proposal-host services and
-dependency declaration; the authority proposal/effect plus mutation controls;
-then native client drafts/reads, documentation and four-validator qualification.
-Ship activation only when the combined candidate meets all of these checks:
+The daemon's offline inspection runs within `--check-replay`, while the actual
+matched State and its copied Kura remain alive:
+
+```sh
+iroha3d --config /absolute/offline/config.toml --check-replay \
+  --runtime-addition-review-request /absolute/review/request.json \
+  --runtime-addition-review-output /absolute/review/new-package
+```
+
+The closed request uses schema `iroha.sorafs.authority.inspect-request.v1`, mode
+`inspect` and module `iroha.sorafs.authority_governance.v1`. Its `expected_cut`
+contains native JSON values for `network_id`, `genesis_hash`, `height`, `tip_hash`
+and `selection_id`. These independently selected values must equal the native
+observation; they never construct State or authenticate it. Unknown fields and
+draft/qualification inputs are refused.
+
+One retained State view supplies the selection, complete published definitions,
+exact committed upgrade-policy parameter and decode result, change-set records,
+canonical tip time and full authority-inventory result. A failed inventory remains
+visible without changing the replay verdict. The package records whether replay
+started from genesis or a snapshot, and includes canonical selection bytes with
+a native roundtrip check. It produces no change set, certificate or transaction.
+
+The same view also exports the exact stored direct grants, role definitions and
+memberships for the protected SoraFS permissions, the reserved compliance role,
+and `CanManageParliament`, `CanProposeRuntimeChangeSet` and `CanSetParameters`.
+Scan counts and executor kind/semantic identity accompany these records. Native
+unit-token comparisons distinguish exact administrative tokens from malformed
+payloads with the same name. This describes stored possession and its origin;
+it does not evaluate an arbitrary user-provided executor's authorization policy.
+The local 16,384-row ceiling refuses an oversized inspection rather than marking
+a partial scan complete.
+
+The request is limited to 64 KiB and the package to 64 MiB. Output must be a new
+private directory outside node stores and the configuration directory; symlinks
+and replacement are refused. `manifest.json` is published last as the completeness
+marker. A partial directory without it is not a successful package. This unsigned
+historical inspection needs retained original replay inputs and build provenance;
+it is neither a State proof nor permission to activate the addition.
+
+The implementation covers selected proposal-host services and dependencies,
+authority proposals/effects and mutation controls, and native client drafts/reads.
+Four-validator qualification remains outstanding. Ship activation only when the
+combined candidate meets all of these checks:
 
 - Frozen baseline catalog/layout fixtures and old-selection replay remain exact.
   Both new wire IDs reject before activation, including malformed payloads;
@@ -209,7 +290,25 @@ verify state-resolved `Applied`, certificate enactment, exact authority readback
 and restart persistence. Permission to deploy updates does not replace those
 protocol decisions or identify the accounts Parliament should approve.
 
-TODO: implement and qualify this design. Read-only public probes during this
-review returned HTTP 404 for `/v1/runtime/release` and HTTP 401 for
-`/v1/runtime/upgrades`. They do not establish the deployed release, selection,
-authority inventory or an outage. No deployment or live grant was performed.
+TODO: qualify the combined exact-source candidate and establish the current
+Parliament prerequisites from actual committed State. The selected V1 runtime
+already constructs certificates from verified timed-private ballot results and
+enacts runtime-upgrade proposals through its retained exact-due certificate path.
+The unfinished anonymous-ballot replacement and its absent qualification record
+do not, by themselves, disable this existing mechanism. Candidate seals,
+component-test certificates, release signatures and validator support attestations
+are not Parliament votes.
+
+The current public Parameters observation has no `runtime_upgrade_policy_v1`,
+so native proposal admission refuses a change set. Its initialization requires
+the current exact `CanSetParameters` permission and a canonical reviewed policy;
+missing State never substitutes compiled defaults. Actual proposer/manager
+permissions, eligible rosters, ready native cadence, verified beacon/TLE custody
+and genuine ballots must also be established before using the existing flow.
+
+Authenticated observations on 2026-11-08 found the release and upgrade routes
+working on all five Taira ingress roots at height 12438, with deployed source
+`59db2e2917`. Anonymous operator reads correctly return
+`401 operator_signature_missing`. The earlier release-route 404 is resolved.
+These observations establish neither a complete authority inventory nor governed
+activation. This candidate has submitted no live grant or activation transaction.

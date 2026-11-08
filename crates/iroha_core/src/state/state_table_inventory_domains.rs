@@ -81,6 +81,34 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Name,
+        reason: "Closed local schemas for unsigned SoraFS authority replay inspection requests, observations and package manifests; these format names confer no State, qualification or governance authority",
+        literals: &[
+            r"iroha.sorafs.authority.inspect-request.v1",
+            r"iroha.sorafs.authority.inspection-package.v1",
+            r"iroha.sorafs.authority.inspection.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "Exact native wire identities for the SoraFS authority proposal and attempt instructions; these dispatch names compute no State digest and confer no authority",
+        literals: &[
+            r"iroha.sorafs.authority.attempt.create.v1",
+            r"iroha.sorafs.authority.propose.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Network- and root-bound content identities of one supplied SoraFS authority proposal, its action-normalized plan, term family, exact effect and governed subject; these records do not hash the hosted table or authorize enactment",
+        literals: &[
+            r"iroha.sorafs.authority.effect.v1",
+            r"iroha.sorafs.authority.family.v1",
+            r"iroha.sorafs.authority.plan.v1",
+            r"iroha.sorafs.authority.proposal.v1",
+            r"iroha.sorafs.authority.subject.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Name,
         reason: "Exact first-release wire identities of privacy consensus-policy scheduling, protocol-limit scheduling and the proof-free X.509 request, including built-in dispatch entries. They select instruction layouts; these identifiers compute no State digest and confer no governance or proof authority",
         literals: &[
             r"iroha.privacy.schedule_consensus_policy_update.v1",
@@ -1480,6 +1508,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha.ironwood.v1",
             r"iroha.kernel.v1",
             r"iroha.parameters.v1",
+            r"iroha.sorafs.authority_governance.v1",
             r"iroha.runtime.endorsed_change_set_proposal.v1",
             r"iroha.world.lthash16.v1",
             r"iroha:runtime:addition:v1\0",
@@ -1488,6 +1517,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha:runtime:definition:v1\0",
             r"iroha:runtime:ironwood:v1\0",
             r"iroha:runtime:selection:v1\0",
+            r"iroha:sorafs:authority:paired-terms-64-epochs:cutoff-1-epoch:17-units-per-role:deadline-closure:controller-bound-http:v1",
         ],
     },
     OtherDomains {

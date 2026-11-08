@@ -1106,3 +1106,141 @@ fn ironwood_accumulator_uses_process_wide_storage_validation_cache() {
         "all accumulator passes use the real global cache"
     );
 }
+
+#[test]
+fn sorafs_authority_storage_preserves_old_root_and_binds_every_selected_table() {
+    use crate::smartcontracts::isi::sorafs_authority::{
+        SorafsAuthorityHeadV1, SorafsAuthorityLeaseV1, SorafsAuthorityProposalRecordV1,
+    };
+    use iroha_data_model::{
+        governance::types::{GovernanceAttemptId, GovernanceCertificateId},
+        isi::sorafs_authority::{
+            SorafsAuthorityActionV1, SorafsAuthorityProposalV1, SorafsAuthorityTermGridV1,
+            SorafsOperatingAuthorityV1,
+        },
+        runtime::lifecycle::RootScopeV1,
+    };
+    let world = World::default();
+    let catalog = crate::runtime::release_catalog().unwrap();
+    let mut block = world.block();
+    let before = WorldStateAccumulator::capture(&block).unwrap();
+    let old_root = before.root(&catalog.baseline).unwrap();
+    let proposal = SorafsAuthorityProposalV1 {
+        grid: SorafsAuthorityTermGridV1 {
+            epoch_length_blocks: 100,
+        },
+        term: 1,
+        network: iroha_data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(Hash::prehashed([0x71; 32])),
+        ),
+        root: RootScopeV1::Universal,
+        account: iroha_test_samples::ALICE_ID.clone(),
+        authority: SorafsOperatingAuthorityV1::SetReservePolicy,
+        action: SorafsAuthorityActionV1::Grant,
+        expected_revision: 0,
+        completion_policy: None,
+    };
+    // Canonical storage rows exercise commitment ownership only. The fabricated
+    // receipt identifiers here never authorize execution or satisfy restore.
+    let content = proposal.proposal_content_id();
+    let record = SorafsAuthorityProposalRecordV1 {
+        proposer: proposal.account.clone(),
+        proposal: proposal.clone(),
+        created_height: 1,
+        status: crate::state::GovernanceProposalStatus::Proposed,
+        deadline_closure: None,
+    };
+    let head = SorafsAuthorityHeadV1 {
+        plan_id: proposal.plan_id(),
+        term: 1,
+        expires_at_height: 12_801,
+        authority: proposal.authority,
+        account: proposal.account.clone(),
+        revision: 2,
+        granted: false,
+        proposal_content_id: content,
+        governance_attempt_id: GovernanceAttemptId::derive_v1(content, 0),
+        certificate_id: GovernanceCertificateId::new([0x71; 32]),
+        enacted_at_height: 1,
+    };
+    let lease = SorafsAuthorityLeaseV1 {
+        plan: proposal.clone(),
+        grant_approval: None,
+        terminal_approval: None,
+        activation: None,
+        completion: None,
+        start_processed: false,
+    };
+    let fields = [
+        "world.sorafs_authority_proposals",
+        "world.sorafs_authority_heads",
+        "world.sorafs_authority_leases",
+    ];
+    let index = field_index().as_ref().unwrap();
+    let old_slots = installed_slots(index, &catalog.baseline).unwrap();
+    for field in fields {
+        assert!(!old_slots[index.ids.binary_search(&field).unwrap()]);
+    }
+    let published = crate::runtime::change_set::PublishedDefinitions(&block.runtime_definitions);
+    let change = catalog
+        .activation(
+            crate::runtime::catalog::additions::SORAFS_AUTHORITY.module,
+            block.runtime_selection.get(),
+            &published,
+            proposal.network,
+            1,
+            [0x71; 32],
+        )
+        .unwrap();
+    let applied = change
+        .apply(block.runtime_selection.get(), &published)
+        .unwrap();
+    for (id, descriptor) in applied.published {
+        block.runtime_definitions.insert(id, descriptor);
+    }
+    *block.runtime_selection.get_mut() = applied.selection;
+    let selected_slots = installed_slots(index, block.runtime_selection.get()).unwrap();
+    for field in fields {
+        assert!(selected_slots[index.ids.binary_search(&field).unwrap()]);
+    }
+    let selected_empty = WorldStateAccumulator::capture(&block).unwrap();
+    for (which, field) in fields.iter().enumerate() {
+        let key = [0x71; 32];
+        match which {
+            0 => {
+                block.sorafs_authority_proposals.insert(key, record.clone());
+            }
+            1 => {
+                block.sorafs_authority_heads.insert(key, head.clone());
+            }
+            2 => {
+                block.sorafs_authority_leases.insert(key, lease.clone());
+            }
+            _ => unreachable!(),
+        }
+        let after = before.apply_block(&block).unwrap();
+        assert_eq!(after, WorldStateAccumulator::capture(&block).unwrap());
+        assert_ne!(after, selected_empty, "selected {field} is committed");
+        assert_eq!(
+            old_root,
+            WorldStateAccumulator::capture_predecessor(&block)
+                .unwrap()
+                .root(&catalog.baseline)
+                .unwrap()
+        );
+        match which {
+            0 => {
+                block.sorafs_authority_proposals.remove(key);
+            }
+            1 => {
+                block.sorafs_authority_heads.remove(key);
+            }
+            2 => {
+                block.sorafs_authority_leases.remove(key);
+            }
+            _ => unreachable!(),
+        }
+    }
+    assert_eq!(selected_empty, before.apply_block(&block).unwrap());
+    assert_eq!(old_root, before.root(&catalog.baseline).unwrap());
+}

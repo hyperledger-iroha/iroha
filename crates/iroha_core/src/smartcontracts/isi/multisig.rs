@@ -481,6 +481,7 @@ fn rekey_account_id(
     new_account: &AccountId,
     home_domain: Option<&iroha_model_base::domain::DomainId>,
 ) -> Result<(), InstructionExecutionError> {
+    super::sorafs_authority::guard_account_removal(&state_transaction.world, old_account)?;
     // A controller change cannot silently create a new retail identity or
     // discard an existing issuer attestation. A future owner-governed rekey
     // instruction must preserve the exact identity and DAY usage atomically.

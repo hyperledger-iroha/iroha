@@ -1026,3 +1026,99 @@ fn ironwood_future_codec_without_a_cutover_refuses_admission_and_lapses() {
         }));
     }
 }
+
+#[test]
+fn sorafs_authority_activation_checks_inventory_before_publishing_any_definition() {
+    use iroha_data_model::{Identifiable, Registrable, permission::Permissions, role::Role};
+    use iroha_executor_data_model::permission::sorafs::CanSetSorafsReservePolicy;
+    use iroha_test_samples::ALICE_ID;
+
+    let catalog = release_catalog().unwrap();
+    let storage = published();
+    let view = storage.view();
+    let change = crate::runtime::sorafs_authority::draft(
+        catalog,
+        &baseline(),
+        &PublishedDefinitions(&view),
+        network(),
+        150,
+        [0x75; 32],
+    )
+    .unwrap();
+    let id = change.id().unwrap();
+    // Empty inventory activates. A direct grant, inherited grant, or reserved empty
+    // role must lapse at the exact cut without publishing any successor definition.
+    for inventory in 0..=3 {
+        let state = scheduled_state(&change, &validators(), 4);
+        if inventory == 1 {
+            let mut permissions = state.world.account_permissions.block();
+            permissions.insert(
+                ALICE_ID.clone(),
+                Permissions::from([CanSetSorafsReservePolicy.into()]),
+            );
+            permissions.commit();
+        } else if inventory >= 2 {
+            let role_id = if inventory == 2 {
+                "ordinary_role"
+            } else {
+                "sorafs_gateway_compliance_operator"
+            };
+            let mut role = Role::new(role_id.parse().unwrap(), ALICE_ID.clone());
+            if inventory == 2 {
+                role = role.add_permission(CanSetSorafsReservePolicy);
+            }
+            let role = role.build(&ALICE_ID);
+            let mut roles = state.world.roles.block();
+            roles.insert(role.id().clone(), role);
+            roles.commit();
+        }
+        let block = state.try_block(header_at(150)).expect("activation cut");
+        assert_eq!(
+            block.world.runtime_change_sets.get(&id).unwrap().status,
+            if inventory == 0 {
+                ChangeSetStatusV1::Activated(150)
+            } else {
+                ChangeSetStatusV1::Lapsed(150)
+            }
+        );
+        assert_eq!(
+            block.world.runtime_selection.get().id().unwrap(),
+            if inventory == 0 {
+                change.successor
+            } else {
+                change.predecessor
+            }
+        );
+        for descriptor in &change.publish {
+            assert_eq!(
+                block
+                    .world
+                    .runtime_definitions
+                    .get(&descriptor.id().unwrap())
+                    .is_some(),
+                inventory == 0,
+                "a lapsed cut must leave unpublished definitions absent"
+            );
+        }
+        assert!(
+            block
+                .world
+                .sorafs_authority_proposals
+                .iter()
+                .next()
+                .is_none()
+        );
+        assert!(block.world.sorafs_authority_heads.iter().next().is_none());
+        if inventory == 1 {
+            assert!(
+                block
+                    .world
+                    .account_permissions
+                    .get(&ALICE_ID)
+                    .unwrap()
+                    .contains(&CanSetSorafsReservePolicy.into()),
+                "the old direct grant must remain unchanged"
+            );
+        }
+    }
+}

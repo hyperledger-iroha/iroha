@@ -6376,6 +6376,39 @@
         ],
         "type": "object"
       },
+      "BuildStatus": {
+        "additionalProperties": false,
+        "description": "Native iroha_torii_shared::status::BuildStatus emitted by this node, including its compiled wire-schema identity.",
+        "properties": {
+          "cargo_features": {
+            "type": "string"
+          },
+          "dpn_validator_release_commit": {
+            "type": "string"
+          },
+          "git_commit_sha": {
+            "type": "string"
+          },
+          "target_triple": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "wire_schema_hash": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "git_commit_sha",
+          "dpn_validator_release_commit",
+          "cargo_features",
+          "target_triple",
+          "wire_schema_hash"
+        ],
+        "type": "object"
+      },
       "CanonicalAccountAliasLiteral": {
         "description": "Canonical account alias in `label@dataspace` or `label@domain.dataspace` form. Runtime admission also verifies exact UTS-46/NFC canonicalization.",
         "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)?$",
@@ -39721,6 +39754,51 @@
         ],
         "type": "object"
       },
+      "RuntimeChangeSetSupport": {
+        "additionalProperties": false,
+        "description": "Native support result for one scheduled change set. An unresolved successor is null and carries the original reason string.",
+        "properties": {
+          "effective_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id_hex": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "successor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeSelectionSupport"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unresolved": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id_hex",
+          "effective_height",
+          "successor",
+          "unresolved"
+        ],
+        "type": "object"
+      },
       "RuntimeCommitmentProfileDescriptorV1": {
         "additionalProperties": false,
         "description": "How State is committed.",
@@ -40536,6 +40614,37 @@
         ],
         "type": "object"
       },
+      "RuntimeReleaseResponse": {
+        "additionalProperties": false,
+        "description": "Native node release support response; an observation of compiled support, not a governance authorization or qualification.",
+        "properties": {
+          "build": {
+            "$ref": "#/components/schemas/BuildStatus"
+          },
+          "release_digest_hex": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "scheduled": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeChangeSetSupport"
+            },
+            "type": "array"
+          },
+          "selection": {
+            "$ref": "#/components/schemas/RuntimeSelectionSupport"
+          }
+        },
+        "required": [
+          "build",
+          "release_digest_hex",
+          "selection",
+          "scheduled"
+        ],
+        "type": "object"
+      },
       "RuntimeResourceLimitsV1": {
         "additionalProperties": false,
         "description": "Resource bounds of one invocation or migration stage.",
@@ -40681,6 +40790,40 @@
             "type": "object"
           }
         ]
+      },
+      "RuntimeSelectionSupport": {
+        "additionalProperties": false,
+        "description": "Native support result for one exact committed runtime selection. Nullable missing_definition_hex is present as null when supported.",
+        "properties": {
+          "missing_definition_hex": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "selection_id_hex": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "supported": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "selection_id_hex",
+          "supported",
+          "missing_definition_hex"
+        ],
+        "type": "object"
       },
       "RuntimeSelectionTransitionV1": {
         "description": "One change to a root's selection (iroha_data_model::runtime::lifecycle::SelectionTransitionV1).",
@@ -51351,6 +51494,601 @@
         ],
         "type": "object"
       },
+      "SorafsAuthorityActionV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "Grant",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "Revoke",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "AuthorizeTerminalRevoke",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SorafsAuthorityApprovalProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "approved_at_height": {
+            "description": "Canonical unsigned 64-bit decimal string.",
+            "maxLength": 20,
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "certificate_id": {
+            "$ref": "#/components/schemas/GovernanceParliamentDigest32V1"
+          },
+          "governance_attempt_id": {
+            "$ref": "#/components/schemas/GovernanceParliamentDigest32V1"
+          },
+          "proposal_content_id": {
+            "$ref": "#/components/schemas/GovernanceParliamentDigest32V1"
+          }
+        },
+        "required": [
+          "proposal_content_id",
+          "governance_attempt_id",
+          "certificate_id",
+          "approved_at_height"
+        ],
+        "type": "object"
+      },
+      "SorafsAuthorityDeadlineClosureProjectionV1": {
+        "additionalProperties": false,
+        "description": "Deterministic expiry of still-pending execution eligibility. The shared reducer status and transcript are preserved; this receipt is neither a rejection vote nor an authority mutation.",
+        "properties": {
+          "closed_at_height": {
+            "description": "Canonical unsigned 64-bit decimal string.",
+            "maxLength": 20,
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "closed_at_height"
+        ],
+        "type": "object"
+      },
+      "SorafsAuthorityExecutionProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "approval": {
+            "$ref": "#/components/schemas/SorafsAuthorityApprovalProjectionV1"
+          },
+          "at_height": {
+            "description": "Canonical unsigned 64-bit decimal string.",
+            "maxLength": 20,
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "implementation": {
+            "$ref": "#/components/schemas/GovernanceParliamentDigest32V1"
+          },
+          "revision": {
+            "description": "Canonical unsigned 64-bit decimal string.",
+            "maxLength": 20,
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "services_profile": {
+            "$ref": "#/components/schemas/GovernanceParliamentDigest32V1"
+          }
+        },
+        "required": [
+          "revision",
+          "at_height",
+          "approval",
+          "services_profile",
+          "implementation"
+        ],
+        "type": "object"
+      },
+      "SorafsAuthorityHeadProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "description": "Canonical domainless I105 account identifier.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "authority": {
+            "$ref": "#/components/schemas/SorafsOperatingAuthorityV1"
+          },
+          "certificate_id": {
+            "$ref": "#/components/schemas/GovernanceParliamentDigest32V1"
+          },
+          "enacted_at_height": {
+            "description": "Canonical decimal actual effect height; scheduled removal may follow its authorization certificate height.",
+            "maxLength": 20,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "expires_at_height": {
+            "description": "Canonical unsigned 64-bit decimal string.",
+            "maxLength": 20,
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "governance_attempt_id": {
+            "$ref": "#/components/schemas/GovernanceParliamentDigest32V1"
+          },
+          "granted": {
+            "type": "boolean"
+          },
+          "plan_id": {
+            "$ref": "#/components/schemas/GovernanceParliamentDigest32V1"
+          },
+          "proposal_content_id": {
+            "$ref": "#/components/schemas/GovernanceParliamentDigest32V1"
+          },
+          "revision": {
+            "description": "Canonical unsigned 64-bit decimal string.",
+            "maxLength": 20,
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          },
+          "term": {
+            "description": "Canonical unsigned 64-bit decimal string.",
+            "maxLength": 20,
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authority",
+          "account",
+          "revision",
+          "granted",
+          "proposal_content_id",
+          "governance_attempt_id",
+          "certificate_id",
+          "enacted_at_height",
+          "plan_id",
+          "term",
+          "expires_at_height"
+        ],
+        "type": "object"
+      },
+      "SorafsAuthorityHeadReadV1": {
+        "additionalProperties": false,
+        "properties": {
+          "current_height": {
+            "description": "Canonical unsigned 64-bit decimal string.",
+            "maxLength": 20,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "head": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SorafsAuthorityHeadProjectionV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "network": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "subject_id": {
+            "$ref": "#/components/schemas/GovernanceParliamentDigest32V1"
+          }
+        },
+        "required": [
+          "network",
+          "subject_id",
+          "current_height",
+          "head"
+        ],
+        "type": "object"
+      },
+      "SorafsAuthorityLeaseProjectionV1": {
+        "additionalProperties": false,
+        "description": "Exact plan normalized to Grant. Separate retained grant and terminal approvals precede activation. Authorization heights are distinct from actual installation and removal heights. Processed starts cannot be retried.",
+        "properties": {
+          "activation": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SorafsAuthorityExecutionProjectionV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "completion": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SorafsAuthorityExecutionProjectionV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "grant_approval": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SorafsAuthorityApprovalProjectionV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "plan": {
+            "$ref": "#/components/schemas/SorafsAuthorityProposalV1"
+          },
+          "start_processed": {
+            "type": "boolean"
+          },
+          "terminal_approval": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SorafsAuthorityApprovalProjectionV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "plan",
+          "grant_approval",
+          "terminal_approval",
+          "activation",
+          "completion",
+          "start_processed"
+        ],
+        "type": "object"
+      },
+      "SorafsAuthorityLeaseReadV1": {
+        "additionalProperties": false,
+        "properties": {
+          "current_height": {
+            "description": "Canonical unsigned 64-bit decimal string.",
+            "maxLength": 20,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "lease": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SorafsAuthorityLeaseProjectionV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "network": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "plan_id": {
+            "$ref": "#/components/schemas/GovernanceParliamentDigest32V1"
+          }
+        },
+        "required": [
+          "network",
+          "plan_id",
+          "current_height",
+          "lease"
+        ],
+        "type": "object"
+      },
+      "SorafsAuthorityProposalProjectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "created_height": {
+            "description": "Canonical unsigned 64-bit decimal string.",
+            "maxLength": 20,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "deadline_closure": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SorafsAuthorityDeadlineClosureProjectionV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "proposal": {
+            "$ref": "#/components/schemas/SorafsAuthorityProposalV1"
+          },
+          "proposer": {
+            "description": "Canonical domainless I105 account identifier.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SorafsAuthorityProposalStatusV1"
+          }
+        },
+        "required": [
+          "proposer",
+          "proposal",
+          "created_height",
+          "status",
+          "deadline_closure"
+        ],
+        "type": "object"
+      },
+      "SorafsAuthorityProposalReadV1": {
+        "additionalProperties": false,
+        "properties": {
+          "current_height": {
+            "description": "Canonical unsigned 64-bit decimal string.",
+            "maxLength": 20,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "network": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "proposal_content_id": {
+            "$ref": "#/components/schemas/GovernanceParliamentDigest32V1"
+          },
+          "record": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SorafsAuthorityProposalProjectionV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "network",
+          "proposal_content_id",
+          "current_height",
+          "record"
+        ],
+        "type": "object"
+      },
+      "SorafsAuthorityProposalStatusV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "Proposed",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "Rejected",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "Enacted",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "Superseded",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "ExecutionFailed",
+                "type": "string"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SorafsAuthorityProposalV1": {
+        "additionalProperties": false,
+        "description": "Closed additive Parliament content for a fixed authority term. Grant and AuthorizeTerminalRevoke separately approve the same exact plan before its cutoff; neither alone installs authority. Revoke is an early-removal decision for that plan. Every completion-plan action carries its original captured signer policy; early revocation does not require that policy to remain current. expected_revision always denotes the subject revision before this plan grant and must reserve both grant and terminal-removal revisions. Corrected plans share the same subject-and-term family budget.",
+        "properties": {
+          "account": {
+            "description": "Canonical domainless I105 account identifier.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "action": {
+            "$ref": "#/components/schemas/SorafsAuthorityActionV1"
+          },
+          "authority": {
+            "$ref": "#/components/schemas/SorafsOperatingAuthorityV1"
+          },
+          "completion_policy": {
+            "oneOf": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/SorafsProviderIngestCompletionAuthorityV1"
+                  },
+                  {
+                    "properties": {
+                      "signer_policy": {
+                        "properties": {
+                          "revision": {
+                            "maximum": 9007199254740991
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expected_revision": {
+            "description": "Canonical decimal subject revision before this plan grant, identical for all three actions; early revocation expects that revision plus one.",
+            "maxLength": 20,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "grid": {
+            "$ref": "#/components/schemas/SorafsAuthorityTermGridV1"
+          },
+          "network": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "root": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "Universal",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          "term": {
+            "description": "Nonzero canonical term number on the fixed grid.",
+            "maxLength": 20,
+            "pattern": "^[1-9][0-9]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "network",
+          "root",
+          "account",
+          "authority",
+          "action",
+          "expected_revision",
+          "completion_policy",
+          "grid",
+          "term"
+        ],
+        "type": "object"
+      },
+      "SorafsAuthorityTermGridV1": {
+        "additionalProperties": false,
+        "description": "Height-one anchored fixed grid: 64 committed native epochs per term, next-term admission, and approval cutoff one epoch before start. Core requires the exact committed epoch cadence; term arithmetic must fit u64.",
+        "properties": {
+          "epoch_length_blocks": {
+            "description": "Exact committed native consensus epoch length, at least three blocks.",
+            "maxLength": 20,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "epoch_length_blocks"
+        ],
+        "type": "object"
+      },
       "SorafsEvidenceApiErrorV1": {
         "additionalProperties": false,
         "properties": {
@@ -52024,6 +52762,87 @@
         "minLength": 4,
         "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
         "type": "string"
+      },
+      "SorafsOperatingAuthorityV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "CompleteReplicationOrder",
+                "type": "string"
+              },
+              "scope": {
+                "additionalProperties": false,
+                "properties": {
+                  "provider_id": {
+                    "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadSorafsProviderIdV1"
+                  }
+                },
+                "required": [
+                  "provider_id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind",
+              "scope"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "SetReservePolicy",
+                "type": "string"
+              },
+              "scope": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "scope"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "UpsertProviderCredit",
+                "type": "string"
+              },
+              "scope": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "scope"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "GatewayComplianceOperator",
+                "type": "string"
+              },
+              "scope": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "kind",
+              "scope"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "SorafsPinRegisterResponseV1": {
         "additionalProperties": false,
@@ -80929,6 +81748,450 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/gov/sorafs/authority/heads/{id}": {
+      "get": {
+        "description": "Read one exact SoraFS authority revision and receipt. Available before activation and after service retirement, preserving typed absence and retained historical receipts. This authenticated observation does not replace a certified execution proof.",
+        "parameters": [
+          {
+            "description": "Exact lowercase 32-byte authority subject identifier.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SorafsAuthorityHeadReadV1"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Read one exact SoraFS authority revision and receipt.",
+        "tags": [
+          "Governance"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "governance.sorafs.authority.head.read"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/gov/sorafs/authority/leases/{id}": {
+      "get": {
+        "description": "Read one normalized plan, independently enacted grant and terminal authorizations, and actual installation and removal receipts from one committed view. Available before activation and after retirement. This authenticated observation does not replace certified execution proofs.",
+        "parameters": [
+          {
+            "description": "Exact lowercase 32-byte normalized lease plan identifier.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SorafsAuthorityLeaseReadV1"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Read exact SoraFS authority lease approvals and effects.",
+        "tags": [
+          "Governance"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "governance.sorafs.authority.lease.read"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/gov/sorafs/authority/proposals/{id}": {
+      "get": {
+        "description": "Read one exact SoraFS authority proposal. Available before activation and after service retirement, preserving typed absence and retained historical receipts. This authenticated observation does not replace a certified execution proof.",
+        "parameters": [
+          {
+            "description": "Exact lowercase 32-byte proposal content identifier.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SorafsAuthorityProposalReadV1"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Canonical authentication headers selecting the private response.",
+                "required": true,
+                "schema": {
+                  "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Read one exact SoraFS authority proposal.",
+        "tags": [
+          "Governance"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "governance.sorafs.authority.proposal.read"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/gov/stream": {
       "get": {
         "description": "Stream governance update notifications via SSE.",
@@ -94354,6 +95617,339 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/privacy/ironwood/pool-cut/{height}": {
+      "post": {
+        "description": "Read the exact current certified Global Ironwood pool/root and payer/reserve balance originals. Canonical signed all-ledger proof-reader authority is required and rechecked before disclosure because the complete World hash list exposes unrelated rows. This is separate from merchant discovery: merchants anonymously fetch public /v1/bridge/finality frames. Retain the canonical cut and authenticate it against independently pinned consecutive finality proofs; query status and decoded bytes grant no authority. No historical cut fallback.",
+        "operationId": "ironwoodPoolCutV1",
+        "parameters": [
+          {
+            "description": "Canonical decimal u64 current certified non-genesis height, at least 2; no sign or leading zero.",
+            "in": "path",
+            "name": "height",
+            "required": true,
+            "schema": {
+              "maxLength": 20,
+              "pattern": "^(?:[2-9]|[1-9][0-9]+)$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical account; required for single-signature mode and optional with a subject-identifying witness.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical request signature; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Signed Unix timestamp; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh signed nonce; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical Norito multisig witness; alternative to the signature quartet.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "payer_account_id": {
+                    "maxLength": 512,
+                    "type": "string"
+                  },
+                  "pool_id_hex": {
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "pool_id_hex",
+                  "payer_account_id"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Data-only complete World hash list and exact typed pool/head/balance preimages; independent native verification required.",
+                  "type": "object"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "format": "binary",
+                  "maxLength": 33554432,
+                  "type": "string",
+                  "x-iroha-norito-frame": "iroha_core_privacy::IronwoodPoolCutProofV1"
+                }
+              }
+            },
+            "description": "Exact current-cut original pool and balances; certified evidence verification remains mandatory.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account-authenticated data is never shared or retained by caches.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Height or exact canonical ordered selector frame is malformed, duplicate or out of bounds.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account-authenticated data is never shared or retained by caches.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Canonical account authentication is absent, invalid or replayed. Authentication-source capacity remains a separate retryable 429.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account-authenticated data is never shared or retained by caches.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The authenticated account lacks current CanReadAllLedgerData required for complete World hash disclosure, or deployment API-token access is denied.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account-authenticated data is never shared or retained by caches.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Accept must permit application/json or application/x-norito.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account-authenticated data is never shared or retained by caches.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Request exceeds the 65536-byte finite selector bound.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account-authenticated data is never shared or retained by caches.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentication-source capacity, heavy-query admission, rate or exact egress limits refused the read.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account-authenticated data is never shared or retained by caches.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Original certified cut, selected context or response capacity is locally unavailable. This is recoverable read failure and supplies no negative state, permission or execution evidence.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account-authenticated data is never shared or retained by caches.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Read every selected private context from one certified Global cut.",
+        "tags": [
+          "Nexus"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-max-request-bytes": 65536,
+        "x-iroha-max-response-bytes": 33554432,
+        "x-iroha-redaction-v1": {
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden",
+          "request_body_must_not_be_logged": true,
+          "response_allowlisted_public_fields_only": true,
+          "scope": "authenticated_restricted_request_redacted_response"
+        },
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "private_settlement.context"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/proofs/query": {
       "post": {
         "description": "Decode a canonical versioned SignedQuery, require FindProofRecordById, verify its signature and authority, and execute it without accepting signing secrets.",
@@ -95795,7 +97391,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/RuntimeReleaseResponse"
                 }
               }
             },

@@ -186,6 +186,9 @@ fn create_implicit_account(
     default_role_on_create: Option<&RoleId>,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
+    if let Some(role) = default_role_on_create {
+        super::sorafs_authority::guard_role_mutation(&state_transaction.world, role)?;
+    }
     let mut metadata = Metadata::default();
     metadata.insert(IMPLICIT_CREATED_VIA_KEY.clone(), Json::new("implicit"));
     let account = Account {

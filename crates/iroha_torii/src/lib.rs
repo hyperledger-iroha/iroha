@@ -8481,6 +8481,58 @@ async fn handler_gov_citizen_status(
         .await
 }
 #[cfg(feature = "app_api")]
+async fn handler_gov_sorafs_authority_proposal(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(id): AxPath<String>,
+) -> Result<JsonBody<iroha_torii_shared::sorafs_authority_api::SorafsAuthorityProposalReadV1>, Error>
+{
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/gov/sorafs/authority/proposals/{id}",
+    )
+    .await?;
+    crate::gov::sorafs_authority::proposal(app.state.clone(), id).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_gov_sorafs_authority_head(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(id): AxPath<String>,
+) -> Result<JsonBody<iroha_torii_shared::sorafs_authority_api::SorafsAuthorityHeadReadV1>, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/gov/sorafs/authority/heads/{id}",
+    )
+    .await?;
+    crate::gov::sorafs_authority::head(app.state.clone(), id).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_gov_sorafs_authority_lease(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(id): AxPath<String>,
+) -> Result<JsonBody<iroha_torii_shared::sorafs_authority_api::SorafsAuthorityLeaseReadV1>, Error> {
+    check_access(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/gov/sorafs/authority/leases/{id}",
+    )
+    .await?;
+    crate::gov::sorafs_authority::lease(app.state.clone(), id).await
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_gov_proposal_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -39332,6 +39384,9 @@ impl Torii {
                 VALIDATION_FEE_PROPOSAL_DETAIL => canonical_account_get(validation_fee_api::handler_proposal_detail, app_state, 0);
                 VALIDATION_FEE_PROPOSAL_DRAFT => canonical_account_post(validation_fee_api::handler_proposal_draft, app_state, runtime_governance_body_limit);
                 GOV_PROPOSAL_GET => canonical_account_get(handler_gov_proposal_get, app_state, 0);
+                GOV_SORAFS_AUTHORITY_PROPOSAL => canonical_account_get(handler_gov_sorafs_authority_proposal, app_state, 0);
+                GOV_SORAFS_AUTHORITY_HEAD => canonical_account_get(handler_gov_sorafs_authority_head, app_state, 0);
+                GOV_SORAFS_AUTHORITY_LEASE => canonical_account_get(handler_gov_sorafs_authority_lease, app_state, 0);
                 GOV_LOCKS_GET => canonical_account_get(handler_gov_locks_get, app_state, 0);
                 GOV_REFERENDUM_GET => canonical_account_get(handler_gov_referendum_get, app_state, 0);
                 GOV_TALLY_GET => canonical_account_get(handler_gov_tally_get, app_state, 0);

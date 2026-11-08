@@ -32,6 +32,8 @@ fn runtime_reconciliation_keeps_read_only_key_config_bytes_mode_and_inode() -> e
             check_replay: false,
             rehearse_sorafs_repair: None,
             repair_execution_time_ms: None,
+            runtime_addition_review_request: None,
+            runtime_addition_review_output: None,
             require_genesis_inrou_deployment_authority: None,
             trace_config: false,
             config_blake3: None,

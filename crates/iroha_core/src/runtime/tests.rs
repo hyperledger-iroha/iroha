@@ -423,3 +423,67 @@ fn ironwood_coherent_candidate_pool_cannot_enter_the_baseline_world() {
         "valid candidate cryptographic state does not authorize the frozen storage grammar"
     );
 }
+
+#[test]
+fn authority_activation_installs_only_its_tables() {
+    let catalog = release_catalog().unwrap();
+    let before = catalog.baseline.clone();
+    let omitted = uninstalled_world_members(&before).unwrap();
+    let authority_members = [
+        "sorafs_authority_heads",
+        "sorafs_authority_leases",
+        "sorafs_authority_proposals",
+    ];
+    assert!(
+        authority_members
+            .iter()
+            .all(|member| omitted.contains(member))
+    );
+    let network = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([7; 32])),
+    );
+    let change = catalog
+        .activation(
+            catalog::additions::SORAFS_AUTHORITY.module,
+            &before,
+            &catalog.definitions,
+            network,
+            20,
+            [1; 32],
+        )
+        .unwrap();
+    let after = change
+        .apply(&before, &catalog.definitions)
+        .unwrap()
+        .selection;
+    assert_eq!(
+        uninstalled_world_members(&after).unwrap(),
+        omitted
+            .into_iter()
+            .filter(|member| !authority_members.contains(member))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(before.kernel, after.kernel);
+    assert_eq!(before.commitment_profile, after.commitment_profile);
+}
+
+#[test]
+fn test_only_activation_keeps_new_foundations_baseline_and_is_idempotent() {
+    let world = crate::state::World::default();
+    assert!(!sorafs_authority_enabled(world.runtime_selection.view().get()).unwrap());
+    let module = catalog::additions::SORAFS_AUTHORITY.module;
+    activate_additions_for_testing(&world, module).unwrap();
+    let first = world.runtime_selection.view().get().clone();
+    assert!(sorafs_authority_enabled(&first).unwrap());
+    activate_additions_for_testing(&world, module).unwrap();
+    assert_eq!(world.runtime_selection.view().get(), &first);
+    assert!(
+        !sorafs_authority_enabled(
+            crate::state::World::default()
+                .runtime_selection
+                .view()
+                .get()
+        )
+        .unwrap()
+    );
+}

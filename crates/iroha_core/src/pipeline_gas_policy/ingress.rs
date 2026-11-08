@@ -58,6 +58,12 @@ pub enum ParameterIngressError {
     /// An executor declaration used a map key different from its value identity.
     #[error("executor custom parameter key differs from its value identity")]
     ExecutorParameterIdentity,
+    /// An executor upgrade attempted to remove a Parliament-owned authority declaration.
+    #[error("executor must retain Parliament-owned SoraFS permission declarations")]
+    SorafsAuthorityDeclaration,
+    /// The selected SoraFS authorization services cannot be executed by this release.
+    #[error("unsupported selected SoraFS authority services")]
+    SorafsAuthorityServices,
     /// Intrinsic signed handshake/context validation without intermediate text.
     #[error(transparent)]
     Handshake(#[from] ConsensusHandshakeValidationError),

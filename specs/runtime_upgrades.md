@@ -106,6 +106,16 @@ World fields after it (design §4, "Add an instruction", "Add storage"):
   obligations (TODO in `additions.rs`). The third addition, `iroha.sorafs.bootstrap.repair.v1`,
   publishes a new interface, implementation and separately identified kernel; its exact
   Taira-only transition changes no existing binding, profile or installed storage.
+  The independent `iroha.sorafs.authority_governance.v1` candidate adds two tolerant
+  proposal/attempt interfaces and three authority tables, selecting nondelegable
+  permission-mutation services. Its draft keeps the existing repair kernel and
+  does not install game partitions. It supports the baseline services composition;
+  other service compositions fail closed. Both the Parliament-grantable completion
+  permission and the provider owner's exact completion-signer policy remain
+  required. Its protected gateway and provider-source HTTP operations refuse
+  delegated account signing keys under the selected authority services.
+  [Authority governance](sorafs_authority_governance.md) describes the
+  paired term approvals and the outstanding current-governance activation prerequisites.
 - **Definitions.** Each addition publishes one native implementation, one interface per wire ID it
   adds and one storage definition per field; a cell's definition carries its initial bytes. Like
   the baseline bundle it declares a conservative superset of dependencies, every storage definition

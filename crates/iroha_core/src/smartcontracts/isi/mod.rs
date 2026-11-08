@@ -65,6 +65,7 @@ pub mod soracloud;
 pub mod soradns;
 /// `SoraFS` pin registry instruction handlers.
 pub mod sorafs;
+pub(crate) mod sorafs_authority;
 /// One-time validator-quorum `SoraFS` bootstrap of a chain whose genesis predates `SoraFS`.
 pub mod sorafs_bootstrap;
 pub mod sorafs_final_promotion_account_custody;
@@ -327,6 +328,8 @@ macro_rules! define_instruction_handlers {
     };
 }
 define_instruction_handlers! {
+    dispatch_instruction::<iroha_data_model::isi::sorafs_authority::ProposeSorafsAuthorityGovernanceV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::sorafs_authority::CreateSorafsAuthorityParliamentAttemptV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::kagemusha_wallet::KagemushaWalletLedgerV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
     dispatch_instruction::<iroha_data_model::isi::nft_market::OfferNftV1>,
     dispatch_instruction::<iroha_data_model::isi::nft_market::BuyNftV1>,
@@ -897,7 +900,18 @@ static ADDITION_HANDLERS: std::sync::LazyLock<
         &'static str,
         std::collections::BTreeMap<&'static str, InstructionHandler>,
     >,
-> = std::sync::LazyLock::new(std::collections::BTreeMap::new);
+> = std::sync::LazyLock::new(|| {
+    let transition: InstructionHandler = dispatch_instruction::<
+        iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1,
+    >;
+    std::collections::BTreeMap::from([(
+        crate::runtime::catalog::additions::SORAFS_AUTHORITY.module,
+        std::collections::BTreeMap::from([(
+            "iroha.governance.parliament.transition.submit.v1",
+            transition,
+        )]),
+    )])
+});
 
 /// The handler that executes `instruction` for the `implementation` its root binds (§5.2).
 ///

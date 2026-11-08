@@ -873,6 +873,10 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            super::super::sorafs_authority::guard_permission_mutation(
+                &state_transaction.world,
+                self.object(),
+            )?;
             let account_id = self.destination().clone();
             let permission = self.object().clone();
             if !crate::alias::asset_definition_alias_permission_targets_active_binding(
@@ -942,6 +946,10 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            super::super::sorafs_authority::guard_permission_mutation(
+                &state_transaction.world,
+                self.object(),
+            )?;
             let account_id = self.destination().clone();
             let permission = self.object().clone();
             if crate::validation_fee::enacted_validation_fee_payout_runtime_permission_owner(
@@ -982,6 +990,10 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            super::super::sorafs_authority::guard_role_mutation(
+                &state_transaction.world,
+                self.object(),
+            )?;
             let account_id = self.destination().clone();
             let role_id = self.object().clone();
             state_transaction.world.role(&role_id)?;
@@ -1018,6 +1030,10 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            super::super::sorafs_authority::guard_role_mutation(
+                &state_transaction.world,
+                self.object(),
+            )?;
             let account_id = self.destination().clone();
             let role_id = self.object().clone();
             if state_transaction

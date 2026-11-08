@@ -5856,4 +5856,59 @@ mod world_through_selection_tests {
             );
         });
     }
+
+    #[test]
+    fn sorafs_authority_snapshot_members_require_selected_storage() {
+        let world = crate::state::World::default();
+        let added = [
+            "sorafs_authority_proposals",
+            "sorafs_authority_heads",
+            "sorafs_authority_leases",
+        ];
+        let mut before = String::new();
+        serialize_world_through_selection(
+            &world,
+            world.runtime_selection.view().get(),
+            &mut before,
+        )
+        .unwrap();
+        let members = crate::state::deserialize::json_object_members(&before).unwrap();
+        for field in added {
+            assert!(members.iter().all(|(name, _)| *name != field));
+        }
+        // Component installation uses the actual immutable change set. It is
+        // neither a governance certificate nor a network activation fixture.
+        let mut block = world.block();
+        let catalog = crate::runtime::release_catalog().unwrap();
+        let network = iroha_data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(Hash::prehashed([0x71; 32])),
+        );
+        let published =
+            crate::runtime::change_set::PublishedDefinitions(&block.runtime_definitions);
+        let change = catalog
+            .activation(
+                crate::runtime::catalog::additions::SORAFS_AUTHORITY.module,
+                block.runtime_selection.get(),
+                &published,
+                network,
+                1,
+                [0x71; 32],
+            )
+            .unwrap();
+        let applied = change
+            .apply(block.runtime_selection.get(), &published)
+            .unwrap();
+        for (id, descriptor) in applied.published {
+            block.runtime_definitions.insert(id, descriptor);
+        }
+        *block.runtime_selection.get_mut() = applied.selection;
+        block.commit();
+        let mut after = String::new();
+        serialize_world_through_selection(&world, world.runtime_selection.view().get(), &mut after)
+            .unwrap();
+        let members = crate::state::deserialize::json_object_members(&after).unwrap();
+        for field in added {
+            assert_eq!(members.iter().filter(|(name, _)| *name == field).count(), 1);
+        }
+    }
 }

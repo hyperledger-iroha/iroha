@@ -2239,6 +2239,8 @@ pub mod soracloud;
 pub mod soradns;
 /// `SoraFS` pin registry instructions.
 pub mod sorafs;
+/// Parliament-governed nondelegable SoraFS authorities.
+pub mod sorafs_authority;
 /// Space Directory manifest instructions.
 pub mod space_directory;
 /// Public lane staking instructions.

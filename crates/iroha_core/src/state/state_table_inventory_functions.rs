@@ -797,6 +797,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     ),
     function(
         "crates/iroha_core/src/state.rs",
+        "sorafs_authority_proposals_mut",
+        1,
+        UseOwner::Other(Use::Test, TEST_ONLY),
+    ),
+    function(
+        "crates/iroha_core/src/state.rs",
         "verify_next_height_threshold_key_lifecycle_certificate_v1",
         1,
         UseOwner::Other(Use::Record, BLOCK_HASH),

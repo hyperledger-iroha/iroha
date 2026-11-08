@@ -174,17 +174,17 @@ http-body-util = { workspace = true }
 tokio-rustls = { workspace = true, features = ["ring"] }
 rand = { workspace = true }
 blake3 = { workspace = true }
+tempfile = { workspace = true }
+iroha_executor_data_model = { workspace = true }
 
 [dev-dependencies]
 iroha_data_model = { workspace = true, default-features = false, features = ["test-fixtures", "transparent_api"] }
 iroha_service_model = { workspace = true }
 iroha_deploy = { workspace = true }
 iroha_musubi_service = { workspace = true, features = ["test-fixtures"] }
-iroha_executor_data_model = { workspace = true }
 iroha_torii = { workspace = true, default-features = false, features = ["test-fixtures"] }
 iroha_core = { workspace = true, default-features = false, features = ["runtime", "iroha-core-tests"] }
 iroha_p2p = { workspace = true, features = ["test-fixtures"] }
-tempfile = { workspace = true }
 iroha_test_samples = { workspace = true }
 sorafs_chunker = { path = "../sorafs_chunker" }
 rcgen = "0.14.5"

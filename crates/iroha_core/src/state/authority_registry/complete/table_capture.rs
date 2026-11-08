@@ -67,6 +67,9 @@ mod native_world;
 #[path = "table_capture/proof_status_tests.rs"]
 mod proof_status_tests;
 #[cfg(test)]
+#[path = "table_capture/sorafs_authority_tests.rs"]
+mod sorafs_authority_tests;
+#[cfg(test)]
 #[path = "table_capture/validation_fee_proposal_tests.rs"]
 mod validation_fee_proposal_tests;
 #[cfg(test)]
@@ -256,6 +259,21 @@ capture_world_table_once!(
     capture_account_signing_key_reservations_once,
     account_signing_key_reservations,
     "world.account_signing_key_reservations"
+);
+capture_world_table_once!(
+    capture_sorafs_authority_proposals_once,
+    sorafs_authority_proposals,
+    "world.sorafs_authority_proposals"
+);
+capture_world_table_once!(
+    capture_sorafs_authority_heads_once,
+    sorafs_authority_heads,
+    "world.sorafs_authority_heads"
+);
+capture_world_table_once!(
+    capture_sorafs_authority_leases_once,
+    sorafs_authority_leases,
+    "world.sorafs_authority_leases"
 );
 capture_world_table_once!(
     capture_nft_sale_offers_once,
@@ -872,6 +890,9 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     capture_game_partitions_once::MATERIALIZER,
     capture_account_signing_keys_once::MATERIALIZER,
     capture_account_signing_key_reservations_once::MATERIALIZER,
+    capture_sorafs_authority_proposals_once::MATERIALIZER,
+    capture_sorafs_authority_heads_once::MATERIALIZER,
+    capture_sorafs_authority_leases_once::MATERIALIZER,
     capture_nft_sale_offers_once::MATERIALIZER,
     capture_nft_custody_records_once::MATERIALIZER,
     capture_vpn_leases_once::MATERIALIZER,
@@ -1328,6 +1349,9 @@ mod tests {
             "world.game_partitions",
             "world.account_signing_keys",
             "world.account_signing_key_reservations",
+            "world.sorafs_authority_proposals",
+            "world.sorafs_authority_heads",
+            "world.sorafs_authority_leases",
             "world.nft_sale_offers",
             "world.nft_custody_records",
             "world.vpn_leases",

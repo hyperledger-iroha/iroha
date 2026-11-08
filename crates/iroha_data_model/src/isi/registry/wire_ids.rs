@@ -119,6 +119,8 @@ macro_rules! governance_wire_id {
 }
 /// Complete canonical wire-ID inventory for built-in instructions.
 pub(super) const ALL: &[BuiltInWireId] = &[
+    built_in_wire_id!(crate::isi::sorafs_authority::ProposeSorafsAuthorityGovernanceV1 => "iroha.sorafs.authority.propose.v1", register, tolerant),
+    built_in_wire_id!(crate::isi::sorafs_authority::CreateSorafsAuthorityParliamentAttemptV1 => "iroha.sorafs.authority.attempt.create.v1", register, tolerant),
     built_in_wire_id!(RegisterBox => "iroha.register"),
     built_in_wire_id!(crate::isi::register_dataspace_asset_definition::RegisterDataspaceAssetDefinition => "iroha.asset_definition.dataspace.register.v1"),
     built_in_wire_id!(crate::isi::kagemusha_wallet::KagemushaWalletLedgerV1 => "iroha.kagemusha.wallet.ledger.v1", register),
