@@ -1,19 +1,41 @@
 //! The fixed layout of a v2 decider: the tables its zero-check reads, its
 //! weighted terms, its key polynomials and its copy permutation.
+//!
+//! Key polynomials are shared by equal contents. A key polynomial with at most
+//! [`STEP_RUNS`] constant runs is a step function the verifier evaluates
+//! ([`Steps`]); every other one is committed and opened. One copy helper covers
+//! [`COPY_GROUP`] copy columns.
 
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, hash_map::DefaultHasher},
+    hash::{Hash, Hasher},
+};
 
 use ff::Field;
 use iroha_pasta::{PastaCurve, PastaField};
 use iroha_plonk::cs::Expression;
 
-use super::eval::{MAX_DEGREE, Poly};
+use super::{
+    eval::{MAX_DEGREE, Poly},
+    mle,
+};
 use crate::{
     Error,
     commit::CommitKey,
     program::folded_degree,
     relation::{Cell, FoldedRelation},
 };
+
+/// A key polynomial with at most this many maximal constant runs (counted
+/// cyclically) is evaluated by the verifier as a step function instead of
+/// being committed and opened: each change of value costs one prefix
+/// indicator (`O(mu)` field operations), against an opened commitment and its
+/// claimed values.
+pub(crate) const STEP_RUNS: usize = 16;
+
+/// Copy columns per copy helper. A helper sums the copy terms of its columns,
+/// and its row constraint has degree `2 COPY_GROUP + 2` (six).
+pub(crate) const COPY_GROUP: usize = 2;
 
 /// A table of the zero-check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -22,6 +44,9 @@ pub(crate) enum Source {
     Witness(usize, i32),
     /// A key polynomial at a rotation.
     Key(usize, i32),
+    /// A key polynomial of at most [`STEP_RUNS`] runs at a rotation: the
+    /// verifier evaluates it ([`DeciderV2Plan::steps`]).
+    Steps(usize, i32),
     /// A folded public column at a rotation (the verifier evaluates it).
     Instance(usize, i32),
     /// A copy helper column, committed by the decider prover.
@@ -88,6 +113,36 @@ pub(crate) struct Term<F> {
     pub(crate) support: Support,
 }
 
+/// A step function over the rows: `first` on row 0, changing by `delta` at each
+/// listed row (ascending). Its multilinear extension at `x` is
+/// `first + sum delta (1 - prefix_indicator(row, x))`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Steps<F> {
+    pub(crate) first: F,
+    pub(crate) changes: Vec<(usize, F)>,
+}
+
+impl<F: Field> Steps<F> {
+    /// The step function of a column.
+    pub(crate) fn of(column: &[F]) -> Self {
+        let first = column.first().copied().unwrap_or(F::ZERO);
+        let changes = column.windows(2).enumerate().filter(|(_, w)| w[1] != w[0]).map(|(i, w)| (i + 1, w[1] - w[0])).collect();
+        Self { first, changes }
+    }
+
+    /// Its multilinear extension at `x`.
+    pub(crate) fn eval(&self, x: &[F]) -> F {
+        self.changes.iter().fold(self.first, |total, (row, delta)| total + *delta * (F::ONE - mle::prefix_indicator(*row, x)))
+    }
+}
+
+/// The number of maximal constant runs of a column, counted cyclically (a
+/// constant column has one).
+fn cyclic_runs<F: Field>(column: &[F]) -> usize {
+    let n = column.len();
+    (0..n).filter(|&i| column[i] != column[(i + n - 1) % n]).count().max(1)
+}
+
 /// A column with copy cells.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum CopyColumn {
@@ -104,6 +159,9 @@ pub(crate) struct CopyPlan {
     pub(crate) sigma: Vec<usize>,
     /// The rows of each column that `sigma` moves.
     pub(crate) rows: Vec<Vec<u32>>,
+    /// The columns of each copy helper ([`COPY_GROUP`] each, the last one
+    /// possibly fewer).
+    pub(crate) helpers: Vec<Vec<usize>>,
     /// Instance cells in copies: column, row, id and `sigma(id)`.
     pub(crate) instance_cells: Vec<(usize, usize, u64, u64)>,
 }
@@ -123,6 +181,9 @@ pub struct DeciderV2Plan<C: PastaCurve> {
     pub(crate) key: CommitKey<C>,
     pub(crate) mu: usize,
     pub(crate) sources: Vec<Source>,
+    /// The step function of each [`Source::Steps`] table (`None` for every
+    /// other source), in source order.
+    pub(crate) steps: Vec<Option<Steps<C::ScalarExt>>>,
     pub(crate) key_polys: Vec<Vec<C::ScalarExt>>,
     pub(crate) key_commitments: Vec<C::AffineExt>,
     pub(crate) terms: Vec<Term<C::ScalarExt>>,
@@ -170,6 +231,10 @@ struct Builder<'a, F> {
     sources: Vec<Source>,
     source_index: HashMap<Source, usize>,
     key_polys: Vec<Vec<F>>,
+    /// Whether each key polynomial is a step function the verifier evaluates.
+    stepped: Vec<bool>,
+    /// Key polynomials by a hash of their contents.
+    contents: HashMap<u64, Vec<usize>>,
     named: HashMap<KeyName, usize>,
     sparse: HashMap<Vec<(u32, [u64; 4])>, usize>,
     cells: Vec<(usize, usize)>,
@@ -202,6 +267,23 @@ impl<F: PastaField> Builder<'_, F> {
         index
     }
 
+    /// The key polynomial `values`, shared by equal contents.
+    fn add_key(&mut self, values: Vec<F>) -> usize {
+        let mut hasher = DefaultHasher::new();
+        for value in &values {
+            value.to_canonical_limbs().hash(&mut hasher);
+        }
+        let candidates = self.contents.entry(hasher.finish()).or_default();
+        if let Some(index) = candidates.iter().find(|index| self.key_polys[**index] == values) {
+            return *index;
+        }
+        let index = self.key_polys.len();
+        candidates.push(index);
+        self.stepped.push(cyclic_runs(&values) <= STEP_RUNS);
+        self.key_polys.push(values);
+        index
+    }
+
     fn named_key(&mut self, name: KeyName) -> usize {
         if let Some(index) = self.named.get(&name) {
             return *index;
@@ -213,8 +295,7 @@ impl<F: PastaField> Builder<'_, F> {
                 relation.selectors[s].iter().map(|on| if *on { F::ONE } else { F::ZERO }).collect()
             }
         };
-        let index = self.key_polys.len();
-        self.key_polys.push(values);
+        let index = self.add_key(values);
         self.named.insert(name, index);
         index
     }
@@ -234,15 +315,20 @@ impl<F: PastaField> Builder<'_, F> {
         for (row, value) in rows.iter().zip(values) {
             column[*row as usize] = *value;
         }
-        let index = self.key_polys.len();
-        self.key_polys.push(column);
+        let index = self.add_key(column);
         self.sparse.insert(content, index);
         index
     }
 
+    /// The zero-check table of key polynomial `key` at `rotation`: a step
+    /// function the verifier evaluates, or a committed table.
+    fn key_source(&mut self, key: usize, rotation: i32) -> usize {
+        self.table(if self.stepped[key] { Source::Steps(key, rotation) } else { Source::Key(key, rotation) })
+    }
+
     fn key_table(&mut self, name: KeyName, rotation: i32) -> usize {
         let key = self.named_key(name);
-        self.table(Source::Key(key, rotation))
+        self.key_source(key, rotation)
     }
 
     fn cell(&mut self, column: usize, row: usize) -> usize {
@@ -326,6 +412,8 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
             sources: Vec::new(),
             source_index: HashMap::new(),
             key_polys: Vec::new(),
+            stepped: Vec::new(),
+            contents: HashMap::new(),
             named: HashMap::new(),
             sparse: HashMap::new(),
             cells: Vec::new(),
@@ -347,7 +435,7 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
                 .map(|f| b.compile(f))
                 .collect::<Vec<_>>();
             let guard = b.sparse_key(&gate.rows, &gate.guards);
-            let guard = b.table(Source::Key(guard, 0));
+            let guard = b.key_source(guard, 0);
             let poly = Poly::table(pow).mul(Poly::table(guard)).mul(product(body));
             terms.push(Term { weight: Weight::Index(gate.class), poly, support: Support::Rows(gate.rows.clone()) });
         }
@@ -361,7 +449,7 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
                 let rows: Vec<u32> = group.slots[slot].iter().map(|cell| cell.row).collect();
                 let ones = vec![S::<C>::ONE; rows.len()];
                 let activity = b.sparse_key(&rows, &ones);
-                let activity = b.table(Source::Key(activity, 0));
+                let activity = b.key_source(activity, 0);
                 let h = b.table(Source::Witness(group.h_column(slot), 0));
                 let parts: Vec<Poly<S<C>>> = chosen
                     .iter()
@@ -466,34 +554,49 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
         let index = b.table(Source::Index);
         let gamma = Poly::scalar(scalars.gamma());
         let eta = Poly::scalar(scalars.eta());
+        // Per column: L = gamma + v + eta id, R = gamma + v + eta sigma and the
+        // correction eta (sigma - id) = R - L.
+        let mut parts = Vec::with_capacity(columns.len());
         for (j, column) in columns.iter().enumerate() {
             moved[j].sort_unstable();
-            let s = b.key_polys.len();
-            b.key_polys.push(sigma_columns[j].iter().map(|v| S::<C>::from(*v)).collect());
+            let s = b.add_key(sigma_columns[j].iter().map(|v| S::<C>::from(*v)).collect());
             sigma.push(s);
             let value = match column {
                 CopyColumn::Witness(c) => b.table(Source::Witness(*c, 0)),
                 CopyColumn::Fixed(c) => b.key_table(KeyName::Fixed(*c), 0),
             };
-            let sigma_table = b.table(Source::Key(s, 0));
-            let helper = b.table(Source::Helper(j));
+            let sigma_table = b.key_source(s, 0);
             let id = Poly::constant(S::<C>::from(j as u64 * n64)).add(Poly::table(index));
             let left = gamma.clone().add(Poly::table(value)).add(eta.clone().mul(id.clone()));
             let right = gamma.clone().add(Poly::table(value)).add(eta.clone().mul(Poly::table(sigma_table)));
-            let row = Poly::table(helper)
-                .mul(left)
-                .mul(right)
-                .sub(eta.clone().mul(Poly::table(sigma_table).sub(id)));
+            let correction = eta.clone().mul(Poly::table(sigma_table).sub(id));
+            parts.push((left, right, correction));
+        }
+        // One helper per group of columns: z = sum_c (1 / L_c - 1 / R_c), by the
+        // row constraint z prod_c L_c R_c = sum_c eta (sigma_c - id_c)
+        // prod_{c' != c} L_c' R_c', which vanishes off the group's moved rows.
+        let helpers: Vec<Vec<usize>> =
+            (0..columns.len()).collect::<Vec<_>>().chunks(COPY_GROUP).map(<[usize]>::to_vec).collect();
+        for (q, members) in helpers.iter().enumerate() {
+            let helper = b.table(Source::Helper(q));
+            let mut rows: Vec<u32> = members.iter().flat_map(|j| moved[*j].iter().copied()).collect();
+            rows.sort_unstable();
+            rows.dedup();
+            let products: Vec<Poly<S<C>>> =
+                members.iter().map(|j| parts[*j].0.clone().mul(parts[*j].1.clone())).collect();
+            let mut row = Poly::table(helper).mul(product(products.iter().cloned()));
+            for (k, j) in members.iter().enumerate() {
+                let others: Vec<Poly<S<C>>> =
+                    products.iter().enumerate().filter(|(i, _)| *i != k).map(|(_, p)| p.clone()).collect();
+                let correction = parts[*j].2.clone();
+                row = row.sub(if others.is_empty() { correction } else { correction.mul(product(others)) });
+            }
             terms.push(Term {
-                weight: Weight::AlphaKappa(groups + 1, j),
+                weight: Weight::AlphaKappa(groups + 1, q),
                 poly: Poly::table(eq_tau).mul(row),
-                support: Support::Rows(moved[j].clone()),
+                support: Support::Rows(rows.clone()),
             });
-            terms.push(Term {
-                weight: Weight::Alpha(groups + 2),
-                poly: Poly::table(helper),
-                support: Support::Rows(moved[j].clone()),
-            });
+            terms.push(Term { weight: Weight::Alpha(groups + 2), poly: Poly::table(helper), support: Support::Rows(rows) });
         }
 
         let degree = terms.iter().map(|t| t.poly.degree()).max().unwrap_or(1).max(1);
@@ -502,8 +605,15 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
         }
         let key_commitments =
             b.key_polys.iter().map(|poly| key.commit(poly, &S::<C>::ZERO)).collect::<Result<Vec<_>, _>>()?;
-        let copies = CopyPlan { columns, sigma, rows: moved, instance_cells };
+        let copies = CopyPlan { columns, sigma, rows: moved, helpers, instance_cells };
         let Builder { sources, key_polys, cells, .. } = b;
+        let steps = sources
+            .iter()
+            .map(|source| match *source {
+                Source::Steps(key, rotation) => Some(Steps::of(&mle::rotated(&key_polys[key], rotation))),
+                _ => None,
+            })
+            .collect();
         let mut committed: Vec<Committed> = sources.iter().filter_map(|s| s.committed().map(|(p, _)| p)).collect();
         committed.sort_unstable();
         committed.dedup();
@@ -523,6 +633,7 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
             key: key.clone(),
             mu,
             sources,
+            steps,
             key_polys,
             key_commitments,
             terms,
@@ -553,11 +664,11 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
         self.mu
     }
 
-    /// Copy-helper commitments per proof of this plan (one per column with copy
-    /// cells).
+    /// Copy-helper commitments per proof of this plan (one per group of
+    /// [`COPY_GROUP`] columns with copy cells).
     #[must_use]
     pub fn helper_count(&self) -> usize {
-        self.copies.columns.len()
+        self.copies.helpers.len()
     }
 
     /// The instance cells in copies, as (column, row, id, `sigma(id)`): the
@@ -578,11 +689,14 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
     }
 
     /// The verifier's work beyond the opening: field multiplications of the
-    /// final term evaluation (one per term weight included), scalars absorbed
-    /// per proof, and the opened commitments as (witness, key, helper).
+    /// final term evaluation (one per term weight included) and of the step
+    /// keys (at most `2 mu + 1` per change of value, before sharing), scalars
+    /// absorbed per proof, and the opened commitments as (witness, key,
+    /// helper).
     #[must_use]
     pub fn verifier_profile(&self) -> (usize, usize, (usize, usize, usize)) {
-        let multiplications = self.terms.iter().map(|t| t.poly.multiplications() + 1).sum();
+        let steps: usize = self.steps.iter().flatten().map(|s| s.changes.len() * (2 * self.mu + 1)).sum();
+        let multiplications = self.terms.iter().map(|t| t.poly.multiplications() + 1).sum::<usize>() + steps;
         let absorbed = self.mu * self.degree + self.reads.len() + 2 * self.mu + self.committed.len();
         let mut opened = (0, 0, 0);
         for poly in &self.committed {
@@ -593,6 +707,20 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
             }
         }
         (multiplications, absorbed, opened)
+    }
+
+    /// For verifier-cost planning of one batch of `plans` (in member order):
+    /// the claims its opening proves (a key polynomial shared by members
+    /// once), the field scalars its transcript absorbs per proof besides the
+    /// digests (round values, reads at `rho`, shift rounds, claim values), and
+    /// its round degree.
+    #[must_use]
+    pub fn batch_profile(plans: &[&Self]) -> (usize, usize, usize) {
+        let claims = super::batch_claims(plans).opened.len();
+        let mu = plans.first().map_or(0, |plan| plan.mu);
+        let degree = plans.iter().map(|plan| plan.degree).max().unwrap_or(1);
+        let reads: usize = plans.iter().map(|plan| plan.reads.len()).sum();
+        (claims, mu * degree + reads + 2 * mu + claims, degree)
     }
 
     /// For verifier-cost planning: each key polynomial's number of maximal
@@ -614,6 +742,6 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
     /// terms.
     #[must_use]
     pub fn sizes(&self) -> (usize, usize, usize, usize) {
-        (self.sources.len(), self.key_polys.len(), self.copies.columns.len(), self.terms.len())
+        (self.sources.len(), self.key_polys.len(), self.copies.helpers.len(), self.terms.len())
     }
 }

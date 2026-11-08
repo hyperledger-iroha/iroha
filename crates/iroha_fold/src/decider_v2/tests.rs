@@ -26,8 +26,9 @@ use iroha_pasta::Fp;
 use iroha_plonk::check::{CheckMode, check_circuit};
 
 use super::{
-    DeciderV2Plan, DeciderV2Proof, helper_digest, instance_copy_terms, mle, open, prove, prove_many, sumcheck, verify,
-    verify_many, verify_opening,
+    DeciderV2Plan, DeciderV2Proof, helper_digest, instance_copy_terms, mle, open,
+    plan::{COPY_GROUP, Committed, STEP_RUNS, Source, Steps},
+    prove, prove_many, sumcheck, verify, verify_many, verify_opening,
 };
 use crate::{
     circuit::{
@@ -109,6 +110,48 @@ fn multilinear_primitives_match_their_definitions() {
         assert_eq!(pcs_mle::shifted_eq(&rho, &sigma, k), Some(evaluate(&e, &sigma)), "k = {k}");
         assert_eq!(pcs_mle::shifted_eq_table(&rho, k), Some(e), "k = {k}");
     }
+    // A step function's extension, from its changes alone, at every rotation:
+    // runs that wrap around, a constant column and a column changing on every row.
+    let steps: Vec<Fq> = (0..n).map(|i| Fq::from([5, 5, 0, 0, 0, 9, 9, 9, 9, 9, 2, 2, 2, 5, 5, 5][i])).collect();
+    let constant = vec![Fq::from(4); n];
+    for values in [&steps, &constant, &column] {
+        for k in [-3, 0, 1, 7] {
+            let rotated = mle::rotated(values, k);
+            assert_eq!(Steps::of(&rotated).eval(&x), evaluate(&rotated, &x), "k = {k}");
+        }
+    }
+    assert_eq!(Steps::of(&steps).changes.len(), 4);
+    assert!(Steps::of(&constant).changes.is_empty());
+}
+
+/// What every plan keeps: key polynomials pairwise distinct, step tables exactly
+/// for keys of at most [`STEP_RUNS`] runs (and every one of them evaluated
+/// correctly), copy helpers grouping the copy columns in order.
+fn assert_plan_invariants(plan: &DeciderV2Plan<Ep>) {
+    for (i, a) in plan.key_polys.iter().enumerate() {
+        assert!(plan.key_polys[..i].iter().all(|b| b != a), "key {i} repeats an earlier key");
+    }
+    let runs = plan.key_runs();
+    let mut rng = ChaCha20Rng::seed_from_u64(14);
+    let x = random_point(&mut rng, plan.mu);
+    for (index, source) in plan.sources.iter().enumerate() {
+        match *source {
+            Source::Steps(key, k) => {
+                assert!(runs[key].0 <= STEP_RUNS, "a step key has {} runs", runs[key].0);
+                let steps = plan.steps[index].as_ref().expect("step table");
+                assert_eq!(steps.eval(&x), evaluate(&mle::rotated(&plan.key_polys[key], k), &x));
+            }
+            Source::Key(key, _) => {
+                assert!(runs[key].0 > STEP_RUNS, "a committed key has {} runs", runs[key].0);
+                assert!(plan.steps[index].is_none());
+            }
+            _ => assert!(plan.steps[index].is_none()),
+        }
+    }
+    let grouped: Vec<usize> = plan.copies.helpers.iter().flatten().copied().collect();
+    assert_eq!(grouped, (0..plan.copies.columns.len()).collect::<Vec<_>>());
+    assert!(plan.copies.helpers.iter().all(|group| !group.is_empty() && group.len() <= COPY_GROUP));
+    assert_eq!(plan.helper_count(), plan.copies.columns.len().div_ceil(COPY_GROUP));
 }
 
 #[test]
@@ -299,7 +342,12 @@ fn honest_accumulators_reduce_to_claims_that_open() {
     let s = setup();
     let (sources, keys, helpers, terms) = s.plan.sizes();
     assert!(sources > 0 && keys > 0 && terms > 0);
-    assert_eq!(helpers, 4, "copy columns a, b, c and the constants column");
+    assert_eq!(helpers, 2, "copy columns a, b, c and the constants column, two per helper");
+    assert_plan_invariants(&s.plan);
+    // Selectors, guards and the range table are step keys the verifier
+    // evaluates; the copy permutations are committed.
+    assert!(s.plan.sources.iter().any(|source| matches!(source, Source::Steps(..))));
+    assert_eq!(s.plan.committed.iter().filter(|poly| matches!(poly, Committed::Key(_))).count(), 4);
     // The decider's commitments are the batched opening's: sum_j a_j g_j + rho W.
     let mut rng = ChaCha20Rng::seed_from_u64(7);
     let column: Vec<Fq> = (0..s.relation.n).map(|_| Fq::random(&mut rng)).collect();
@@ -350,6 +398,7 @@ fn a_lookup_input_outside_its_table_never_decides() {
     let params = PinnedParams::<Ep>::derive(forgery::K).expect("params");
     let stage = forgery::stage_with(CommitKey::monomial(params.params()));
     let plan = DeciderV2Plan::new(stage.relation.clone(), &stage.key).expect("plan");
+    assert_plan_invariants(&plan);
     for balance in [forgery::Balance::InactiveReciprocal, forgery::Balance::ReciprocalPastUsable, forgery::Balance::TablePastUsable] {
         let (instance, w) = forgery::forged(&stage, balance);
         let acc = Accumulator::from_fresh(&stage.relation, &forgery::DOMAIN, instance).expect("accumulator");
@@ -486,12 +535,36 @@ fn a_batch_of_accumulators_of_two_relations_decides_with_one_opening() {
     let acc3 = Accumulator::from_fresh(&pair, &DOMAIN, instance).expect("accumulator");
     decide(&pair, &s.key, &acc3, &w3).expect("pair accumulator");
 
+    assert_plan_invariants(&pair_plan);
     let inputs = [(&s.plan, &acc1, &w1), (&s.plan, &acc2, &w2), (&pair_plan, &acc3, &w3)];
     let accs = [(&s.plan, &acc1), (&s.plan, &acc2), (&pair_plan, &acc3)];
     let mut proved = prove_many(&DOMAIN, &inputs).expect("prove");
     let (opening, prover_claim) = open(s.params.params(), &mut proved).expect("open");
     let mut verified = verify_many(&DOMAIN, &accs, &proved.proof).expect("verify");
     assert_eq!(verified.claims, proved.claims);
+    // One claim per witness column and helper of every member, and one per
+    // distinct key commitment: the second Mini member opens no key of its own.
+    let plans = [&s.plan, &s.plan, &pair_plan];
+    let mut keys = Vec::new();
+    let mut own = 0;
+    for plan in plans {
+        for poly in &plan.committed {
+            match *poly {
+                Committed::Key(p) if !keys.contains(&plan.key_commitments[p]) => keys.push(plan.key_commitments[p]),
+                Committed::Key(_) => {}
+                _ => own += 1,
+            }
+        }
+    }
+    assert_eq!(proved.claims.len(), own + keys.len());
+    assert!(proved.claims.len() < plans.iter().map(|plan| plan.committed.len()).sum::<usize>());
+    assert_eq!(proved.proof.at_sigma.len(), proved.claims.len());
+    // Both Mini members read a shared key claim: another value fails the shift
+    // reduction.
+    let shared = proved.claims.iter().position(|claim| claim.commitment == keys[0]).expect("a key claim");
+    let mut tampered = proved.proof.clone();
+    tampered.at_sigma[shared] += Fq::ONE;
+    assert_eq!(verify_many(&DOMAIN, &accs, &tampered).map(|_| ()), Err(Error::Rejected("shift reduction")));
     let claim = verify_opening(s.params.params(), &mut verified, &opening).expect("opening verifies");
     assert_eq!(claim, prover_claim);
     claim.decide(&s.params, MemoryBudget::DEFAULT).expect("generator claim decides");
@@ -529,19 +602,25 @@ fn a_batch_of_accumulators_of_two_relations_decides_with_one_opening() {
     );
 }
 
-/// The field side of the decider over one accumulator: a circuit over the
-/// decider's scalar field that exposes `d_F` and the opening scalars `v*`, `b'`
-/// for given `alpha` and `u`.
+/// One member of a field-side batch: its plan, shape, accumulator and imported
+/// instance copy term (`None` at key generation, or when not imported).
 #[derive(Clone)]
-struct FieldDeciderCircuit {
+struct FieldMember {
     plan: Arc<DeciderV2Plan<Ep>>,
     shape: FoldShape,
     acc: Option<Accumulator<Ep>>,
-    /// Whether the public columns stay out and the instance copy term is
+    copy_terms: Option<Fq>,
+}
+
+/// The field side of the decider over a batch of accumulators: a circuit over
+/// the decider's scalar field that exposes `d_F` and the opening scalars `v*`,
+/// `b'` for given `alpha` and `u`.
+#[derive(Clone)]
+struct FieldDeciderCircuit {
+    members: Vec<FieldMember>,
+    /// Whether the public columns stay out and the instance copy terms are
     /// imported.
     import_terms: bool,
-    /// The imported copy term (`None` at key generation).
-    copy_terms: Option<Fq>,
     proof: Option<DeciderV2Proof<Ep>>,
     helpers: Option<Fp>,
     alpha: Option<Fq>,
@@ -561,11 +640,8 @@ impl Circuit<Fq> for FieldDeciderCircuit {
 
     fn without_witnesses(&self) -> Self {
         Self {
-            plan: Arc::clone(&self.plan),
-            shape: self.shape.clone(),
-            acc: None,
+            members: self.members.iter().map(|m| FieldMember { acc: None, copy_terms: None, ..m.clone() }).collect(),
             import_terms: self.import_terms,
-            copy_terms: None,
             proof: None,
             helpers: None,
             alpha: None,
@@ -583,16 +659,20 @@ impl Circuit<Fq> for FieldDeciderCircuit {
     fn synthesize(&self, config: FieldDeciderConfig, mut layouter: impl Layouter<Fq>) -> Result<(), PlonkError> {
         let mut chips = FieldVerifierChips::new(&config.field);
         chips.load_tables(&mut layouter)?;
-        let k = self.plan.mu;
+        let k = self.members[0].plan.mu;
+        let plans: Vec<&DeciderV2Plan<Ep>> = self.members.iter().map(|m| &*m.plan).collect();
         let (digest, value, folded) = layouter.assign_region(
             || "decider v2 field side",
             |mut region| {
                 let mut lanes = chips.lanes();
-                let acc = if self.import_terms {
-                    assign_accumulator_field_terms(&mut lanes, &mut region, &DOMAIN, &self.shape, self.acc.as_ref(), self.copy_terms)?
-                } else {
-                    assign_accumulator_field(&mut lanes, &mut region, &DOMAIN, &self.shape, self.acc.as_ref())?
-                };
+                let mut accs = Vec::with_capacity(self.members.len());
+                for m in &self.members {
+                    accs.push(if self.import_terms {
+                        assign_accumulator_field_terms(&mut lanes, &mut region, &DOMAIN, &m.shape, m.acc.as_ref(), m.copy_terms)?
+                    } else {
+                        assign_accumulator_field(&mut lanes, &mut region, &DOMAIN, &m.shape, m.acc.as_ref())?
+                    });
+                }
                 let limbs = self.helpers.map(|d| s6_limbs(&d).map(Fq::from_u128));
                 let witness = |lanes: &mut crate::circuit::field::FieldLanes<'_, Fq>, region: &mut _, v: Option<Fq>| {
                     lanes.glue.witness(region, v.map_or_else(Value::unknown, Value::known))
@@ -601,8 +681,9 @@ impl Circuit<Fq> for FieldDeciderCircuit {
                     witness(&mut lanes, &mut region, limbs.map(|l| l[0]))?,
                     witness(&mut lanes, &mut region, limbs.map(|l| l[1]))?,
                 ];
-                let proof = assign_decider_v2_field_proof(&mut lanes, &mut region, &[&self.plan], self.proof.as_ref())?;
-                let out = verify_decider_v2_field(&mut lanes, &mut region, &DOMAIN, &[(&self.plan, &acc)], &helpers, &proof)?;
+                let proof = assign_decider_v2_field_proof(&mut lanes, &mut region, &plans, self.proof.as_ref())?;
+                let members: Vec<_> = plans.iter().copied().zip(&accs).collect();
+                let out = verify_decider_v2_field(&mut lanes, &mut region, &DOMAIN, &members, &helpers, &proof)?;
                 let alpha = witness(&mut lanes, &mut region, self.alpha)?;
                 let u = (0..k)
                     .map(|j| witness(&mut lanes, &mut region, self.u.as_ref().map(|u| u[j])))
@@ -637,11 +718,8 @@ fn the_field_side_decider_circuit_verifies_exactly_as_the_native_verifier() {
     let shape = s.relation.shape();
     let with_terms = |proof: &DeciderV2Proof<Ep>, helpers: Fp, public: &[Fq], copy_terms: Option<Fq>| {
         let circuit = FieldDeciderCircuit {
-            plan: Arc::clone(&plan),
-            shape: shape.clone(),
-            acc: Some(acc.clone()),
+            members: vec![FieldMember { plan: Arc::clone(&plan), shape: shape.clone(), acc: Some(acc.clone()), copy_terms }],
             import_terms: copy_terms.is_some(),
-            copy_terms,
             proof: Some(proof.clone()),
             helpers: Some(helpers),
             alpha: Some(alpha),
@@ -677,6 +755,70 @@ fn the_field_side_decider_circuit_verifies_exactly_as_the_native_verifier() {
     let mut p = proved.proof;
     p.at_sigma[0] += Fq::ONE;
     assert!(!satisfied(&p, helpers, &public));
+}
+
+#[test]
+#[ignore = "k16 field-side decider circuit; run optimized"]
+fn the_field_side_decider_circuit_verifies_a_batch_whose_members_share_keys() {
+    let s = setup();
+    let (acc1, w1) = accumulator(&s);
+    let mut rng = ChaCha20Rng::seed_from_u64(15);
+    let (instance, w2) = fresh(&s, Mini { seed: 8, broken: false }, &mut rng);
+    let acc2 = Accumulator::from_fresh(&s.relation, &DOMAIN, instance).expect("accumulator");
+    let layout = synthesize(&Pair { seed: 1 }, K, None).expect("layout");
+    let pair = FoldedRelation::from_synthesized(&layout).expect("relation");
+    let pair_plan = Arc::new(DeciderV2Plan::new(pair.clone(), &s.key).expect("plan"));
+    let none: Vec<Vec<Fq>> = Vec::new();
+    let synthesized = synthesize(&Pair { seed: 5 }, K, Some(&none)).expect("witness");
+    let (advice, public) = pair.stage_witness(&synthesized).expect("stage witness");
+    let (instance, w3) = fresh_instance(&pair, &s.key, &DOMAIN, advice, public, &mut rng).expect("fresh");
+    let acc3 = Accumulator::from_fresh(&pair, &DOMAIN, instance).expect("accumulator");
+    let mini_plan = Arc::new(DeciderV2Plan::new(s.relation.clone(), &s.key).expect("plan"));
+    let proved =
+        prove_many(&DOMAIN, &[(&*mini_plan, &acc1, &w1), (&*mini_plan, &acc2, &w2), (&*pair_plan, &acc3, &w3)])
+            .expect("prove");
+    let accs = [(&*mini_plan, &acc1), (&*mini_plan, &acc2), (&*pair_plan, &acc3)];
+    let verified = verify_many(&DOMAIN, &accs, &proved.proof).expect("verify");
+    let committed: usize = accs.iter().map(|(plan, _)| plan.committed.len()).sum();
+    assert!(proved.claims.len() < committed, "the second Mini member shares its key claims");
+    let helpers = helper_digest::<Ep>(&DOMAIN, &proved.proof.helpers);
+    let alpha = Fq::random(&mut rng);
+    let u: Vec<Fq> = (0..s.plan.mu).map(|_| Fq::random(&mut rng)).collect();
+    let value = proved.proof.at_sigma.iter().rev().fold(Fq::ZERO, |acc, v| acc * alpha + v);
+    let folded = pcs_mle::folded_eq(&verified.point, &u).expect("lengths");
+    let public = vec![verified.field_digest, value, folded];
+    let member = |plan: &Arc<DeciderV2Plan<Ep>>, relation: &FoldedRelation<Fq>, acc: &Accumulator<Ep>| FieldMember {
+        plan: Arc::clone(plan),
+        shape: relation.shape(),
+        acc: Some(acc.clone()),
+        copy_terms: None,
+    };
+    let members =
+        vec![member(&mini_plan, &s.relation, &acc1), member(&mini_plan, &s.relation, &acc2), member(&pair_plan, &pair, &acc3)];
+    let satisfied = |proof: &DeciderV2Proof<Ep>, members: &[FieldMember]| {
+        let circuit = FieldDeciderCircuit {
+            members: members.to_vec(),
+            import_terms: false,
+            proof: Some(proof.clone()),
+            helpers: Some(helpers),
+            alpha: Some(alpha),
+            u: Some(u.clone()),
+        };
+        check_circuit(&circuit, 16, &[public.clone()], CheckMode::Strict).expect("synthesis").is_satisfied()
+    };
+    assert!(satisfied(&proved.proof, &members));
+    // A shared key claim's value, read by both Mini members: unsatisfied.
+    let key = mini_plan.committed.iter().find_map(|poly| match *poly {
+        Committed::Key(p) => Some(mini_plan.key_commitments[p]),
+        _ => None,
+    });
+    let shared = proved.claims.iter().position(|claim| Some(claim.commitment) == key).expect("a shared key claim");
+    let mut p = proved.proof.clone();
+    p.at_sigma[shared] += Fq::ONE;
+    assert!(!satisfied(&p, &members));
+    // The members in another order: unsatisfied.
+    let swapped = vec![members[1].clone(), members[0].clone(), members[2].clone()];
+    assert!(!satisfied(&proved.proof, &swapped));
 }
 
 /// The commitment side's decider pieces: the helper digest and the opening

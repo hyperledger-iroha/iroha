@@ -8,19 +8,24 @@
 //! at one point `sigma`, which one batched IPA opening proves:
 //!
 //! 1. *Copies* (a `LogUp` permutation argument): from the accumulator's digest,
-//!    challenges `gamma` and `eta`; for every column with copy cells the prover
-//!    commits `z_j = 1 / (gamma + v + eta id) - 1 / (gamma + v + eta sigma)`.
+//!    challenges `gamma` and `eta`; for every group of two columns with copy
+//!    cells the prover commits one helper
+//!    `z_q = sum_{c in q} (1 / (gamma + v_c + eta id_c) - 1 / (gamma + v_c + eta sigma_c))`.
 //! 2. *Zero-check*: one sumcheck over the `mu` row bits of
-//!    `S = P Phi + sum_g alpha^{1+g} L_g + alpha^{G+1} eq(tau, .) sum_j kappa^j C_j
-//!    + alpha^{G+2} sum_j z_j`, with claimed sum `e - alpha^{G+2} I`. `P` is the
+//!    `S = P Phi + sum_g alpha^{1+g} L_g + alpha^{G+1} eq(tau, .) sum_q kappa^q C_q`
+//!    `+ alpha^{G+2} sum_q z_q`, with claimed sum `e - alpha^{G+2} I`. `P` is the
 //!    `pow` extension of `beta`'s row bits; `Phi` sums the weighted gate,
 //!    reciprocal-cell and table constraints, each gate's guard read from a key
 //!    polynomial of its guard values; `L_g = sum_s a_s h_s - u g` is the `LogUp`
-//!    sum over exactly the constrained cells; `C_j` is the copy row constraint of
-//!    column `j`; `I` sums the public copy terms of instance cells.
+//!    sum over exactly the constrained cells; `C_q` is the row constraint of
+//!    helper `q`, that `z_q prod_c L_c R_c` equals
+//!    `sum_c eta (sigma_c - id_c) prod_{c' != c} L_c' R_c'`; `I` sums the
+//!    public copy terms of instance cells.
 //! 3. *Shift reduction*: the zero-check ends at `rho` with claimed values of every
 //!    committed table at its rotations; one degree-two sumcheck reduces them to
 //!    unshifted values at `sigma` through the weights `shifted_eq(rho, sigma, k)`.
+//!    Key polynomials with at most 16 constant runs are not committed: the
+//!    verifier evaluates them at `rho` as step functions.
 //! 4. *Opening*: every committed polynomial (accumulator witness columns, key
 //!    polynomials, copy helpers) at `sigma`, proved by one batched IPA opening
 //!    (`iroha_plonk::pcs::mle`, [`open`] and [`verify_opening`]) that continues
@@ -30,7 +35,10 @@
 //! [`prove_many`] and [`verify_many`] decide several accumulators of one field
 //! (any relations with the same domain size and commitment key) at once. They
 //! share the copy challenges, one zero-check over `sum_r lambda^r S_r`, one
-//! shift reduction and one opening.
+//! shift reduction and one opening. The batch's claims list every member's
+//! committed polynomials in member order, except that a key polynomial whose
+//! commitment an earlier member already opens shares that claim
+//! ([`batch_claims`]).
 //!
 //! Two transcripts (the DESIGN.md section 9.0 split): the *field transcript*
 //! runs natively over the decider's scalar field ([`FieldTranscript`]) and
@@ -78,7 +86,8 @@ use crate::{
 /// The decider's messages.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeciderV2Proof<C: PastaCurve> {
-    /// One copy helper commitment per column with copy cells.
+    /// One copy helper commitment per group of columns with copy cells
+    /// ([`DeciderV2Plan::helper_count`] per member, in member order).
     pub helpers: Vec<C::AffineExt>,
     /// The zero-check round polynomials at `0, 2, ..., d`.
     pub zero_check: Vec<Vec<C::ScalarExt>>,
@@ -86,8 +95,56 @@ pub struct DeciderV2Proof<C: PastaCurve> {
     pub at_rho: Vec<C::ScalarExt>,
     /// The shift-reduction round polynomials at `0, 2`.
     pub shift: Vec<[C::ScalarExt; 2]>,
-    /// The committed polynomials at `sigma`, in plan order.
+    /// The committed polynomials at `sigma`, in claim order ([`batch_claims`]).
     pub at_sigma: Vec<C::ScalarExt>,
+}
+
+/// The claims of a batch: one per committed polynomial of every member, in
+/// member order and each member's plan order, except that a key polynomial
+/// whose commitment an earlier claim already opens shares that claim.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BatchClaims {
+    /// Per member, the claim of each of its committed polynomials (plan order).
+    pub(crate) of: Vec<Vec<usize>>,
+    /// The claims, as the member and committed index of the polynomial each
+    /// opens.
+    pub(crate) opened: Vec<(usize, usize)>,
+}
+
+/// The claims of a batch of `plans` (in member order).
+pub(crate) fn batch_claims<C: PastaCurve>(plans: &[&DeciderV2Plan<C>]) -> BatchClaims {
+    let mut keys: Vec<(C::AffineExt, usize)> = Vec::new();
+    let mut of = Vec::with_capacity(plans.len());
+    let mut opened = Vec::new();
+    for (member, plan) in plans.iter().enumerate() {
+        let mut claims = Vec::with_capacity(plan.committed.len());
+        for (index, poly) in plan.committed.iter().enumerate() {
+            if let Committed::Key(p) = *poly {
+                let commitment = plan.key_commitments[p];
+                if let Some((_, claim)) = keys.iter().find(|(other, _)| *other == commitment) {
+                    claims.push(*claim);
+                    continue;
+                }
+                keys.push((commitment, opened.len()));
+            }
+            claims.push(opened.len());
+            opened.push((member, index));
+        }
+        of.push(claims);
+    }
+    BatchClaims { of, opened }
+}
+
+/// Each member's first helper in a batch's helper list.
+pub(crate) fn helper_offsets<C: PastaCurve>(plans: &[&DeciderV2Plan<C>]) -> Vec<usize> {
+    plans
+        .iter()
+        .scan(0, |offset, plan| {
+            let first = *offset;
+            *offset += plan.helper_count();
+            Some(first)
+        })
+        .collect()
 }
 
 /// The prover's output: the proof and what the batched opening needs.
@@ -270,32 +327,36 @@ fn batch_shape<'a, C: PastaCurve + 'a>(plans: impl Iterator<Item = &'a DeciderV2
     shape.ok_or(Error::Shape("empty decider batch"))
 }
 
-/// The copy helper columns.
+/// The copy helper columns: per group of columns, the sum of its columns'
+/// copy terms `1 / (gamma + v + eta id) - 1 / (gamma + v + eta sigma)` on
+/// their moved rows.
 fn copy_helpers<C: PastaCurve>(plan: &DeciderV2Plan<C>, witness: &Witness<C::ScalarExt>, gamma: C::ScalarExt, eta: C::ScalarExt) -> Result<Vec<Vec<C::ScalarExt>>, Error> {
     type S<C> = <C as PastaCurve>::ScalarExt;
     let n = plan.relation.n;
-    let mut helpers = Vec::with_capacity(plan.copies.columns.len());
-    for (j, column) in plan.copies.columns.iter().enumerate() {
-        let values = match column {
-            CopyColumn::Witness(c) => &witness.columns[*c],
-            CopyColumn::Fixed(c) => &plan.relation.fixed[*c],
-        };
-        let sigma = &plan.key_polys[plan.copies.sigma[j]];
-        let rows = &plan.copies.rows[j];
-        let mut denominators = Vec::with_capacity(2 * rows.len());
-        for row in rows {
-            let i = *row as usize;
-            let id = S::<C>::from((j * n + i) as u64);
-            denominators.push(gamma + values[i] + eta * id);
-            denominators.push(gamma + values[i] + eta * sigma[i]);
-        }
-        if denominators.iter().any(|d| bool::from(d.is_zero())) {
-            return Err(Error::Shape("copy denominator is zero"));
-        }
-        batch_invert(&mut denominators);
+    let mut helpers = Vec::with_capacity(plan.copies.helpers.len());
+    for members in &plan.copies.helpers {
         let mut helper = vec![S::<C>::ZERO; n];
-        for (k, row) in rows.iter().enumerate() {
-            helper[*row as usize] = denominators[2 * k] - denominators[2 * k + 1];
+        for &j in members {
+            let values = match plan.copies.columns[j] {
+                CopyColumn::Witness(c) => &witness.columns[c],
+                CopyColumn::Fixed(c) => &plan.relation.fixed[c],
+            };
+            let sigma = &plan.key_polys[plan.copies.sigma[j]];
+            let rows = &plan.copies.rows[j];
+            let mut denominators = Vec::with_capacity(2 * rows.len());
+            for row in rows {
+                let i = *row as usize;
+                let id = S::<C>::from((j * n + i) as u64);
+                denominators.push(gamma + values[i] + eta * id);
+                denominators.push(gamma + values[i] + eta * sigma[i]);
+            }
+            if denominators.iter().any(|d| bool::from(d.is_zero())) {
+                return Err(Error::Shape("copy denominator is zero"));
+            }
+            batch_invert(&mut denominators);
+            for (k, row) in rows.iter().enumerate() {
+                helper[*row as usize] += denominators[2 * k] - denominators[2 * k + 1];
+            }
         }
         helpers.push(helper);
     }
@@ -367,7 +428,7 @@ fn lane_tables<C: PastaCurve>(lane: &Lane<'_, C>, tau: &[C::ScalarExt]) -> Vec<V
         .par_iter()
         .map(|source| match *source {
             Source::Witness(c, k) => mle::rotated(&witness.columns[c], k),
-            Source::Key(p, k) => mle::rotated(&plan.key_polys[p], k),
+            Source::Key(p, k) | Source::Steps(p, k) => mle::rotated(&plan.key_polys[p], k),
             Source::Instance(c, k) => {
                 let mut column = acc.instance.public[c].clone();
                 column.resize(n, S::<C>::ZERO);
@@ -548,21 +609,24 @@ pub fn prove_many<C: PastaCurve>(
         sigma.push(challenge);
     }
 
-    // Every lane's committed polynomials at sigma.
-    let mut polys = Vec::new();
-    let mut commitments = Vec::new();
-    let mut blinds = Vec::new();
-    for lane in &lanes {
-        for poly in &lane.plan.committed {
-            polys.push(committed_poly(lane.plan, lane.witness, &lane.helpers, *poly).to_vec());
-            let (commitment, blind) = match *poly {
-                Committed::Witness(c) => (lane.acc.instance.commitments[c], lane.witness.blinds[c]),
-                Committed::Key(p) => (lane.plan.key_commitments[p], S::<C>::ZERO),
-                Committed::Helper(j) => (lane.helper_commitments[j], S::<C>::ZERO),
-            };
-            commitments.push(commitment);
-            blinds.push(blind);
-        }
+    // The batch's claims at sigma: every lane's committed polynomials, each
+    // shared key polynomial once.
+    let plans: Vec<&DeciderV2Plan<C>> = lanes.iter().map(|lane| lane.plan).collect();
+    let batch = batch_claims(&plans);
+    let mut polys = Vec::with_capacity(batch.opened.len());
+    let mut commitments = Vec::with_capacity(batch.opened.len());
+    let mut blinds = Vec::with_capacity(batch.opened.len());
+    for &(member, index) in &batch.opened {
+        let lane = &lanes[member];
+        let poly = lane.plan.committed[index];
+        polys.push(committed_poly(lane.plan, lane.witness, &lane.helpers, poly).to_vec());
+        let (commitment, blind) = match poly {
+            Committed::Witness(c) => (lane.acc.instance.commitments[c], lane.witness.blinds[c]),
+            Committed::Key(p) => (lane.plan.key_commitments[p], S::<C>::ZERO),
+            Committed::Helper(j) => (lane.helper_commitments[j], S::<C>::ZERO),
+        };
+        commitments.push(commitment);
+        blinds.push(blind);
     }
     let at_sigma = polys
         .par_iter()
@@ -613,9 +677,11 @@ pub fn verify_many<C: PastaCurve>(
     for &(plan, acc) in inputs {
         check_accumulator(plan, acc)?;
     }
-    let helper_count: usize = inputs.iter().map(|(plan, _)| plan.copies.columns.len()).sum();
-    let read_count: usize = inputs.iter().map(|(plan, _)| plan.reads.len()).sum();
-    let committed_count: usize = inputs.iter().map(|(plan, _)| plan.committed.len()).sum();
+    let plans: Vec<&DeciderV2Plan<C>> = inputs.iter().map(|input| input.0).collect();
+    let batch = batch_claims(&plans);
+    let helper_count: usize = plans.iter().map(|plan| plan.helper_count()).sum();
+    let read_count: usize = plans.iter().map(|plan| plan.reads.len()).sum();
+    let committed_count = batch.opened.len();
     if proof.helpers.len() != helper_count
         || proof.zero_check.len() != mu
         || proof.zero_check.iter().any(|round| round.len() != m)
@@ -666,6 +732,7 @@ pub fn verify_many<C: PastaCurve>(
                     .iter()
                     .enumerate()
                     .fold(S::<C>::ZERO, |sum, (row, x)| sum + *x * eq_row(&rho, mle::rotate(row, -k, n))),
+                Source::Steps(..) => plan.steps[index].as_ref().expect("a step table has its steps").eval(&rho),
                 Source::Pow => mle::pow(&acc.beta[pb..], &rho),
                 Source::EqTau => mle::eq(&challenges.tau, &rho),
                 Source::Usable => mle::prefix_indicator(relation.usable, &rho),
@@ -705,8 +772,7 @@ pub fn verify_many<C: PastaCurve>(
     let mut expected = S::<C>::ZERO;
     let mut power = S::<C>::ONE;
     let mut by_rotation: Vec<(i32, S<C>)> = Vec::new();
-    let mut committed_offset = 0;
-    for &(plan, _) in inputs {
+    for (plan, claims) in plans.iter().zip(&batch.of) {
         for read in &plan.reads {
             let weight = match by_rotation.iter().position(|(k, _)| *k == read.rotation) {
                 Some(slot) => by_rotation[slot].1,
@@ -716,30 +782,30 @@ pub fn verify_many<C: PastaCurve>(
                     w
                 }
             };
-            expected += power * weight * proof.at_sigma[committed_offset + read.poly];
+            expected += power * weight * proof.at_sigma[claims[read.poly]];
             power *= zeta;
         }
-        committed_offset += plan.committed.len();
     }
     if expected != claim {
         return Err(Error::Rejected("shift reduction"));
     }
     transcript.absorb(&proof.at_sigma);
     let field_digest = transcript.challenge();
-    let mut claims = Vec::with_capacity(committed_count);
-    let (mut committed_offset, mut helper_offset) = (0, 0);
-    for &(plan, acc) in inputs {
-        for (i, poly) in plan.committed.iter().enumerate() {
-            let commitment = match *poly {
+    let offsets = helper_offsets(&plans);
+    let claims = batch
+        .opened
+        .iter()
+        .zip(&proof.at_sigma)
+        .map(|(&(member, index), value)| {
+            let (plan, acc) = inputs[member];
+            let commitment = match plan.committed[index] {
                 Committed::Witness(c) => acc.instance.commitments[c],
                 Committed::Key(p) => plan.key_commitments[p],
-                Committed::Helper(j) => proof.helpers[helper_offset + j],
+                Committed::Helper(j) => proof.helpers[offsets[member] + j],
             };
-            claims.push(MleClaim { commitment, value: proof.at_sigma[committed_offset + i] });
-        }
-        committed_offset += plan.committed.len();
-        helper_offset += plan.copies.columns.len();
-    }
+            MleClaim { commitment, value: *value }
+        })
+        .collect();
     let transcript = opening_transcript::<C>(domain, field_digest);
     Ok(Verified { point: sigma, claims, field_digest, copy_challenges: [gamma, eta], transcript })
 }
