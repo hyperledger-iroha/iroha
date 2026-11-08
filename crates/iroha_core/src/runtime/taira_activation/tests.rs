@@ -32,9 +32,7 @@ use crate::{
         sorafs_bootstrap::tests::{Fixture, account},
         sorafs_provider_admission::test_fixture::key,
     },
-    state::{
-        State, StorageReadOnly as _, world_projection::world_state_accumulator::selection_schema,
-    },
+    state::{State, world_projection::world_state_accumulator::selection_schema},
     sumeragi::test_chain::fixture_keys,
 };
 

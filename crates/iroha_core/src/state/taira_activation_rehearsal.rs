@@ -9,7 +9,6 @@
 //! A reserve account the chain has not registered yet is registered in the same overlay, and the
 //! report says so. A real activation registers it by ordinary transaction before the bootstrap.
 
-use super::*;
 use crate::{
     runtime::{
         change_set::{PublishedDefinitions, activate_due, record_attestation},
