@@ -308,18 +308,24 @@ fn boi_session_selections() -> Value {
             .collect(),
     )
 }
+/// The form of account literal Core binds into its retail token: non-ASCII, unescaped UTF-8.
+const CORE_ACCOUNT_LITERAL: &str = "testuﾛ1PﾀgﾘｷﾇsﾗAﾔsVﾘbﾁLoﾛﾆvﾇﾏﾑｳcfｸﾚxtｸJsﾇZ5ｵJuSV0000";
 fn boi_claims(index: usize) -> Value {
     let bank = boi_registry::BOI_PARTICIPANTS[index];
-    norito::json!({"sub":("owner@example.test"), "dataspace_id":(bank.alias_scope),
+    norito::json!({"sub":("owner@example.test"), "account_id":(CORE_ACCOUNT_LITERAL),
+        "dataspace_id":(bank.alias_scope),
         "roles":["RETAIL_USER"], "iat":(1000), "nbf":(1000), "exp":(2000),
         "iss":(bank.session_issuer), "aud":(bank.session_audience)})
 }
-fn boi_token(claims: &Value, key: &KeyPair) -> Vec<u8> {
+fn boi_token_from_bytes(claims: &[u8], key: &KeyPair) -> Vec<u8> {
     let header = URL_SAFE_NO_PAD.encode(br#"{"typ":"JWT","alg":"EdDSA"}"#);
-    let claims = URL_SAFE_NO_PAD.encode(norito::json::to_json(claims).unwrap().as_bytes());
+    let claims = URL_SAFE_NO_PAD.encode(claims);
     let message = format!("{header}.{claims}");
     let signature = Signature::try_new(key.private_key(), message.as_bytes()).unwrap();
     format!("{message}.{}", URL_SAFE_NO_PAD.encode(signature.payload())).into_bytes()
+}
+fn boi_token(claims: &Value, key: &KeyPair) -> Vec<u8> {
+    boi_token_from_bytes(norito::json::to_json(claims).unwrap().as_bytes(), key)
 }
 
 #[test]
@@ -655,6 +661,66 @@ fn boi_session_refuses_cross_scope_and_supplied_proof_or_root() {
             .enrollment_session(false, [&token, b"", b"foreign root"])
             .is_err()
     );
+}
+
+#[test]
+fn boi_session_accepts_the_bytes_core_signs_for_a_retail_owner() {
+    // Field order and unescaped UTF-8 of Core's `RetailAuthClaims`, as serde_json writes them.
+    let selected = BoiFixture::new().load().unwrap();
+    let index = boi_registry::BOI_PARTICIPANTS
+        .iter()
+        .position(|bank| bank.kagemusha_issuer)
+        .unwrap();
+    let bank = boi_registry::BOI_PARTICIPANTS[index];
+    let claims = format!(
+        r#"{{"sub":"owner-user-id","account_id":"{CORE_ACCOUNT_LITERAL}","dataspace_id":"{}","roles":["RETAIL_USER"],"iat":1794171148,"nbf":1794171148,"exp":1794174748,"iss":"{}","aud":"{}"}}"#,
+        bank.alias_scope, bank.session_issuer, bank.session_audience
+    );
+    let token = boi_token_from_bytes(claims.as_bytes(), &session_key(index as u8));
+    for (android, root) in [(true, b"".as_slice()), (false, SESSION_ROOT)] {
+        let session = selected
+            .enrollment_session(android, [&token, b"", root])
+            .unwrap();
+        assert_eq!(session.config.actor, b"owner-user-id");
+        assert_eq!(session.config.fi, bank.alias_scope.as_bytes());
+        assert_eq!(session.config.session_valid_from_ms, 1_794_171_148_000);
+        assert_eq!(session.config.session_expires_at_ms, 1_794_174_748_000);
+    }
+}
+
+#[test]
+fn boi_session_requires_the_bound_account_and_no_other_claim() {
+    let selected = BoiFixture::new().load().unwrap();
+    let index = boi_registry::BOI_PARTICIPANTS
+        .iter()
+        .position(|bank| bank.kagemusha_issuer)
+        .unwrap();
+    let key = session_key(index as u8);
+    let good = boi_token(&boi_claims(index), &key);
+    assert!(selected.enrollment_session(true, [&good, b"", b""]).is_ok());
+    let mut missing = boi_claims(index);
+    object_mut(&mut missing).remove("account_id");
+    let mut extra = boi_claims(index);
+    object_mut(&mut extra).insert("device_id".into(), Value::String("unknown".into()));
+    let mut cases = vec![missing, extra];
+    for replacement in [
+        Value::String(String::new()),
+        Value::String(" padded ".into()),
+        Value::String("a".repeat(513)),
+        Value::Null,
+        Value::Bool(true),
+    ] {
+        let mut claims = boi_claims(index);
+        mutate(&mut claims, "account_id", replacement);
+        cases.push(claims);
+    }
+    for (case, claims) in cases.iter().enumerate() {
+        let token = boi_token(claims, &key);
+        assert!(
+            selected.enrollment_session(true, [&token, b"", b""]).is_err(),
+            "case {case}"
+        );
+    }
 }
 
 #[test]

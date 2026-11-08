@@ -80,6 +80,7 @@ fn authenticate_one(
         &claims_value,
         &[
             "sub",
+            "account_id",
             "dataspace_id",
             "roles",
             "iat",
@@ -89,6 +90,9 @@ fn authenticate_one(
             "aud",
         ],
     )?;
+    // Core binds the verified native account into every retail token. Core, not this
+    // selection, compares it with the enrollment account, so it only has to be exact text.
+    exact_text(claims, "account_id", 512)?;
     let roles = field(claims, "roles")?.as_array().ok_or(invalid())?;
     if text(claims, "iss")? != selected.issuer
         || text(claims, "aud")? != selected.audience
