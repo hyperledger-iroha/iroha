@@ -8,9 +8,21 @@
 //! The decomposition uses Babai rounding against the short lattice basis
 //! `(b1, b2)` with the precomputed truncation constants `gamma1, gamma2`
 //! (`floor(2^256 * b / r)`), the same constants the vendored
-//! `halo2curves-axiom` uses. The bound `|k_i| < 2^128` follows from
-//! `|b1|, |b2| < 2^127.2`; `decompose` checks it and the tests exercise
-//! it on random and edge scalars.
+//! `halo2curves-axiom` uses. Each coefficient `k * gamma / 2^256` is rounded
+//! to the nearest integer, so it is off from the exact `k * b / r` by at most
+//! `1/2` plus the constants' truncation (under `1/4`, as `k < r < 2^255`).
+//! That bounds `|k1| < 0.87 * 2^127` and `|k2| < 1.3 * 2^127` (exact corner
+//! analysis of both Pasta lattices); `decompose` checks `|k_i| < 2^128` and the
+//! tests exercise the tighter bounds on random and edge scalars.
+//!
+//! Rounding to nearest also recovers short representations: for
+//! `k = a + b * lambda` with `|a|, |b|` far below the lattice minimum (for
+//! example `2^120`), the exact coefficients sit next to integers, rounding
+//! lands on them, and the decomposition returns `(a, b)` itself. Endoscalar
+//! challenges built that way from 64-bit halves therefore fold with 64-bit
+//! wNAF digits instead of 128-bit ones. Flooring the coefficients, as before
+//! 2026-11-08, lost this whenever an exact coefficient fell just below an
+//! integer, which the truncated constants made the usual case.
 #![allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -63,6 +75,21 @@ fn mul_512(a: &[u64; 4], b: &[u64; 4]) -> [u64; 8] {
     out
 }
 
+/// `floor((a * b + 2^255) / 2^256)`: the high half of the 512-bit product,
+/// rounded to the nearest integer.
+fn mul_high_rounded(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
+    let mut product = mul_512(a, b);
+    // Add 2^255, the top bit of limb 3, and carry into the high half.
+    let (limb, mut carry) = product[3].overflowing_add(1 << 63);
+    product[3] = limb;
+    for limb in &mut product[4..] {
+        let (sum, overflow) = limb.overflowing_add(u64::from(carry));
+        *limb = sum;
+        carry = overflow;
+    }
+    [product[4], product[5], product[6], product[7]]
+}
+
 /// Returns `(negative, magnitude)` of a field element read as a signed value
 /// in `(-r/2, r/2]` when its magnitude is below `2^128`.
 fn signed_small<F: PastaField>(v: &F) -> Option<(bool, u128)> {
@@ -83,10 +110,8 @@ fn signed_small<F: PastaField>(v: &F) -> Option<(bool, u128)> {
 /// Pasta constants (tested); callers then fall back to plain double-and-add.
 pub fn decompose<C: GlvParams>(k: &C::ScalarExt) -> Option<GlvDecomposition> {
     let input = k.to_canonical_limbs();
-    let c1 = mul_512(&C::GAMMA2, &input);
-    let c2 = mul_512(&C::GAMMA1, &input);
-    let c1 = [c1[4], c1[5], c1[6], c1[7]];
-    let c2 = [c2[4], c2[5], c2[6], c2[7]];
+    let c1 = mul_high_rounded(&C::GAMMA2, &input);
+    let c2 = mul_high_rounded(&C::GAMMA1, &input);
     let q1 = mul_512(&c1, &C::B1);
     let q2 = mul_512(&c2, &C::B2);
     let q1 = C::ScalarExt::from_raw_reduced([q1[0], q1[1], q1[2], q1[3]]);
@@ -188,7 +213,7 @@ mod tests {
     use ff::{Field, PrimeField};
     use group::Group;
     use rand_chacha::ChaCha20Rng;
-    use rand_core::SeedableRng;
+    use rand_core::{Rng, SeedableRng};
 
     fn check_decomposition<C: PastaCurve>(k: C::ScalarExt) {
         let d = C::glv_decompose(&k).expect("lattice bound");
@@ -197,8 +222,80 @@ mod tests {
         let k1 = if d.k1_neg { -k1 } else { k1 };
         let k2 = if d.k2_neg { -k2 } else { k2 };
         assert_eq!(k1 + k2 * C::ScalarExt::ZETA, k);
-        assert!(d.k1 < (1u128 << 127) + (1u128 << 126));
-        assert!(d.k2 < (1u128 << 127) + (1u128 << 126));
+        // 0.875 * 2^127 and 1.3125 * 2^127 sit above the exact worst cases
+        // (0.866, 1.299) and below the 1.5 * 2^127 that iroha_plonk_gadgets'
+        // offset GLV witness needs.
+        assert!(d.k1 < 7u128 << 124, "{d:?}");
+        assert!(
+            d.k2 < (1u128 << 127) + (1u128 << 125) + (1u128 << 123),
+            "{d:?}"
+        );
+    }
+
+    /// `a + b * ZETA` with `|a|, |b|` far below the lattice minimum decomposes
+    /// to `(a, b)` itself, so endoscalar challenges keep their short halves.
+    fn recovers_short<C: PastaCurve>(seed: u64) {
+        let mut rng = ChaCha20Rng::seed_from_u64(seed);
+        let mut halves = vec![
+            (0u128, false, 0u128, false),
+            (1, false, 0, false),
+            (0, false, 1, true),
+        ];
+        for bits in [1u32, 32, 64, 65, 100, 120] {
+            for _ in 0..200 {
+                let mask = (1u128 << bits) - 1;
+                let a = (u128::from(rng.next_u64()) | (u128::from(rng.next_u64()) << 64)) & mask;
+                let b = (u128::from(rng.next_u64()) | (u128::from(rng.next_u64()) << 64)) & mask;
+                let signs = rng.next_u64();
+                halves.push((a, signs & 1 == 1 && a != 0, b, signs & 2 == 2 && b != 0));
+            }
+        }
+        for (a, a_neg, b, b_neg) in halves {
+            let signed = |magnitude: u128, negative: bool| {
+                let v = C::ScalarExt::from_u128(magnitude);
+                if negative { -v } else { v }
+            };
+            let k = signed(a, a_neg) + signed(b, b_neg) * C::ScalarExt::ZETA;
+            let expected = GlvDecomposition {
+                k1: a,
+                k1_neg: a_neg,
+                k2: b,
+                k2_neg: b_neg,
+            };
+            assert_eq!(C::glv_decompose(&k), Some(expected));
+        }
+    }
+
+    #[test]
+    fn decomposition_recovers_short_representations() {
+        recovers_short::<Ep>(11);
+        recovers_short::<Eq>(12);
+    }
+
+    #[test]
+    fn mul_high_rounded_rounds_half_up() {
+        // 2^255 * 1 rounds to 1; 2^255 - 1 rounds to 0; 3 * 2^255 rounds to 2.
+        assert_eq!(
+            mul_high_rounded(&[0, 0, 0, 1 << 63], &[1, 0, 0, 0]),
+            [1, 0, 0, 0]
+        );
+        assert_eq!(
+            mul_high_rounded(
+                &[u64::MAX, u64::MAX, u64::MAX, (1 << 63) - 1],
+                &[1, 0, 0, 0]
+            ),
+            [0, 0, 0, 0]
+        );
+        assert_eq!(
+            mul_high_rounded(&[0, 0, 0, 1 << 63], &[3, 0, 0, 0]),
+            [2, 0, 0, 0]
+        );
+        // 2^255 * (2^192 - 1) + 2^255 = 2^447: the rounding carry runs through
+        // two all-ones high limbs.
+        assert_eq!(
+            mul_high_rounded(&[0, 0, 0, 1 << 63], &[u64::MAX, u64::MAX, u64::MAX, 0]),
+            [0, 0, 1 << 63, 0]
+        );
     }
 
     #[test]
