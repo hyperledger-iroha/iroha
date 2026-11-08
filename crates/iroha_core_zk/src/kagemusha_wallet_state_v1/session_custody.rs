@@ -136,8 +136,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, N: NativeProofs>
                     nonce,
                     sent,
                     maximum_response_ms: step
-                        .frozen
-                        .capsule
+                        .capsule()
                         .body()
                         .successor_state
                         .core
@@ -170,7 +169,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, N: NativeProofs>
             anchor,
             certificate,
             &scheme,
-            &step.frozen.capsule.body().successor_state,
+            &step.capsule().body().successor_state,
             received,
         )?;
         let anchors = retain_anchor(&mut self.archive, manifest.direct_anchors, &anchored)?;

@@ -71,13 +71,13 @@ impl RetentionKeyV1 {
         custody: &FoldCustodyV1<'_>,
     ) -> Result<Self, Error> {
         let verifier = worker.installed.verifier();
-        let body = step.frozen.capsule.body();
+        let body = step.capsule().body();
         Ok(Self {
             installation: (verifier.scheme().scheme_id(), verifier.manifest_digest()),
             wallet: body.wallet_id,
             route,
             sequence: body.statement.sequence,
-            capsule: step.frozen.capsule.custody_digest(),
+            capsule: step.capsule().custody_digest(),
             predecessor: predecessor
                 .map(KagemushaWalletFoldRecordV1::fold_digest)
                 .transpose()

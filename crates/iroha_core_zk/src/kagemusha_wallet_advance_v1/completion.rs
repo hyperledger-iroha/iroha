@@ -26,6 +26,7 @@ use super::{
         kagemusha_wallet_settle_pair_v1, pair_write_published, read_pair, read_pair_states,
         write_pair,
     },
+    decode_resource::read_model,
     layout::{
         KagemushaWalletCompletionNameV1, KagemushaWalletCopyV1, KagemushaWalletEntryNameV1,
         KagemushaWalletSlotIdV1, kagemusha_wallet_completion_dir_v1,
@@ -257,11 +258,8 @@ where
         });
     }
     // Exactly what `kagemusha_wallet_load_completion_v1` will accept, checked before writing.
-    let frame = record
-        .encode_frame()
-        .map_err(|_| KagemushaWalletProviderErrorV1::Invalid { field: R::OBJECT })?;
-    let decoded = R::decode_frame(&frame, binding)
-        .map_err(|_| KagemushaWalletProviderErrorV1::Invalid { field: R::OBJECT })?;
+    let frame = read_model(|| record.encode_frame(), R::OBJECT)?;
+    let decoded = read_model(|| R::decode_frame(&frame, binding), R::OBJECT)?;
     if decoded.operation_id() != operation_id || decoded.capsule_digest() != capsule_digest {
         return Err(KagemushaWalletProviderErrorV1::Invalid {
             field: "completion.binding",

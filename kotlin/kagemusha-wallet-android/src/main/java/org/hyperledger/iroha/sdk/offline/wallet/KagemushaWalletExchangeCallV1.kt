@@ -11,6 +11,62 @@ class KagemushaWalletExchangeCallV1 internal constructor(
     private val exchange: KagemushaWalletExchangeV1,
     private val task: KagemushaWalletExchangeTaskV1,
 ) : Closeable {
+    /** One bounded native verification turn. No approval or debit occurs during preparation. */
+    fun prepareSuffixUnload(request: KagemushaWalletSuffixUnloadRequestV1): KagemushaWalletSuffixUnloadDecisionV1 = task.useCall {
+        suffixDecision(request.requestId()) { value -> KagemushaWalletNativeCallsV1.suffixUnloadPrepare(value, exchange.token, request) }
+    }
+    /** Continue the same retained request. An interrupted debit never becomes a fresh approval. */
+    fun resumeSuffixUnload(requestId: ByteArray): KagemushaWalletSuffixUnloadDecisionV1 {
+        val identity = suffixRequestIdentity(requestId)
+        return task.useCall { suffixDecision(identity, allowAbsent = true) { value -> KagemushaWalletNativeCallsV1.suffixUnloadResume(value, exchange.token, identity) } }
+    }
+    /** Consume only the exact issued review after hardware confirmation and certified Begin. */
+    fun executeReviewedSuffixUnload(review: KagemushaWalletSuffixUnloadReviewV1): KagemushaWalletSuffixUnloadExecutionV1 = task.useCall {
+        val value = handle()
+        val token = review.consume(exchange)
+        KagemushaWalletReviewExecutionCleanupV1.run(execute = {
+            suffixReply { KagemushaWalletNativeCallsV1.executeReviewedSuffixUnload(value, exchange.token, token) }
+                .execution(exchange, review, token)
+        }, discard = { KagemushaWalletNativeCallsV1.discardReview(value, exchange.token, token) }, close = wallet::close)
+    }
+    private fun suffixDecision(requestId: ByteArray, allowAbsent: Boolean = false,
+        call: (Long) -> KagemushaWalletSuffixUnloadReplyV1?): KagemushaWalletSuffixUnloadDecisionV1 {
+        val value = handle()
+        var reply: KagemushaWalletSuffixUnloadReplyV1? = null
+        try {
+            reply = suffixReply { call(value) }
+            return reply.decision(exchange, requestId, allowAbsent)
+        } catch (failure: Throwable) {
+            if (failure !is KagemushaWalletExceptionV1 || failure.status == KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT) {
+                try {
+                    val token = reply?.cleanupToken()
+                    if (token == null) wallet.close()
+                    else when (val status = KagemushaWalletNativeCallsV1.discardReview(value, exchange.token, token)) {
+                        0, -1, -2 -> Unit
+                        else -> throw KagemushaWalletExceptionV1(status)
+                    }
+                } catch (cleanup: Throwable) {
+                    if (cleanup !== failure) failure.addSuppressed(cleanup)
+                    try { wallet.close() } catch (retirement: Throwable) {
+                        if (retirement !== failure) failure.addSuppressed(retirement)
+                    }
+                }
+            }
+            throw failure
+        }
+    }
+    private fun ingestSuffixFinalityAccepted(attempt: KagemushaWalletLedgerAttemptV1.SuffixUnloadStage,
+        finality: ByteArray): KagemushaWalletLedgerIngestV1 {
+        require(finality.size in 1..1_327_104) { "ledger finality original bound" }
+        val original = finality.copyOf()
+        val reply = suffixReply { KagemushaWalletNativeCallsV1.suffixUnloadIngestFinality(handle(), exchange.token,
+            attempt.requestId(), attempt.ordinal, attempt.signedWire(), original) }
+        return if (reply.status == 68) KagemushaWalletLedgerIngestV1.EpochRequired(reply.sequenceLow)
+        else KagemushaWalletLedgerIngestV1.Outcome(reply.ledgerOutcome().also {
+            requireSuffix(it !is KagemushaWalletLedgerOutcomeV1.Awaiting)
+        })
+    }
+
     private fun handle(): Long = wallet.exchangeHandle()
     private fun setup(input: KagemushaWalletSetupInputV1) = wallet.setup(input, exchange.token)
     private fun deletionSetup(input: KagemushaWalletSetupInputV1) = wallet.deletionSetup(input, exchange.token)
@@ -99,10 +155,12 @@ class KagemushaWalletExchangeCallV1 internal constructor(
     private fun ledgerAttemptOutcome(attempt: KagemushaWalletLedgerAttemptV1): KagemushaWalletLedgerOutcomeV1 = when (attempt) {
         is KagemushaWalletLedgerAttemptV1.Activation -> wallet.activationAttemptOutcome(attempt.signedWire())
         is KagemushaWalletLedgerAttemptV1.Unload -> wallet.unloadAttemptOutcome(attempt.claim(), attempt.signedWire())
+        is KagemushaWalletLedgerAttemptV1.SuffixUnloadStage -> wallet.suffixUnloadAttemptOutcome(attempt.requestId(), attempt.ordinal, attempt.signedWire())
     }
     private fun ingestLedgerAttemptAccepted(attempt: KagemushaWalletLedgerAttemptV1, finality: ByteArray): KagemushaWalletLedgerIngestV1 = when (attempt) {
         is KagemushaWalletLedgerAttemptV1.Activation -> ingestActivationFinalityAccepted(attempt.signedWire(), finality)
         is KagemushaWalletLedgerAttemptV1.Unload -> ingestUnloadFinalityAccepted(attempt.claim(), attempt.signedWire(), finality)
+        is KagemushaWalletLedgerAttemptV1.SuffixUnloadStage -> ingestSuffixFinalityAccepted(attempt, finality)
     }
 
     /** Exact retained Activate frame for ledger submission; this is not activation confirmation. */

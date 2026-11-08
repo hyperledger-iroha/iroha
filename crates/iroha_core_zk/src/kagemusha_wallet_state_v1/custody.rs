@@ -5,6 +5,12 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use iroha_data_model::kagemusha::*;
 
+mod native_frames;
+pub use native_frames::{NativeCapsuleV1, NativeCompletionV1, NativeProviderV1};
+mod suffix_owner;
+pub(super) use suffix_owner::SuffixTransitionOwnerV1;
+use suffix_owner::NativeTransitionOwnerV1;
+mod suffix_recovery;
 mod deletion;
 pub use deletion::{CustodyDeletionProgressV1, CustodyDeletionReviewV1, ReviewedCustodyDeletionV1};
 
@@ -60,6 +66,25 @@ pub trait Custody {
         &mut self,
         operation_id: &[u8; 32],
     ) -> Result<Lookup<KagemushaWalletCompletionRecordV1>, ProviderError>;
+    /// Read either exact declared completion schema without converting its bytes.
+    /// Test providers retaining ordinary frames inherit the ordinary mapping.
+    fn lookup_any(
+        &mut self,
+        operation_id: &[u8; 32],
+    ) -> Result<Lookup<NativeCompletionV1>, ProviderError> {
+        native_frames::map_lookup(self.lookup(operation_id)?, |value| Ok(NativeCompletionV1::Ordinary(value)))
+    }
+    /// Recover only an exact provider-selected suffix transition; never select a new head.
+    /// Ordinary-only custody test providers reject this unsupported schema.
+    /// # Errors
+    /// Wrong schema/selected identity, unavailable protected storage, or uncertain write.
+    fn resume_suffix_selected(
+        &mut self,
+        _frozen: &super::SuffixFrozenTransitionV1,
+    ) -> Result<AdvanceOutcome<iroha_data_model::kagemusha::kagemusha_wallet_suffix_unload_v1::SuffixCompletionRecordV1>, super::Error> {
+        Err(super::Error::Invalid("custody does not own selected suffix recovery"))
+    }
+
     /// Remove exactly one older capsule's redundant copies after durable owner collection intent.
     /// # Errors
     /// Current-head attempts, uncertain storage or an unavailable protected-data bracket.
@@ -93,7 +118,7 @@ pub trait Custody {
 
 /// Owns the exclusive native provider handle and binds calls to one enrolled slot.
 pub struct AdvanceHandle<F: KagemushaWalletFsV1, P> {
-    provider: Arc<Mutex<KagemushaWalletProviderV1<F, P>>>,
+    provider: Arc<Mutex<NativeProviderV1<F, P>>>,
     slot: KagemushaWalletSlotIdV1,
     deletion_owner: Arc<()>,
     deletion: deletion::DeletionState,
@@ -102,7 +127,8 @@ pub struct AdvanceHandle<F: KagemushaWalletFsV1, P> {
 impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdvanceHandle<F, P> {
     /// Move the exclusive provider into the shared coordinator's slot adapter.
     #[must_use]
-    pub fn new(provider: KagemushaWalletProviderV1<F, P>, slot: KagemushaWalletSlotIdV1) -> Self {
+    pub fn new<C, R>(provider: KagemushaWalletProviderV1<F, P, C, R>, slot: KagemushaWalletSlotIdV1) -> Self {
+        let provider: NativeProviderV1<F, P> = provider.into_frame_types();
         Self {
             provider: Arc::new(Mutex::new(provider)),
             slot,
@@ -110,7 +136,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdvanceHandle<F, P> {
             deletion: deletion::DeletionState::Open,
         }
     }
-    pub(super) fn try_into_provider(self) -> Result<KagemushaWalletProviderV1<F, P>, Self> {
+    pub(super) fn try_into_provider(self) -> Result<NativeProviderV1<F, P>, Self> {
         let Self {
             provider,
             slot,
@@ -125,7 +151,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdvanceHandle<F, P> {
         })
     }
 
-    fn lock(&self) -> Result<MutexGuard<'_, KagemushaWalletProviderV1<F, P>>, ProviderError> {
+    fn lock(&self) -> Result<MutexGuard<'_, NativeProviderV1<F, P>>, ProviderError> {
         self.require_custody_operations()?;
         let mut provider = self.provider.lock().map_err(|_| ProviderError::Invalid {
             field: "provider handle poisoned",
@@ -200,7 +226,7 @@ fn take_exclusive<T>(shared: Arc<Mutex<T>>) -> Result<T, Arc<Mutex<T>>> {
 /// Private clock capability sharing the actual exclusive provider lifetime.
 /// It grants no payment-key, storage or Advance access.
 pub struct NativeObservationsV1<F: KagemushaWalletFsV1, P> {
-    provider: Arc<Mutex<KagemushaWalletProviderV1<F, P>>>,
+    provider: Arc<Mutex<NativeProviderV1<F, P>>>,
 }
 
 impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> NativeObservationsV1<F, P> {
@@ -250,7 +276,16 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> Custody for AdvanceHa
         &mut self,
         operation_id: &[u8; 32],
     ) -> Result<Lookup<KagemushaWalletCompletionRecordV1>, ProviderError> {
+        native_frames::map_lookup(self.lock()?.lookup(&self.slot, operation_id)?, NativeCompletionV1::into_ordinary)
+    }
+    fn lookup_any(&mut self, operation_id: &[u8; 32]) -> Result<Lookup<NativeCompletionV1>, ProviderError> {
         self.lock()?.lookup(&self.slot, operation_id)
+    }
+    fn resume_suffix_selected(
+        &mut self,
+        frozen: &super::SuffixFrozenTransitionV1,
+    ) -> Result<AdvanceOutcome<iroha_data_model::kagemusha::kagemusha_wallet_suffix_unload_v1::SuffixCompletionRecordV1>, super::Error> {
+        self.recover_selected_suffix(frozen)
     }
     fn collect_capsule(
         &mut self,
@@ -272,7 +307,16 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> Custody for AdvanceHa
         owner: &TransitionOwner,
         request: &AdvanceRequest<KagemushaWalletRecoveryCapsuleV1>,
     ) -> Result<AdvanceOutcome<KagemushaWalletCompletionRecordV1>, ProviderError> {
-        self.lock()?.advance(&self.slot, owner, request)
+        let request = AdvanceRequest {
+            expected: request.expected,
+            operation_id: request.operation_id,
+            new_head: request.new_head,
+            proof_digest: request.proof_digest,
+            capsule: NativeCapsuleV1::Ordinary(request.capsule.clone()),
+            growth_bytes: request.growth_bytes,
+        };
+        let outcome = self.lock()?.advance(&self.slot, &NativeTransitionOwnerV1::Ordinary(owner), &request)?;
+        native_frames::map_outcome(outcome, NativeCompletionV1::into_ordinary)
     }
 }
 
@@ -452,14 +496,14 @@ impl
 /// redundant copy that passes every check and are kept, authenticated, for the rest of the
 /// phase; every other key reads and compares both copies.
 pub struct ProviderArchive<F: KagemushaWalletFsV1, P> {
-    provider: Arc<Mutex<KagemushaWalletProviderV1<F, P>>>,
+    provider: Arc<Mutex<NativeProviderV1<F, P>>>,
     slot: KagemushaWalletSlotIdV1,
     scheme_id: [u8; 32],
     wallet_id: [u8; 32],
 }
 
 impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> ProviderArchive<F, P> {
-    fn lock(&self) -> Result<MutexGuard<'_, KagemushaWalletProviderV1<F, P>>, super::Error> {
+    fn lock(&self) -> Result<MutexGuard<'_, NativeProviderV1<F, P>>, super::Error> {
         self.provider
             .lock()
             .map_err(|_| super::Error::Invalid("provider handle poisoned"))

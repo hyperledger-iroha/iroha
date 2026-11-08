@@ -305,8 +305,7 @@ pub(super) fn receive(
         Some(cancellation.prover_token()),
     )?;
     let burned = verdict.burns();
-    let KagemushaWalletEffectV1::Receive { amount, .. } =
-        step.frozen.capsule.body().statement.effect
+    let KagemushaWalletEffectV1::Receive { amount, .. } = step.capsule().body().statement.effect
     else {
         return Err(Error::Proof("Receive amount"));
     };
@@ -358,8 +357,7 @@ pub(super) fn receive(
 
 fn retained(step: &ReleasedStep, role: KagemushaWalletRetainedInputRoleV1) -> Result<&[u8], Error> {
     let mut found = step
-        .frozen
-        .capsule
+        .capsule()
         .body()
         .retained_inputs
         .iter()
@@ -544,7 +542,7 @@ pub(super) fn archive(
         )
     };
     let KagemushaWalletEffectV1::ArchiveSent { credit_id, .. } =
-        step.frozen.capsule.body().statement.effect
+        step.capsule().body().statement.effect
     else {
         return Err(Error::Proof("Archive credit"));
     };

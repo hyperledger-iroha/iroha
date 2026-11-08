@@ -3,6 +3,7 @@
 use super::carrier::*;
 use super::prekey::PreKeyDispatchV1;
 use crate::kagemusha_wallet_advance_v1::*;
+use crate::kagemusha_wallet_state_v1::NativeProviderV1;
 use iroha_crypto::{Algorithm, Signature};
 use iroha_data_model::{account::AccountId, kagemusha::*};
 mod apple_collection;
@@ -136,7 +137,7 @@ pub enum RequestPreparationV1 {
 
 /// The sole provider owner for enrollment; construction is a trusted native startup operation.
 pub struct EnrollmentOwnerV1<F: KagemushaWalletFsV1, P> {
-    provider: KagemushaWalletProviderV1<F, P>,
+    provider: NativeProviderV1<F, P>,
     config: EnrollmentConfigV1,
     pending: Option<prekey_owner::Pending>,
     selected: Option<(Scope, KagemushaWalletSlotIdV1)>,
@@ -157,9 +158,9 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
         reason = "return the exact original custody owner on refusal without allocating a replacement"
     )]
     pub fn new(
-        provider: KagemushaWalletProviderV1<F, P>,
+        provider: NativeProviderV1<F, P>,
         config: EnrollmentConfigV1,
-    ) -> Result<Self, (KagemushaWalletProviderV1<F, P>, Error)> {
+    ) -> Result<Self, (NativeProviderV1<F, P>, Error)> {
         let checked = (|| {
             original(config.scheme.validate())?;
             config.verify_prekey()?;
@@ -203,13 +204,13 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
     }
     /// Test-only access to the actual provider while this enrollment keeps its selection.
     #[cfg(test)]
-    pub(crate) fn test_provider(&mut self) -> &mut KagemushaWalletProviderV1<F, P> {
+    pub(crate) fn test_provider(&mut self) -> &mut NativeProviderV1<F, P> {
         &mut self.provider
     }
 
     /// Release this opaque enrollment owner to the native artifact loader/open path.
     /// No account admission or Bootstrap authority transfers with this method.
-    pub fn into_provider(self) -> KagemushaWalletProviderV1<F, P> {
+    pub fn into_provider(self) -> NativeProviderV1<F, P> {
         self.provider
     }
 
@@ -262,9 +263,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> EnrollmentOwnerV1<F, 
     )]
     pub fn try_handoff<T, E>(
         self,
-        load: impl FnOnce(
-            KagemushaWalletProviderV1<F, P>,
-        ) -> Result<T, (KagemushaWalletProviderV1<F, P>, E)>,
+        load: impl FnOnce(NativeProviderV1<F, P>) -> Result<T, (NativeProviderV1<F, P>, E)>,
     ) -> Result<T, (Self, E)> {
         let Self {
             provider,

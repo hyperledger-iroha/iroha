@@ -488,7 +488,7 @@ fn current_archive_key_frames_and_provider_identities_are_fixed() {
 fn provider_reopens_records_at_current_object_and_capsule_identities() {
     use crate::kagemusha_wallet_advance_v1::{
         KagemushaWalletAnchorPolicyV1 as Policy, KagemushaWalletProviderOptionsV1,
-        KagemushaWalletProviderV1, test_support::bootstrapped_provider,
+        test_support::bootstrapped_provider,
     };
     use crate::kagemusha_wallet_state_v1::{AdvanceHandle, Custody};
 
@@ -536,7 +536,7 @@ fn provider_reopens_records_at_current_object_and_capsule_identities() {
         }
         drop(provider);
         fs.power_loss(PowerLoss::DropUnsynced);
-        let provider = KagemushaWalletProviderV1::open(
+        let provider = crate::kagemusha_wallet_state_v1::NativeProviderV1::open(
             fs,
             platform,
             scheme_id,

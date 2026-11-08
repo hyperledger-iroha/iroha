@@ -19,7 +19,9 @@ use iroha_data_model::kagemusha::{
 };
 
 use super::{
-    KagemushaWalletProviderErrorV1, decode_envelope_v1, encode_envelope_v1,
+    KagemushaWalletProviderErrorV1,
+    decode_resource::{completed, read_canonical, read_model},
+    encode_envelope_v1,
     layout::{
         KagemushaWalletCapsuleNameV1, KagemushaWalletCopyV1, KagemushaWalletCustodyDirV1,
         KagemushaWalletEntryNameV1, KagemushaWalletSlotIdV1, kagemusha_wallet_capsule_name_v1,
@@ -297,19 +299,25 @@ where
                 continue;
             }
         };
-        let decoded = decode_envelope_v1::<KagemushaWalletFrozenFileV1>(&bytes, file_max::<T>())
-            .ok()
-            .filter(|file| {
-                file.version == KAGEMUSHA_WALLET_FROZEN_FILE_VERSION_V1
-                    && file.selected_generation == selected_generation
-                    && file.frame.len() <= T::MAX_FRAME_BYTES
-            })
-            .and_then(|file| {
-                let digest = T::frame_digest(&file.frame);
-                let value = T::decode_frame(&file.frame, binding).ok()?;
-                accept(&value, &digest).then_some((value, file, digest))
-            });
-        let Some((value, file, digest)) = decoded else {
+        let file = completed(read_canonical::<KagemushaWalletFrozenFileV1>(
+            &bytes,
+            file_max::<T>(),
+        ))?
+        .filter(|file| {
+            file.version == KAGEMUSHA_WALLET_FROZEN_FILE_VERSION_V1
+                && file.selected_generation == selected_generation
+                && file.frame.len() <= T::MAX_FRAME_BYTES
+        });
+        let Some(file) = file else {
+            states[index] = KagemushaWalletCopyStateV1::Invalid;
+            continue;
+        };
+        let digest = T::frame_digest(&file.frame);
+        let value = completed(read_model(
+            || T::decode_frame(&file.frame, binding),
+            T::OBJECT,
+        ))?;
+        let Some(value) = value.filter(|value| accept(value, &digest)) else {
             states[index] = KagemushaWalletCopyStateV1::Invalid;
             continue;
         };

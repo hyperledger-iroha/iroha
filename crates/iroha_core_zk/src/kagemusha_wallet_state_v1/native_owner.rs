@@ -10,6 +10,10 @@ mod ledger;
 mod ledger_outcome;
 mod ledger_producer;
 mod unload;
+mod suffix;
+mod suffix_ledger;
+pub use suffix::{ProvedSuffixPreparationV1, SuffixPreparationJobV1, SuffixPreparationCancellationV1, SuffixUnloadRequestV1, SuffixNotApplicableV1, SuffixUnloadDecisionV1, SuffixUnloadExecutionV1, ReviewedSuffixUnloadV1, ReviewedSuffixFailureV1};
+pub use suffix_ledger::{SuffixStageOutcomeV1, SuffixStageIngestV1, SUFFIX_INSTRUCTION_MAX_BYTES_V1, SUFFIX_SIGNED_WIRE_MAX_BYTES_V1};
 pub use ledger::{LEDGER_PROOF_MAX_BYTES_V1, LedgerProgressV1, PAYOUT_RECORD_MAX_BYTES_V1};
 pub use ledger_outcome::{LedgerAttemptIngestV1, LedgerAttemptOutcomeV1, LedgerCommitV1};
 pub use ledger_producer::{LEDGER_INSTRUCTION_MAX_BYTES_V1, NativePreparedLedgerLoadV1};
@@ -54,6 +58,8 @@ pub struct NativeWalletProofsV1<F: KagemushaWalletFsV1, P, S> {
     installed: Arc<InstalledVerifierPackV1>,
     sources: Arc<QualifiedWalletSourcesV1>,
     originals: Mutex<S>,
+    suffix_pass: Option<suffix::LiveSuffixPass>,
+    suffix_serial: u64,
     observations: NativeObservationsV1<F, P>,
     worker: NativeFoldWorkerV1,
     read: ReadConfig,
@@ -156,6 +162,8 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdmittedWalletV1<F, P
             installed,
             sources,
             originals: Mutex::new(originals),
+            suffix_pass: None,
+            suffix_serial: 0,
             observations: handle.observations(),
             worker,
             read,
@@ -275,7 +283,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         Ok(NativePreparedOperationV1::new(
             prepared,
             bytes,
-            source.released().frozen.capsule.custody_digest(),
+            source.released().capsule().custody_digest(),
             self.installed.verifier().manifest_digest(),
         ))
     }
@@ -290,11 +298,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     ) -> Result<PreparedOperationV1, Error> {
         let manifest = self.installed.verifier().manifest_digest();
         NativeChoicesV1::decode(plan, manifest, request, source)?;
-        prepared.redeem(
-            plan,
-            source.released().frozen.capsule.custody_digest(),
-            manifest,
-        )
+        prepared.redeem(plan, source.released().capsule().custody_digest(), manifest)
     }
 
     // The sole original store is lent to this proof's import only.

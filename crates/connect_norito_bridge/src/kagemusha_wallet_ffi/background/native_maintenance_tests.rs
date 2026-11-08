@@ -327,8 +327,8 @@ impl HostPlatform {
         &self,
         device: &Path,
         scheme: [u8; 32],
-    ) -> KagemushaWalletProviderV1<KagemushaWalletStdFsV1, Self> {
-        KagemushaWalletProviderV1::open(
+    ) -> state::NativeProviderV1<KagemushaWalletStdFsV1, Self> {
+        state::NativeProviderV1::open(
             KagemushaWalletStdFsV1::open(device.join("custody")).unwrap(),
             self.clone(),
             scheme,

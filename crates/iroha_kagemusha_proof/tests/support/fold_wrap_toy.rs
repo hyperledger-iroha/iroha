@@ -487,9 +487,9 @@ pub fn toy() -> &'static Toy {
         println!(
             "keygen S, R, P and Omega: {:.1?}; S has {} public rows, R {}, P {}",
             now.elapsed(),
-            keys.s_plan.layout.rows(),
-            keys.r_plan.layout.rows(),
-            keys.p_plan.layout.rows()
+            keys.plans.s_plan.layout.rows(),
+            keys.plans.r_plan.layout.rows(),
+            keys.plans.p_plan.layout.rows()
         );
         Toy { relations, keys }
     })
@@ -692,7 +692,7 @@ fn with_r_row_changed(keys: &native::WrapKeys, stage: &native::PStage, row: usiz
         fold: copy_fold(&original.fold),
     };
     PCircuit {
-        plan: Arc::clone(&keys.p_plan),
+        plan: Arc::clone(&keys.plans.p_plan),
         witness: Some(Arc::new(witness)),
     }
 }
@@ -703,7 +703,7 @@ fn with_s_row_changed(keys: &native::WrapKeys, stage: &native::RStage, row: usiz
     let mut witness = (*stage.r_witness).clone();
     witness.s_public[row] += Fp::ONE;
     RCircuit {
-        plan: Arc::clone(&keys.r_plan),
+        plan: Arc::clone(&keys.plans.r_plan),
         witness: Some(Arc::new(witness)),
     }
 }
@@ -724,21 +724,21 @@ pub fn wrap(
     seed: u64,
     mutate: bool,
 ) -> [VerifierUsage; 4] {
-    let spec = &keys.p_plan.spec;
+    let spec = &keys.plans.p_plan.spec;
     let config = FoldConfig::default();
     let _ = diagnostic_take_usage();
     let now = Instant::now();
-    let prepared = native::prepare(keys, chain, tapes(seed), &config).expect("native wraps");
+    let prepared = native::prepare(&keys.plans, chain, tapes(seed), &config).expect("native wraps");
     println!(
         "native deciders, folds and restructurings: {:.1?}",
         now.elapsed()
     );
     // S.
-    let s = native::s_circuit(keys, &prepared);
+    let s = native::s_circuit(&keys.plans, &prepared);
     let report = check_circuit(&s, K, &[prepared.s_public.clone()], CheckMode::Strict).expect("S");
     let s_rows = take_rows("S").expect("S rows");
     assert!(report.is_satisfied(), "S: {:?}", report.failures().first());
-    let s_layout = &keys.s_plan.layout;
+    let s_layout = &keys.plans.s_plan.layout;
     let s_parsed = s_layout.parse(&prepared.s_public).expect("layout");
     let s_row_of = |value: &Fp| {
         prepared
@@ -766,17 +766,17 @@ pub fn wrap(
         }
     }
     let now = Instant::now();
-    let (s_proof, s_opening) = native::prove_s(keys, &prepared).expect("S proof");
+    let (s_proof, s_opening) = native::prove_s(&keys.plans, &keys.s_key, &prepared).expect("S proof");
     println!("S proof ({} bytes): {:.1?}", s_proof.len(), now.elapsed());
-    let stage = native::r_stage(keys, prepared, s_proof, &s_opening).expect("R stage");
+    let stage = native::r_stage(&keys.plans, prepared, s_proof, &s_opening).expect("R stage");
     // R (S's proving recorded S's rows again).
     let _ = diagnostic_take_usage();
-    let r = native::r_circuit(keys, &stage);
+    let r = native::r_circuit(&keys.plans, &stage);
     let report = check_circuit(&r, K, &[stage.r_public.clone()], CheckMode::Strict).expect("R");
     let r_rows = take_rows("R").expect("R rows");
     assert!(report.is_satisfied(), "R: {:?}", report.failures().first());
     if mutate {
-        let layout = &keys.r_plan.layout;
+        let layout = &keys.plans.r_plan.layout;
         let parsed = layout.parse(&stage.r_public).expect("layout");
         let row_of = |value: &Fq| stage.r_public.iter().position(|v| v == value).expect("row");
         for (label, row) in [
@@ -807,17 +807,17 @@ pub fn wrap(
         }
     }
     let now = Instant::now();
-    let (r_proof, r_opening) = native::prove_r(keys, &stage).expect("R proof");
+    let (r_proof, r_opening) = native::prove_r(&keys.plans, &keys.r_key, &stage).expect("R proof");
     println!("R proof ({} bytes): {:.1?}", r_proof.len(), now.elapsed());
-    let stage = native::p_stage(keys, stage, r_proof, &r_opening, &config).expect("P stage");
+    let stage = native::p_stage(&keys.plans, stage, r_proof, &r_opening, &config).expect("P stage");
     // P (R's proving recorded R's rows again).
     let _ = diagnostic_take_usage();
-    let p = native::p_circuit(keys, &stage);
+    let p = native::p_circuit(&keys.plans, &stage);
     let report = check_circuit(&p, K, &[stage.p_public.clone()], CheckMode::Strict).expect("P");
     let p_rows = take_rows("P").expect("P rows");
     assert!(report.is_satisfied(), "P: {:?}", report.failures().first());
     if mutate {
-        let layout = &keys.p_plan.layout;
+        let layout = &keys.plans.p_plan.layout;
         let parsed = layout.parse(&stage.p_public).expect("layout");
         let row_of = |value: &Fp| stage.p_public.iter().position(|v| v == value).expect("row");
         for (label, row) in [
@@ -844,11 +844,11 @@ pub fn wrap(
         assert!(!report.is_satisfied(), "P accepts another R row");
     }
     let now = Instant::now();
-    let (p_proof, p_opening) = native::prove_p(keys, &stage).expect("P proof");
+    let (p_proof, p_opening) = native::prove_p(&keys.plans, &keys.p_key, &stage).expect("P proof");
     println!("P proof ({} bytes): {:.1?}", p_proof.len(), now.elapsed());
     let acc_p = stage.acc_p.clone();
     let (omega, instances, acc_v) =
-        native::omega_circuit(keys, stage, p_proof, &p_opening, &config).expect("Omega");
+        native::omega_circuit(&keys.plans, stage, p_proof, &p_opening, &config).expect("Omega");
     let _ = diagnostic_take_usage();
     let report = check_circuit(&omega, K, &instances, CheckMode::Strict).expect("Omega");
     let omega_rows = take_rows("Omega").expect("Omega rows");
@@ -901,6 +901,80 @@ pub fn wrap(
     acc_v.decide(&spec.params_a, budget).expect("acc_V decides");
     acc_p.decide(&spec.params_q, budget).expect("acc_P decides");
     [s_rows, r_rows, p_rows, omega_rows]
+}
+
+fn print_elapsed(label: &str, since: Instant) {
+    println!("{label}: {:.1?}", since.elapsed());
+}
+
+/// Proves `chain` as a phone does, with bounded memory: plans from verifying
+/// keys alone, no strict checks, and each wrap's proving key made just before
+/// its proof and dropped after it. Prints every stage's time, then checks
+/// that Omega verifies and its opening, `acc_V` and `acc_P` decide.
+///
+/// # Panics
+/// When a stage fails, Omega does not verify or an accumulator does not
+/// decide.
+pub fn prove_one_key_at_a_time(spec: Arc<WrapSpec>, chain: FinalChain, seed: u64) {
+    let now = Instant::now();
+    let plans = native::plans(spec).expect("plans");
+    print_elapsed("plans and verifying keys", now);
+    let config = FoldConfig::default();
+    let now = Instant::now();
+    let prepared = native::prepare(&plans, &chain, tapes(seed), &config).expect("native wraps");
+    drop(chain);
+    print_elapsed("native deciders, folds and restructurings", now);
+    let now = Instant::now();
+    let key = native::s_key(&plans).expect("S key");
+    print_elapsed("S proving key", now);
+    let now = Instant::now();
+    let (s_proof, s_opening) = native::prove_s(&plans, &key, &prepared).expect("S proof");
+    drop(key);
+    print_elapsed("S proof", now);
+    let stage = native::r_stage(&plans, prepared, s_proof, &s_opening).expect("R stage");
+    let now = Instant::now();
+    let key = native::r_key(&plans).expect("R key");
+    print_elapsed("R proving key", now);
+    let now = Instant::now();
+    let (r_proof, r_opening) = native::prove_r(&plans, &key, &stage).expect("R proof");
+    drop(key);
+    print_elapsed("R proof", now);
+    let now = Instant::now();
+    let stage = native::p_stage(&plans, stage, r_proof, &r_opening, &config).expect("P stage");
+    print_elapsed("acc_P fold and D_A", now);
+    let (d_a, acc_p) = (stage.d_a, stage.acc_p.clone());
+    let now = Instant::now();
+    let key = native::p_key(&plans).expect("P key");
+    print_elapsed("P proving key", now);
+    let now = Instant::now();
+    let (p_proof, p_opening) = native::prove_p(&plans, &key, &stage).expect("P proof");
+    drop(key);
+    print_elapsed("P proof", now);
+    let now = Instant::now();
+    let (circuit, instances, acc_v) =
+        native::omega_circuit(&plans, stage, p_proof, &p_opening, &config).expect("Omega");
+    print_elapsed("acc_V fold", now);
+    let now = Instant::now();
+    let key = native::omega_key(&plans).expect("Omega key");
+    print_elapsed("Omega proving key", now);
+    let now = Instant::now();
+    let proof = native::prove_omega(&plans, &key, &circuit, &instances).expect("Omega proof");
+    print_elapsed("Omega proof", now);
+    let (binding, vk) = (key.binding().clone(), key.vk().clone());
+    drop(key);
+    assert_eq!(instances, native::omega_instances(d_a, &acc_v));
+    let now = Instant::now();
+    let spec = &plans.p_plan.spec;
+    let budget = MemoryBudget::DEFAULT;
+    let claim = accumulate_generator(&spec.params_q, &binding, &vk, &instances, &proof, budget)
+        .expect("Omega verifies");
+    FoldInput::from_opening(*claim.g(), claim.challenges())
+        .expect("claim")
+        .decide(&spec.params_q, budget)
+        .expect("Omega's opening decides");
+    acc_v.decide(&spec.params_a, budget).expect("acc_V decides");
+    acc_p.decide(&spec.params_q, budget).expect("acc_P decides");
+    print_elapsed("Omega verified, its opening, acc_V and acc_P decided", now);
 }
 
 /// The rows one wrap uses, from a synthesis without witnesses.

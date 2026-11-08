@@ -110,7 +110,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         // Retirement stops new receiving quotes. It preserves Send of remaining value: the
         // payer pays another receiver's open Request (§6.3).
         if matches!(action, Action::Request { .. })
-            && source.frozen.capsule.body().successor_state.core.lifecycle
+            && source.capsule().body().successor_state.core.lifecycle
                 != KagemushaWalletLifecycleV1::Active
         {
             return Err(Error::Invalid("new Request requires active wallet"));
@@ -220,7 +220,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             &snapshot
                 .original(
                     &mut self.archive,
-                    &source.frozen.capsule.body().successor_state,
+                    &source.capsule().body().successor_state,
                     PreparationOriginalV1::EnrollmentCertificates,
                 )?
                 .ok_or(Error::WitnessLost("setup issuer original"))?,
@@ -264,8 +264,8 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                 .read_object(&output, KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1)?
         } else {
             let (source, snapshot) = self.setup_source(&plan)?;
-            let credential = source.frozen.credential;
-            let state = source.frozen.capsule.body().successor_state;
+            let credential = *source.credential();
+            let state = source.capsule().body().successor_state;
             let certificates = self.setup_certificates(&source, &snapshot)?;
             let issuer = *valid(certificates.certificate(
                 &credential.body.issuer_certificate,
@@ -359,13 +359,13 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         )?;
         let identity = valid(payment.digests())?;
         let (source, certificates) = self.archive_send_source(&identity.credit_id)?;
-        if source.retained.record.output != payment_bytes {
+        if source.output() != payment_bytes {
             return Err(Error::WitnessLost(
                 "payer companion retained Payment binding",
             ));
         }
         let certificates: KagemushaWalletCertificateSetV1 = archive::decode(&certificates)?;
-        let credential = source.frozen.credential;
+        let credential = *source.credential();
         let issuer = valid(certificates.certificate(
             &credential.body.issuer_certificate,
             KagemushaWalletSignerRoleV1::Enrollment,
@@ -387,7 +387,7 @@ pub(in crate::kagemusha_wallet_state_v1) fn retain_request_session_fixture(
         .unwrap();
     wallet.source_custody(&manifest, &source).unwrap();
     assert_eq!(
-        source.frozen.capsule.body().successor_state.core.lifecycle,
+        source.capsule().body().successor_state.core.lifecycle,
         KagemushaWalletLifecycleV1::Active
     );
     let action = action_bytes(&Action::Request {
@@ -717,7 +717,7 @@ mod tests {
         let source = wallet
             .indexed_step(&manifest, manifest.indexed.unwrap())
             .unwrap();
-        let mut request = setup_quote(&source.frozen);
+        let mut request = setup_quote(&source.ordinary_parts().0);
         let action = Action::Request {
             amount: 7,
             fee: None,

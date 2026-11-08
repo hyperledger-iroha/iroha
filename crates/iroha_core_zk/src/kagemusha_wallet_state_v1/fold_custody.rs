@@ -87,11 +87,11 @@ impl<'a> FoldCustodyV1<'a> {
             return Err(Error::WitnessLost("fold predecessor custody"));
         }
         if let Some((before, source)) = before.zip(sources.before.as_ref()) {
-            source.require(store, &before.frozen.capsule.body().successor_state)?;
+            source.require(store, &before.capsule().body().successor_state)?;
         }
         sources
             .after
-            .require(store, &after.frozen.capsule.body().successor_state)?;
+            .require(store, &after.capsule().body().successor_state)?;
         pending.validate()?;
         Ok(Self {
             store: Store(store),
@@ -130,8 +130,8 @@ impl<'a> FoldCustodyV1<'a> {
         let before = self
             .before
             .ok_or(Error::WitnessLost("fold native predecessor"))?;
-        if plan.source != before.frozen.capsule.custody_digest()
-            || plan.request.kind() != self.after.frozen.capsule.body().kind
+        if plan.source != before.capsule().custody_digest()
+            || plan.request.kind() != self.after.capsule().body().kind
         {
             return Err(Error::WitnessLost("fold preparation source"));
         }
@@ -139,7 +139,7 @@ impl<'a> FoldCustodyV1<'a> {
             .before_source
             .clone()
             .ok_or(Error::WitnessLost("fold preparation snapshot"))?;
-        let mut state = before.frozen.capsule.body().successor_state;
+        let mut state = before.capsule().body().successor_state;
         if plan.request.kind().consumes_lineage() {
             state.core.pending_outgoing_root = self.initial_pending.root();
             selected.maps.replace_pending(self.initial_pending.clone());
@@ -212,11 +212,7 @@ impl<'a> FoldCustodyV1<'a> {
             .as_ref()
             .ok_or(Error::WitnessLost("fold predecessor snapshot"))?;
         let before = self.before.ok_or(Error::WitnessLost("fold predecessor"))?;
-        source.original(
-            self.store.0,
-            &before.frozen.capsule.body().successor_state,
-            role,
-        )
+        source.original(self.store.0, &before.capsule().body().successor_state, role)
     }
 
     /// Read the released successor's own original; renewal never rewrites history.
@@ -229,7 +225,7 @@ impl<'a> FoldCustodyV1<'a> {
     ) -> Result<Option<Vec<u8>>, Error> {
         self.after_source.original(
             self.store.0,
-            &self.after.frozen.capsule.body().successor_state,
+            &self.after.capsule().body().successor_state,
             role,
         )
     }
@@ -262,7 +258,7 @@ impl<'a> FoldCustodyV1<'a> {
                 Err(Error::Invalid("changed fold burn proposal"))
             };
         }
-        let capsule = &self.after.frozen.capsule;
+        let capsule = &self.after.capsule();
         let KagemushaWalletEffectV1::Receive { credit_id, .. } = capsule.body().statement.effect
         else {
             return Err(Error::Invalid("fold credit role"));
@@ -295,7 +291,7 @@ impl<'a> FoldCustodyV1<'a> {
             fee,
             request,
             ..
-        } = self.after.frozen.capsule.body().statement.effect
+        } = self.after.capsule().body().statement.effect
         else {
             return Err(Error::Invalid("fold pending insertion role"));
         };
@@ -324,7 +320,7 @@ impl<'a> FoldCustodyV1<'a> {
             return Ok(*witness);
         }
         let KagemushaWalletEffectV1::ArchiveSent { credit_id, .. } =
-            self.after.frozen.capsule.body().statement.effect
+            self.after.capsule().body().statement.effect
         else {
             return Err(Error::Invalid("fold pending removal role"));
         };

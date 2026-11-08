@@ -118,16 +118,16 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             return Err(Error::WitnessLost("snapshot selected index"));
         }
         let current = self.indexed_step(&manifest, sequence)?;
-        let capsule = &current.frozen.capsule;
+        let capsule = &current.capsule();
         let head = match marker.marker().state {
             KagemushaWalletMarkerStateV1::Head { head, .. } => head.value,
             _ => return Err(Error::NoHead),
         };
         if capsule.body().statement.successor.value != head
-            || current.retained.operation_id != operation
-            || marker.selected_generation() != Some(current.retained.selected_generation)
-            || marker.completion_digest() != Some(current.retained.completion_digest)
-            || marker.payment_key() != &current.frozen.credential.body.payment_key
+            || current.operation_id() != operation
+            || marker.selected_generation() != Some(current.selected_generation())
+            || marker.completion_digest() != Some(current.completion_digest())
+            || marker.payment_key() != &current.credential().body.payment_key
         {
             return Err(Error::WitnessLost("snapshot selected head"));
         }
@@ -147,8 +147,8 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                     ancestor = self.indexed_step(&manifest, folded_sequence)?;
                     &ancestor
                 };
-                let a = &folded_step.frozen.credential.body;
-                let b = &current.frozen.credential.body;
+                let a = &folded_step.credential().body;
+                let b = &current.credential().body;
                 if a.scheme_id != b.scheme_id
                     || a.asset_digest != b.asset_digest
                     || a.wallet_id != b.wallet_id
@@ -163,7 +163,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                     .read_fold(folded_step)?
                     .ok_or(Error::WitnessLost("snapshot indexed fold"))?;
                 let public = &fold.record.lineage.public;
-                let folded_core = &folded_step.frozen.capsule.body().successor_state.core;
+                let folded_core = &folded_step.capsule().body().successor_state.core;
                 if public.burned_total < folded_core.burned_total
                     || public.burned_total < core.burned_total
                 {
@@ -173,8 +173,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 // burns above that head's own gross balance, even for an indexed ancestor.
                 let covered_balance = valid(
                     folded_step
-                        .frozen
-                        .capsule
+                        .capsule()
                         .body()
                         .successor_state
                         .spendable_with(public),

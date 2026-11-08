@@ -344,7 +344,15 @@ impl PreparationV1<'_> {
         let consumed = KagemushaWalletConsumedCreditLeafV1 {
             credit_id: request.credit_id(),
             amount: 7,
-            receive_sequence: source.frozen.capsule.body().successor_state.core.sequence + 1,
+            receive_sequence: source
+                .ordinary_parts()
+                .0
+                .capsule
+                .body()
+                .successor_state
+                .core
+                .sequence
+                + 1,
         };
         let mut tree = KagemushaWalletIndexedTreeV1::new();
         let maps = ReceiveMapsV1 {
@@ -401,7 +409,15 @@ impl PreparationV1<'_> {
             );
             assert_eq!(
                 restored.state().core.balance,
-                source.frozen.capsule.body().successor_state.core.balance + 7
+                source
+                    .ordinary_parts()
+                    .0
+                    .capsule
+                    .body()
+                    .successor_state
+                    .core
+                    .balance
+                    + 7
             );
             assert_eq!(restored.state().core.consumed_credit_root, tree.root());
             let projected = payment(restored.originals().1.unwrap()).unwrap();
@@ -465,7 +481,7 @@ impl PreparationV1<'_> {
         ));
         // Incoming softness cannot suppress source-custody failures.
         let mut changed_source = source.clone();
-        changed_source.retained.frame[0] ^= 1;
+        changed_source.ordinary_parts_mut().1.frame[0] ^= 1;
         assert!(
             self.restore_receive(
                 owner,

@@ -149,7 +149,7 @@ fn closure_uncertainty_restart_and_later_head_preserve_exact_selected_output() {
         let (_, manifest) = w.manifest().unwrap();
         let pred = w.indexed_step(&manifest, 1).unwrap();
         w.commit(frozen(
-            Some(&pred.frozen),
+            Some(&pred.ordinary_parts().0),
             KagemushaWalletEffectV1::Load {
                 load_ordinal: 0,
                 receipt_digest: field(31),
@@ -203,7 +203,7 @@ fn preissued_load_then_complete_consumer_can_select_new_closure_and_replay_both_
     let (_, manifest) = w.manifest().unwrap();
     let previous = w.indexed_step(&manifest, 1).unwrap();
     let mut load = frozen(
-        Some(&previous.frozen),
+        Some(&previous.ordinary_parts().0),
         KagemushaWalletEffectV1::Load {
             load_ordinal: 0,
             receipt_digest: field(31),

@@ -209,12 +209,12 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         step: &ReleasedStep,
     ) -> Result<(), Error> {
         if !matches!(
-            step.frozen.capsule.body().statement.effect,
+            step.capsule().body().statement.effect,
             KagemushaWalletEffectV1::Send { .. }
         ) {
             return Ok(());
         }
-        let bytes = &step.retained.record.output;
+        let bytes = step.output();
         let payment = read_model_original(
             || KagemushaWalletPaymentV1::decode_canonical(bytes, &self.scheme_id),
             Error::Invalid("G1 validation"),
@@ -232,15 +232,14 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             return Err(Error::WitnessLost("duplicate committed fee claim"));
         }
         let request = step
-            .frozen
-            .capsule
+            .capsule()
             .body()
             .retained_inputs
             .iter()
             .find(|input| input.role == KagemushaWalletRetainedInputRoleV1::Request)
             .ok_or(Error::WitnessLost("fee Request original"))?;
         let original = RetainedFeeClaim {
-            payment: bytes.clone(),
+            payment: bytes.to_vec(),
             request: request.bytes.clone(),
         };
         check_claim_original(

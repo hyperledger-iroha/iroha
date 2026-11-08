@@ -66,7 +66,7 @@ impl PreparationV1<'_> {
         // receipt and sigma. It requires an Omega only when the *source's own*
         // operation consumed one, never a fold of this current source head.
         self.receipt_tape(owner, source, budget)?;
-        let capsule = &source.frozen.capsule;
+        let capsule = &source.capsule();
         authority(statement.validate_successor_of(&capsule.body().statement))?;
         let statement_fields = self.statement_fields(owner, statement)?;
         let relation = self.installed.verifier().scheme().relation_id;

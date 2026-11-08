@@ -34,6 +34,8 @@ public final class KagemushaWalletSuffixUnloadReviewV1: @unchecked Sendable {
 
 /// Preparation never performs an irreversible debit or establishes online payout.
 public enum KagemushaWalletSuffixUnloadDecisionV1: Sendable {
+  /// Named recovery authenticated that this exact request has never been retained.
+  case notStarted
   case ready(KagemushaWalletSuffixUnloadReviewV1)
   case verifying(KagemushaWalletSuffixUnloadProgressV1)
   case released(KagemushaWalletSuffixUnloadReleasedV1)
@@ -101,7 +103,7 @@ struct KagemushaWalletSuffixUnloadReplyV1: Sendable {
     if status == -4 { throw KagemushaWalletErrorV1.artifactsUnavailable }
     if status < 0 { throw KagemushaWalletErrorV1.native(status: status, reason: reason, platformCode: platformCode) }
   }
-  func decision(origin: AnyObject, requestID: Data) throws -> KagemushaWalletSuffixUnloadDecisionV1 {
+  func decision(origin: AnyObject, requestID: Data, allowAbsent: Bool = false) throws -> KagemushaWalletSuffixUnloadDecisionV1 {
     try checked()
     switch status {
     case 2: return .pending
@@ -114,6 +116,11 @@ struct KagemushaWalletSuffixUnloadReplyV1: Sendable {
       guard progress.requestID == requestID else { throw KagemushaWalletErrorV1.invalidNativeOutput }
       return .verifying(progress)
     case 73: return .ready(try .fromNative(origin: origin, requestID: requestID, reply: self))
+    case 77:
+      let observation = try KagemushaWalletSuffixUnloadStatusV1(bytes)
+      guard allowAbsent, observation.state == .requestAbsent, observation.requestID == requestID
+      else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+      return .notStarted
     case 74:
       let summary = try KagemushaWalletSuffixUnloadReleasedV1(bytes)
       guard summary.requestID == requestID else { throw KagemushaWalletErrorV1.invalidNativeOutput }

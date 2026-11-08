@@ -40,6 +40,8 @@ sealed class KagemushaWalletSuffixUnloadDecisionV1 {
     class Verifying internal constructor(val progress: KagemushaWalletSuffixUnloadProgressV1) : KagemushaWalletSuffixUnloadDecisionV1()
     class Released internal constructor(val summary: KagemushaWalletSuffixUnloadReleasedV1) : KagemushaWalletSuffixUnloadDecisionV1()
     object Pending : KagemushaWalletSuffixUnloadDecisionV1()
+    /** The selected request index positively contains no record for this exact named resume. */
+    object NotStarted : KagemushaWalletSuffixUnloadDecisionV1()
     class NotApplicable internal constructor(val reason: Int) : KagemushaWalletSuffixUnloadDecisionV1()
     class Waiting internal constructor(val wait: KagemushaWalletReviewMaintenanceWaitV1) : KagemushaWalletSuffixUnloadDecisionV1()
 }
@@ -52,7 +54,8 @@ sealed class KagemushaWalletSuffixUnloadExecutionV1 {
         val wait: KagemushaWalletReviewMaintenanceWaitV1) : KagemushaWalletSuffixUnloadExecutionV1()
 }
 
-internal fun KagemushaWalletSuffixUnloadReplyV1.decision(owner: Any, requestId: ByteArray): KagemushaWalletSuffixUnloadDecisionV1 {
+internal fun KagemushaWalletSuffixUnloadReplyV1.decision(owner: Any, requestId: ByteArray,
+    allowAbsent: Boolean = false): KagemushaWalletSuffixUnloadDecisionV1 {
     checked()
     return when (status) {
         2 -> KagemushaWalletSuffixUnloadDecisionV1.Pending
@@ -68,6 +71,11 @@ internal fun KagemushaWalletSuffixUnloadReplyV1.decision(owner: Any, requestId: 
             val summary = KagemushaWalletSuffixUnloadReleasedV1(bytes())
             requireSuffix(summary.requestId().contentEquals(requestId))
             KagemushaWalletSuffixUnloadDecisionV1.Released(summary)
+        }
+        77 -> {
+            requireSuffix(allowAbsent)
+            requireSuffixRequestAbsent(bytes(), requestId)
+            KagemushaWalletSuffixUnloadDecisionV1.NotStarted
         }
         else -> invalidSuffixOutput()
     }

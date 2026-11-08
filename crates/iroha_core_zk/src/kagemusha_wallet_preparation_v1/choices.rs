@@ -59,8 +59,7 @@ fn needs_time(request: &NativeIntentV1, source: &PreparationSourceV1<'_>) -> boo
     request.kind() == KagemushaWalletOperationKindV1::Send
         && source
             .released()
-            .frozen
-            .capsule
+            .capsule()
             .body()
             .successor_state
             .send_requires_time_anchor()
@@ -72,7 +71,7 @@ fn bindings(
 ) -> Result<([u8; 32], [u8; 32])> {
     let bytes =
         norito::to_bytes(request).map_err(|_| state::Error::Invalid("native request encoding"))?;
-    let source = source.released().frozen.capsule.custody_digest();
+    let source = source.released().capsule().custody_digest();
     Ok((source, digest("native-preparation-choices-request", &bytes)))
 }
 
@@ -95,8 +94,7 @@ impl NativeChoicesV1 {
         let nonce = Self::fresh_nonce(
             &source
                 .released()
-                .frozen
-                .capsule
+                .capsule()
                 .body()
                 .successor_state
                 .core
@@ -196,8 +194,7 @@ impl NativeChoicesV1 {
             request_digest,
             source
                 .released()
-                .frozen
-                .capsule
+                .capsule()
                 .body()
                 .successor_state
                 .core

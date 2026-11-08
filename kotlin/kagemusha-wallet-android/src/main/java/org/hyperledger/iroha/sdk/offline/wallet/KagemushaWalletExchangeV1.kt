@@ -43,6 +43,16 @@ class KagemushaWalletExchangeV1 internal constructor(
     override fun retryCleanup() { close() }
     override fun cleanupReleased(): Boolean = lifetime.released() || wallet.cleanupReleased()
 
+    /** Discard an unused exact-origin suffix review without creating a debit. */
+    fun discardSuffixUnloadReview(review: KagemushaWalletSuffixUnloadReviewV1) {
+        val owner = wallet.exchangeCleanupHandle()
+        val reviewToken = review.consume(this)
+        KagemushaWalletExchangeCleanupV1.run(wallet::close) {
+            val result = KagemushaWalletNativeCallsV1.discardReview(owner, token, reviewToken)
+            if (result != 0) throw KagemushaWalletExceptionV1(result)
+        }
+    }
+
     /** Discard an unused exact-origin review, including after the end fence. */
     fun discardReview(review: KagemushaWalletReviewV1) {
         val owner = wallet.exchangeCleanupHandle()

@@ -525,32 +525,40 @@ impl<'a> PreparationV1<'a> {
         budget: MemoryBudget,
     ) -> Result<Vec<u8>, Error> {
         self.credential_owner(owner)?;
-        step.frozen.validate().map_err(Error::preparation_read)?;
-        let capsule = &step.frozen.capsule;
-        let retained = &step.retained;
-        if step.frozen.credential != owner.credential
-            || retained.selected_generation == 0
-            || retained.operation_id != capsule.body().operation_id
-            || retained.capsule_digest != capsule.custody_digest()
-            || retained.frame != authority(retained.record.to_canonical_bytes())?
-            || retained.completion_digest != authority(retained.record.completion_digest())?
-        {
+        step.verify_completion().map_err(Error::preparation_read)?;
+        let capsule = step.capsule();
+        if step.credential() != &owner.credential {
             return Err(Error::Authority);
         }
-        authority(retained.record.verify(&owner.credential, capsule))?;
-        self.installed
-            .verifier()
-            .verify_capsule_proofs_cancellable(
-                capsule,
-                &owner.credential,
-                budget,
-                self.cancellation,
-            )?;
+        match capsule {
+            wallet_state::ReleasedCapsuleRefV1::Ordinary(original) => {
+                self.installed
+                    .verifier()
+                    .verify_capsule_proofs_cancellable(
+                        original,
+                        &owner.credential,
+                        budget,
+                        self.cancellation,
+                    )?;
+            }
+            wallet_state::ReleasedCapsuleRefV1::Suffix(original) => {
+                // The source-selected Released marker binds the already authenticated suffix.
+                // Preserve its own sigma and tau; no later Omega replaces receipt authority.
+                self.installed.verifier().verify_step_proof_cancellable(
+                    &original.body().statement,
+                    &original.body().step_proof,
+                    KagemushaWalletOperationKindV1::Unload,
+                    0,
+                    budget,
+                    self.cancellation,
+                )?;
+            }
+        }
         let signer = authority(KagemushaWalletReceiptSignerV1::from_credential(
             &owner.credential,
         ))?;
         let proof_digest = authority(capsule.proof_digest())?;
-        let receipt = &retained.record.receipt;
+        let receipt = step.receipt();
         authority(receipt.verify(&signer, &capsule.body().statement, &proof_digest))?;
         let body = authority(receipt.body(&signer, &capsule.body().statement, &proof_digest))?;
         Ok(signed_tape(body.transcript(), &receipt.signature))
@@ -569,7 +577,7 @@ impl<'a> PreparationV1<'a> {
     ) -> Result<FoldedStateV1, Error> {
         self.receipt_tape(owner, step, budget)?;
         authority(fold.validate())?;
-        let capsule = &step.frozen.capsule;
+        let capsule = &step.capsule();
         if fold.scheme_id != capsule.body().scheme_id
             || fold.wallet_id != capsule.body().wallet_id
             || fold.sequence != capsule.body().statement.sequence
@@ -617,7 +625,7 @@ impl<'a> PreparationV1<'a> {
         budget: MemoryBudget,
     ) -> Result<(StateWitness, [Fp; 26], Vec<u8>), Error> {
         let receipt = self.receipt_tape(owner, step, budget)?;
-        let capsule = &step.frozen.capsule;
+        let capsule = &step.capsule();
         if predecessor.manifest_digest != self.installed.verifier().manifest_digest()
             || predecessor.source_capsule_digest != capsule.body().predecessor_capsule_digest
             || predecessor.credential != owner.credential
@@ -630,7 +638,8 @@ impl<'a> PreparationV1<'a> {
                 .statement
                 .validate_successor_of(&predecessor.source_statement),
         )?;
-        if capsule.body().kind.consumes_lineage()
+        if matches!(capsule, wallet_state::ReleasedCapsuleRefV1::Ordinary(_))
+            && capsule.body().kind.consumes_lineage()
             && capsule.body().predecessor_lineage() != Some(&predecessor.lineage)
         {
             return Err(Error::Authority);
@@ -652,7 +661,7 @@ impl<'a> PreparationV1<'a> {
         public: &KagemushaWalletLineagePublicV1,
         budget: MemoryBudget,
     ) -> Result<BootstrapFieldsV1, Error> {
-        let capsule = &step.frozen.capsule;
+        let capsule = &step.capsule();
         if capsule.body().kind != KagemushaWalletOperationKindV1::Bootstrap {
             return Err(Error::Authority);
         }
@@ -687,7 +696,7 @@ impl<'a> PreparationV1<'a> {
         public: &KagemushaWalletLineagePublicV1,
         budget: MemoryBudget,
     ) -> Result<LoadFieldsV1, wallet_state::Error> {
-        let capsule = &step.frozen.capsule;
+        let capsule = &step.capsule();
         let KagemushaWalletEffectV1::Load {
             receipt_digest: digest,
             load_ordinal,
@@ -741,7 +750,7 @@ impl<'a> PreparationV1<'a> {
         if !matches!(
             kind,
             KagemushaWalletOperationKindV1::Unload | KagemushaWalletOperationKindV1::Retiring
-        ) || step.frozen.capsule.body().kind != kind
+        ) || step.capsule().body().kind != kind
         {
             return Err(Error::Authority);
         }

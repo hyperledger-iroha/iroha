@@ -174,8 +174,8 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         // The actual committed capsule selects the source; untrusted receipt credit never
         // chooses an outgoing index lookup or turns a foreign receipt into custody loss.
         let source = self.checked_step(capsule)?;
-        if source.frozen.capsule.receipt_commitment() != commitment
-            || source.frozen.capsule.body().operation_id != operation
+        if source.capsule().receipt_commitment() != commitment
+            || source.capsule().body().operation_id != operation
         {
             return Err(Error::WitnessLost("selected Send source"));
         }
@@ -183,7 +183,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         let certificates = custody
             .original(
                 &mut self.archive,
-                &source.frozen.capsule.body().successor_state,
+                &source.capsule().body().successor_state,
                 PreparationOriginalV1::EnrollmentCertificates,
             )?
             .ok_or(Error::WitnessLost("Archive historical issuer set"))?;

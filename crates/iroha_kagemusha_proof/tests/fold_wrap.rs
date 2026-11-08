@@ -12,7 +12,9 @@
 //!   `acc_V` and `acc_P` decide.
 //!
 //! The wraps' sizes without witnesses (the sizing other relations use) equal
-//! the rows the checked wraps use. The Omega fixture other tests use carries
+//! the rows the checked wraps use. A third test proves the toy chain with one
+//! wrap proving key at a time, as a phone does, and prints every stage's
+//! time. The Omega fixture other tests use carries
 //! the chosen lineage in `D_A` and verifies. The tests print each wrap's rows
 //! and each stage's time.
 
@@ -57,7 +59,7 @@ fn the_wraps_finish_two_kind_chains_into_omegas_that_decide() {
     );
     // Sizing without witnesses counts exactly the rows the wraps use.
     let now = Instant::now();
-    let sizes = fold_wrap_toy::sizes(&keys.p_plan.spec);
+    let sizes = fold_wrap_toy::sizes(&keys.plans.p_plan.spec);
     println!("sizes without witnesses: {:.1?}", now.elapsed());
     assert_eq!(sizes.len(), 4, "every wrap is sized");
     for (size, used) in sizes.iter().zip(rows) {
@@ -120,4 +122,18 @@ fn the_toy_omega_fixture_carries_the_chosen_lineage() {
         .expect("Omega's opening decides");
     acc_v.decide(&params_a, budget).expect("acc_V decides");
     acc_p.decide(&params_q, budget).expect("acc_P decides");
+}
+
+#[test]
+#[ignore = "toy chain and its wraps, one proving key at a time; run optimized"]
+fn the_toy_chain_proves_with_one_wrap_key_at_a_time() {
+    let _serial = fold_wrap_toy::serial();
+    let started = Instant::now();
+    let relations = fold_wrap_toy::relations();
+    let spec = fold_wrap_toy::spec(&relations);
+    let chain = fold_wrap_toy::chain(&relations, 8, &lineage(9));
+    drop(relations);
+    println!("toy relations and eight half-steps: {:.1?}", started.elapsed());
+    fold_wrap_toy::prove_one_key_at_a_time(spec, chain, 13);
+    println!("total: {:.1?}", started.elapsed());
 }

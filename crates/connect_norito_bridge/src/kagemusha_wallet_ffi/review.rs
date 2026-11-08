@@ -2,11 +2,20 @@
 use super::*;
 use exports::{input, output};
 
+mod suffix_cleanup;
+
 const FINANCIAL_BYTES: usize = 491;
 pub(crate) const PROJECTION_FIXED_BYTES: usize = FINANCIAL_BYTES + 4;
 const ACCOUNT_MAX: usize = iroha_core_zk::kagemusha_wallet_intake_v1::ACCOUNT_ORIGINAL_MAX_BYTES_V1;
 pub(crate) const PROJECTION_MAX_BYTES: usize = PROJECTION_FIXED_BYTES + ACCOUNT_MAX;
 const MAX_REVIEWS: usize = 8;
+
+/// In-memory only. The two capabilities share one token namespace and origin binding.
+/// A wrong named consumer takes and drops its token instead of reinterpreting its kind.
+pub(super) enum FinancialReview {
+    Ordinary(state::ReviewedOperationV1),
+    Suffix(suffix::SuffixReviewCell),
+}
 const MAGIC: &[u8; 8] = b"KWORV1\0\0";
 const CHARGE_MAGIC: &[u8; 8] = b"KWUCV1\0\0";
 const CHARGE_CARRIER_MAX: usize = 16 + KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1 + ACCOUNT_MAX;
@@ -164,6 +173,7 @@ fn allocate_from(next: &std::sync::atomic::AtomicU64) -> Result<u64> {
 /// It never imports a capability from its copyable projection or token.
 pub(super) struct Tokens<T> {
     values: BTreeMap<u64, T>,
+    suffix_retired: std::collections::VecDeque<(u64, u64)>,
 }
 
 /// A genuine Native capability bound to the exact requested exchange that issued it.
@@ -195,6 +205,7 @@ impl<T> Default for Tokens<T> {
     fn default() -> Self {
         Self {
             values: BTreeMap::new(),
+            suffix_retired: std::collections::VecDeque::new(),
         }
     }
 }
@@ -220,7 +231,7 @@ impl<T> Tokens<T> {
     }
     // Only the caller that just took this table's token may restore it, under the same
     // exclusive wallet ownership. No foreign route accepts a token/value pair to restore.
-    fn restore_exact(&mut self, token: u64, value: T) -> Result<()> {
+    pub(super) fn restore_exact(&mut self, token: u64, value: T) -> Result<()> {
         if token == 0 || token > i64::MAX as u64 {
             return Err(Failure::code(INTERNAL));
         }
@@ -427,6 +438,7 @@ fn parse_projection(selector: u32, bytes: &[u8]) -> Result<state::NativeOperatio
 }
 impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> NativeWallet<P, S> {
     pub(super) fn review_inner(&mut self, exchange_id: u64, input: Input) -> Result<Response> {
+        self.reviews.prune_ended_suffix();
         let decision = match input {
             Input::Send {
                 request_id,
@@ -457,7 +469,7 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> NativeWa
             state::ReviewDecisionV1::Waiting(wait) => return Ok(waiting_response(wait)),
         };
         let bytes = projection(review.projection())?;
-        let token = self.reviews.put(OriginBound::new(exchange_id, review))?;
+        let token = self.reviews.put(OriginBound::new(exchange_id, FinancialReview::Ordinary(review)))?;
         Ok(Response {
             kind: 18,
             sequence: u128::from(token),
@@ -472,7 +484,9 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> NativeWa
     ) -> Result<Response> {
         // Actual execution consumes even on an invalid identity or failed source recheck.
         // Only Native's pre-execution maintenance refusal can return this same genuine review.
-        let reviewed = self.reviews.take_bound(token, exchange_id)?;
+        let FinancialReview::Ordinary(reviewed) = self.reviews.take_bound(token, exchange_id)? else {
+            return Err(Failure::code(INVALID));
+        };
         match self.wallet.execute_reviewed(reviewed) {
             Ok(state::ReviewedExecutionV1::Executed(value)) => completion(Some(value)),
             Ok(state::ReviewedExecutionV1::Existing(value)) => existing_response(value),
@@ -482,7 +496,7 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> NativeWa
                 match (wait, retained) {
                     (Some(wait), Some(reviewed)) => {
                         self.reviews
-                            .restore_exact(token, OriginBound::new(exchange_id, reviewed))?;
+                            .restore_exact(token, OriginBound::new(exchange_id, FinancialReview::Ordinary(reviewed)))?;
                         retained_response(&self.reviews, exchange_id, token, wait_detail(wait))
                     }
                     (None, None) => Err(error.into()),
@@ -609,7 +623,7 @@ impl CapabilityDelivery {
     pub(super) fn issued(&mut self, invocation: &exchange::Invocation, response: &Response) {
         let kind = match response.kind {
             13 => CapabilityKind::Time,
-            18 => CapabilityKind::Financial,
+            18 | 73 => CapabilityKind::Financial,
             53 => CapabilityKind::Deletion,
             _ => return,
         };
@@ -647,6 +661,7 @@ impl Drop for CapabilityDelivery {
             // Keep exact custody registered for explicit close retry. Never join while
             // this failed foreign handoff still owns an accepted invocation child.
             owner.closing.begin();
+            owner.exchanges.lock().unwrap_or_else(std::sync::PoisonError::into_inner).end_suffix();
             owner.background.stop();
             owner.scheduler.close();
         }

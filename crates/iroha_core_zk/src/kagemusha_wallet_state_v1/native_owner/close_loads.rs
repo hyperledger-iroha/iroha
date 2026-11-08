@@ -103,14 +103,14 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         };
         let (sequence, _, capsule) = marker.head().ok_or(Error::NoHead)?;
         let source = self.indexed_step(&manifest, sequence)?;
-        if source.retained.capsule_digest != capsule {
+        if source.capsule_digest() != capsule {
             return Err(Error::WitnessLost("CloseLoads current source"));
         }
         let snapshot = self.source_custody(&manifest, &source)?;
         let certificates = snapshot
             .original(
                 &mut self.archive,
-                &source.frozen.capsule.body().successor_state,
+                &source.capsule().body().successor_state,
                 PreparationOriginalV1::EnrollmentCertificates,
             )?
             .ok_or(Error::WitnessLost("CloseLoads issuer original"))?;
@@ -118,15 +118,15 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             version: 1,
             request_id,
             capsule,
-            capsule_commitment: source.frozen.capsule.receipt_commitment(),
-            completion: source.retained.completion_digest,
-            credential: source.frozen.credential,
+            capsule_commitment: source.capsule().receipt_commitment(),
+            completion: source.completion_digest(),
+            credential: *source.credential(),
             certificates: archive::decode(&certificates)?,
-            package: if source.frozen.capsule.body().kind == KagemushaWalletOperationKindV1::Send {
+            package: if source.capsule().body().kind == KagemushaWalletOperationKindV1::Send {
                 read_model_original(
                     || {
                         KagemushaWalletPaymentV1::decode_canonical(
-                            &source.retained.record.output,
+                            &source.output(),
                             &self.scheme_id,
                         )
                     },
@@ -134,7 +134,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 )?
                 .send
             } else {
-                archive::decode(&source.retained.record.output)?
+                archive::decode(&source.output())?
             },
             nonce: NativeChoicesV1::fresh_nonce(&[0; 32])?,
             output: None,

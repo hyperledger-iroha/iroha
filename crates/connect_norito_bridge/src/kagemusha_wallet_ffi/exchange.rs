@@ -14,6 +14,7 @@ struct Entry {
     lease: state::ExchangeLeaseV1,
     // Cleanup bookkeeping only; Core decides whether any accepted children remain.
     ending: bool,
+    suffix: suffix::ExchangeLifetime,
 }
 
 #[derive(Default)]
@@ -32,6 +33,11 @@ fn failure(error: state::ExchangeErrorV1) -> Failure {
 }
 
 impl Tokens {
+    /// Close only suffix ephemeral work/reviews, without waiting for wallet/proof ownership.
+    pub(super) fn end_suffix(&self) {
+        for entry in self.live.values(){entry.suffix.end();}
+    }
+
     #[cfg(test)]
     pub(super) fn first_live(&self) -> Option<u64> {
         self.live
@@ -49,11 +55,18 @@ impl Tokens {
             Entry {
                 lease,
                 ending: false,
+                suffix: suffix::ExchangeLifetime::default(),
             },
         );
         Ok(token)
     }
 
+    fn suffix_lifetime(&self, token:u64)->Result<suffix::ExchangeLifetime>{
+        let entry=self.live.get(&token).ok_or(Failure::code(CLOSED))?;
+        if entry.ending{return Err(Failure::code(CLOSED))}
+        entry.suffix.require_live()?;
+        Ok(entry.suffix.clone())
+    }
     fn enter(&self, token: u64) -> Result<state::ExchangeCallV1> {
         let entry = self.live.get(&token).ok_or_else(|| {
             Failure::code(if self.ended.contains(&token) {
@@ -73,6 +86,9 @@ impl Tokens {
                 Err(Failure::code(INVALID))
             };
         };
+        // Suffix proofs/reviews are explicitly cancellable; ordinary admitted children
+        // retain their established semantics and are not invalidated by this signal.
+        entry.suffix.end();
         let result = entry.lease.end().map_err(failure)?;
         match result {
             state::ExchangeEndV1::Ending => entry.ending = true,
@@ -221,6 +237,10 @@ impl Invocation {
     }
     pub(super) fn origin(&self) -> u64 {
         self.exchange_id
+    }
+    pub(crate) fn suffix_lifetime(&self)->Result<suffix::ExchangeLifetime>{
+        self.validate()?;
+        self.owner.exchanges.lock().map_err(|_|Failure::code(INTERNAL))?.suffix_lifetime(self.exchange_id)
     }
     pub(super) fn validate(&self) -> Result<()> {
         match &self.child {

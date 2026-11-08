@@ -250,7 +250,7 @@ impl PreparationV1<'_> {
         let (receipt, retained) =
             authenticate_originals(&mut reader, originals.receipt, &finality_original)?;
         dispatch::proof((|| {
-            let capsule = &source.frozen.capsule;
+            let capsule = &source.capsule();
             let (state, statement, witness) = derive(
                 &owner.credential,
                 &capsule.body().successor_state,

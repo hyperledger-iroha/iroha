@@ -8,9 +8,6 @@ mod intake;
 #[path = "receive_retry_tests.rs"]
 mod receive_retry;
 
-#[path = "reviewed_preparing_tests.rs"]
-mod reviewed_preparing;
-
 use crate::kagemusha_wallet_advance_v1::kagemusha_wallet_archive_object_digest_v1 as object_digest;
 
 /// Which mock derivation a proof consumed.
@@ -101,7 +98,7 @@ impl NativePreparation for TestProofs {
         }
         let fold = source.folded().ok_or(Error::FoldRequired)?;
         let mut retiring = frozen(
-            Some(&source.released().frozen),
+            Some(&source.released().ordinary_parts().0),
             KagemushaWalletEffectV1::Retiring,
         );
         let mut c = retiring.capsule.body().clone();
@@ -165,7 +162,12 @@ impl NativePreparation for TestProofs {
         };
         if !planned
             || prepared.capsule.body().predecessor_capsule_digest
-                != source.released().frozen.capsule.custody_digest()
+                != source
+                    .released()
+                    .ordinary_parts()
+                    .0
+                    .capsule
+                    .custody_digest()
         {
             return Err(Error::Invalid("test plan binding"));
         }
@@ -210,7 +212,12 @@ impl NativePreparation for TestProofs {
         let made_for_source =
             archive::decode::<FrozenTransition>(&speculative.plan).is_ok_and(|frozen| {
                 frozen.capsule.body().predecessor_capsule_digest
-                    == source.released().frozen.capsule.custody_digest()
+                    == source
+                        .released()
+                        .ordinary_parts()
+                        .0
+                        .capsule
+                        .custody_digest()
             });
         if !made_for_source {
             return self.plan_preparation(request, source, custody);
@@ -260,7 +267,7 @@ fn archive_step(
     let payment = KagemushaWalletPaymentV1::decode_canonical(&archive.payment, &scheme.scheme_id())
         .map_err(|_| Error::Invalid("test Archive Payment"))?;
     let credited: KagemushaWalletCreditedV1 = archive::decode(&archive.credited)?;
-    let previous = &source.released().frozen;
+    let previous = &source.released().ordinary_parts().0;
     // Archive requires all five originals before freeze; an empty intermediate capsule is
     // invalid even for this explicit mock proof. Build its body, then seal it exactly once.
     let (credential, mut body) = frozen_body(
@@ -379,8 +386,14 @@ fn a_confirmed_speculation_is_the_durable_plan_and_skips_the_proof() {
     );
     let released: FrozenTransition = archive::decode(&plan).unwrap();
     assert_eq!(
-        wallet.released_steps().unwrap().last().unwrap().frozen,
-        released,
+        wallet
+            .released_steps()
+            .unwrap()
+            .last()
+            .unwrap()
+            .ordinary_parts()
+            .0,
+        &released,
         "the committed step is the speculated one"
     );
     // Exact retry returns the same output with no proof, plan or signature.
@@ -782,7 +795,8 @@ fn exact_request_replay_survives_restart_without_reproving_or_resigning() {
         .unwrap()
         .last()
         .unwrap()
-        .frozen
+        .ordinary_parts()
+        .0
         .capsule
         .body()
         .operation_id;
@@ -1642,15 +1656,6 @@ fn source_rotation_does_not_rebase_a_durable_plan_or_repeat_proving() {
         wallet.execute(request()).unwrap(),
         Completion::NotPerformed(NotPerformed::StaleHead)
     );
-    let (_, binding) = wallet
-        .retained_preparation_review_binding(&request())
-        .unwrap();
-    assert_eq!(
-        wallet
-            .execute_reviewed_preparing(request(), &binding)
-            .unwrap(),
-        ReviewedExecutionV1::Executed(Completion::NotPerformed(NotPerformed::StaleHead))
-    );
     assert_eq!(wallet.proofs.preparations.load(Ordering::SeqCst), count);
     assert_eq!(wallet.proofs.preparation_proofs.load(Ordering::SeqCst), 1);
     assert_eq!(wallet.custody.signatures, 2);
@@ -1843,7 +1848,7 @@ fn deferred_archive_stopped_after_its_plan_is_planned_again_after_a_later_step()
     );
     // The committed Archive keeps the exact Credited original; a retry repeats nothing.
     let step = wallet.released_steps().unwrap().pop().unwrap();
-    let body = step.frozen.capsule.body();
+    let body = step.ordinary_parts().0.capsule.body();
     assert_eq!(body.kind, KagemushaWalletOperationKindV1::ArchiveSent);
     assert!(body.retained_inputs.iter().any(|input| {
         input.role == KagemushaWalletRetainedInputRoleV1::Credited && input.bytes == credited
@@ -1889,7 +1894,7 @@ fn deferred_archive_capsule_never_selected_is_replaced_after_a_later_step() {
             .is_none()
     );
     let committed = wallet.released_steps().unwrap().pop().unwrap();
-    assert_ne!(committed.frozen.capsule.custody_digest(), stale);
+    assert_ne!(committed.ordinary_parts().0.capsule.custody_digest(), stale);
     assert_eq!(
         wallet.retry_request(&archive).unwrap(),
         RequestStatusV1::Outcome(complete)
@@ -2081,15 +2086,20 @@ fn prepared_capsule_keeps_exact_durable_plan_after_completion_and_restart() {
         .indexed_step(&manifest, manifest.indexed.unwrap())
         .unwrap();
     let plan = wallet
-        .transition_preparation(&manifest, &released.frozen)
+        .transition_preparation(&manifest, &released.ordinary_parts().0)
         .unwrap()
         .unwrap();
     assert_eq!(plan.request, NativeIntentV1::user(request()));
     assert_eq!(
         plan.source,
-        released.frozen.capsule.body().predecessor_capsule_digest
+        released
+            .ordinary_parts()
+            .0
+            .capsule
+            .body()
+            .predecessor_capsule_digest
     );
-    let capsule = released.frozen.capsule.custody_digest();
+    let capsule = released.ordinary_parts().0.capsule.custody_digest();
     let bad = manifest
         .capsule_plans
         .set(&mut wallet.archive, capsule, &[7; 31])
@@ -2097,7 +2107,7 @@ fn prepared_capsule_keeps_exact_durable_plan_after_completion_and_restart() {
     let mut changed = manifest;
     changed.capsule_plans = bad;
     assert!(matches!(
-        wallet.transition_preparation(&changed, &released.frozen),
+        wallet.transition_preparation(&changed, &released.ordinary_parts().0),
         Err(Error::WitnessLost("capsule plan address"))
     ));
 }
@@ -2540,7 +2550,8 @@ fn every_crash_boundary_resumes_with_one_signature_exact_output_and_at_most_two_
             .unwrap()
             .pop()
             .unwrap()
-            .frozen
+            .ordinary_parts()
+            .0
             .capsule
             .custody_digest()
     };
@@ -2687,7 +2698,8 @@ fn stale_archive_batch_retirement_preserves_the_original_across_every_boundary()
         assert!(!wallet.archive.records.lock().unwrap().contains_key(&draft));
         let step = wallet.released_steps().unwrap().pop().unwrap();
         assert!(
-            step.frozen
+            step.ordinary_parts()
+                .0
                 .capsule
                 .body()
                 .retained_inputs
@@ -2726,7 +2738,8 @@ fn stale_archive_capsule_retirement_keeps_its_locator_until_cleanup_finishes() {
             .unwrap()
             .pop()
             .unwrap()
-            .frozen
+            .ordinary_parts()
+            .0
             .capsule
             .custody_digest();
         let signatures = wallet.custody.signatures;
@@ -2926,7 +2939,7 @@ fn a_committed_archive_with_missing_output_never_becomes_a_replan() {
         Completion::Complete(_)
     ));
     let archived = wallet.released_steps().unwrap().pop().unwrap();
-    let operation = archived.frozen.capsule.body().operation_id;
+    let operation = archived.ordinary_parts().0.capsule.body().operation_id;
     snapshot_test_fold(&mut wallet);
     let folded = wallet.read_fold(&archived).unwrap().unwrap();
     assert_eq!(
@@ -3207,7 +3220,8 @@ fn guarded_archive_waits_for_due_and_exchange_gates_then_blocks_fresh_head_until
         Err(Error::FoldRequired | Error::ArchiveAdmission(ArchiveAdmissionErrorV1::Busy))
     ));
     assert_eq!(w.proofs.preparations.load(Ordering::SeqCst), 1);
-    let current = w.released_steps().unwrap().pop().unwrap().frozen;
+    let released = w.released_steps().unwrap().pop().unwrap();
+    let current = released.ordinary_parts().0;
     let load = frozen(
         Some(&current),
         KagemushaWalletEffectV1::Load {
@@ -3438,7 +3452,8 @@ fn late_fresh_work_preserves_running_and_parked_archive_fold() {
         Completion::Complete(_)
     ));
     w.proofs.checkpoint_stages = 3;
-    let current = w.released_steps().unwrap().pop().unwrap().frozen;
+    let released = w.released_steps().unwrap().pop().unwrap();
+    let current = released.ordinary_parts().0;
     let sequence = current.capsule.body().statement.sequence;
     let job = match w.fold_prepare().unwrap() {
         ControlFlow::Continue(job) => job,

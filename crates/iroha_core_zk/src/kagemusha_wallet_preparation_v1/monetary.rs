@@ -771,7 +771,7 @@ impl PreparationV1<'_> {
                 norito::canonical_decode_limits(payer_certificate_set_original.len()),
             )
         })?;
-        let source_state = &source.frozen.capsule.body().successor_state;
+        let source_state = &source.capsule().body().successor_state;
         let check = authority(payment.prepare_receive(
             scheme,
             &payer,
@@ -881,7 +881,7 @@ impl PreparationV1<'_> {
         effect: KagemushaWalletEffectV1,
     ) -> Result<MonetaryStepV1, Error> {
         let scheme = self.installed.verifier().scheme();
-        let source_state = &source.frozen.capsule.body().successor_state;
+        let source_state = &source.capsule().body().successor_state;
         let sequence = source_state
             .core
             .sequence
@@ -919,10 +919,10 @@ impl PreparationV1<'_> {
         let (state, statement) = derive(source_state, relation, &witness, effect)?;
         authority(statement.validate_for_scheme(scheme))?;
         authority(statement.validate_for_credential(&owner.credential))?;
-        authority(statement.validate_successor_of(&source.frozen.capsule.body().statement))?;
+        authority(statement.validate_successor_of(&source.capsule().body().statement))?;
         Ok(MonetaryStepV1 {
             manifest_digest: owner.manifest_digest,
-            source_capsule_digest: source.frozen.capsule.custody_digest(),
+            source_capsule_digest: source.capsule().custody_digest(),
             relation,
             witness,
             state,
@@ -1019,7 +1019,7 @@ impl PreparationV1<'_> {
         public: &KagemushaWalletLineagePublicV1,
         budget: MemoryBudget,
     ) -> Result<(StateWitness, [Fp; 26], Vec<u8>), Error> {
-        let capsule = &step.frozen.capsule;
+        let capsule = &step.capsule();
         if prepared.manifest_digest != self.installed.verifier().manifest_digest()
             || prepared.source_capsule_digest != predecessor.source_capsule_digest
             || prepared.statement != capsule.body().statement
@@ -1109,7 +1109,7 @@ impl PreparationV1<'_> {
             .payment_original
             .as_deref()
             .ok_or(Error::Authority)?;
-        let capsule = &step.frozen.capsule;
+        let capsule = &step.capsule();
         if retained_original(
             &capsule.body().retained_inputs,
             KagemushaWalletRetainedInputRoleV1::Payment,
@@ -1197,7 +1197,7 @@ impl PreparationV1<'_> {
     ) -> Result<ReceiveAdmissionFieldsV1, Error> {
         if prepared.statement.effect.kind() != KagemushaWalletOperationKindV1::Receive
             || prepared.manifest_digest != self.installed.verifier().manifest_digest()
-            || prepared.source_capsule_digest != source.frozen.capsule.custody_digest()
+            || prepared.source_capsule_digest != source.capsule().custody_digest()
         {
             return Err(Error::Authority);
         }
@@ -1207,7 +1207,7 @@ impl PreparationV1<'_> {
             .ok_or(Error::Authority)?;
         let payer = prepared.payer.as_ref().ok_or(Error::Authority)?;
         let incoming = incoming_original::payment(original)?;
-        let before = &source.frozen.capsule.body().successor_state;
+        let before = &source.capsule().body().successor_state;
         let quoted = &prepared.request.receiver_credential;
         let quoted_certificate = authority(prepared.request.certificates.certificate(
             &quoted.body.issuer_certificate,
@@ -1323,7 +1323,7 @@ impl PreparationV1<'_> {
         }
         let credit_entry = KagemushaWalletCreditDigestLeafV1 {
             credit_id: prepared.request.credit_id(),
-            payment_digest: step.frozen.capsule.body().payment_digest,
+            payment_digest: step.capsule().body().payment_digest,
             burned,
         };
         let credit = receive_credit_route(

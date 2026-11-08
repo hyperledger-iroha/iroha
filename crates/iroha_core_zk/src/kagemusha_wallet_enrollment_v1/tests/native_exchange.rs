@@ -189,8 +189,8 @@ impl HostDevice {
     fn provider(
         &self,
         scheme: [u8; 32],
-    ) -> KagemushaWalletProviderV1<KagemushaWalletStdFsV1, FakePlatformV1> {
-        KagemushaWalletProviderV1::open(
+    ) -> NativeProviderV1<KagemushaWalletStdFsV1, FakePlatformV1> {
+        NativeProviderV1::open(
             KagemushaWalletStdFsV1::open(self.root.join("custody")).unwrap(),
             self.platform.clone(),
             scheme,
@@ -755,16 +755,19 @@ fn require_completed_send(wallet: &mut Wallet, open: &[u8], payment: &[u8]) {
         .released_steps()
         .unwrap()
         .into_iter()
-        .find(|step| step.retained.record.output == payment)
+        .find(|step| step.output().as_slice() == payment)
         .expect("released Send of this Payment");
     assert_eq!(
-        step.frozen.capsule.body().kind,
+        step.ordinary_capsule()
+            .expect("ordinary Send capsule")
+            .body()
+            .kind,
         KagemushaWalletOperationKindV1::Send
     );
     let retained: KagemushaWalletRequestV1 = decode(
         &step
-            .frozen
-            .capsule
+            .ordinary_capsule()
+            .expect("ordinary Send capsule")
             .body()
             .retained_inputs
             .iter()

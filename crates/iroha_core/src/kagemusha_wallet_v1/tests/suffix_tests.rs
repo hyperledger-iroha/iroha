@@ -10,7 +10,7 @@ use iroha_data_model::kagemusha::kagemusha_wallet_suffix_unload_v1::{
     KagemushaWalletSuffixOriginalV1 as Original, KagemushaWalletSuffixStepKindV1 as StepKind,
     KagemushaWalletSuffixStepV1 as Step, KagemushaWalletSuffixUnloadV1 as Unload,
     kagemusha_wallet_suffix_authority_digest_v1, kagemusha_wallet_suffix_digest_v1,
-    kagemusha_wallet_suffix_payout_source_v1,
+    kagemusha_wallet_suffix_payout_source_v1, kagemusha_wallet_suffix_recovery_witness_digest_v1,
 };
 use suffix::{StageId, SuffixTransaction};
 
@@ -337,6 +337,7 @@ pub(super) fn build_suffix_with(network_id: Digest, partition: &[usize], full: b
     statement.sequence = 3 + total as u128;
     statement.predecessor = states[total].commitment().unwrap();
     statement.successor = states[total + 1].commitment().unwrap();
+    let map_openings = vec![vec![0; LOW], vec![0; EMPTY]];
     let header = Header {
         version: 1,
         method: 1,
@@ -361,7 +362,8 @@ pub(super) fn build_suffix_with(network_id: Digest, partition: &[usize], full: b
         tip_adjusted: adjusted(&states[total]),
         statement,
         sigma: claim.package.step_proof.clone(),
-        recovery_witness_digest: [0x73; 32],
+        recovery_witness_digest: kagemusha_wallet_suffix_recovery_witness_digest_v1(&map_openings)
+            .unwrap(),
         account: claim.account.clone(),
         charge: claim.charge.clone(),
     };
@@ -373,7 +375,7 @@ pub(super) fn build_suffix_with(network_id: Digest, partition: &[usize], full: b
         certificates: claim.certificates.clone(),
         after: states[total + 1],
         receipt: claim.package.receipt,
-        map_openings: vec![vec![0; LOW], vec![0; EMPTY]],
+        map_openings,
     }
     .to_canonical_bytes()
     .unwrap();

@@ -27,7 +27,7 @@ use iroha_pasta::{
 use iroha_plonk::{
     ProverConfig, ProverRandomness, ProvingKey, Witness, create_proof_owned_with_claim,
     cs::InstanceType,
-    keys::{KeygenConfigV2, keygen_pk_v2},
+    keys::{KeygenConfigV2, keygen_pk_v2, keygen_vk_with_binding_v2},
     pcs::{
         ipa::{GeneratorClaim, PinnedParams},
         mle::{self, BatchOpening},
@@ -55,22 +55,33 @@ use super::{
 };
 use crate::a_relation::LINEAGE_DOMAIN;
 
-/// The four wraps' programs and proving keys.
-pub struct WrapKeys {
+/// The four wraps' programs, each pinning the verifying key of the wrap it
+/// verifies: everything proving needs besides each wrap's proving key.
+#[derive(Clone, Debug)]
+pub struct WrapPlans {
     /// S's program.
     pub s_plan: Arc<SPlan>,
+    /// R's program (pins S's key).
+    pub r_plan: Arc<RPlan>,
+    /// P's program (pins R's key).
+    pub p_plan: Arc<PPlan>,
+    /// Omega's program (pins P's key).
+    pub omega_plan: Arc<OmegaPlan>,
+}
+
+/// The four wraps' programs and proving keys. On the real Receive relations
+/// a wrap's proving key holds about 1.5 GiB, so a prover with bounded memory
+/// keeps only the [`WrapPlans`] ([`plans`]) and makes each proving key just
+/// before its proof ([`s_key`], [`r_key`], [`p_key`], [`omega_key`]).
+pub struct WrapKeys {
+    /// The programs.
+    pub plans: WrapPlans,
     /// S's proving key (Vesta).
     pub s_key: ProvingKey<Eq>,
-    /// R's program.
-    pub r_plan: Arc<RPlan>,
     /// R's proving key (Pallas).
     pub r_key: ProvingKey<Ep>,
-    /// P's program.
-    pub p_plan: Arc<PPlan>,
     /// P's proving key (Vesta).
     pub p_key: ProvingKey<Eq>,
-    /// Omega's program.
-    pub omega_plan: Arc<OmegaPlan>,
     /// Omega's proving key (Pallas).
     pub omega_key: ProvingKey<Ep>,
 }
@@ -81,74 +92,130 @@ impl core::fmt::Debug for WrapKeys {
     }
 }
 
-/// Generates S's key, then R's (which pins S's), then P's (which pins R's),
-/// then Omega's (which pins P's).
+fn field_instances() -> KeygenConfigV2 {
+    KeygenConfigV2::pipa_r(vec![InstanceType::Field])
+}
+
+fn s_shape(plans: &WrapPlans) -> SCircuit {
+    SCircuit {
+        plan: Arc::clone(&plans.s_plan),
+        witness: None,
+    }
+}
+
+fn r_shape(plan: &Arc<RPlan>) -> RCircuit {
+    RCircuit {
+        plan: Arc::clone(plan),
+        witness: None,
+    }
+}
+
+fn p_shape(plan: &Arc<PPlan>) -> PCircuit {
+    PCircuit {
+        plan: Arc::clone(plan),
+        witness: None,
+    }
+}
+
+/// The four programs, each pinning the previous wrap's verifying key, built
+/// from verifying keys alone (no proving key is made).
+///
+/// # Errors
+/// [`WrapError::Input`] for relations the wraps do not admit,
+/// [`WrapError::Proof`] when key generation fails.
+pub fn plans(spec: Arc<WrapSpec>) -> Result<WrapPlans, WrapError> {
+    let s_plan = Arc::new(SPlan::new(Arc::clone(&spec))?);
+    let s = SCircuit {
+        plan: Arc::clone(&s_plan),
+        witness: None,
+    };
+    let (binding, key) = keygen_vk_with_binding_v2(&spec.params_a, &s, &field_instances())
+        .map_err(|_| WrapError::Proof)?;
+    let r_plan = Arc::new(RPlan::new(Arc::clone(&s_plan), binding, key)?);
+    let (binding, key) =
+        keygen_vk_with_binding_v2(&spec.params_q, &r_shape(&r_plan), &field_instances())
+            .map_err(|_| WrapError::Proof)?;
+    let p_plan = Arc::new(PPlan::new(Arc::clone(&r_plan), binding, key)?);
+    let (binding, key) =
+        keygen_vk_with_binding_v2(&spec.params_a, &p_shape(&p_plan), &field_instances())
+            .map_err(|_| WrapError::Proof)?;
+    let omega_plan = Arc::new(OmegaPlan::new(Arc::clone(&p_plan), binding, key)?);
+    Ok(WrapPlans {
+        s_plan,
+        r_plan,
+        p_plan,
+        omega_plan,
+    })
+}
+
+/// S's proving key.
+///
+/// # Errors
+/// [`WrapError::Proof`] when key generation fails.
+pub fn s_key(plans: &WrapPlans) -> Result<ProvingKey<Eq>, WrapError> {
+    keygen_pk_v2(
+        &plans.s_plan.spec.params_a,
+        &s_shape(plans),
+        &field_instances(),
+    )
+    .map_err(|_| WrapError::Proof)
+}
+
+/// R's proving key.
+///
+/// # Errors
+/// [`WrapError::Proof`] when key generation fails.
+pub fn r_key(plans: &WrapPlans) -> Result<ProvingKey<Ep>, WrapError> {
+    keygen_pk_v2(
+        &plans.r_plan.spec.params_q,
+        &r_shape(&plans.r_plan),
+        &field_instances(),
+    )
+    .map_err(|_| WrapError::Proof)
+}
+
+/// P's proving key.
+///
+/// # Errors
+/// [`WrapError::Proof`] when key generation fails.
+pub fn p_key(plans: &WrapPlans) -> Result<ProvingKey<Eq>, WrapError> {
+    keygen_pk_v2(
+        &plans.p_plan.spec.params_a,
+        &p_shape(&plans.p_plan),
+        &field_instances(),
+    )
+    .map_err(|_| WrapError::Proof)
+}
+
+/// Omega's proving key.
+///
+/// # Errors
+/// [`WrapError::Proof`] when key generation fails.
+pub fn omega_key(plans: &WrapPlans) -> Result<ProvingKey<Ep>, WrapError> {
+    keygen_pk_v2(
+        &plans.p_plan.spec.params_q,
+        &OmegaCircuit {
+            plan: Arc::clone(&plans.omega_plan),
+            witness: None,
+        },
+        &KeygenConfigV2::pipa_r(INSTANCE_TYPES.to_vec()),
+    )
+    .map_err(|_| WrapError::Proof)
+}
+
+/// The four programs and every wrap's proving key.
 ///
 /// # Errors
 /// [`WrapError::Input`] for relations the wraps do not admit,
 /// [`WrapError::Proof`] when key generation fails.
 pub fn keygen(spec: Arc<WrapSpec>) -> Result<WrapKeys, WrapError> {
-    let s_plan = Arc::new(SPlan::new(Arc::clone(&spec))?);
-    let s_key = keygen_pk_v2(
-        &spec.params_a,
-        &SCircuit {
-            plan: Arc::clone(&s_plan),
-            witness: None,
-        },
-        &KeygenConfigV2::pipa_r(vec![InstanceType::Field]),
-    )
-    .map_err(|_| WrapError::Proof)?;
-    let r_plan = Arc::new(RPlan::new(
-        Arc::clone(&s_plan),
-        s_key.binding().clone(),
-        s_key.vk().clone(),
-    )?);
-    let r_key = keygen_pk_v2(
-        &spec.params_q,
-        &RCircuit {
-            plan: Arc::clone(&r_plan),
-            witness: None,
-        },
-        &KeygenConfigV2::pipa_r(vec![InstanceType::Field]),
-    )
-    .map_err(|_| WrapError::Proof)?;
-    let p_plan = Arc::new(PPlan::new(
-        Arc::clone(&r_plan),
-        r_key.binding().clone(),
-        r_key.vk().clone(),
-    )?);
-    let p_key = keygen_pk_v2(
-        &spec.params_a,
-        &PCircuit {
-            plan: Arc::clone(&p_plan),
-            witness: None,
-        },
-        &KeygenConfigV2::pipa_r(vec![InstanceType::Field]),
-    )
-    .map_err(|_| WrapError::Proof)?;
-    let omega_plan = Arc::new(OmegaPlan::new(
-        Arc::clone(&p_plan),
-        p_key.binding().clone(),
-        p_key.vk().clone(),
-    )?);
-    let omega_key = keygen_pk_v2(
-        &spec.params_q,
-        &OmegaCircuit {
-            plan: Arc::clone(&omega_plan),
-            witness: None,
-        },
-        &KeygenConfigV2::pipa_r(INSTANCE_TYPES.to_vec()),
-    )
-    .map_err(|_| WrapError::Proof)?;
+    let plans = plans(spec)?;
     Ok(WrapKeys {
-        s_plan,
-        s_key,
-        r_plan,
-        r_key,
-        p_plan,
-        p_key,
-        omega_plan,
-        omega_key,
+        s_key: s_key(&plans)?,
+        r_key: r_key(&plans)?,
+        p_key: p_key(&plans)?,
+        omega_key: omega_key(&plans)?,
+        plans,
     })
 }
 
@@ -416,13 +483,13 @@ struct OmegaInputs {
 /// when a native step fails (a chain whose accumulators do not decide).
 #[allow(clippy::too_many_lines)]
 pub fn prepare(
-    keys: &WrapKeys,
+    plans: &WrapPlans,
     chain: &FinalChain,
     tapes: WrapTapes,
     config: &FoldConfig,
 ) -> Result<Prepared, WrapError> {
-    let s_plan = &*keys.s_plan;
-    let r_plan = &*keys.r_plan;
+    let s_plan = &*plans.s_plan;
+    let r_plan = &*plans.r_plan;
     let spec = &*s_plan.spec;
     let domains = &spec.domains;
     let last = spec.last;
@@ -672,9 +739,9 @@ pub fn prepare(
 
 /// S with `prepared`'s witness.
 #[must_use]
-pub fn s_circuit(keys: &WrapKeys, prepared: &Prepared) -> SCircuit {
+pub fn s_circuit(plans: &WrapPlans, prepared: &Prepared) -> SCircuit {
     SCircuit {
-        plan: Arc::clone(&keys.s_plan),
+        plan: Arc::clone(&plans.s_plan),
         witness: Some(Arc::clone(&prepared.s_witness)),
     }
 }
@@ -684,15 +751,16 @@ pub fn s_circuit(keys: &WrapKeys, prepared: &Prepared) -> SCircuit {
 /// # Errors
 /// [`WrapError::Proof`] when proving fails.
 pub fn prove_s(
-    keys: &WrapKeys,
+    plans: &WrapPlans,
+    key: &ProvingKey<Eq>,
     prepared: &Prepared,
 ) -> Result<(Vec<u8>, GeneratorClaim<Eq>), WrapError> {
-    let circuit = s_circuit(keys, prepared);
-    let columns = Witness::from_circuit(&keys.s_key, &circuit, &[prepared.s_public.clone()])
+    let circuit = s_circuit(plans, prepared);
+    let columns = Witness::from_circuit(key, &circuit, &[prepared.s_public.clone()])
         .map_err(|_| WrapError::Proof)?;
     let output = create_proof_owned_with_claim(
-        &keys.s_plan.spec.params_a,
-        &keys.s_key,
+        &plans.s_plan.spec.params_a,
+        key,
         columns,
         ProverRandomness::os(),
         ProverConfig::default(),
@@ -725,7 +793,7 @@ impl core::fmt::Debug for RStage {
 /// # Errors
 /// [`WrapError::Input`] for another layout.
 pub fn r_stage(
-    keys: &WrapKeys,
+    plans: &WrapPlans,
     prepared: Prepared,
     s_proof: Vec<u8>,
     s_opening: &GeneratorClaim<Eq>,
@@ -740,7 +808,7 @@ pub fn r_stage(
         u: s_opening.challenges().iter().map(embed_fp).collect(),
     };
     let r_public = public.rows();
-    if r_public.len() != keys.r_plan.layout.rows() {
+    if r_public.len() != plans.r_plan.layout.rows() {
         return Err(WrapError::Input);
     }
     witness.s_public = prepared.s_public;
@@ -756,9 +824,9 @@ pub fn r_stage(
 
 /// R with `stage`'s witness.
 #[must_use]
-pub fn r_circuit(keys: &WrapKeys, stage: &RStage) -> RCircuit {
+pub fn r_circuit(plans: &WrapPlans, stage: &RStage) -> RCircuit {
     RCircuit {
-        plan: Arc::clone(&keys.r_plan),
+        plan: Arc::clone(&plans.r_plan),
         witness: Some(Arc::clone(&stage.r_witness)),
     }
 }
@@ -768,15 +836,16 @@ pub fn r_circuit(keys: &WrapKeys, stage: &RStage) -> RCircuit {
 /// # Errors
 /// [`WrapError::Proof`] when proving fails.
 pub fn prove_r(
-    keys: &WrapKeys,
+    plans: &WrapPlans,
+    key: &ProvingKey<Ep>,
     stage: &RStage,
 ) -> Result<(Vec<u8>, GeneratorClaim<Ep>), WrapError> {
-    let circuit = r_circuit(keys, stage);
-    let columns = Witness::from_circuit(&keys.r_key, &circuit, &[stage.r_public.clone()])
+    let circuit = r_circuit(plans, stage);
+    let columns = Witness::from_circuit(key, &circuit, &[stage.r_public.clone()])
         .map_err(|_| WrapError::Proof)?;
     let output = create_proof_owned_with_claim(
-        &keys.r_plan.spec.params_q,
-        &keys.r_key,
+        &plans.r_plan.spec.params_q,
+        key,
         columns,
         ProverRandomness::os(),
         ProverConfig::default(),
@@ -813,13 +882,13 @@ impl core::fmt::Debug for PStage {
 /// [`WrapError::Fold`] when `acc_P`'s fold fails, [`WrapError::Input`] for
 /// another layout.
 pub fn p_stage(
-    keys: &WrapKeys,
+    plans: &WrapPlans,
     stage: RStage,
     r_proof: Vec<u8>,
     r_opening: &GeneratorClaim<Ep>,
     config: &FoldConfig,
 ) -> Result<PStage, WrapError> {
-    let spec = &*keys.p_plan.spec;
+    let spec = &*plans.p_plan.spec;
     let inputs = stage.p;
     let (fold, acc_p) = create_fold(
         &spec.params_q,
@@ -847,7 +916,7 @@ pub fn p_stage(
         vesta: inputs.vesta_crossing,
     }
     .rows();
-    if p_public.len() != keys.p_plan.layout.rows() {
+    if p_public.len() != plans.p_plan.layout.rows() {
         return Err(WrapError::Input);
     }
     let p_witness = PWitness {
@@ -873,9 +942,9 @@ pub fn p_stage(
 
 /// P with `stage`'s witness.
 #[must_use]
-pub fn p_circuit(keys: &WrapKeys, stage: &PStage) -> PCircuit {
+pub fn p_circuit(plans: &WrapPlans, stage: &PStage) -> PCircuit {
     PCircuit {
-        plan: Arc::clone(&keys.p_plan),
+        plan: Arc::clone(&plans.p_plan),
         witness: Some(Arc::clone(&stage.p_witness)),
     }
 }
@@ -885,15 +954,16 @@ pub fn p_circuit(keys: &WrapKeys, stage: &PStage) -> PCircuit {
 /// # Errors
 /// [`WrapError::Proof`] when proving fails.
 pub fn prove_p(
-    keys: &WrapKeys,
+    plans: &WrapPlans,
+    key: &ProvingKey<Eq>,
     stage: &PStage,
 ) -> Result<(Vec<u8>, GeneratorClaim<Eq>), WrapError> {
-    let circuit = p_circuit(keys, stage);
-    let columns = Witness::from_circuit(&keys.p_key, &circuit, &[stage.p_public.clone()])
+    let circuit = p_circuit(plans, stage);
+    let columns = Witness::from_circuit(key, &circuit, &[stage.p_public.clone()])
         .map_err(|_| WrapError::Proof)?;
     let output = create_proof_owned_with_claim(
-        &keys.p_plan.spec.params_a,
-        &keys.p_key,
+        &plans.p_plan.spec.params_a,
+        key,
         columns,
         ProverRandomness::os(),
         ProverConfig::default(),
@@ -908,13 +978,13 @@ pub fn prove_p(
 /// # Errors
 /// [`WrapError::Fold`] when `acc_V`'s fold fails.
 pub fn omega_circuit(
-    keys: &WrapKeys,
+    plans: &WrapPlans,
     stage: PStage,
     p_proof: Vec<u8>,
     p_opening: &GeneratorClaim<Eq>,
     config: &FoldConfig,
 ) -> Result<(OmegaCircuit, Vec<Vec<Fq>>, AccumulatorT<Eq>), WrapError> {
-    let spec = &*keys.p_plan.spec;
+    let spec = &*plans.p_plan.spec;
     let inputs = stage.omega;
     // acc_V = fold(P's claim, R's claim for S, the A decider's claim, the
     // restructured Vesta claim).
@@ -942,10 +1012,32 @@ pub fn omega_circuit(
     };
     let instances = omega_instances(stage.d_a, &acc_v);
     let circuit = OmegaCircuit {
-        plan: Arc::clone(&keys.omega_plan),
+        plan: Arc::clone(&plans.omega_plan),
         witness: Some(Arc::new(witness)),
     };
     Ok((circuit, instances, acc_v))
+}
+
+/// Proves Omega (Pallas) for `circuit` and its public columns `instances`.
+///
+/// # Errors
+/// [`WrapError::Proof`] when proving fails.
+pub fn prove_omega(
+    plans: &WrapPlans,
+    key: &ProvingKey<Ep>,
+    circuit: &OmegaCircuit,
+    instances: &[Vec<Fq>],
+) -> Result<Vec<u8>, WrapError> {
+    let columns = Witness::from_circuit(key, circuit, instances).map_err(|_| WrapError::Proof)?;
+    let output = create_proof_owned_with_claim(
+        &plans.p_plan.spec.params_q,
+        key,
+        columns,
+        ProverRandomness::os(),
+        ProverConfig::default(),
+    )
+    .map_err(|_| WrapError::Proof)?;
+    Ok(output.proof)
 }
 
 /// Proves S, then R, then P, then Omega, for `chain`.
@@ -960,26 +1052,18 @@ pub fn prove(
     tapes: WrapTapes,
     config: &FoldConfig,
 ) -> Result<WrapOutput, WrapError> {
-    let prepared = prepare(keys, chain, tapes, config)?;
-    let (s_proof, s_opening) = prove_s(keys, &prepared)?;
-    let stage = r_stage(keys, prepared, s_proof, &s_opening)?;
-    let (r_proof, r_opening) = prove_r(keys, &stage)?;
-    let stage = p_stage(keys, stage, r_proof, &r_opening, config)?;
+    let plans = &keys.plans;
+    let prepared = prepare(plans, chain, tapes, config)?;
+    let (s_proof, s_opening) = prove_s(plans, &keys.s_key, &prepared)?;
+    let stage = r_stage(plans, prepared, s_proof, &s_opening)?;
+    let (r_proof, r_opening) = prove_r(plans, &keys.r_key, &stage)?;
+    let stage = p_stage(plans, stage, r_proof, &r_opening, config)?;
     let (d_a, acc_p) = (stage.d_a, stage.acc_p.clone());
-    let (p_proof, p_opening) = prove_p(keys, &stage)?;
-    let (circuit, instances, acc_v) = omega_circuit(keys, stage, p_proof, &p_opening, config)?;
-    let columns = Witness::from_circuit(&keys.omega_key, &circuit, &instances)
-        .map_err(|_| WrapError::Proof)?;
-    let output = create_proof_owned_with_claim(
-        &keys.p_plan.spec.params_q,
-        &keys.omega_key,
-        columns,
-        ProverRandomness::os(),
-        ProverConfig::default(),
-    )
-    .map_err(|_| WrapError::Proof)?;
+    let (p_proof, p_opening) = prove_p(plans, &keys.p_key, &stage)?;
+    let (circuit, instances, acc_v) = omega_circuit(plans, stage, p_proof, &p_opening, config)?;
+    let proof = prove_omega(plans, &keys.omega_key, &circuit, &instances)?;
     Ok(WrapOutput {
-        proof: output.proof,
+        proof,
         instances,
         d_a,
         acc_p,

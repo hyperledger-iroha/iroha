@@ -26,7 +26,7 @@ pub struct NativeWalletRuntimeV1<F: KagemushaWalletFsV1, P, S> {
     reason = "retained phases own the original provider and challenge without adding a fallible allocation"
 )]
 pub(super) enum RuntimeCustodyV1<F: KagemushaWalletFsV1, P> {
-    Exclusive(crate::kagemusha_wallet_advance_v1::KagemushaWalletProviderV1<F, P>),
+    Exclusive(crate::kagemusha_wallet_state_v1::NativeProviderV1<F, P>),
     // Enrollment retains the same installed proof graph and original source owner.
     Enrollment(Box<enrollment::EnrollmentOwnerV1<F, P>>),
     // Unexpected native references retain custody and cannot confer admission.
@@ -92,7 +92,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     /// This is not account admission and performs no payment-key or monetary operation.
     #[must_use]
     pub fn new(
-        provider: crate::kagemusha_wallet_advance_v1::KagemushaWalletProviderV1<F, P>,
+        provider: crate::kagemusha_wallet_state_v1::NativeProviderV1<F, P>,
         installed: Arc<InstalledVerifierPackV1>,
         sources: Arc<QualifiedWalletSourcesV1>,
         genesis: Arc<SumeragiFinalityVerifier>,
@@ -514,7 +514,7 @@ pub struct NativeInstallationConfigV1 {
 
 /// Failed native startup retains the actual provider and sole original source for retry.
 pub struct NativeStartupFailureV1<F: KagemushaWalletFsV1, P, S> {
-    provider: crate::kagemusha_wallet_advance_v1::KagemushaWalletProviderV1<F, P>,
+    provider: crate::kagemusha_wallet_state_v1::NativeProviderV1<F, P>,
     originals: S,
     error: Error,
 }
@@ -531,7 +531,7 @@ impl<F: KagemushaWalletFsV1, P, S> NativeStartupFailureV1<F, P, S> {
     pub fn into_parts(
         self,
     ) -> (
-        crate::kagemusha_wallet_advance_v1::KagemushaWalletProviderV1<F, P>,
+        crate::kagemusha_wallet_state_v1::NativeProviderV1<F, P>,
         S,
         Error,
     ) {
@@ -556,7 +556,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
     )]
     pub fn load(
         config: &NativeInstallationConfigV1,
-        provider: crate::kagemusha_wallet_advance_v1::KagemushaWalletProviderV1<F, P>,
+        provider: crate::kagemusha_wallet_state_v1::NativeProviderV1<F, P>,
         verifier_pack: &[u8],
         producer_inventory: &[u8],
         mut originals: S,

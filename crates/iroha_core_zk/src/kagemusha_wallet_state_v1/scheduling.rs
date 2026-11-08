@@ -211,6 +211,14 @@ impl Default for Scheduler {
 }
 
 impl Scheduler {
+    /// Stop one suffix waiter under the admission lock, preventing a lost wakeup.
+    pub(super) fn cancel_suffix_speculation<T>(&self, job: &SpeculationJob<T>) {
+        let state = self.0.lock();
+        job.cancel_proof();
+        drop(state);
+        self.0.idle.notify_all();
+    }
+
     /// Initially inactive; enable work explicitly when foreground or charging.
     #[must_use]
     pub fn new() -> Self {
@@ -443,6 +451,17 @@ impl<T> Clone for SpeculationJob<T> {
 }
 
 impl<T> SpeculationJob<T> {
+    /// Request cancellation of exactly this ephemeral proof without joining its thread.
+    pub(super) fn cancel_proof(&self) {self.0.token.cancel();}
+    /// End only an unadmitted job whose owning bridge call was dropped.
+    pub(super) fn abandon_waiting(&self) {
+        let mut state=self.0.lock();
+        if matches!(*state,Speculated::Waiting) {
+            self.0.token.cancel();
+            *state=Speculated::Ended;
+        }
+    }
+
     /// The proof's cooperative cancellation signal: its call ended it, or close cancelled
     /// the admitted proof.
     pub(super) fn token(&self) -> &Cancellation {
@@ -486,6 +505,11 @@ impl<T> Shared<T> {
 }
 
 impl<T> Speculation<T> {
+    /// Observe whether a bounded job completed or ended; never consumes its value.
+    pub(super) fn finished(&self) -> bool {
+        matches!(*self.0.lock(), Speculated::Done(_) | Speculated::Ended)
+    }
+
     /// A speculation whose job has not been admitted.
     pub(super) fn new() -> Self {
         Self(Arc::new(Shared {

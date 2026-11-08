@@ -274,7 +274,7 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
         speculative: Option<&N::Speculative>,
     ) -> Result<Option<(Plan, N::Prepared)>, Error> {
         let key = ArchiveKey::PreparationDraft(request.request_id());
-        let source_digest = source.released().frozen.capsule.custody_digest();
+        let source_digest = source.released().capsule().custody_digest();
         let mut planned = None;
         let recovered = match self.read_intake_batch(request.request_id(), entry)? {
             // A stale Receive/Archive batch can be replaced only before a plan/capsule was selected.

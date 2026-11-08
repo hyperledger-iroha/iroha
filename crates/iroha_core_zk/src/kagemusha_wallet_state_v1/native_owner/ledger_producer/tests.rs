@@ -513,8 +513,7 @@ fn unconfirmed_load_reserves_nothing_and_preserves_the_activation() {
 #[test]
 fn first_load_uses_real_provider_archive_and_checkpoint_on_disk() {
     use crate::kagemusha_wallet_advance_v1::{
-        KagemushaWalletProviderOptionsV1, KagemushaWalletProviderV1,
-        KagemushaWalletPublishOutcomeV1, KagemushaWalletStdFsV1,
+        KagemushaWalletProviderOptionsV1, KagemushaWalletPublishOutcomeV1, KagemushaWalletStdFsV1,
         test_support::enrolled_state_provider,
     };
     use crate::kagemusha_wallet_state_v1::tests::{TestProofs, signer};
@@ -557,7 +556,7 @@ fn first_load_uses_real_provider_archive_and_checkpoint_on_disk() {
     .unwrap();
     let scope = super::super::activation::initialize_ledger_load_fixture(&mut wallet, true);
     drop(wallet);
-    let provider = KagemushaWalletProviderV1::open(
+    let provider = crate::kagemusha_wallet_state_v1::NativeProviderV1::open(
         KagemushaWalletStdFsV1::open(&root).unwrap(),
         platform.clone(),
         credential.body.scheme_id,
@@ -584,7 +583,7 @@ fn first_load_uses_real_provider_archive_and_checkpoint_on_disk() {
     wallet.close_archive_call(true).unwrap();
     let selected = wallet.manifest().unwrap().0;
     drop(wallet);
-    let provider = KagemushaWalletProviderV1::open(
+    let provider = crate::kagemusha_wallet_state_v1::NativeProviderV1::open(
         KagemushaWalletStdFsV1::open(&root).unwrap(),
         platform,
         credential.body.scheme_id,

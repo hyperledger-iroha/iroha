@@ -396,7 +396,7 @@ impl SpeculativeSendV1 {
         );
         same_request
             && self.manifest == manifest
-            && self.source == source.released().frozen.capsule.custody_digest()
+            && self.source == source.released().capsule().custody_digest()
             && !NativeChoicesV1::needs_clock(request, source)
     }
 
@@ -527,7 +527,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         let SlotStatus::Released(marker) = self.status()? else {
             return Err(Error::Pending);
         };
-        let capsule = &released.frozen.capsule;
+        let capsule = &released.capsule();
         let original_manifest = self
             .custody
             .archive_checkpoint()?
@@ -553,25 +553,25 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         };
         if marker.marker().scheme_id != self.scheme_id
             || marker.marker().wallet_id != self.wallet_id
-            || marker.payment_key() != &released.frozen.credential.body.payment_key
+            || marker.payment_key() != &released.credential().body.payment_key
             || sequence != capsule.body().statement.sequence
             || operation_id != capsule.body().operation_id
             || head != capsule.body().statement.successor
             || head != valid(capsule.body().successor_state.commitment())?
             || capsule_digest != capsule.custody_digest()
-            || capsule_digest != released.retained.capsule_digest
-            || operation_id != released.retained.operation_id
-            || marker.selected_generation() != Some(released.retained.selected_generation)
-            || marker.completion_digest() != Some(released.retained.completion_digest)
+            || capsule_digest != released.capsule_digest()
+            || operation_id != released.operation_id()
+            || marker.selected_generation() != Some(released.selected_generation())
+            || marker.completion_digest() != Some(released.completion_digest())
         {
             return Err(Error::WitnessLost("review selected source"));
         }
         Ok(ReviewSourceV1 {
             marker: *marker.marker(),
-            completion: released.retained.completion_digest,
+            completion: released.completion_digest(),
             archive_checkpoint,
             artifact_manifest: self.proofs.installed.verifier().manifest_digest(),
-            selected_generation: released.retained.selected_generation,
+            selected_generation: released.selected_generation(),
         })
     }
 
@@ -755,9 +755,9 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             charge_quote_digest,
             scheme_id: self.scheme_id,
             wallet_id: self.wallet_id,
-            current_head: released.frozen.capsule.body().statement.successor.value,
+            current_head: released.capsule().body().statement.successor.value,
             source_state_commitment: valid(before.commitment())?.value,
-            source_capsule_digest: released.retained.capsule_digest,
+            source_capsule_digest: released.capsule_digest(),
             credential_digest: owner.credential().credential_digest(),
             payment_key: owner.credential().body.payment_key,
             artifact_manifest_digest: self.proofs.installed.verifier().manifest_digest(),
@@ -765,7 +765,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         // Preparation reads are complete before checking actual selection again.
         let (current_selected, current) = self.sync_manifest()?;
         if current_selected != selected
-            || current.capsule != released.retained.capsule_digest
+            || current.capsule != released.capsule_digest()
             || self.review_source(current_selected, &current, &released)? != binding
         {
             return Err(Error::OperationConflict);
@@ -775,8 +775,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         let speculation = (speculate
             && kind == KagemushaWalletOperationKindV1::Send
             && !released
-                .frozen
-                .capsule
+                .capsule()
                 .body()
                 .successor_state
                 .send_requires_time_anchor())
@@ -840,13 +839,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             Some(&fold),
         )?;
         let nonce = NativeChoicesV1::fresh_nonce(
-            &released
-                .frozen
-                .capsule
-                .body()
-                .successor_state
-                .core
-                .state_nonce,
+            &released.capsule().body().successor_state.core.state_nonce,
         )?;
         // The same binding fresh choices have; a speculation never carries a clock reading.
         let choices = NativeChoicesV1::speculated(
@@ -920,7 +913,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
             budget: self.proofs.budget,
             step,
             manifest: self.proofs.installed.verifier().manifest_digest(),
-            source: released.frozen.capsule.custody_digest(),
+            source: released.capsule().custody_digest(),
             request: kagemusha_wallet_provider_digest_v1(SPECULATIVE_REQUEST_DOMAIN, &job.request),
             nonce,
         }))

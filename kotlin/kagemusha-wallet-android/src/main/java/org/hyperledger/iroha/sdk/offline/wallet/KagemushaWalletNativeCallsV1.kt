@@ -36,6 +36,32 @@ internal object KagemushaWalletNativeCallsV1 {
     fun snapshot(handle: Long) = worker.snapshot { KagemushaWalletNativeV1.snapshot(handle) }
     fun review(handle: Long, exchangeId: Long, requestId: ByteArray, selector: Int, amountLow: Long, amountHigh: Long, expectation: Int, expectedProjection: ByteArray, first: ByteArray, second: ByteArray) =
         worker.run { KagemushaWalletNativeV1.review(handle, exchangeId, requestId, selector, amountLow, amountHigh, expectation, expectedProjection, first, second) }
+    fun suffixUnloadStatus(handle: Long) = worker.run { KagemushaWalletNativeV1.suffixUnloadStatus(handle) }
+    fun suffixUnloadPrepare(handle: Long, exchangeId: Long, request: KagemushaWalletSuffixUnloadRequestV1) = worker.run {
+        KagemushaWalletNativeV1.suffixUnloadPrepare(handle, exchangeId, request.requestId(), request.amount.low,
+            request.amount.high, request.quote() ?: byteArrayOf(), request.certificates() ?: byteArrayOf(),
+            request.beneficiary() ?: byteArrayOf())
+    }
+    fun suffixUnloadResume(handle: Long, exchangeId: Long, requestId: ByteArray) = worker.run {
+        KagemushaWalletNativeV1.suffixUnloadResume(handle, exchangeId, requestId)
+    }
+    fun executeReviewedSuffixUnload(handle: Long, exchangeId: Long, token: Long) = worker.run {
+        KagemushaWalletNativeV1.executeReviewedSuffixUnload(handle, exchangeId, token)
+    }
+    fun suffixUnloadInstruction(handle: Long, requestId: ByteArray, ordinal: KagemushaWalletUInt128V1) = worker.run {
+        KagemushaWalletNativeV1.suffixUnloadInstruction(handle, requestId, ordinal.low, ordinal.high)
+    }
+    fun suffixUnloadAttemptOutcome(handle: Long, requestId: ByteArray, ordinal: KagemushaWalletUInt128V1, signedWire: ByteArray) = worker.run {
+        KagemushaWalletNativeV1.suffixUnloadAttemptOutcome(handle, requestId, ordinal.low, ordinal.high, signedWire)
+    }
+    fun suffixUnloadIngestFinality(handle: Long, exchangeId: Long, requestId: ByteArray, ordinal: KagemushaWalletUInt128V1,
+        signedWire: ByteArray, finality: ByteArray) = worker.run {
+        KagemushaWalletNativeV1.suffixUnloadIngestFinality(handle, exchangeId, requestId, ordinal.low, ordinal.high, signedWire, finality)
+    }
+    fun suffixUnloadSignedWire(handle: Long, requestId: ByteArray, ordinal: KagemushaWalletUInt128V1, attemptIndex: Long) = worker.run {
+        KagemushaWalletNativeV1.suffixUnloadSignedWire(handle, requestId, ordinal.low, ordinal.high, attemptIndex)
+    }
+
     fun executeReviewed(handle: Long, exchangeId: Long, token: Long) =
         worker.run { KagemushaWalletNativeV1.executeReviewed(handle, exchangeId, token) }
     fun discardReview(handle: Long, exchangeId: Long, token: Long) = KagemushaWalletNativeV1.discardReview(handle, exchangeId, token)

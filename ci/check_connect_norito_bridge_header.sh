@@ -121,7 +121,7 @@ wallet_exports_path = jni_path.parent / "kagemusha_wallet_ffi/exports.rs"
 rust += "\n" + wallet_exports_path.read_text(encoding="utf-8")
 wallet_load_path = jni_path.parent / "kagemusha_wallet_load_original.rs"
 rust += "\n" + wallet_load_path.read_text(encoding="utf-8")
-for relative in ("review.rs", "exchange.rs", "installed/exports.rs", "observation.rs"):
+for relative in ("review.rs", "exchange.rs", "installed/exports.rs", "observation.rs", "suffix.rs"):
     rust += "\n" + (jni_path.parent / "kagemusha_wallet_ffi" / relative).read_text(encoding="utf-8")
 native_sources = [jni_path, *sorted(
     source for source in jni_path.parent.rglob("*.rs") if source != jni_path
@@ -197,6 +197,14 @@ KAGEMUSHA_WALLET_EXPORTS = {
     "connect_norito_kagemusha_wallet_snapshot_v1",
     "connect_norito_kagemusha_wallet_review_v1",
     "connect_norito_kagemusha_wallet_execute_reviewed_v1",
+    "connect_norito_kagemusha_wallet_suffix_unload_status_v1",
+    "connect_norito_kagemusha_wallet_suffix_unload_prepare_v1",
+    "connect_norito_kagemusha_wallet_suffix_unload_resume_v1",
+    "connect_norito_kagemusha_wallet_suffix_unload_execute_reviewed_v1",
+    "connect_norito_kagemusha_wallet_suffix_unload_instruction_v1",
+    "connect_norito_kagemusha_wallet_suffix_unload_attempt_outcome_v1",
+    "connect_norito_kagemusha_wallet_suffix_unload_ingest_finality_v1",
+    "connect_norito_kagemusha_wallet_suffix_unload_signed_wire_v1",
     "connect_norito_kagemusha_wallet_discard_review_v1",
     "connect_norito_kagemusha_wallet_installation_begin_v1",
     "connect_norito_kagemusha_wallet_installation_register_v1",
@@ -210,7 +218,7 @@ KAGEMUSHA_WALLET_EXPORTS = {
 }
 KAGEMUSHA_WALLET_JNI_EXPORTS = {
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
-    for method in ("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "beginExchange", "endExchange", "call", "setup", "enrollment", "enrollmentRefusal", "execute", "review", "executeReviewed", "discardReview", "snapshot")
+    for method in ("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "beginExchange", "endExchange", "call", "setup", "enrollment", "enrollmentRefusal", "execute", "review", "executeReviewed", "discardReview", "snapshot", "suffixUnloadStatus", "suffixUnloadPrepare", "suffixUnloadResume", "executeReviewedSuffixUnload", "suffixUnloadInstruction", "suffixUnloadAttemptOutcome", "suffixUnloadIngestFinality", "suffixUnloadSignedWire")
 } | {
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_beginInstallation",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_registerInstallation",
@@ -360,6 +368,7 @@ def canonical_rust_type(value: str) -> str:
         "WalletEnrollmentItem": "connect_norito_kagemusha_wallet_enrollment_item_v1",
         "WalletOpenRequest": "connect_norito_kagemusha_wallet_open_request_v1",
         "WalletReviewRequest": "connect_norito_kagemusha_wallet_review_request_v1",
+        "WalletSuffixUnloadRequest": "connect_norito_kagemusha_wallet_suffix_unload_request_v1",
         "WalletRuntimeOriginals": "connect_norito_kagemusha_wallet_runtime_originals_v1",
         "WalletInstallationAttempt": "connect_norito_kagemusha_wallet_installation_attempt_v1",
         "WalletEnrollmentRequest": "connect_norito_kagemusha_wallet_enrollment_request_v1",
@@ -508,6 +517,50 @@ for method, expected in (
     actual = [re.sub(r"\s+", "", value) for value in split_parameters(declaration.group(1))[2:]] if declaration else []
     if actual != expected:
         raise SystemExit(f"request-bound review JNI {method} signature mismatch")
+
+# Suffix issuance adds a distinct request; the ordinary request and result remain exact.
+suffix_fields = (
+    ("request_id32", "*const u8", "const uint8_t *"),
+    ("amount", "WalletU128", "connect_norito_kagemusha_wallet_u128_v1"),
+    ("charge_quote", "*const u8", "const uint8_t *"),
+    ("charge_quote_length", "usize", "size_t"),
+    ("charge_certificates", "*const u8", "const uint8_t *"),
+    ("charge_certificates_length", "usize", "size_t"),
+    ("charge_beneficiary", "*const u8", "const uint8_t *"),
+    ("charge_beneficiary_length", "usize", "size_t"),
+)
+suffix_rust = re.search(r"pub\s+struct\s+WalletSuffixUnloadRequest\s*\{([^}]+)\}", rust, re.S)
+suffix_c = re.search(
+    r"typedef\s+struct(?:\s+connect_norito_kagemusha_wallet_suffix_unload_request_v1)?\s*\{([^}]+)\}\s*connect_norito_kagemusha_wallet_suffix_unload_request_v1\s*;",
+    header, re.S,
+)
+for language, declaration, expected in (
+    ("Rust", suffix_rust, "".join(f"pub {name}: {kind}," for name, kind, _ in suffix_fields)),
+    ("C", suffix_c, "".join(f"{kind} {name};" for name, _, kind in suffix_fields)),
+):
+    body = re.sub(r"/\*.*?\*/|//[^\n]*", "", declaration.group(1), flags=re.S) if declaration else ""
+    if re.sub(r"\s+", "", body) != re.sub(r"\s+", "", expected):
+        raise SystemExit(f"{language} suffix Unload request layout mismatch")
+
+suffix_stage_jni = ["handle:jlong", "request_id:JByteArray<'_>", "ordinal_low:jlong", "ordinal_high:jlong"]
+for method, expected in (
+    ("suffixUnloadStatus", ["handle:jlong"]),
+    ("suffixUnloadPrepare", ["handle:jlong", "exchange_id:jlong", "request_id:JByteArray<'_>",
+        "amount_low:jlong", "amount_high:jlong", "quote:JByteArray<'_>",
+        "certificates:JByteArray<'_>", "beneficiary:JByteArray<'_>"]),
+    ("suffixUnloadResume", ["handle:jlong", "exchange_id:jlong", "request_id:JByteArray<'_>"]),
+    ("executeReviewedSuffixUnload", ["handle:jlong", "exchange_id:jlong", "token:jlong"]),
+    ("suffixUnloadInstruction", suffix_stage_jni),
+    ("suffixUnloadSignedWire", suffix_stage_jni + ["attempt_index:jlong"]),
+    ("suffixUnloadAttemptOutcome", suffix_stage_jni + ["signed_wire:JByteArray<'_>"]),
+    ("suffixUnloadIngestFinality", ["handle:jlong", "exchange_id:jlong", "request_id:JByteArray<'_>",
+        "ordinal_low:jlong", "ordinal_high:jlong", "signed_wire:JByteArray<'_>", "finality:JByteArray<'_>"]),
+):
+    name = "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
+    declaration = re.search(rf"fn\s+{name}\s*\((.*?)\)\s*->\s*jobject", native_rust, re.S)
+    actual = [re.sub(r"\s+", "", value) for value in split_parameters(declaration.group(1))[2:]] if declaration else []
+    if actual != expected:
+        raise SystemExit(f"suffix Unload JNI {method} signature mismatch")
 
 # The wallet has one current ABI; every other KAGEMUSHA C export is retired.
 native_c_exports = set(re.findall(

@@ -52,6 +52,7 @@ use super::{
         KagemushaWalletCompletionExpectationV1, KagemushaWalletCompletionFrameV1,
         kagemusha_wallet_load_completion_v1, kagemusha_wallet_stage_completion_v1,
     },
+    decode_resource::read_model,
     layout::{
         KAGEMUSHA_WALLET_BALLAST_NAME_V1, KagemushaWalletCustodyDirV1, KagemushaWalletSlotIdV1,
         kagemusha_wallet_fixed_name_v1, kagemusha_wallet_list_dir_v1,
@@ -365,6 +366,25 @@ pub(super) enum FinishedV1<R> {
     Stalled(KagemushaWalletProviderErrorV1),
 }
 
+/// Only completed invalid input becomes NotPerformed; unfinished local reads stay retryable.
+enum RequestValidationErrorV1 {
+    NotPerformed(KagemushaWalletNotPerformedV1),
+    Provider(KagemushaWalletProviderErrorV1),
+}
+impl From<KagemushaWalletNotPerformedV1> for RequestValidationErrorV1 {
+    fn from(reason: KagemushaWalletNotPerformedV1) -> Self {
+        Self::NotPerformed(reason)
+    }
+}
+impl RequestValidationErrorV1 {
+    fn project(error: KagemushaWalletProviderErrorV1, field: &'static str) -> Self {
+        match error {
+            error @ KagemushaWalletProviderErrorV1::DecodeResource(_) => Self::Provider(error),
+            _ => Self::NotPerformed(invalid(field)),
+        }
+    }
+}
+
 fn invalid(field: &'static str) -> KagemushaWalletNotPerformedV1 {
     KagemushaWalletNotPerformedV1::Invalid { field }
 }
@@ -453,7 +473,10 @@ where
             owner,
         ) {
             Ok(validated) => validated,
-            Err(reason) => return Ok(KagemushaWalletAdvanceOutcomeV1::NotPerformed(reason)),
+            Err(RequestValidationErrorV1::NotPerformed(reason)) => {
+                return Ok(KagemushaWalletAdvanceOutcomeV1::NotPerformed(reason));
+            }
+            Err(RequestValidationErrorV1::Provider(error)) => return Err(error),
         };
         let durable = self
             .cache
@@ -742,14 +765,14 @@ where
         capsule_digest: &[u8; 32],
         boot: &Result<[u8; 32], KagemushaWalletUnavailableV1>,
         owner: &dyn KagemushaWalletTransitionOwnerV1<C, R>,
-    ) -> Result<(KagemushaWalletMarkerRecordV1, Vec<u8>), KagemushaWalletNotPerformedV1> {
+    ) -> Result<(KagemushaWalletMarkerRecordV1, Vec<u8>), RequestValidationErrorV1> {
         if KagemushaWalletExpectedHeadV1::of(current) != Some(request.expected) {
-            return Err(KagemushaWalletNotPerformedV1::StaleHead);
+            return Err(KagemushaWalletNotPerformedV1::StaleHead.into());
         }
         let capsule = &request.capsule;
         let state = capsule
             .head_marker_state()
-            .map_err(|_| invalid("capsule"))?;
+            .map_err(|error| RequestValidationErrorV1::project(error, "capsule"))?;
         let KagemushaWalletMarkerStateV1::Head {
             operation_id,
             head,
@@ -757,16 +780,16 @@ where
             ..
         } = state
         else {
-            return Err(invalid("capsule.head"));
+            return Err(invalid("capsule.head").into());
         };
         if state_capsule_digest != *capsule_digest {
-            return Err(invalid("capsule.digest"));
+            return Err(invalid("capsule.digest").into());
         }
         if request.operation_id != operation_id || capsule.operation_id() != operation_id {
-            return Err(invalid("operation_id"));
+            return Err(invalid("operation_id").into());
         }
         if request.new_head != head {
-            return Err(invalid("new_head"));
+            return Err(invalid("new_head").into());
         }
         // For Send, Unload and Retiring, the native Coordinator requires the source-selected
         // durable fold of this expected head and exact equality with capsule Ω(pred) before
@@ -774,9 +797,9 @@ where
         // them. Advance independently binds the capsule to the currently selected head below.
         let bound = capsule
             .bound_proof_digest()
-            .map_err(|_| invalid("proof_digest"))?;
+            .map_err(|error| RequestValidationErrorV1::project(error, "proof_digest"))?;
         if request.proof_digest != bound {
-            return Err(invalid("proof_digest"));
+            return Err(invalid("proof_digest").into());
         }
         let linked = match current.phase() {
             KagemushaWalletMarkerPhaseV1::Enrollment => {
@@ -789,20 +812,23 @@ where
             }
         };
         if !linked {
-            return Err(invalid("capsule.predecessor"));
+            return Err(invalid("capsule.predecessor").into());
         }
         // What is staged must be readable under the marker's binding in every later reconcile.
-        C::decode_frame(frame, &C::marker_binding(current.marker()))
-            .map_err(|_| invalid("capsule.binding"))?;
+        read_model(
+            || C::decode_frame(frame, &C::marker_binding(current.marker())),
+            "capsule.binding",
+        )
+        .map_err(|error| RequestValidationErrorV1::project(error, "capsule.binding"))?;
         let selected = current
             .select(state, kagemusha_wallet_boot_stamp_v1(boot))
             .map_err(|_| invalid("capsule.successor"))?;
         capsule
             .require_marker(selected.marker())
-            .map_err(|_| invalid("capsule.marker"))?;
+            .map_err(|error| RequestValidationErrorV1::project(error, "capsule.marker"))?;
         let receipt_body = owner
             .receipt_body(capsule, capsule_digest)
-            .map_err(|_| invalid("receipt_body"))?;
+            .map_err(|error| RequestValidationErrorV1::project(error, "receipt_body"))?;
         Ok((selected, receipt_body))
     }
 

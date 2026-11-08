@@ -27,7 +27,7 @@ fn setup(effect: KagemushaWalletEffectV1) -> (MemoryArchive, ReleasedStep, Sourc
     frozen.capsule = super::super::tests::seal_body(body);
     let capsule = frozen.capsule;
     let record: KagemushaWalletCompletionRecordV1 = fixture("KagemushaWalletCompletionRecordV1");
-    let released = ReleasedStep {
+    let released = ReleasedStep::Ordinary {
         frozen: FrozenTransition {
             credential,
             capsule,
@@ -158,7 +158,7 @@ fn send_pending_uses_the_selected_statement_and_archive_keeps_both_branches() {
     let expected = public(send.credit_root(), send.pending_root());
     let (credits, pending) = send.finish(&expected).unwrap();
     let mut archive = step.clone();
-    let mut body = archive.frozen.capsule.body().clone();
+    let mut body = archive.ordinary_parts().0.capsule.body().clone();
     body.kind = KagemushaWalletOperationKindV1::ArchiveSent;
     body.statement.effect = KagemushaWalletEffectV1::ArchiveSent {
         credit_id: field(3),
@@ -187,7 +187,7 @@ fn send_pending_uses_the_selected_statement_and_archive_keeps_both_branches() {
         &body.payment_digest,
     )
     .unwrap();
-    archive.frozen.capsule = super::super::tests::seal_body(body);
+    archive.ordinary_parts_mut().0.capsule = super::super::tests::seal_body(body);
     for remove in [false, true] {
         let mut view = FoldCustodyV1::new(
             &mut store,
@@ -226,8 +226,8 @@ fn historical_originals_are_exact_and_unknown_final_roots_reject() {
     )
     .unwrap();
     assert_eq!(
-        view.predecessor().unwrap().retained.frame,
-        step.retained.frame
+        view.predecessor().unwrap().ordinary_parts().1.frame,
+        step.ordinary_parts().1.frame
     );
     for role in [
         PreparationOriginalV1::CurrentCredential,
@@ -252,7 +252,7 @@ fn fold_preparation_replays_without_the_local_blacklist() {
             action: OperationActionV1::Retire,
         }),
         native: std::sync::Arc::new(PrivateArchiveBytes::copy_from(&[1]).unwrap()),
-        source: step.frozen.capsule.custody_digest(),
+        source: step.ordinary_parts().0.capsule.custody_digest(),
         draft: source.clone(),
     };
     let mut view = FoldCustodyV1::new(

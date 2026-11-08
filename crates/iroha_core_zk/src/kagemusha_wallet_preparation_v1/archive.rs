@@ -160,7 +160,7 @@ impl PreparationV1<'_> {
         witness: ArchiveFoldWitnessV1,
         budget: MemoryBudget,
     ) -> Result<ArchiveFoldFieldsV1, Error> {
-        let capsule = &step.frozen.capsule;
+        let capsule = &step.capsule();
         let KagemushaWalletEffectV1::ArchiveSent {
             credit_id,
             credited,

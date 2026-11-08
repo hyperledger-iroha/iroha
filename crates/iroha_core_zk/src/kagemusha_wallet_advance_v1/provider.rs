@@ -154,6 +154,34 @@ pub struct KagemushaWalletProviderV1<
     _frames: PhantomData<fn() -> (C, R)>,
 }
 
+impl<F: KagemushaWalletFsV1, P, C, R> KagemushaWalletProviderV1<F, P, C, R> {
+    /// Transfer the same exclusive provider to explicit frame owners. No persistent byte,
+    /// staged write, lock or durability evidence is changed. Semantic reconciliation caches
+    /// are cleared so the new owners must decode current source-bound originals themselves.
+    #[must_use]
+    pub fn into_frame_types<C2, R2>(self) -> KagemushaWalletProviderV1<F, P, C2, R2> {
+        KagemushaWalletProviderV1 {
+            store: self.store,
+            platform: self.platform,
+            scheme_id: self.scheme_id,
+            options: self.options,
+            cache: BTreeMap::new(),
+            pending_reasons: self.pending_reasons,
+            generation_results: self.generation_results,
+            generation_dispatches: self.generation_dispatches,
+            adopted: self.adopted,
+            slot_phases: std::cell::RefCell::new(BTreeMap::new()),
+            archive_writes: self.archive_writes,
+            archive_phase: None,
+            archive_batches: self.archive_batches,
+            archive_swept: self.archive_swept,
+            sentinel: self.sentinel,
+            _lock: self._lock,
+            _frames: PhantomData,
+        }
+    }
+}
+
 impl<F, P, C, R> KagemushaWalletProviderV1<F, P, C, R>
 where
     F: KagemushaWalletFsV1,

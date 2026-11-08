@@ -129,6 +129,7 @@ mod archive;
 mod capsule;
 mod completion;
 pub(crate) mod counters;
+pub(crate) mod decode_resource;
 pub use counters::KagemushaWalletStorageCountersV1;
 mod enrollment;
 mod enrollment_phase;
@@ -255,12 +256,25 @@ pub enum KagemushaWalletLostCustodyV1 {
     CompletionLost,
 }
 
+/// Local resource origin captured during the actual monetary-original decode attempt.
+/// This nonserialized diagnostic grants no proof, selection, or later-attempt authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum KagemushaWalletDecodeResourceV1 {
+    /// The allocator refused the original read.
+    Allocator,
+    /// An enclosing local admission budget refused the original read.
+    EnclosingLimit,
+}
+
 /// Error of the provider.
 // Fixed retained-status digests stay inline so this bounded error remains Copy.
 // On 32-bit targets pointer-sized variants are smaller; no extra allocation is needed.
 #[cfg_attr(target_pointer_width = "32", allow(variant_size_differences))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum KagemushaWalletProviderErrorV1 {
+    /// The actual monetary-original read did not complete; retry exact retained bytes.
+    #[error("wallet custody decode resource unavailable: {0:?}")]
+    DecodeResource(KagemushaWalletDecodeResourceV1),
     /// Storage, the key store or the platform gave no definitive answer; retry.
     #[error("wallet custody unavailable: {0:?}")]
     Unavailable(KagemushaWalletUnavailableV1),

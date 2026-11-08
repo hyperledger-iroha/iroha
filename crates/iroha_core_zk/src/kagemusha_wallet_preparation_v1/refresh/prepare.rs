@@ -134,7 +134,7 @@ impl PreparationV1<'_> {
         self.credential_owner(owners.current)?;
         self.credential_owner(owners.successor)?;
         self.receipt_tape(owners.current, source, budget)?;
-        let capsule = &source.frozen.capsule;
+        let capsule = &source.capsule();
         let scheme = self.installed.verifier().scheme();
         let update = decode_originals(
             scheme,

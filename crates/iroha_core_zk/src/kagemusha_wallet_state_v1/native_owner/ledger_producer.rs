@@ -182,7 +182,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             return Ok(plan.instruction_original);
         }
         let released = self.indexed_step(&manifest, manifest.indexed.ok_or(Error::NoHead)?)?;
-        let core = &released.frozen.capsule.body().successor_state.core;
+        let core = &released.capsule().body().successor_state.core;
         if core.lifecycle != KagemushaWalletLifecycleV1::Active {
             return Err(Error::Invalid("ledger Load lifecycle"));
         }

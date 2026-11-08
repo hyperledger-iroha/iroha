@@ -97,7 +97,7 @@ fn preparation_draft_must_equal_the_rederived_draft_and_actual_successor() {
     let (_, manifest) = wallet.manifest().unwrap();
     let selected = wallet.indexed_step(&manifest, 0).unwrap();
     let source = wallet.source_custody(&manifest, &selected).unwrap();
-    let mut after = selected.frozen.capsule.body().successor_state;
+    let mut after = selected.ordinary_parts().0.capsule.body().successor_state;
     let mut wrong = source.clone();
     let mut tree = map_tree::PersistentMapV1::default();
     tree.insert(&mut wallet.archive, field(17), field(18))
@@ -118,7 +118,7 @@ fn preparation_draft_must_equal_the_rederived_draft_and_actual_successor() {
         Some(view(
             &mut wallet.archive,
             &source,
-            &selected.frozen.capsule.body().successor_state,
+            &selected.ordinary_parts().0.capsule.body().successor_state,
             &manifest,
         )),
     )
@@ -129,7 +129,7 @@ fn preparation_draft_must_equal_the_rederived_draft_and_actual_successor() {
         Some(view(
             &mut wallet.archive,
             &source,
-            &selected.frozen.capsule.body().successor_state,
+            &selected.ordinary_parts().0.capsule.body().successor_state,
             &manifest,
         )),
     )
@@ -141,7 +141,7 @@ fn preparation_draft_must_equal_the_rederived_draft_and_actual_successor() {
         Some(view(
             &mut wallet.archive,
             &source,
-            &selected.frozen.capsule.body().successor_state,
+            &selected.ordinary_parts().0.capsule.body().successor_state,
             &manifest,
         )),
     )
@@ -149,7 +149,7 @@ fn preparation_draft_must_equal_the_rederived_draft_and_actual_successor() {
     assert_eq!(
         archive::encode(
             &custody
-                .finish(&selected.frozen.capsule.body().successor_state)
+                .finish(&selected.ordinary_parts().0.capsule.body().successor_state)
                 .unwrap()
                 .unwrap()
         )

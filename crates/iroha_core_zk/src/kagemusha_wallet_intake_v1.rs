@@ -23,18 +23,19 @@ use rand::rand_core::TryRng as _;
 use crate::{
     kagemusha_wallet_advance_v1::{
         KagemushaWalletFsV1, KagemushaWalletMarkerRecordV1, KagemushaWalletPlatformV1,
-        KagemushaWalletProbeV1, KagemushaWalletProviderErrorV1, KagemushaWalletProviderV1,
-        KagemushaWalletSlotIdV1, KagemushaWalletSlotStatusV1, KagemushaWalletUnavailableV1,
+        KagemushaWalletProbeV1, KagemushaWalletProviderErrorV1, KagemushaWalletSlotIdV1,
+        KagemushaWalletSlotStatusV1, KagemushaWalletUnavailableV1,
         kagemusha_wallet_provider_digest_v1,
     },
     kagemusha_wallet_artifacts_v1::{
         InstalledVerifierPackV1, producer_inventory::QualifiedWalletSourcesV1,
     },
     kagemusha_wallet_preparation_v1::PreparationV1,
+    kagemusha_wallet_state_v1::{NativeCapsuleV1, NativeProviderV1},
 };
 
 type AdmittedParts<F, P> = (
-    KagemushaWalletProviderV1<F, P>,
+    NativeProviderV1<F, P>,
     Arc<InstalledVerifierPackV1>,
     Arc<QualifiedWalletSourcesV1>,
     KagemushaWalletSlotIdV1,
@@ -285,7 +286,7 @@ fn pin_selected_source(
 // Native's existing begin is the only constructor. These private fields carry real
 // exclusive provider ownership and original DATA; a failed check grants no admission.
 struct WalletOpenIntakeV1<F: KagemushaWalletFsV1, P> {
-    provider: KagemushaWalletProviderV1<F, P>,
+    provider: NativeProviderV1<F, P>,
     installed: Arc<InstalledVerifierPackV1>,
     sources: Arc<QualifiedWalletSourcesV1>,
     originals: [Vec<u8>; 4],
@@ -346,7 +347,7 @@ impl<F: KagemushaWalletFsV1, P> WalletOpenFinishFailureV1<F, P> {
 /// Move-only account authorization challenge retaining exclusive real provider custody.
 /// It cannot be reconstructed from a foreign handle/identifier or serialized checkpoint.
 pub struct PendingWalletOpenV1<F: KagemushaWalletFsV1, P> {
-    provider: KagemushaWalletProviderV1<F, P>,
+    provider: NativeProviderV1<F, P>,
     installed: Arc<InstalledVerifierPackV1>,
     sources: Arc<QualifiedWalletSourcesV1>,
     slot: KagemushaWalletSlotIdV1,
@@ -364,7 +365,7 @@ pub struct PendingWalletOpenV1<F: KagemushaWalletFsV1, P> {
 /// Fully admitted original owner, awaiting the genuine native operation/folding owner.
 /// Private fields confer no arbitrary signature, fabricated proof or replacement-key path.
 pub struct AdmittedWalletV1<F: KagemushaWalletFsV1, P> {
-    provider: KagemushaWalletProviderV1<F, P>,
+    provider: NativeProviderV1<F, P>,
     installed: Arc<InstalledVerifierPackV1>,
     sources: Arc<QualifiedWalletSourcesV1>,
     slot: KagemushaWalletSlotIdV1,
@@ -407,7 +408,7 @@ fn bind_source_credential(
 }
 
 fn source<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1>(
-    provider: &mut KagemushaWalletProviderV1<F, P>,
+    provider: &mut NativeProviderV1<F, P>,
     slot: &KagemushaWalletSlotIdV1,
     credential: &KagemushaWalletCredentialV1,
     credential_original: &[u8],
@@ -456,9 +457,15 @@ fn source<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1>(
     bind_source_credential(
         credential,
         credential_original,
-        capsule.as_ref().map(|capsule| {
-            let body = capsule.body();
-            (&body.successor_state, &body.statement)
+        capsule.as_ref().map(|capsule| match capsule {
+            NativeCapsuleV1::Ordinary(capsule) => {
+                let body = capsule.body();
+                (&body.successor_state, &body.statement)
+            }
+            NativeCapsuleV1::Suffix(capsule) => {
+                let body = capsule.body();
+                (&body.successor_state, &body.statement)
+            }
         }),
         || provider.credential(slot, 0),
     )?;
@@ -477,7 +484,7 @@ fn source<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1>(
 // positive orphan key cannot own that credential; all selected-source checks remain below.
 // Kept crate-visible for provider-custody regression tests of this exact opening path.
 pub(crate) fn select_enrolled_source<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1>(
-    provider: &mut KagemushaWalletProviderV1<F, P>,
+    provider: &mut NativeProviderV1<F, P>,
     credential: &KagemushaWalletCredentialV1,
     credential_original: &[u8],
     pinned: Option<(KagemushaWalletSlotIdV1, [u8; 32])>,
@@ -534,7 +541,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
         reason = "return the exact original custody owner on refusal without allocating a replacement"
     )]
     pub fn begin(
-        provider: KagemushaWalletProviderV1<F, P>,
+        provider: NativeProviderV1<F, P>,
         installed: Arc<InstalledVerifierPackV1>,
         sources: Arc<QualifiedWalletSourcesV1>,
         credential_original: &[u8],
@@ -674,7 +681,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> PendingWalletOpenV1<F
     /// Explicitly abandon this account challenge while retaining the actual unadmitted provider.
     /// Ordinary validation/IO failures never invoke this deliberate cancellation path.
     #[must_use]
-    pub fn abandon(self) -> KagemushaWalletProviderV1<F, P> {
+    pub fn abandon(self) -> NativeProviderV1<F, P> {
         self.provider
     }
 

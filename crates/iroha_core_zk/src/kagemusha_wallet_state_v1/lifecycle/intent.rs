@@ -148,12 +148,11 @@ impl NativeIntentV1 {
         certificates: Vec<u8>,
         credited: Vec<u8>,
     ) -> Result<Self, Error> {
-        if send.frozen.capsule.body().kind != KagemushaWalletOperationKindV1::Send {
+        if send.capsule().body().kind != KagemushaWalletOperationKindV1::Send {
             return Err(Error::Invalid("Archive requires retained Send"));
         }
         let mut requests = send
-            .frozen
-            .capsule
+            .capsule()
             .body()
             .retained_inputs
             .iter()
@@ -166,27 +165,23 @@ impl NativeIntentV1 {
         if requests.next().is_some() {
             return Err(Error::WitnessLost("Archive duplicate Send Request"));
         }
-        valid(
-            send.retained
-                .record
-                .verify(&send.frozen.credential, &send.frozen.capsule),
-        )?;
-        let send_capsule = send.frozen.capsule.custody_digest();
-        if send.retained.capsule_digest != send_capsule {
+        send.verify_completion()?;
+        let send_capsule = send.capsule().custody_digest();
+        if send.capsule_digest() != send_capsule {
             return Err(Error::WitnessLost("Archive selected Send custody"));
         }
         Ok(Self {
             value: Intent::Archive(ArchiveIntentV1 {
                 request_id: Self::archive_identity(
                     &send_capsule,
-                    &send.frozen.capsule.body().wallet_id,
+                    &send.capsule().body().wallet_id,
                     &credited,
                 ),
                 send_capsule,
-                send_commitment: send.frozen.capsule.receipt_commitment(),
+                send_commitment: send.capsule().receipt_commitment(),
                 request,
-                payment: send.retained.record.output.clone(),
-                credential: valid(send.frozen.credential.to_canonical_bytes())?,
+                payment: send.output().clone(),
+                credential: valid(send.credential().to_canonical_bytes())?,
                 certificates,
                 credited,
             }),

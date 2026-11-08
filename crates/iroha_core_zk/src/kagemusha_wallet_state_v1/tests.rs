@@ -1049,7 +1049,13 @@ impl NativeProofs for TestProofs {
         if let Some(previous) = previous {
             assert_eq!(
                 next.capsule.body().statement.predecessor,
-                previous.frozen.capsule.body().statement.successor
+                previous
+                    .ordinary_parts()
+                    .0
+                    .capsule
+                    .body()
+                    .statement
+                    .successor
             );
         }
         Ok(self
@@ -1108,7 +1114,8 @@ impl NativeProofs for TestProofs {
         // Multi-receive recovery tests use the real source-owned persistent credit tree.
         // Only the mock lineage proof is synthesized; the final publication checks this root.
         let credit_root = if self.receive_plans
-            && witness.frozen.capsule.body().kind == KagemushaWalletOperationKindV1::Receive
+            && witness.ordinary_parts().0.capsule.body().kind
+                == KagemushaWalletOperationKindV1::Receive
             && checkpoints.len() == usize::from(self.checkpoint_stages.max(1))
         {
             let custody = custody.ok_or(Error::WitnessLost("test Receive fold custody"))?;
@@ -1175,7 +1182,7 @@ impl NativeFoldJobV1 for TestFoldJob {
                 retention.marks += 1;
                 let left = TestRetainedV1 {
                     mark: retention.marks,
-                    sequence: witness.frozen.capsule.body().statement.sequence,
+                    sequence: witness.ordinary_parts().0.capsule.body().statement.sequence,
                     checkpoints: checkpoints.len(),
                 };
                 retention.left.push(left);
@@ -1188,7 +1195,7 @@ impl NativeFoldJobV1 for TestFoldJob {
                 Some(FoldRetentionV1::new(left)),
             ));
         }
-        let c = &witness.frozen.capsule;
+        let c = &witness.ordinary_parts().0.capsule;
         let mut tree = KagemushaWalletIndexedTreeV1::new();
         if let KagemushaWalletEffectV1::Receive { credit_id, .. } = c.body().statement.effect {
             // Tests use one Receive. Native production proofs must handle the complete map.
@@ -1221,7 +1228,7 @@ impl NativeFoldJobV1 for TestFoldJob {
                         head: c.body().statement.successor,
                         wallet_id: c.body().wallet_id,
                         credential_digest: c.body().statement.credential_digest,
-                        payment_key: witness.frozen.credential.body.payment_key,
+                        payment_key: witness.ordinary_parts().0.credential.body.payment_key,
                         lifecycle: c.body().statement.lifecycle,
                         policy_epoch: c.body().successor_state.core.policy_epoch,
                         enabled_controls: c.body().successor_state.core.enabled_controls,
@@ -2342,7 +2349,7 @@ fn earned_fee_payment_has_independent_exact_custody_and_missing_copy_is_not_paid
     record.output = bytes.clone();
     // Exercise archive retention in isolation. Completion authority and exact receipt binding
     // are exercised by the real-provider adapter tests; this synthetic step is not advanced.
-    let step = ReleasedStep {
+    let step = ReleasedStep::Ordinary {
         frozen: send,
         retained: Retained {
             operation_id: record.operation_id,
@@ -3189,16 +3196,21 @@ fn source_reads_preserve_exact_released_head_without_signing() {
     );
     assert!(snapshot.verified_fold.is_none());
     let step = wallet.released_steps().unwrap().pop().unwrap();
-    assert_eq!(step.frozen.capsule, frozen.capsule);
+    assert_eq!(step.ordinary_parts().0.capsule, frozen.capsule);
     assert_eq!(
         wallet.retry(&frozen.capsule.body().operation_id).unwrap(),
-        Some(Completion::Complete(step.retained.record.output.clone()))
+        Some(Completion::Complete(
+            step.ordinary_parts().1.record.output.clone()
+        ))
     );
     assert_eq!(wallet.custody.signatures, signatures);
     snapshot_test_fold(&mut wallet);
     let snapshot = wallet.snapshot().unwrap();
     let current = wallet.released_steps().unwrap().pop().unwrap();
-    assert_eq!(current.retained.frame, step.retained.frame);
+    assert_eq!(
+        current.ordinary_parts().1.frame,
+        step.ordinary_parts().1.frame
+    );
     assert_eq!(
         wallet
             .read_fold(&current)

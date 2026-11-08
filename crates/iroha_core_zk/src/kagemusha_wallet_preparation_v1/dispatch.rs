@@ -663,7 +663,7 @@ impl PreparationV1<'_> {
         let certificates = required_original(custody, Original::EnrollmentCertificates)?;
         let owner = self.authenticate_credential_set(&credential, &certificates)?;
         let released = source.released();
-        let before = &released.frozen.capsule.body().successor_state;
+        let before = &released.capsule().body().successor_state;
         let predecessor = if request.kind().consumes_lineage() {
             Some(proof(self.folded_state(
                 &owner,

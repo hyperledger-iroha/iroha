@@ -130,7 +130,7 @@ public struct KagemushaWalletSuffixUnloadReleasedV1: Sendable {
 
 /// O(1) wallet scheduling DATA. Polling this does not verify a suffix or authorize a debit.
 public struct KagemushaWalletSuffixUnloadStatusV1: Sendable {
-  public enum State: UInt16, Sendable { case initializing, notApplicable, eligible, verifying, ready, pending, released }
+  public enum State: UInt16, Sendable { case initializing, notApplicable, eligible, verifying, ready, pending, released, requestAbsent }
   public let state: State
   public let reason: UInt16
   public let currentSequence: KagemushaWalletUInt128V1?
@@ -153,7 +153,10 @@ public struct KagemushaWalletSuffixUnloadStatusV1: Sendable {
       guard let currentSequence, foldedSequence <= currentSequence else { throw KagemushaWalletErrorV1.invalidNativeOutput }
     }
     if let requestID, !requestID.contains(where: { $0 != 0 }) { throw KagemushaWalletErrorV1.invalidNativeOutput }
-    if state.rawValue >= State.verifying.rawValue {
+    if state == .requestAbsent {
+      guard requestID != nil, currentSequence != nil, completedSteps == .init(low: 0, high: 0), totalSteps == .init(low: 0, high: 0)
+      else { throw KagemushaWalletErrorV1.invalidNativeOutput }
+    } else if state.rawValue >= State.verifying.rawValue {
       guard requestID != nil else { throw KagemushaWalletErrorV1.invalidNativeOutput }
       try suffixProgress(completedSteps, totalSteps)
       if state.rawValue >= State.ready.rawValue, completedSteps != totalSteps { throw KagemushaWalletErrorV1.invalidNativeOutput }

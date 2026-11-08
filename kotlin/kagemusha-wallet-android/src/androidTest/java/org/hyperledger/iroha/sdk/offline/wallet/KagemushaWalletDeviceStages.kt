@@ -86,6 +86,7 @@ internal class KagemushaWalletDeviceStages(
             is KagemushaWalletLedgerOutcomeV1.Awaiting -> { row.add("entrypoint" to hex(value.entrypoint())); "unconfirmed" }
             is KagemushaWalletLedgerOutcomeV1.Rejected -> { row.addAll(commit(value.commit)); "rejected" }
             is KagemushaWalletLedgerOutcomeV1.Confirmed -> { row.addAll(commit(value.commit)); "confirmed" }
+            is KagemushaWalletLedgerOutcomeV1.StageConfirmed -> error("Suffix stage confirmation in an ordinary activation/Unload probe")
         }
         row.add("confirmed" to (state == "confirmed").toString()); row.add("rejected" to (state == "rejected").toString())
         event(name, sequence, *row.toTypedArray())

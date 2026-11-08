@@ -679,3 +679,6 @@ where
     let limits = norito::canonical_decode_limits(bytes.len());
     Ok(norito::decode_canonical_with_limits(bytes, limits)?)
 }
+
+// Shared unchanged randomized capsule primitive for explicitly tagged new Native bodies.
+pub(crate) use custody::kagemusha_wallet_capsule_commitment_for_body_v1;

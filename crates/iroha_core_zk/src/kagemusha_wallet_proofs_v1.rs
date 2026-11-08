@@ -17,15 +17,15 @@ use ff::PrimeField;
 use iroha_data_model::kagemusha::kagemusha_wallet_v1::*;
 use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve, msm::MemoryBudget};
 use iroha_plonk::{
-    AccumulatorError, BatchItem, DescriptorBinding, PendingAccumulator, Protocol, VerifyingKey,
-    batch_decide, batch_verify,
+    AccumulatorError, DescriptorBinding, PendingAccumulator, Protocol, VerifyingKey,
+    batch_decide,
     cs::{CurveV1, InstanceModeV1, InstanceType, ProofSuffixV1, TranscriptV2},
     pcs::ipa::{
-        PinnedParams,
+        GeneratorClaim, PinnedParams,
         accumulator::{CURVE_BYTE_PALLAS, CURVE_BYTE_VESTA},
     },
-    transcript::generator_coordinates,
-    verifier::{accumulate_succinct_cancellable, verify_full_cancellable},
+    transcript::{encode_point, generator_coordinates},
+    verifier::{accumulate_generator_cancellable, verify_full_cancellable},
 };
 use iroha_plonk_recursion::{ACCUMULATOR_BYTES, AccumulatorT, K};
 
@@ -778,6 +778,25 @@ fn pending_claim<C: PastaCurve>(
     PendingAccumulator::from_bytes(&bytes).map_err(|_| Error::Proof)
 }
 
+// A base-field PIPA-R VK has no scalar transcript representation. Its succinct
+// owner returns the provenance-free generator equation after checking the exact
+// descriptor, key, instances and opening equation. Batch those equations directly;
+// never project the base-field VK binding into a scalar field.
+fn pending_generator<C: PastaCurve>(
+    claim: &GeneratorClaim<C>,
+    curve: u8,
+) -> Result<PendingAccumulator<C>, Error> {
+    let mut bytes = Vec::with_capacity(66 + 32 * claim.challenges().len());
+    bytes.extend_from_slice(&[0; 32]);
+    bytes.push(curve);
+    bytes.push(u8::try_from(claim.k()).map_err(|_| Error::Profile)?);
+    bytes.extend_from_slice(&encode_point::<C>(claim.g()));
+    for challenge in claim.challenges() {
+        bytes.extend_from_slice(challenge.to_repr().as_ref());
+    }
+    PendingAccumulator::from_bytes(&bytes).map_err(|_| Error::Proof)
+}
+
 fn accumulator_error(error: AccumulatorError) -> Error {
     match error {
         AccumulatorError::ParamsTooSmall { .. } | AccumulatorError::UnsupportedK { .. } => {
@@ -902,7 +921,7 @@ impl ArtifactSet {
             vec![x, y],
             challenges,
         ];
-        let opening = accumulate_succinct_cancellable(
+        let opening = accumulate_generator_cancellable(
             &self.lineage.params,
             &self.lineage.binding,
             &self.lineage.vk,
@@ -912,6 +931,7 @@ impl ArtifactSet {
             cancellation,
         )
         .map_err(verification_error)?;
+        let opening = pending_generator(&opening, CURVE_BYTE_PALLAS)?;
         let pallas = pending_claim(&pallas, CURVE_BYTE_PALLAS)?;
         let vesta = pending_claim(&vesta, CURVE_BYTE_VESTA)?;
         deferred.pallas.extend([opening, pallas]);
@@ -919,8 +939,9 @@ impl ArtifactSet {
         Ok(())
     }
 
-    /// Decide every deferred entry: one batched verification of every σ, one Pallas and one
-    /// Vesta batch decision. Consumes the set; nothing is accepted unless all hold.
+    /// Decide every deferred entry: each σ opening equation, then one Pallas and one
+    /// Vesta batch decision covering all σ/Omega generator obligations. Consumes the set;
+    /// nothing is accepted unless every opening and both complete batches hold.
     ///
     /// # Errors
     /// Another installation, any failed σ or decision, cancellation or local unavailability.
@@ -937,21 +958,23 @@ impl ArtifactSet {
         let KagemushaWalletDeferredProofsV1 {
             sigmas,
             pallas,
-            vesta,
+            mut vesta,
             ..
         } = deferred;
-        let mut items = Vec::with_capacity(sigmas.len());
         for sigma in &sigmas {
             let key = self.steps.get(&sigma.selector).ok_or(Error::Profile)?;
-            items.push(BatchItem {
-                params: key.params.as_ref(),
-                binding: &key.binding,
-                vk: &key.vk,
-                instances: &sigma.instances,
-                proof: &sigma.proof,
-            });
+            let claim = accumulate_generator_cancellable(
+                key.params.as_ref(),
+                &key.binding,
+                &key.vk,
+                &sigma.instances,
+                &sigma.proof,
+                budget,
+                cancellation,
+            )
+            .map_err(verification_error)?;
+            vesta.push(pending_generator(&claim, CURVE_BYTE_VESTA)?);
         }
-        batch_verify(&items, budget).map_err(verification_error)?;
         iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;
         batch_decide(pallas, self.lineage.params.as_ref(), budget).map_err(accumulator_error)?;
         iroha_pasta::CancellationToken::checkpoint(cancellation).map_err(|_| Error::Cancelled)?;

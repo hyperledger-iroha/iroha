@@ -141,7 +141,7 @@ impl PreparationV1<'_> {
             evidence::credited_digest(&intent.credited, &held.request, &held.payment_digest)?;
         let (state, statement) = derive(
             &owner.credential,
-            &source.frozen.capsule.body().successor_state,
+            &source.capsule().body().successor_state,
             &held.pending,
             digest,
             removal,
@@ -151,7 +151,7 @@ impl PreparationV1<'_> {
         let witness = self.archive_sigma_fields(owner, source, &state, &statement, budget)?;
         Ok(ArchiveStepV1 {
             manifest: owner.manifest_digest,
-            source: source.frozen.capsule.custody_digest(),
+            source: source.capsule().custody_digest(),
             witness,
             state,
             statement,

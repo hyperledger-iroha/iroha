@@ -3,6 +3,7 @@ use super::engineering_fixture::*;
 use super::test_support::{DeviceV1, FakePlatformV1, public_key, signing_key, test_options};
 use super::*;
 use crate::kagemusha_wallet_enrollment_v1::*;
+use crate::kagemusha_wallet_state_v1::{NativeCapsuleV1, NativeProviderV1};
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{account::AccountId, kagemusha::*};
 use sha2::Sha256;
@@ -13,7 +14,7 @@ mod multischeme_custody;
 #[path = "tests/native_exchange.rs"]
 mod native_exchange;
 fn owner(f: &Fixture, d: &DeviceV1) -> Owner {
-    let provider = KagemushaWalletProviderV1::open(
+    let provider = NativeProviderV1::open(
         d.fs.clone(),
         d.platform.clone(),
         f.config.scheme.scheme_id(),
@@ -235,7 +236,7 @@ fn enrollment_approved_native_configuration_cannot_select_an_android_root_origin
     for substitute in [Some(b"component root original".to_vec()), Some(Vec::new())] {
         let mut f = fixture();
         let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 83);
-        let provider = KagemushaWalletProviderV1::open(
+        let provider = NativeProviderV1::open(
             d.fs.clone(),
             d.platform.clone(),
             f.config.scheme.scheme_id(),
@@ -264,7 +265,7 @@ fn enrollment_apple_configuration_requires_its_exact_pinned_root_original() {
         (Some(vec![1; 16_385]), false),
     ] {
         let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 84);
-        let provider = KagemushaWalletProviderV1::open(
+        let provider = NativeProviderV1::open(
             d.fs.clone(),
             d.platform.clone(),
             f.config.scheme.scheme_id(),
@@ -295,7 +296,7 @@ fn enrollment_owner_refuses_unknown_or_unqualified_vendor_adapter_before_any_cha
         });
         f.config.policy.validate_for_app(&f.config.app).unwrap();
         let d = DeviceV1::new(KagemushaWalletAnchorPolicyV1::NotRequired, 85);
-        let provider = KagemushaWalletProviderV1::open(
+        let provider = NativeProviderV1::open(
             d.fs.clone(),
             d.platform.clone(),
             f.config.scheme.scheme_id(),
@@ -1411,8 +1412,8 @@ fn an_abandoned_slot_record_beside_a_marker_is_conflicting_custody() {
         .unwrap();
     drop(provider);
     d.fs.restart();
-    let mut provider: KagemushaWalletProviderV1<KagemushaWalletSimFsV1, FakePlatformV1> =
-        KagemushaWalletProviderV1::open(
+    let mut provider: NativeProviderV1<KagemushaWalletSimFsV1, FakePlatformV1> =
+        NativeProviderV1::open(
             d.fs.clone(),
             d.platform.clone(),
             f.config.scheme.scheme_id(),
@@ -1478,7 +1479,7 @@ fn an_uncertain_local_abandonment_record_is_terminal_only_once_it_is_durable() {
 
 /// Durable phase of the fixture attempt (request identity `[11; 32]`) as custody shows it now.
 fn fixture_phase(
-    provider: &KagemushaWalletProviderV1<KagemushaWalletSimFsV1, FakePlatformV1>,
+    provider: &NativeProviderV1<KagemushaWalletSimFsV1, FakePlatformV1>,
 ) -> Option<KagemushaWalletEnrollmentPhaseStateV1> {
     provider.enrollment_phase(&[11; 32]).unwrap()
 }
@@ -1486,7 +1487,7 @@ fn fixture_phase(
 /// Every visible slot original is named by the durable phase: an intent by its exact selected
 /// digest, a marker by a selected marker phase.
 fn assert_phase_covers_custody(
-    provider: &mut KagemushaWalletProviderV1<KagemushaWalletSimFsV1, FakePlatformV1>,
+    provider: &mut NativeProviderV1<KagemushaWalletSimFsV1, FakePlatformV1>,
     label: &str,
 ) {
     let phase = fixture_phase(provider);
@@ -2372,7 +2373,7 @@ fn persisted_complete_sources_open_real_bootstrap_and_reopen_exact_output() {
     std::fs::write(output.join("bootstrap-original.norito"), bytes).unwrap();
     drop(wallet);
 
-    let provider = KagemushaWalletProviderV1::open(
+    let provider = NativeProviderV1::open(
         device.fs.clone(),
         device.platform.clone(),
         scheme_id,

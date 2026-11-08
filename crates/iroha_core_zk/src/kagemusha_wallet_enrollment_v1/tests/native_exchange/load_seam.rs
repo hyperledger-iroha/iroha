@@ -102,17 +102,17 @@ fn require_released_originals(
 ) {
     let steps = wallet.released_steps().unwrap();
     let released = steps.last().unwrap();
-    let capsule = &released.frozen.capsule;
+    let capsule = released.ordinary_capsule().expect("ordinary Load capsule");
     let (sequence, operation, digest) = selected.head().unwrap();
     assert_eq!(capsule.body().kind, KagemushaWalletOperationKindV1::Load);
     assert_eq!(capsule.body().statement.sequence, sequence);
     assert_eq!(capsule.body().operation_id, operation);
     assert_eq!(capsule.custody_digest(), digest);
     assert_eq!(
-        Some(released.retained.selected_generation),
+        Some(released.selected_generation()),
         selected.selected_generation()
     );
-    assert_eq!(released.retained.record.output, loaded);
+    assert_eq!(released.output().as_slice(), loaded);
     let OperationActionV1::Load { receipt, finality } = &request.action else {
         panic!("Load request")
     };

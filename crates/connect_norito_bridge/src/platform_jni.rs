@@ -38,6 +38,7 @@ mod gpu;
 mod kagemusha_wallet_advance;
 mod kagemusha_wallet_observation;
 mod kagemusha_wallet_review;
+mod kagemusha_wallet_suffix;
 mod privacy_intent;
 mod privacy_x509_request;
 mod zk_x509_holder;

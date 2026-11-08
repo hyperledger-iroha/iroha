@@ -23,6 +23,8 @@ public enum KagemushaWalletLedgerOutcomeV1: Equatable, Sendable {
     /// Certified successful execution. For Activate this is the wallet's activation; it does
     /// not assert that every other attempt executed successfully.
     case confirmed(KagemushaWalletLedgerCommitV1)
+    /// Certified Begin or Append. This never establishes an account payout.
+    case stageConfirmed(KagemushaWalletLedgerCommitV1)
 
     init(_ result: KagemushaWalletCallV1) throws {
         switch result.status {

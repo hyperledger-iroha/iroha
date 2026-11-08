@@ -51,6 +51,13 @@ sealed class KagemushaWalletLedgerOutcomeV1 {
         override fun toString(): String = "Confirmed($commit)"
     }
 
+    /** Certified Begin or Append only. This never establishes account payout. */
+    class StageConfirmed internal constructor(val commit: KagemushaWalletLedgerCommitV1) : KagemushaWalletLedgerOutcomeV1() {
+        override fun equals(other: Any?): Boolean = other is StageConfirmed && other.commit == commit
+        override fun hashCode(): Int = 61 + commit.hashCode()
+        override fun toString(): String = "StageConfirmed($commit)"
+    }
+
     internal companion object {
         fun of(result: KagemushaWalletCallV1): KagemushaWalletLedgerOutcomeV1 = when (result.status) {
             KagemushaWalletCallV1.LEDGER_AWAITING -> Awaiting(result.bytes())
@@ -95,6 +102,15 @@ sealed class KagemushaWalletLedgerIngestV1 {
 
 /** One retained attempt to confirm. Native derives its route selector from these exact bytes. */
 sealed class KagemushaWalletLedgerAttemptV1 {
+    /** Exact Native-retained suffix envelope; ordinal zero is Begin, never a payout. */
+    class SuffixUnloadStage(requestId: ByteArray, val ordinal: KagemushaWalletUInt128V1,
+        signedWire: ByteArray) : KagemushaWalletLedgerAttemptV1() {
+        private val identity = suffixRequestIdentity(requestId)
+        private val wire = suffixSignedWire(signedWire)
+        internal fun requestId(): ByteArray = identity.copyOf()
+        internal fun signedWire(): ByteArray = wire.copyOf()
+    }
+
     class Activation(signedWire: ByteArray) : KagemushaWalletLedgerAttemptV1() {
         private val wire = signedWire.copyOf()
         internal fun signedWire(): ByteArray = wire.copyOf()

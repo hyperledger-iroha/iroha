@@ -159,7 +159,7 @@ fn release(
     let output = norito::encode_canonical(&package).unwrap();
     let record = KagemushaWalletCompletionRecordV1::new(&capsule, receipt, output).unwrap();
     record.verify(credential, &capsule).unwrap();
-    ReleasedStep {
+    ReleasedStep::Ordinary {
         retained: Retained {
             selected_generation: 1,
             operation_id: capsule.body().operation_id,
@@ -450,7 +450,7 @@ fn installed_public_refresh_proves_all_four_updates_and_rejects_resigned_bad_sig
             .unwrap();
         assert_eq!(
             step.source_capsule_digest(),
-            released.retained.capsule_digest
+            released.ordinary_parts().1.capsule_digest
         );
         assert_eq!(step.state().core.sequence, 1);
         let proof = preparation
@@ -471,7 +471,7 @@ fn installed_public_refresh_proves_all_four_updates_and_rejects_resigned_bad_sig
         assert_eq!(frozen.capsule.body().statement, *step.statement());
         assert_eq!(
             frozen.capsule.body().predecessor_capsule_digest,
-            released.retained.capsule_digest
+            released.ordinary_parts().1.capsule_digest
         );
         assert_eq!(frozen.capsule.body().retained_inputs, step.originals());
         assert!(frozen.capsule.body().map_openings.is_empty());
@@ -514,7 +514,7 @@ fn installed_public_refresh_proves_all_four_updates_and_rejects_resigned_bad_sig
             );
         }
         let mut wrong = released.clone();
-        wrong.retained.frame[0] ^= 1;
+        wrong.ordinary_parts_mut().1.frame[0] ^= 1;
         assert!(
             preparation
                 .prepare_refresh(
@@ -529,7 +529,13 @@ fn installed_public_refresh_proves_all_four_updates_and_rejects_resigned_bad_sig
                 )
                 .is_err()
         );
-        let mut sigma = released.frozen.capsule.body().step_proof.clone();
+        let mut sigma = released
+            .ordinary_parts()
+            .0
+            .capsule
+            .body()
+            .step_proof
+            .clone();
         sigma.bytes[32] ^= 1;
         let resigned = release(&credential, &state, &statement, sigma, &payment);
         assert!(

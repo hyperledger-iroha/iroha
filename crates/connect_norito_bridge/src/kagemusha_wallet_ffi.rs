@@ -65,6 +65,8 @@ pub(crate) mod setup;
 pub(crate) mod terminal;
 mod transport;
 pub use exports::*;
+pub(crate) mod suffix;
+pub use suffix::*;
 pub(crate) mod review;
 pub use review::{
     WalletReviewRequest, connect_norito_kagemusha_wallet_discard_review_v1,
@@ -184,6 +186,7 @@ impl From<advance::KagemushaWalletProviderErrorV1> for Failure {
             E::Unavailable(reason) => Self::unavailable(UNAVAILABLE, reason),
             E::Uncertain(reason) => Self::unavailable(UNCERTAIN, reason),
             E::NoSpace => Self::code(NOT_ENOUGH_STORAGE),
+            E::DecodeResource(_) => Self::code(RESOURCE),
             E::NoReplaceUnsupported => Self::invalid(236),
             E::Invalid { field } => Self::invalid(match field {
                 "provider handle poisoned" => 207,
@@ -435,6 +438,11 @@ trait Wallet: Send {
     fn review(&mut self, _exchange_id: u64, _input: review::Input) -> Result<Response> {
         Err(Failure::code(INVALID))
     }
+    fn suffix_prepare(&mut self, _origin: u64, _lifetime: suffix::ExchangeLifetime, _input: suffix::Input) -> Result<ControlFlow<Response, FoldProof>> { Err(Failure::code(INVALID)) }
+    fn suffix_publish(&mut self, _origin: u64, _lifetime: suffix::ExchangeLifetime, _proved: state::ProvedSuffixPreparationV1) -> Result<Response> { Err(Failure::code(INVALID)) }
+    fn suffix_execute(&mut self, _origin: u64, _token: u64) -> Result<Response> { Err(Failure::code(INVALID)) }
+    fn suffix_read(&mut self, _input: suffix::Read) -> Result<Response> { Err(Failure::code(INVALID)) }
+    fn suffix_finality(&mut self, _request: [u8; 32], _ordinal: u128, _wire: &[u8], _finality: &[u8]) -> Result<Response> { Err(Failure::code(INVALID)) }
     fn execute_reviewed(&mut self, _exchange_id: u64, _token: u64) -> Result<Response> {
         Err(Failure::code(INVALID))
     }
@@ -519,7 +527,7 @@ fn fold_response(ended: state::FoldTurnStatusV1) -> Response {
 struct NativeWallet<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> {
     wallet: state::NativeWalletCoordinatorV1<advance::KagemushaWalletStdFsV1, P, S>,
     times: BTreeMap<u64, review::OriginBound<state::DirectTimeExchangeV1>>,
-    reviews: review::Tokens<review::OriginBound<state::ReviewedOperationV1>>,
+    reviews: review::Tokens<review::OriginBound<review::FinancialReview>>,
     deletion_reviews: review::Tokens<review::OriginBound<state::ReviewedCustodyDeletionV1>>,
 }
 impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> Wallet
@@ -578,12 +586,17 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> Wallet
     fn review(&mut self, exchange_id: u64, input: review::Input) -> Result<Response> {
         self.review_inner(exchange_id, input)
     }
+    fn suffix_prepare(&mut self, origin: u64, lifetime: suffix::ExchangeLifetime, input: suffix::Input) -> Result<ControlFlow<Response, FoldProof>> { self.suffix_prepare_inner(origin, lifetime, input) }
+    fn suffix_publish(&mut self, origin: u64, lifetime: suffix::ExchangeLifetime, proved: state::ProvedSuffixPreparationV1) -> Result<Response> { self.suffix_publish_inner(origin, lifetime, proved) }
+    fn suffix_execute(&mut self, origin: u64, token: u64) -> Result<Response> { self.suffix_execute_inner(origin, token) }
+    fn suffix_read(&mut self, input: suffix::Read) -> Result<Response> { self.suffix_read_inner(input) }
+    fn suffix_finality(&mut self, request: [u8; 32], ordinal: u128, wire: &[u8], finality: &[u8]) -> Result<Response> { self.suffix_finality_inner(request, ordinal, wire, finality) }
     fn execute_reviewed(&mut self, exchange_id: u64, token: u64) -> Result<Response> {
         self.execute_reviewed_inner(exchange_id, token)
     }
     fn discard_review(&mut self, exchange_id: u64, token: u64) -> Result<()> {
         // Dropping the review cancels its speculation and drops any σ unsigned.
-        self.reviews.take_bound(token, exchange_id).map(drop)
+        self.reviews.discard_financial(exchange_id,token)
     }
     fn discard_capability(
         &mut self,
@@ -592,7 +605,7 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> Wallet
         token: u64,
     ) -> Result<()> {
         match kind {
-            review::CapabilityKind::Financial => self.reviews.take_bound(token, origin).map(drop),
+            review::CapabilityKind::Financial => self.reviews.discard_financial(origin,token),
             review::CapabilityKind::Time => {
                 setup::take_time(&mut self.times, token, origin).map(drop)
             }
@@ -602,7 +615,10 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> Wallet
         }
     }
     fn review_speculation(&mut self, token: u64) -> Option<state::SpeculativeSendJobV1> {
-        self.reviews.get(token)?.value.speculation()
+        match &self.reviews.get(token)?.value {
+            review::FinancialReview::Ordinary(value) => value.speculation(),
+            review::FinancialReview::Suffix(_) => None,
+        }
     }
     fn prepare_speculation(
         &mut self,

@@ -134,6 +134,20 @@ class KagemushaWalletSuffixUnloadStatusV1 internal constructor(original: ByteArr
     override fun toString(): String = "KagemushaWalletSuffixUnloadStatusV1(state=$state)"
 }
 
+/** Exact positive absence for a named resume only. It grants no preparation or debit authority. */
+internal fun requireSuffixRequestAbsent(original: ByteArray, requestId: ByteArray) {
+    requireSuffix(requestId.size == 32 && requestId.any { it != 0.toByte() })
+    val r = suffixFrame(original, "SuffixUnloadStatusV1", 15, 512)
+    requireSuffix(r.field { it.u16() } == 7 && r.field { it.u16() } == 0)
+    val current = r.optional { it.u128() }
+    val folded = r.optional { it.u128() }
+    val request = r.optional { it.arrayElements(32) }
+    val completed = r.scalar(); val total = r.scalar(); r.finish()
+    requireSuffix(current != null && (folded == null || folded <= current))
+    requireSuffix(request != null && request.contentEquals(requestId) &&
+        completed.big().signum() == 0 && total.big().signum() == 0)
+}
+
 internal fun invalidSuffixOutput(): Nothing =
     throw KagemushaWalletExceptionV1(KagemushaWalletExceptionV1.INVALID_NATIVE_OUTPUT)
 

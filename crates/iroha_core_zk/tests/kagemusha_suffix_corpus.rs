@@ -50,6 +50,8 @@ use iroha_core_zk::{
 };
 use iroha_data_model::kagemusha::*;
 
+#[path = "kagemusha_suffix_corpus/activation.rs"]
+mod activation;
 #[path = "kagemusha_suffix_corpus/adversarial.rs"]
 mod adversarial;
 #[path = "kagemusha_suffix_corpus/continuation.rs"]
@@ -244,7 +246,9 @@ impl Corpus {
     pub(crate) fn load() -> Self {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
-            .join(FIXTURE);
+            .join(FIXTURE)
+            .canonicalize()
+            .unwrap();
         let catalog = root.join("catalog");
         let installation_original = bounded(&catalog.join("engineering-installation.norito"), 1024);
         assert_eq!(

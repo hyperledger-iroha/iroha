@@ -12,6 +12,11 @@
 //! S, R, P and Omega are checked strictly and proved, Omega verifies
 //! natively, and its opening, `acc_V` and `acc_P` decide.
 //!
+//! The third test proves the same Receive as a phone does, with bounded
+//! memory: no strict checks, and each wrap's proving key (about 1.5 GiB) made
+//! just before its proof and dropped after it. It prints every stage's time;
+//! run it on the phone to time the Receive there.
+//!
 //! Measurements:
 //! - three wraps on iroha 5bde12ef2c's relations: R fit (sponge 35%, glue
 //!   16%, ECC 69%, range 98%), P did not (sponge 115%, glue 70%, ECC 100%,
@@ -34,7 +39,10 @@ use iroha_kagemusha_proof::{
     fold_lineage::{
         A_CONTEXT, A_PC, AKind, BASE, CLAIM_A, CLAIM_Q, FOLD_A, FOLD_Q, IVC_A, IVC_Q, Q_STATE,
     },
-    fold_wrap::{Domains, WrapSpec, native::FinalChain},
+    fold_wrap::{
+        Domains, WrapSpec,
+        native::{self, FinalChain},
+    },
 };
 use iroha_pasta::{Fp, Fq};
 
@@ -73,24 +81,24 @@ fn spec(rel: &ReceiveRelations) -> Arc<WrapSpec> {
 /// The finished chain the wraps take: the Receive after its eight
 /// half-steps, which A5 (step 8) closes after Q's Frame (step 7). Q keeps no
 /// state.
-fn final_chain(chain: &Chain) -> FinalChain {
+fn final_chain(chain: Chain) -> FinalChain {
     assert!(
         matches!(chain.last, Some(HalfStep::A(AKind::Receive5))),
         "the Receive ends with A5"
     );
     FinalChain {
         step: 8,
-        a_state: chain.a_state.clone(),
+        a_state: chain.a_state,
         q_state: Vec::new(),
         u_q: chain
             .a_kept
-            .iter()
-            .map(|kept| kept.clone().expect("A keeps every Q kind"))
+            .into_iter()
+            .map(|kept| kept.expect("A keeps every Q kind"))
             .collect(),
-        u_a: chain.q_kept.clone(),
-        a_n: chain.last_a.clone().expect("A5's instance"),
-        pallas_claims: chain.claims_a.clone().expect("A's claim accumulator"),
-        vesta_claims: chain.claims_q.clone().expect("Q's claim accumulator"),
+        u_a: chain.q_kept,
+        a_n: chain.last_a.expect("A5's instance"),
+        pallas_claims: chain.claims_a.expect("A's claim accumulator"),
+        vesta_claims: chain.claims_q.expect("Q's claim accumulator"),
     }
 }
 
@@ -147,17 +155,42 @@ fn the_wraps_finish_the_real_receive_into_an_omega_that_decides() {
     let keys = receive_keys();
     let full = full_receive(&keys, None);
     let rel = receive_relations(&keys, &full);
-    let chain = final_chain(&run_chain(&keys, &rel, &full, 8));
+    let chain = final_chain(run_chain(&keys, &rel, &full, 8));
     assert_eq!(Q_STATE, 0, "Q keeps no state");
     println!(
         "keys, fixture, relations and eight half-steps: {:.1?}",
         started.elapsed()
     );
     let now = Instant::now();
-    let wrap_keys = iroha_kagemusha_proof::fold_wrap::native::keygen(spec(&rel)).expect("keys");
+    let wrap_keys = native::keygen(spec(&rel)).expect("keys");
     println!("keygen S, R, P and Omega: {:.1?}", now.elapsed());
     let now = Instant::now();
     fold_wrap_toy::wrap(&wrap_keys, &chain, 7, false);
     println!("wraps checked, proved and decided: {:.1?}", now.elapsed());
+    println!("total: {:.1?}", started.elapsed());
+}
+
+#[test]
+#[ignore = "the real Receive and its wraps, one proving key at a time; run optimized"]
+fn the_real_receive_proves_with_one_wrap_key_at_a_time() {
+    let _serial = fold_wrap_toy::serial();
+    let started = Instant::now();
+    let (spec, chain) = {
+        let keys = receive_keys();
+        let full = full_receive(&keys, None);
+        let rel = receive_relations(&keys, &full);
+        println!(
+            "receive keys, fixture and relations: {:.1?}",
+            started.elapsed()
+        );
+        let now = Instant::now();
+        let chain = run_chain(&keys, &rel, &full, 8);
+        println!(
+            "eight half-steps, each checked strictly, committed and folded: {:.1?}",
+            now.elapsed()
+        );
+        (spec(&rel), final_chain(chain))
+    };
+    fold_wrap_toy::prove_one_key_at_a_time(spec, chain, 7);
     println!("total: {:.1?}", started.elapsed());
 }

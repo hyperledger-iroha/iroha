@@ -206,7 +206,7 @@ impl PreparationV1<'_> {
         public: &KagemushaWalletLineagePublicV1,
         budget: MemoryBudget,
     ) -> Result<LoadFoldFieldsV1, wallet_state::Error> {
-        let capsule = &step.frozen.capsule;
+        let capsule = &step.capsule();
         let fields = self.load_fields(owner, step, predecessor, public, budget)?;
         let insertion = super::dispatch::proof(load_recovery(
             &capsule.body().statement.effect,
@@ -248,7 +248,7 @@ impl PreparationV1<'_> {
         public: &KagemushaWalletLineagePublicV1,
         budget: MemoryBudget,
     ) -> Result<BootstrapFoldFieldsV1, Error> {
-        no_map_openings(&step.frozen.capsule.body().map_openings)?;
+        no_map_openings(&step.capsule().body().map_openings)?;
         let fields = self.bootstrap_fields(owner, step, public, budget)?;
         Ok(BootstrapFoldFieldsV1 {
             state: fields.state,
@@ -274,7 +274,7 @@ impl PreparationV1<'_> {
         public: &KagemushaWalletLineagePublicV1,
         budget: MemoryBudget,
     ) -> Result<ConsumingFoldFieldsV1, Error> {
-        let capsule = &step.frozen.capsule;
+        let capsule = &step.capsule();
         let fields = self.consuming_fields(
             capsule.body().kind,
             owner,

@@ -54,3 +54,27 @@ internal class KagemushaWalletSuffixUnloadReplyV1(
     override fun toString(): String = "KagemushaWalletSuffixUnloadReplyV1(status=$status, source=[REDACTED])"
     private fun nonzeroWord(bytes: ByteArray) = bytes.size == 32 && bytes.any { it != 0.toByte() }
 }
+
+internal inline fun suffixReply(call: () -> KagemushaWalletSuffixUnloadReplyV1?): KagemushaWalletSuffixUnloadReplyV1 =
+    (call() ?: invalidSuffixOutput()).checked()
+
+internal fun suffixRequestIdentity(value: ByteArray): ByteArray {
+    require(value.size == 32 && value.any { it != 0.toByte() }) { "nonzero32-byte request identity required" }
+    return value.copyOf()
+}
+
+internal fun suffixSignedWire(value: ByteArray): ByteArray {
+    require(value.size in 1..KagemushaWalletSuffixUnloadV1.SIGNED_WIRE_MAX_BYTES) { "suffix signed wire bound" }
+    return value.copyOf()
+}
+
+internal fun KagemushaWalletSuffixUnloadReplyV1.ledgerOutcome(): KagemushaWalletLedgerOutcomeV1 {
+    checked()
+    return when (status) {
+        46 -> KagemushaWalletLedgerOutcomeV1.Awaiting(bytes())
+        69 -> KagemushaWalletLedgerOutcomeV1.Rejected(KagemushaWalletLedgerCommitV1(sequenceLow, bytes()))
+        70 -> KagemushaWalletLedgerOutcomeV1.Confirmed(KagemushaWalletLedgerCommitV1(sequenceLow, bytes()))
+        76 -> KagemushaWalletLedgerOutcomeV1.StageConfirmed(KagemushaWalletLedgerCommitV1(sequenceLow, bytes()))
+        else -> invalidSuffixOutput()
+    }
+}

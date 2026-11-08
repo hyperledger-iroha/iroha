@@ -6,6 +6,7 @@ use super::super::preparation_custody::SourceCustodyV1;
 use super::super::transition_custody::PreparedTransitionV1;
 use super::*;
 pub(super) mod intake;
+mod suffix_charge;
 mod unload;
 
 mod delivery;
@@ -955,7 +956,7 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
             iroha_plonk::work_metrics::WorkPhase::SourceRestore,
         );
         let released = self.indexed_step(&manifest, sequence)?;
-        let source_digest = released.frozen.capsule.custody_digest();
+        let source_digest = released.capsule().custody_digest();
         let mut held_plan = entry
             .plan
             .map(|plan| archive::decode::<Plan>(&self.archive.read_object(&plan, PLAN_BOUND)?))

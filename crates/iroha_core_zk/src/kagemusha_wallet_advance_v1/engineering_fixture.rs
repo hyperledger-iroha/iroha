@@ -323,7 +323,7 @@ pub fn issuer_result(f: &Fixture, request: &RequestV1) -> ResultV1 {
     )
 )]
 pub fn enroll<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1>(
-    provider: KagemushaWalletProviderV1<F, P>,
+    provider: crate::kagemusha_wallet_state_v1::NativeProviderV1<F, P>,
     f: &Fixture,
 ) -> [Vec<u8>; 4] {
     let mut owner = EnrollmentOwnerV1::new(provider, f.config.clone())

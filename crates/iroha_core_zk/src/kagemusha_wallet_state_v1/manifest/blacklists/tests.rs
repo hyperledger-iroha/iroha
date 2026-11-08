@@ -99,7 +99,7 @@ fn derived_list(
     PreparationCustodyV1::new(
         &mut w.archive,
         &source,
-        &step.frozen.capsule.body().successor_state,
+        &step.ordinary_parts().0.capsule.body().successor_state,
         KagemushaWalletOperationKindV1::Send,
         None,
         crate::kagemusha_wallet_state_v1::preparation_custody::PreparationSelectionV1 {

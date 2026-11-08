@@ -54,6 +54,33 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         Ok(DerivedOutgoingAbsence { low, opening })
     }
 
+    // One selected request protects its whole immutable range until the active operation
+    // settles. There is no scan or volatile-only pin; restart reads the selected suffix root.
+    fn suffix_protects_step(&mut self, sequence: u128) -> Result<bool, Error> {
+        let Some(selected) = self.selected_suffix_checkpoint()? else {
+            return Ok(false);
+        };
+        let Some(suffix) = selected.suffix else {
+            return Ok(false);
+        };
+        let Some(request_id) = suffix.active_request else {
+            return Ok(false);
+        };
+        let address: [u8; 32] = suffix
+            .requests
+            .get(&mut self.archive, &request_id)?
+            .ok_or(Error::WitnessLost("active suffix request"))?
+            .try_into()
+            .map_err(|_| Error::WitnessLost("active suffix request address"))?;
+        let request: suffix_custody::SuffixRequestRecordV1 =
+            suffix_custody::read_record(&mut self.archive, address)?;
+        request.require((self.scheme_id, self.wallet_id))?;
+        if request.request_id != request_id {
+            return Err(Error::WitnessLost("active suffix request identity"));
+        }
+        Ok((request.anchor_sequence..=request.source_sequence).contains(&sequence))
+    }
+
     /// Collect one historical step in bounded restartable turns. A newer durable Ω must cover
     /// it; the current head and latest folded head are always retained. Send collection also
     /// requires authenticated removal from that Ω's retained native pending-outgoing map. Earned fees have
@@ -70,6 +97,9 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         };
         guard.token.check()?;
         let (old, mut manifest) = self.sync_manifest()?;
+        if self.suffix_protects_step(sequence)? {
+            return Ok(CollectionStatus::Idle);
+        }
         if let Some(intent) = manifest.collection.as_ref() {
             if intent.sequence != sequence {
                 return Err(Error::Invalid("another collection is pending"));
@@ -98,7 +128,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 .read_fold_cancellable(&latest, Some(&guard.token))?
                 .ok_or(Error::WitnessLost("collection covering Ω"))?;
             if let KagemushaWalletEffectV1::Send { credit_id, fee, .. } =
-                step.frozen.capsule.body().statement.effect
+                step.capsule().body().statement.effect
             {
                 let opening =
                     self.collection_outgoing_absence(&manifest, &fold.record, &credit_id)?;
@@ -112,7 +142,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                 // Required claim bytes must already be durable before the last Send output is
                 // deleted. A finalized payout may instead have authorized their own deletion.
                 if fee != 0 {
-                    self.require_fee_claim(&manifest, credit_id, &step.retained.record.output)?;
+                    self.require_fee_claim(&manifest, credit_id, &step.output())?;
                 }
             }
             entry.collected = true;

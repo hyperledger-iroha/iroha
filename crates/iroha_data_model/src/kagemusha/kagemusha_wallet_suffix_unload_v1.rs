@@ -21,6 +21,11 @@
 //! every proof, signature and opening and binds every identity before a payout. Encodings of
 //! existing KAGEMUSHA objects are unchanged; they are embedded as their existing types.
 
+mod native;
+pub use native::*;
+mod monetary;
+pub use monetary::*;
+
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
@@ -105,6 +110,8 @@ pub enum KagemushaWalletSuffixDigestRoleV1 {
     PayoutSource,
     /// Installed `VerifierPackV1` original bytes; the header's `verifier_definition`.
     VerifierDefinition,
+    /// Canonical exact recovery-map opening pair selected by the header.
+    RecoveryWitness,
 }
 
 impl KagemushaWalletSuffixDigestRoleV1 {
@@ -117,6 +124,7 @@ impl KagemushaWalletSuffixDigestRoleV1 {
             Self::Unload => "unload",
             Self::PayoutSource => "payout-source",
             Self::VerifierDefinition => "verifier-definition",
+            Self::RecoveryWitness => "recovery-witness",
         }
     }
 }
@@ -174,6 +182,25 @@ pub fn kagemusha_wallet_suffix_payout_source_v1(
     body[..32].copy_from_slice(authority);
     body[32..].copy_from_slice(unload_digest);
     kagemusha_wallet_suffix_digest_v1(KagemushaWalletSuffixDigestRoleV1::PayoutSource, &body)
+}
+
+/// Commit to the exact selected recovery-map insertion pair.
+///
+/// The preimage is the canonical Norito `Vec<Vec<u8>>` frame containing the low-leaf
+/// opening followed by the empty-slot opening; the digest uses the `recovery-witness` role.
+///
+/// # Errors
+/// Rejects a missing, additional, wrongly sized or unencodable opening.
+pub fn kagemusha_wallet_suffix_recovery_witness_digest_v1(
+    openings: &[Vec<u8>],
+) -> SuffixResult<[u8; 32]> {
+    require_insert_openings("suffix.recovery_witness", openings)?;
+    let original = norito::encode_canonical(&openings.to_vec())
+        .map_err(|_| invalid("suffix.recovery_witness"))?;
+    Ok(kagemusha_wallet_suffix_digest_v1(
+        KagemushaWalletSuffixDigestRoleV1::RecoveryWitness,
+        &original,
+    ))
 }
 
 // ---------------------------------------------------------------------------------------
@@ -316,7 +343,7 @@ pub struct KagemushaWalletSuffixHeaderV1 {
     pub charge: KagemushaWalletUnloadChargeV1,
 }
 
-/// Payout terms of a validated header. There is no public constructor from DATA.
+/// Payout DATA of a shape-validated header. This alone grants no monetary authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(align(16))]
 pub struct KagemushaWalletSuffixPayoutTermsV1 {
@@ -1136,6 +1163,11 @@ impl KagemushaWalletSuffixUnloadV1 {
         )?;
         if self.after.commitment()? != header.statement.successor {
             return Err(invalid("suffix_unload.after"));
+        }
+        if kagemusha_wallet_suffix_recovery_witness_digest_v1(&self.map_openings)?
+            != header.recovery_witness_digest
+        {
+            return Err(invalid("suffix_unload.recovery_witness_digest"));
         }
         Ok(terms)
     }

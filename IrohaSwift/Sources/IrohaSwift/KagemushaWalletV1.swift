@@ -368,6 +368,20 @@ final class KagemushaWalletNativeDriverV1: @unchecked Sendable {
   typealias Snapshot = @convention(c) (UInt64, UnsafeMutablePointer<connect_norito_kagemusha_wallet_snapshot_v1_t>?) -> Int32
   typealias EndExchange = @convention(c) (UInt64, UInt64, UnsafeMutablePointer<Output>?) -> Int32
   typealias Free = @convention(c) (UnsafeMutablePointer<UInt8>?) -> Void
+  typealias SuffixPrepare = @convention(c) (UInt64, UInt64, UnsafePointer<connect_norito_kagemusha_wallet_suffix_unload_request_v1>?, UnsafeMutablePointer<Output>?) -> Int32
+  typealias SuffixResume = @convention(c) (UInt64, UInt64, UnsafePointer<UInt8>?, UnsafeMutablePointer<Output>?) -> Int32
+  typealias SuffixInstruction = @convention(c) (UInt64, UnsafePointer<UInt8>?, UInt64, UInt64, UnsafeMutablePointer<Output>?) -> Int32
+  typealias SuffixAttempt = @convention(c) (UInt64, UnsafePointer<UInt8>?, UInt64, UInt64, UnsafePointer<UInt8>?, Int, UnsafeMutablePointer<Output>?) -> Int32
+  typealias SuffixIngest = @convention(c) (UInt64, UInt64, UnsafePointer<UInt8>?, UInt64, UInt64, UnsafePointer<UInt8>?, Int, UnsafePointer<UInt8>?, Int, UnsafeMutablePointer<Output>?) -> Int32
+  typealias SuffixSignedWire = @convention(c) (UInt64, UnsafePointer<UInt8>?, UInt64, UInt64, UInt64, UnsafeMutablePointer<Output>?) -> Int32
+  let suffixStatus: Simple
+  let suffixPrepare: SuffixPrepare
+  let suffixResume: SuffixResume
+  let suffixExecute: ExecuteReviewed
+  let suffixInstruction: SuffixInstruction
+  let suffixAttempt: SuffixAttempt
+  let suffixIngest: SuffixIngest
+  let suffixSignedWire: SuffixSignedWire
   let openBegin: OpenBegin
   let accountDisplay: AccountDisplay
   let accountOriginal: AccountOriginal
@@ -402,6 +416,14 @@ final class KagemushaWalletNativeDriverV1: @unchecked Sendable {
     let revision = try symbol(
       "connect_norito_kagemusha_wallet_revision_v1", (@convention(c) () -> UInt32).self)
     guard revision() == 1 else { throw KagemushaWalletErrorV1.bridgeUnavailable }
+    suffixStatus = try symbol("connect_norito_kagemusha_wallet_suffix_unload_status_v1", Simple.self)
+    suffixPrepare = try symbol("connect_norito_kagemusha_wallet_suffix_unload_prepare_v1", SuffixPrepare.self)
+    suffixResume = try symbol("connect_norito_kagemusha_wallet_suffix_unload_resume_v1", SuffixResume.self)
+    suffixExecute = try symbol("connect_norito_kagemusha_wallet_suffix_unload_execute_reviewed_v1", ExecuteReviewed.self)
+    suffixInstruction = try symbol("connect_norito_kagemusha_wallet_suffix_unload_instruction_v1", SuffixInstruction.self)
+    suffixAttempt = try symbol("connect_norito_kagemusha_wallet_suffix_unload_attempt_outcome_v1", SuffixAttempt.self)
+    suffixIngest = try symbol("connect_norito_kagemusha_wallet_suffix_unload_ingest_finality_v1", SuffixIngest.self)
+    suffixSignedWire = try symbol("connect_norito_kagemusha_wallet_suffix_unload_signed_wire_v1", SuffixSignedWire.self)
     accountDisplay = try symbol("connect_norito_kagemusha_wallet_account_display_v1", AccountDisplay.self)
     accountOriginal = try symbol("connect_norito_kagemusha_wallet_account_original_v1", AccountOriginal.self)
     observe = try symbol("connect_norito_kagemusha_wallet_observe_v1", Observe.self)

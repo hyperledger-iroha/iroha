@@ -427,7 +427,7 @@ impl PreparationV1<'_> {
     ) -> Result<RefreshFoldFieldsV1, Error> {
         self.credential_owner(owners.current)?;
         self.credential_owner(owners.successor)?;
-        let capsule = &step.frozen.capsule;
+        let capsule = step.ordinary_capsule().map_err(Error::preparation_read)?;
         if predecessor.manifest_digest != self.installed.verifier().manifest_digest()
             || predecessor.source_capsule_digest != capsule.body().predecessor_capsule_digest
             || predecessor.credential != owners.current.credential

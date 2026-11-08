@@ -988,12 +988,7 @@ impl KagemushaWalletFrozenRecoveryBodyV1 {
     /// public identifier. The complete wrapper must remain within the private cap.
     pub fn seal(self, opening: [u8; 32]) -> WalletResult<KagemushaWalletRecoveryCapsuleV1> {
         let opening = zeroize::Zeroizing::new(opening);
-        let point = capsule_point_v1::<iroha_pasta::Eq>(&self.body_digest, &opening)?;
-        let receipt_commitment = super::poseidon::kagemusha_wallet_poseidon_bytes_v1(
-            super::poseidon::KAGEMUSHA_WALLET_CAPSULE_COMMITMENT_DOMAIN_V1,
-            &point,
-        );
-        require_nonzero_v1("capsule.commitment", &receipt_commitment)?;
+        let receipt_commitment = kagemusha_wallet_capsule_commitment_for_body_v1(&self.body_digest, &opening)?;
         let wire = KagemushaWalletRecoveryCapsuleFrameV1 {
             body_frame: self.body_frame,
             opening: *opening,
@@ -1008,6 +1003,22 @@ impl KagemushaWalletFrozenRecoveryBodyV1 {
             receipt_commitment,
         })
     }
+}
+
+/// Existing randomized commitment primitive over an already domain-separated frozen body
+/// identity. New native frames choose their own body domain but use the same compiled bases,
+/// opening field and public receipt identifier; no circuit or key profile changes here.
+pub(crate) fn kagemusha_wallet_capsule_commitment_for_body_v1(
+    body_digest: &[u8; 32],
+    opening: &[u8; 32],
+) -> WalletResult<[u8; 32]> {
+    let point = capsule_point_v1::<iroha_pasta::Eq>(body_digest, opening)?;
+    let commitment = super::poseidon::kagemusha_wallet_poseidon_bytes_v1(
+        super::poseidon::KAGEMUSHA_WALLET_CAPSULE_COMMITMENT_DOMAIN_V1,
+        &point,
+    );
+    require_nonzero_v1("capsule.commitment", &commitment)?;
+    Ok(commitment)
 }
 
 /// The only wire form of a private recovery capsule: exact canonical B, then r.

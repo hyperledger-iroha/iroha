@@ -4476,6 +4476,10 @@ mod archive_tests;
 mod publication_tests;
 
 #[cfg(test)]
+#[path = "executor_suffix_performance_tests.rs"]
+mod suffix_performance_tests;
+
+#[cfg(test)]
 pub(crate) mod clock_tests;
 
 #[cfg(test)]

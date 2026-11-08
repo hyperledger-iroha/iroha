@@ -1890,3 +1890,16 @@ fn archive_call_publishes_on_success_discards_on_failure_and_reports_publication
         (Err(uncertain), vec!["open", "publish"])
     );
 }
+
+#[test]
+fn provider_monetary_decode_resource_remains_retryable_without_custody_loss() {
+    use advance::{KagemushaWalletDecodeResourceV1 as Origin, KagemushaWalletProviderErrorV1 as E};
+    for origin in [Origin::Allocator, Origin::EnclosingLimit] {
+        let expected = Failure::code(RESOURCE);
+        assert_eq!(Failure::from(E::DecodeResource(origin)), expected);
+        assert_eq!(
+            Failure::from(state::Error::Provider(E::DecodeResource(origin))),
+            expected
+        );
+    }
+}

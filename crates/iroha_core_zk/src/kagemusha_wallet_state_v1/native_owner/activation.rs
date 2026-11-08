@@ -114,19 +114,19 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         let certificates = snapshot
             .original(
                 &mut self.archive,
-                &source.frozen.capsule.body().successor_state,
+                &source.capsule().body().successor_state,
                 PreparationOriginalV1::EnrollmentCertificates,
             )?
             .ok_or(Error::WitnessLost("activation issuer original"))?;
         let plan = Plan {
             version: 1,
-            capsule: source.retained.capsule_digest,
-            capsule_commitment: source.frozen.capsule.receipt_commitment(),
-            completion: source.retained.completion_digest,
-            credential: source.frozen.credential,
+            capsule: source.capsule_digest(),
+            capsule_commitment: source.capsule().receipt_commitment(),
+            completion: source.completion_digest(),
+            credential: *source.credential(),
             certificates: archive::decode(&certificates)?,
             asset: asset.clone(),
-            bootstrap: archive::decode(&source.retained.record.output)?,
+            bootstrap: archive::decode(&source.output())?,
             nonce: NativeChoicesV1::fresh_nonce(&[0; 32])?,
             output: None,
             confirmation: None,

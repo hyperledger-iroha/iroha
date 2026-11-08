@@ -666,7 +666,10 @@ fn actual_native_renewal_and_daily_monthly_rollover_preserve_received_value() {
         provider.status(&slots[0]).unwrap(),
         KagemushaWalletSlotStatusV1::Pending(_)
     ));
-    let pending = provider.current_capsule(&slots[0]).unwrap().unwrap();
+    let NativeCapsuleV1::Ordinary(pending) = provider.current_capsule(&slots[0]).unwrap().unwrap()
+    else {
+        panic!("renewal selected a suffix capsule");
+    };
     pending
         .body()
         .successor_state
@@ -743,12 +746,12 @@ fn actual_native_renewal_and_daily_monthly_rollover_preserve_received_value() {
         provider.status(&slots[0]).unwrap(),
         KagemushaWalletSlotStatusV1::Released(_)
     ));
+    let NativeCapsuleV1::Ordinary(released) = provider.current_capsule(&slots[0]).unwrap().unwrap()
+    else {
+        panic!("renewal resumed into a suffix capsule");
+    };
     assert_eq!(
-        provider
-            .current_capsule(&slots[0])
-            .unwrap()
-            .unwrap()
-            .to_canonical_bytes(),
+        released.to_canonical_bytes(),
         pending_bytes,
         "resume keeps exact selected proof/capsule; no reprepare"
     );

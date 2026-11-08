@@ -88,7 +88,8 @@ mod tests {
                     Some(norito::encode_canonical(&typed).unwrap())
                 );
                 assert!(project_instruction(&input).is_none());
-                let envelope = norito::decode_canonical(&row.envelope_norito).unwrap();
+                let envelope: iroha_data_model::privacy::PrivacyRuntimeProofEnvelopeV1 =
+                    norito::decode_canonical(&row.envelope_norito).unwrap();
                 let retired = norito::encode_canonical(&SubmitPrivacyProofV1::new(
                     (envelope).try_into().expect("frozen Exact12 test input"),
                 ))
@@ -137,6 +138,8 @@ mod tests {
             .unwrap();
         let x509: iroha_data_model::privacy::PrivacyRuntimeProofEnvelopeV1 =
             norito::decode_canonical(&x509.envelope_norito).unwrap();
+        let x509: iroha_data_model::privacy::PrivacyProofEnvelopeV1 =
+            x509.try_into().expect("frozen Exact12 test input");
         let generic: SubmitPrivacyProofV1 =
             norito::decode_canonical(&fixtures.rows[0].submit_proof_instruction_norito).unwrap();
         for component in 0..3 {

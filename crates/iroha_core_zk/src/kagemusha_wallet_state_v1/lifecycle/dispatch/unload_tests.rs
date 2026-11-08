@@ -192,7 +192,10 @@ fn permanent_plan_projects_after_capsule_collection_and_restart_without_signing(
         .unwrap();
     let source = w.source_custody(&manifest, &previous).unwrap();
     let lineage = w.read_fold(&previous).unwrap().unwrap().record.lineage;
-    let mut next = frozen(Some(&previous.frozen), KagemushaWalletEffectV1::Retiring);
+    let mut next = frozen(
+        Some(&previous.ordinary_parts().0),
+        KagemushaWalletEffectV1::Retiring,
+    );
     let mut c = next.capsule.body().clone();
     c.predecessor_lineage = KagemushaWalletLineageSlotV1::Present {
         lineage: lineage.clone(),
@@ -320,4 +323,24 @@ fn unknown_and_lost_selected_originals_never_reconstruct_a_claim() {
         w.retained_unload_claim(&request.request_id, &account, None),
         Err(Error::WitnessLost(_))
     ));
+}
+
+#[test]
+fn suffix_prior_unload_charge_uses_selected_plan_and_rejects_mapping_mutation() {
+    let (mut w, _, _, capsule, _) = prepared();
+    let (_, mut manifest) = w.sync_manifest().unwrap();
+    let step = w
+        .indexed_step(&manifest, manifest.indexed.unwrap())
+        .unwrap();
+    assert_eq!(step.capsule_digest(), capsule);
+    assert_eq!(w.suffix_step_charge(&manifest, &step).unwrap(), None);
+    // An indexed capsule with a missing or substituted permanent plan cannot supply even
+    // an uncharged prior Unload. This is a custody test, not a sigma proof fixture.
+    manifest.capsule_plans = IndexRoot::default();
+    assert!(w.suffix_step_charge(&manifest, &step).is_err());
+    manifest.capsule_plans = manifest
+        .capsule_plans
+        .set(&mut w.archive, capsule, &[7; 32])
+        .unwrap();
+    assert!(w.suffix_step_charge(&manifest, &step).is_err());
 }

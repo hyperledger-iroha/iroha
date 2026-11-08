@@ -33,7 +33,7 @@ pub(super) fn receive_step(
     let received: KagemushaWalletPaymentV1 = archive::decode(payment)?;
     let request = valid(received.signed_request())?;
     let identity = valid(received.digests())?;
-    let previous = &source.released().frozen;
+    let previous = &source.released().ordinary_parts().0;
     let (credential, mut body) = frozen_body_for_credential(
         &previous.credential,
         Some(previous),
@@ -176,7 +176,8 @@ fn assert_complete_once(wallet: &mut Wallet, signatures: usize) {
         unreachable!()
     };
     assert!(
-        step.frozen
+        step.ordinary_parts()
+            .0
             .capsule
             .body()
             .retained_inputs
@@ -355,7 +356,7 @@ fn selected_receive_pending_and_missing_output_are_never_replanned() {
         Some(Completion::Complete(_))
     ));
     let step = wallet.released_steps().unwrap().pop().unwrap();
-    let operation = step.frozen.capsule.body().operation_id;
+    let operation = step.ordinary_parts().0.capsule.body().operation_id;
     wallet.custody.retained.remove(&operation).unwrap();
     assert_eq!(
         wallet.execute(request).unwrap(),
@@ -469,7 +470,8 @@ fn hundred_receives_survive_fold_publication_restart_and_exact_replay() {
             .unwrap()
             .last()
             .unwrap()
-            .frozen
+            .ordinary_parts()
+            .0
             .capsule
             .body()
             .successor_state

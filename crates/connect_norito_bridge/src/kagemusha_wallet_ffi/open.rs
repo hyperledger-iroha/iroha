@@ -538,7 +538,7 @@ pub enum NativeStartupFailure<P: advance::KagemushaWalletPlatformV1, S: Original
 /// Every error retains the exclusive provider and sole original source in its typed failure.
 pub fn start_native_wallet<P, S>(
     config: state::NativeInstallationConfigV1,
-    provider: advance::KagemushaWalletProviderV1<advance::KagemushaWalletStdFsV1, P>,
+    provider: state::NativeProviderV1<advance::KagemushaWalletStdFsV1, P>,
     verifier_pack: &[u8],
     producer_inventory: &[u8],
     originals: S,

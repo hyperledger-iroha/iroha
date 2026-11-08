@@ -233,7 +233,8 @@ pub struct SuffixUnloadStatusV1 {
     pub format_version: u16,
     /// Exactly fifteen.
     pub discriminator: u16,
-    /// 0 initializing, 1 not applicable, 2 eligible, 3 verifying, 4 ready, 5 pending, 6 released.
+    /// 0 initializing, 1 not applicable, 2 eligible, 3 verifying, 4 ready, 5 pending,
+    /// 6 released, 7 exact request absent (named resume only).
     pub state: u16,
     /// 1 no anchor, 2 unsupported step, 3 no suffix; zero except for state one.
     pub reason: u16,
@@ -241,7 +242,7 @@ pub struct SuffixUnloadStatusV1 {
     pub current_sequence: Option<u128>,
     /// Latest verified ordinary fold sequence, if present.
     pub folded_sequence: Option<u128>,
-    /// Exact selected request for states three through six.
+    /// Exact selected request for states three through six, or queried absent request for seven.
     pub request_id: Option<[u8; 32]>,
     /// Completed steps in the selected pass.
     pub completed_steps: u128,
@@ -254,7 +255,7 @@ impl SuffixUnloadStatusV1 {
     /// Unknown codes, inconsistent presence, sequences or counters.
     pub fn validate(&self) -> SuffixResult<()> {
         tag(self.format_version, self.discriminator, 15)?;
-        if self.state > 6
+        if self.state > 7
             || (self.state == 1 && !(1..=3).contains(&self.reason))
             || (self.state != 1 && self.reason != 0)
             || self
@@ -263,7 +264,16 @@ impl SuffixUnloadStatusV1 {
         {
             return Err(invalid("suffix.status.state"));
         }
-        if self.state >= 3 {
+        if self.state == 7 {
+            let request = self
+                .request_id
+                .ok_or_else(|| invalid("suffix.status.absent_request"))?;
+            require_nonzero("suffix.status.absent_request", &request)?;
+            if self.current_sequence.is_none() || self.completed_steps != 0 || self.total_steps != 0
+            {
+                return Err(invalid("suffix.status.absent_geometry"));
+            }
+        } else if self.state >= 3 {
             let request = self
                 .request_id
                 .ok_or_else(|| invalid("suffix.status.request"))?;
@@ -351,5 +361,216 @@ impl SuffixUnloadReleasedV1 {
         let value: Self = decode_frame_v1(bytes, SUFFIX_UNLOAD_STATUS_MAX_BYTES_V1)?;
         value.validate()?;
         Ok(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn scheduling_frames_round_trip_and_reject_impossible_states() {
+        let progress = SuffixUnloadProgressV1 {
+            format_version: 1,
+            discriminator: 14,
+            request_id: [1; 32],
+            completed_steps: 17,
+            total_steps: 50,
+        };
+        let bytes = progress.to_canonical_bytes().unwrap();
+        assert_eq!(
+            SuffixUnloadProgressV1::decode_canonical(&bytes).unwrap(),
+            progress
+        );
+        for value in [
+            SuffixUnloadProgressV1 {
+                discriminator: 15,
+                ..progress
+            },
+            SuffixUnloadProgressV1 {
+                completed_steps: 51,
+                ..progress
+            },
+            SuffixUnloadProgressV1 {
+                total_steps: 4097,
+                ..progress
+            },
+            SuffixUnloadProgressV1 {
+                request_id: [0; 32],
+                ..progress
+            },
+        ] {
+            assert!(value.to_canonical_bytes().is_err());
+        }
+        let status = SuffixUnloadStatusV1 {
+            format_version: 1,
+            discriminator: 15,
+            state: 3,
+            reason: 0,
+            current_sequence: Some(99),
+            folded_sequence: Some(49),
+            request_id: Some([1; 32]),
+            completed_steps: 17,
+            total_steps: 50,
+        };
+        assert_eq!(
+            SuffixUnloadStatusV1::decode_canonical(&status.to_canonical_bytes().unwrap()).unwrap(),
+            status
+        );
+        for value in [
+            SuffixUnloadStatusV1 { state: 7, ..status },
+            SuffixUnloadStatusV1 { state: 4, ..status },
+            SuffixUnloadStatusV1 {
+                request_id: None,
+                ..status
+            },
+            SuffixUnloadStatusV1 {
+                folded_sequence: Some(100),
+                ..status
+            },
+            SuffixUnloadStatusV1 {
+                reason: 1,
+                ..status
+            },
+            SuffixUnloadStatusV1 { state: 2, ..status },
+        ] {
+            assert!(value.to_canonical_bytes().is_err());
+        }
+    }
+    #[test]
+    fn release_summary_has_exact_counts_and_no_payout_semantics() {
+        let mut authority = [0; 32];
+        authority[0] = 7;
+        let released = SuffixUnloadReleasedV1 {
+            format_version: 1,
+            discriminator: 16,
+            request_id: [1; 32],
+            authority_digest: authority,
+            amount: 500,
+            step_count: 50,
+            chunk_count: 7,
+            instruction_count: 9,
+        };
+        let bytes = released.to_canonical_bytes().unwrap();
+        assert_eq!(
+            SuffixUnloadReleasedV1::decode_canonical(&bytes).unwrap(),
+            released
+        );
+        assert!(
+            SuffixUnloadReleasedV1 {
+                instruction_count: 8,
+                ..released
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            SuffixUnloadReleasedV1 {
+                chunk_count: 0,
+                ..released
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            SuffixUnloadReleasedV1 {
+                amount: 0,
+                ..released
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            SuffixUnloadReleasedV1 {
+                step_count: 57,
+                ..released
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            SuffixUnloadReleasedV1 {
+                authority_digest: [255; 32],
+                ..released
+            }
+            .validate()
+            .is_err()
+        );
+        let mut extra = bytes;
+        extra.push(0);
+        assert!(SuffixUnloadReleasedV1::decode_canonical(&extra).is_err());
+        assert_eq!(std::mem::align_of::<SuffixUnloadReviewProjectionV1>(), 16);
+        assert_eq!(std::mem::align_of::<SuffixUnloadProgressV1>(), 16);
+        assert_eq!(std::mem::align_of::<SuffixUnloadStatusV1>(), 16);
+        assert_eq!(std::mem::align_of::<SuffixUnloadReleasedV1>(), 16);
+    }
+}
+
+#[cfg(test)]
+mod absence_tests {
+    use super::*;
+
+    fn absent() -> SuffixUnloadStatusV1 {
+        SuffixUnloadStatusV1 {
+            format_version: 1,
+            discriminator: 15,
+            state: 7,
+            reason: 0,
+            current_sequence: Some((1_u128 << 64) + 3),
+            folded_sequence: Some(0),
+            request_id: Some([1; 32]),
+            completed_steps: 0,
+            total_steps: 0,
+        }
+    }
+
+    #[test]
+    fn named_request_absence_roundtrips_wide_and_unfolded_selected_heads() {
+        let wide = absent();
+        let mut unfolded = absent();
+        unfolded.current_sequence = Some(0);
+        unfolded.folded_sequence = None;
+        for value in [wide, unfolded] {
+            let bytes = value.to_canonical_bytes().unwrap();
+            assert_eq!(
+                SuffixUnloadStatusV1::decode_canonical(&bytes).unwrap(),
+                value
+            );
+        }
+    }
+
+    #[test]
+    fn named_request_absence_rejects_invalid_identity_and_progress() {
+        let base = absent();
+        let mut mutations = vec![];
+        let mut value = base;
+        value.current_sequence = None;
+        value.folded_sequence = None;
+        mutations.push(value);
+        let mut value = base;
+        value.request_id = None;
+        mutations.push(value);
+        let mut value = base;
+        value.request_id = Some([0; 32]);
+        mutations.push(value);
+        let mut value = base;
+        value.reason = 1;
+        mutations.push(value);
+        let mut value = base;
+        value.total_steps = 1;
+        mutations.push(value);
+        let mut value = base;
+        value.completed_steps = 1;
+        mutations.push(value);
+        let mut value = base;
+        value.folded_sequence = Some(base.current_sequence.unwrap() + 1);
+        mutations.push(value);
+        let mut value = base;
+        value.state = 8;
+        mutations.push(value);
+        for value in mutations {
+            assert!(value.validate().is_err());
+            let bytes = norito::encode_canonical(&value).unwrap();
+            assert!(SuffixUnloadStatusV1::decode_canonical(&bytes).is_err());
+        }
     }
 }

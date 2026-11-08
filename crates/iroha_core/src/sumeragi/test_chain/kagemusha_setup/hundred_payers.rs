@@ -13,11 +13,13 @@
 //! folds unburned, the folded total is the sum, value is conserved and the merchant can spend it
 //! onward. Engineering evidence only: no physical device, attestation or network-round claim.
 
+mod suffix_engine;
+
 use super::*;
 use crate::kagemusha_wallet_v1::CommittedLoadReceipts;
 use iroha_core_zk::{
     kagemusha_wallet_advance_v1::{
-        KagemushaWalletAnchorPolicyV1, KagemushaWalletProviderV1, KagemushaWalletStdFsV1,
+        KagemushaWalletAnchorPolicyV1, KagemushaWalletStdFsV1,
         engineering_fixture::{self as engineering, Fixture},
         test_support::{FakePlatformV1, test_options},
     },
@@ -185,8 +187,11 @@ impl Device {
     fn provider(
         &self,
         scheme: [u8; 32],
-    ) -> KagemushaWalletProviderV1<KagemushaWalletStdFsV1, FakePlatformV1> {
-        KagemushaWalletProviderV1::open(
+    ) -> iroha_core_zk::kagemusha_wallet_state_v1::NativeProviderV1<
+        KagemushaWalletStdFsV1,
+        FakePlatformV1,
+    > {
+        iroha_core_zk::kagemusha_wallet_state_v1::NativeProviderV1::open(
             KagemushaWalletStdFsV1::open(self.root.join("custody")).unwrap(),
             self.platform.clone(),
             scheme,

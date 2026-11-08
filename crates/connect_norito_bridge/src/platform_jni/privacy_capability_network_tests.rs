@@ -159,7 +159,10 @@ fn generic_construction_without_policy_preserves_committed_protocol_limits() {
     envelope.statement_schema_digest = profile.statement_schema_digest;
     envelope.engine_manifest_digest = profile.engine_manifest_digest;
     envelope.statement_digest = envelope.statement.digest().unwrap();
-    let instruction = norito::encode_canonical(&SubmitPrivacyProofV1 { envelope }).unwrap();
+    let instruction = norito::encode_canonical(&SubmitPrivacyProofV1::new(
+        envelope.try_into().expect("frozen Exact12 test input"),
+    ))
+    .unwrap();
     let archive = manifest.canonical_bytes().unwrap();
     assert!(java_privacy_exact12_submit_proof_admitted(
         &archive,

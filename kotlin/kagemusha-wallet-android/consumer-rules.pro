@@ -42,3 +42,6 @@
 # Rust constructs bounded observation DATA through its dedicated JNI reply domain.
 -keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletObservationNativeV1 { *; }
 -keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletObservationReplyV1 { *; }
+
+# Native constructs the dedicated bounded suffix reply by exact JNI name and descriptor.
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaWalletSuffixUnloadReplyV1 { *; }

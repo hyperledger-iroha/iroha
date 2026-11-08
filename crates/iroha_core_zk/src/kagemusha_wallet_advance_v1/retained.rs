@@ -21,7 +21,9 @@ use super::{
         KagemushaWalletCompletionFrameV1, kagemusha_wallet_completion_names_v1,
         kagemusha_wallet_list_completions_v1,
     },
-    decode_envelope_v1, encode_envelope_v1,
+    decode_envelope_v1,
+    decode_resource::{completed, read_canonical},
+    encode_envelope_v1,
     layout::{
         KagemushaWalletSlotIdV1, kagemusha_wallet_capsule_name_v1,
         kagemusha_wallet_capsules_dir_v1, kagemusha_wallet_completion_dir_v1,
@@ -235,9 +237,10 @@ where
         match store.read(&dir, name, file_max::<R>()) {
             KagemushaWalletReadV1::Present(bytes) => {
                 present = true;
-                if let Ok(file) =
-                    decode_envelope_v1::<KagemushaWalletFrozenFileV1>(&bytes, file_max::<R>())
-                    && !generations.contains(&file.selected_generation)
+                if let Some(file) = completed(read_canonical::<KagemushaWalletFrozenFileV1>(
+                    &bytes,
+                    file_max::<R>(),
+                ))? && !generations.contains(&file.selected_generation)
                 {
                     generations.push(file.selected_generation);
                 }
@@ -353,9 +356,10 @@ where
             super::layout::kagemusha_wallet_completion_name_v1(&name.operation_id, name.copy);
         match store.read(&dir, &entry, file_max::<R>()) {
             KagemushaWalletReadV1::Present(bytes) => {
-                if let Ok(file) =
-                    decode_envelope_v1::<KagemushaWalletFrozenFileV1>(&bytes, file_max::<R>())
-                {
+                if let Some(file) = completed(read_canonical::<KagemushaWalletFrozenFileV1>(
+                    &bytes,
+                    file_max::<R>(),
+                ))? {
                     highest = highest.max(Some(file.selected_generation));
                 }
             }

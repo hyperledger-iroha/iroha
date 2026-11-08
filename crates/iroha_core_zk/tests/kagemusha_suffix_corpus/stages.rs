@@ -1,6 +1,30 @@
 //! Canonical stage originals produced by the genuine continuation test for ledger tests.
 use super::*;
 use iroha_data_model::account::AccountId;
+use iroha_data_model::kagemusha::kagemusha_wallet_suffix_unload_v1::*;
+
+// Use the shared model owner and verify exact parity with the source-frozen gate05 framing.
+// The independent hash below is an engineering assertion, never a production decoder.
+fn recovery_digest(openings: &[Vec<u8>]) -> [u8; 32] {
+    let shared = kagemusha_wallet_suffix_recovery_witness_digest_v1(openings).unwrap();
+    assert_eq!(
+        openings.iter().map(Vec::len).collect::<Vec<_>>(),
+        [1124, 1028]
+    );
+    let frame = norito::encode_canonical(&openings.to_vec()).unwrap();
+    let mut digest = Sha256::new();
+    digest.update(KAGEMUSHA_WALLET_SUFFIX_DIGEST_PREFIX_V1);
+    digest.update(b"recovery-witness");
+    digest.update([0]);
+    digest.update((frame.len() as u64).to_le_bytes());
+    digest.update(frame);
+    let prior_gate_digest: [u8; 32] = digest.finalize().into();
+    assert_eq!(
+        shared, prior_gate_digest,
+        "shared recovery-witness owner changed gate05 framing"
+    );
+    shared
+}
 
 pub(super) struct Stages {
     header: KagemushaWalletSuffixHeaderV1,
@@ -148,10 +172,7 @@ impl Stages {
             tip_adjusted: derivation.predecessor_adjusted,
             statement: derivation.statement,
             sigma: sigma.clone(),
-            recovery_witness_digest: Sha256::digest(
-                norito::encode_canonical(&derivation.openings).unwrap(),
-            )
-            .into(),
+            recovery_witness_digest: recovery_digest(&derivation.openings),
             account: account(corpus),
             charge: KagemushaWalletUnloadChargeV1::None,
         };

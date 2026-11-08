@@ -221,6 +221,35 @@ class KagemushaWalletV1 internal constructor(handle: Long) : Closeable, Kagemush
     private val closeGate = Any()
     private val retired = java.util.concurrent.atomic.AtomicBoolean(false)
     @Volatile private var closeFailure: Throwable? = null
+    /** Cheap authenticated scheduling DATA; no suffix scan or proof work. */
+    fun suffixUnloadStatus(): KagemushaWalletSuffixUnloadStatusV1 {
+        val reply = suffixReply { KagemushaWalletNativeCallsV1.suffixUnloadStatus(handle()) }
+        requireSuffix(reply.status == 77)
+        return KagemushaWalletSuffixUnloadStatusV1(reply.bytes())
+    }
+    /** Exact retained canonical stage; Begin is available before debit only after complete preparation. */
+    fun suffixUnloadInstruction(requestId: ByteArray, ordinal: KagemushaWalletUInt128V1): ByteArray {
+        val identity = suffixRequestIdentity(requestId)
+        val reply = suffixReply { KagemushaWalletNativeCallsV1.suffixUnloadInstruction(handle(), identity, ordinal) }
+        requireSuffix(reply.status == 75)
+        return reply.bytes()
+    }
+    /** Read an exact retained signed envelope by bounded index; null means absent, never lost custody. */
+    fun suffixUnloadSignedWire(requestId: ByteArray, ordinal: KagemushaWalletUInt128V1, attemptIndex: Long): ByteArray? {
+        require(attemptIndex >= 0) { "nonnegative attempt index required" }
+        val identity = suffixRequestIdentity(requestId)
+        val reply = suffixReply { KagemushaWalletNativeCallsV1.suffixUnloadSignedWire(handle(), identity, ordinal, attemptIndex) }
+        requireSuffix(reply.status == 78)
+        return reply.bytes().takeIf { it.isNotEmpty() }
+    }
+    /** Intake binds and retains the exact signed stage before it can leave Native custody. */
+    fun suffixUnloadAttemptOutcome(requestId: ByteArray, ordinal: KagemushaWalletUInt128V1,
+        signedWire: ByteArray): KagemushaWalletLedgerOutcomeV1 {
+        val identity = suffixRequestIdentity(requestId)
+        val wire = suffixSignedWire(signedWire)
+        return suffixReply { KagemushaWalletNativeCallsV1.suffixUnloadAttemptOutcome(handle(), identity, ordinal, wire) }.ledgerOutcome()
+    }
+
     private fun handle(): Long { deletionGate.requireOrdinary(); return custodyHandle() }
     private fun custodyHandle(): Long {
         closeFailure?.let { throw it }
@@ -477,6 +506,15 @@ internal object KagemushaWalletNativeV1 {
     @JvmStatic external fun execute(handle: Long, exchangeId: Long, requestId: ByteArray, selector: Int, amountLow: Long, amountHigh: Long, first: ByteArray, second: ByteArray, third: ByteArray): KagemushaWalletCallV1?
     @JvmStatic external fun snapshot(handle: Long): KagemushaWalletSnapshotReplyV1?
     @JvmStatic external fun review(handle: Long, exchangeId: Long, requestId: ByteArray, selector: Int, amountLow: Long, amountHigh: Long, expectation: Int, expectedProjection: ByteArray, first: ByteArray, second: ByteArray): KagemushaWalletReviewReplyV1?
+    @JvmStatic external fun suffixUnloadStatus(handle: Long): KagemushaWalletSuffixUnloadReplyV1?
+    @JvmStatic external fun suffixUnloadPrepare(handle: Long, exchangeId: Long, requestId: ByteArray, amountLow: Long, amountHigh: Long, quote: ByteArray, certificates: ByteArray, beneficiary: ByteArray): KagemushaWalletSuffixUnloadReplyV1?
+    @JvmStatic external fun suffixUnloadResume(handle: Long, exchangeId: Long, requestId: ByteArray): KagemushaWalletSuffixUnloadReplyV1?
+    @JvmStatic external fun executeReviewedSuffixUnload(handle: Long, exchangeId: Long, token: Long): KagemushaWalletSuffixUnloadReplyV1?
+    @JvmStatic external fun suffixUnloadInstruction(handle: Long, requestId: ByteArray, ordinalLow: Long, ordinalHigh: Long): KagemushaWalletSuffixUnloadReplyV1?
+    @JvmStatic external fun suffixUnloadAttemptOutcome(handle: Long, requestId: ByteArray, ordinalLow: Long, ordinalHigh: Long, signedWire: ByteArray): KagemushaWalletSuffixUnloadReplyV1?
+    @JvmStatic external fun suffixUnloadIngestFinality(handle: Long, exchangeId: Long, requestId: ByteArray, ordinalLow: Long, ordinalHigh: Long, signedWire: ByteArray, finality: ByteArray): KagemushaWalletSuffixUnloadReplyV1?
+    @JvmStatic external fun suffixUnloadSignedWire(handle: Long, requestId: ByteArray, ordinalLow: Long, ordinalHigh: Long, attemptIndex: Long): KagemushaWalletSuffixUnloadReplyV1?
+
     @JvmStatic external fun executeReviewed(handle: Long, exchangeId: Long, token: Long): KagemushaWalletCallV1?
     @JvmStatic external fun discardReview(handle: Long, exchangeId: Long, token: Long): Int
 }

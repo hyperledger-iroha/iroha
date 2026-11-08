@@ -2357,6 +2357,78 @@ int32_t connect_norito_kagemusha_wallet_execute_reviewed_v1(uint64_t handle, uin
 /** Cancel an in-memory review only; same issuing exchange even after end, no durable custody mutation. */
 int32_t connect_norito_kagemusha_wallet_discard_review_v1(uint64_t handle, uint64_t exchange_id, uint64_t token);
 
+/** Additive suffix Unload request. The nonzero request ID is exactly32 bytes and the amount
+ * is positive. Charge quote<=1024, certificates<=10034, beneficiary AccountId<=4096:
+ * all three are absent (NULL,length0) together or present together. Inputs are borrowed only
+ * for the call. Native selects source, anchor, nonce, witness paths and proof originals. */
+typedef struct {
+    const uint8_t* request_id32;
+    connect_norito_kagemusha_wallet_u128_v1 amount;
+    const uint8_t* charge_quote; size_t charge_quote_length;
+    const uint8_t* charge_certificates; size_t charge_certificates_length;
+    const uint8_t* charge_beneficiary; size_t charge_beneficiary_length;
+} connect_norito_kagemusha_wallet_suffix_unload_request_v1;
+
+/** Suffix result kinds use the unchanged wallet_result_v1 layout and existing byte free owner.
+ * Unless explicitly specified below, sequence/detail are zero. Canonical DATA cannot recreate
+ * the actual Native review or claim proof acceptance.
+ * 71 NotApplicable: detail1 NoAnchor/2 UnsupportedStep/3 NoSuffix, empty bytes.
+ * 72 Verifying: canonical SuffixUnloadProgressV1 frame<=256; no review token.
+ * 73 Ready: positive one-use origin-bound review token in sequence_low<=INT64_MAX, high0,
+ *    canonical SuffixUnloadReviewProjectionV1 display frame<=12288; detail0.
+ * 74 Released: canonical SuffixUnloadReleasedV1 frame<=512; local debit completed,
+ *    no online credit/finality verdict. A retry returns the same retained monetary outcome.
+ * 75 Instruction: exact registered KagemushaWalletLedgerV1 frame<=544800.
+ * 76 StageConfirmed: certified Begin/Append height in sequence_low, high0, commit hash32.
+ *    This never means payout. Only70 confirms the Finalize Unload at its certified height.
+ * 77 Status: canonical SuffixUnloadStatusV1 frame<=512; scheduling DATA, never a proof verdict.
+ * Named resume alone may return77/state7 RequestAbsent: exact queried request32, currentSome,
+ * optional folded<=current, reason0 and zero counters. Only a selected index miss permits it;
+ * malformed/missing referenced originals remain errors. Global status never returns state7.
+ * 78 SignedWire: exact retained signed transaction<=593952; empty means positive index absence.
+ *    Corruption, unavailable custody and malformed/foreign records return errors, not absence.
+ * Prepare/resume may also return2 Pending (zero scalars/empty bytes) or67 tokenless maintenance
+ * (sequence0, empty bytes, detail1 SelectedPending/6 Busy). Execute may return65 only with the
+ * SAME live token and detail1 SelectedPending/6 Busy; retry that token in its issuing exchange.
+ * Wrong-kind tokens are consumed/rejected. Use discard_review_v1 to drop a suffix review.
+ * Attempt/finality may return46 Awaiting (entrypoint32, zero scalars),69 Rejected or70
+ * UnloadConfirmed (height in sequence_low, high0/detail0, commit hash32); finality may return68
+ * EpochRequired (target height in sequence_low, high0/detail0, empty bytes).
+ * These larger caps apply only to named suffix APIs; ordinary API bounds are unchanged. */
+int32_t connect_norito_kagemusha_wallet_suffix_unload_status_v1(uint64_t handle,
+    connect_norito_kagemusha_wallet_result_v1 *out);
+/** One bounded preparation pass; the actual review is bound to this issuing exchange. */
+int32_t connect_norito_kagemusha_wallet_suffix_unload_prepare_v1(uint64_t handle, uint64_t exchange_id,
+    const connect_norito_kagemusha_wallet_suffix_unload_request_v1 *request,
+    connect_norito_kagemusha_wallet_result_v1 *out);
+/** Resume retained work or selected Advance; never initiates a fresh unreviewed debit. */
+int32_t connect_norito_kagemusha_wallet_suffix_unload_resume_v1(uint64_t handle, uint64_t exchange_id,
+    const uint8_t *request_id32, connect_norito_kagemusha_wallet_result_v1 *out);
+/** Consume the exact review after fresh hardware approval. No caller financial terms. */
+int32_t connect_norito_kagemusha_wallet_suffix_unload_execute_reviewed_v1(uint64_t handle,
+    uint64_t exchange_id, uint64_t token, connect_norito_kagemusha_wallet_result_v1 *out);
+/** Ordinals are u128 low/high:0 Begin,1..chunk_count Append,chunk_count+1 Finalize; at most513.
+ * Begin may be available before Advance; later stages require the retained local release. */
+int32_t connect_norito_kagemusha_wallet_suffix_unload_instruction_v1(uint64_t handle,
+    const uint8_t *request_id32, uint64_t ordinal_low, uint64_t ordinal_high,
+    connect_norito_kagemusha_wallet_result_v1 *out);
+/** Read exact retained wire by its monotonic u64 index within this request/stage; never re-sign. */
+int32_t connect_norito_kagemusha_wallet_suffix_unload_signed_wire_v1(uint64_t handle,
+    const uint8_t *request_id32, uint64_t ordinal_low, uint64_t ordinal_high,
+    uint64_t attempt_index, connect_norito_kagemusha_wallet_result_v1 *out);
+/** Validate and durably retain the nonempty exact signed wire before any application POST. */
+int32_t connect_norito_kagemusha_wallet_suffix_unload_attempt_outcome_v1(uint64_t handle,
+    const uint8_t *request_id32, uint64_t ordinal_low, uint64_t ordinal_high,
+    const uint8_t *signed_wire, size_t signed_wire_length,
+    connect_norito_kagemusha_wallet_result_v1 *out);
+/** Nonempty ledger finality<=1327104 is checked against the signed validators. A Core submission
+ * is not finality. Confirm Begin before Advance, all Appends before Finalize, and credit only70. */
+int32_t connect_norito_kagemusha_wallet_suffix_unload_ingest_finality_v1(uint64_t handle,
+    uint64_t exchange_id, const uint8_t *request_id32, uint64_t ordinal_low, uint64_t ordinal_high,
+    const uint8_t *signed_wire, size_t signed_wire_length,
+    const uint8_t *finality, size_t finality_length,
+    connect_norito_kagemusha_wallet_result_v1 *out);
+
 // Mandatory original base authenticated under public build-selected Ed25519 trust.
 // Whole app manifest <=8MiB; envelope <=2048; wallet runtime <=128KiB;
 // signed genesis <=64MiB; root UTF-8 <=4096. Verifier pack/catalog retain Native caps.

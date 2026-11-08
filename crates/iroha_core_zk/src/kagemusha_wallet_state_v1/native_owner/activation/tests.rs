@@ -116,7 +116,7 @@ fn activation_publisher_retains_original_through_uncertainty_restart_and_new_hea
         let (_, manifest) = w.manifest().unwrap();
         let pred = w.indexed_step(&manifest, 0).unwrap();
         let next = frozen(
-            Some(&pred.frozen),
+            Some(&pred.ordinary_parts().0),
             KagemushaWalletEffectV1::Load {
                 load_ordinal: 0,
                 receipt_digest: field(31),
@@ -187,7 +187,7 @@ fn collection_requires_the_complete_selected_activation_copy() {
     let (_, manifest) = w.manifest().unwrap();
     let pred = w.indexed_step(&manifest, 0).unwrap();
     w.commit(frozen(
-        Some(&pred.frozen),
+        Some(&pred.ordinary_parts().0),
         KagemushaWalletEffectV1::Load {
             load_ordinal: 0,
             receipt_digest: field(31),

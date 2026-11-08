@@ -61,10 +61,13 @@ fn selected(
     let KagemushaWalletSlotStatusV1::Pending(marker) = provider.status(&slots[0]).unwrap() else {
         panic!("charged operation must remain durably Selected and unsigned");
     };
-    let capsule = provider
+    let NativeCapsuleV1::Ordinary(capsule) = provider
         .current_capsule(&slots[0])
         .unwrap()
-        .expect("selected capsule original");
+        .expect("selected capsule original")
+    else {
+        panic!("ordinary charge fixture selected a suffix capsule");
+    };
     assert_eq!(
         marker.head().unwrap(),
         (
@@ -118,14 +121,17 @@ fn require_released(
     let steps = wallet.released_steps().unwrap();
     let released = steps.last().unwrap();
     assert_eq!(
-        released.frozen.capsule.as_canonical_bytes(),
+        released
+            .ordinary_capsule()
+            .expect("ordinary online-charge capsule")
+            .as_canonical_bytes(),
         capsule.as_canonical_bytes()
     );
     assert_eq!(
-        Some(released.retained.selected_generation),
+        Some(released.selected_generation()),
         marker.selected_generation()
     );
-    assert_eq!(released.retained.record.output, output);
+    assert_eq!(released.output().as_slice(), output);
     assert_eq!(capsule.body().kind, request.kind());
     if let OperationActionV1::Load { receipt, finality } = &request.action {
         require_load_originals(&capsule.body().retained_inputs, receipt, finality);

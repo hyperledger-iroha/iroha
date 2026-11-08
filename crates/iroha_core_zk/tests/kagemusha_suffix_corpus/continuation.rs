@@ -11,7 +11,7 @@ use super::*;
 use ff::{Field, PrimeField};
 use iroha_core_zk::{
     kagemusha_wallet_artifacts_v1::producer_inventory::{
-        DirectoryOriginalsV1, ImportedQV1, ImportedSigmaV1, PROVING_KEY_MAX_BYTES_V1,
+        ImportedQV1, ImportedSigmaV1, OriginalSourceV1, PROVING_KEY_MAX_BYTES_V1,
         QualifiedOperationOwnerV1, QualifiedWalletSourcesV1,
     },
     kagemusha_wallet_preparation_v1::PreparationV1,
@@ -36,6 +36,27 @@ use iroha_plonk_gadgets::p256::native::words_from_be;
 use iroha_plonk_recursion::{FoldConfig, FoldTape, obligation::ledger::Variant};
 use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 use rand::rand_core::TryRng as _;
+
+/// Read-only content-addressed public engineering fixture source. The installed source
+/// owner still checks every exact length, SHA-256, descriptor and key. No private custody
+/// directory is created or chmodded, and no wallet originals are rewritten.
+pub(super) struct FixtureOriginals(PathBuf);
+
+impl OriginalSourceV1 for FixtureOriginals {
+    fn open(
+        &mut self,
+        digest: [u8; 32],
+    ) -> Result<Box<dyn std::io::Read + '_>, iroha_core_zk::kagemusha_wallet_proofs_v1::Error> {
+        use iroha_core_zk::kagemusha_wallet_proofs_v1::Error;
+        let path = self.0.join(hex::encode(digest));
+        let metadata = fs::symlink_metadata(&path).map_err(|_| Error::Unavailable)?;
+        if !metadata.file_type().is_file() || metadata.len() > PROVING_KEY_MAX_BYTES_V1 as u64 {
+            return Err(Error::Inventory);
+        }
+        let file = fs::File::open(path).map_err(|_| Error::Unavailable)?;
+        Ok(Box::new(file.take(PROVING_KEY_MAX_BYTES_V1 as u64 + 1)))
+    }
+}
 
 /// Public engineering harness merchant key: `MERCHANT_KEY_SEED = 250`. No phone key.
 const MERCHANT_KEY: [u8; 32] = [250; 32];
@@ -84,7 +105,7 @@ fn config() -> ReadConfig {
 
 /// The complete installed engineering catalog: every sigma/Q/A/W/Omega source qualified
 /// against the signed inventory and the run's native genesis. Reads no wallet custody.
-pub(super) fn qualify(corpus: &Corpus) -> (QualifiedWalletSourcesV1, DirectoryOriginalsV1) {
+pub(super) fn qualify(corpus: &Corpus) -> (QualifiedWalletSourcesV1, FixtureOriginals) {
     let catalog = corpus.root.join("catalog");
     let inventory = bounded(&catalog.join("producer-inventory.norito"), 8 << 20);
     let authenticated = corpus
@@ -111,12 +132,10 @@ pub(super) fn qualify(corpus: &Corpus) -> (QualifiedWalletSourcesV1, DirectoryOr
         validators,
     )
     .unwrap();
-    let mut originals =
-        DirectoryOriginalsV1::open_existing(catalog.join("originals"), PROVING_KEY_MAX_BYTES_V1)
-            .unwrap();
+    let mut originals = FixtureOriginals(catalog.join("originals"));
     let started = Instant::now();
     let sources = authenticated
-        .qualify_wallet_builtin(&corpus.installed, &finality, &mut originals, config())
+        .qualify_wallet(&corpus.installed, &finality, &mut originals, config())
         .unwrap();
     eprintln!(
         "SUFFIX_GATE qualified_complete_installed_catalog=true ms={}",
@@ -347,7 +366,7 @@ fn finish_negatives(
 fn repeated_withdrawal(
     verifier: &SuffixVerifierV1<'_>,
     sources: &QualifiedWalletSourcesV1,
-    originals: &mut DirectoryOriginalsV1,
+    originals: &mut FixtureOriginals,
     preparation: &PreparationV1<'_>,
     owner: &iroha_core_zk::kagemusha_wallet_preparation_v1::AuthenticatedCredentialV1,
     anchor: &SuffixAnchorPointV1,
@@ -865,8 +884,10 @@ pub(super) fn run(corpus: &Corpus) {
     eprintln!(
         "SUFFIX_GATE unload_fold_verified=true predicted_successor_fields_equal=true receipt_unchanged=true"
     );
-    // Every changed source is rejected by original admission or terminal restoration; no
-    // replacement key, accepted host Boolean or new source is used.
+    // Public sources must refuse original-checkpoint adoption. The recovery siblings are
+    // private circuit witnesses: a prior valid proof can be restored under unchanged public
+    // fields, so exercise a FRESH proof and its complete verification for that mutation.
+    // Native custody independently binds exact originals to the capsule and checkpoint chain.
     for mutation in 0..6 {
         let mut changed = input.clone();
         match mutation {
@@ -880,15 +901,42 @@ pub(super) fn run(corpus: &Corpus) {
             4 => changed.recovery.as_mut().unwrap().leaf_siblings[0] += Fp::ONE,
             _ => changed.q[0].proof[0] ^= 1,
         }
+        let refused = match prover.prepare(changed, budget) {
+            Err(_) => true,
+            Ok(changed) if mutation == 4 => {
+                let key = sources
+                    .import_a(route, 0, &mut originals, config())
+                    .unwrap();
+                match changed.terminal(
+                    &key,
+                    tape(),
+                    &FoldConfig::default(),
+                    ProverRandomness::os(),
+                    ProverConfig::default(),
+                ) {
+                    Err(consuming::Error::Proof) => {
+                        eprintln!(
+                            "SUFFIX_GATE_CIRCUIT_NEGATIVE private_recovery_fresh_proof=cryptographic_refusal"
+                        );
+                        true
+                    }
+                    Err(error) => panic!(
+                        "private recovery mutation did not complete proof verification: {error:?}"
+                    ),
+                    Ok(invalid) => changed
+                        .encode_terminal_checkpoint(&invalid, budget)
+                        .is_err(),
+                }
+            }
+            Ok(changed) => changed
+                .restore_terminal_checkpoint(&checkpoint, budget)
+                .is_err(),
+        };
         assert!(
-            match prover.prepare(changed, budget) {
-                Err(_) => true,
-                Ok(changed) => changed
-                    .restore_terminal_checkpoint(&checkpoint, budget)
-                    .is_err(),
-            },
-            "changed source {mutation} must not adopt the original terminal"
+            refused,
+            "changed source {mutation} must fail its complete proof owner"
         );
+        eprintln!("SUFFIX_GATE_CIRCUIT_NEGATIVE mutation={mutation} refused=true");
     }
     if let Some(directory) = std::env::var_os("KAGEMUSHA_SUFFIX_STAGE_OUTPUT") {
         fs::write(

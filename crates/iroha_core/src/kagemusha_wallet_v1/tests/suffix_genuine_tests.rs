@@ -2,6 +2,9 @@
 //! The local fixture creates an activated wallet row; it does not qualify enrollment,
 //! public testnet finality, SDK custody or physical-device performance.
 use super::*;
+
+#[path = "suffix_performance.rs"]
+mod performance;
 use iroha_core_zk::kagemusha_wallet_artifacts_v1::{VERIFIER_PACK_MAX_BYTES_V1, VerifierPackV1};
 use iroha_data_model::isi::kagemusha_wallet::{
     KagemushaWalletLedgerActionV1 as Action, KagemushaWalletLedgerV1,
@@ -108,15 +111,45 @@ fn genuine_suffix_stages_verify_pay_once_and_reject_mutated_originals() {
         ordinal: header.chunk_count + 1,
         unload: unload_bytes.clone(),
     };
-    let dispatch = |state: &mut State, height, action| {
-        transact(state, height, |tx| {
-            KagemushaWalletLedgerV1::new(header.scheme_id, action)
+    eprintln!(
+        "SUFFIX_PERF_CONTEXT steps={} chunks={} configured_e_max_ms={} validity_timeout=false",
+        header.step_count,
+        header.chunk_count,
+        state
+            .view()
+            .world()
+            .parameters()
+            .sumeragi()
+            .exec_budget_ms
+            .get(),
+    );
+    let dispatch = |state: &mut State, height, action, label: &'static str, steps| {
+        let ordinal = match &action {
+            Action::SuffixUnloadBegin { ordinal, .. }
+            | Action::SuffixUnloadAppend { ordinal, .. }
+            | Action::SuffixUnloadFinalize { ordinal, .. } => *ordinal,
+            _ => unreachable!("suffix stages only"),
+        };
+        let sample = performance::Sample::start(label, height, ordinal, steps);
+        let mut usage = performance::Usage::default();
+        let result = transact(state, height, |tx| {
+            let result = KagemushaWalletLedgerV1::new(header.scheme_id, action)
                 .execute(&header.account, tx)
-                .map_err(Error::from)
-        })
+                .map_err(Error::from);
+            usage = performance::Usage {
+                proof_calls: tx.zk_verify_calls_in_tx,
+                proof_bytes: tx.zk_proof_bytes_in_tx,
+                max_calls_per_tx: tx.zk.max_verify_calls_per_tx,
+                max_calls_per_block: tx.zk.max_verify_calls_per_block,
+                max_proof_bytes_block: tx.zk.max_proof_bytes_block,
+            };
+            result
+        });
+        sample.finish(result.is_ok(), &usage);
+        result
     };
-    dispatch(&mut state, 3, begin.clone()).unwrap();
-    assert!(dispatch(&mut state, 4, finalize.clone()).is_err());
+    dispatch(&mut state, 3, begin.clone(), "begin_first", 0).unwrap();
+    assert!(dispatch(&mut state, 4, finalize.clone(), "finalize_premature", 0).is_err());
     let mut height = 4;
     // Reverse order proves Appends need only their Begin, never a prior Append.
     for index in (0..header.chunk_count).rev() {
@@ -125,6 +158,8 @@ fn genuine_suffix_stages_verify_pay_once_and_reject_mutated_originals() {
             &format!("chunk-{index:03}.norito"),
             KAGEMUSHA_WALLET_SUFFIX_CHUNK_MAX_BYTES_V1,
         );
+        let step_count = iroha_data_model::kagemusha::kagemusha_wallet_suffix_unload_v1::KagemushaWalletSuffixChunkV1::decode_canonical(&chunk, &header.scheme_id)
+            .unwrap().decode_steps(&header.scheme_id).unwrap().len();
         let make_append = |chunk| Action::SuffixUnloadAppend {
             wallet: header.wallet_id,
             authority,
@@ -135,10 +170,33 @@ fn genuine_suffix_stages_verify_pay_once_and_reject_mutated_originals() {
         let mut changed = chunk.clone();
         let last = changed.last_mut().unwrap();
         *last ^= 1;
-        assert!(dispatch(&mut state, height, make_append(changed)).is_err());
-        dispatch(&mut state, height, make_append(chunk.clone())).unwrap();
+        assert!(
+            dispatch(
+                &mut state,
+                height,
+                make_append(changed),
+                "append_mutated",
+                step_count
+            )
+            .is_err()
+        );
+        dispatch(
+            &mut state,
+            height,
+            make_append(chunk.clone()),
+            "append_first",
+            step_count,
+        )
+        .unwrap();
         height += 1;
-        dispatch(&mut state, height, make_append(chunk)).unwrap();
+        dispatch(
+            &mut state,
+            height,
+            make_append(chunk),
+            "append_duplicate",
+            step_count,
+        )
+        .unwrap();
         height += 1;
     }
     let mut changed_unload = unload_bytes;
@@ -153,12 +211,14 @@ fn genuine_suffix_stages_verify_pay_once_and_reject_mutated_originals() {
                 account: header.account.clone(),
                 ordinal: header.chunk_count + 1,
                 unload: changed_unload,
-            }
+            },
+            "finalize_mutated",
+            0,
         )
         .is_err()
     );
     let reserve_before = balance(&state, &memory, &memory.registration.reserve);
-    dispatch(&mut state, height, finalize.clone()).unwrap();
+    dispatch(&mut state, height, finalize.clone(), "finalize_first", 0).unwrap();
     let quantity = |value| {
         Quantity::from_canonical_numeric(Numeric::new(value, memory.registration.asset.scale))
             .unwrap()
@@ -178,8 +238,8 @@ fn genuine_suffix_stages_verify_pay_once_and_reject_mutated_originals() {
         .get(&KagemushaWalletPayoutKeyV1::Unload(terms.nullifier).ledger_key(header.scheme_id))
         .unwrap()
         .clone();
-    dispatch(&mut state, height + 1, finalize).unwrap();
-    dispatch(&mut state, height + 2, begin).unwrap();
+    dispatch(&mut state, height + 1, finalize, "finalize_duplicate", 0).unwrap();
+    dispatch(&mut state, height + 2, begin, "begin_duplicate", 0).unwrap();
     assert_eq!(
         balance(&state, &memory, &header.account),
         quantity(terms.account_payout)

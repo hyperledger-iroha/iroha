@@ -74,6 +74,14 @@ mod preparation_custody;
 mod scheduling;
 mod session_custody;
 mod snapshot;
+mod suffix_custody;
+pub use custody::{NativeCapsuleV1, NativeCompletionV1, NativeProviderV1};
+pub use native_owner::{
+    ProvedSuffixPreparationV1, ReviewedSuffixFailureV1, ReviewedSuffixUnloadV1,
+    SUFFIX_INSTRUCTION_MAX_BYTES_V1, SUFFIX_SIGNED_WIRE_MAX_BYTES_V1, SuffixNotApplicableV1,
+    SuffixPreparationCancellationV1, SuffixPreparationJobV1, SuffixStageIngestV1,
+    SuffixStageOutcomeV1, SuffixUnloadDecisionV1, SuffixUnloadExecutionV1, SuffixUnloadRequestV1,
+};
 mod transition_custody;
 
 pub use archive::{ArchiveKey, ArchiveStore, FsArchive};
@@ -460,14 +468,11 @@ pub trait NativeFoldJobV1 {
     ) -> Result<(FoldProgress, Option<FoldRetentionV1>), Error>;
 }
 
-/// One authenticated released transition; inputs and output remain byte-exact.
-#[derive(Debug, Clone)]
-pub struct ReleasedStep {
-    /// Frozen capsule and credential selected by Advance.
-    pub frozen: FrozenTransition,
-    /// Original retained completion; never assembled again after release.
-    pub retained: Retained<KagemushaWalletCompletionRecordV1>,
-}
+mod released;
+pub use released::{
+    ReleasedBodyRefV1, ReleasedCapsuleRefV1, ReleasedStep, SelectedSuffixReleaseV1,
+    SuffixFrozenTransitionV1,
+};
 
 /// Exact intermediate output layout from the authenticated native proof schedule.
 #[derive(
@@ -658,20 +663,43 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
     }
 
     fn frozen(&mut self, digest: [u8; 32]) -> Result<FrozenTransition, Error> {
+        match self.frozen_any(digest)? {
+            released::RecordedTransitionV1::Ordinary(frozen) => Ok(frozen),
+            released::RecordedTransitionV1::Suffix(_) => {
+                Err(Error::WitnessLost("ordinary frozen schema required"))
+            }
+        }
+    }
+    fn frozen_any(&mut self, digest: [u8; 32]) -> Result<released::RecordedTransitionV1, Error> {
+        use released::RecordedTransitionV1;
         let bytes = self
             .archive
             .get(
                 ArchiveKey::Capsule(digest),
                 KAGEMUSHA_WALLET_CAPSULE_MAX_BYTES_V1
+                    + KAGEMUSHA_WALLET_MESSAGE_MAX_BYTES_V1
                     + KAGEMUSHA_WALLET_CREDENTIAL_MAX_BYTES_V1
                     + archive::METADATA_BOUND,
             )?
             .ok_or(Error::WitnessLost("selected capsule"))?;
-        let frozen: FrozenTransition = archive::decode(&bytes)?;
+        let schema = norito::core::Header::read(bytes.as_slice())
+            .map_err(|_| Error::WitnessLost("frozen frame schema"))?
+            .schema;
+        let frozen = if schema == norito::schema::identity::frame_hash::<FrozenTransition>() {
+            RecordedTransitionV1::Ordinary(archive::decode(&bytes)?)
+        } else if schema == SuffixFrozenTransitionV1::frame_schema() {
+            RecordedTransitionV1::Suffix(SuffixFrozenTransitionV1::decode_canonical(
+                &bytes,
+                &self.scheme_id,
+            )?)
+        } else {
+            return Err(Error::WitnessLost("unknown frozen frame schema"));
+        };
         frozen.validate()?;
-        if frozen.capsule.body().scheme_id != self.scheme_id
-            || frozen.capsule.body().wallet_id != self.wallet_id
-            || frozen.capsule.custody_digest() != digest
+        let capsule = frozen.capsule();
+        if capsule.body().scheme_id != self.scheme_id
+            || capsule.body().wallet_id != self.wallet_id
+            || capsule.custody_digest() != digest
         {
             return Err(Error::WitnessLost("capsule binding"));
         }
@@ -695,7 +723,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         for sequence in 0..=last {
             // Intentional collection has its own error; it must not be relabelled custody loss.
             let step = self.indexed_step(&manifest, sequence)?;
-            let capsule = &step.frozen.capsule;
+            let capsule = &step.capsule();
             if capsule.body().statement.predecessor != predecessor
                 || capsule.body().predecessor_capsule_digest != previous_capsule
             {
@@ -824,9 +852,8 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             }
             return Ok(Completion::Complete(
                 self.indexed_step(&manifest, credit.sequence)?
-                    .retained
-                    .record
-                    .output,
+                    .output()
+                    .clone(),
             ));
         }
         if released_receive {
@@ -884,7 +911,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             let previous = predecessor
                 .as_ref()
                 .ok_or(Error::WitnessLost("prepared predecessor"))?;
-            if prepared.source != previous.frozen.capsule.custody_digest() {
+            if prepared.source != previous.capsule().custody_digest() {
                 return Err(Error::WitnessLost("prepared transition source"));
             }
             Some(self.preparation_source_custody(
@@ -982,10 +1009,28 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             return Ok(None);
         };
         let (_, _, digest) = marker.head().ok_or(Error::NoHead)?;
-        let frozen = self.frozen(digest)?;
+        let frozen = self.frozen_any(digest)?;
         self.status()?;
-        let owner = TransitionOwner::new(&frozen.credential);
-        let outcome = map_outcome(self.custody.advance(&owner, &frozen.request()?)?);
+        let outcome = match frozen {
+            released::RecordedTransitionV1::Ordinary(frozen) => {
+                let owner = TransitionOwner::new(&frozen.credential);
+                map_outcome(self.custody.advance(&owner, &frozen.request()?)?)
+            }
+            released::RecordedTransitionV1::Suffix(frozen) => {
+                match self.custody.resume_suffix_selected(&frozen)? {
+                    AdvanceOutcome::Released { .. } => {
+                        self.sync_manifest()?;
+                        // The named suffix flow must verify finish and publish its exact stages.
+                        // Never transport a suffix Finalize frame through ordinary completion ABI.
+                        Completion::Pending
+                    }
+                    AdvanceOutcome::Pending { .. } => Completion::Pending,
+                    AdvanceOutcome::NotPerformed(reason) => Completion::NotPerformed(reason),
+                    AdvanceOutcome::Archived(_) => Completion::Archived,
+                    AdvanceOutcome::DeliveryDataLoss { .. } => Completion::DeliveryDataLoss,
+                }
+            }
+        };
         if matches!(outcome, Completion::Complete(_)) {
             self.sync_manifest()?;
         }

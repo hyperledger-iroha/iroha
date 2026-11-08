@@ -102,32 +102,24 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         let Some((digest, bytes)) = self.custody.archive_checkpoint()? else {
             return Ok(([0; 32], Manifest::empty(self.scheme_id, self.wallet_id)));
         };
-        if bytes.len()
-            > crate::kagemusha_wallet_advance_v1::KAGEMUSHA_WALLET_ARCHIVE_MANIFEST_MAX_BYTES_V1
-            || manifest_digest(&bytes) != digest
-        {
-            return Err(Error::WitnessLost("archive manifest digest"));
-        }
-        let manifest: Manifest = archive::decode(&bytes)?;
-        if manifest.scheme_id != self.scheme_id
-            || manifest.wallet_id != self.wallet_id
-            || manifest.indexed.is_none()
-            || manifest
-                .folded
-                .zip(manifest.indexed)
-                .is_some_and(|(a, b)| a > b)
-            || (manifest.checkpoint_count == 0) != (manifest.checkpoint_digest == [0; 32])
-        {
-            return Err(Error::WitnessLost("archive manifest binding"));
-        }
-        Ok((digest, manifest))
+        let selected = suffix_custody::decode_checkpoint(
+            &mut self.archive, (self.scheme_id, self.wallet_id), digest, &bytes,
+        )?;
+        Ok((digest, selected.manifest))
     }
     pub(super) fn publish_manifest(
         &mut self,
         expected: [u8; 32],
         manifest: &Manifest,
     ) -> Result<[u8; 32], Error> {
-        let bytes = archive::encode(manifest)?;
+        let selected = self.selected_suffix_checkpoint()?;
+        if selected.as_ref().map_or([0; 32], |value| value.digest) != expected {
+            return Err(Error::OperationConflict);
+        }
+        // Ordinary fold/replay/finality publications retain the authenticated suffix root.
+        // Never turn an envelope checkpoint back into an ordinary-only Manifest.
+        let suffix = selected.as_ref().and_then(|value| value.suffix.as_ref());
+        let bytes = suffix_custody::checkpoint_bytes(&mut self.archive, manifest, suffix)?;
         let expected_digest = manifest_digest(&bytes);
         if self.custody.publish_archive_checkpoint(expected, &bytes)? != expected_digest {
             return Err(Error::WitnessLost("archive manifest publication"));
@@ -213,24 +205,82 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         Ok(())
     }
 
+    /// Common output provenance after the exact schema-specific record verified.
+    pub(super) fn require_released_output(&mut self, step: &ReleasedStep) -> Result<(), Error> {
+        step.verify_completion()?;
+        let sequence = step.capsule().body().statement.sequence;
+        let (_, manifest) = self.manifest()?;
+        if manifest.indexed.is_none_or(|last| sequence > last) {
+            let SlotStatus::Released(marker) = self.status()? else {
+                return Err(Error::WitnessLost("unindexed released output"));
+            };
+            if marker.head() != Some((sequence, step.operation_id(), step.capsule_digest()))
+                || marker.completion_digest() != Some(step.completion_digest())
+                || marker.selected_generation() != Some(step.selected_generation())
+            {
+                return Err(Error::WitnessLost("released output marker"));
+            }
+        } else {
+            let entry = self.step_entry(&manifest, sequence)?;
+            if entry.operation != step.operation_id()
+                || entry.capsule != step.capsule_digest()
+                || entry.completion != step.completion_digest()
+                || entry.selected_generation != step.selected_generation()
+                || entry.kind != step.capsule().body().kind
+            {
+                return Err(Error::WitnessLost("released output selected index"));
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn checked_step(&mut self, digest: [u8; 32]) -> Result<ReleasedStep, Error> {
-        let frozen = self.frozen(digest)?;
-        let c = &frozen.capsule;
-        let Lookup::Retained(retained) = self.custody.lookup(&c.body().operation_id)? else {
+        use custody::NativeCompletionV1;
+        use released::RecordedTransitionV1;
+        let frozen = self.frozen_any(digest)?;
+        let operation = frozen.capsule().body().operation_id;
+        let Lookup::Retained(retained) = self.custody.lookup_any(&operation)? else {
             return Err(Error::WitnessLost("released completion"));
         };
-        if retained.operation_id != c.body().operation_id
-            || retained.capsule_digest != digest
-            || retained.frame != valid(retained.record.to_canonical_bytes())?
-            || retained.completion_digest != valid(retained.record.completion_digest())?
-        {
-            return Err(Error::WitnessLost("completion binding"));
-        }
-        valid(retained.record.verify(&frozen.credential, c))?;
-        Ok(ReleasedStep {
-            frozen,
-            retained: *retained,
-        })
+        let Retained {
+            operation_id,
+            capsule_digest,
+            selected_generation,
+            completion_digest,
+            frame,
+            record,
+        } = *retained;
+        let step = match (frozen, record) {
+            (RecordedTransitionV1::Ordinary(frozen), NativeCompletionV1::Ordinary(record)) => {
+                ReleasedStep::Ordinary {
+                    frozen,
+                    retained: Retained {
+                        operation_id,
+                        capsule_digest,
+                        selected_generation,
+                        completion_digest,
+                        frame,
+                        record,
+                    },
+                }
+            }
+            (RecordedTransitionV1::Suffix(frozen), NativeCompletionV1::Suffix(record)) => {
+                ReleasedStep::selected_suffix(
+                    frozen,
+                    Retained {
+                        operation_id,
+                        capsule_digest,
+                        selected_generation,
+                        completion_digest,
+                        frame,
+                        record,
+                    },
+                )?
+            }
+            _ => return Err(Error::WitnessLost("capsule completion schema disagreement")),
+        };
+        step.verify_completion()?;
+        Ok(step)
     }
     pub(super) fn indexed_step(
         &mut self,
@@ -242,14 +292,14 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             return Err(Error::Collected);
         }
         let step = self.checked_step(entry.capsule)?;
-        if step.retained.operation_id != entry.operation
-            || step.retained.selected_generation != entry.selected_generation
-            || step.retained.completion_digest != entry.completion
-            || step.frozen.capsule.body().kind != entry.kind
+        if step.operation_id() != entry.operation
+            || step.selected_generation() != entry.selected_generation
+            || step.completion_digest() != entry.completion
+            || step.capsule().body().kind != entry.kind
         {
             return Err(Error::WitnessLost("step metadata"));
         }
-        if step.frozen.capsule.body().statement.sequence != sequence {
+        if step.capsule().body().statement.sequence != sequence {
             return Err(Error::WitnessLost("indexed sequence"));
         }
         Ok(step)
@@ -335,21 +385,21 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
                     return Err(Error::WitnessLost("indexed boundary"));
                 }
                 let boundary = self.indexed_step(&manifest, current)?;
-                if boundary.frozen.capsule.body().statement.successor != head {
+                if boundary.capsule().body().statement.successor != head {
                     return Err(Error::WitnessLost("indexed boundary head"));
                 }
                 break;
             }
             let step = self.checked_step(digest)?;
-            let c = &step.frozen.capsule;
+            let c = &step.capsule();
             if c.body().statement.sequence != current || c.body().statement.successor != head {
                 return Err(Error::WitnessLost("capsule chain"));
             }
             let entry = StepEntry {
                 capsule: digest,
                 operation: c.body().operation_id,
-                selected_generation: step.retained.selected_generation,
-                completion: step.retained.completion_digest,
+                selected_generation: step.selected_generation(),
+                completion: step.completion_digest(),
                 kind: c.body().kind,
                 checkpoints: 0,
                 collected: false,

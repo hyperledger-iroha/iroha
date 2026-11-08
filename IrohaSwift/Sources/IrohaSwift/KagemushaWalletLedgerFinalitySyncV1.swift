@@ -4,6 +4,8 @@ import Foundation
 public enum KagemushaWalletLedgerAttemptV1: Sendable {
     case activation(signedWire: Data)
     case unload(claim: Data, signedWire: Data)
+    /// Exact retained suffix stage. Only certified Finalize establishes payout.
+    case suffixUnloadStage(requestId: Data, ordinal: KagemushaWalletUInt128V1, signedWire: Data)
 }
 
 /// Native outcome after one confirmation pass.
@@ -74,6 +76,8 @@ extension KagemushaWalletExchangeCallV1 {
             return try wallet.activationAttemptOutcome(signedWire: signedWire)
         case .unload(let claim, let signedWire):
             return try wallet.unloadAttemptOutcome(claim: claim, signedWire: signedWire)
+        case .suffixUnloadStage(let requestId, let ordinal, let signedWire):
+            return try wallet.suffixUnloadAttemptOutcome(requestId: requestId, ordinal: ordinal, signedWire: signedWire)
         }
     }
 
@@ -83,6 +87,8 @@ extension KagemushaWalletExchangeCallV1 {
             return try ingestActivationFinality(signedWire: signedWire, finality: finality)
         case .unload(let claim, let signedWire):
             return try ingestUnloadFinality(claim: claim, signedWire: signedWire, finality: finality)
+        case .suffixUnloadStage(let requestId, let ordinal, let signedWire):
+            return try ingestSuffixUnloadFinality(requestId: requestId, ordinal: ordinal, signedWire: signedWire, finality: finality)
         }
     }
 }
