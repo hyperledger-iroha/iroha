@@ -1597,6 +1597,62 @@ async fn single_replica_without_remote_sources_releases_source_claim_for_retry()
     ));
 }
 #[tokio::test]
+async fn deferring_an_unstaged_source_never_spends_the_retry_budget() {
+    let row = fixture_row(0x37);
+    let (runtime, _, _, _) = test_runtime(
+        row.clone(),
+        false,
+        Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+        0,
+        ProviderIngestIngressDispositionV1::Submitted,
+        false,
+    );
+    let authorization = validate_assignment(&row, cursor(8), LOCAL_PROVIDER, runtime_policy())
+        .unwrap()
+        .authorization;
+    runtime.outbox.enqueue(authorization.clone()).unwrap();
+    let owner = ProviderIngestClaimOwnerV1::new([0xDD; 32]).unwrap();
+    // More polls than `outbox_policy`'s four attempts, at the fixed interval.
+    let mut now = 10_000;
+    for _ in 0..8 {
+        let claim = runtime
+            .outbox
+            .claim_source(authorization.job_id(), owner, now, cursor(8))
+            .unwrap();
+        let outcome = runtime
+            .outbox
+            .defer_source_unavailable(&claim, now + 1, cursor(8))
+            .unwrap();
+        let ProviderIngestRetryOutcomeV1::RetryScheduled {
+            attempts,
+            next_attempt_at_ms,
+        } = outcome
+        else {
+            panic!("a deferred source must stay active");
+        };
+        assert_eq!(attempts, 1);
+        assert_eq!(next_attempt_at_ms, now + 1 + 30_000);
+        now = next_attempt_at_ms;
+    }
+    // Every other failure class keeps its bounded accounting.
+    let claim = runtime
+        .outbox
+        .claim_source(authorization.job_id(), owner, now, cursor(8))
+        .unwrap();
+    assert!(matches!(
+        runtime
+            .outbox
+            .schedule_source_retry(
+                &claim,
+                now + 1,
+                cursor(8),
+                ProviderIngestFailureClassV1::SourceRejected,
+            )
+            .unwrap(),
+        ProviderIngestRetryOutcomeV1::RetryScheduled { attempts: 2, .. }
+    ));
+}
+#[tokio::test]
 async fn corrupt_authenticated_source_is_retryable_not_a_permanent_dead_letter() {
     let row = fixture_row(0x33);
     let (mut runtime, _, fetch, ingress) = test_runtime(

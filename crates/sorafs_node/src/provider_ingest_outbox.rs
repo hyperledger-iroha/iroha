@@ -70,6 +70,10 @@ const PROVIDER_INGEST_SEALED_CHECKPOINT_REVISION_DOMAIN_V1: &[u8] =
 pub const PROVIDER_INGEST_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1: u64 = 1_024;
 const PROVIDER_INGEST_CHECKPOINT_REQUEST_CAPACITY_V1: usize = 1;
 const PROVIDER_INGEST_CHECKPOINT_OPERATION_TIMEOUT_MAX_MS_V1: u64 = 24 * 60 * 60 * 1_000;
+/// Poll interval while no admitted source holds an assigned payload yet.
+///
+/// Bounded by the configured retry delays; the finalized order deadline ends the wait.
+const PROVIDER_INGEST_SOURCE_UNAVAILABLE_DEFER_MS_V1: u64 = 30_000;
 const MAX_CHUNKER_HANDLE_BYTES_V1: usize = 128;
 const MAX_MANIFEST_ID_BYTES_V1: usize = 128;
 static PROVIDER_INGEST_PROCESS_LOCKS: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
@@ -2721,6 +2725,61 @@ impl ProviderIngestOutbox {
         candidate.active[position].state = StoredProviderIngestStateV1::RetryScheduled {
             next_attempt_at_ms,
             failure_class,
+        };
+        self.persist_candidate(&mut state, candidate)?;
+        Ok(ProviderIngestRetryOutcomeV1::RetryScheduled {
+            attempts,
+            next_attempt_at_ms,
+        })
+    }
+    /// Persist "no admitted source holds this payload yet" without consuming the retry budget.
+    ///
+    /// A newly assigned order has no reachable source until its publisher finishes staging the
+    /// payload on one assigned provider and that provider completes. Charging each poll against
+    /// the bounded budget dead-letters every assigned provider within minutes of any multi-gigabyte
+    /// publication. Only the first deferral is recorded (persisted retry state requires a non-zero
+    /// count); later deferrals keep the count unchanged and poll at a fixed bounded interval. The
+    /// finalized order deadline still cancels the job, and every other failure class keeps its
+    /// bounded retry accounting.
+    pub fn defer_source_unavailable(
+        &self,
+        claim: &ProviderIngestSourceClaimV1,
+        now_ms: u64,
+        observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
+    ) -> Result<ProviderIngestRetryOutcomeV1, ProviderIngestOutboxError> {
+        observed_finalized_cursor.validate()?;
+        let mut state = self.lock_state()?;
+        let mut candidate = state.checkpoint.clone();
+        let position = active_position(&candidate, claim.job_id)?;
+        validate_cursor_after_admission(
+            &candidate.active[position].authorization,
+            observed_finalized_cursor,
+        )?;
+        validate_live_claim(&candidate.active[position], claim, now_ms)?;
+        let attempts = candidate.active[position].source_attempts.max(1);
+        candidate.active[position].source_attempts = attempts;
+        if attempts >= self.policy.max_attempts {
+            move_active_to_dead_letter(
+                &mut candidate,
+                position,
+                attempts,
+                ProviderIngestDeadLetterReasonV1::RetryExhausted,
+                ProviderIngestFailureClassV1::SourceUnavailable,
+                observed_finalized_cursor,
+                self.policy,
+            )?;
+            self.persist_candidate(&mut state, candidate)?;
+            return Ok(ProviderIngestRetryOutcomeV1::DeadLettered);
+        }
+        let delay = PROVIDER_INGEST_SOURCE_UNAVAILABLE_DEFER_MS_V1
+            .max(self.policy.retry_base_delay_ms)
+            .min(self.policy.retry_max_delay_ms);
+        let next_attempt_at_ms = now_ms
+            .checked_add(delay)
+            .ok_or(ProviderIngestOutboxError::TimestampOverflow)?;
+        candidate.active[position].state = StoredProviderIngestStateV1::RetryScheduled {
+            next_attempt_at_ms,
+            failure_class: ProviderIngestFailureClassV1::SourceUnavailable,
         };
         self.persist_candidate(&mut state, candidate)?;
         Ok(ProviderIngestRetryOutcomeV1::RetryScheduled {

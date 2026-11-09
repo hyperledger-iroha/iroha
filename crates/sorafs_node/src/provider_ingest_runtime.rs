@@ -2800,12 +2800,10 @@ where
             }
         }
         if source_provider_ids.is_empty() {
-            self.outbox.schedule_source_retry(
-                &claim,
-                self.clock.now_ms(),
-                cursor,
-                ProviderIngestFailureClassV1::SourceUnavailable,
-            )?;
+            // No admitted source exists yet: wait for staging or an assigned provider's
+            // completion without consuming the bounded retry budget.
+            self.outbox
+                .defer_source_unavailable(&claim, self.clock.now_ms(), cursor)?;
             return Ok(true);
         }
         let request = match ProviderIngestSourceRequestV1::new(
@@ -2832,8 +2830,15 @@ where
             LeaseOperationOutcomeV1::Completed(Ok(fetched)) => fetched,
             LeaseOperationOutcomeV1::Completed(Err(
                 ProviderIngestSourceFetchErrorV1::Unavailable,
-            ))
-            | LeaseOperationOutcomeV1::TimedOut => {
+            )) => {
+                // Every admitted source answered that it does not hold the payload yet (or was
+                // unreachable). Keep polling until the finalized order deadline instead of
+                // dead-lettering while the publisher is still staging a large payload.
+                self.outbox
+                    .defer_source_unavailable(&claim, self.clock.now_ms(), cursor)?;
+                return Ok(true);
+            }
+            LeaseOperationOutcomeV1::TimedOut => {
                 self.outbox.schedule_source_retry(
                     &claim,
                     self.clock.now_ms(),

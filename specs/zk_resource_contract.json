@@ -14667,6 +14667,18 @@
     ],
     "excluded": [
       {
+        "path": "crates/iroha_core/src/sumeragi/certified_chain.rs",
+        "reason": "Sizes of the process-local cache of verified finality prefixes. A miss only walks from signed genesis as before, so they bound local memory, not a quantity on the proof, transaction, block, transport or VM path.",
+        "symbols": [
+          "SHARED_PREFIXES_PER_CHAIN",
+          "SHARED_PREFIXES_TOTAL"
+        ],
+        "exprs": {
+          "SHARED_PREFIXES_PER_CHAIN": "4",
+          "SHARED_PREFIXES_TOTAL": "16"
+        }
+      },
+      {
         "path": "crates/iroha_data_model/src/zk_validity_policy.rs",
         "reason": "Ceilings of what a committed ZK validity policy may hold, checked when a SetParameter installs it: the largest value of a field that sizes a buffer or collection (fixed so that a payload is valid on every pointer width) and the exact-JSON ceiling of the SCCP byte limits. They bound the policy, not a quantity on the path; each policy field they cap is a bound above with its own value.",
         "symbols": [

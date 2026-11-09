@@ -12,6 +12,44 @@ fn with_native_boundary_chain(assert_original: fn(&CertifiedTestChain)) {
 }
 
 #[test]
+fn a_fresh_reader_resumes_from_the_shared_prefix_its_own_view_still_holds() {
+    SHARE_PREFIXES_IN_TEST.set(true);
+    let (chain, _) = chain();
+    let view = chain.state().view();
+    let first = CertifiedChain::new(&view).unwrap();
+    first.check_certificate(frame(&chain, 3), 3).unwrap();
+
+    // The later reader starts from the verified height 3, and still checks every QC after it.
+    let later = CertifiedChain::new(&view).unwrap();
+    let (receipt, counts) =
+        relation_counts::measure(|| later.check_certificate(frame(&chain, 5), 5));
+    let receipt = receipt.unwrap();
+    assert_eq!(receipt.height(), 5);
+    assert_eq!(receipt.verification(), QcVerification::Verified);
+    assert_eq!(counts.frames, vec![5, 4]);
+    assert_eq!(counts.qcs, vec![4, 5]);
+
+    // Nothing at or above a target is reused, so a lower target walks from signed genesis.
+    let lower = CertifiedChain::new(&view).unwrap();
+    let (receipt, counts) =
+        relation_counts::measure(|| lower.check_certificate(frame(&chain, 2), 2));
+    assert_eq!(receipt.unwrap().height(), 2);
+    assert_eq!(counts.frames, vec![1, 2]);
+    assert_eq!(counts.qcs, vec![2]);
+
+    // Another chain instance never sees these prefixes, and neither does a non-ordinary reader.
+    {
+        let shared = SHARED_PREFIXES.lock().unwrap();
+        assert!(shared.iter().any(|cursor| cursor.tip_height() == 5));
+        assert!(shared.iter().all(|cursor| {
+            cursor.prefix.proof_source.is_none()
+                && matches!(cursor.prefix.authority, PrefixAuthority::Transient(_))
+        }));
+    }
+    SHARE_PREFIXES_IN_TEST.set(false);
+}
+
+#[test]
 fn staged_certificate_prefix_preserves_reset_target_first_order_and_original_receipts() {
     let (chain, _) = chain();
     let view = chain.state().view();
