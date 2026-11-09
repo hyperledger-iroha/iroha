@@ -24,7 +24,7 @@ jobs:
     runs-on: [self-hosted, Linux, cuda]
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: "true"

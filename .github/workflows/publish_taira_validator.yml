@@ -25,7 +25,7 @@ jobs:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.checkout_ref }}
 
