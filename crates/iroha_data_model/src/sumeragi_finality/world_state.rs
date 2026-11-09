@@ -22,7 +22,7 @@ use std::{collections::BTreeSet, sync::Arc};
 /// Number of little-endian u16 lanes in the existing complete World accumulator.
 pub const WORLD_STATE_ACCUMULATOR_LANES_V1: usize = 1024;
 /// Portable reader bound, not a native consensus invalidity verdict.
-pub const MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1: usize = 131_072;
+pub const MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1: usize = 262_144;
 /// Maximum original canonical snapshot frame accepted by the portable reader.
 pub const MAX_WORLD_STATE_SNAPSHOT_BYTES_V1: usize = 32 * 1024 * 1024;
 const ELEMENT_CONTEXT: &str = "iroha 2026-09-30 world-state lthash16 element v1";

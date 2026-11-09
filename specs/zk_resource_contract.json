@@ -19407,7 +19407,7 @@
               "MAX_WORLD_STATE_SNAPSHOT_BYTES_V1"
             ],
             "exprs": {
-              "MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1": "131_072",
+              "MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1": "262_144",
               "MAX_WORLD_STATE_SNAPSHOT_BYTES_V1": "32 * 1024 * 1024"
             }
           }
