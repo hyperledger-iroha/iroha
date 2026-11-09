@@ -29,10 +29,11 @@
 use crate::CancellationToken;
 use group::CurveAffine;
 use rayon::prelude::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use zeroize::Zeroizing;
 
-use super::pippenger::{Buckets, Digits, MAX_WINDOW, bucket_bytes, num_windows};
-use super::{BudgetExceeded, MemoryBudget, MsmError, SharedMemoryBudget};
+use super::pippenger::{Buckets, Digits, GUIDE, MAX_WINDOW, bucket_bytes, num_windows};
+use super::{BoundedSecretScalars, BudgetExceeded, MemoryBudget, MsmError, SharedMemoryBudget};
 use crate::curve::PastaCurve;
 
 /// Window multiples of a fixed set of bases.
@@ -53,6 +54,50 @@ const AUTO_MAX_WINDOW: usize = 14;
 pub const BUILD_CHUNK_ENTRIES: usize = 4096;
 /// Bases of one MSM task below which the table MSM does not split further.
 const MIN_BASES_PER_TASK: usize = 256;
+/// Additions to reduce one bucket by summation by parts (the planner's fitted
+/// reduction cost).
+const TABLE_REDUCTION: usize = 3;
+/// A column claim's one bucket reduction stays below one part in `share` of
+/// its insertions, which sets the fewest points a claim takes. A batch uses
+/// the first share at which its claims could number at least two per loop:
+/// short batches (a few rows) take shorter claims and more reductions rather
+/// than leave workers idle.
+const TABLE_CLAIM_SHARES: [usize; 3] = [8, 4, 2];
+
+/// The claim that starts at point `pos` of a table batch whose columns each
+/// hold `n` points: its column, first point and point count. Column `j`
+/// recodes `weights[j]` windows, claims at least `floors[j]` points, and the
+/// columns after it hold `after[j]` window-points of work.
+///
+/// The count is the guided share (`1 / (GUIDE * loops)`) of the batch's
+/// remaining work in the column's points, at least the floor and at most the
+/// column's remainder; a claim never leaves fewer points than the floor behind.
+/// Successive claims from 0 therefore cover every point exactly once.
+pub(crate) fn table_claim_at(
+    pos: usize,
+    n: usize,
+    weights: &[usize],
+    floors: &[usize],
+    after: &[usize],
+    loops: usize,
+) -> (usize, usize, usize) {
+    let column = pos / n;
+    let first = pos % n;
+    let left = n - first;
+    let weight = weights[column].max(1);
+    let floor = floors[column].clamp(1, n);
+    let remaining = after[column].saturating_add(left.saturating_mul(weight));
+    let wanted = remaining
+        .div_ceil(GUIDE * loops.max(1))
+        .div_ceil(weight)
+        .max(floor);
+    let count = if wanted >= left || left - wanted < floor {
+        left
+    } else {
+        wanted
+    };
+    (column, first, count)
+}
 
 /// Bytes of the finished table for `n` bases with window `c`.
 fn table_bytes<C: PastaCurve>(n: usize, c: usize) -> Option<usize> {
@@ -423,6 +468,267 @@ impl<C: PastaCurve> FixedBaseTable<C> {
         cancellation: Option<&CancellationToken>,
     ) -> Result<C, MsmError> {
         self.msm_impl::<true>(scalars, budget, shared, cancellation)
+    }
+
+    /// One secret MSM per bounded column against the table bases, returned in
+    /// column order.
+    ///
+    /// Columns share one claim queue, widest first, as in
+    /// [`super::msm_secret_bounded_columns_cancellable`]. One reservation admits a
+    /// batch: the recoded digits of its columns and `loops` claiming loops (at
+    /// most the pool size), each holding one bucket set at a time. A claim is a
+    /// range of one column's points with all of the column's windows, reduced
+    /// once into a partial sum; a column's result is the sum of its partials.
+    ///
+    /// Claims take about `1 / (4 * loops)` of the batch's remaining work
+    /// ([`table_claim_at`]), but never so few points that the claim's
+    /// reduction exceeds an eighth of its insertions (a quarter or a half in a
+    /// batch too short to give every loop two claims otherwise). Early claims
+    /// are therefore whole columns and the last are short, so a fast worker
+    /// finishes the batch while a slow one completes its last claim. Each column is recoded only
+    /// for the windows its public bound needs. Claim boundaries depend only on
+    /// public lengths, bounds, the window and the admitted loop count; worker
+    /// timing decides only which loop runs a claim. Every result is the exact
+    /// group element [`Self::msm_secret_cancellable`] returns for its column.
+    ///
+    /// A batch with fewer claims than workers, and every column when only one
+    /// column or one worker is given, the table is small, or no batch of two
+    /// loops fits, runs one column at a time through
+    /// [`Self::msm_secret_cancellable`].
+    ///
+    /// # Errors
+    /// [`MsmError::LengthMismatch`] (every column is checked before any work);
+    /// otherwise as [`Self::msm_secret_cancellable`]. All tasks have joined and
+    /// secret scratch is wiped before an error is returned.
+    pub fn msm_secret_bounded_columns_cancellable(
+        &self,
+        columns: &[BoundedSecretScalars<'_, C::ScalarExt>],
+        budget: MemoryBudget,
+        shared: &SharedMemoryBudget,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<Vec<C>, MsmError> {
+        CancellationToken::checkpoint(cancellation)?;
+        if let Some(column) = columns.iter().find(|column| column.scalars.len() != self.n) {
+            return Err(MsmError::LengthMismatch(crate::LengthMismatch {
+                left: column.scalars.len(),
+                right: self.n,
+            }));
+        }
+        let alone = |column: &BoundedSecretScalars<'_, C::ScalarExt>| {
+            if column.bits == 0 {
+                // A zero bound admits only zeros, whose sum is the identity.
+                CancellationToken::checkpoint(cancellation)?;
+                return Ok(C::identity());
+            }
+            self.msm_impl::<true>(column.scalars, budget, shared, cancellation)
+        };
+        let threads = rayon::current_num_threads();
+        let (all_digits, task) = self.msm_scratch();
+        // A column that would not fit the per-kernel budget alone fails exactly
+        // as it does through the single-column MSM.
+        if threads < 2
+            || columns.len() < 2
+            || self.n < 2 * MIN_BASES_PER_TASK
+            || budget.check(all_digits.saturating_add(task)).is_err()
+        {
+            return columns.iter().map(alone).collect();
+        }
+        let mut order: Vec<(usize, usize)> = columns
+            .iter()
+            .enumerate()
+            .filter(|(_, column)| column.bits > 0)
+            .map(|(index, column)| (index, num_windows(column.bits, self.c).min(self.nw)))
+            .collect();
+        // Widest first; the sort is stable, so equal widths keep column order.
+        order.sort_by_key(|&(_, windows)| core::cmp::Reverse(windows));
+        let mut sums: Vec<Option<C>> = vec![None; columns.len()];
+        let mut next = 0;
+        while next < order.len() {
+            // A loop for every worker first, then the next columns in claim
+            // order whose digits fit beside them; fewer loops only when not
+            // even one column fits.
+            let available = shared.available_bytes();
+            let mut loops = threads;
+            let (fixed, end) = loop {
+                let room = available.saturating_sub(task.saturating_mul(loops));
+                let (mut fixed, mut end) = (0_usize, next);
+                while let Some(&(_, windows)) = order.get(end) {
+                    match fixed.checked_add(self.column_bytes(windows)) {
+                        Some(with) if with <= room => (fixed, end) = (with, end + 1),
+                        _ => break,
+                    }
+                }
+                if end > next || loops <= 2 {
+                    break (fixed, end);
+                }
+                loops -= 1;
+            };
+            let batch = &order[next..end];
+            let claims_at = |share: usize| -> usize {
+                batch
+                    .iter()
+                    .map(|&(_, windows)| self.n.div_ceil(self.claim_floor(windows, share)))
+                    .sum()
+            };
+            let share = TABLE_CLAIM_SHARES
+                .into_iter()
+                .find(|&share| claims_at(share) >= 2 * loops)
+                .unwrap_or(TABLE_CLAIM_SHARES[TABLE_CLAIM_SHARES.len() - 1]);
+            let admitted = if batch.is_empty() || claims_at(share) < threads {
+                None
+            } else {
+                super::admit_batch(fixed, task, loops, shared)
+            };
+            let Some((loops, scratch)) = admitted else {
+                // Fewer claims than workers, or nothing fits: one column at a
+                // time, each split across the pool by the table MSM.
+                let rest = if batch.is_empty() {
+                    &order[next..]
+                } else {
+                    batch
+                };
+                for &(index, _) in rest {
+                    sums[index] = Some(alone(&columns[index])?);
+                }
+                next += rest.len();
+                continue;
+            };
+            self.run_columns(columns, batch, loops, share, cancellation, &mut sums)?;
+            // run_columns joined every loop and wiped its scratch before returning.
+            drop(scratch);
+            next = end;
+        }
+        CancellationToken::checkpoint(cancellation)?;
+        // Every nonzero column was summed above; computing any missing one here
+        // keeps the result total without trusting that (zero bounds give the
+        // identity without scratch).
+        let mut out = Vec::with_capacity(columns.len());
+        for (sum, column) in sums.into_iter().zip(columns) {
+            out.push(match sum {
+                Some(point) => point,
+                None => alone(column)?,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Fewest points a claim of a column recoding `windows` windows takes: its
+    /// one reduction stays below `1 / share` of its insertions.
+    fn claim_floor(&self, windows: usize, share: usize) -> usize {
+        (share * TABLE_REDUCTION * (1usize << (self.c - 1)))
+            .div_ceil(windows.max(1))
+            .clamp(1, self.n.max(1))
+    }
+
+    /// Scratch of one batch column recoding `windows` windows: its digits and
+    /// one partial sum per claim at the smallest share.
+    fn column_bytes(&self, windows: usize) -> usize {
+        let share = TABLE_CLAIM_SHARES[TABLE_CLAIM_SHARES.len() - 1];
+        self.n
+            .saturating_mul(windows)
+            .saturating_mul(2)
+            .saturating_add(
+                self.n
+                    .div_ceil(self.claim_floor(windows, share))
+                    .saturating_mul(size_of::<(usize, C)>() + 16),
+            )
+    }
+
+    /// One admitted batch (`(column index, windows)` in claim order): recode its
+    /// columns, let `loops` claiming loops take point ranges ([`table_claim_at`],
+    /// floors at `share`) until none is left, then add each column's partial
+    /// sums into `sums`. All loops have joined, and digits, buckets and partial
+    /// sums are wiped, before this returns, also on cancellation.
+    fn run_columns(
+        &self,
+        columns: &[BoundedSecretScalars<'_, C::ScalarExt>],
+        batch: &[(usize, usize)],
+        loops: usize,
+        share: usize,
+        cancellation: Option<&CancellationToken>,
+        sums: &mut [Option<C>],
+    ) -> Result<(), MsmError> {
+        let nb = 1usize << (self.c - 1);
+        let digits: Vec<Digits> = batch
+            .par_iter()
+            .map(|&(index, windows)| {
+                Digits::new_cancellable(columns[index].scalars, self.c, windows, cancellation)
+            })
+            .collect::<Result<_, _>>()?;
+        let weights: Vec<usize> = batch.iter().map(|&(_, windows)| windows).collect();
+        let floors: Vec<usize> = weights
+            .iter()
+            .map(|&windows| self.claim_floor(windows, share))
+            .collect();
+        let mut after = vec![0_usize; batch.len()];
+        for column in (1..batch.len()).rev() {
+            after[column - 1] =
+                after[column].saturating_add(self.n.saturating_mul(weights[column]));
+        }
+        let total = batch.len() * self.n;
+        let next = AtomicUsize::new(0);
+        let claim = || {
+            let mut pos = next.load(Ordering::Relaxed);
+            while pos < total {
+                let (column, first, count) =
+                    table_claim_at(pos, self.n, &weights, &floors, &after, loops);
+                match next.compare_exchange_weak(
+                    pos,
+                    pos + count,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => return Some((column, first, count)),
+                    Err(seen) => pos = seen,
+                }
+            }
+            None
+        };
+        let claimed: Vec<Vec<(usize, Zeroizing<C>)>> = (0..loops)
+            .into_par_iter()
+            .map(|_| {
+                let mut done = Vec::new();
+                'claims: while CancellationToken::checkpoint(cancellation).is_ok() {
+                    let Some((column, first, count)) = claim() else {
+                        break;
+                    };
+                    let mut buckets = Buckets::<C, true>::new(&self.points, nb);
+                    for i in first..first + count {
+                        if i % 256 == 0 && CancellationToken::checkpoint(cancellation).is_err() {
+                            // The checkpoint below reports the cancellation.
+                            break 'claims;
+                        }
+                        if self.skip[i] {
+                            continue;
+                        }
+                        for (w, &d) in digits[column].row(i).iter().enumerate() {
+                            if d != 0 {
+                                buckets.insert(
+                                    usize::from(d.unsigned_abs()) - 1,
+                                    i * self.nw + w,
+                                    d < 0,
+                                );
+                            }
+                        }
+                    }
+                    buckets.flush();
+                    done.push((column, Zeroizing::new(buckets.reduce(0, nb))));
+                    // Dropping `buckets` wipes its scratch.
+                }
+                done
+            })
+            .collect();
+        CancellationToken::checkpoint(cancellation)?;
+        // Without cancellation every point was claimed exactly once.
+        let mut totals = Zeroizing::new(vec![C::identity(); batch.len()]);
+        for (column, partial) in claimed.into_iter().flatten() {
+            totals[column] += *partial;
+        }
+        drop(digits);
+        for (&(index, _), sum) in batch.iter().zip(totals.iter()) {
+            sums[index] = Some(*sum);
+        }
+        Ok(())
     }
 
     /// Scratch of one MSM: `(digit_bytes, bucket_bytes)` where the second is
@@ -816,5 +1122,276 @@ mod tests {
         assert_eq!(table.msm_tasks(7, MemoryBudget::DEFAULT), Ok(3));
         let two = MemoryBudget::new(digits + 2 * buckets);
         assert_eq!(table.msm_tasks(7, two), Ok(2));
+    }
+
+    /// A canonical integer below `2^bits` (`bits < 255`), built limb by limb
+    /// from the top: the bound's largest value, or a uniform one.
+    fn below<F: crate::field::PastaField>(rng: &mut ChaCha20Rng, bits: usize, largest: bool) -> F {
+        use rand_core::Rng;
+        let shift = F::from(u64::MAX) + F::ONE;
+        let mut value = F::ZERO;
+        for limb in (0..bits.div_ceil(64)).rev() {
+            let kept = (bits - 64 * limb).min(64);
+            let mask = if kept == 64 {
+                u64::MAX
+            } else {
+                (1_u64 << kept) - 1
+            };
+            let word = if largest { mask } else { rng.next_u64() & mask };
+            value = value * shift + F::from(word);
+        }
+        value
+    }
+
+    /// A column within `bits`: zeros, the largest value, and uniform values.
+    fn bounded_column<F: crate::field::PastaField>(
+        rng: &mut ChaCha20Rng,
+        n: usize,
+        bits: usize,
+    ) -> Vec<F> {
+        (0..n)
+            .map(|i| match (bits, i % 5) {
+                (0, _) | (_, 0) => F::ZERO,
+                (255, 1) => -F::ONE,
+                (255, _) => F::random(&mut *rng),
+                (_, 1) => below(rng, bits, true),
+                _ => below(rng, bits, false),
+            })
+            .collect()
+    }
+
+    fn table_columns<C: PastaCurve>() {
+        const BOUNDS: [usize; 6] = [0, 1, 13, 88, 177, 255];
+        let mut rng = ChaCha20Rng::seed_from_u64(61);
+        for n in [9usize, 300, 600, 1031] {
+            let mut bases: Vec<C::AffineExt> =
+                (0..n).map(|_| C::random(&mut rng).to_affine()).collect();
+            bases[n / 2] = C::AffineExt::identity();
+            let tables: Vec<FixedBaseTable<C>> = [4usize, 9, 13]
+                .into_iter()
+                .map(|c| {
+                    FixedBaseTable::<C>::with_window(&bases, c, MemoryBudget::DEFAULT).unwrap()
+                })
+                .collect();
+            for count in [0usize, 1, 2, 7, 13] {
+                let columns: Vec<(Vec<C::ScalarExt>, usize)> = (0..count)
+                    .map(|j| {
+                        let bits = BOUNDS[j % BOUNDS.len()];
+                        (bounded_column(&mut rng, n, bits), bits)
+                    })
+                    .collect();
+                let bounded: Vec<BoundedSecretScalars<'_, C::ScalarExt>> = columns
+                    .iter()
+                    .map(|(scalars, bits)| BoundedSecretScalars::new(scalars, *bits, None).unwrap())
+                    .collect();
+                let expected: Vec<C> = columns
+                    .iter()
+                    .map(|(scalars, _)| msm_naive::<C>(scalars, &bases))
+                    .collect();
+                for table in &tables {
+                    for threads in [1usize, 3, 8] {
+                        let shared =
+                            SharedMemoryBudget::new(super::super::PROCESS_MSM_SCRATCH_BYTES);
+                        let sums = pool(threads)
+                            .install(|| {
+                                table.msm_secret_bounded_columns_cancellable(
+                                    &bounded,
+                                    MemoryBudget::DEFAULT,
+                                    &shared,
+                                    None,
+                                )
+                            })
+                            .unwrap();
+                        assert_eq!(
+                            sums,
+                            expected,
+                            "n={n} c={} columns={count} threads={threads}",
+                            table.window()
+                        );
+                        assert_eq!(shared.in_use_bytes(), 0);
+                        assert!(shared.peak_bytes() <= shared.limit_bytes());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn table_columns_equal_independent_sums_on_both_curves() {
+        table_columns::<crate::Ep>();
+        table_columns::<Eq>();
+    }
+
+    /// Successive claims from point 0 cover every point exactly once, stay in
+    /// one column, take at least the floor unless they end their column, and
+    /// never leave fewer points than the floor behind.
+    #[test]
+    fn table_claims_cover_every_point_once() {
+        use rand_core::Rng;
+        let mut rng = ChaCha20Rng::seed_from_u64(62);
+        for case in 0..400 {
+            let n = 1 + (rng.next_u64() % 5000) as usize;
+            let count = 1 + (rng.next_u64() % 10) as usize;
+            let weights: Vec<usize> = (0..count)
+                .map(|_| 1 + (rng.next_u64() % 64) as usize)
+                .collect();
+            let floors: Vec<usize> = (0..count)
+                .map(|_| 1 + (rng.next_u64() % 3000) as usize)
+                .collect();
+            let mut after = vec![0_usize; count];
+            for column in (1..count).rev() {
+                after[column - 1] = after[column] + n * weights[column];
+            }
+            let loops = 2 + (rng.next_u64() % 15) as usize;
+            let total = n * count;
+            let mut covered = vec![0_u8; total];
+            let mut pos = 0;
+            while pos < total {
+                let (column, first, points) =
+                    table_claim_at(pos, n, &weights, &floors, &after, loops);
+                assert_eq!(column * n + first, pos, "case {case}");
+                assert!(
+                    points >= 1 && first + points <= n,
+                    "case {case}: claim crosses its column"
+                );
+                let floor = floors[column].clamp(1, n);
+                assert!(
+                    points >= floor || first + points == n,
+                    "case {case}: {points} below floor {floor}"
+                );
+                let left = n - first - points;
+                assert!(
+                    left == 0 || left >= floor,
+                    "case {case}: leaves {left} below floor {floor}"
+                );
+                for slot in &mut covered[pos..pos + points] {
+                    *slot += 1;
+                }
+                pos += points;
+            }
+            assert!(covered.iter().all(|&times| times == 1), "case {case}");
+        }
+    }
+
+    /// A cancellation from another thread at any point of a batch returns either
+    /// every exact sum or `Cancelled`, and releases all scratch.
+    #[test]
+    fn table_columns_cancelled_from_another_thread_return_exact_sums_or_cancelled() {
+        let mut rng = ChaCha20Rng::seed_from_u64(63);
+        let n = 2048;
+        let bases: Vec<EqAffine> = (0..n).map(|_| Eq::random(&mut rng).to_affine()).collect();
+        let table = FixedBaseTable::<Eq>::with_window(&bases, 9, MemoryBudget::DEFAULT).unwrap();
+        let columns: Vec<Vec<Fp>> = (0..9)
+            .map(|_| (0..n).map(|_| Fp::random(&mut rng)).collect())
+            .collect();
+        let bounded: Vec<BoundedSecretScalars<'_, Fp>> = columns
+            .iter()
+            .map(|scalars| BoundedSecretScalars::new(scalars, 255, None).unwrap())
+            .collect();
+        let expected: Vec<Eq> = columns
+            .iter()
+            .map(|scalars| msm_naive::<Eq>(scalars, &bases))
+            .collect();
+        let workers = pool(4);
+        let mut cancelled = 0;
+        for delay_us in [0_u64, 100, 300, 1_000, 3_000, 10_000, 30_000, 100_000] {
+            let shared = SharedMemoryBudget::new(super::super::PROCESS_MSM_SCRATCH_BYTES);
+            let token = CancellationToken::new();
+            let result = std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_micros(delay_us));
+                    token.cancel();
+                });
+                workers.install(|| {
+                    table.msm_secret_bounded_columns_cancellable(
+                        &bounded,
+                        MemoryBudget::DEFAULT,
+                        &shared,
+                        Some(&token),
+                    )
+                })
+            });
+            match result {
+                Ok(sums) => assert_eq!(sums, expected, "delay {delay_us} us"),
+                Err(error) => {
+                    assert_eq!(error, MsmError::Cancelled, "delay {delay_us} us");
+                    cancelled += 1;
+                }
+            }
+            assert_eq!(shared.in_use_bytes(), 0, "delay {delay_us} us");
+        }
+        // An immediate cancellation always wins the race against the whole batch.
+        assert!(cancelled >= 1);
+    }
+
+    /// Lengths are checked before any work; with no shared scratch every column
+    /// takes the allocation-free path; a limit that admits one column beside a
+    /// loop per worker runs batches of one column and never holds more.
+    #[test]
+    fn table_columns_check_lengths_fall_back_and_respect_the_limit() {
+        let mut rng = ChaCha20Rng::seed_from_u64(64);
+        let n = 600;
+        let bases: Vec<EqAffine> = (0..n).map(|_| Eq::random(&mut rng).to_affine()).collect();
+        let table = FixedBaseTable::<Eq>::with_window(&bases, 4, MemoryBudget::DEFAULT).unwrap();
+        let columns: Vec<Vec<Fp>> = (0..5)
+            .map(|_| (0..n).map(|_| Fp::random(&mut rng)).collect())
+            .collect();
+        let expected: Vec<Eq> = columns
+            .iter()
+            .map(|scalars| msm_naive::<Eq>(scalars, &bases))
+            .collect();
+        let mut bounded: Vec<BoundedSecretScalars<'_, Fp>> = columns
+            .iter()
+            .map(|scalars| BoundedSecretScalars::new(scalars, 255, None).unwrap())
+            .collect();
+        bounded[4] = BoundedSecretScalars::new(&columns[4][..n - 1], 255, None).unwrap();
+        let shared = SharedMemoryBudget::new(super::super::PROCESS_MSM_SCRATCH_BYTES);
+        assert!(matches!(
+            pool(4).install(|| {
+                table.msm_secret_bounded_columns_cancellable(
+                    &bounded,
+                    MemoryBudget::DEFAULT,
+                    &shared,
+                    None,
+                )
+            }),
+            Err(MsmError::LengthMismatch(_))
+        ));
+        assert_eq!(shared.peak_bytes(), 0);
+        bounded[4] = BoundedSecretScalars::new(&columns[4], 255, None).unwrap();
+        let none = SharedMemoryBudget::new(0);
+        let sums = pool(4)
+            .install(|| {
+                table.msm_secret_bounded_columns_cancellable(
+                    &bounded,
+                    MemoryBudget::DEFAULT,
+                    &none,
+                    None,
+                )
+            })
+            .unwrap();
+        assert_eq!(sums, expected);
+        assert_eq!(none.peak_bytes(), 0);
+        let (_, task) = table.msm_scratch();
+        let one = table.column_bytes(table.nw);
+        // Room for one column's digits beside four loops, never two columns'.
+        let limited = SharedMemoryBudget::new(one + 4 * task + one / 2);
+        let sums = pool(4)
+            .install(|| {
+                table.msm_secret_bounded_columns_cancellable(
+                    &bounded,
+                    MemoryBudget::DEFAULT,
+                    &limited,
+                    None,
+                )
+            })
+            .unwrap();
+        assert_eq!(sums, expected);
+        assert_eq!(limited.in_use_bytes(), 0);
+        assert_eq!(
+            limited.peak_bytes(),
+            one + 4 * task,
+            "each batch admits one column and four loops together"
+        );
     }
 }
