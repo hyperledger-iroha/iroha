@@ -475,10 +475,12 @@ impl<C: PastaCurve> FixedBaseTable<C> {
     ///
     /// Columns share one claim queue, widest first, as in
     /// [`super::msm_secret_bounded_columns_cancellable`]. One reservation admits a
-    /// batch: the recoded digits of its columns and `loops` claiming loops (at
-    /// most the pool size), each holding one bucket set at a time. A claim is a
-    /// range of one column's points with all of the column's windows, reduced
-    /// once into a partial sum; a column's result is the sum of its partials.
+    /// batch: `loops` claiming loops (at most the pool size), each holding one
+    /// bucket set and the digits of its current claim, plus the columns'
+    /// partial sums. A claim is a range of one column's points with all of the
+    /// column's windows: the loop recodes those points just before it inserts
+    /// them, still in its core's cache, and reduces the claim once into a
+    /// partial sum. A column's result is the sum of its partials.
     ///
     /// Claims take about `1 / (4 * loops)` of the batch's remaining work
     /// ([`table_claim_at`]), but never so few points that the claim's
@@ -524,12 +526,15 @@ impl<C: PastaCurve> FixedBaseTable<C> {
         };
         let threads = rayon::current_num_threads();
         let (all_digits, task) = self.msm_scratch();
-        // A column that would not fit the per-kernel budget alone fails exactly
-        // as it does through the single-column MSM.
+        // A claiming loop holds one bucket set and the digits of at most one
+        // whole column, recoded per claim. A column that would not fit the
+        // per-kernel budget alone fails exactly as it does through the
+        // single-column MSM.
+        let loop_bytes = all_digits.saturating_add(task);
         if threads < 2
             || columns.len() < 2
             || self.n < 2 * MIN_BASES_PER_TASK
-            || budget.check(all_digits.saturating_add(task)).is_err()
+            || budget.check(loop_bytes).is_err()
         {
             return columns.iter().map(alone).collect();
         }
@@ -545,12 +550,12 @@ impl<C: PastaCurve> FixedBaseTable<C> {
         let mut next = 0;
         while next < order.len() {
             // A loop for every worker first, then the next columns in claim
-            // order whose digits fit beside them; fewer loops only when not
-            // even one column fits.
+            // order whose partial sums fit beside them; fewer loops only when
+            // not even one column fits.
             let available = shared.available_bytes();
             let mut loops = threads;
             let (fixed, end) = loop {
-                let room = available.saturating_sub(task.saturating_mul(loops));
+                let room = available.saturating_sub(loop_bytes.saturating_mul(loops));
                 let (mut fixed, mut end) = (0_usize, next);
                 while let Some(&(_, windows)) = order.get(end) {
                     match fixed.checked_add(self.column_bytes(windows)) {
@@ -577,7 +582,7 @@ impl<C: PastaCurve> FixedBaseTable<C> {
             let admitted = if batch.is_empty() || claims_at(share) < threads {
                 None
             } else {
-                super::admit_batch(fixed, task, loops, shared)
+                super::admit_batch(fixed, loop_bytes, loops, shared)
             };
             let Some((loops, scratch)) = admitted else {
                 // Fewer claims than workers, or nothing fits: one column at a
@@ -620,25 +625,21 @@ impl<C: PastaCurve> FixedBaseTable<C> {
             .clamp(1, self.n.max(1))
     }
 
-    /// Scratch of one batch column recoding `windows` windows: its digits and
-    /// one partial sum per claim at the smallest share.
+    /// Scratch of one batch column recoding `windows` windows: one partial sum
+    /// per claim at the smallest share (claims recode their own points).
     fn column_bytes(&self, windows: usize) -> usize {
         let share = TABLE_CLAIM_SHARES[TABLE_CLAIM_SHARES.len() - 1];
         self.n
-            .saturating_mul(windows)
-            .saturating_mul(2)
-            .saturating_add(
-                self.n
-                    .div_ceil(self.claim_floor(windows, share))
-                    .saturating_mul(size_of::<(usize, C)>() + 16),
-            )
+            .div_ceil(self.claim_floor(windows, share))
+            .saturating_mul(size_of::<(usize, C)>() + 16)
     }
 
-    /// One admitted batch (`(column index, windows)` in claim order): recode its
-    /// columns, let `loops` claiming loops take point ranges ([`table_claim_at`],
-    /// floors at `share`) until none is left, then add each column's partial
-    /// sums into `sums`. All loops have joined, and digits, buckets and partial
-    /// sums are wiped, before this returns, also on cancellation.
+    /// One admitted batch (`(column index, windows)` in claim order): `loops`
+    /// claiming loops take point ranges ([`table_claim_at`], floors at `share`)
+    /// until none is left, each recoding its claim's points just before it
+    /// inserts them (still in that core's cache), then each column's partial
+    /// sums are added into `sums`. All loops have joined, and digits, buckets
+    /// and partial sums are wiped, before this returns, also on cancellation.
     fn run_columns(
         &self,
         columns: &[BoundedSecretScalars<'_, C::ScalarExt>],
@@ -649,12 +650,6 @@ impl<C: PastaCurve> FixedBaseTable<C> {
         sums: &mut [Option<C>],
     ) -> Result<(), MsmError> {
         let nb = 1usize << (self.c - 1);
-        let digits: Vec<Digits> = batch
-            .par_iter()
-            .map(|&(index, windows)| {
-                Digits::new_cancellable(columns[index].scalars, self.c, windows, cancellation)
-            })
-            .collect::<Result<_, _>>()?;
         let weights: Vec<usize> = batch.iter().map(|&(_, windows)| windows).collect();
         let floors: Vec<usize> = weights
             .iter()
@@ -692,8 +687,19 @@ impl<C: PastaCurve> FixedBaseTable<C> {
                     let Some((column, first, count)) = claim() else {
                         break;
                     };
+                    let (index, windows) = batch[column];
+                    // A cancelled recoding returns no digits; the checkpoint
+                    // below reports it.
+                    let Ok(digits) = Digits::new_serial_cancellable(
+                        &columns[index].scalars[first..first + count],
+                        self.c,
+                        windows,
+                        cancellation,
+                    ) else {
+                        break;
+                    };
                     let mut buckets = Buckets::<C, true>::new(&self.points, nb);
-                    for i in first..first + count {
+                    for (local, i) in (first..first + count).enumerate() {
                         if i % 256 == 0 && CancellationToken::checkpoint(cancellation).is_err() {
                             // The checkpoint below reports the cancellation.
                             break 'claims;
@@ -701,7 +707,7 @@ impl<C: PastaCurve> FixedBaseTable<C> {
                         if self.skip[i] {
                             continue;
                         }
-                        for (w, &d) in digits[column].row(i).iter().enumerate() {
+                        for (w, &d) in digits.row(local).iter().enumerate() {
                             if d != 0 {
                                 buckets.insert(
                                     usize::from(d.unsigned_abs()) - 1,
@@ -713,7 +719,7 @@ impl<C: PastaCurve> FixedBaseTable<C> {
                     }
                     buckets.flush();
                     done.push((column, Zeroizing::new(buckets.reduce(0, nb))));
-                    // Dropping `buckets` wipes its scratch.
+                    // Dropping `buckets` and `digits` wipes their scratch.
                 }
                 done
             })
@@ -724,7 +730,6 @@ impl<C: PastaCurve> FixedBaseTable<C> {
         for (column, partial) in claimed.into_iter().flatten() {
             totals[column] += *partial;
         }
-        drop(digits);
         for (&(index, _), sum) in batch.iter().zip(totals.iter()) {
             sums[index] = Some(*sum);
         }
@@ -1372,10 +1377,12 @@ mod tests {
             .unwrap();
         assert_eq!(sums, expected);
         assert_eq!(none.peak_bytes(), 0);
-        let (_, task) = table.msm_scratch();
+        let (all_digits, task) = table.msm_scratch();
+        // A loop holds one bucket set and at most one whole column's digits.
+        let looped = all_digits + task;
         let one = table.column_bytes(table.nw);
-        // Room for one column's digits beside four loops, never two columns'.
-        let limited = SharedMemoryBudget::new(one + 4 * task + one / 2);
+        // Room for one column's partial sums beside four loops, never two columns'.
+        let limited = SharedMemoryBudget::new(one + 4 * looped + one / 2);
         let sums = pool(4)
             .install(|| {
                 table.msm_secret_bounded_columns_cancellable(
@@ -1390,7 +1397,7 @@ mod tests {
         assert_eq!(limited.in_use_bytes(), 0);
         assert_eq!(
             limited.peak_bytes(),
-            one + 4 * task,
+            one + 4 * looped,
             "each batch admits one column and four loops together"
         );
     }
