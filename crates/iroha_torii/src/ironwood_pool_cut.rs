@@ -1,6 +1,8 @@
-//! Current-cut Ironwood pool originals under full-ledger read authority.
+//! Current-cut Ironwood pool originals under certified-original or full-ledger read authority.
 //! Complete World hashes authenticate absence but expose unrelated row identities and permit
 //! low-entropy value dictionaries. Selected data space grants cannot authorize this response.
+//! A certified-original reader may name any payer: it reads that payer's public Global balance
+//! row, and the runner reading a cut is not the per-run account paying for the proof.
 //! TODO: replace this full snapshot with genuinely scoped keyed-State inclusion/absence proofs
 //! before offering restricted bank one-call context reads.
 use crate::*;
@@ -75,7 +77,7 @@ fn require_permission(
     _selectors: &SelectedPools,
 ) -> Result<(), Error> {
     // The selected typed values do not reduce the full hash-list disclosure. Reuse the
-    // canonical all-ledger permission matcher at every current authorization check.
+    // canonical permission matchers at every current authorization check.
     let owner = crate::history_producer::HistoryProducerOwner::authentication_read(app)?;
     owner.scope(|| {
         app.state
@@ -83,11 +85,12 @@ fn require_permission(
                 use iroha_core::state::{StorageReadOnly as _, WorldReadOnly as _};
                 let world = view.world();
                 let allowed = world.accounts().get(account).is_some()
-                    && crate::stream_control::can_read_all(world, account)?;
+                    && (crate::stream_control::can_read_all(world, account)?
+                        || crate::stream_control::can_read_certified_originals(world, account)?);
                 if !allowed {
                     return Err(Error::Query(
                         iroha_data_model::ValidationFail::NotPermitted(
-                            "Ironwood pool cut full World snapshot requires all-ledger read permission".into(),
+                            "Ironwood pool cut full World snapshot requires certified-original or all-ledger read permission".into(),
                         ),
                     ));
                 }
@@ -258,7 +261,7 @@ mod tests {
         );
     }
     #[test]
-    fn ironwood_pool_cut_requires_all_ledger_permission_and_current_revocation() {
+    fn ironwood_pool_cut_requires_reader_permission_and_current_revocation() {
         use iroha_core::state::World;
         use iroha_data_model::{Account, Registrable};
         let owner = iroha_test_samples::ALICE_ID.clone();
@@ -304,12 +307,17 @@ mod tests {
             require_permission(&app, &owner, &key).is_err(),
             "even all selected dataspace grants cannot disclose unrelated complete World hashes"
         );
-        change(CanReadAllLedgerData.into(), true);
-        require_permission(&app, &owner, &key).unwrap();
-        change(CanReadAllLedgerData.into(), false);
-        assert!(
-            require_permission(&app, &owner, &key).is_err(),
-            "a retained request cannot hide current revocation"
-        );
+        for reader in [
+            iroha_data_model::permission::Permission::from(CanReadAllLedgerData),
+            CanReadCertifiedOriginals.into(),
+        ] {
+            change(reader.clone(), true);
+            require_permission(&app, &owner, &key).unwrap();
+            change(reader, false);
+            assert!(
+                require_permission(&app, &owner, &key).is_err(),
+                "a retained request cannot hide current revocation"
+            );
+        }
     }
 }

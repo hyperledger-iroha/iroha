@@ -495,7 +495,7 @@ pub mod query {
         pub struct CanReadAllLedgerData;
     }
     permission! {
-        /// Read complete certified native resource-name and authority originals.
+        /// Read complete certified native resource-name, authority and Ironwood pool originals.
         ///
         /// Only an existing [`CanReadAllLedgerData`] holder may grant or revoke
         /// this capability. Its holder cannot delegate it. It grants no generic

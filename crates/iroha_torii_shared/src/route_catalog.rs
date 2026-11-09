@@ -2927,7 +2927,7 @@ pub mod runtime_governance {
     /// Read the authoritative committed privacy capability snapshot.
     pub const PRIVACY_CAPABILITIES: RouteDescriptor =
         signed_get("privacy.capabilities", "/v1/privacy/capabilities");
-    /// Certified pool anchor and balances; complete World disclosure requires all-ledger read authority.
+    /// Certified pool anchor and balances; complete World disclosure requires certified-original or all-ledger read authority.
     pub const PRIVACY_IRONWOOD_POOL_CUT: RouteDescriptor = app_signed_post(
         "privacy.ironwood.pool_cut",
         "/v1/privacy/ironwood/pool-cut/{height}",

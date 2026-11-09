@@ -226,12 +226,16 @@ lifecycle-witness and release qualification remain open.
 
 Taira is live on chain `fc56984b-2be7-431d-840e-21514d1883f0`, network
 `hash:4978D0BD15FC32B834672B27BBD8A03653B1DF060A1EEE7E9374D29AF3886D91#6774`, with four
-validators on one OVH host. As of 2026-11-08 23:00 UTC it was at height 12517 on selection
-`f4f73c12…`, the repaired SoraFS selection. All four run source `59db2e29` with the same wire
-hash, on three binaries: seat 1 `77c236e7` (with wallet read routes and the Kaigi index
-repair), seats 2-3 `4d1c295e`, seat 4 `f56180e1`. Stopping one seat takes the others'
-network time unhealthy and blocks writes for about 25 minutes. Idle chains create no empty
-blocks.
+validators on one OVH host. As of 2026-11-09 12:30 UTC it was at height 12565 on selection
+`f4f73c12…`, the repaired SoraFS selection. All four report source `59db2e29` with the same
+wire hash, on three binaries: units 1-2 `423a6dab`, unit 3 `88b7d133`, unit 4 `f56180e1`.
+Units 1-3 keep SoraFS data on `/data`. Stopping one unit takes the others' network time
+unhealthy and blocks writes for about 25 minutes. Idle chains create no empty blocks.
+
+Its World held 122,025 entries at height 12563. Complete-World reads and proofs carry every
+entry, so `MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1` is now 262,144. Nodes and readers built before
+this change refuse those reads above 131,072 entries, and entries never shrink. Each block
+that charges a sponsored fee adds one permanent `fee_sponsor_budget_counters` row.
 
 The [certified Time and Ironwood activation](specs/runtime/taira_time_ironwood_v1.md) is
 implemented and has not run on Taira. A keyless replay of a copied store activated in a

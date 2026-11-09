@@ -184,8 +184,9 @@ Types: `Grant<O, D>` and `Revoke<O, D>`, with boxed enums for `Permission`/`Role
 `CanReadCertifiedOriginals` has the exact unit (`null`) payload. Only an existing
 `CanReadAllLedgerData` holder may grant or revoke it; a recipient cannot delegate
 it directly or through a role. It authorizes only the signed native
-resource-name and fixed-family authority-original endpoints. Those endpoints
-recheck the current permission before source capture and before egress. It grants
+resource-name, fixed-family authority-original and Ironwood pool-cut endpoints.
+Those endpoints recheck the current permission before source capture and before
+egress. A pool-cut reader may name any payer. It grants
 no generic private query, full-block carrier, event-stream, SoraFS publication,
 or write authority. `CanReadAllLedgerData` remains genesis-only and nondelegable.
 

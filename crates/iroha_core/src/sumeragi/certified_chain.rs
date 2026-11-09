@@ -1420,6 +1420,83 @@ struct VerifiedPrefix {
     proof_source: Option<Hash>,
 }
 
+/// A retained [`VerifiedPrefix`], reusable by a later fresh reader of the same chain.
+///
+/// The cursor is process-local and in-memory only; it is never serialized, accepted from a peer
+/// or treated as finality authority. A reader accepts it only for its own chain instance and root
+/// scope, and only while its own view still holds the cursor's tip block at that height. The
+/// bounded per-operation epoch validation scope is never carried over.
+struct CertifiedPrefixCursor {
+    instance: Hash32,
+    root_scope: SumeragiRootScope,
+    prefix: VerifiedPrefix,
+}
+
+impl CertifiedPrefixCursor {
+    /// Height of the last certificate this cursor verified.
+    fn tip_height(&self) -> u64 {
+        self.prefix.tip.height()
+    }
+
+    /// Block hash of the last certificate this cursor verified.
+    fn tip_block_hash(&self) -> HashOf<IrohaHeader> {
+        self.prefix.tip.block_hash()
+    }
+
+    /// An independent copy that a caller can keep while a reader advances the original.
+    ///
+    /// Only an ordinary transient prefix is copied; the copy's epoch validation scope is empty.
+    fn duplicate(&self) -> Option<Self> {
+        let PrefixAuthority::Transient(authority) = &self.prefix.authority else {
+            return None;
+        };
+        if self.prefix.proof_source.is_some() {
+            return None;
+        }
+        Some(Self {
+            instance: self.instance,
+            root_scope: self.root_scope,
+            prefix: VerifiedPrefix {
+                tip: self.prefix.tip.clone(),
+                schedule: self.prefix.schedule.clone(),
+                authority: PrefixAuthority::Transient(Arc::clone(authority)),
+                validation: EpochValidationScope::new(),
+                proof_source: None,
+            },
+        })
+    }
+}
+
+impl core::fmt::Debug for CertifiedPrefixCursor {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("CertifiedPrefixCursor")
+            .field("tip_height", &self.tip_height())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Recently verified prefixes shared by fresh readers of immutable State views.
+///
+/// A reader that must (re)start its cursor otherwise verifies every certificate from signed
+/// genesis, so callers that open one reader per request (signer finality, provider admission,
+/// publisher source authorization, finalized archive capture) pay a cost that grows with the
+/// chain. Such a reader instead resumes from the highest retained prefix strictly below its target
+/// whose tip is still its own view's block at that height; every later height is verified under
+/// the exact BLS quorum of its committee as before. Entries are process-local and in-memory only,
+/// never serialized or accepted from a peer, and never carry an epoch validation scope.
+static SHARED_PREFIXES: std::sync::Mutex<Vec<CertifiedPrefixCursor>> =
+    std::sync::Mutex::new(Vec::new());
+/// Retained shared prefixes per chain instance and root scope.
+const SHARED_PREFIXES_PER_CHAIN: usize = 4;
+/// Retained shared prefixes across every chain instance in this process.
+const SHARED_PREFIXES_TOTAL: usize = 16;
+// Test chains repeat their genesis, so sharing is opt-in per test thread: every other test keeps
+// counting its reads from signed genesis.
+#[cfg(test)]
+std::thread_local! {
+    static SHARE_PREFIXES_IN_TEST: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+
 // This constant-size, ordered, certificate-inclusive local source fence is never
 // serialized, persisted or accepted as finality authority. The sole native verifier
 // authenticates each appended receipt; fresh source bytes only govern cursor reuse.
@@ -3302,7 +3379,9 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
         let mut cursor = self.prefix.lock();
         self.prepare_certificate_prefix(&mut cursor, height)?;
         let prefix = cursor.as_mut().ok_or(ChainReadError::ForeignGenesis)?;
-        self.check_certificate_at_prefix(prefix, block, height)
+        let certified = self.check_certificate_at_prefix(prefix, block, height)?;
+        self.share_prefix(prefix);
+        Ok(certified)
     }
 
     // Initialize the same signed-genesis cursor before target/gap receipt slots are live.
@@ -3316,9 +3395,106 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
             .as_ref()
             .is_none_or(|prefix| prefix.tip.height >= height)
         {
-            *cursor = Some(self.genesis_prefix()?);
+            *cursor = Some(match self.shared_prefix_below(height) {
+                Some(shared) => shared,
+                None => self.genesis_prefix()?,
+            });
         }
         Ok(())
+    }
+
+    // Shared prefixes apply only to ordinary readers of one immutable State view.
+    fn shares_prefixes(&self) -> bool {
+        #[cfg(test)]
+        if !SHARE_PREFIXES_IN_TEST.get() {
+            return false;
+        }
+        matches!(self.source, ChainSource::State(_))
+            && self.terminal.is_none()
+            && self.proof_source_genesis.is_none()
+            && self.amx_genesis_source.is_none()
+    }
+
+    // The highest shared prefix strictly below `height` whose tip is this view's block there.
+    fn shared_prefix_below(&self, height: u64) -> Option<VerifiedPrefix> {
+        if !self.shares_prefixes() {
+            return None;
+        }
+        let ChainSource::State(view) = &self.source else {
+            return None;
+        };
+        let shared = SHARED_PREFIXES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        shared
+            .iter()
+            .filter(|cursor| {
+                cursor.instance == self.instance
+                    && cursor.root_scope == self.root_scope
+                    && cursor.tip_height() > GENESIS_HEIGHT
+                    && cursor.tip_height() < height
+                    && usize::try_from(cursor.tip_height())
+                        .ok()
+                        .and_then(|tip| tip.checked_sub(1))
+                        .and_then(|index| view.block_hashes().get(index))
+                        .is_some_and(|hash| *hash == cursor.tip_block_hash())
+            })
+            .max_by_key(|cursor| cursor.tip_height())
+            .and_then(CertifiedPrefixCursor::duplicate)
+            .map(|cursor| cursor.prefix)
+    }
+
+    // Retain a copy of this ordinary reader's verified prefix for later fresh readers.
+    fn share_prefix(&self, prefix: &VerifiedPrefix) {
+        if !self.shares_prefixes()
+            || prefix.proof_source.is_some()
+            || prefix.tip.height() <= GENESIS_HEIGHT
+        {
+            return;
+        }
+        let PrefixAuthority::Transient(authority) = &prefix.authority else {
+            return;
+        };
+        let height = prefix.tip.height();
+        let mut shared = SHARED_PREFIXES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let same_chain = |cursor: &CertifiedPrefixCursor| {
+            cursor.instance == self.instance && cursor.root_scope == self.root_scope
+        };
+        if shared.iter().any(|cursor| {
+            same_chain(cursor)
+                && cursor.tip_height() == height
+                && cursor.tip_block_hash() == prefix.tip.block_hash()
+        }) {
+            return;
+        }
+        shared.retain(|cursor| !(same_chain(cursor) && cursor.tip_height() == height));
+        shared.push(CertifiedPrefixCursor {
+            instance: self.instance,
+            root_scope: self.root_scope,
+            prefix: VerifiedPrefix {
+                tip: prefix.tip.clone(),
+                schedule: prefix.schedule.clone(),
+                authority: PrefixAuthority::Transient(Arc::clone(authority)),
+                validation: EpochValidationScope::new(),
+                proof_source: None,
+            },
+        });
+        shared.sort_by_key(|cursor| core::cmp::Reverse(cursor.tip_height()));
+        let mut kept: Vec<CertifiedPrefixCursor> = Vec::with_capacity(shared.len());
+        for cursor in shared.drain(..) {
+            let per_chain = kept
+                .iter()
+                .filter(|other| {
+                    other.instance == cursor.instance && other.root_scope == cursor.root_scope
+                })
+                .count();
+            if per_chain < SHARED_PREFIXES_PER_CHAIN && kept.len() < SHARED_PREFIXES_TOTAL {
+                kept.push(cursor);
+            }
+        }
+        *shared = kept;
     }
 
     // Genesis decoding has returned before these complete target and gap receipts exist.
@@ -3426,6 +3602,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
                 .advance_prefix(prefix, next, None)?;
             progress()?;
         }
+        self.share_prefix(prefix);
         Ok(())
     }
 }
