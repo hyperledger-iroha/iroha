@@ -91,6 +91,9 @@ macro_rules! schema_types {
             iroha_data_model::isi::musubi::CheckMusubiPinOutboxV1,
             // Separate immutable SoraFS repair wire; its full all-four plan is public review material.
             iroha_data_model::isi::sorafs_repair::ApplySorafsRepairV1,
+            // Separate immutable Taira activation wire; its full all-four plan is public review
+            // material.
+            iroha_data_model::isi::taira_activation::ScheduleTairaTimeIronwoodV1,
             iroha_data_model::smart_contract::ContractArtifactId,
             // Current finalized provider authority and signed discovery material.
             iroha_data_model::sorafs::provider_admission::discovery::ProviderDiscoveryProofV1,

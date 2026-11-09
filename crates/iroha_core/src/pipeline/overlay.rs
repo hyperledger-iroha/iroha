@@ -5889,6 +5889,34 @@ seiyaku GuardedOverlayRebound { permission CanInvokeContractEntrypoint;
                 root,
             )
             .expect("the original scoped contract path retains its exact authority");
+            // The activation receipts carry authority, so a proved artifact can never name them,
+            // with or without a valid snapshot of another contract's invocation.
+            for receipt in [
+                "runtime/taira_time_ironwood/certificate",
+                "sorafs/repair/certificate",
+            ] {
+                let receipt: StatePath = receipt.parse().unwrap();
+                for (replacement, authorization) in [
+                    (Some(vec![8]), None),
+                    (None, None),
+                    (Some(vec![8]), Some(root.clone())),
+                    (None, Some(root.clone())),
+                ] {
+                    let error = validate_ivm_proved_durable_authorizations(
+                        view.world(),
+                        &BTreeMap::from([(receipt.clone(), replacement)]),
+                        &BTreeMap::from([(receipt.clone(), authorization)]),
+                        root,
+                    )
+                    .unwrap_err();
+                    assert!(matches!(
+                        error,
+                        crate::execution_attempt::ExecutionAttemptError::Rejected(
+                            ValidationFail::NotPermitted(_)
+                        )
+                    ));
+                }
+            }
             let native: StatePath = "sorafs_reserve_state_v1".parse().unwrap();
             for replacement in [Some(vec![8]), None] {
                 let error = validate_ivm_proved_durable_authorizations(

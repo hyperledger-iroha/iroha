@@ -103,7 +103,7 @@ use iroha_data_model::{
     governance::types::{
         BallotAttemptId, BallotAttemptStatusV1, BeaconSessionId, BodyInstanceStatusV1,
         GovernanceAttemptId, GovernanceAttemptStatusV1, GovernanceStageV1,
-        MAX_PARLIAMENT_CITIZENS_V1, ProposalKind, TleKeySessionId,
+        MAX_PARLIAMENT_CITIZENS_V1, ProposalContentId, ProposalKind, TleKeySessionId,
     },
     identifier::{IdentifierClaimRecord, IdentifierPolicy, IdentifierPolicyId},
     isi::{
@@ -340,6 +340,9 @@ mod committed_execution_read;
 mod contract_event_journal;
 pub(crate) mod native_execution_tip;
 mod trigger_lifecycle;
+use crate::smartcontracts::isi::sorafs_authority::{
+    SorafsAuthorityHeadV1, SorafsAuthorityLeaseV1, SorafsAuthorityProposalRecordV1,
+};
 pub mod upgrade_checkpoint;
 #[cfg(test)]
 mod world_view_admission_parameters_tests;
@@ -368,7 +371,9 @@ mod fastpq_source_inventory;
 pub(crate) use fastpq_source_inventory::native_capture_fixture;
 pub(crate) mod network_policy_routes;
 mod output_capacity;
-pub use output_capacity::{SorafsRepairRehearsalReport, SorafsRepairWorldChange};
+pub use output_capacity::{
+    SorafsRepairRehearsalReport, SorafsRepairWorldChange, TairaActivationRehearsalReport,
+};
 mod output_publication;
 pub(crate) use output_capacity::{
     ExecutionOutputAttemptError, ExecutionOutputSealError, ExecutionOutputSealMetadata,
@@ -1250,6 +1255,9 @@ macro_rules! with_world_overlay_fields {
             game_partitions,
             account_signing_keys,
             account_signing_key_reservations,
+            sorafs_authority_proposals,
+            sorafs_authority_heads,
+            sorafs_authority_leases,
             nft_sale_offers,
             nft_custody_records,
             nft_custody_by_nft,
@@ -4253,6 +4261,12 @@ pub struct WorldData {
     /// Every key that is or was an account's off-chain signing key, so none is reused,
     /// keyed by the single-key `AccountId` the key would control.
     pub(crate) account_signing_key_reservations: Storage<AccountId, AccountSigningKeyReservationV1>,
+    /// Parliament-owned SoraFS authority state, installed only by its selected addition.
+    pub(crate) sorafs_authority_proposals: Storage<[u8; 32], SorafsAuthorityProposalRecordV1>,
+    /// Parliament-owned SoraFS authority state, installed only by its selected addition.
+    pub(crate) sorafs_authority_heads: Storage<[u8; 32], SorafsAuthorityHeadV1>,
+    /// Retained two-vote lease mandates and exact execution receipts.
+    pub(crate) sorafs_authority_leases: Storage<[u8; 32], SorafsAuthorityLeaseV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: Storage<Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -5278,6 +5292,13 @@ pub struct WorldBlockFields<'world> {
     /// Every key that is or was an account's off-chain signing key.
     pub(crate) account_signing_key_reservations:
         StorageField<'world, AccountId, AccountSigningKeyReservationV1>,
+    /// Parliament-owned SoraFS authority state, installed only by its selected addition.
+    pub(crate) sorafs_authority_proposals:
+        StorageField<'world, [u8; 32], SorafsAuthorityProposalRecordV1>,
+    /// Parliament-owned SoraFS authority state, installed only by its selected addition.
+    pub(crate) sorafs_authority_heads: StorageField<'world, [u8; 32], SorafsAuthorityHeadV1>,
+    /// Retained two-vote lease mandates and exact execution receipts.
+    pub(crate) sorafs_authority_leases: StorageField<'world, [u8; 32], SorafsAuthorityLeaseV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageField<'world, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -6489,6 +6510,9 @@ impl WorldBlock<'_> {
             game_partitions,
             account_signing_keys,
             account_signing_key_reservations,
+            sorafs_authority_proposals,
+            sorafs_authority_heads,
+            sorafs_authority_leases,
             nft_sale_offers,
             nft_custody_records,
             nft_custody_by_nft,
@@ -7044,6 +7068,14 @@ pub struct WorldTransaction<'block, 'world> {
     /// Every key that is or was an account's off-chain signing key.
     pub(crate) account_signing_key_reservations:
         StorageTransaction<'block, AccountId, AccountSigningKeyReservationV1>,
+    /// Parliament-owned SoraFS authority state, installed only by its selected addition.
+    pub(crate) sorafs_authority_proposals:
+        StorageTransaction<'block, [u8; 32], SorafsAuthorityProposalRecordV1>,
+    /// Parliament-owned SoraFS authority state, installed only by its selected addition.
+    pub(crate) sorafs_authority_heads: StorageTransaction<'block, [u8; 32], SorafsAuthorityHeadV1>,
+    /// Retained two-vote lease mandates and exact execution receipts.
+    pub(crate) sorafs_authority_leases:
+        StorageTransaction<'block, [u8; 32], SorafsAuthorityLeaseV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageTransaction<'block, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -9296,6 +9328,13 @@ pub struct WorldView<'world> {
     /// Every key that is or was an account's off-chain signing key.
     pub(crate) account_signing_key_reservations:
         StorageView<'world, AccountId, AccountSigningKeyReservationV1>,
+    /// Parliament-owned SoraFS authority state, installed only by its selected addition.
+    pub(crate) sorafs_authority_proposals:
+        StorageView<'world, [u8; 32], SorafsAuthorityProposalRecordV1>,
+    /// Parliament-owned SoraFS authority state, installed only by its selected addition.
+    pub(crate) sorafs_authority_heads: StorageView<'world, [u8; 32], SorafsAuthorityHeadV1>,
+    /// Retained two-vote lease mandates and exact execution receipts.
+    pub(crate) sorafs_authority_leases: StorageView<'world, [u8; 32], SorafsAuthorityLeaseV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageView<'world, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -9943,9 +9982,12 @@ pub struct WorldView<'world> {
     )]
     pub(crate) parliament_attempt_counts: CellView<'world, ParliamentAttemptCountsV1>,
     /// Derived distinct-attempt reference counts for each Parliament member account.
-    #[expect(
-        dead_code,
-        reason = "retains read guards for the complete World snapshot"
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "retains read guards for the complete World snapshot"
+        )
     )]
     pub(crate) parliament_member_reference_counts:
         StorageView<'world, AccountId, ParliamentMemberReferenceCountsV1>,
@@ -14376,6 +14418,9 @@ pub struct StateTransaction<'block, 'state> {
     /// Exact signed repair plan admitted by the owner-authorized exceptional kernel boundary.
     /// Ephemeral transaction custody; never serialized or inherited by contract callbacks.
     pub(crate) sorafs_repair_entrypoint: Option<[u8; 32]>,
+    /// Exact signed activation plan admitted by the owner-authorized Taira boundary.
+    /// Ephemeral transaction custody; never serialized or inherited by contract callbacks.
+    pub(crate) taira_activation_entrypoint: Option<[u8; 32]>,
     /// Mutable counter shared with the parent [`StateBlock`] recording committed fragments.
     committed_fragments: &'block mut usize,
     /// Lanes whose state was touched in this transaction.
@@ -18862,14 +18907,28 @@ struct ParliamentDerivedReadIndexesV1 {
 
 fn parliament_derived_read_indexes_v1<'a>(
     attempts: impl IntoIterator<Item = (&'a GovernanceAttemptId, &'a ParliamentAttemptStateV1)>,
+    is_closed: impl Fn(ProposalContentId) -> bool,
 ) -> Result<ParliamentDerivedReadIndexesV1, String> {
     let attempts = attempts.into_iter().collect::<Vec<_>>();
-    let member_reference_counts = parliament_member_reference_counts_v1(attempts.iter().copied())
+    let mut member_reference_counts = parliament_member_reference_counts_v1(attempts.iter().copied())
         .map_err(|error| {
             format!(
                 "invalid Parliament member-reference projection while rebuilding derived indexes: {error}"
             )
         })?;
+    for (_, attempt) in &attempts {
+        if is_closed(attempt.proposal_content_id()) {
+            for member in attempt.parliament_member_reference_sets_v1().1 {
+                let row = member_reference_counts
+                    .get_mut(&member)
+                    .ok_or("closed Parliament member reference is absent")?;
+                row.bond_retaining_attempt_count = row
+                    .bond_retaining_attempt_count
+                    .checked_sub(1)
+                    .ok_or("closed Parliament bond count underflow")?;
+            }
+        }
+    }
     let attempt_counts = ParliamentAttemptCountsV1::from_attempts(&attempts).map_err(|error| {
         format!(
             "invalid Parliament attempt-count projection while rebuilding derived indexes: {error}"
@@ -18883,13 +18942,19 @@ fn parliament_derived_read_indexes_v1<'a>(
     let mut tle_key_session_retention_deadlines =
         BTreeMap::<TleKeySessionId, ParliamentTleKeySessionRetentionIndexV1>::new();
     for (governance_attempt_id, attempt) in attempts {
-        if let Some(enact_at_height) = attempt.certified_enactment_height_v1() {
+        if !is_closed(attempt.proposal_content_id())
+            && let Some(enact_at_height) = attempt.certified_enactment_height_v1()
+        {
             certified_enactments
                 .entry(enact_at_height)
                 .or_default()
                 .insert(*governance_attempt_id);
         }
-        for pulse_slot in attempt.required_beacon_pulse_slots_v1() {
+        for pulse_slot in attempt
+            .required_beacon_pulse_slots_v1()
+            .into_iter()
+            .filter(|_| !is_closed(attempt.proposal_content_id()))
+        {
             required_beacon_pulse_slots
                 .entry(pulse_slot)
                 .or_default()
@@ -18906,13 +18971,14 @@ fn parliament_derived_read_indexes_v1<'a>(
                 .insert(*governance_attempt_id);
         }
         for (ballot_attempt_id, _) in attempt.ballot_attempts() {
-            if let Some((ballot_attempt_id, reservation)) =
+            if let Some((ballot_attempt_id, mut reservation)) =
                 parliament_timed_ovn_resource_reservation_v1(
                     *governance_attempt_id,
                     attempt,
                     *ballot_attempt_id,
                 )
             {
+                reservation.cast_capable &= !is_closed(attempt.proposal_content_id());
                 insert_parliament_timed_ovn_resource_reservation_v1(
                     &mut timed_ovn_resource_reservations,
                     ballot_attempt_id,
@@ -18924,13 +18990,16 @@ fn parliament_derived_read_indexes_v1<'a>(
                     )
                 })?;
             }
-            if let Some((ballot_attempt_id, candidate)) = parliament_timed_ovn_casting_candidate_v1(
-                *governance_attempt_id,
-                attempt,
-                *ballot_attempt_id,
-            ) && timed_ovn_casting_candidates
-                .insert(ballot_attempt_id, candidate)
-                .is_some()
+            if !is_closed(attempt.proposal_content_id())
+                && let Some((ballot_attempt_id, candidate)) =
+                    parliament_timed_ovn_casting_candidate_v1(
+                        *governance_attempt_id,
+                        attempt,
+                        *ballot_attempt_id,
+                    )
+                && timed_ovn_casting_candidates
+                    .insert(ballot_attempt_id, candidate)
+                    .is_some()
             {
                 return Err(format!(
                     "duplicate Parliament timed-OVN casting candidate {ballot_attempt_id:?} while rebuilding derived indexes"
@@ -20082,7 +20151,12 @@ impl World {
         };
         let current_parliament = {
             let attempts = self.parliament_attempts.view();
-            parliament_derived_read_indexes_v1(attempts.iter())?
+            let hosted = self.sorafs_authority_proposals.view();
+            parliament_derived_read_indexes_v1(attempts.iter(), |content| {
+                hosted
+                    .get(content.as_bytes())
+                    .is_some_and(|r| r.deadline_closure.is_some())
+            })?
         };
         let tle_key_session_selection_intervals = {
             let lifecycles = self.tle_key_session_lifecycles.view();
@@ -20119,6 +20193,7 @@ impl World {
             let reverted_referenda = self.governance_referenda.block_and_revert();
             let reverted_proposals = self.governance_proposals.block_and_revert();
             let reverted_attempts = self.parliament_attempts.block_and_revert();
+            let reverted_hosted = self.sorafs_authority_proposals.block_and_revert();
             let reverted_lifecycles = self.tle_key_session_lifecycles.block_and_revert();
             let reverted_active_key_sessions = self.tle_active_key_session.block_and_revert();
 
@@ -20136,7 +20211,12 @@ impl World {
                 })?;
             let previous_validation_fee_proposal_index =
                 validation_fee_proposal_index_v1(reverted_proposals.iter());
-            let previous_parliament = parliament_derived_read_indexes_v1(reverted_attempts.iter())?;
+            let previous_parliament =
+                parliament_derived_read_indexes_v1(reverted_attempts.iter(), |content| {
+                    reverted_hosted
+                        .get(content.as_bytes())
+                        .is_some_and(|r| r.deadline_closure.is_some())
+                })?;
             let previous_tle_key_session_selection_intervals =
                 tle_key_session_selection_intervals_v1(
                     reverted_lifecycles.iter(),
@@ -20145,6 +20225,7 @@ impl World {
 
             drop(reverted_active_key_sessions);
             drop(reverted_lifecycles);
+            drop(reverted_hosted);
             drop(reverted_attempts);
             drop(reverted_proposals);
             drop(reverted_referenda);
@@ -21387,6 +21468,12 @@ macro_rules! world_ro_accessors {
             storage account_signing_keys: AccountId => AccountSigningKeyRecordV1;
             /// Every key that is or was an account's off-chain signing key.
             storage account_signing_key_reservations: AccountId => AccountSigningKeyReservationV1;
+            /// Immutable authority proposal content and shared Parliament status (read-only).
+            storage sorafs_authority_proposals: [u8; 32] => SorafsAuthorityProposalRecordV1;
+            /// Monotonic authority heads and retained enactment receipts (read-only).
+            storage sorafs_authority_heads: [u8; 32] => SorafsAuthorityHeadV1;
+            /// Retained two-vote lease mandates and exact execution receipts.
+            storage sorafs_authority_leases: [u8; 32] => SorafsAuthorityLeaseV1;
             /// Immutable native NFT sale terms and permanent terminal decisions.
             storage nft_sale_offers: Hash => NftSaleRecordV1;
             /// Permanent non-signing custody records shared by native NFT protocols.
@@ -23412,6 +23499,26 @@ impl WorldTransaction<'_, '_> {
                 .map_err(|(_prepared, original)| original.into())
         })
         .map_err(|original| parameter_ingress_attempt_error(original, |original| original))?;
+        if crate::runtime::sorafs_authority_enabled(self.runtime_selection.get()).map_err(|_| {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(
+                crate::pipeline_gas_policy::ParameterIngressError::SorafsAuthorityServices,
+            )
+        })? && [
+            "CanCompleteSorafsReplicationOrder",
+            "CanSetSorafsReservePolicy",
+            "CanUpsertSorafsProviderCredit",
+        ]
+        .iter()
+        .any(|name| {
+            !executor_data_model
+                .permissions()
+                .iter()
+                .any(|declared| declared.as_str() == *name)
+        }) {
+            return Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                crate::pipeline_gas_policy::ParameterIngressError::SorafsAuthorityDeclaration,
+            ));
+        }
         // Preparation/refusal above leaves every World owner untouched. The
         // existing permission-table mutation remains its separate storage owner.
         let declared_permissions = executor_data_model.permissions().clone();
@@ -24287,12 +24394,92 @@ impl WorldTransaction<'_, '_> {
             }
         }
     }
+    /// Remove work and bond retention for a closed hosted attempt, preserving its audit and custody.
+    pub(crate) fn close_sorafs_authority_attempt_work(
+        &mut self,
+        id: GovernanceAttemptId,
+    ) -> Result<(), ParliamentReducerErrorV1> {
+        let Some(attempt) = self.parliament_attempts.get(&id) else {
+            return Ok(());
+        };
+        let (_, bonds) = attempt.parliament_member_reference_sets_v1();
+        for member in bonds {
+            let mut row = self
+                .parliament_member_reference_counts
+                .get(&member)
+                .copied()
+                .ok_or(ParliamentReducerErrorV1::MemberReferenceProjectionMismatch)?;
+            row.bond_retaining_attempt_count = row
+                .bond_retaining_attempt_count
+                .checked_sub(1)
+                .ok_or(ParliamentReducerErrorV1::MemberReferenceProjectionMismatch)?;
+            self.parliament_member_reference_counts.insert(member, row);
+        }
+        for slot in attempt.required_beacon_pulse_slots_v1() {
+            if let Some(mut ids) = self
+                .parliament_required_beacon_pulse_slots
+                .get(&slot)
+                .cloned()
+            {
+                ids.remove(&id);
+                if ids.is_empty() {
+                    self.parliament_required_beacon_pulse_slots.remove(slot);
+                } else {
+                    self.parliament_required_beacon_pulse_slots
+                        .insert(slot, ids);
+                }
+            }
+        }
+        if let Some(height) = attempt.certified_enactment_height_v1()
+            && let Some(mut ids) = self.parliament_certified_enactments.get(&height).cloned()
+        {
+            ids.remove(&id);
+            if ids.is_empty() {
+                self.parliament_certified_enactments.remove(height);
+            } else {
+                self.parliament_certified_enactments.insert(height, ids);
+            }
+        }
+        while let Some(ballot) = self
+            .parliament_timed_ovn_casting_candidates
+            .iter()
+            .find_map(|(ballot_id, candidate)| {
+                (candidate.governance_attempt_id == id).then_some(*ballot_id)
+            })
+        {
+            self.parliament_timed_ovn_casting_candidates.remove(ballot);
+        }
+        while let Some((ballot, mut reservation)) = self
+            .parliament_timed_ovn_resource_reservations
+            .iter()
+            .find_map(|(ballot, reservation)| {
+                (reservation.governance_attempt_id == id && reservation.cast_capable)
+                    .then_some((*ballot, *reservation))
+            })
+        {
+            reservation.cast_capable = false;
+            self.parliament_timed_ovn_resource_reservations
+                .insert(ballot, reservation);
+        }
+        // Keep original TLE key deadlines and timed-OVN reservations: closure cancels
+        // protocol work, not the custody already promised to an admitted transcript.
+        Ok(())
+    }
     /// Validate and persist one canonical attempt-local Parliament reducer snapshot.
     pub(crate) fn put_parliament_attempt(
         &mut self,
         attempt: ParliamentAttemptStateV1,
     ) -> Result<(), crate::governance::parliament::ParliamentReducerErrorV1> {
         attempt.validate()?;
+        if crate::runtime::sorafs_authority_enabled(self.runtime_selection()).ok() == Some(true) {
+            if crate::smartcontracts::isi::sorafs_authority::proposal_is_closed(
+                self,
+                attempt.proposal_content_id(),
+            ) {
+                return Err(ParliamentReducerErrorV1::AttemptNotActive);
+            }
+            crate::smartcontracts::isi::sorafs_authority::validate_attempt_budget(self, &attempt)?;
+        }
         let id = attempt.attempt().id;
         {
             let mut history = Vec::new();
@@ -25181,6 +25368,9 @@ impl WorldTransaction<'_, '_> {
             game_partitions: _,
             account_signing_keys: _,
             account_signing_key_reservations: _,
+            sorafs_authority_proposals: _,
+            sorafs_authority_heads: _,
+            sorafs_authority_leases: _,
             nft_sale_offers: _,
             nft_custody_records: _,
             nft_custody_by_nft: _,
@@ -25637,6 +25827,9 @@ impl WorldTransaction<'_, '_> {
         self.game_partitions.apply();
         self.account_signing_keys.apply();
         self.account_signing_key_reservations.apply();
+        self.sorafs_authority_proposals.apply();
+        self.sorafs_authority_heads.apply();
+        self.sorafs_authority_leases.apply();
         self.nft_sale_offers.apply();
         self.nft_custody_records.apply();
         self.nft_custody_by_nft.apply();
@@ -26263,6 +26456,27 @@ impl WorldTransaction<'_, '_> {
 }
 #[cfg(any(test, feature = "iroha-core-tests"))]
 impl<'block, 'world> WorldTransaction<'block, 'world> {
+    /// Apply a closed runtime change set for an explicit cross-crate fixture.
+    ///
+    /// This authors test State only; it supplies no governance authorization,
+    /// validator support attestations, or finalized-block evidence.
+    ///
+    /// # Errors
+    /// Returns the normal change-set error for invalid definitions or selection closure.
+    pub fn apply_runtime_change_set_for_testing(
+        &mut self,
+        change: &iroha_data_model::runtime::lifecycle::ChangeSetV1,
+    ) -> Result<(), iroha_data_model::runtime::lifecycle::ChangeSetError> {
+        let applied = change.apply(
+            self.runtime_selection.get(),
+            &crate::runtime::change_set::PublishedDefinitions(&self.runtime_definitions),
+        )?;
+        for (id, definition) in applied.published {
+            self.runtime_definitions.insert(id, definition);
+        }
+        *self.runtime_selection.get_mut() = applied.selection;
+        Ok(())
+    }
     /// Test helper: mutable access to the governed runtime change sets.
     pub fn runtime_change_sets_mut(
         &mut self,
@@ -26331,6 +26545,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             world: self,
             mutably_borrowed: BTreeSet::new(),
         }
+    }
+    /// Test helper: seed an exact hosted proposal for cross-crate read fixtures.
+    pub fn sorafs_authority_proposals_mut(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, [u8; 32], SorafsAuthorityProposalRecordV1> {
+        &mut self.sorafs_authority_proposals
     }
     /// Test helper: get mutable access to stored proof records for direct seeding.
     pub fn proofs_mut_for_testing(
@@ -29720,6 +29940,23 @@ impl State {
         sb.activate_due_public_lane_validators(current_epoch);
         // Height-trigger: open/close referenda at scheduled heights
         let now_h = sb._curr_block.height().get();
+        // Irrevocable voted terminations precede all ordinary authority use.
+        // Keep the complete pass inside one rollback boundary, including starts.
+        if crate::runtime::sorafs_authority_enabled(sb.world.runtime_selection())
+            .map_err(|error| StateBlockStartError::Policy(error.to_string()))?
+            && (sb.world.sorafs_authority_proposals.iter().next().is_some()
+                || sb.world.sorafs_authority_leases.iter().next().is_some())
+        {
+            let mut terms = sb.try_transaction()?;
+            let result = crate::smartcontracts::isi::sorafs_authority::advance_terms(&mut terms);
+            terms
+                .ensure_execution_ready()
+                .map_err(StateBlockStartError::ExecutionDeferred)?;
+            result.map_err(|error| {
+                StateBlockStartError::Policy(format!("authority term execution: {error:?}"))
+            })?;
+            terms.apply();
+        }
         // Finish start-phase transaction owners before the after-start
         // continuation enters Network execution on this same block. Keeping
         // these independent owners in this constructor also keeps all of their
@@ -39449,6 +39686,7 @@ impl<'state> StateBlock<'state> {
             canonical_runtime: fields.canonical_runtime.transaction(),
             native_execution_tip: *fields.native_execution_tip.get(),
             sorafs_repair_entrypoint: None,
+            taira_activation_entrypoint: None,
             committed_fragments: &mut fields.committed_fragments,
             touched_lanes: &mut fields.touched_lanes,
             world,
@@ -43562,6 +43800,7 @@ impl StateTransaction<'_, '_> {
             canonical_runtime,
             native_execution_tip: _,
             sorafs_repair_entrypoint: _,
+            taira_activation_entrypoint: _,
             committed_fragments,
             touched_lanes,
             mut world,
@@ -45897,6 +46136,10 @@ mod npos_effect_application_tests {
 }
 #[cfg(test)]
 mod event_carrier_tests;
+#[cfg(test)]
+#[path = "state/sorafs_authority_closure_index_tests.rs"]
+mod sorafs_authority_closure_index_tests;
+
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

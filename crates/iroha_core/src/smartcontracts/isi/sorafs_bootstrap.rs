@@ -74,6 +74,20 @@ pub fn read_sorafs_bootstrap_record_v1(
         .transpose()
 }
 
+/// Read the retained repair certificate, if this chain executed the repair.
+///
+/// # Errors
+/// Returns an error if a retained certificate is not canonical and fully signed.
+pub(crate) fn read_retained_repair_certificate(
+    world: &impl WorldReadOnly,
+) -> Result<Option<SorafsRepairCertificateV1>, InstructionExecutionError> {
+    world
+        .smart_contract_state()
+        .get(&certificate_path())
+        .map(|bytes| SorafsRepairCertificateV1::from_bytes(bytes).map_err(rejected))
+        .transpose()
+}
+
 /// Resolve one allowlisted grant to its exact canonical permission and optional provider scope.
 fn canonical_grant(
     permission: &Permission,

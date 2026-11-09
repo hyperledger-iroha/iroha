@@ -17,6 +17,144 @@ use iroha_torii_shared::{
 use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+#[test]
+fn runtime_release_schema_matches_native_build_selection_and_scheduled_support() {
+    use crate::runtime::{
+        RuntimeChangeSetSupport, RuntimeReleaseResponse, RuntimeSelectionSupport,
+    };
+
+    let response = RuntimeReleaseResponse {
+        build: iroha_torii_shared::status::BuildStatus {
+            version: "3.0.0".into(),
+            git_commit_sha: "a".repeat(40),
+            dpn_validator_release_commit: "b".repeat(40),
+            cargo_features: "daemon,default".into(),
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            wire_schema_hash: "c".repeat(64),
+        },
+        release_digest_hex: "d".repeat(64),
+        selection: RuntimeSelectionSupport {
+            selection_id_hex: "e".repeat(64),
+            supported: true,
+            missing_definition_hex: None,
+        },
+        scheduled: vec![
+            RuntimeChangeSetSupport {
+                id_hex: "a".repeat(64),
+                effective_height: 42,
+                successor: Some(RuntimeSelectionSupport {
+                    selection_id_hex: "b".repeat(64),
+                    supported: false,
+                    missing_definition_hex: Some("c".repeat(64)),
+                }),
+                unresolved: None,
+            },
+            RuntimeChangeSetSupport {
+                id_hex: "f".repeat(64),
+                effective_height: u64::MAX,
+                successor: None,
+                unresolved: Some("original successor refusal".into()),
+            },
+        ],
+    };
+    let native = norito::json::to_value(&response).expect("native release JSON");
+    let decoded: RuntimeReleaseResponse =
+        norito::json::from_value(native.clone()).expect("native release JSON roundtrip");
+    assert_eq!(norito::json::to_value(&decoded).unwrap(), native);
+    let spec = compiled_spec();
+    let schemas = component_schemas(spec);
+    for (name, value) in [
+        ("RuntimeReleaseResponse", &native),
+        ("BuildStatus", &native["build"]),
+        ("RuntimeSelectionSupport", &native["selection"]),
+        (
+            "RuntimeSelectionSupport",
+            &native["scheduled"][0]["successor"],
+        ),
+        ("RuntimeChangeSetSupport", &native["scheduled"][0]),
+        ("RuntimeChangeSetSupport", &native["scheduled"][1]),
+    ] {
+        let fields: Vec<_> = value
+            .as_object()
+            .expect("native DTO object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_strict_object_schema(schemas, name, &fields, &[]);
+    }
+    for value in schemas["BuildStatus"]["properties"]
+        .as_object()
+        .unwrap()
+        .values()
+    {
+        assert_eq!(value["type"].as_str(), Some("string"));
+    }
+    let release = &schemas["RuntimeReleaseResponse"]["properties"];
+    assert_eq!(
+        release["build"]["$ref"].as_str(),
+        Some("#/components/schemas/BuildStatus")
+    );
+    assert_eq!(
+        release["selection"]["$ref"].as_str(),
+        Some("#/components/schemas/RuntimeSelectionSupport")
+    );
+    assert_eq!(release["scheduled"]["type"].as_str(), Some("array"));
+    assert_eq!(
+        release["scheduled"]["items"]["$ref"].as_str(),
+        Some("#/components/schemas/RuntimeChangeSetSupport")
+    );
+    let selection = &schemas["RuntimeSelectionSupport"]["properties"];
+    let scheduled = &schemas["RuntimeChangeSetSupport"]["properties"];
+    assert_eq!(selection["supported"]["type"].as_str(), Some("boolean"));
+    assert_eq!(
+        selection["missing_definition_hex"]["anyOf"][1],
+        norito::json!({"type": "null"})
+    );
+    assert_eq!(
+        scheduled["successor"]["anyOf"],
+        norito::json!([
+            {"$ref": "#/components/schemas/RuntimeSelectionSupport"}, {"type": "null"}
+        ])
+    );
+    assert_eq!(
+        scheduled["unresolved"]["anyOf"],
+        norito::json!([
+            {"type": "string"}, {"type": "null"}
+        ])
+    );
+    for schema in [
+        &release["release_digest_hex"],
+        &selection["selection_id_hex"],
+        &selection["missing_definition_hex"]["anyOf"][0],
+        &scheduled["id_hex"],
+    ] {
+        assert_eq!(schema["type"].as_str(), Some("string"));
+        assert_eq!(schema["pattern"].as_str(), Some("^[0-9a-f]{64}$"));
+        assert_eq!(schema["minLength"].as_u64(), Some(64));
+        assert_eq!(schema["maxLength"].as_u64(), Some(64));
+    }
+    assert_eq!(
+        scheduled["effective_height"]["type"].as_str(),
+        Some("integer")
+    );
+    assert_eq!(
+        scheduled["effective_height"]["format"].as_str(),
+        Some("uint64")
+    );
+    assert_eq!(scheduled["effective_height"]["minimum"].as_u64(), Some(0));
+    assert_eq!(
+        scheduled["effective_height"]["maximum"].as_u64(),
+        Some(u64::MAX)
+    );
+    assert_eq!(native["selection"]["missing_definition_hex"], Value::Null);
+    assert_eq!(native["scheduled"][0]["unresolved"], Value::Null);
+    assert_eq!(native["scheduled"][1]["successor"], Value::Null);
+    assert_eq!(
+        native["scheduled"][1]["effective_height"].as_u64(),
+        Some(u64::MAX)
+    );
+}
+
 #[cfg(feature = "app_api")]
 #[test]
 fn explorer_feeds_share_list_query_and_page_contract() {

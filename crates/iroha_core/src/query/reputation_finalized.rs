@@ -38,7 +38,10 @@ use super::finalized_archive_fs::{
 use crate::secure_file_metadata::{self, SecureMetadata};
 use crate::{
     kura::Kura,
-    query::archive_finality::{ArchiveFinalityError, CertifiedArchiveView},
+    query::archive_finality::{
+        ArchiveAuthentication, ArchiveContentIdentity, ArchiveFinalityError, CertifiedArchiveView,
+        RetainedPrefixCheck,
+    },
     smartcontracts::ValidSingularQuery,
     state::StateReadOnly,
 };
@@ -2763,6 +2766,8 @@ pub struct ReputationFinalizedArchive {
     native: NativeArchive,
     writer_lock: fs::File,
     index: ArchiveIndexLock<ArchiveIndex>,
+    // Process-local: what this open archive has proved against certified history.
+    authentication: ArchiveAuthentication,
 }
 impl ReputationFinalizedArchive {
     /// Hold the actual archive reader while a component test attempts publication.
@@ -2938,6 +2943,7 @@ impl ReputationFinalizedArchive {
             #[cfg(windows)]
             native,
             index: ArchiveIndexLock::new(ArchiveIndex::default()),
+            authentication: ArchiveAuthentication::default(),
         };
         archive.verify_storage_boundaries()?;
         archive.recover_staged_files()?;
@@ -3142,14 +3148,34 @@ impl ReputationFinalizedArchive {
         kura: &Kura,
     ) -> Result<ReputationFinalizedArchiveInsertOutcome, ReputationFinalizedArchiveError> {
         let (key, finalized_at_unix_ms) = candidate_capture_key(state_ro, kura)?;
-        let certified =
-            CertifiedArchiveView::new(state_ro, kura).map_err(certified_finality_error)?;
+        // The executor's committed State view is held here, so this authentication resumes
+        // from this archive's verified prefix instead of walking from signed genesis.
+        let certified = CertifiedArchiveView::resuming(state_ro, kura, &self.authentication)
+            .map_err(certified_finality_error)?;
         authenticate_archive_anchor_against_certified(&key, finalized_at_unix_ms, &certified)?;
+        // A point only records finished chain verification, so keep it before the index can
+        // refuse this attempt. A retry then resumes instead of repeating the walk.
+        certified
+            .verify_unchanged()
+            .map_err(certified_finality_error)?;
+        certified.retain_verified_prefix();
+        // TODO: this preparation still reconstructs earlier archive state from its files,
+        // which grows with the retained records under the commit's view. The provider archive
+        // validates only its successor from a retained walk; do the same here before enabling
+        // this archive on a long-lived network.
         let mut insertion = self.prepare_capture_at_key(state_ro, key, finalized_at_unix_ms)?;
         certified
             .verify_unchanged()
             .map_err(certified_finality_error)?;
-        insertion.persist()
+        let before = reputation_content_identity(&insertion.index, &key.network_id);
+        let outcome = insertion.persist()?;
+        // Only this capture's authenticated, durably published anchor extends proved coverage.
+        self.authentication.note_capture(
+            &before,
+            reputation_content_identity(&insertion.index, &key.network_id),
+            key.height,
+        );
+        Ok(outcome)
     }
     fn prepare_capture_at_key(
         &self,
@@ -3511,7 +3537,10 @@ impl ReputationFinalizedArchive {
     ///
     /// Every archive anchor from the explicit activation floor through the archive tip must be
     /// present at every height, match Kura's authenticated hash journal and embedded commit certificate,
-    /// and retain the exact canonical block timestamp. Only a suffix no larger than
+    /// and retain the exact canonical block timestamp. The first qualification of an open archive
+    /// checks all of that from signed genesis. After that this archive's captures keep those anchors
+    /// proved, so a call rechecks the retained tip frame and every anchor's journal hash, and advances
+    /// the periodic audit by one bounded slice. Only a suffix no larger than
     /// `maximum_kura_tip_lag_blocks` may remain between the archive and Kura tips. Kura, the
     /// archive generation, and the active checkpoint content address are re-read before success so
     /// a changing boundary never receives a mixed qualification.
@@ -3578,8 +3607,8 @@ impl ReputationFinalizedArchive {
             .last()
             .map(|(key, _)| *key)
             .expect("non-empty archive coverage has a tip");
-        let certified =
-            CertifiedArchiveView::new(state_ro, kura).map_err(certified_finality_error)?;
+        let certified = CertifiedArchiveView::resuming(state_ro, kura, &self.authentication)
+            .map_err(certified_finality_error)?;
         if archive_tip.height > certified.tip_height() {
             return Err(ReputationFinalizedArchiveError::ArchiveAheadOfKura {
                 archive_height: archive_tip.height,
@@ -3595,28 +3624,77 @@ impl ReputationFinalizedArchive {
                 maximum: maximum_kura_tip_lag_blocks,
             });
         }
-        for (key, finalized_at_unix_ms) in &anchors {
-            authenticate_archive_anchor_against_certified(key, *finalized_at_unix_ms, &certified)?;
-        }
-        if let Some(expected_digest) = checkpoint_finality_digest {
-            let checkpoint_height = anchors
-                .first()
-                .expect("checkpoint qualification has a virtual-base anchor")
-                .0
-                .height;
-            if *certified
-                .block(checkpoint_height)
+        let limited = norito::core::decode_limits_active();
+        let identity = ArchiveContentIdentity {
+            network_id: *network_id,
+            generation,
+            base: checkpoint_digest,
+        };
+        // History this archive already proved needs only its retained frame rechecked here.
+        // A changed frame walks from signed genesis, which owns the diagnosis.
+        let proved = if !limited
+            && self.authentication.covered_through(&identity) == Some(archive_tip.height)
+        {
+            match certified
+                .confirm_retained(archive_tip.height)
                 .map_err(certified_finality_error)?
-                .id()
-                .0
-                .as_ref()
-                != expected_digest
             {
-                return Err(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-                    network_id: *network_id,
-                    height: checkpoint_height,
-                    reason: "virtual-base certified block identity changed",
-                });
+                RetainedPrefixCheck::Confirmed => true,
+                // This view predates a concurrent capture. Nothing is wrong; a fresh view retries.
+                RetainedPrefixCheck::Stale => {
+                    return Err(
+                        ReputationFinalizedArchiveError::QualificationBoundaryChanged {
+                            boundary: "archive",
+                        },
+                    );
+                }
+                RetainedPrefixCheck::Missing | RetainedPrefixCheck::Changed => false,
+            }
+        } else {
+            false
+        };
+        if proved {
+            for (key, _) in &anchors {
+                certified
+                    .require_journal_anchor(key.height, &key.block_hash)
+                    .map_err(certified_finality_error)?;
+            }
+        } else {
+            certified.audit_from_genesis();
+            for (key, finalized_at_unix_ms) in &anchors {
+                authenticate_archive_anchor_against_certified(
+                    key,
+                    *finalized_at_unix_ms,
+                    &certified,
+                )?;
+            }
+            if let Some(expected_digest) = checkpoint_finality_digest {
+                let checkpoint_height = anchors
+                    .first()
+                    .expect("checkpoint qualification has a virtual-base anchor")
+                    .0
+                    .height;
+                if *certified
+                    .block(checkpoint_height)
+                    .map_err(certified_finality_error)?
+                    .id()
+                    .0
+                    .as_ref()
+                    != expected_digest
+                {
+                    return Err(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
+                        network_id: *network_id,
+                        height: checkpoint_height,
+                        reason: "virtual-base certified block identity changed",
+                    });
+                }
+            }
+            if !limited {
+                // The whole selected history just passed from signed genesis. That stands even
+                // if the sources advance before the closing checks below.
+                certified.retain_verified_prefix();
+                self.authentication
+                    .record_audit(identity, archive_tip.height);
             }
         }
         certified
@@ -3625,6 +3703,19 @@ impl ReputationFinalizedArchive {
         let index = self.read_index()?;
         self.verify_synchronized_index(&index)?;
         validate_qualification_archive_boundary(&index, network_id, generation, checkpoint_digest)?;
+        drop(index);
+        if proved {
+            // TODO: rechecks chain frames only. Add this archive's anchor files to each slice
+            // when its insertion also moves off whole-history replay.
+            match certified.audit_next_slice(&self.authentication, archive_tip.height) {
+                Ok(_) | Err(ArchiveFinalityError::Deferred(_)) => {}
+                Err(error) => {
+                    self.authentication.forget_coverage();
+                    return Err(certified_finality_error(error));
+                }
+            }
+        }
+        let index = self.read_index()?;
         let qualification = ReputationFinalizedArchiveQualificationV1 {
             activation_floor,
             archive_tip,
@@ -6495,6 +6586,16 @@ fn validate_contiguous_archive_coverage(
         previous_height = Some(key.height);
     }
     Ok(())
+}
+fn reputation_content_identity(
+    index: &ArchiveIndex,
+    network_id: &NetworkId,
+) -> ArchiveContentIdentity {
+    ArchiveContentIdentity {
+        network_id: *network_id,
+        generation: index.generation,
+        base: active_checkpoint_digest(index, network_id),
+    }
 }
 fn authenticate_archive_anchor_against_certified(
     key: &ReputationFinalizedArchiveKeyV1,

@@ -20,8 +20,9 @@
 //!
 //! Like the baseline bundle, an addition declares a conservative superset of dependencies: every
 //! storage definition and interface of the baseline and of the additions before it. Additions are
-//! therefore activated in declaration order, and an addition never moves once a network has
-//! activated it.
+//! therefore activated in declaration order, except the explicitly independent repair and
+//! authority additions whose dependencies are exactly the baseline. Published dependency
+//! descriptors never change after a selection contains them.
 
 use crate::state::WorldTransaction;
 
@@ -89,7 +90,23 @@ pub const ADDITIONS: &[Addition] = &[
     // Keep account signing keys independent of the Taira-only repair boundary.
     ACCOUNT_SIGNING_KEYS,
     SORAFS_REPAIR,
+    SORAFS_AUTHORITY,
 ];
+
+/// Parliament-owned nondelegable SoraFS authorities, independent of game partitions.
+pub const SORAFS_AUTHORITY: Addition = Addition {
+    module: "iroha.sorafs.authority_governance.v1",
+    instructions: &[
+        "iroha.sorafs.authority.propose.v1",
+        "iroha.sorafs.authority.attempt.create.v1",
+    ],
+    rebinds: &["iroha.governance.parliament.transition.submit.v1"],
+    storage: &[
+        StorageAddition::Table("world.sorafs_authority_proposals"),
+        StorageAddition::Table("world.sorafs_authority_heads"),
+        StorageAddition::Table("world.sorafs_authority_leases"),
+    ],
+};
 
 /// The owner-authorized, all-four-certified Taira initialization. Its dependency closure is
 /// exactly the frozen baseline, independently of the unfinished game-partition addition.

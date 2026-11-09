@@ -103,6 +103,7 @@ pub mod governance;
 pub mod ministry;
 /// Typed one-time SoraFS successor repair instruction.
 pub mod sorafs_repair;
+pub mod taira_activation;
 /// Canonical registered instruction storage.
 ///
 /// Ordinary instructions own their trait object. Native AMX proof instructions can instead
@@ -410,6 +411,7 @@ impl_direct_instruction_box!(crate::isi::soracloud::ApplySoracloudOrderedMailbox
 impl_direct_instruction_box!(crate::isi::runtime_upgrade::AttestRuntimeSupportV1);
 impl_direct_instruction_box!(crate::isi::runtime_upgrade::ContainRuntimeV1);
 impl_direct_instruction_box!(crate::isi::sorafs_repair::ApplySorafsRepairV1);
+impl_direct_instruction_box!(crate::isi::taira_activation::ScheduleTairaTimeIronwoodV1);
 // Allow direct boxing of verifying-keys registry instructions
 impl_direct_instruction_box!(crate::isi::verifying_keys::RegisterVerifyingKey);
 impl_direct_instruction_box!(crate::isi::verifying_keys::UpdateVerifyingKey);
@@ -662,6 +664,10 @@ impl_direct_instruction_box!(crate::isi::governance::ProposeRuntimeUpgradePropos
 impl_direct_instruction_box!(crate::isi::governance::ProposeEndorsedRuntimeUpgradeProposal);
 impl_direct_instruction_box!(crate::isi::governance::ProposeSccpRouteGovernance);
 impl_direct_instruction_box!(crate::isi::governance::ProposeSorafsProviderGovernance);
+impl_direct_instruction_box!(crate::isi::sorafs_authority::ProposeSorafsAuthorityGovernanceV1);
+impl_direct_instruction_box!(
+    crate::isi::sorafs_authority::CreateSorafsAuthorityParliamentAttemptV1
+);
 impl_direct_instruction_box!(crate::isi::governance::ProposeValidationFeePolicy);
 impl_direct_instruction_box!(crate::isi::governance::ProposeValidationFeePayoutLifecycle);
 impl_direct_instruction_box!(crate::isi::governance::CreateParliamentGovernanceAttemptV1);
@@ -2239,6 +2245,8 @@ pub mod soracloud;
 pub mod soradns;
 /// `SoraFS` pin registry instructions.
 pub mod sorafs;
+/// Parliament-governed nondelegable SoraFS authorities.
+pub mod sorafs_authority;
 /// Space Directory manifest instructions.
 pub mod space_directory;
 /// Public lane staking instructions.

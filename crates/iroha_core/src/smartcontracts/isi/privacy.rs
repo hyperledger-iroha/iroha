@@ -1004,7 +1004,12 @@ impl Execute for iroha_data_model::isi::privacy::BootstrapPrivacyIronwoodPoolV1 
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        ensure_privacy_governance(authority, state_transaction)?;
+        if !crate::runtime::taira_activation::certified_pool_bootstrap(
+            state_transaction,
+            &self.bootstrap,
+        ) {
+            ensure_privacy_governance(authority, state_transaction)?;
+        }
         crate::runtime::ensure_privacy_protocol_storage_v1(
             PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1,
             state_transaction.world.runtime_selection.get(),

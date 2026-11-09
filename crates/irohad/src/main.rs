@@ -918,6 +918,20 @@ pub struct StartupArgs {
     /// Exact proposed execution time for the finite signed repair transaction rehearsal.
     #[arg(long, value_name = "UNIX_MS", requires = "rehearse_sorafs_repair")]
     pub repair_execution_time_ms: Option<u64>,
+    /// After successful `--check-replay`, schedule and activate the exact Taira Time and Ironwood
+    /// change set on the temporary State, bootstrap the pool in this JSON file, and discard the
+    /// overlay. Uses throwaway keys; never reads a validator key for it, signs or publishes a block.
+    #[arg(long, value_name = "POOL_JSON", requires = "check_replay", conflicts_with_all = ["rehearse_sorafs_repair", "runtime_addition_review_request"])]
+    pub rehearse_taira_activation: Option<PathBuf>,
+    /// After matched `--check-replay`, inspect SoraFS authority upgrade inputs at the exact
+    /// historical cut asserted by this closed JSON request. Inspect only: no draft or signing.
+    #[arg(long, value_name = "REQUEST_JSON", requires_all = ["check_replay", "runtime_addition_review_output"], conflicts_with = "rehearse_sorafs_repair")]
+    pub runtime_addition_review_request: Option<PathBuf>,
+    /// New private directory for the historical inspection package (64 MiB maximum).
+    /// Existing destinations and paths under node stores or the configuration directory refuse.
+    /// `manifest.json` is published last; a package without it is incomplete.
+    #[arg(long, value_name = "NEW_DIRECTORY", requires_all = ["check_replay", "runtime_addition_review_request"], conflicts_with = "rehearse_sorafs_repair")]
+    pub runtime_addition_review_output: Option<PathBuf>,
     /// Require this registered account to retain `SoraCloud` deployment authority
     /// after executing the exact signed genesis during offline validation.
     #[arg(long, value_name = "ACCOUNT_ID", requires = "check_config")]
@@ -8330,11 +8344,30 @@ fn run_main_with_config_guard(
         return compatibility_probe::run_check_storage(&config);
     }
     if args.startup.check_replay {
+        if let Some(request) = &args.startup.runtime_addition_review_request {
+            let output = args
+                .startup
+                .runtime_addition_review_output
+                .as_deref()
+                .ok_or_else(|| {
+                    Report::new(MainError::CheckReplay)
+                        .attach("inspection output directory is required")
+                })?;
+            return replay_check::run_sorafs_authority_inspection(
+                &config,
+                request,
+                output,
+                args.config.as_deref(),
+            );
+        }
         if let Some(path) = &args.startup.rehearse_sorafs_repair {
             let time = args.startup.repair_execution_time_ms.ok_or_else(|| {
                 Report::new(MainError::CheckReplay).attach("repair execution time is required")
             })?;
             return replay_check::run_check_repair_rehearsal(&config, path, time);
+        }
+        if let Some(path) = &args.startup.rehearse_taira_activation {
+            return replay_check::run_check_activation_rehearsal(&config, path);
         }
         return replay_check::run_check_replay(&config);
     }
@@ -12723,7 +12756,10 @@ mod tests {
                     check_storage: false,
                     check_replay: false,
                     rehearse_sorafs_repair: None,
+                    rehearse_taira_activation: None,
                     repair_execution_time_ms: None,
+                    runtime_addition_review_request: None,
+                    runtime_addition_review_output: None,
                     require_genesis_inrou_deployment_authority: None,
                     trace_config: false,
                     config_blake3: None,
@@ -12809,7 +12845,10 @@ mod tests {
                     check_storage: false,
                     check_replay: false,
                     rehearse_sorafs_repair: None,
+                    rehearse_taira_activation: None,
                     repair_execution_time_ms: None,
+                    runtime_addition_review_request: None,
+                    runtime_addition_review_output: None,
                     require_genesis_inrou_deployment_authority: None,
                     trace_config: false,
                     config_blake3: None,

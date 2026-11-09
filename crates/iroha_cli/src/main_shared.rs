@@ -53,6 +53,7 @@ pub use taira_dataspace_deploy::{
 mod deployment_genesis_fixture;
 #[cfg(unix)]
 mod taira_public_reset;
+mod taira_time_ironwood;
 mod transaction_journal;
 mod transaction_load;
 mod zk; // ZK helpers (app API convenience) // IVM/ABI helpers
@@ -1628,6 +1629,11 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
     if let Command::Taira(taira::Command::PublicReset(reset)) = &args.command {
         reject_irrelevant_taira_public_reset_globals(&args)?;
         return map_command_result(reset.run_without_client_config(io::stdout()))
+            .map(|()| std::process::ExitCode::SUCCESS);
+    }
+    if let Command::Taira(taira::Command::TimeIronwood(command)) = &args.command {
+        reject_irrelevant_local_tool_globals(&args, "taira time-ironwood")?;
+        return map_command_result(command.run_without_client_config(&mut io::stdout()))
             .map(|()| std::process::ExitCode::SUCCESS);
     }
     #[cfg(unix)]

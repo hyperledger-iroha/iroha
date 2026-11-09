@@ -365,6 +365,25 @@ mod addition_tests {
             expected.insert(selected.services_profile);
             expected.extend(selected.active);
         }
+        // The authority service adds only its exact compiled profile and native owners
+        // composed with that profile; its declared interfaces/storage are counted above.
+        for (id, descriptor) in &catalog.definitions {
+            let profile = match descriptor {
+                DefinitionDescriptorV1::ServicesProfile(_) => *id,
+                DefinitionDescriptorV1::Implementation(implementation) => {
+                    implementation.services_profile
+                }
+                _ => continue,
+            };
+            if catalog.service_enabled(
+                profile,
+                crate::runtime::sorafs_authority::SERVICE,
+                iroha_crypto::Hash::new(crate::runtime::sorafs_authority::SERVICE_CLOSURE).into(),
+            ) == Ok(true)
+            {
+                expected.insert(*id);
+            }
+        }
         assert_eq!(
             catalog.definitions.keys().copied().collect::<BTreeSet<_>>(),
             expected,

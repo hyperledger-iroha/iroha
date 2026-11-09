@@ -134,12 +134,14 @@ domain; `call.domain` remains the domain of the call that submitted the report.
   `KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS` relay records. They use a single bounded
   pass rather than collecting the full registry or every Prometheus label
   series. Detail derives the metadata key and performs direct per-domain lookup.
-- Call-signal history uses the core committed-transaction visitor with both
-  per-carrier and cumulative physical-work budgets. Every touched carrier costs
-  at least one unit, so old or sparse chains cannot force an unbounded scan;
-  budget exhaustion fails closed before resolving the next carrier. The route
-  also validates `offset + limit` against the canonical fetch budget, retains
-  only the requested heap window, and caps retained page JSON at
+- Call-signal history uses the call-specific structural index, an anchored
+  exclusive cursor, and per-carrier and cumulative physical-work budgets. Each
+  candidate is rehydrated and authenticated against the original canonical State
+  cut before projection. Strict startup reconstructs the index during its existing
+  canonical-frame audit, preserving bounded pages across restart. Missing frame
+  coverage and emergency Fast startup leave the index unavailable; requests never
+  fall back to a history scan. Commit-marker recovery audits do not build this
+  projection. The route caps retained page JSON at
   `KAIGI_CALL_SIGNALS_MAX_RETAINED_BYTES`.
 - The SSE route retains its separate streaming protocol and is not converted to
   snapshot-style operator request signing by this contract. It requires a

@@ -7673,6 +7673,7 @@ impl Executor {
         state_transaction.bind_privacy_transaction_intent_v1(None);
         // A local refusal has no completed execution, fee, gas, or effect result.
         state_transaction.sorafs_repair_entrypoint = None;
+        state_transaction.taira_activation_entrypoint = None;
         // The transaction overlay remains poisoned until its owner drops it.
         state_transaction
             .ensure_execution_ready()
@@ -7701,11 +7702,14 @@ impl Executor {
         // same selection (`StateBlock::execute_signed_transaction_in_overlay`); this keeps the
         // guarantee for every caller of the executor.
         crate::runtime::sorafs_repair::prepare_signed_boundary(state_transaction, transaction)?;
-        crate::runtime::envelope::admit_envelopes(
-            state_transaction.world.runtime_selection.get(),
-            state_transaction.block_height(),
-            transaction.instructions(),
-        )?;
+        crate::runtime::taira_activation::prepare_signed_boundary(state_transaction, transaction)?;
+        if state_transaction.taira_activation_entrypoint.is_none() {
+            crate::runtime::envelope::admit_envelopes(
+                state_transaction.world.runtime_selection.get(),
+                state_transaction.block_height(),
+                transaction.instructions(),
+            )?;
+        }
         root_scope::ensure_executable_scope(state_transaction, transaction.instructions())?;
         state_transaction.bind_privacy_transaction_intent_v1(None);
         state_transaction.bind_private_settlement_carrier_v1(None);
@@ -8908,13 +8912,15 @@ impl Executor {
         // and a restriction or containment holds on every path below, including the controlled
         // lock, linked-FI and multisig paths that bypass the native dispatch table
         // (`specs/live_runtime_upgrades.md` §5.2, §7.1).
-        crate::runtime::envelope::resolve_envelope(
-            state_transaction.world.runtime_selection.get(),
-            state_transaction.block_height(),
-            instruction,
-            || crate::runtime::obligations::step(instruction, &state_transaction.world),
-        )
-        .map_err(ValidationFail::InstructionFailed)?;
+        if !crate::runtime::taira_activation::admitted_by_boundary(state_transaction, instruction) {
+            crate::runtime::envelope::resolve_envelope(
+                state_transaction.world.runtime_selection.get(),
+                state_transaction.block_height(),
+                instruction,
+                || crate::runtime::obligations::step(instruction, &state_transaction.world),
+            )
+            .map_err(ValidationFail::InstructionFailed)?;
+        }
         root_scope::ensure_instruction_scope(instruction, state_transaction)?;
         ensure_contract_deployment_permission_mutation_allowed(
             state_transaction,
@@ -10762,9 +10768,14 @@ pub mod executor_norito {
         norito::codec::encode_adaptive_into(&borrowed, &mut writer).map(|_| ())
     }
 
-    /// Hash the executor's borrowed semantic payload for the private World delta.
-    /// Loaded VM variants, caches and pool history are not State values.
-    pub(crate) fn net_state_hash(executor: &Executor) -> Result<iroha_crypto::Hash, String> {
+    /// Hash the executor's borrowed semantic payload for the private World delta
+    /// and read-only inspection of that same native State value.
+    /// Loaded VM variants, caches and pool history are not State values. This
+    /// identity does not establish the executor's authorization policy or finality.
+    ///
+    /// # Errors
+    /// Returns the native semantic-payload hashing error without cloning raw code.
+    pub fn net_state_hash(executor: &Executor) -> Result<iroha_crypto::Hash, String> {
         const DOMAIN: &[u8] = b"iroha:world-net-delta:executor:v1\0";
         match executor {
             Executor::Initial => Ok(iroha_crypto::Hash::new_from_chunks(&[DOMAIN, &[0]])),

@@ -546,6 +546,21 @@ pub fn plan_parliament_attempt_v1(
     let execution_height = committed_height.checked_add(1)?;
     let world = state.world();
     let attempt = world.parliament_attempts().get(&attempt_id)?;
+    if world
+        .sorafs_authority_proposals()
+        .get(attempt.proposal_content_id().as_bytes())
+        .is_some_and(|record| {
+            record.deadline_closure.is_some()
+                || crate::smartcontracts::isi::sorafs_authority::proposal_deadline(&record.proposal)
+                    .is_some_and(|deadline| execution_height >= deadline)
+        })
+    {
+        return Some((
+            committed_height,
+            execution_height,
+            ParliamentDriverPlanV1::default(),
+        ));
+    }
     let inputs = WorldPlanInputsV1 { world, network_id };
     Some((
         committed_height,

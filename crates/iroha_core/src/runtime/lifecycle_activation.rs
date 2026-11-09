@@ -140,9 +140,19 @@ pub fn committed_policy(
             matches!(record.status, ChangeSetStatusV1::Activated(_))
                 && record.change_set.successor == cursor
         });
-        let (id, record) = candidates
-            .next()
-            .ok_or("selected runtime lacks committed activation provenance")?;
+        let Some((id, record)) = candidates.next() else {
+            // The certified repair boundary selected its successor in a transaction overlay. Its
+            // retained certificate is the provenance of that one step, which changes no services.
+            let repair =
+                crate::smartcontracts::isi::sorafs_bootstrap::read_retained_repair_certificate(
+                    world,
+                )
+                .map_err(|error| error.to_string())?
+                .filter(|certificate| certificate.plan.change_set.successor == cursor)
+                .ok_or("selected runtime lacks committed activation provenance")?;
+            cursor = repair.plan.change_set.predecessor;
+            continue;
+        };
         if candidates.next().is_some() {
             return Err("ambiguous committed runtime activation lineage".into());
         }

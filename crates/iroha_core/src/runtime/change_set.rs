@@ -478,6 +478,18 @@ pub fn activate_due(
                     {
                         return true;
                     }
+                    if matches!(
+                        (
+                            super::sorafs_authority_enabled(&current),
+                            super::sorafs_authority_enabled(&applied.selection),
+                        ),
+                        (Ok(false), Ok(true))
+                    ) {
+                        if let Err(reason) = crate::smartcontracts::isi::sorafs_authority::validate_activation_inventory(&*wtx) {
+                            iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
+                            return false;
+                        }
+                    }
                     super::ironwood::validate_cutover(
                         &current,
                         &applied.selection,

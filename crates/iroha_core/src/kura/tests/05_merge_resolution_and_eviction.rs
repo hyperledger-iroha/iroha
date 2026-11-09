@@ -508,6 +508,7 @@ fn raw_block_read_preserves_wire_without_promoting_execution_custody() {
         &RuntimeLaneConfig::default(),
     )
     .unwrap();
+    assert!(kura.transaction_entrypoint_index.lock().complete);
     let height = NonZeroUsize::new(block_count).unwrap();
     assert_eq!(
         kura.block_data.lock().len(),
@@ -538,7 +539,7 @@ fn raw_block_read_preserves_wire_without_promoting_execution_custody() {
             .cached_body(height.get() - 1)
             .is_none()
     );
-    assert!(!kura.transaction_entrypoint_index.lock().complete);
+    assert!(kura.transaction_entrypoint_index.lock().complete);
 }
 #[test]
 fn raw_block_reads_do_not_authenticate_reopened_transaction_index() {
@@ -578,20 +579,14 @@ fn raw_block_reads_do_not_authenticate_reopened_transaction_index() {
     )
     .expect("reopen Kura");
     assert_eq!(block_count.0, 3);
-    // A structural read does not authenticate execution or complete query joins.
-    let retained_body_index = {
-        let block_data = kura.block_data.lock();
-        Kura::build_transaction_entrypoint_index(&block_data)
-    };
-    assert!(
-        !retained_body_index.complete,
-        "a one-body retained cache must leave a three-block index partial"
-    );
-    *kura.transaction_entrypoint_index.lock() = retained_body_index;
+    assert!(kura.transaction_entrypoint_index.lock().complete);
+    // Strict startup rebuilt the complete projection independently of the small
+    // body cache. A later structural read must still not repair lost coverage.
+    kura.mark_transaction_entrypoint_index_incomplete(1, block_count.0);
     assert!(
         kura.get_block_heights_by_entrypoint_hash(entrypoint_hash)
             .is_none(),
-        "the retained-body cache starts with a partial transaction index"
+        "the explicitly invalidated transaction index remains partial"
     );
     for height in 1..=block_count.0 {
         let height = NonZeroUsize::new(height).expect("non-zero height");

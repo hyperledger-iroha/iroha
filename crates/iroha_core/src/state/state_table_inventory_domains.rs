@@ -81,6 +81,73 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Name,
+        reason: "Reserved additive wire name of anonymous Parliament credential registration; no current registry or selection activates it.",
+        literals: &[r"iroha.governance.parliament.credential.register.v1"],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "Definition, module and wire names of the SoraFS bootstrap repair addition: they name a kernel and an instruction and hash no State content.",
+        literals: &[
+            r"iroha.kernel.taira_sorafs_repair.v1",
+            r"iroha.sorafs.bootstrap.repair.apply.v1",
+            r"iroha.sorafs.bootstrap.repair.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Content identities of one post-genesis SoraFS bootstrap payload and of its session: each hashes that supplied record, not a State table.",
+        literals: &[
+            r"iroha.sorafs.post-genesis-bootstrap.payload.v1\0",
+            r"iroha.sorafs.post-genesis-bootstrap.session.v1\0",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Role prefix of the SHA-256 digests of one KAGEMUSHA suffix Unload record; the active ledger does not admit suffix Unload.",
+        literals: &[r"iroha:kagemusha:wallet:suffix-unload:v1:"],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "Wire identity of the one certified Taira activation; no selection binds it and it hashes no State content.",
+        literals: &[r"iroha.runtime.taira_time_ironwood.schedule.v1"],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Content identity of one Taira activation plan and the domain of its signatures: both cover that supplied plan, not a State table.",
+        literals: &[
+            r"iroha:runtime:taira-time-ironwood:plan:v1\0",
+            r"iroha:runtime:taira-time-ironwood:signature:v1\0",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Content identity of one SoraFS repair plan and the domain of its signatures: both cover that supplied plan, not a State table.",
+        literals: &[
+            r"iroha:sorafs:repair:plan:v1\0",
+            r"iroha:sorafs:repair:signature:v1\0",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "Exact native wire identities for the SoraFS authority proposal and attempt instructions; these dispatch names compute no State digest and confer no authority",
+        literals: &[
+            r"iroha.sorafs.authority.attempt.create.v1",
+            r"iroha.sorafs.authority.propose.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Network- and root-bound content identities of one supplied SoraFS authority proposal, its action-normalized plan, term family, exact effect and governed subject; these records do not hash the hosted table or authorize enactment",
+        literals: &[
+            r"iroha.sorafs.authority.effect.v1",
+            r"iroha.sorafs.authority.family.v1",
+            r"iroha.sorafs.authority.plan.v1",
+            r"iroha.sorafs.authority.proposal.v1",
+            r"iroha.sorafs.authority.subject.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Name,
         reason: "Exact first-release wire identities of privacy consensus-policy scheduling, protocol-limit scheduling and the proof-free X.509 request, including built-in dispatch entries. They select instruction layouts; these identifiers compute no State digest and confer no governance or proof authority",
         literals: &[
             r"iroha.privacy.schedule_consensus_policy_update.v1",
@@ -1481,19 +1548,22 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha.kernel.v1",
             r"iroha.parameters.v1",
             r"iroha.runtime.endorsed_change_set_proposal.v1",
+            r"iroha.sorafs.authority_governance.v1",
             r"iroha.world.lthash16.v1",
-            r"iroha:runtime:addition:v1\0",
             r"iroha:ironwood:qualification-evidence:v1\0",
+            r"iroha:runtime:addition:v1\0",
             r"iroha:runtime:baseline:v1\0",
             r"iroha:runtime:definition:v1\0",
             r"iroha:runtime:ironwood:v1\0",
             r"iroha:runtime:selection:v1\0",
+            r"iroha:sorafs:authority:paired-terms-64-epochs:cutoff-1-epoch:17-units-per-role:deadline-closure:controller-bound-http:signed-operating-effects:v1",
         ],
     },
     OtherDomains {
         usage: Use::Record,
         reason: "Identities and signature domains of live-upgrade lifecycle records (specs/live_runtime_upgrades.md §6, §7, §13): change sets and the release signers' provenance endorsements of them, validator support attestations with the release digests and committees they bind, adoption trust anchors, and emergency containment with its panel endorsements. Each hashes or signs one canonical record or a release's build status and implemented definitions; none commits to State content",
         literals: &[
+            r"iroha:runtime:adoption-attestation:v1\0",
             r"iroha:runtime:adoption:v1\0",
             r"iroha:runtime:change-set-endorsement:v1\0",
             r"iroha:runtime:change-set:v1\0",

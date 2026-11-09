@@ -2,6 +2,70 @@
 
 use super::*;
 
+#[cfg(feature = "app_api")]
+#[test]
+fn wallet_call_and_original_reads_survive_compiled_openapi_projection() {
+    use iroha_torii_shared::route_catalog::{
+        application_api as calls, contracts_and_verification_keys as originals,
+    };
+
+    let authored = canonical_document();
+    let compiled = compiled_spec();
+    for route in [
+        calls::KAIGI_CALLS_BY_CALL_ID_GET,
+        calls::KAIGI_CALLS_BY_CALL_ID_SIGNALS_GET,
+        originals::KAGEMUSHA_LOAD_ISSUANCE_GET,
+        originals::KAGEMUSHA_LOAD_FINALITY_GET,
+        originals::KAGEMUSHA_LOAD_EPOCH_GET,
+        originals::KAGEMUSHA_LEDGER_FINALITY_GET,
+        originals::KAGEMUSHA_LEDGER_EPOCH_GET,
+    ] {
+        assert!(route.projections().openapi(), "{}", route.path());
+        assert!(route.projections().sdk(), "{}", route.path());
+        for document in [&authored, compiled] {
+            let operation = &document["paths"][route.path()]["get"];
+            assert!(operation.is_object(), "{}", route.path());
+            assert_eq!(operation[ROUTE_AUTH_EXTENSION], route_auth_metadata(route));
+            assert_eq!(operation[TOOL_EFFECT_EXTENSION].as_str(), Some("read"));
+        }
+    }
+
+    for (route, maximum) in [
+        (originals::KAGEMUSHA_LOAD_ISSUANCE_GET, 512),
+        (
+            originals::KAGEMUSHA_LOAD_FINALITY_GET,
+            iroha_data_model::kagemusha::KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1,
+        ),
+        (
+            originals::KAGEMUSHA_LOAD_EPOCH_GET,
+            iroha_data_model::sumeragi_finality::MAX_COMMIT_CERTIFICATE_BYTES_V1,
+        ),
+        (
+            originals::KAGEMUSHA_LEDGER_FINALITY_GET,
+            iroha_data_model::kagemusha::KAGEMUSHA_WALLET_LEDGER_FINALITY_MAX_BYTES_V1,
+        ),
+        (
+            originals::KAGEMUSHA_LEDGER_EPOCH_GET,
+            iroha_data_model::sumeragi_finality::MAX_COMMIT_CERTIFICATE_BYTES_V1,
+        ),
+    ] {
+        let response = &compiled["paths"][route.path()]["get"]["responses"]["200"];
+        let content = response["content"].as_object().unwrap();
+        assert_eq!(content.len(), 1);
+        let schema = &content["application/x-norito"]["schema"];
+        assert_eq!(schema["format"].as_str(), Some("binary"));
+        assert_eq!(schema["minLength"].as_u64(), Some(1));
+        assert_eq!(
+            schema["maxLength"].as_u64(),
+            Some(u64::try_from(maximum).unwrap())
+        );
+        assert_eq!(
+            response["headers"]["Cache-Control"]["schema"]["const"].as_str(),
+            Some("private, no-store")
+        );
+    }
+}
+
 #[test]
 fn account_inspection_contract_is_public_bounded_and_syntax_only() {
     use iroha_torii_shared::route_catalog::{AdmissionPolicy, AuthenticationPolicy};
@@ -557,8 +621,8 @@ fn openapi_operations_equal_the_enabled_catalog_projection() {
     ))]
     assert_eq!(
         expected.len(),
-        572,
-        "the supported full Torii documentation profile must remain exactly 572 cataloged operations"
+        579,
+        "the supported full Torii documentation profile must remain exactly 579 cataloged operations"
     );
     let spec = generate_spec();
     let paths = spec
@@ -1405,8 +1469,15 @@ fn openapi_authorities_preserve_native_enrollment_and_retire_wallet_transport_in
                 .map(String::as_str)
                 .filter(|path| path.starts_with("/v1/kagemusha/"))
                 .collect::<BTreeSet<_>>(),
-            BTreeSet::from(["/v1/kagemusha/enrollment"]),
-            "only current native enrollment remains in {variant} OpenAPI"
+            BTreeSet::from([
+                "/v1/kagemusha/enrollment",
+                "/v1/kagemusha/{scheme}/wallets/{wallet}/ledger/{entrypoint}/epochs/{boundary}",
+                "/v1/kagemusha/{scheme}/wallets/{wallet}/ledger/{entrypoint}/finality",
+                "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}",
+                "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/epochs/{boundary}",
+                "/v1/kagemusha/{scheme}/wallets/{wallet}/loads/{request}/finality",
+            ]),
+            "only native enrollment and the authenticated wallet reads remain in {variant} OpenAPI"
         );
         let enrollment = &paths["/v1/kagemusha/enrollment"]["post"];
         assert_eq!(

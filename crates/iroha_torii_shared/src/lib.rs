@@ -57,6 +57,8 @@ pub mod resource_names_state;
 pub mod route_catalog;
 /// Typed absence response for authoritative SNS registration lookups.
 pub mod sns;
+/// Exact Parliament-owned SoraFS authority proposal and head reads.
+pub mod sorafs_authority_api;
 /// Canonical gateway-compliance control projections and exact request bindings.
 pub mod sorafs_gateway_compliance_api;
 /// Canonical wire types for the authenticated SoraFS hedging and billing API.

@@ -19,6 +19,10 @@ path = "src/bin/refresh_nexus_streaming_fixtures.rs"
 required-features = ["dev-tools"]
 
 [[test]]
+name = "taira_time_ironwood_campaign"
+path = "tests/taira_time_ironwood_campaign.rs"
+
+[[test]]
 name = "lifecycle_trace_activation"
 path = "tests/lifecycle_trace_activation.rs"
 

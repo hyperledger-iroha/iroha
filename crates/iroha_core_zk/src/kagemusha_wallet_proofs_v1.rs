@@ -17,9 +17,11 @@ use ff::PrimeField;
 use iroha_data_model::kagemusha::kagemusha_wallet_v1::*;
 use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve, msm::MemoryBudget};
 use iroha_plonk::{
-    AccumulatorError, DescriptorBinding, PendingAccumulator, Protocol, VerifyingKey,
-    batch_decide,
-    cs::{CurveV1, InstanceModeV1, InstanceType, ProofSuffixV1, TranscriptV2},
+    AccumulatorError, DescriptorBinding, PendingAccumulator, Protocol, VerifyingKey, batch_decide,
+    cs::{
+        CurveV1, InstanceModeV1, InstanceType, ProofSuffixV1, TranscriptV2,
+        descriptor::{ExprNodeV1, ExprV1, LookupV1},
+    },
     pcs::ipa::{
         GeneratorClaim, PinnedParams,
         accumulator::{CURVE_BYTE_PALLAS, CURVE_BYTE_VESTA},
@@ -187,9 +189,31 @@ fn authority<T>(value: Result<T, KagemushaWalletValidationErrorV1>) -> Result<T,
     value.map_err(|_| Error::Authority)
 }
 
+/// Whether a wallet circuit reads instance cells.
+///
+/// Only the folding wrap builds these, and no selected definition admits it. Validators on a
+/// build from before that expression node refuse such a descriptor while decoding it, so wallet
+/// admission refuses it with the same error: `InstallVerifierPack` then has one verdict on every
+/// build and a rolling upgrade cannot split on it. Admitting instance cells takes a new governed
+/// definition (`specs/live_runtime_upgrades.md`), not the removal of this check.
+pub(crate) fn reads_instance_cell(gates: &[Vec<ExprV1>], lookups: &[LookupV1]) -> bool {
+    let reads = |expression: &ExprV1| {
+        expression
+            .iter()
+            .any(|node| matches!(node, ExprNodeV1::InstanceCell(..)))
+    };
+    gates.iter().flatten().any(reads)
+        || lookups
+            .iter()
+            .any(|lookup| lookup.inputs.iter().chain(&lookup.tables).any(reads))
+}
+
 fn binding(descriptor: &[u8], curve: CurveV1, lineage: bool) -> Result<DescriptorBinding, Error> {
     let binding = DescriptorBinding::decode_v2(descriptor).map_err(|_| Error::Profile)?;
     let d = binding.descriptor();
+    if reads_instance_cell(&d.gates, &d.lookups) {
+        return Err(Error::Profile);
+    }
     let (lengths, types): (&[u32], &[InstanceType]) = if lineage {
         (
             &[1, 2, u32::try_from(K).map_err(|_| Error::Profile)?],

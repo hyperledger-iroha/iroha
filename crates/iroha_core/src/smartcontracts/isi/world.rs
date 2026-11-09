@@ -29,6 +29,7 @@ fn fastpq_allocation_deferral(
 /// Iroha Special Instructions that have `World` as their target.
 #[allow(clippy::used_underscore_binding)]
 pub mod isi {
+    include!("world_authority_host.rs");
     use crate::governance::draw::body_committee_size;
     use crate::governance::parliament::{
         PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1, ParliamentAttemptStateV1, ParliamentBodyStateV1,
@@ -4835,6 +4836,17 @@ pub mod isi {
         else {
             return Ok(None);
         };
+        if super::sorafs_authority::active(&state_transaction.world)?
+            && state_transaction
+                .world
+                .sorafs_authority_proposals
+                .get(&proposal_id)
+                .is_some()
+        {
+            return Err(invalid_governance_parameter(
+                "SoraFS authority proposals use only the authenticated Parliament lifecycle",
+            ));
+        }
         let Some(proposal) = state_transaction
             .world
             .governance_proposals
@@ -8792,7 +8804,7 @@ pub mod isi {
         (
             crate::governance::parliament::ParliamentAttemptStateV1,
             [u8; 32],
-            crate::state::GovernanceProposalRecord,
+            ParliamentProposalHost,
             GovernanceCertificateV1,
         ),
         Error,
@@ -8830,25 +8842,19 @@ pub mod isi {
             ));
         }
         let proposal_id = *attempt.proposal_content_id().as_bytes();
-        let proposal = state_transaction
-            .world
-            .governance_proposals
-            .get(&proposal_id)
-            .cloned()
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "due Parliament certificate proposal is missing".into(),
-                )
-            })?;
-        ensure_certificate_only_proposal_v1(proposal_id, &proposal, state_transaction)?;
-        attempt
-            .validate_proposal_bindings_v1(&proposal.kind)
+        let proposal = ParliamentProposalHost::resolve(&state_transaction.world, proposal_id)?;
+        proposal.validate_record(
+            crate::state::GovernanceProposalStatus::Proposed,
+            state_transaction,
+        )?;
+        proposal
+            .validate_bindings(&attempt)
             .map_err(parliament_reducer_error)?;
         if certificate.proposal_content_id != attempt.proposal_content_id()
             || certificate.governance_attempt_id != governance_attempt_id
             || certificate.governance_attempt_sequence != attempt.attempt().sequence
-            || certificate.effect_preimage_hash != proposal.kind.effect_preimage_hash_v1()
-            || proposal.kind.fingerprint() != proposal_id
+            || certificate.effect_preimage_hash != proposal.effect_hash()
+            || proposal.fingerprint() != proposal_id
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 "due Parliament certificate differs from its exact stored proposal effect".into(),
@@ -8900,7 +8906,7 @@ pub mod isi {
         let (mut attempt, proposal_id, proposal, certificate) =
             exact_due_parliament_certificate_context_v1(governance_attempt_id, state_transaction)?;
         let current_height = state_transaction.block_height();
-        let observed_head = parliament_expected_head_v1(&proposal.kind, state_transaction)?;
+        let observed_head = proposal.expected_head(state_transaction)?;
         if observed_head != certificate.expected_head {
             attempt
                 .mark_superseded(governance_attempt_id, current_height, observed_head)
@@ -8908,12 +8914,10 @@ pub mod isi {
             let outcome = gov::ParliamentAutomaticExecutionOutcomeV1::Superseded(
                 gov::ParliamentAutomaticSupersededV1 { observed_head },
             );
-            let mut superseded = proposal;
-            superseded.status = crate::state::GovernanceProposalStatus::Superseded;
-            state_transaction
-                .world
-                .put_governance_proposal(proposal_id, superseded)
-                .map_err(governance_proposal_storage_error)?;
+            proposal.write_status(
+                crate::state::GovernanceProposalStatus::Superseded,
+                state_transaction,
+            )?;
             state_transaction
                 .world
                 .put_parliament_attempt(attempt)
@@ -8932,12 +8936,8 @@ pub mod isi {
             .mark_enacted(governance_attempt_id, current_height)
             .map_err(parliament_reducer_error)?;
         // The World write remains isolated until transaction apply.
-        let effect_result: Result<(), Error> = apply_parliament_proposal_effect_v1(
-            proposal_id,
-            &proposal,
-            &certificate,
-            state_transaction,
-        );
+        let effect_result: Result<(), Error> =
+            proposal.apply_effect(&certificate, state_transaction);
         state_transaction
             .ensure_execution_ready()
             .map_err(crate::execution_attempt::ExecutionAttemptError::Deferred)?;
@@ -8951,15 +8951,16 @@ pub mod isi {
             });
         }
         let changes_fee_policy = matches!(
-            proposal.kind,
-            ProposalKind::ValidationFeePolicy(_) | ProposalKind::ValidationFeePayoutLifecycle(_)
+            proposal.baseline_kind(),
+            Some(
+                ProposalKind::ValidationFeePolicy(_)
+                    | ProposalKind::ValidationFeePayoutLifecycle(_)
+            )
         );
-        let mut enacted = proposal;
-        enacted.status = crate::state::GovernanceProposalStatus::Enacted;
-        state_transaction
-            .world
-            .put_governance_proposal(proposal_id, enacted)
-            .map_err(governance_proposal_storage_error)?;
+        proposal.write_status(
+            crate::state::GovernanceProposalStatus::Enacted,
+            state_transaction,
+        )?;
         state_transaction
             .world
             .put_parliament_attempt(attempt)
@@ -9010,10 +9011,10 @@ pub mod isi {
         expected_failure_root: [u8; 32],
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<Error>> {
-        let (mut attempt, proposal_id, proposal, certificate) =
+        let (mut attempt, _proposal_id, proposal, certificate) =
             exact_due_parliament_certificate_context_v1(governance_attempt_id, state_transaction)?;
         let current_height = state_transaction.block_height();
-        let observed_head = parliament_expected_head_v1(&proposal.kind, state_transaction)?;
+        let observed_head = proposal.expected_head(state_transaction)?;
         if observed_head != certificate.expected_head {
             return Err(InstructionExecutionError::InvariantViolation(
                 "Parliament compare-and-set head changed between isolated failure transactions"
@@ -9034,12 +9035,10 @@ pub mod isi {
             .world
             .put_parliament_attempt(attempt)
             .map_err(parliament_reducer_error)?;
-        let mut failed = proposal;
-        failed.status = crate::state::GovernanceProposalStatus::ExecutionFailed;
-        state_transaction
-            .world
-            .put_governance_proposal(proposal_id, failed)
-            .map_err(governance_proposal_storage_error)?;
+        proposal.write_status(
+            crate::state::GovernanceProposalStatus::ExecutionFailed,
+            state_transaction,
+        )?;
         emit_automatic_parliament_execution_transition_v1(
             state_transaction,
             certificate.proposal_content_id,
@@ -9244,9 +9243,27 @@ pub mod isi {
                     "Parliament proposal storage key collides with different typed content".into(),
                 ));
             }
-            let proposal_content_id = self.proposal_content_id();
-            let previous = self
-                .attempt_sequence
+            create_parliament_host_attempt(
+                ParliamentProposalHost::Baseline(proposal_record),
+                self.attempt_sequence,
+                state_transaction,
+            )
+        }
+    }
+
+    fn create_parliament_host_attempt(
+        host: ParliamentProposalHost,
+        attempt_sequence: u32,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if attempt_sequence > MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 {
+            return Err(invalid_governance_parameter(
+                "Parliament governance attempt sequence exceeds the first-release retry limit",
+            ));
+        }
+        let proposal_content_id =
+            iroha_data_model::governance::types::ProposalContentId::new(host.fingerprint());
+        let previous = attempt_sequence
                 .checked_sub(1)
                 .map(|previous_sequence| {
                     let previous_id = GovernanceAttemptId::derive_v1(
@@ -9261,14 +9278,14 @@ pub mod isi {
                             InstructionExecutionError::InvariantViolation(
                                 format!(
                                     "Parliament attempt sequence {} requires exact predecessor {previous_sequence}",
-                                    self.attempt_sequence
+                                    attempt_sequence
                                 )
                                 .into(),
                             )
                         })
                 })
                 .transpose()?;
-            if previous.is_some_and(|state| {
+        if previous.is_some_and(|state| {
                 !matches!(
                     state.attempt().status,
                     iroha_data_model::governance::types::GovernanceAttemptStatusV1::Rejected
@@ -9280,65 +9297,71 @@ pub mod isi {
                     "a new Parliament retry requires a terminal non-enacted predecessor".into(),
                 ));
             }
-            let randomness_redraws_before_attempt = previous
-                .map(crate::governance::parliament::ParliamentAttemptStateV1::randomness_redraws_used_v1)
-                .transpose()
-                .map_err(parliament_reducer_error)?
-                .unwrap_or(0);
-            if previous.is_some()
-                && randomness_redraws_before_attempt
-                    >= crate::governance::parliament::MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1
-            {
-                return Err(parliament_reducer_error(
+        let randomness_redraws_before_attempt = previous
+            .map(
+                crate::governance::parliament::ParliamentAttemptStateV1::randomness_redraws_used_v1,
+            )
+            .transpose()
+            .map_err(parliament_reducer_error)?
+            .unwrap_or(0);
+        if previous.is_some()
+            && randomness_redraws_before_attempt
+                >= crate::governance::parliament::MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1
+        {
+            return Err(parliament_reducer_error(
                     crate::governance::parliament::ParliamentReducerErrorV1::RandomnessRedrawLimitExceeded,
                 ));
-            }
-            let expected_proposal_status = previous
-                .map_or(crate::state::GovernanceProposalStatus::Proposed, |state| {
-                    governance_proposal_status_for_attempt_v1(state.attempt().status)
-                });
-            ensure_certificate_only_proposal_status_v1(
-                proposal_id,
-                &proposal_record,
-                expected_proposal_status,
+        }
+        let expected_proposal_status = previous
+            .map_or(crate::state::GovernanceProposalStatus::Proposed, |state| {
+                governance_proposal_status_for_attempt_v1(state.attempt().status)
+            });
+        host.validate_record(expected_proposal_status, state_transaction)?;
+        if let Some(ProposalKind::ValidationFeePayoutLifecycle(payload)) = host.baseline_kind() {
+            validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
+                &payload.payout_binding,
                 state_transaction,
+            )
+            .map_err(|error| contract_attempt_instruction_error(state_transaction, error))?;
+        }
+        if let Some(ProposalKind::SccpRouteGovernance(payload)) = host.baseline_kind() {
+            crate::smartcontracts::isi::sccp::governance::preflight_attempt(
+                state_transaction,
+                &payload.proposal,
             )?;
-            if let ProposalKind::ValidationFeePayoutLifecycle(payload) = &self.proposal {
-                validate_validation_fee_payout_lifecycle_runtime_before_effect_install(
-                    &payload.payout_binding,
-                    state_transaction,
-                )
-                .map_err(|error| contract_attempt_instruction_error(state_transaction, error))?;
-            }
-            if let ProposalKind::SccpRouteGovernance(payload) = &self.proposal {
-                crate::smartcontracts::isi::sccp::governance::preflight_attempt(
-                    state_transaction,
-                    &payload.proposal,
-                )?;
-            }
+        }
 
-            let governance_attempt_id = self.governance_attempt_id();
-            if state_transaction
-                .world
-                .parliament_attempts
-                .get(&governance_attempt_id)
-                .is_some()
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "Parliament governance attempt already exists".into(),
-                ));
-            }
-            // Every sortition slot is a consensus-native pulse height derived from this
-            // frozen length. A chain without that cadence creates no attempt: nothing is
-            // stored and no bond or reference count is touched before this rejection.
-            let sortition_pulse_epoch_length_blocks =
-                parliament_sortition_pulse_epoch_length_v1(state_transaction)?;
-            let (risk_tier, required_bodies) = parliament_attempt_policy_v1(&self.proposal);
-            let effect_preimage_hash = self.proposal.effect_preimage_hash_v1();
-            let expected_head = parliament_expected_head_v1(&self.proposal, state_transaction)
-                .map_err(|error| contract_attempt_instruction_error(state_transaction, error))?;
-            let attempt = crate::governance::parliament::ParliamentAttemptStateV1::try_new_with_randomness_redraws_before_attempt(
-                self.canonical_attempt(risk_tier),
+        let governance_attempt_id =
+            GovernanceAttemptId::derive_v1(proposal_content_id, attempt_sequence);
+        if state_transaction
+            .world
+            .parliament_attempts
+            .get(&governance_attempt_id)
+            .is_some()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "Parliament governance attempt already exists".into(),
+            ));
+        }
+        // Every sortition slot is a consensus-native pulse height derived from this
+        // frozen length. A chain without that cadence creates no attempt: nothing is
+        // stored and no bond or reference count is touched before this rejection.
+        let sortition_pulse_epoch_length_blocks =
+            parliament_sortition_pulse_epoch_length_v1(state_transaction)?;
+        let (risk_tier, required_bodies) = match host.baseline_kind() {
+            Some(kind) => parliament_attempt_policy_v1(kind),
+            None => crate::governance::parliament::sorafs_authority_attempt_policy_v1(),
+        };
+        let effect_preimage_hash = host.effect_hash();
+        let expected_head = host
+            .attempt_expected_head(state_transaction)
+            .map_err(|error| contract_attempt_instruction_error(state_transaction, error))?;
+        let attempt = crate::governance::parliament::ParliamentAttemptStateV1::try_new_with_randomness_redraws_before_attempt(
+                iroha_data_model::governance::types::GovernanceAttemptV1 {
+                    id: governance_attempt_id, proposal_content_id, sequence: attempt_sequence, risk_tier,
+                    stage: iroha_data_model::governance::types::GovernanceStageV1::Qualification,
+                    status: GovernanceAttemptStatusV1::Active,
+                },
                 randomness_redraws_before_attempt,
                 PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,(state_transaction
                     .gov
@@ -9348,35 +9371,32 @@ pub mod isi {
                 required_bodies,
             )
             .map_err(parliament_reducer_error)?;
-            if proposal_record.status != crate::state::GovernanceProposalStatus::Proposed {
-                let mut retried_proposal = proposal_record;
-                retried_proposal.status = crate::state::GovernanceProposalStatus::Proposed;
-                state_transaction
-                    .world
-                    .put_governance_proposal(proposal_id, retried_proposal)
-                    .map_err(governance_proposal_storage_error)?;
-            }
-            state_transaction
-                .world
-                .put_parliament_attempt(attempt)
-                .map_err(parliament_reducer_error)?;
-            let at_height = state_transaction.block_height();
-            state_transaction
-                .world
-                .emit_events(Some(GovernanceEvent::ParliamentAttemptCreated(
-                    GovernanceParliamentAttemptCreated {
-                        proposal_content_id,
-                        governance_attempt_id,
-                        attempt_sequence: self.attempt_sequence,
-                        risk_tier,
-                        policy_version: PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
-                        effect_preimage_hash,
-                        expected_head,
-                        at_height,
-                    },
-                )));
-            Ok(())
+        if host.status() != crate::state::GovernanceProposalStatus::Proposed {
+            host.write_status(
+                crate::state::GovernanceProposalStatus::Proposed,
+                state_transaction,
+            )?;
         }
+        state_transaction
+            .world
+            .put_parliament_attempt(attempt)
+            .map_err(parliament_reducer_error)?;
+        let at_height = state_transaction.block_height();
+        state_transaction
+            .world
+            .emit_events(Some(GovernanceEvent::ParliamentAttemptCreated(
+                GovernanceParliamentAttemptCreated {
+                    proposal_content_id,
+                    governance_attempt_id,
+                    attempt_sequence,
+                    risk_tier,
+                    policy_version: PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
+                    effect_preimage_hash,
+                    expected_head,
+                    at_height,
+                },
+            )));
+        Ok(())
     }
 
     fn confirmation_candidate_snapshot_v1(
@@ -10562,33 +10582,20 @@ pub mod isi {
             let proposal_status =
                 governance_proposal_status_for_attempt_v1(attempt.attempt().status);
             let proposal_id = proposal_content_id.into_bytes();
-            let mut proposal = state_transaction
-                .world
-                .governance_proposals
-                .get(&proposal_id)
-                .cloned()
-                .ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation(
-                        "Parliament attempt has no retained exact typed proposal".into(),
-                    )
-                })?;
-            if proposal.kind.fingerprint() != proposal_id {
+            let proposal = ParliamentProposalHost::resolve(&state_transaction.world, proposal_id)?;
+            if proposal.fingerprint() != proposal_id {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "Parliament attempt proposal key differs from its typed content".into(),
                 ));
             }
-            let rejected_now = proposal.status != proposal_status
+            let rejected_now = proposal.status() != proposal_status
                 && proposal_status == crate::state::GovernanceProposalStatus::Rejected;
-            proposal.status = proposal_status;
 
             state_transaction
                 .world
                 .put_parliament_attempt(attempt)
                 .map_err(parliament_reducer_error)?;
-            state_transaction
-                .world
-                .put_governance_proposal(proposal_id, proposal)
-                .map_err(governance_proposal_storage_error)?;
+            proposal.write_status(proposal_status, state_transaction)?;
             if rejected_now {
                 state_transaction
                     .world
@@ -17374,6 +17381,13 @@ pub mod isi {
             let new_role = self.object().clone();
             let initial_owner = new_role.grant_to().clone();
             let mut role = new_role.build(authority);
+            super::sorafs_authority::guard_role_mutation(&state_transaction.world, role.id())?;
+            for token in role.permissions() {
+                super::sorafs_authority::guard_permission_mutation(
+                    &state_transaction.world,
+                    token,
+                )?;
+            }
             role.ensure_permission_epochs(state_transaction.block_height());
             if role.permissions().any(|permission| {
                 !crate::alias::asset_definition_alias_permission_targets_active_binding(
@@ -17434,6 +17448,7 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let role_id = self.object().clone();
+            super::sorafs_authority::guard_role_mutation(&state_transaction.world, &role_id)?;
             let accounts_with_role = state_transaction
                 .world
                 .account_roles
@@ -17464,6 +17479,11 @@ pub mod isi {
         ) -> Result<(), Error> {
             let role_id = self.destination().clone();
             let permission = self.object().clone();
+            super::sorafs_authority::guard_role_mutation(&state_transaction.world, &role_id)?;
+            super::sorafs_authority::guard_permission_mutation(
+                &state_transaction.world,
+                &permission,
+            )?;
             let current_epoch = state_transaction.block_height();
             if !crate::alias::asset_definition_alias_permission_targets_active_binding(
                 &state_transaction.world,
@@ -17531,6 +17551,11 @@ pub mod isi {
         ) -> Result<(), Error> {
             let role_id = self.destination().clone();
             let permission = self.object().clone();
+            super::sorafs_authority::guard_role_mutation(&state_transaction.world, &role_id)?;
+            super::sorafs_authority::guard_permission_mutation(
+                &state_transaction.world,
+                &permission,
+            )?;
             let Some(existing_role) = state_transaction.world.roles.get(&role_id) else {
                 return Err(FindError::Role(role_id).into());
             };
@@ -21134,14 +21159,45 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
             proposal_kind: ProposalKind,
         ) -> DueParliamentCertificateFixture {
-            // Existing exact-due tests still supply height 60. Capacity/retry tests
-            // retain the same reducer flow at a later certified chain height.
+            let proposer = proposal_kind
+                .proposal_operator_v1()
+                .cloned()
+                .unwrap_or_else(|| ALICE_ID.clone());
+            seed_due_hosted_parliament_certificate(
+                state_transaction,
+                ParliamentProposalHost::Baseline(crate::state::GovernanceProposalRecord {
+                    proposer,
+                    kind: proposal_kind,
+                    created_height: 1,
+                    status: crate::state::GovernanceProposalStatus::Proposed,
+                }),
+            )
+        }
+
+        fn seed_due_hosted_parliament_certificate(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            host: ParliamentProposalHost,
+        ) -> DueParliamentCertificateFixture {
             let due_height = state_transaction.block_height();
-            let proposal_id = proposal_kind.fingerprint();
+            seed_hosted_parliament_certificate_at(state_transaction, host, due_height)
+        }
+
+        fn seed_hosted_parliament_certificate_at(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            host: ParliamentProposalHost,
+            due_height: u64,
+        ) -> DueParliamentCertificateFixture {
+            // Explicit component certificates may await a future exact due height;
+            // all body and certificate construction still uses the shared reducer.
+            let proposal_id = host.fingerprint();
             let proposal_content_id = ProposalContentId::new(proposal_id);
             let governance_attempt_id = GovernanceAttemptId::derive_v1(proposal_content_id, 0);
-            let (risk_tier, requirements) = parliament_attempt_policy_v1(&proposal_kind);
-            let expected_head = parliament_expected_head_v1(&proposal_kind, state_transaction)
+            let (risk_tier, requirements) = host.baseline_kind().map_or_else(
+                crate::governance::parliament::sorafs_authority_attempt_policy_v1,
+                parliament_attempt_policy_v1,
+            );
+            let expected_head = host
+                .expected_head(state_transaction)
                 .expect("derive deterministic governed head");
             let mut attempt = crate::governance::parliament::ParliamentAttemptStateV1::try_new(
                 GovernanceAttemptV1 {
@@ -21156,7 +21212,7 @@ pub mod isi {
                 10,
                 // Height 20, the fixture's sortition slot, is the first native pulse height.
                 21,
-                proposal_kind.effect_preimage_hash_v1(),
+                host.effect_hash(),
                 expected_head,
                 requirements.clone(),
             )
@@ -21236,25 +21292,13 @@ pub mod isi {
             certificate
                 .validate()
                 .expect("complete world-test certificate must validate");
-            attempt
-                .validate_proposal_bindings_v1(&proposal_kind)
+            host.validate_bindings(&attempt)
                 .expect("world-test attempt must retain exact proposal bindings");
-
-            state_transaction
-                .world
-                .put_governance_proposal(
-                    proposal_id,
-                    crate::state::GovernanceProposalRecord {
-                        proposer: proposal_kind
-                            .proposal_operator_v1()
-                            .cloned()
-                            .unwrap_or_else(|| ALICE_ID.clone()),
-                        kind: proposal_kind,
-                        created_height: 1,
-                        status: crate::state::GovernanceProposalStatus::Proposed,
-                    },
-                )
-                .expect("world-test proposal must satisfy first-release JSON bounds");
+            host.write_status(
+                crate::state::GovernanceProposalStatus::Proposed,
+                state_transaction,
+            )
+            .expect("persist world-test hosted proposal");
             state_transaction
                 .world
                 .put_parliament_attempt(attempt)
@@ -23693,6 +23737,7 @@ AccountEvent::PermissionRemoved(change))
         include!("world_validation_fee_tests.rs");
         include!("world_fee_sponsor_ledger_effect_tests.rs");
         include!("world_parliament_due_effect_tests.rs");
+        include!("world_sorafs_authority_tests.rs");
         include!("world_parliament_initial_sortition_tests.rs");
         include!("world_parliament_sortition_retry_tests.rs");
         include!("world_parliament_attempt_cadence_tests.rs");

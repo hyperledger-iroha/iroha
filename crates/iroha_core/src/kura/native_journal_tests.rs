@@ -30,6 +30,65 @@ fn strict_native_journal_audit_preserves_valid_original_bytes() {
     let original = journal_image(&store);
     let validated = Kura::init_canonical_chain(&mut store, 2).unwrap();
     assert_eq!(validated.hashes, expected);
+    assert!(validated.transaction_entrypoint_index.complete);
+    assert_eq!(
+        validated.transaction_entrypoint_index.indexed_heights.len(),
+        2
+    );
+    assert!(
+        validated
+            .transaction_entrypoint_index
+            .incomplete_heights
+            .is_empty()
+    );
+    let mut slots = vec![BlockIndex::default(); 2];
+    store.read_block_indices(0, &mut slots).unwrap();
+    let marker_audit =
+        Kura::validate_committed_block_prefix(&mut store, &slots, &expected, None).unwrap();
+    assert!(!marker_audit.transaction_entrypoint_index.complete);
+    assert!(
+        marker_audit
+            .transaction_entrypoint_index
+            .indexed_heights
+            .is_empty()
+    );
+    assert!(
+        marker_audit
+            .transaction_entrypoint_index
+            .inventories_by_height
+            .is_empty()
+    );
+    assert_eq!(journal_image(&store), original);
+}
+
+#[test]
+fn strict_native_journal_audit_keeps_missing_original_index_incomplete() {
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
+    chain.commit(Vec::new());
+    let missing = NonZeroUsize::MIN;
+    let mut store = chain.kura().block_store.lock();
+    // A valid evicted slot retains its original nonzero length. A zero-length
+    // corruption is rejected before the missing-availability branch is reached.
+    let slot = store.read_block_index(0).unwrap();
+    assert!(slot.length > 0);
+    assert!(store.read_optional_da_cache(1).unwrap().is_none());
+    store
+        .write_block_index(0, EVICTED_BLOCK_START, slot.length)
+        .unwrap();
+    let original = journal_image(&store);
+    let validated = Kura::init_canonical_chain(&mut store, 2).unwrap();
+    let index = validated.transaction_entrypoint_index;
+    assert!(
+        !index.complete,
+        "absence cannot authorize an empty signal page"
+    );
+    assert!(index.incomplete_heights.contains(&missing));
+    assert!(!index.indexed_heights.contains(&missing));
+    assert!(
+        index
+            .indexed_heights
+            .contains(&NonZeroUsize::new(2).unwrap())
+    );
     assert_eq!(journal_image(&store), original);
 }
 

@@ -708,11 +708,18 @@ impl ReputationFinalizedArchiveActivationV1 {
                 reason: "uncommitted bootstrap has a nonempty reputation archive",
             });
         }
-        let qualification = self.archive.qualify_against_certified_tip(
+        let qualification = match self.archive.qualify_against_certified_tip(
             &view,
             self.kura.as_ref(),
             self.maximum_kura_tip_lag_blocks,
-        )?;
+        ) {
+            Ok(qualification) => qualification,
+            // A capture overtook this view. The next activation tick retries with a fresh one.
+            Err(ReputationFinalizedArchiveError::QualificationBoundaryChanged { .. }) => {
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
+        };
         if u64::try_from(view.height()).ok() != Some(qualification.archive_tip().height) {
             return Ok(false);
         }

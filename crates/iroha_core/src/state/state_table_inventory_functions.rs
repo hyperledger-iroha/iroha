@@ -70,6 +70,18 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         UseOwner::Other(Use::Seed, DERIVED_SEED),
     ),
     function(
+        "crates/iroha_core/src/kagemusha_wallet_v1/artifacts.rs",
+        "installed_identity",
+        1,
+        UseOwner::Other(Use::Record, RECORD_IDENTITY),
+    ),
+    function(
+        "crates/iroha_core/src/kagemusha_wallet_v1/wsv.rs",
+        "suffix_installation",
+        1,
+        UseOwner::Other(Use::Record, RECORD_IDENTITY),
+    ),
+    function(
         "crates/iroha_core/src/kagemusha_wallet_v1/wsv.rs",
         "transaction_hash",
         1,
@@ -170,6 +182,18 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
             Use::Record,
             "Lists the identities of the active containments that still hold a restriction they imposed, so block start can close their ratification cases after the height's change sets: record identifiers, no digest over a table or cell",
         ),
+    ),
+    function(
+        "crates/iroha_core/src/runtime/taira_activation.rs",
+        "validate_boundary",
+        1,
+        UseOwner::Other(Use::Record, RECORD_IDENTITY),
+    ),
+    function(
+        "crates/iroha_core/src/runtime/taira_activation.rs",
+        "validate_context",
+        1,
+        UseOwner::Other(Use::Record, RECORD_IDENTITY),
     ),
     function(
         "crates/iroha_core/src/smartcontracts/code.rs",
@@ -792,6 +816,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     function(
         "crates/iroha_core/src/state.rs",
         "soracloud_runtime_receipts_mut_for_testing",
+        1,
+        UseOwner::Other(Use::Test, TEST_ONLY),
+    ),
+    function(
+        "crates/iroha_core/src/state.rs",
+        "sorafs_authority_proposals_mut",
         1,
         UseOwner::Other(Use::Test, TEST_ONLY),
     ),

@@ -1992,3 +1992,309 @@ fn scoped_escrow_zero_requires_native_initialization_at_the_same_certified_world
         })
         .unwrap();
 }
+
+#[test]
+fn native_schema_family_follows_exact_catalog_paths_and_keeps_foreign_anchors_exact() {
+    use crate::runtime::catalog::additions::{ACCOUNT_SIGNING_KEYS, SORAFS_AUTHORITY};
+    use iroha_data_model::sumeragi_finality::WorldStateSchemaPolicyV1 as _;
+    let catalog = crate::runtime::release_catalog().unwrap();
+    let selections = native_world_schema_selections_v1().unwrap();
+    assert_eq!(
+        selections.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+        ["B", "B+A", "B+G", "B+G+A", "B+G+K", "B+G+K+A", "Ironwood"]
+    );
+    let family = State::native_world_schema_hashes_v1().unwrap();
+    assert_eq!(family.len(), 7);
+    assert!(family.windows(2).all(|pair| pair[0] < pair[1]));
+    for (_, selection) in &selections {
+        selection.check_closure(&catalog.definitions).unwrap();
+        assert!(catalog.unsupported(selection).is_none());
+        let schema = selection_schema(selection).unwrap();
+        assert_eq!(
+            State::select_native_world_schema_v1(schema).unwrap(),
+            schema
+        );
+        assert_eq!(
+            State::native_world_schemas_for_anchor_v1(schema).unwrap(),
+            family
+        );
+    }
+    assert_eq!(
+        selection_schema(&selections[0].1).unwrap(),
+        State::native_world_schema_hash_v1().unwrap()
+    );
+    let foreign = Hash::new(b"unqualified-native-schema-family-test");
+    assert!(State::select_native_world_schema_v1(foreign).is_err());
+    assert_eq!(
+        State::native_world_schemas_for_anchor_v1(foreign).unwrap(),
+        vec![foreign]
+    );
+    // One authority table alone is not a supported native shape.
+    let mut partial = selections[0].1.clone();
+    let authority = catalog
+        .additions
+        .iter()
+        .find(|addition| addition.module == SORAFS_AUTHORITY.module)
+        .unwrap();
+    partial
+        .installed_storage
+        .push(*authority.storage.values().next().unwrap());
+    partial.installed_storage.sort_unstable();
+    assert!(
+        family
+            .as_slice()
+            .select_schema(selection_schema(&partial).unwrap())
+            .is_err()
+    );
+    let published: std::collections::BTreeMap<_, _> = catalog
+        .baseline_definitions
+        .iter()
+        .map(|id| (*id, catalog.definitions[id].clone()))
+        .collect();
+    let network = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(Hash::prehashed([0; 32])),
+    );
+    assert!(
+        catalog
+            .activation(
+                ACCOUNT_SIGNING_KEYS.module,
+                &catalog.baseline,
+                &published,
+                network,
+                1,
+                [0; 32]
+            )
+            .is_err()
+    );
+    for unsupported in [
+        &catalog.lifecycle,
+        &catalog.ironwood.as_ref().unwrap().selection,
+    ] {
+        assert!(
+            catalog
+                .activation(
+                    SORAFS_AUTHORITY.module,
+                    unsupported,
+                    &catalog.definitions,
+                    network,
+                    1,
+                    [0; 32]
+                )
+                .is_err()
+        );
+    }
+    // For each supported prefix the repair's actual kernel/interface change retains S,
+    // and its exact authority successor has the same S as the unrepaired counterpart.
+    // Publish only the selected prefix's needed definitions, not the future repair kernel.
+    for (plain, with_authority) in [(0, 1), (2, 3), (4, 5)] {
+        let current = &selections[plain].1;
+        let mut definitions = published.clone();
+        for id in current.active.iter().chain(&current.installed_storage) {
+            definitions.insert(*id, catalog.definitions[id].clone());
+        }
+        let repaired = catalog
+            .sorafs_repair_activation(current, &definitions, network, 1, [0; 32])
+            .unwrap()
+            .apply(current, &definitions)
+            .unwrap();
+        definitions.extend(repaired.published);
+        repaired.selection.check_closure(&definitions).unwrap();
+        assert_eq!(
+            selection_schema(&repaired.selection).unwrap(),
+            selection_schema(current).unwrap()
+        );
+        let after = catalog
+            .activation(
+                SORAFS_AUTHORITY.module,
+                &repaired.selection,
+                &definitions,
+                network,
+                2,
+                [0; 32],
+            )
+            .unwrap()
+            .apply(&repaired.selection, &definitions)
+            .unwrap();
+        definitions.extend(after.published);
+        after.selection.check_closure(&definitions).unwrap();
+        assert_eq!(
+            selection_schema(&after.selection).unwrap(),
+            selection_schema(&selections[with_authority].1).unwrap()
+        );
+    }
+}
+
+/// Prints source literals from native catalog/codec/hash derivation only. Replace the portable
+/// function with this exact output, then run native/portable parity and certified-proof tests.
+#[test]
+#[ignore = "native generator for portable schema literals"]
+fn print_qualified_native_world_schema_family_v1() {
+    let family = State::native_world_schema_hashes_v1().unwrap();
+    assert_eq!(family.len(), 7);
+    println!("pub fn native_world_schema_family_v1() -> Vec<Hash> {{");
+    println!("    vec![");
+    for schema in family {
+        let bytes: &[u8; 32] = schema.as_ref();
+        println!("        Hash::prehashed({bytes:?}),");
+    }
+    println!("    ]");
+    println!("}}");
+}
+
+#[test]
+fn authority_schema_family_verifies_original_certified_cuts_for_each_supported_prefix() {
+    use crate::runtime::catalog::additions::{
+        ACCOUNT_SIGNING_KEYS, ENDORSED_RUNTIME_UPGRADE_PROPOSAL, GAME_PARTITIONS, SORAFS_AUTHORITY,
+    };
+    use iroha_data_model::sumeragi_finality::{
+        FinalityValidator, SumeragiFinalityVerifier, WorldStateSchemaPolicyV1 as _,
+    };
+    // The existing component fixture stages an approved record and signs every validator's
+    // support. Real block execution performs activation and certifies the World root. This
+    // regression tests proof interpretation, not Parliament approval or release qualification.
+    let schedule = |chain: &CertifiedTestChain, module: &str, time_ms: u64| {
+        let change = {
+            let view = chain.state().view();
+            crate::runtime::draft_addition(
+                view.world(),
+                chain.network_id(),
+                module,
+                chain.height() + 2,
+                [0x71; 32],
+            )
+            .unwrap()
+        };
+        crate::runtime::ironwood::test_activation::schedule_change(chain, time_ms, change)
+    };
+    let selections = native_world_schema_selections_v1().unwrap();
+    for (prefix, plain, with_authority) in [
+        (Vec::<&str>::new(), 0, 1),
+        (
+            vec![
+                ENDORSED_RUNTIME_UPGRADE_PROPOSAL.module,
+                GAME_PARTITIONS.module,
+            ],
+            2,
+            3,
+        ),
+        (
+            vec![
+                ENDORSED_RUNTIME_UPGRADE_PROPOSAL.module,
+                GAME_PARTITIONS.module,
+                ACCOUNT_SIGNING_KEYS.module,
+            ],
+            4,
+            5,
+        ),
+    ] {
+        let (mut chain, asset) = asset_chain();
+        let mut time_ms = 3_000;
+        for module in prefix {
+            let activation = schedule(&chain, module, time_ms);
+            chain.commit_at(time_ms, Vec::new());
+            chain.commit_at(time_ms + 1_000, Vec::new());
+            assert_eq!(chain.height(), activation);
+            time_ms += 2_000;
+        }
+        let validators = chain
+            .validators()
+            .iter()
+            .map(|(peer, pop)| FinalityValidator {
+                public_key: peer.public_key().clone(),
+                proof_of_possession: pop.clone(),
+            })
+            .collect();
+        let mut verifier = SumeragiFinalityVerifier::new(
+            chain.genesis(),
+            chain.state().chain_id_ref().as_ref(),
+            validators,
+        )
+        .unwrap();
+        for height in 1..=chain.height() {
+            verifier
+                .verify(
+                    &crate::sumeragi::finality::build_proof(&chain.state().view(), height).unwrap(),
+                )
+                .unwrap();
+        }
+        let activation = schedule(&chain, SORAFS_AUTHORITY.module, time_ms);
+        let family = State::native_world_schema_hashes_v1().unwrap();
+        let budget = AllocationBudget::new(64 * 1024 * 1024);
+        let mut retained = Vec::new();
+        for expected_height in [activation - 1, activation] {
+            chain.commit_at(time_ms, Vec::new());
+            time_ms += 1_000;
+            assert_eq!(chain.height(), expected_height);
+            let committed = chain.committed(chain.height());
+            let (wire, definition, incarnation) = with_asset_snapshot(
+                chain.state(),
+                &committed,
+                &asset,
+                &budget,
+                |snapshot, definition, incarnation| {
+                    Ok((
+                        norito::encode_canonical(snapshot).map_err(|error| error.to_string())?,
+                        definition.clone(),
+                        incarnation.clone(),
+                    ))
+                },
+            )
+            .unwrap();
+            let snapshot = WorldStateSnapshotV1::decode_bounded_canonical(&wire).unwrap();
+            let block = verifier
+                .verify(
+                    &crate::sumeragi::finality::build_proof(&chain.state().view(), chain.height())
+                        .unwrap(),
+                )
+                .unwrap();
+            family
+                .as_slice()
+                .select_schema(snapshot.schema_hash)
+                .unwrap();
+            let verified = snapshot.authenticate(&block).unwrap();
+            verified
+                .verify_table_value("world.asset_definitions", &asset, &definition)
+                .unwrap();
+            verified
+                .verify_table_value("world.axt_asset_incarnations", &asset, &incarnation)
+                .unwrap();
+            let foreign_asset = AssetDefinitionId::derive_from_components(
+                DomainId::try_new("foreign", "universal").unwrap(),
+                "coin".parse().unwrap(),
+            );
+            assert!(
+                verified
+                    .verify_table_value("world.asset_definitions", &foreign_asset, &definition)
+                    .is_err()
+            );
+            retained.push((snapshot, block));
+        }
+        assert_eq!(
+            retained[0].0.schema_hash,
+            selection_schema(&selections[plain].1).unwrap()
+        );
+        assert_eq!(
+            retained[1].0.schema_hash,
+            selection_schema(&selections[with_authority].1).unwrap()
+        );
+        assert_ne!(retained[0].0.schema_hash, retained[1].0.schema_hash);
+        for (snapshot, block) in &retained {
+            snapshot.authenticate(block).unwrap();
+        }
+        assert!(retained[0].0.authenticate(&retained[1].1).is_err());
+        assert!(retained[1].0.authenticate(&retained[0].1).is_err());
+        let mut relabeled = retained[1].0.clone();
+        relabeled.schema_hash = retained[0].0.schema_hash;
+        assert!(relabeled.authenticate(&retained[1].1).is_err());
+        let mut foreign = retained[1].0.clone();
+        foreign.schema_hash = Hash::new(b"unqualified-certified-schema-candidate");
+        assert!(
+            family
+                .as_slice()
+                .select_schema(foreign.schema_hash)
+                .is_err()
+        );
+        assert!(foreign.authenticate(&retained[1].1).is_err());
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+}

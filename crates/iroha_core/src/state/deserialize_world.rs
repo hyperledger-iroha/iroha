@@ -135,10 +135,21 @@ fn proposal_status_matches_latest_attempt_v1(
 fn validate_no_standalone_governance_state_for_typed_proposals_v1(
     world: &World,
 ) -> Result<(), json::Error> {
+    let hosted_selected = crate::runtime::sorafs_authority_enabled(
+        world.runtime_selection.view().get(),
+    )
+    .map_err(|error| json::Error::InvalidField {
+        field: "runtime_selection".into(),
+        message: error.to_string(),
+    })?;
     let proposals = world.governance_proposals.view();
+    let hosted = world.sorafs_authority_proposals.view();
     let aliases_typed_proposal = |selector: &str| {
         iroha_data_model::governance::decode_governance_proposal_selector_alias_v1(selector)
-            .is_some_and(|proposal_id| proposals.get(&proposal_id).is_some())
+            .is_some_and(|proposal_id| {
+                proposals.get(&proposal_id).is_some()
+                    || (hosted_selected && hosted.get(&proposal_id).is_some())
+            })
     };
     macro_rules! reject_typed_alias {
         ($field:literal, $storage:expr) => {{
@@ -6188,6 +6199,7 @@ fn timed_ovn_phase_matches_ballot_status_v1(
 fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
     let mut validated_key_sessions = BTreeMap::new();
     let parliament_attempts = world.parliament_attempts.view();
+    let hosted = world.sorafs_authority_proposals.view();
     let timed_ovn_evidence = world.timed_ovn_evidence.view();
     let tle_key_session_rosters = world.tle_key_session_rosters.view();
     let tle_key_session_lifecycles = world.tle_key_session_lifecycles.view();
@@ -6489,8 +6501,11 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
             let Some(attempt) = parliament_attempts.get(&governance_attempt_id) else {
                 return false;
             };
-            if attempt.attempt().status
-                != iroha_data_model::governance::types::GovernanceAttemptStatusV1::Active
+            if hosted
+                .get(attempt.proposal_content_id().as_bytes())
+                .is_some_and(|record| record.deadline_closure.is_some())
+                || attempt.attempt().status
+                    != iroha_data_model::governance::types::GovernanceAttemptStatusV1::Active
             {
                 return false;
             }
@@ -9078,6 +9093,12 @@ fn decode_world_fields(
         AccountId,
         iroha_data_model::account::signing_key::AccountSigningKeyReservationV1,
     > = take_required(&mut map, "account_signing_key_reservations")?;
+    let sorafs_authority_proposals: Storage<[u8; 32], SorafsAuthorityProposalRecordV1> =
+        take_required(&mut map, "sorafs_authority_proposals")?;
+    let sorafs_authority_heads: Storage<[u8; 32], SorafsAuthorityHeadV1> =
+        take_required(&mut map, "sorafs_authority_heads")?;
+    let sorafs_authority_leases: Storage<[u8; 32], SorafsAuthorityLeaseV1> =
+        take_required(&mut map, "sorafs_authority_leases")?;
     let nft_sale_offers = take_optional(&mut map, "nft_sale_offers")?.unwrap_or_default();
     let nft_custody_records = take_optional(&mut map, "nft_custody_records")?.unwrap_or_default();
 
@@ -9173,6 +9194,9 @@ fn decode_world_fields(
         game_partitions,
         account_signing_keys,
         account_signing_key_reservations,
+        sorafs_authority_proposals,
+        sorafs_authority_heads,
+        sorafs_authority_leases,
         nft_sale_offers,
         nft_custody_records,
         nft_custody_by_nft: Storage::default(),
@@ -9548,21 +9572,21 @@ fn parse_world(
                     message: format!("invalid persisted Parliament attempt: {error}"),
                 })?;
             let proposal_id = *attempt.proposal_content_id().as_bytes();
-            let proposal = governance_proposals_view.get(&proposal_id).ok_or_else(|| {
-                json::Error::InvalidField {
+            let proposal =
+                crate::smartcontracts::isi::world::isi::ParliamentProposalHost::resolve_retained(
+                    &world.view(),
+                    proposal_id,
+                )
+                .map_err(|error| json::Error::InvalidField {
                     field: "parliament_attempts".into(),
-                    message: "Parliament attempt references a missing exact governance proposal"
-                        .to_owned(),
-                }
-            })?;
-            attempt
-            .validate_proposal_bindings_v1(&proposal.kind)
-            .map_err(|error| json::Error::InvalidField {
-                field: "parliament_attempts".into(),
-                message: format!(
-                    "Parliament attempt differs from its exact governance proposal policy: {error}"
-                ),
-            })?;
+                    message: error.to_string(),
+                })?;
+            proposal
+                .validate_bindings(attempt)
+                .map_err(|error| json::Error::InvalidField {
+                    field: "parliament_attempts".into(),
+                    message: error.to_string(),
+                })?;
             parliament_attempts_by_proposal
                 .entry(attempt.proposal_content_id())
                 .or_default()
@@ -9707,6 +9731,12 @@ fn parse_world(
             }.into());
             }
         }
+        validate_sorafs_authority_attempt_history(&world.view()).map_err(|message| {
+            json::Error::InvalidField {
+                field: "sorafs_authority_proposals".into(),
+                message,
+            }
+        })?;
         crate::validation_fee::validate_persisted_policy_registry_governance_v1(&world.view())
             .map_err(|error| match error {
                 crate::execution_attempt::ExecutionAttemptError::Rejected(message) => {
@@ -10039,6 +10069,541 @@ fn validate_restored_crypto_policy(
     Ok(())
 }
 
+// Each proposal has at most the fixed V1 retry ceiling. Look up those exact keys
+// instead of copying the global attempt table or allocating a per-proposal history.
+fn validate_sorafs_authority_attempt_history(cut: &impl WorldReadOnly) -> Result<(), String> {
+    use iroha_data_model::governance::types::{
+        GovernanceAttemptId, GovernanceAttemptStatusV1,
+        MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1, ProposalContentId,
+    };
+    const ATTEMPTS: usize = MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 as usize + 1;
+
+    for (id, attempt) in cut.parliament_attempts().iter() {
+        if cut
+            .sorafs_authority_proposals()
+            .get(attempt.proposal_content_id().as_bytes())
+            .is_none()
+        {
+            continue;
+        }
+        if id != &attempt.attempt().id {
+            return Err("SoraFS Parliament attempt key differs from its canonical id".into());
+        }
+        attempt.validate().map_err(|error| error.to_string())?;
+        let host =
+            crate::smartcontracts::isi::world::isi::ParliamentProposalHost::resolve_retained(
+                cut,
+                *attempt.proposal_content_id().as_bytes(),
+            )
+            .map_err(|error| error.to_string())?;
+        host.validate_bindings(attempt)
+            .map_err(|error| error.to_string())?;
+    }
+    for (id, record) in cut.sorafs_authority_proposals().iter() {
+        crate::smartcontracts::isi::sorafs_authority::family_randomness_units(
+            cut,
+            &record.proposal,
+            None,
+        )
+        .map_err(|error| error.to_string())?;
+        if record.proposal.invariant_error().is_some()
+            || record.proposal.fingerprint() != *id
+            || record.created_height == 0
+            || cut.governance_proposals().get(id).is_some()
+        {
+            return Err("invalid or ambiguous hosted SoraFS authority proposal".into());
+        }
+        let content = ProposalContentId::new(*id);
+        let mut history: [Option<&ParliamentAttemptStateV1>; ATTEMPTS] = [None; ATTEMPTS];
+        let mut count = 0_usize;
+        let mut missing = false;
+        for sequence in 0..=MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1 {
+            let id = GovernanceAttemptId::derive_v1(content, sequence);
+            let Some(attempt) = cut.parliament_attempts().get(&id) else {
+                missing = true;
+                continue;
+            };
+            if missing
+                || attempt.proposal_content_id() != content
+                || attempt.attempt().sequence != sequence
+            {
+                return Err("SoraFS Parliament attempt history is not contiguous".into());
+            }
+            if let Some(previous) = count.checked_sub(1).and_then(|index| history[index])
+                && !matches!(
+                    previous.attempt().status,
+                    GovernanceAttemptStatusV1::Rejected
+                        | GovernanceAttemptStatusV1::Superseded
+                        | GovernanceAttemptStatusV1::ExecutionFailed
+                )
+            {
+                return Err(
+                    "SoraFS non-latest Parliament attempt is not a retryable terminal predecessor"
+                        .into(),
+                );
+            }
+            history[count] = Some(attempt);
+            count += 1;
+        }
+        crate::governance::parliament::validate_ordered_parliament_randomness_redraw_lineage_v1(
+            history[..count].iter().filter_map(|attempt| *attempt),
+        )
+        .map_err(|error| error.to_string())?;
+        let latest = count.checked_sub(1).and_then(|index| history[index]);
+        if !proposal_status_matches_latest_attempt_v1(
+            record.status,
+            latest.map(|attempt| attempt.attempt().status),
+        ) || latest.is_some_and(|attempt| {
+            record.status == GovernanceProposalStatus::Enacted
+                && !attempt.certificate().is_some_and(|certificate| {
+                    attempt.terminal_height() == Some(certificate.enact_at_height)
+                })
+        }) {
+            return Err("SoraFS proposal status differs from its latest Parliament attempt".into());
+        }
+    }
+    Ok(())
+}
+
+// Both original cuts must retain voted receipts and revision tombstones. A coherent
+// current projection cannot authorize a corrupted predecessor after rollback.
+fn validate_sorafs_authority_versions(
+    world: &World,
+    network: &iroha_data_model::NetworkId,
+    height: u64,
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<(), MergeLedgerCommitError> {
+    fn validate(
+        cut: &impl WorldReadOnly,
+        network: &iroha_data_model::NetworkId,
+        height: u64,
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> Result<(), MergeLedgerCommitError> {
+        validate_sorafs_authority_attempt_history(cut)
+            .map_err(MergeLedgerCommitError::ExecutionStatePublication)?;
+        crate::smartcontracts::isi::sorafs_authority::validate_projection(cut, network, budget)
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(reason) => {
+                    MergeLedgerCommitError::ExecutionStatePublication(reason)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Deferred(reason) => {
+                    MergeLedgerCommitError::ExecutionDeferred(reason)
+                }
+            })?;
+        let cadence = if cut.sorafs_authority_proposals().iter().next().is_some()
+            || cut.sorafs_authority_leases().iter().next().is_some()
+        {
+            Some(
+                cut.sumeragi_npos_parameters()
+                    .map_err(|error| match error {
+                        crate::execution_attempt::ExecutionAttemptError::Rejected(reason) => {
+                            MergeLedgerCommitError::ExecutionStatePublication(reason)
+                        }
+                        crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                            MergeLedgerCommitError::ExecutionDeferred(original)
+                        }
+                    })?
+                    .ok_or_else(|| {
+                        MergeLedgerCommitError::ExecutionStatePublication(
+                            "retained authority history has no committed immutable cadence".into(),
+                        )
+                    })?
+                    .epoch_length_blocks
+                    .get(),
+            )
+        } else {
+            None
+        };
+        for (id, record) in cut.sorafs_authority_proposals().iter() {
+            let deadline =
+                crate::smartcontracts::isi::sorafs_authority::proposal_deadline(&record.proposal);
+            let invalid_admission = record
+                .proposal
+                .grid
+                .window(record.proposal.term)
+                .is_none_or(|window| {
+                    let (start, end) = if record.proposal.action
+                        == iroha_data_model::isi::sorafs_authority::SorafsAuthorityActionV1::Revoke
+                    {
+                        (window.start_height, window.end_height)
+                    } else {
+                        (window.admission_height, window.cutoff_height)
+                    };
+                    !(start..end).contains(&record.created_height)
+                });
+            let invalid_closure = match record.deadline_closure {
+                Some(closure) => {
+                    record.status != GovernanceProposalStatus::Proposed
+                        || deadline != Some(closure.closed_at_height)
+                        || closure.closed_at_height > height
+                        || record.created_height >= closure.closed_at_height
+                }
+                None => {
+                    record.status == GovernanceProposalStatus::Proposed
+                        && deadline.is_some_and(|deadline| height >= deadline)
+                }
+            };
+            if Some(record.proposal.grid.epoch_length_blocks) != cadence
+                || invalid_admission
+                || invalid_closure
+                || record.proposal.network != *network
+                || record.created_height == 0
+                || record.created_height > height
+                || record.proposal.fingerprint() != *id
+                || record.proposal.invariant_error().is_some()
+            {
+                return Err(MergeLedgerCommitError::ExecutionStatePublication(
+                    "SoraFS authority content differs from the restored network, immutable cadence, admission window or committed height".into()));
+            }
+        }
+        if cut
+            .sorafs_authority_heads()
+            .iter()
+            .any(|(_, head)| head.enacted_at_height > height)
+        {
+            return Err(MergeLedgerCommitError::ExecutionStatePublication(
+                "SoraFS authority receipt is beyond the restored committed height".into(),
+            ));
+        }
+        for (_, lease) in cut.sorafs_authority_leases().iter() {
+            let window = lease.plan.grid.window(lease.plan.term).ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionStatePublication("invalid authority term".into())
+            })?;
+            if lease.plan.network != *network
+                || Some(lease.plan.grid.epoch_length_blocks) != cadence
+                || lease
+                    .activation
+                    .as_ref()
+                    .is_some_and(|e| e.at_height > height)
+                || lease
+                    .completion
+                    .as_ref()
+                    .is_some_and(|e| e.at_height > height)
+                || (lease.start_processed && height < window.start_height)
+                || (!lease.start_processed && height >= window.start_height)
+                || (lease.activation.is_some()
+                    && lease.completion.is_none()
+                    && height >= window.end_height)
+            {
+                return Err(MergeLedgerCommitError::ExecutionStatePublication(
+                    "authority lease missed its committed-height boundary".into(),
+                ));
+            }
+        }
+        for (_, attempt) in cut.parliament_attempts().iter() {
+            if cut
+                .sorafs_authority_proposals()
+                .get(attempt.proposal_content_id().as_bytes())
+                .is_some()
+            {
+                // The block-start closure precedes every ordinary transition at its height.
+                let transcript_height = crate::smartcontracts::isi::sorafs_authority::retained_attempt_validation_height(cut, attempt.proposal_content_id(), height);
+                attempt
+                    .validate_restored_height_v1(transcript_height)
+                    .map_err(|error| {
+                        MergeLedgerCommitError::ExecutionStatePublication(error.to_string())
+                    })?;
+            }
+        }
+        Ok(())
+    }
+    validate(&world.view(), network, height, budget)?;
+    let previous = world
+        .try_block_and_revert(budget)
+        .map_err(StateStorageAdmissionError::World)?;
+    validate(&previous, network, height.saturating_sub(1), budget)
+}
+
+#[cfg(test)]
+mod sorafs_authority_restore_tests {
+    use super::*;
+    use iroha_data_model::isi::sorafs_authority::{
+        SorafsAuthorityActionV1, SorafsAuthorityProposalV1, SorafsOperatingAuthorityV1,
+    };
+
+    fn world_with_authority_cadence() -> World {
+        let mut world = World::default();
+        let policy = iroha_data_model::parameter::system::SumeragiNposParameters {
+            epoch_length_blocks: core::num::NonZeroU64::new(100).unwrap(),
+            epoch_seed: [0x31; 32],
+            evidence_horizon_blocks: 1,
+            slashing_delay_blocks: 1,
+            ..iroha_data_model::parameter::system::SumeragiNposParameters::default()
+        };
+        world
+            .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+                policy.into_custom_parameter(),
+            ))
+            .unwrap();
+        world
+    }
+
+    fn proposal() -> SorafsAuthorityProposalV1 {
+        SorafsAuthorityProposalV1 {
+            grid: iroha_data_model::isi::sorafs_authority::SorafsAuthorityTermGridV1 {
+                epoch_length_blocks: 100,
+            },
+            term: 1,
+            network: iroha_data_model::NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
+                    [0x72; 32],
+                )),
+            ),
+            root: iroha_data_model::runtime::lifecycle::RootScopeV1::Universal,
+            account: iroha_test_samples::ALICE_ID.clone(),
+            authority: SorafsOperatingAuthorityV1::SetReservePolicy,
+            action: SorafsAuthorityActionV1::Grant,
+            expected_revision: 0,
+            completion_policy: None,
+        }
+    }
+
+    fn attempt(proposal: &SorafsAuthorityProposalV1, sequence: u32) -> ParliamentAttemptStateV1 {
+        use iroha_data_model::governance::types::{
+            GovernanceAttemptId, GovernanceAttemptStatusV1, GovernanceAttemptV1, GovernanceStageV1,
+        };
+        let (risk_tier, bodies) =
+            crate::governance::parliament::sorafs_authority_attempt_policy_v1();
+        ParliamentAttemptStateV1::try_new(
+            GovernanceAttemptV1 {
+                id: GovernanceAttemptId::derive_v1(proposal.proposal_content_id(), sequence),
+                proposal_content_id: proposal.proposal_content_id(),
+                sequence,
+                risk_tier,
+                stage: GovernanceStageV1::Qualification,
+                status: GovernanceAttemptStatusV1::Active,
+            },
+            crate::governance::parliament::PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,
+            1,
+            100,
+            proposal.effect_preimage_hash_v1(),
+            crate::smartcontracts::isi::sorafs_authority::admitted_expected_head(proposal),
+            bodies,
+        )
+        .unwrap()
+    }
+
+    fn record(
+        proposal: SorafsAuthorityProposalV1,
+        status: GovernanceProposalStatus,
+    ) -> SorafsAuthorityProposalRecordV1 {
+        SorafsAuthorityProposalRecordV1 {
+            deadline_closure: None,
+            proposer: iroha_test_samples::ALICE_ID.clone(),
+            proposal,
+            created_height: 1,
+            status,
+        }
+    }
+
+    #[test]
+    fn sorafs_authority_restore_rejects_an_uncommitted_term_grid() {
+        use crate::smartcontracts::isi::sorafs_authority::SorafsAuthorityDeadlineClosureV1;
+        let world = world_with_authority_cadence();
+        let mut proposal = proposal();
+        proposal.grid.epoch_length_blocks = 200;
+        let network = proposal.network;
+        let id = proposal.fingerprint();
+        let cutoff = proposal.grid.window(proposal.term).unwrap().cutoff_height;
+        let budget = world.sccp_committee_generations.allocation_budget().clone();
+        let mut closed = record(proposal, GovernanceProposalStatus::Proposed);
+        closed.deadline_closure = Some(SorafsAuthorityDeadlineClosureV1 {
+            closed_at_height: cutoff,
+        });
+        let mut records = world.sorafs_authority_proposals.block();
+        records.insert(id, closed);
+        records.commit();
+        let error =
+            validate_sorafs_authority_versions(&world, &network, cutoff, &budget).unwrap_err();
+        assert!(error.to_string().contains("immutable cadence"), "{error}");
+    }
+
+    #[test]
+    fn sorafs_authority_restore_checks_exact_deadline_receipts_and_undo() {
+        use crate::smartcontracts::isi::sorafs_authority::SorafsAuthorityDeadlineClosureV1;
+        let world = world_with_authority_cadence();
+        let proposal = proposal();
+        let network = proposal.network;
+        let id = proposal.fingerprint();
+        let cutoff = proposal.grid.window(proposal.term).unwrap().cutoff_height;
+        let budget = world.sccp_committee_generations.allocation_budget().clone();
+        let mut closed = record(proposal, GovernanceProposalStatus::Proposed);
+        closed.deadline_closure = Some(SorafsAuthorityDeadlineClosureV1 {
+            closed_at_height: cutoff,
+        });
+        {
+            let mut records = world.sorafs_authority_proposals.block();
+            records.insert(id, closed.clone());
+            records.commit();
+        }
+        validate_sorafs_authority_versions(&world, &network, cutoff, &budget).unwrap();
+        let error =
+            validate_sorafs_authority_versions(&world, &network, cutoff - 1, &budget).unwrap_err();
+        assert!(error.to_string().contains("committed height"), "{error}");
+        {
+            let mut records = world.sorafs_authority_proposals.block();
+            closed.deadline_closure.as_mut().unwrap().closed_at_height -= 1;
+            records.insert(id, closed);
+            records.commit();
+        }
+        assert!(validate_sorafs_authority_versions(&world, &network, cutoff + 1, &budget).is_err());
+        {
+            let mut records = world.sorafs_authority_proposals.block();
+            records.remove(id);
+            records.commit();
+        }
+        assert!(
+            validate_sorafs_authority_versions(&world, &network, cutoff + 2, &budget).is_err(),
+            "a clean current table cannot authorize a forged undo closure"
+        );
+    }
+
+    #[test]
+    fn sorafs_authority_history_rejects_missing_and_nonterminal_predecessors() {
+        let world = world_with_authority_cadence();
+        let proposal = proposal();
+        let proposal_id = proposal.fingerprint();
+        let first = attempt(&proposal, 0);
+        let retry = attempt(&proposal, 1);
+        let first_id = first.attempt().id;
+        let retry_id = retry.attempt().id;
+        let mut block = world.block();
+        block.sorafs_authority_proposals.insert(
+            proposal.fingerprint(),
+            record(proposal, GovernanceProposalStatus::Proposed),
+        );
+        block.parliament_attempts.insert(first_id, first.clone());
+        validate_sorafs_authority_attempt_history(&block).unwrap();
+        block
+            .sorafs_authority_proposals
+            .get_mut(&proposal_id)
+            .unwrap()
+            .status = GovernanceProposalStatus::Rejected;
+        let error = validate_sorafs_authority_attempt_history(&block).unwrap_err();
+        assert!(error.contains("latest Parliament attempt"), "{error}");
+        block
+            .sorafs_authority_proposals
+            .get_mut(&proposal_id)
+            .unwrap()
+            .status = GovernanceProposalStatus::Proposed;
+        block.parliament_attempts.insert(retry_id, retry);
+        let error = validate_sorafs_authority_attempt_history(&block).unwrap_err();
+        assert!(error.contains("retryable terminal predecessor"), "{error}");
+        block.parliament_attempts.remove(first_id);
+        let error = validate_sorafs_authority_attempt_history(&block).unwrap_err();
+        assert!(error.contains("not contiguous"), "{error}");
+        block.parliament_attempts.remove(retry_id);
+        block.parliament_attempts.insert(retry_id, first);
+        let error = validate_sorafs_authority_attempt_history(&block).unwrap_err();
+        assert!(error.contains("canonical id"), "{error}");
+    }
+
+    #[test]
+    fn sorafs_authority_restore_rejects_terminal_status_without_history_in_undo() {
+        let world = world_with_authority_cadence();
+        let proposal = proposal();
+        let network = proposal.network;
+        let id = proposal.fingerprint();
+        let budget = world.sccp_committee_generations.allocation_budget().clone();
+        {
+            let mut records = world.sorafs_authority_proposals.block();
+            records.insert(id, record(proposal, GovernanceProposalStatus::Rejected));
+            records.commit();
+        }
+        let error = validate_sorafs_authority_versions(&world, &network, 1, &budget).unwrap_err();
+        assert!(
+            error.to_string().contains("latest Parliament attempt"),
+            "{error}"
+        );
+        {
+            let mut records = world.sorafs_authority_proposals.block();
+            records.remove(id);
+            records.commit();
+        }
+        validate_sorafs_authority_attempt_history(&world.view()).unwrap();
+        let error = validate_sorafs_authority_versions(&world, &network, 2, &budget).unwrap_err();
+        assert!(
+            error.to_string().contains("latest Parliament attempt"),
+            "{error}"
+        );
+        assert!(
+            world
+                .sorafs_authority_proposals
+                .view()
+                .iter()
+                .next()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn sorafs_authority_restore_checks_the_original_undo_cut() {
+        let world = world_with_authority_cadence();
+        let budget = world.sccp_committee_generations.allocation_budget().clone();
+        let network = iroha_data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x72; 32])),
+        );
+        validate_sorafs_authority_versions(&world, &network, 2, &budget).unwrap();
+        let proposal = SorafsAuthorityProposalV1 {
+            grid: iroha_data_model::isi::sorafs_authority::SorafsAuthorityTermGridV1 {
+                epoch_length_blocks: 100,
+            },
+            term: 1,
+            network,
+            root: iroha_data_model::runtime::lifecycle::RootScopeV1::Universal,
+            account: iroha_test_samples::ALICE_ID.clone(),
+            authority: SorafsOperatingAuthorityV1::SetReservePolicy,
+            action: SorafsAuthorityActionV1::Grant,
+            expected_revision: 0,
+            completion_policy: None,
+        };
+        let id = proposal.fingerprint();
+        {
+            let mut entries = world.sorafs_authority_proposals.block();
+            entries.insert(
+                id,
+                SorafsAuthorityProposalRecordV1 {
+                    deadline_closure: None,
+                    proposer: iroha_test_samples::ALICE_ID.clone(),
+                    proposal,
+                    created_height: 1,
+                    status: GovernanceProposalStatus::Proposed,
+                },
+            );
+            entries.commit();
+        }
+        {
+            let mut entries = world.sorafs_authority_proposals.block();
+            entries.remove(id);
+            entries.commit();
+        }
+        assert!(
+            world
+                .sorafs_authority_proposals
+                .view()
+                .iter()
+                .next()
+                .is_none()
+        );
+        let error = validate_sorafs_authority_versions(&world, &network, 2, &budget).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("inactive SoraFS authority host retains a live obligation"),
+            "{error}"
+        );
+        assert!(
+            world
+                .sorafs_authority_proposals
+                .view()
+                .iter()
+                .next()
+                .is_none(),
+            "validating original undo must not publish it"
+        );
+    }
+}
+
 fn build_state(
     inputs: BuildStateInputs,
     allow_durable_recovery: bool,
@@ -10124,6 +10689,7 @@ fn build_state(
             ))
         })?;
     }
+    validate_sorafs_authority_versions(&world, &network_id, restored_height, &execution_budget)?;
     if !emergency_fast {
         validate_tle_ovn_snapshot_network_v1(&world, &network_id)
             .map_err(MergeLedgerCommitError::ExecutionStatePublication)?;
@@ -10142,9 +10708,16 @@ fn build_state(
                 )));
             }
         }
+        let world_view = world.view();
         for (governance_attempt_id, attempt) in world.parliament_attempts.view().iter() {
+            let transcript_height =
+                crate::smartcontracts::isi::sorafs_authority::retained_attempt_validation_height(
+                    &world_view,
+                    attempt.proposal_content_id(),
+                    restored_height,
+                );
             attempt
-                .validate_restored_height_v1(restored_height)
+                .validate_restored_height_v1(transcript_height)
                 .map_err(|error| {
                     MergeLedgerCommitError::ExecutionStatePublication(format!(
                         "restored Parliament attempt {governance_attempt_id:?} has impossible lifecycle state at committed height {restored_height}: {error}"
@@ -13558,7 +14131,7 @@ mod privacy_root_refusal_tests {
     #[test]
     fn ironwood_optional_policy_cannot_restore_under_the_baseline_selection() {
         use super::*;
-        use iroha_data_model::privacy::{PrivacyRuntimeProtocolIdV1, PrivacyProtocolPolicyV1};
+        use iroha_data_model::privacy::{PrivacyProtocolPolicyV1, PrivacyRuntimeProtocolIdV1};
         let mut world = World::default();
         let protocol = PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1;
         world.privacy_protocol_policies.insert(

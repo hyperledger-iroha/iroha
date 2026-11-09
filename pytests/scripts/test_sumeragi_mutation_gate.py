@@ -1475,11 +1475,12 @@ def test_physical_history_contention_ignores_logical_membership_release():
     assert 'sumeragi_core_mutation = "HC73"' in source.read_text()
 
 
-def test_opaque_host_and_replay_preserve_signed_staking_authority():
+def test_opaque_host_and_replay_preserve_signed_staking_and_selected_sorafs_authority():
     rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC66"]
     assert rule.tests == (
         'executor::opaque_monetary_tests::raw_ivm_staking_trigger_requires_signed_monetary_plan',
         'executor::opaque_monetary_tests::supplied_proved_staking_effects_require_signed_monetary_plan',
+        'smartcontracts::isi::sorafs_authority::tests::delegated_trigger_cannot_exercise_selected_holder_credit_authority',
     )
     assert not rule.scenarios
     assert gate.has_switch("HC66", core=True)
@@ -7172,13 +7173,14 @@ def test_sccp_parliament_boundary_owns_certificate_checks_and_requires_original_
         "attempt.attempt().status != GovernanceAttemptStatusV1::Certified",
         "certificate.validate()",
         "certificate.enact_at_height != current_height",
-        "ensure_certificate_only_proposal_v1(proposal_id, &proposal, state_transaction)?",
-        "validate_proposal_bindings_v1(&proposal.kind)",
+        "ParliamentProposalHost::resolve(&state_transaction.world, proposal_id)?",
+        "proposal.validate_record(crate::state::GovernanceProposalStatus::Proposed, state_transaction,)?",
+        "proposal.validate_bindings(&attempt)",
         "certificate.proposal_content_id != attempt.proposal_content_id()",
         "certificate.governance_attempt_id != governance_attempt_id",
         "certificate.governance_attempt_sequence != attempt.attempt().sequence",
-        "certificate.effect_preimage_hash != proposal.kind.effect_preimage_hash_v1()",
-        "proposal.kind.fingerprint() != proposal_id",
+        "certificate.effect_preimage_hash != proposal.effect_hash()",
+        "proposal.fingerprint() != proposal_id",
     ):
         assert re.sub(r"\s+", "", obligation) in context
     executor = named_rust_function(world, "execute_due_parliament_certificate_v1")
@@ -7186,7 +7188,21 @@ def test_sccp_parliament_boundary_owns_certificate_checks_and_requires_original_
     assert "exact_due_parliament_certificate_context_v1(governance_attempt_id,state_transaction)?" in compact_executor
     assert "observed_head!=certificate.expected_head" in compact_executor
     assert executor.index("exact_due_parliament_certificate_context_v1(") < executor.index("observed_head != certificate.expected_head")
-    assert executor.index("observed_head != certificate.expected_head") < executor.index("apply_parliament_proposal_effect_v1(")
+    assert executor.index("observed_head != certificate.expected_head") < executor.index("proposal.apply_effect(")
+
+    # The selected proposal host must preserve every baseline certificate check
+    # and effect dispatch; changing the caller alone is not enough evidence.
+    host = (core / "smartcontracts/isi/world_authority_host.rs").read_text()
+    for function, baseline_obligation in (
+        ("validate_record", "Self::Baseline(r) => { ensure_certificate_only_proposal_status_v1(self.fingerprint(), r, status, tx) }"),
+        ("validate_bindings", "Self::Baseline(r) => attempt.validate_proposal_bindings_v1(&r.kind)"),
+        ("fingerprint", "Self::Baseline(r) => r.kind.fingerprint()"),
+        ("effect_hash", "Self::Baseline(r) => r.kind.effect_preimage_hash_v1()"),
+        ("expected_head", "Self::Baseline(r) => parliament_expected_head_v1(&r.kind, tx)"),
+        ("apply_effect", "Self::Baseline(r) => { apply_parliament_proposal_effect_v1(self.fingerprint(), r, certificate, tx) }"),
+    ):
+        body = re.sub(r"\s+", "", named_rust_function(host, function))
+        assert re.sub(r"\s+", "", baseline_obligation) in body
 
     governance = (core / "smartcontracts/isi/sccp/governance.rs").read_text()
     enact = named_rust_function(governance, "enact")

@@ -134,7 +134,9 @@ mod attempt;
 mod producer;
 pub use attempt::ExecutionOutputAttemptError;
 pub use producer::{ExecutionOutputSealError, ExecutionOutputSealMetadata};
-pub use producer::{SorafsRepairRehearsalReport, SorafsRepairWorldChange};
+pub use producer::{
+    SorafsRepairRehearsalReport, SorafsRepairWorldChange, TairaActivationRehearsalReport,
+};
 
 impl StateBlock<'_> {
     /// Capture once; an invalid restored policy is retained as an explicit refusal.

@@ -8,6 +8,7 @@ pub mod definition;
 pub mod lifecycle;
 /// Explicit one-time SoraFS successor authorization and certificate.
 pub mod sorafs_repair;
+pub mod taira_activation;
 
 /// Native implementation identity for complete compact trigger lifecycle capture.
 pub const TRIGGER_LIFECYCLE_MODULE: &str = "iroha.trigger-lifecycle.v1";

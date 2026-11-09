@@ -2117,7 +2117,10 @@ async fn ironwood_onecall_default_native_family_accepts_successor_cut_through_pr
     let family = iroha_data_model::sumeragi_finality::native_world_schema_family_v1();
     // The portable family is sorted by hash, not activation order. Exercise both
     // directions so this includes baseline requests reading the successor cut.
-    for (anchor, successor) in [(family[0], family[1]), (family[1], family[0])] {
+    for (anchor, successor) in family
+        .windows(2)
+        .flat_map(|pair| [(pair[0], pair[1]), (pair[1], pair[0])])
+    {
         for exact in [false, true] {
             let mut native = NativeFinalityFixture::start("ironwood-onecall-schema-transition");
             let mut builder =

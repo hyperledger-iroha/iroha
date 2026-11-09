@@ -3,6 +3,7 @@ pub mod admission;
 pub mod alias_cache;
 #[cfg(feature = "app_api")]
 pub mod api;
+mod authority_auth;
 pub mod blinded;
 #[cfg(all(test, feature = "app_api"))]
 pub mod concurrency;

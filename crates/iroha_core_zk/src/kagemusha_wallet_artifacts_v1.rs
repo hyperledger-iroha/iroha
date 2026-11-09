@@ -30,7 +30,7 @@ use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::kagemusha_wallet_proofs_v1::{
-    ArtifactSet, Error, LineageArtifact, RuntimeBindings, StepArtifact,
+    ArtifactSet, Error, LineageArtifact, RuntimeBindings, StepArtifact, reads_instance_cell,
 };
 
 /// Non-shipping genuine signed artifact fixtures for native/Core installation tests.
@@ -508,6 +508,9 @@ fn parse_artifact<C: PastaCurve>(
     artifact_bounds(original, &mut total)?;
     let binding = DescriptorBinding::decode_v2(&original.descriptor).map_err(|_| Error::Profile)?;
     let d = binding.descriptor();
+    if reads_instance_cell(&d.gates, &d.lookups) {
+        return Err(Error::Profile);
+    }
     let expected = policy(lineage)?;
     if d.protocol_version != PROTOCOL_VERSION
         || d.curve != expected.curve

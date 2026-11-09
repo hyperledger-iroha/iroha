@@ -534,6 +534,32 @@ pub(crate) fn parliament_attempt_policy_v1(
     (risk_tier, requirements)
 }
 
+/// Constitutional body pipeline for the selected SoraFS authority proposal host.
+pub(crate) fn sorafs_authority_attempt_policy_v1() -> (RiskTierV1, Vec<RequiredParliamentBodyV1>) {
+    (
+        RiskTierV1::Constitutional,
+        [
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::CoordinationCouncil,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::PolicyJury,
+        ]
+        .into_iter()
+        .map(|body| RequiredParliamentBodyV1 {
+            body,
+            decision_mode: if body == ParliamentBody::PolicyJury {
+                ParliamentDecisionModeV1::HiddenBindingBallot
+            } else {
+                ParliamentDecisionModeV1::PublicFinding
+            },
+        })
+        .collect(),
+    )
+}
+
 /// The single reducer object allowed to consume a finalized beacon pulse.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::governance::parliament::ParliamentPulseConsumerV1")]
@@ -2112,11 +2138,31 @@ impl ParliamentAttemptStateV1 {
         let expected_subject = proposal
             .governed_subject_id_v1()
             .map_err(|_| ParliamentReducerErrorV1::ProposalBindingMismatch)?;
+        let (base_risk_tier, base_required_bodies) = parliament_attempt_policy_v1(proposal);
+        self.validate_hosted_proposal_bindings_v1(
+            expected_proposal_content_id,
+            expected_effect_preimage_hash,
+            expected_subject,
+            base_risk_tier,
+            &base_required_bodies,
+        )
+    }
+
+    /// Validate the exact immutable bindings supplied by a selected typed proposal host.
+    /// # Errors
+    /// The retained attempt differs from its content, effect, subject or policy.
+    pub(crate) fn validate_hosted_proposal_bindings_v1(
+        &self,
+        expected_proposal_content_id: ProposalContentId,
+        expected_effect_preimage_hash: [u8; 32],
+        expected_subject: [u8; 32],
+        base_risk_tier: RiskTierV1,
+        base_required_bodies: &[RequiredParliamentBodyV1],
+    ) -> Result<(), ParliamentReducerErrorV1> {
         let observed_subject = match self.expected_head {
             GovernanceExpectedHeadV1::Absent(head) => head.subject_id,
             GovernanceExpectedHeadV1::Present(head) => head.subject_id,
         };
-        let (base_risk_tier, base_required_bodies) = parliament_attempt_policy_v1(proposal);
         let persisted_base =
             self.required_bodies
                 .last()
@@ -2782,16 +2828,27 @@ where
 {
     let mut attempts = attempts.into_iter().collect::<Vec<_>>();
     attempts.sort_unstable_by_key(|attempt| attempt.borrow().attempt.sequence);
-    let Some(first) = attempts.first() else {
-        return Ok(());
-    };
-    let first = first.borrow();
-    let proposal_content_id = first.proposal_content_id();
+    validate_ordered_parliament_randomness_redraw_lineage_v1(attempts)
+}
+
+/// Validate an already ordered borrowed attempt history without allocating scratch.
+///
+/// # Errors
+/// Rejects a missing sequence or a reset of the proposal-wide redraw allowance.
+pub(crate) fn validate_ordered_parliament_randomness_redraw_lineage_v1<I, A>(
+    attempts: I,
+) -> Result<(), ParliamentReducerErrorV1>
+where
+    I: IntoIterator<Item = A>,
+    A: core::borrow::Borrow<ParliamentAttemptStateV1>,
+{
+    let mut proposal_content_id = None;
     let mut expected_prefix = 0;
     let mut expected_sequence = 0;
     for attempt in attempts {
         let attempt = attempt.borrow();
-        if attempt.proposal_content_id() != proposal_content_id
+        if attempt.proposal_content_id()
+            != *proposal_content_id.get_or_insert_with(|| attempt.proposal_content_id())
             || attempt.randomness_redraws_before_attempt != expected_prefix
         {
             return Err(ParliamentReducerErrorV1::RandomnessRedrawLineageMismatch);

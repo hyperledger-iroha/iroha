@@ -946,3 +946,128 @@ fn live_obligations_are_empty_only_without_any_class() {
         assert!(!live.is_empty(), "{live:?}");
     }
 }
+
+mod authority {
+    //! Selected authority obligations retain their original completion closure.
+    use super::*;
+    use crate::runtime::release_catalog;
+    fn blank_state() -> crate::state::State {
+        crate::state::State::new_for_testing(
+            crate::state::World::default(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        )
+    }
+    fn first_header() -> iroha_data_model::block::BlockHeader {
+        iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(1).expect("height"),
+            None,
+            None,
+            0,
+            0,
+        )
+    }
+    #[test]
+    fn hosted_authority_attempts_keep_their_closure_and_finish_under_completion_only() {
+        use crate::state::{GovernanceProposalStatus, StateReadOnly, WorldReadOnly};
+        use iroha_data_model::isi::sorafs_authority::{
+            CreateSorafsAuthorityParliamentAttemptV1, ProposeSorafsAuthorityGovernanceV1,
+            SorafsAuthorityActionV1, SorafsAuthorityProposalV1, SorafsOperatingAuthorityV1,
+        };
+        let state = blank_state();
+        let mut block = state.block(first_header());
+        let mut tx = block.transaction();
+        let change = crate::runtime::draft_addition(
+            &tx.world,
+            *tx.network_id(),
+            "iroha.sorafs.authority_governance.v1",
+            1,
+            [0x41; 32],
+        )
+        .unwrap();
+        let applied = change
+            .apply(
+                tx.world.runtime_selection(),
+                &crate::runtime::change_set::PublishedDefinitions(tx.world.runtime_definitions()),
+            )
+            .unwrap();
+        for (id, descriptor) in applied.published {
+            tx.world.runtime_definitions.insert(id, descriptor);
+        }
+        *tx.world.runtime_selection.get_mut() = applied.selection;
+        let proposal = SorafsAuthorityProposalV1 {
+            grid: iroha_data_model::isi::sorafs_authority::SorafsAuthorityTermGridV1 {
+                epoch_length_blocks: 100,
+            },
+            term: 1,
+            network: *tx.network_id(),
+            root: iroha_data_model::runtime::lifecycle::RootScopeV1::Universal,
+            account: iroha_test_samples::ALICE_ID.clone(),
+            authority: SorafsOperatingAuthorityV1::SetReservePolicy,
+            action: SorafsAuthorityActionV1::Grant,
+            expected_revision: 0,
+            completion_policy: None,
+        };
+        let submit: InstructionBox = ProposeSorafsAuthorityGovernanceV1 {
+            proposal: proposal.clone(),
+        }
+        .into();
+        let create: InstructionBox = CreateSorafsAuthorityParliamentAttemptV1 {
+            proposal: proposal.clone(),
+            attempt_sequence: 0,
+        }
+        .into();
+        assert_eq!(step(&submit, &tx.world), None);
+        assert_eq!(step(&create, &tx.world), None);
+        let record =
+            crate::smartcontracts::isi::sorafs_authority::SorafsAuthorityProposalRecordV1 {
+                deadline_closure: None,
+                proposer: proposal.account.clone(),
+                proposal: proposal.clone(),
+                created_height: 1,
+                status: GovernanceProposalStatus::Proposed,
+            };
+        tx.world
+            .sorafs_authority_proposals
+            .insert(proposal.fingerprint(), record.clone());
+        for instruction in [&submit, &create] {
+            assert_eq!(step(instruction, &tx.world), Some(Step::Complete));
+            assert!(
+                step(instruction, &tx.world)
+                    .unwrap()
+                    .runs_under(RestrictionV1::CompletionOnly(2))
+            );
+        }
+        let live = LiveObligations::of(&tx.world);
+        assert!(!live.is_empty());
+        let before = tx.world.runtime_selection().clone();
+        let published =
+            crate::runtime::change_set::PublishedDefinitions(tx.world.runtime_definitions());
+        for wire in [
+            "iroha.sorafs.authority.propose.v1",
+            "iroha.sorafs.authority.attempt.create.v1",
+            "iroha.governance.parliament.transition.submit.v1",
+        ] {
+            let mut after = before.clone();
+            after.bindings.retain(|binding| binding.wire_id != wire);
+            assert!(
+                stranded(&before, &after, &published, &live).is_some(),
+                "{wire}"
+            );
+        }
+        let mut after = before.clone();
+        after.services_profile = release_catalog().unwrap().baseline.services_profile;
+        assert!(stranded(&before, &after, &published, &live).is_some());
+        let mut terminal = record;
+        terminal.status = GovernanceProposalStatus::Rejected;
+        tx.world
+            .sorafs_authority_proposals
+            .insert(proposal.fingerprint(), terminal);
+        assert!(LiveObligations::of(&tx.world).is_empty());
+        assert_eq!(
+            step(&create, &tx.world),
+            None,
+            "retry after rejection is new work"
+        );
+    }
+}

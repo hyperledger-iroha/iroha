@@ -9,6 +9,9 @@
 //!   root, an escrow of a `Yes` vote that no decision has settled yet
 //!   (`world.sumeragi_amx_participant`). A `No` vote escrows nothing, so its entry is not live.
 //!
+//! - **Selected SoraFS authorities.** Granted heads, pending proposals and unprocessed leases
+//!   retain the exact selected authority services and original completion closure.
+//!
 //! A restriction never removes settlement authority (§7.1):
 //!
 //! - while a definition behind an instruction has admission closed, the instructions that
@@ -306,6 +309,9 @@ pub fn step(
             .is_some_and(|record| is_live(record.status))
             .then_some(step);
     }
+    if let Some(step) = authority_step(instruction, world) {
+        return Some(step);
+    }
     let (participation, step) = amx_step(instruction)?;
     participation
         .is_live(
@@ -313,6 +319,61 @@ pub fn step(
             world.sumeragi_amx_participant.get().canonical(),
         )
         .then_some(step)
+}
+
+/// How selected authority work continues or completes, without changing escrow or AMX admission.
+fn authority_step(
+    instruction: &InstructionBox,
+    world: &crate::state::WorldTransaction<'_, '_>,
+) -> Option<Step> {
+    if super::sorafs_authority_enabled(world.runtime_selection.get()).ok() == Some(true) {
+        use iroha_data_model::isi::sorafs_authority::{
+            CreateSorafsAuthorityParliamentAttemptV1, ProposeSorafsAuthorityGovernanceV1,
+            SorafsAuthorityActionV1,
+        };
+        let raw = instruction.as_any();
+        let proposal = raw
+            .downcast_ref::<ProposeSorafsAuthorityGovernanceV1>()
+            .map(|instruction| &instruction.proposal)
+            .or_else(|| {
+                raw.downcast_ref::<CreateSorafsAuthorityParliamentAttemptV1>()
+                    .map(|instruction| &instruction.proposal)
+            });
+        if let Some(proposal) = proposal {
+            if proposal.action == SorafsAuthorityActionV1::Revoke
+                && world
+                    .sorafs_authority_heads
+                    .get(&proposal.governed_subject_id_v1())
+                    .is_some_and(|head| {
+                        head.granted
+                            && head.plan_id == proposal.plan_id()
+                            && proposal.expected_revision.checked_add(1) == Some(head.revision)
+                    })
+            {
+                return Some(Step::Complete);
+            }
+            if world
+                .sorafs_authority_proposals
+                .get(&proposal.fingerprint())
+                .is_some_and(|record| {
+                    record.status == crate::state::GovernanceProposalStatus::Proposed
+                        && record.deadline_closure.is_none()
+                })
+            {
+                // Finishing already admitted proposal content closes its Parliament
+                // obligation, including a vote that rejects the requested grant.
+                return Some(Step::Complete);
+            }
+        }
+        if let Some(transition) = raw.downcast_ref::<iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1>()
+            && let Some(attempt) = world.parliament_attempts.get(&transition.governance_attempt_id)
+            && let Some(record) = world.sorafs_authority_proposals.get(attempt.proposal_content_id().as_bytes()) {
+            if record.status == crate::state::GovernanceProposalStatus::Proposed && record.deadline_closure.is_none() {
+                return Some(Step::Complete);
+            }
+        }
+    }
+    None
 }
 
 /// Wire IDs of the instructions that complete a live escrow. The successor of a change set must
@@ -398,12 +459,40 @@ pub struct LiveObligations {
     amx_decisions: usize,
     /// AMX escrows this root holds as a participant and has not settled.
     amx_settlements: usize,
+    /// Selected SoraFS authority custody and pending Parliament certificates.
+    sorafs_authorities: usize,
 }
 
 impl LiveObligations {
     /// Live obligations of `world`.
     pub(crate) fn of(world: &crate::state::WorldTransaction<'_, '_>) -> Self {
+        let sorafs_authorities =
+            if super::sorafs_authority_enabled(world.runtime_selection.get()).ok() == Some(true) {
+                world
+                    .sorafs_authority_heads
+                    .iter()
+                    .filter(|(_, head)| head.granted)
+                    .count()
+                    + world
+                        .sorafs_authority_proposals
+                        .iter()
+                        .filter(|(_, record)| {
+                            matches!(
+                                record.status,
+                                crate::state::GovernanceProposalStatus::Proposed
+                            ) && record.deadline_closure.is_none()
+                        })
+                        .count()
+                    + world
+                        .sorafs_authority_leases
+                        .iter()
+                        .filter(|(_, lease)| !lease.start_processed)
+                        .count()
+            } else {
+                0
+            };
         Self {
+            sorafs_authorities,
             escrows: world
                 .asset_escrows
                 .iter()
@@ -430,12 +519,13 @@ impl LiveObligations {
                 .filter(|entry| entry.decided.is_none())
                 .count(),
             amx_settlements: participant.map_or(0, unsettled_escrows),
+            sorafs_authorities: 0,
         }
     }
 
     /// Whether no obligation is live.
     pub(crate) fn is_empty(&self) -> bool {
-        Class::ALL.into_iter().all(|class| self.count(class) == 0)
+        self.sorafs_authorities == 0 && Class::ALL.into_iter().all(|class| self.count(class) == 0)
     }
 
     /// How many live obligations of `class` there are.
@@ -464,6 +554,7 @@ impl LiveObligations {
             escrows: 0,
             amx_decisions: decisions,
             amx_settlements: settlements,
+            sorafs_authorities: 0,
         }
     }
 }
@@ -613,6 +704,22 @@ pub fn stranded(
 ) -> Option<String> {
     if live.is_empty() {
         return None;
+    }
+    if live.sorafs_authorities != 0 {
+        let ids = [
+            "iroha.sorafs.authority.propose.v1",
+            "iroha.sorafs.authority.attempt.create.v1",
+            "iroha.governance.parliament.transition.submit.v1",
+        ];
+        if let Some(reason) = closure_gap(predecessor, successor, published, &ids, false) {
+            return Some(format!(
+                "{} live SoraFS authority obligations: {reason}",
+                live.sorafs_authorities
+            ));
+        }
+        if predecessor.services_profile != successor.services_profile {
+            return Some("live SoraFS authorities retain their exact services profile".into());
+        }
     }
     Class::ALL.into_iter().find_map(|class| {
         let count = live.count(class);

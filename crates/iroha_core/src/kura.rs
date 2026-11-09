@@ -527,30 +527,6 @@ impl Kura {
         }
         index
     }
-    fn build_transaction_entrypoint_index(block_data: &BlockData) -> TransactionEntrypointIndex {
-        let mut index = TransactionEntrypointIndex::complete_empty();
-        index.complete = false;
-        let Some(entries) = block_data.dense_entries() else {
-            return index;
-        };
-        for (offset, (expected_hash, block)) in entries.iter().enumerate() {
-            let Some(height) = NonZeroUsize::new(offset.saturating_add(1)) else {
-                continue;
-            };
-            if let Some(block) = block
-                .as_ref()
-                .filter(|block| block.hash() == *expected_hash)
-            {
-                Self::insert_transaction_entrypoint_heights(&mut index, height, block);
-            } else {
-                index.incomplete_heights.insert(height);
-            }
-        }
-        index.complete =
-            index.incomplete_heights.is_empty() && index.indexed_heights.len() == block_data.len();
-        index
-    }
-
     /// Publish only a complete, structurally validated Network projection. Physical
     /// canonical body/finality admission remains the caller's existing responsibility.
     fn insert_transaction_entrypoint_heights(
@@ -1520,7 +1496,10 @@ impl Kura {
                 .collect()
         };
         let block_height_index = Self::build_block_height_index(&block_data);
-        let transaction_entrypoint_index = Self::build_transaction_entrypoint_index(&block_data);
+        // The body cache deliberately starts empty. Retain the structural projection
+        // from the original Strict audit instead of treating every restored height
+        // as unindexed. Fast startup supplies an explicitly incomplete projection.
+        let transaction_entrypoint_index = chain_validation.transaction_entrypoint_index;
         info!(
             mode = ?config.init_mode,
             block_count,
@@ -4848,6 +4827,10 @@ impl Kura {
             // Fast keeps only the durable count and reads exact hashes on demand. This avoids
             // startup I/O and RAM proportional to total chain height.
             hashes: Vec::new(),
+            transaction_entrypoint_index: TransactionEntrypointIndex {
+                complete: false,
+                ..TransactionEntrypointIndex::complete_empty()
+            },
         })
     }
     /// Audit every committed slot without repairing occupied native history.
@@ -4872,17 +4855,22 @@ impl Kura {
         if block_store.read_hashes_count()? != u64::try_from(block_indices.len())? {
             return Err(Error::HashesFileHeightMismatch);
         }
-        Self::validate_committed_block_prefix(
+        let mut index = TransactionEntrypointIndex::complete_empty();
+        let mut validated = Self::validate_committed_block_prefix(
             block_store,
             block_indices,
             expected_hashes.ok_or(Error::HashesFileHeightMismatch)?,
-        )
+            Some(&mut index),
+        )?;
+        validated.transaction_entrypoint_index = index;
+        Ok(validated)
     }
     /// Audit the durable prefix before reconciling any uncommitted journal suffix.
     fn validate_committed_block_prefix(
         block_store: &mut BlockStore,
         block_indices: &[BlockIndex],
         expected: &[HashOf<BlockHeader>],
+        mut transaction_entrypoint_index: Option<&mut TransactionEntrypointIndex>,
     ) -> Result<ChainValidation, Error> {
         if expected.len() != block_indices.len()
             || block_store.read_hashes_count()? < u64::try_from(block_indices.len())?
@@ -4896,6 +4884,8 @@ impl Kura {
             let height = u64::try_from(position)?
                 .checked_add(1)
                 .ok_or(Error::HashesFileHeightMismatch)?;
+            let index_height = NonZeroUsize::new(usize::try_from(height)?)
+                .ok_or(Error::HashesFileHeightMismatch)?;
             if slot.length == 0 || slot.length > STRICT_INIT_MAX_BLOCK_BYTES {
                 return Err(Error::CorruptedBlockLength {
                     length: slot.length,
@@ -4906,6 +4896,9 @@ impl Kura {
                 let Some(bytes) = block_store.read_optional_da_cache(height)? else {
                     // Missing availability grants no execution authority. The native
                     // certified-chain reader must obtain and authenticate the actual frame.
+                    if let Some(index) = transaction_entrypoint_index.as_deref_mut() {
+                        index.incomplete_heights.insert(index_height);
+                    }
                     previous = Some(expected[position]);
                     continue;
                 };
@@ -4942,10 +4935,24 @@ impl Kura {
             {
                 return Err(Error::CanonicalBlockWireMismatch { height });
             }
+            // Locators carry no execution authority. The query still rehydrates and
+            // authenticates each carrier against its original canonical State cut.
+            // Reuse this audited frame; never populate the index from request reads.
+            if let Some(index) = transaction_entrypoint_index.as_deref_mut() {
+                Self::insert_transaction_entrypoint_heights(index, index_height, &block);
+            }
             previous = Some(expected[position]);
+        }
+        if let Some(index) = transaction_entrypoint_index {
+            index.complete = index.incomplete_heights.is_empty()
+                && index.indexed_heights.len() == block_indices.len();
         }
         Ok(ChainValidation {
             hashes: expected.to_vec(),
+            transaction_entrypoint_index: TransactionEntrypointIndex {
+                complete: false,
+                ..TransactionEntrypointIndex::complete_empty()
+            },
         })
     }
     #[iroha_logger::log(skip_all)]
@@ -9471,7 +9478,7 @@ impl BlockStore {
             let mut indices = vec![BlockIndex::default(); count];
             self.read_block_indices(0, &mut indices)?;
             let hashes = self.read_block_hashes(0, count)?;
-            Kura::validate_committed_block_prefix(self, &indices, &hashes)?;
+            Kura::validate_committed_block_prefix(self, &indices, &hashes, None)?;
         }
         let data_backed_count = self.data_backed_count(logical_count, hashes_count)?;
         if existing_marker.is_none()

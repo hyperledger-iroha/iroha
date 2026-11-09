@@ -153,15 +153,19 @@ impl AdditionDefinitions {
 
 /// Whether a wire ID belongs to the immutable foundation roster.
 pub(crate) fn is_baseline_instruction(wire_id: &str) -> bool {
-    use iroha_data_model::isi::privacy::{
-        BootstrapPrivacyIronwoodPoolV1, SchedulePrivacyIronwoodLimitsUpdateV1,
-        SubmitPrivacyIronwoodProofV1,
+    use iroha_data_model::isi::{
+        privacy::{
+            BootstrapPrivacyIronwoodPoolV1, SchedulePrivacyIronwoodLimitsUpdateV1,
+            SubmitPrivacyIronwoodProofV1,
+        },
+        taira_activation::ScheduleTairaTimeIronwoodV1,
     };
     !matches!(
         wire_id,
         BootstrapPrivacyIronwoodPoolV1::WIRE_ID
             | SubmitPrivacyIronwoodProofV1::WIRE_ID
             | SchedulePrivacyIronwoodLimitsUpdateV1::WIRE_ID
+            | ScheduleTairaTimeIronwoodV1::WIRE_ID
     )
 }
 
@@ -619,25 +623,27 @@ impl ReleaseCatalog {
         let mut interfaces_so_far = interfaces;
         for addition in additions {
             let independent_interfaces;
-            let (storage_dependencies, interface_dependencies) =
-                if addition.module == additions::SORAFS_REPAIR.module {
-                    independent_interfaces = catalog
-                        .baseline
-                        .bindings
-                        .iter()
-                        .map(|binding| {
-                            let wire = payloads
-                                .keys()
-                                .copied()
-                                .find(|wire| *wire == binding.wire_id)
-                                .expect("baseline binding has a registered wire ID");
-                            (wire, binding.interface)
-                        })
-                        .collect();
-                    (&baseline_storage, &independent_interfaces)
-                } else {
-                    (&storage_so_far, &interfaces_so_far)
-                };
+            let (storage_dependencies, interface_dependencies) = if addition.module
+                == additions::SORAFS_REPAIR.module
+                || addition.module == additions::SORAFS_AUTHORITY.module
+            {
+                independent_interfaces = catalog
+                    .baseline
+                    .bindings
+                    .iter()
+                    .map(|binding| {
+                        let wire = payloads
+                            .keys()
+                            .copied()
+                            .find(|wire| *wire == binding.wire_id)
+                            .expect("baseline binding has a registered wire ID");
+                        (wire, binding.interface)
+                    })
+                    .collect();
+                (&baseline_storage, &independent_interfaces)
+            } else {
+                (&storage_so_far, &interfaces_so_far)
+            };
             let published = catalog.publish_addition(
                 addition,
                 &shared,
@@ -656,6 +662,7 @@ impl ReleaseCatalog {
         catalog.lifecycle = catalog.lifecycle_successor(&baseline)?;
         catalog.lifecycle_id = catalog.lifecycle.id()?;
         catalog.compile_lifecycle_compositions()?;
+        super::sorafs_authority::compile(&mut catalog)?;
         Ok(catalog)
     }
 
@@ -831,6 +838,16 @@ impl ReleaseCatalog {
         effective_height: u64,
         qualification: [u8; 32],
     ) -> Result<ChangeSetV1, CatalogError> {
+        if module == additions::SORAFS_AUTHORITY.module {
+            return super::sorafs_authority::draft(
+                self,
+                current,
+                published,
+                network,
+                effective_height,
+                qualification,
+            );
+        }
         let fail = |reason: String| CatalogError::Addition {
             module: module.to_owned(),
             reason,

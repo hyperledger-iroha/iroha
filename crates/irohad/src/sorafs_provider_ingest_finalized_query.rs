@@ -2388,12 +2388,9 @@ mod tests {
 
         let archive_root = root.path().join(&config.relative_root);
         let records = archive_root.join("records");
-        let record = std::fs::read_dir(&records)
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap()
-            .path();
+        // The tip record is read on every tick; records below it wait for the periodic audit.
+        let tip = *reader.qualify_live().unwrap().archive_tip();
+        let record = reader.archive.record_path(&tip).unwrap();
         let original = std::fs::read(&record).unwrap();
         std::fs::write(&record, [0xff]).unwrap();
         let corrupt = reader.activation_ready();

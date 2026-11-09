@@ -44,6 +44,7 @@ mod repair;
 mod reputation_journal;
 mod reserve;
 mod resource_names_state;
+mod sorafs_authority;
 pub use authority_originals::NativeAuthorityOriginalsReadV1;
 pub use resource_names_state::NativeReadHttpError;
 mod runtime_governance_client_auth;

@@ -8,6 +8,47 @@ use iroha_data_model::isi::{
 use iroha_pasta::msm::MemoryBudget;
 
 #[test]
+fn wallet_admission_finds_an_instance_cell_in_every_expression_position() {
+    use iroha_plonk::cs::descriptor::{ExprNodeV1, LookupV1};
+    let plain = vec![
+        ExprNodeV1::Advice(0),
+        ExprNodeV1::Instance(0),
+        ExprNodeV1::Product,
+    ];
+    let cell = vec![
+        ExprNodeV1::Advice(0),
+        ExprNodeV1::InstanceCell(0, 0),
+        ExprNodeV1::Product,
+    ];
+    assert!(!reads_instance_cell(&[], &[]));
+    assert!(!reads_instance_cell(
+        std::slice::from_ref(&vec![plain.clone()]),
+        &[LookupV1 {
+            inputs: vec![plain.clone()],
+            tables: vec![plain.clone()],
+        }],
+    ));
+    assert!(reads_instance_cell(
+        &[vec![plain.clone()], vec![plain.clone(), cell.clone()]],
+        &[],
+    ));
+    assert!(reads_instance_cell(
+        &[],
+        &[LookupV1 {
+            inputs: vec![plain.clone(), cell.clone()],
+            tables: vec![plain.clone()],
+        }],
+    ));
+    assert!(reads_instance_cell(
+        &[],
+        &[LookupV1 {
+            inputs: vec![plain],
+            tables: vec![cell],
+        }],
+    ));
+}
+
+#[test]
 #[ignore = "genuine complete k12/k16 native verifier inventory; run optimized"]
 fn genuine_signed_complete_inventory_mounts_and_rejects_substituted_originals() {
     let (pack, installation) = engineering_fixture::signed_inventory();

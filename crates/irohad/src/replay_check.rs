@@ -10,8 +10,12 @@
 //! (the snapshot directory is only read), or empty to re-execute signed genesis, and never below
 //! the configured upgrade checkpoint. Every later block is re-executed and its execution result
 //! compared with the stored certificate ([`iroha_core::sumeragi::node::replay_check`]). The
-//! tiered-state backend stays detached and no runtime-only secret is opened. Progress goes to
-//! standard error; standard output ends with the one-line JSON report.
+//! tiered-state backend stays detached and runtime-provider credentials are never opened.
+//! Ordinary configuration parsing still reads its configured node key files; replay uses only
+//! their public identities. Progress goes to standard error; standard output ends with the
+//! one-line JSON report. A matched nonempty replay also observes the unchanged native SoraFS
+//! activation inventory on its final State; this optional diagnostic never changes the replay
+//! verdict and grants no qualification, governance approval or activation authority.
 
 use super::*;
 use iroha_allocation::AllocationBudget;
@@ -26,6 +30,8 @@ use std::num::NonZeroUsize;
 
 mod suffix_inventory;
 pub use suffix_inventory::KagemushaSuffixRowInventoryV1;
+mod sorafs_authority_inspect;
+pub use sorafs_authority_inspect::run_sorafs_authority_inspection;
 
 /// `start.source` of a replay that re-executed signed genesis first.
 pub const START_GENESIS: &str = "genesis";
@@ -73,6 +79,54 @@ pub struct ReplayDivergenceV1 {
     pub differing_components: Vec<String>,
 }
 
+/// Observation of the exact native SoraFS activation inventory at a matched replay cut.
+///
+/// This diagnostic grants no governance approval, qualification or activation authority.
+/// A clear inventory is only one existing activation precondition, observed on this copy.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct ReplaySorafsAuthorityInventoryV1 {
+    /// Height of the same final State view used for the inventory scan.
+    pub height: u64,
+    /// Exact current selection identity as lowercase hexadecimal.
+    pub selection_id: String,
+    /// Whether the unchanged native activation-inventory validator returned success.
+    pub inventory_clear: bool,
+    /// Original native validator failure, or `None` when the inventory is clear.
+    pub failure_reason: Option<String>,
+}
+
+/// Observe only a complete match, using one stable view of the original replay State.
+/// Local inability to obtain that view or identity leaves the diagnostic unavailable;
+/// it must never change the already-completed replay outcome or its exit semantics.
+fn inventory_after_matched_replay(
+    tip_height: u64,
+    report: &ReplayCheckReport,
+    state: &State,
+) -> Result<Option<ReplaySorafsAuthorityInventoryV1>, String> {
+    if !matches!(report.outcome, ReplayCheckOutcome::Matched) || tip_height == 0 {
+        return Ok(None);
+    }
+    let view = state.try_view_once().map_err(|error| error.to_string())?;
+    let height = u64::try_from(view.height()).map_err(|error| error.to_string())?;
+    if height != report.replayed_to || height != tip_height {
+        return Err("matched replay and final State do not name the same durable tip".into());
+    }
+    let selection_id = view
+        .world()
+        .runtime_selection()
+        .id()
+        .map_err(|error| error.to_string())?;
+    let failure_reason =
+        iroha_core::runtime::validate_sorafs_authority_activation_inventory(view.world()).err();
+    Ok(Some(ReplaySorafsAuthorityInventoryV1 {
+        height,
+        selection_id: hex::encode(selection_id.0),
+        inventory_clear: failure_reason.is_none(),
+        failure_reason,
+    }))
+}
+
 /// Result printed by `iroha3d --check-replay`.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -94,6 +148,9 @@ pub struct ReplayCheckReportV1 {
     /// Count/hash-only held-suffix inventory of the fully authenticated final State.
     /// Absent unless every retained block was reproduced through the durable tip.
     pub kagemusha_suffix_rows: Option<KagemushaSuffixRowInventoryV1>,
+    /// Optional native inventory observation from the same final State, only after a matched
+    /// nonempty replay. This grants no qualification, governance approval or activation authority.
+    pub sorafs_authority_inventory: Option<ReplaySorafsAuthorityInventoryV1>,
 }
 
 impl ReplayCheckReportV1 {
@@ -122,6 +179,7 @@ impl ReplayCheckReportV1 {
             divergence: None,
             missing_height,
             kagemusha_suffix_rows: None,
+            sorafs_authority_inventory: None,
         }
     }
 
@@ -163,6 +221,7 @@ impl ReplayCheckReportV1 {
             divergence,
             missing_height,
             kagemusha_suffix_rows: None,
+            sorafs_authority_inventory: None,
         }
     }
 
@@ -205,6 +264,22 @@ pub fn check_replay(config: &Config) -> ReportResult<ReplayCheckReportV1, MainEr
 fn check_replay_then(
     config: &Config,
     on_matched: impl FnOnce(&State) -> ReportResult<(), MainError>,
+) -> ReportResult<ReplayCheckReportV1, MainError> {
+    check_replay_with_matched(config, |matched| on_matched(matched.state))
+}
+
+/// A borrowed continuation of the actual replay, never reconstructed from a report DTO.
+/// Its State and copied Kura remain owned by `check_replay_with_matched` until it returns.
+struct MatchedReplay<'a> {
+    state: &'a State,
+    report: &'a ReplayCheckReport,
+    tip_height: u64,
+    genesis_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
+}
+
+fn check_replay_with_matched(
+    config: &Config,
+    on_matched: impl FnOnce(MatchedReplay<'_>) -> ReportResult<(), MainError>,
 ) -> ReportResult<ReplayCheckReportV1, MainError> {
     let store_root = config.kura.store_dir.resolve_relative_path();
     match std::fs::symlink_metadata(&store_root) {
@@ -333,7 +408,7 @@ fn check_replay_then(
         height => eprintln!("check-replay: starting from the snapshot at height {height}"),
     }
     let started = Instant::now();
-    let report = replay_check::check_replay(
+    let core_report = replay_check::check_replay(
         ReplayCheckInputs {
             state: Arc::clone(&state),
             source_lanes: copy.store_root().join("lanes"),
@@ -350,10 +425,22 @@ fn check_replay_then(
         },
     )
     .map_err(|error| Report::new(error).change_context(MainError::CheckReplay))?;
-    let mut report = ReplayCheckReportV1::from_core(tip_height, &report);
+    let authority_inventory = inventory_after_matched_replay(tip_height, &core_report, &state);
+    let mut report = ReplayCheckReportV1::from_core(tip_height, &core_report);
+    match authority_inventory {
+        Ok(observation) => report.sorafs_authority_inventory = observation,
+        Err(reason) => {
+            eprintln!("check-replay: SoraFS inventory observation unavailable: {reason}")
+        }
+    }
     if report.is_ok() && report.replayed_to == tip_height {
         report.kagemusha_suffix_rows = Some(suffix_inventory::capture(&state, tip_height)?);
-        on_matched(&state)?;
+        on_matched(MatchedReplay {
+            state: &state,
+            report: &core_report,
+            tip_height,
+            genesis_hash: genesis.hash(),
+        })?;
     }
     Ok(report)
 }
@@ -438,6 +525,57 @@ pub fn run_check_repair_rehearsal(
     } else {
         Err(failure(
             "repair transaction rehearsal did not qualify; inspect the actual replay/output result",
+        ))
+    }
+}
+
+/// Replay evidence plus one discarded, keyless Time and Ironwood activation.
+#[derive(Debug, JsonSerialize)]
+struct ActivationRehearsalReportV1 {
+    replay: ReplayCheckReportV1,
+    rehearsal: Option<iroha_core::state::TairaActivationRehearsalReport>,
+}
+
+/// Run finite authenticated replay followed by a discarded activation on the temporary State.
+///
+/// # Errors
+/// Refuses incomplete historical replay, an invalid pool file, or a selection other than the exact
+/// repaired one, and fails when the change set does not activate.
+pub fn run_check_activation_rehearsal(
+    config: &Config,
+    pool_path: &std::path::Path,
+) -> ReportResult<(), MainError> {
+    const MAX_POOL_BYTES: u64 = 64 * 1024;
+    let metadata = std::fs::metadata(pool_path)
+        .map_err(|error| failure(format!("cannot read the pool file: {error}")))?;
+    if !metadata.is_file() || metadata.len() > MAX_POOL_BYTES {
+        return Err(failure("the pool file is not a small regular file"));
+    }
+    let bytes = std::fs::read(pool_path)
+        .map_err(|error| failure(format!("cannot read the pool file: {error}")))?;
+    let pool: iroha_data_model::privacy::PrivacyIronwoodPoolBootstrapV1 =
+        norito::json::from_slice(&bytes)
+            .map_err(|error| failure(format!("invalid pool file: {error}")))?;
+    let mut rehearsal = None;
+    let replay = check_replay_then(config, |state| {
+        rehearsal = Some(state.rehearse_taira_activation(pool).map_err(failure)?);
+        Ok(())
+    })?;
+    let report = ActivationRehearsalReportV1 { replay, rehearsal };
+    println!(
+        "{}",
+        norito::json::to_json(&report).map_err(|error| failure(error.to_string()))?
+    );
+    if report.replay.is_ok()
+        && report
+            .rehearsal
+            .as_ref()
+            .is_some_and(|r| r.activated && !r.state_published)
+    {
+        Ok(())
+    } else {
+        Err(failure(
+            "the activation rehearsal did not activate; inspect the report",
         ))
     }
 }

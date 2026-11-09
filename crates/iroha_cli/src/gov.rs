@@ -3,6 +3,7 @@ mod audit;
 mod deploy;
 pub mod parliament;
 mod shared;
+mod sorafs_authority;
 mod vote;
 use crate::{Run, RunContext};
 pub use audit::AuditDeployArgs;
@@ -43,6 +44,9 @@ pub enum Command {
     /// Attempt-based private SORA Parliament helpers.
     #[command(subcommand)]
     Parliament(ParliamentCommand),
+    /// Exact Parliament-voted SoraFS operating-authority drafts and reads.
+    #[command(subcommand)]
+    SorafsAuthority(sorafs_authority::Command),
 }
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -56,6 +60,7 @@ impl Run for Command {
             Command::Tally(cmd) => cmd.run(context),
             Command::Protected(cmd) => cmd.run(context),
             Command::Parliament(cmd) => cmd.run(context),
+            Command::SorafsAuthority(cmd) => cmd.run(context),
         }
     }
 }

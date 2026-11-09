@@ -182,7 +182,7 @@ def _assert_current_wallet_load_issuance_route(operations: dict[str, dict[str, s
         "transport": "http",
         "feature_gate": "feature(app_api)",
         "sdk": "true",
-        "openapi": "false",
+        "openapi": "true",
         "mcp": "false",
         "private_no_store": "true",
     }
@@ -221,7 +221,7 @@ def _assert_current_wallet_load_issuance_route(operations: dict[str, dict[str, s
     ("effect", "mutation"),
     ("private_no_store", "false"),
     ("path", "/v1/kagemusha/readiness"),
-    ("openapi", "true"),
+    ("openapi", "false"),
 ))
 def test_current_wallet_load_route_rejects_relaxed_policy(
     generated: bytes, field: str, value: str,
