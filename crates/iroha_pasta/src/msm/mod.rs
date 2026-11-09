@@ -13,9 +13,9 @@
 //!   chosen from public protocol data and checked against every scalar before
 //!   planning. It does not choose a width from witness values.
 //! - [`msm_secret_columns_cancellable`]: one secret MSM per column over shared
-//!   bases, run as a bounded number of admitted single-task kernels;
-//!   [`msm_secret_bounded_columns_cancellable`] does the same with each column
-//!   planned for its own public bound.
+//!   bases, run as one admitted batch of window-range claims across all
+//!   workers; [`msm_secret_bounded_columns_cancellable`] does the same with
+//!   each column planned for its own public bound.
 //! - [`FixedBaseTable`]: precomputed window multiples of a fixed commitment
 //!   key; one bucket set and no doublings per MSM.
 //!
@@ -206,12 +206,26 @@ pub fn msm_secret_cancellable<C: PastaCurve>(
 /// Committing many columns concurrently through [`msm_secret_cancellable`] lets
 /// nested work stealing open more kernels than the shared ceiling admits; the
 /// refused ones stream or take the allocation-free path. Here one reservation
-/// admits `lanes` single-task plans at once (at most the pool size and the column
-/// count). Each lane claims the next column and runs it on its own thread, so no
-/// more kernels exist than were admitted, and fast workers claim more columns.
-/// Columns left after the last full round of lanes, and every column when fewer
-/// than two lanes fit, run one at a time on the whole pool through
-/// [`msm_secret_cancellable`]. Every result is the exact group element that
+/// admits a batch: the recoded digits of its columns and `loops` claiming
+/// loops (at most the pool size), each holding one claim's buckets at a time.
+///
+/// A claim is a range of consecutive windows of one column, reduced once, so
+/// splitting a column repeats no work. Columns are claimed widest first. Each
+/// claim takes about `1 / (4 * loops)` of the windows still unclaimed, within
+/// the column's claim sizes (see `pippenger::ColumnPlan`). Early claims are
+/// therefore large and the last are single windows: on cores of unequal speed
+/// a fast worker finishes the batch while a slow one completes its last claim,
+/// instead of every worker waiting on whole columns left on slow cores.
+/// Claim boundaries depend only on the batch's public lengths and bounds and
+/// on the admitted loop count; worker timing decides only which loop runs a
+/// claim. Neither depends on scalar values.
+///
+/// A batch reserves a loop for every worker before it takes columns, so
+/// columns whose digits do not all fit beside them run in several batches.
+/// A batch with fewer claims than workers, and every column when no batch of
+/// at least two loops fits, runs one column at a time on the whole pool
+/// through [`msm_secret_cancellable`]; so does a single column, or a pool of
+/// one worker. Every result is the exact group element that
 /// [`msm_secret_cancellable`] returns for its column.
 ///
 /// # Errors
@@ -235,12 +249,12 @@ pub fn msm_secret_columns_cancellable<C: PastaCurve>(
 /// One secret MSM per bounded column over the same `bases`, returned in column
 /// order.
 ///
-/// As [`msm_secret_columns_cancellable`], but each lane runs the single-task plan
-/// for its column's public bound (see [`BoundedSecretScalars`]), so narrow
-/// columns pay for their width only. The one reservation covers `lanes` copies
-/// of the largest of those plans. Plans depend on the public length and bounds,
-/// never on the scalar values. Every result is the exact group element that
-/// [`msm_secret_bounded_cancellable`] returns for its column.
+/// As [`msm_secret_columns_cancellable`], but each column is recoded and cut
+/// for its own public bound (see [`BoundedSecretScalars`]), so narrow columns
+/// pay for their width only; a column of few buckets is claimed whole. Plans
+/// depend on the public length and bounds, never on the scalar values. Every
+/// result is the exact group element that [`msm_secret_bounded_cancellable`]
+/// returns for its column.
 ///
 /// # Errors
 /// As [`msm_secret_columns_cancellable`].
@@ -284,81 +298,94 @@ fn secret_columns<C: PastaCurve>(
     let whole_pool = |&(column, bits): &(&[C::ScalarExt], usize)| {
         msm_impl::<C, true>(column, bases, budget, shared, cancellation, Some(bits))
     };
-    let wanted = rayon::current_num_threads().min(columns.len());
-    // One single-task plan per distinct nonzero bound; a zero bound admits only
-    // zeros, whose sum is the identity.
-    let mut plans: Vec<(usize, pippenger::Plan)> = Vec::new();
-    let admitted = if wanted < 2 || n <= SMALL_MSM {
-        None
-    } else {
-        let mut feasible = true;
-        for &(_, bits) in columns {
-            if bits == 0 || plans.iter().any(|(planned, _)| *planned == bits) {
-                continue;
-            }
-            match pippenger::plan(n, bits, 1, budget.bytes()) {
-                Some(plan) => plans.push((bits, plan)),
-                None => {
-                    feasible = false;
-                    break;
-                }
-            }
-        }
-        let largest = plans.iter().map(|(_, plan)| plan.bytes).max().unwrap_or(0);
-        if feasible {
-            admit_lanes(largest, wanted, shared)
-        } else {
-            None
-        }
-    };
-    let Some((lanes, scratch)) = admitted else {
+    let threads = rayon::current_num_threads();
+    if threads < 2 || columns.len() < 2 || n <= SMALL_MSM {
         return columns.iter().map(&whole_pool).collect();
-    };
-    let head = columns.len() - columns.len() % lanes;
-    let next = AtomicUsize::new(0);
-    let claimed: Vec<Vec<(usize, Result<C, MsmError>)>> = (0..lanes)
-        .into_par_iter()
-        .map(|_| {
-            let mut done = Vec::new();
-            loop {
-                let index = next.fetch_add(1, Ordering::Relaxed);
-                let Some(&(column, bits)) = columns[..head].get(index) else {
-                    break;
-                };
-                let sum = match plans.iter().find(|(planned, _)| *planned == bits) {
-                    Some(&(_, plan)) => run_plan::<C, true>(column, bases, plan, cancellation),
-                    None => CancellationToken::checkpoint(cancellation)
-                        .map(|()| C::identity())
-                        .map_err(MsmError::from),
-                };
-                let failed = sum.is_err();
-                done.push((index, sum));
-                if failed {
-                    // Every lane stops at its next claim; the error is reported below.
-                    next.store(head, Ordering::Relaxed);
-                    break;
-                }
-            }
-            done
+    }
+    // One column plan per distinct nonzero bound; a zero bound admits only
+    // zeros, whose sum is the identity. A bound without a plan inside the
+    // per-kernel budget fails exactly as its column does alone.
+    let mut plans: Vec<(usize, pippenger::ColumnPlan)> = Vec::new();
+    for &(_, bits) in columns {
+        if bits == 0 || plans.iter().any(|(planned, _)| *planned == bits) {
+            continue;
+        }
+        match pippenger::column_plan(n, bits, budget.bytes()) {
+            Some(plan) => plans.push((bits, plan)),
+            None => return columns.iter().map(&whole_pool).collect(),
+        }
+    }
+    let mut order: Vec<(usize, pippenger::ColumnPlan)> = columns
+        .iter()
+        .enumerate()
+        .filter_map(|(index, &(_, bits))| {
+            plans
+                .iter()
+                .find(|(planned, _)| *planned == bits)
+                .map(|&(_, plan)| (index, plan))
         })
         .collect();
-    drop(scratch);
-    let mut sums: Vec<Option<C>> = vec![None; head];
-    let mut failure: Option<(usize, MsmError)> = None;
-    for (index, sum) in claimed.into_iter().flatten() {
-        match sum {
-            Ok(point) => sums[index] = Some(point),
-            Err(error) if failure.is_none_or(|(lowest, _)| index < lowest) => {
-                failure = Some((index, error));
+    // Widest first; the sort is stable, so equal widths keep column order.
+    order.sort_by_key(|&(_, plan)| core::cmp::Reverse(plan.nw));
+    let widest_task = order.iter().map(|(_, plan)| plan.task).max().unwrap_or(0);
+    // Identity bases contribute nothing and would break the affine formulas.
+    let skip: Vec<bool> = bases.iter().map(|b| bool::from(b.is_identity())).collect();
+    let mut sums: Vec<Option<C>> = vec![None; columns.len()];
+    let mut next = 0;
+    while next < order.len() {
+        // A loop for every worker first, then the next columns in claim order
+        // whose digits fit beside them; fewer loops only when not even one
+        // column fits.
+        let available = shared.available_bytes();
+        let mut loops = threads;
+        let (fixed, end) = loop {
+            let room = available.saturating_sub(widest_task.saturating_mul(loops));
+            let (mut fixed, mut end) = (0_usize, next);
+            while let Some(&(_, plan)) = order.get(end) {
+                match fixed.checked_add(plan.fixed) {
+                    Some(with) if with <= room => (fixed, end) = (with, end + 1),
+                    _ => break,
+                }
             }
-            Err(_) => {}
-        }
+            if end > next || loops <= 2 {
+                break (fixed, end);
+            }
+            loops -= 1;
+        };
+        let batch = &order[next..end];
+        let claims: usize = batch
+            .iter()
+            .map(|(_, plan)| plan.nw.div_ceil(plan.least))
+            .sum();
+        let task = batch.iter().map(|(_, plan)| plan.task).max().unwrap_or(0);
+        let admitted = if batch.is_empty() || claims < threads {
+            None
+        } else {
+            admit_batch(fixed, task, loops, shared)
+        };
+        let Some((loops, scratch)) = admitted else {
+            // Fewer claims than workers, or nothing fits: one column at a time
+            // on the whole pool, where a narrow column splits its points.
+            let rest = if batch.is_empty() {
+                &order[next..]
+            } else {
+                batch
+            };
+            for &(index, _) in rest {
+                sums[index] = Some(whole_pool(&columns[index])?);
+            }
+            next += rest.len();
+            continue;
+        };
+        run_batch::<C>(columns, batch, bases, &skip, loops, cancellation, &mut sums)?;
+        // run_batch joined every loop and wiped its scratch before returning.
+        drop(scratch);
+        next = end;
     }
-    if let Some((_, error)) = failure {
-        return Err(error);
-    }
-    // Without a failure every head column was claimed exactly once; computing any
-    // unclaimed one here keeps the result total without trusting that invariant.
+    CancellationToken::checkpoint(cancellation)?;
+    // Every nonzero column was summed above; computing any missing one here
+    // keeps the result total without trusting that (zero bounds give the
+    // identity without scratch).
     let mut out = Vec::with_capacity(columns.len());
     for (sum, column) in sums.into_iter().zip(columns) {
         out.push(match sum {
@@ -366,30 +393,131 @@ fn secret_columns<C: PastaCurve>(
             None => whole_pool(column)?,
         });
     }
-    for column in &columns[head..] {
-        out.push(whole_pool(column)?);
-    }
     Ok(out)
 }
 
-/// Reserve scratch for `wanted` concurrent kernels of `plan_bytes` each, or as many
-/// as fit; two is the fewest worth running instead of one whole-pool kernel.
-fn admit_lanes(
-    plan_bytes: usize,
+/// Reserve a batch's `fixed` scratch plus `task` bytes for each of as many
+/// claiming loops as fit, at most `wanted`; two is the fewest worth running
+/// instead of one whole-pool kernel per column.
+fn admit_batch(
+    fixed: usize,
+    task: usize,
     wanted: usize,
     shared: &SharedMemoryBudget,
 ) -> Option<(usize, ScratchReservation<'_>)> {
-    let mut lanes = wanted.min(shared.available_bytes() / plan_bytes.max(1));
-    while lanes >= 2 {
-        if let Some(scratch) = plan_bytes
-            .checked_mul(lanes)
+    let room = shared.available_bytes().checked_sub(fixed)?;
+    let mut loops = wanted.min(room / task.max(1));
+    while loops >= 2 {
+        if let Some(scratch) = task
+            .checked_mul(loops)
+            .and_then(|bytes| bytes.checked_add(fixed))
             .and_then(|bytes| shared.try_reserve(bytes))
         {
-            return Some((lanes, scratch));
+            return Some((loops, scratch));
         }
-        lanes -= 1;
+        loops -= 1;
     }
     None
+}
+
+/// One admitted batch (`(column index, plan)` in claim order): recode its
+/// columns, let `loops` claiming loops take window ranges (`pippenger::claim_at`)
+/// until none is left, then combine each column's window sums into `sums`.
+///
+/// Each loop holds one claim's buckets at a time, within the admitted `task`
+/// bytes. Every window is reduced once, by the loop that claimed it; group
+/// addition is exact, so a result does not depend on which loop ran which
+/// claim. All loops have joined, and digits, buckets and window sums are
+/// wiped, before this returns, also on cancellation.
+fn run_batch<C: PastaCurve>(
+    columns: &[(&[C::ScalarExt], usize)],
+    batch: &[(usize, pippenger::ColumnPlan)],
+    bases: &[C::AffineExt],
+    skip: &[bool],
+    loops: usize,
+    cancellation: Option<&CancellationToken>,
+    sums: &mut [Option<C>],
+) -> Result<(), MsmError> {
+    let digits: Vec<pippenger::Digits> = batch
+        .par_iter()
+        .map(|&(index, plan)| {
+            pippenger::Digits::new_cancellable(columns[index].0, plan.c, plan.nw, cancellation)
+        })
+        .collect::<Result<_, _>>()?;
+    let mut starts = Vec::with_capacity(batch.len() + 1);
+    let mut total = 0;
+    starts.push(total);
+    for (_, plan) in batch {
+        total += plan.nw;
+        starts.push(total);
+    }
+    let bounds: Vec<(usize, usize)> = batch
+        .iter()
+        .map(|(_, plan)| (plan.least, plan.most))
+        .collect();
+    let next = AtomicUsize::new(0);
+    let claim = || {
+        let mut pos = next.load(Ordering::Relaxed);
+        while pos < total {
+            let (column, w0, count) = pippenger::claim_at(pos, &starts, &bounds, loops);
+            match next.compare_exchange_weak(pos, pos + count, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => return Some((column, w0, count)),
+                Err(seen) => pos = seen,
+            }
+        }
+        None
+    };
+    let claimed: Vec<Vec<(usize, usize, Zeroizing<Vec<C>>)>> = (0..loops)
+        .into_par_iter()
+        .map(|_| {
+            let mut done = Vec::new();
+            while CancellationToken::checkpoint(cancellation).is_ok() {
+                let Some((column, w0, count)) = claim() else {
+                    break;
+                };
+                let plan = batch[column].1;
+                // A cancelled claim returns no sums; the checkpoint below reports it.
+                let window_sums = pippenger::run_range_cancellable::<C, true>(
+                    bases,
+                    skip,
+                    &digits[column],
+                    plan.c,
+                    w0..w0 + count,
+                    0..bases.len(),
+                    cancellation,
+                );
+                done.push((column, w0, window_sums));
+            }
+            done
+        })
+        .collect();
+    CancellationToken::checkpoint(cancellation)?;
+    // Without cancellation every window was claimed exactly once.
+    let mut windows: Vec<Zeroizing<Vec<C>>> = batch
+        .iter()
+        .map(|(_, plan)| Zeroizing::new(vec![C::identity(); plan.nw]))
+        .collect();
+    for (column, w0, window_sums) in claimed.into_iter().flatten() {
+        for (offset, sum) in window_sums.iter().enumerate() {
+            windows[column][w0 + offset] += sum;
+        }
+        // Dropping `window_sums` wipes the claim's returned sums.
+    }
+    drop(digits);
+    let results: Vec<C> = windows
+        .par_iter_mut()
+        .zip(batch.par_iter())
+        .map(|(window, &(_, plan))| {
+            let sum = pippenger::combine(window, plan.c);
+            window.zeroize();
+            sum
+        })
+        .collect();
+    for (&(index, _), sum) in batch.iter().zip(results) {
+        sums[index] = Some(sum);
+    }
+    Ok(())
 }
 
 /// Borrowed secret scalars checked against one independently chosen public bit bound.

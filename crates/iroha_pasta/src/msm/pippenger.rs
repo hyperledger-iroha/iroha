@@ -748,19 +748,44 @@ pub(crate) fn run_task_cancellable<C: PastaCurve, const SECRET: bool>(
 ) -> (usize, Zeroizing<Vec<C>>) {
     let w0 = group * plan.per_group;
     let w1 = ((group + 1) * plan.per_group).min(plan.nw);
-    if w0 >= w1 || CancellationToken::checkpoint(cancellation).is_err() {
-        return (w0, Zeroizing::new(Vec::new()));
-    }
     let n = bases.len();
-    let nb_per = 1usize << (plan.c - 1);
-    let windows = w1 - w0;
-    let mut buckets = Buckets::<C, SECRET>::new(bases, windows * nb_per);
     let step = n.div_ceil(plan.chunks);
     let i0 = chunk * step;
     let i1 = ((chunk + 1) * step).min(n);
-    for (i, _) in skip.iter().enumerate().take(i1).skip(i0) {
+    let sums = run_range_cancellable::<C, SECRET>(
+        bases,
+        skip,
+        digits,
+        plan.c,
+        w0..w1,
+        i0..i1,
+        cancellation,
+    );
+    (w0, sums)
+}
+
+/// The bucket phase of windows `windows` over points `points`: one bucket set
+/// for those windows, then each window's sum. Returns no sums for an empty
+/// window range or a cancelled run.
+pub(crate) fn run_range_cancellable<C: PastaCurve, const SECRET: bool>(
+    bases: &[C::AffineExt],
+    skip: &[bool],
+    digits: &Digits,
+    c: usize,
+    windows: core::ops::Range<usize>,
+    points: core::ops::Range<usize>,
+    cancellation: Option<&CancellationToken>,
+) -> Zeroizing<Vec<C>> {
+    let (w0, w1) = (windows.start, windows.end);
+    if w0 >= w1 || CancellationToken::checkpoint(cancellation).is_err() {
+        return Zeroizing::new(Vec::new());
+    }
+    let nb_per = 1usize << (c - 1);
+    let count = w1 - w0;
+    let mut buckets = Buckets::<C, SECRET>::new(bases, count * nb_per);
+    for i in points {
         if i % 256 == 0 && CancellationToken::checkpoint(cancellation).is_err() {
-            return (w0, Zeroizing::new(Vec::new()));
+            return Zeroizing::new(Vec::new());
         }
         if skip[i] {
             continue;
@@ -774,11 +799,135 @@ pub(crate) fn run_task_cancellable<C: PastaCurve, const SECRET: bool>(
         }
     }
     buckets.flush();
-    let sums = (0..windows)
+    let sums = (0..count)
         .map(|gw| buckets.reduce(gw * nb_per, nb_per))
         .collect();
     // Dropping `buckets` wipes its scratch in secret mode.
-    (w0, Zeroizing::new(sums))
+    Zeroizing::new(sums)
+}
+
+/// Fewest buckets a claim of a split column covers: a batch inversion then
+/// spans at least 128 additions (a quarter of the buckets), so splitting a
+/// column costs at most about 3% more per insertion (`INVERSION / 128`).
+const MIN_CLAIM_BUCKETS: usize = 512;
+
+/// Scratch per window of a claimed batch besides [`fixed_bytes`]: the
+/// window's sum as its claim returned it, and that claim's share of a result
+/// slot.
+const CLAIM_WINDOW_BYTES: usize = 96 + 64;
+
+/// How one column of a claimed batch is cut into window ranges.
+///
+/// A claim covers `least..=most` consecutive windows of one column: `most`
+/// keeps a claim's buckets near the L2 size (the planner's largest grouping)
+/// and within the per-kernel budget, `least` keeps a batch inversion
+/// amortised. A column whose buckets are few is never split
+/// (`least == most == nw`); a split column has `most >= 2 * least - 1`, so a
+/// claim can always leave either nothing or at least `least` windows behind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ColumnPlan {
+    /// Window width.
+    pub(crate) c: usize,
+    /// Number of windows.
+    pub(crate) nw: usize,
+    /// Fewest windows in one claim.
+    pub(crate) least: usize,
+    /// Most windows in one claim.
+    pub(crate) most: usize,
+    /// The column's digits, skip flags, window sums and claimed results.
+    pub(crate) fixed: usize,
+    /// One claiming loop's live claim at `most` windows.
+    pub(crate) task: usize,
+}
+
+/// The window width and claim sizes for one column of `n` scalars of at most
+/// `bits` bits in a claimed batch, or `None` when no width fits `budget` (the
+/// per-kernel limit, as for one column's own plan).
+///
+/// Every width is scored by [`makespan`] at its smallest claim, because the
+/// claims of a batch shrink towards `least` windows as its work runs out; a
+/// point split is never used, so no window is reduced twice.
+pub(crate) fn column_plan(n: usize, bits: usize, budget: usize) -> Option<ColumnPlan> {
+    let mut best: Option<(u128, ColumnPlan)> = None;
+    for c in MIN_WINDOW..=MAX_WINDOW {
+        let nw = num_windows(bits, c);
+        let nb_per = 1usize << (c - 1);
+        let fixed = fixed_bytes(n, nw)?.checked_add(nw.checked_mul(CLAIM_WINDOW_BYTES)?)?;
+        let Some(avail) = budget.checked_sub(fixed) else {
+            continue;
+        };
+        let largest = nw.min(((2usize << 20) / (nb_per * BUCKET_BYTES)).max(1));
+        let Some(most) = (1..=largest)
+            .rev()
+            .find(|&windows| task_bytes(windows, nb_per).is_some_and(|bytes| bytes <= avail))
+        else {
+            continue;
+        };
+        let (least, most) = if nw * nb_per <= 2 * MIN_CLAIM_BUCKETS && most == nw {
+            (nw, nw)
+        } else {
+            let least = MIN_CLAIM_BUCKETS.div_ceil(nb_per).min(nw);
+            (least.min(most.div_ceil(2)), most)
+        };
+        let task = task_bytes(most, nb_per)?;
+        let cost = makespan(n, c, nw, least, 1, 1);
+        if best.is_none_or(|(b, _)| cost < b) {
+            best = Some((
+                cost,
+                ColumnPlan {
+                    c,
+                    nw,
+                    least,
+                    most,
+                    fixed,
+                    task,
+                },
+            ));
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+/// Claims take about `1 / (GUIDE * loops)` of the windows still unclaimed in a
+/// batch. Early claims are large (fewer, better amortised tasks); the last are
+/// single windows, so a fast worker can finish the batch while a slow one
+/// completes its claim. With 4, a worker's first claim is about 3% of the
+/// batch, which a Pixel 6 little core (about 1/7 of a big core's rate on this
+/// kernel) completes within about half of the batch's time.
+pub(crate) const GUIDE: usize = 4;
+
+/// The claim that starts at window `pos` of a batch whose columns occupy
+/// `starts[j]..starts[j + 1]` (`starts[0] == 0`, the last entry the batch's
+/// total) and cut by `bounds[j] = (least, most)`: its column, first window and
+/// window count.
+///
+/// The count is the guided share of the windows left in the batch, clamped to
+/// the column's claim sizes and the column's end; a claim never leaves fewer
+/// than `least` windows of its column behind. Successive claims from 0
+/// therefore cover every window exactly once.
+pub(crate) fn claim_at(
+    pos: usize,
+    starts: &[usize],
+    bounds: &[(usize, usize)],
+    loops: usize,
+) -> (usize, usize, usize) {
+    let total = starts[starts.len() - 1];
+    let column = starts.partition_point(|&start| start <= pos) - 1;
+    let left = starts[column + 1] - pos;
+    let (least, most) = bounds[column];
+    let guided = (total - pos)
+        .div_ceil(GUIDE * loops.max(1))
+        .clamp(least, most);
+    let count = if guided >= left {
+        left
+    } else if left - guided >= least {
+        guided
+    } else if left <= most {
+        left
+    } else {
+        left - least
+    };
+    (column, pos - starts[column], count)
 }
 
 /// Combines per-window sums: `sum_w 2^(c w) * W_w`.

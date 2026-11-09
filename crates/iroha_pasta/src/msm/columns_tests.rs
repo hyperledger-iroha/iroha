@@ -77,7 +77,7 @@ fn columns_equal_independent_sums_on_both_curves() {
     exact_columns::<Eq>();
 }
 
-fn bounded_lanes<C: PastaCurve>() {
+fn bounded_batches<C: PastaCurve>() {
     let n = 4097;
     let (_, bases) = mixed_inputs::<C>(n, 11);
     let columns = columns_of::<C>(11, n);
@@ -86,9 +86,12 @@ fn bounded_lanes<C: PastaCurve>() {
         .iter()
         .map(|column| msm_naive::<C>(column, &bases))
         .collect();
-    let member = pippenger::plan(n, 255, 1, MemoryBudget::DEFAULT.bytes()).unwrap();
-    // Room for exactly two single-task kernels: four workers must not run more.
-    let shared = SharedMemoryBudget::new(member.bytes * 2 + member.bytes / 2);
+    let plan = pippenger::column_plan(n, 255, MemoryBudget::DEFAULT.bytes()).unwrap();
+    let batch = plan.fixed + 2 * plan.task;
+    // Room for one column's digits beside two claiming loops, never two
+    // columns' or three loops': four workers must not hold more.
+    assert!(plan.fixed / 2 < plan.task);
+    let shared = SharedMemoryBudget::new(batch + plan.fixed / 2);
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(4)
         .build()
@@ -106,17 +109,17 @@ fn bounded_lanes<C: PastaCurve>() {
         .unwrap();
     assert_eq!(sums, expected);
     assert_eq!(shared.in_use_bytes(), 0);
-    assert!(
-        shared.peak_bytes() >= member.bytes * 2,
-        "two lanes must be admitted together"
+    assert_eq!(
+        shared.peak_bytes(),
+        batch,
+        "each batch admits one column and two loops together"
     );
-    assert!(shared.peak_bytes() <= shared.limit_bytes());
 }
 
 #[test]
-fn columns_never_run_more_kernels_than_admitted() {
-    bounded_lanes::<Ep>();
-    bounded_lanes::<Eq>();
+fn columns_never_hold_more_scratch_than_admitted() {
+    bounded_batches::<Ep>();
+    bounded_batches::<Eq>();
 }
 
 fn no_lane_fits<C: PastaCurve>() {
@@ -199,6 +202,63 @@ fn columns_check_every_length_before_work_and_cancel() {
         ),
         Err(MsmError::Budget(_))
     ));
+}
+
+/// A cancellation from another thread at any point of a batch (recoding,
+/// claims, the final combination) returns either every exact sum or
+/// `Cancelled`, and releases all scratch.
+fn cancelled_mid_batch<C: PastaCurve>() {
+    let n = 4097;
+    let (_, bases) = mixed_inputs::<C>(n, 37);
+    let columns = columns_of::<C>(9, n);
+    let borrowed: Vec<&[C::ScalarExt]> = columns.iter().map(Vec::as_slice).collect();
+    let expected: Vec<C> = columns
+        .iter()
+        .map(|column| msm_naive::<C>(column, &bases))
+        .collect();
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap();
+    let mut outcomes = (0, 0);
+    for delay_us in [0, 100, 300, 1_000, 3_000, 10_000, 30_000, 100_000] {
+        let shared = SharedMemoryBudget::new(PROCESS_MSM_SCRATCH_BYTES);
+        let token = CancellationToken::new();
+        let result = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(std::time::Duration::from_micros(delay_us));
+                token.cancel();
+            });
+            pool.install(|| {
+                msm_secret_columns_cancellable::<C>(
+                    &borrowed,
+                    &bases,
+                    MemoryBudget::DEFAULT,
+                    &shared,
+                    Some(&token),
+                )
+            })
+        });
+        match result {
+            Ok(sums) => {
+                assert_eq!(sums, expected, "delay {delay_us} us");
+                outcomes.0 += 1;
+            }
+            Err(error) => {
+                assert_eq!(error, MsmError::Cancelled, "delay {delay_us} us");
+                outcomes.1 += 1;
+            }
+        }
+        assert_eq!(shared.in_use_bytes(), 0, "delay {delay_us} us");
+    }
+    // An immediate cancellation always wins the race against the whole batch.
+    assert!(outcomes.1 >= 1, "{outcomes:?}");
+}
+
+#[test]
+fn columns_cancelled_from_another_thread_return_exact_sums_or_cancelled() {
+    cancelled_mid_batch::<Ep>();
+    cancelled_mid_batch::<Eq>();
 }
 
 /// Bounds across a column set: zero, one bit, narrow chunks, limbs and full width.
@@ -288,7 +348,7 @@ fn bounded_columns_equal_independent_sums_on_both_curves() {
     exact_bounded_columns::<Eq>();
 }
 
-fn bounded_columns_admit_the_largest_plan<C: PastaCurve>() {
+fn bounded_columns_admit_the_largest_claim<C: PastaCurve>() {
     let n = 4097;
     let (_, bases) = mixed_inputs::<C>(n, 29);
     let columns: Vec<(Vec<C::ScalarExt>, usize)> = (0..9)
@@ -305,17 +365,15 @@ fn bounded_columns_admit_the_largest_plan<C: PastaCurve>() {
         .iter()
         .map(|(scalars, _)| msm_naive::<C>(scalars, &bases))
         .collect();
-    let largest = [13, 255, 1]
+    let plans: Vec<pippenger::ColumnPlan> = [13, 255, 1]
         .into_iter()
-        .map(|bits| {
-            pippenger::plan(n, bits, 1, MemoryBudget::DEFAULT.bytes())
-                .unwrap()
-                .bytes
-        })
-        .max()
-        .unwrap();
-    // Room for exactly two of the largest single-task kernels.
-    let shared = SharedMemoryBudget::new(largest * 2 + largest / 2);
+        .map(|bits| pippenger::column_plan(n, bits, MemoryBudget::DEFAULT.bytes()).unwrap())
+        .collect();
+    let task = plans.iter().map(|plan| plan.task).max().unwrap();
+    let wide = plans[1];
+    // Room for one wide column's digits beside two loops of the largest claim.
+    let batch = wide.fixed + 2 * task;
+    let shared = SharedMemoryBudget::new(batch + wide.fixed / 2);
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(4)
         .build()
@@ -334,16 +392,81 @@ fn bounded_columns_admit_the_largest_plan<C: PastaCurve>() {
     assert_eq!(sums, expected);
     assert_eq!(shared.in_use_bytes(), 0);
     assert!(
-        shared.peak_bytes() >= largest * 2,
-        "two lanes must be admitted together"
+        shared.peak_bytes() >= batch,
+        "a wide column and two loops must be admitted together"
     );
     assert!(shared.peak_bytes() <= shared.limit_bytes());
 }
 
 #[test]
-fn bounded_columns_never_run_more_kernels_than_admitted() {
-    bounded_columns_admit_the_largest_plan::<Ep>();
-    bounded_columns_admit_the_largest_plan::<Eq>();
+fn bounded_columns_never_hold_more_scratch_than_admitted() {
+    bounded_columns_admit_the_largest_claim::<Ep>();
+    bounded_columns_admit_the_largest_claim::<Eq>();
+}
+
+/// Successive claims from window 0 cover every window of a batch exactly once,
+/// stay inside one column, respect its claim sizes and shrink to the smallest
+/// claim at the end of the batch, for every column plan the planner makes.
+#[test]
+fn claims_cover_every_window_once_within_claim_sizes() {
+    let budget = MemoryBudget::DEFAULT.bytes();
+    let plans: Vec<pippenger::ColumnPlan> = [1, 3, 11, 13, 15, 16, 88, 177, 255]
+        .into_iter()
+        .flat_map(|bits| [300, 4097, 15_628, 65_536].map(|n| (n, bits)))
+        .map(|(n, bits)| pippenger::column_plan(n, bits, budget).unwrap())
+        .collect();
+    for plan in &plans {
+        assert!(plan.least >= 1 && plan.least <= plan.most && plan.most <= plan.nw);
+        assert!(
+            (plan.least == plan.nw && plan.most == plan.nw) || plan.most + 1 >= 2 * plan.least,
+            "{plan:?}"
+        );
+    }
+    let mut rng = ChaCha20Rng::seed_from_u64(41);
+    for case in 0..400 {
+        use rand_core::Rng;
+        let count = 1 + (rng.next_u64() % 12) as usize;
+        let batch: Vec<pippenger::ColumnPlan> = (0..count)
+            .map(|_| plans[(rng.next_u64() % plans.len() as u64) as usize])
+            .collect();
+        let loops = 2 + (rng.next_u64() % 15) as usize;
+        let mut starts = vec![0];
+        for plan in &batch {
+            starts.push(starts[starts.len() - 1] + plan.nw);
+        }
+        let bounds: Vec<(usize, usize)> = batch.iter().map(|p| (p.least, p.most)).collect();
+        let total = starts[count];
+        let mut covered = vec![0_u8; total];
+        let mut pos = 0;
+        let mut last = (0, 0);
+        while pos < total {
+            let (column, w0, windows) = pippenger::claim_at(pos, &starts, &bounds, loops);
+            let plan = batch[column];
+            assert_eq!(starts[column] + w0, pos, "case {case}");
+            assert!(
+                windows >= plan.least && windows <= plan.most,
+                "case {case}: {windows} for {plan:?}"
+            );
+            assert!(
+                w0 + windows <= plan.nw,
+                "case {case}: claim crosses its column"
+            );
+            for slot in &mut covered[pos..pos + windows] {
+                *slot += 1;
+            }
+            last = (column, windows);
+            pos += windows;
+        }
+        assert!(covered.iter().all(|&times| times == 1), "case {case}");
+        // The batch ends on a smallest claim (a remainder rule may add fewer
+        // than `least` more windows), so a slow worker never holds a large one.
+        let (column, windows) = last;
+        let plan = batch[column];
+        assert!(
+            windows < 2 * plan.least,
+            "case {case}: final claim of {windows} for {plan:?}"
+        );
+    }
 }
 
 #[test]
