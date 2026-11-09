@@ -1,4 +1,5 @@
-//! Current signed read authority for the two certified-native-original endpoints.
+//! Current signed read authority for the certified-native-original endpoints. The Ironwood pool
+//! cut accepts the same two capabilities through its own authorization view.
 
 use super::*;
 use iroha_executor_data_model::permission::query::CanReadCertifiedOriginals;

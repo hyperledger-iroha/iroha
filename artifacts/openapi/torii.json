@@ -97644,7 +97644,7 @@
     },
     "/v1/privacy/ironwood/pool-cut/{height}": {
       "post": {
-        "description": "Read the exact current certified Global Ironwood pool/root and payer/reserve balance originals. Canonical signed all-ledger proof-reader authority is required and rechecked before disclosure because the complete World hash list exposes unrelated rows. This is separate from merchant discovery: merchants anonymously fetch public /v1/bridge/finality frames. Retain the canonical cut and authenticate it against independently pinned consecutive finality proofs; query status and decoded bytes grant no authority. No historical cut fallback.",
+        "description": "Read the exact current certified Global Ironwood pool/root and payer/reserve balance originals. Canonical signed CanReadCertifiedOriginals or all-ledger proof-reader authority is required and rechecked before disclosure because the complete World hash list exposes unrelated rows. This is separate from merchant discovery: merchants anonymously fetch public /v1/bridge/finality frames. Retain the canonical cut and authenticate it against independently pinned consecutive finality proofs; query status and decoded bytes grant no authority. No historical cut fallback.",
         "operationId": "ironwoodPoolCutV1",
         "parameters": [
           {
