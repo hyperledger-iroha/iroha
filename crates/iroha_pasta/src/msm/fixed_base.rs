@@ -3,7 +3,9 @@
 //! For bases `P_i` and window width `c`, the table stores `2^(c w) * P_i` for
 //! every window `w`, as affine points in layout `[i * nw + w]`. An MSM then
 //! drops every scalar digit into a single set of `2^(c-1)` buckets: there are
-//! no per-window bucket sets and no doublings. The table costs
+//! no per-window bucket sets and no doublings. Scalars with a public bound
+//! under one window (`bits < c`) are their own digits and need only
+//! `2^bits - 1` buckets ([`bound_buckets`]). The table costs
 //! `n * nw * 64` bytes (about 2.6 MiB for `n = 2^11, c = 13` and about 84 MiB
 //! for `n = 2^16`), so its construction is gated by a [`MemoryBudget`].
 //!
@@ -63,6 +65,22 @@ const TABLE_REDUCTION: usize = 3;
 /// short batches (a few rows) take shorter claims and more reductions rather
 /// than leave workers idle.
 const TABLE_CLAIM_SHARES: [usize; 3] = [8, 4, 2];
+/// Bits of a canonical Pasta scalar: an unbounded MSM recodes every window.
+const SCALAR_BITS: usize = 255;
+
+/// Buckets that the digits of scalars below `2^bits` reach with window `c`.
+///
+/// Under one window (`bits < c`, so [`num_windows`] is 1) every scalar is
+/// below `2^(c-1)`, which the signed recoding keeps as one nonnegative digit
+/// of at most `2^bits - 1` with no carry. Wider bounds reach all `2^(c-1)`
+/// buckets. The count depends only on the public bound and the window.
+fn bound_buckets(bits: usize, c: usize) -> usize {
+    if num_windows(bits, c) == 1 {
+        ((1_usize << bits) - 1).max(1)
+    } else {
+        1_usize << (c - 1)
+    }
+}
 
 /// The claim that starts at point `pos` of a table batch whose columns each
 /// hold `n` points: its column, first point and point count. Column `j`
@@ -425,7 +443,7 @@ impl<C: PastaCurve> FixedBaseTable<C> {
         budget: MemoryBudget,
         shared: &SharedMemoryBudget,
     ) -> Result<C, MsmError> {
-        self.msm_impl::<false>(scalars, budget, shared, None)
+        self.msm_impl::<false>(scalars, SCALAR_BITS, budget, shared, None)
     }
 
     /// Secret table MSM charging an explicit shared scratch ceiling.
@@ -438,7 +456,7 @@ impl<C: PastaCurve> FixedBaseTable<C> {
         budget: MemoryBudget,
         shared: &SharedMemoryBudget,
     ) -> Result<C, MsmError> {
-        self.msm_impl::<true>(scalars, budget, shared, None)
+        self.msm_impl::<true>(scalars, SCALAR_BITS, budget, shared, None)
     }
 
     /// Public table MSM with explicit cancellation and shared scratch.
@@ -452,7 +470,7 @@ impl<C: PastaCurve> FixedBaseTable<C> {
         shared: &SharedMemoryBudget,
         cancellation: Option<&CancellationToken>,
     ) -> Result<C, MsmError> {
-        self.msm_impl::<false>(scalars, budget, shared, cancellation)
+        self.msm_impl::<false>(scalars, SCALAR_BITS, budget, shared, cancellation)
     }
 
     /// Secret table MSM with explicit cancellation and shared scratch.
@@ -467,7 +485,7 @@ impl<C: PastaCurve> FixedBaseTable<C> {
         shared: &SharedMemoryBudget,
         cancellation: Option<&CancellationToken>,
     ) -> Result<C, MsmError> {
-        self.msm_impl::<true>(scalars, budget, shared, cancellation)
+        self.msm_impl::<true>(scalars, SCALAR_BITS, budget, shared, cancellation)
     }
 
     /// One secret MSM per bounded column against the table bases, returned in
@@ -488,7 +506,9 @@ impl<C: PastaCurve> FixedBaseTable<C> {
     /// batch too short to give every loop two claims otherwise). Early claims
     /// are therefore whole columns and the last are short, so a fast worker
     /// finishes the batch while a slow one completes its last claim. Each column is recoded only
-    /// for the windows its public bound needs. Claim boundaries depend only on
+    /// for the windows its public bound needs, and its bucket sets hold only the
+    /// buckets those digits reach ([`bound_buckets`]: `2^bits - 1` under one
+    /// window), also when it runs alone. Claim boundaries depend only on
     /// public lengths, bounds, the window and the admitted loop count; worker
     /// timing decides only which loop runs a claim. Every result is the exact
     /// group element [`Self::msm_secret_cancellable`] returns for its column.
@@ -522,14 +542,16 @@ impl<C: PastaCurve> FixedBaseTable<C> {
                 CancellationToken::checkpoint(cancellation)?;
                 return Ok(C::identity());
             }
-            self.msm_impl::<true>(column.scalars, budget, shared, cancellation)
+            // Alone, a column recodes only the windows its bound needs and holds
+            // only the buckets those digits reach.
+            self.msm_impl::<true>(column.scalars, column.bits, budget, shared, cancellation)
         };
         let threads = rayon::current_num_threads();
-        let (all_digits, task) = self.msm_scratch();
+        let (all_digits, task) = self.msm_scratch(SCALAR_BITS);
         // A claiming loop holds one bucket set and the digits of at most one
-        // whole column, recoded per claim. A column that would not fit the
-        // per-kernel budget alone fails exactly as it does through the
-        // single-column MSM.
+        // whole column, recoded per claim; full-width scalars bound both. A
+        // column that would not fit the per-kernel budget alone fails exactly
+        // as it does through the single-column MSM.
         let loop_bytes = all_digits.saturating_add(task);
         if threads < 2
             || columns.len() < 2
@@ -649,7 +671,6 @@ impl<C: PastaCurve> FixedBaseTable<C> {
         cancellation: Option<&CancellationToken>,
         sums: &mut [Option<C>],
     ) -> Result<(), MsmError> {
-        let nb = 1usize << (self.c - 1);
         let weights: Vec<usize> = batch.iter().map(|&(_, windows)| windows).collect();
         let floors: Vec<usize> = weights
             .iter()
@@ -688,6 +709,7 @@ impl<C: PastaCurve> FixedBaseTable<C> {
                         break;
                     };
                     let (index, windows) = batch[column];
+                    let nb = bound_buckets(columns[index].bits, self.c);
                     // A cancelled recoding returns no digits; the checkpoint
                     // below reports it.
                     let Ok(digits) = Digits::new_serial_cancellable(
@@ -736,23 +758,28 @@ impl<C: PastaCurve> FixedBaseTable<C> {
         Ok(())
     }
 
-    /// Scratch of one MSM: `(digit_bytes, bucket_bytes)` where the second is
-    /// one task's bucket set.
-    fn msm_scratch(&self) -> (usize, usize) {
-        let nb = 1usize << (self.c - 1);
-        let digits = self.n.saturating_mul(self.nw).saturating_mul(2);
+    /// Scratch of one MSM over scalars below `2^bits`: `(digit_bytes,
+    /// bucket_bytes)` where the second is one task's bucket set.
+    fn msm_scratch(&self, bits: usize) -> (usize, usize) {
+        let windows = num_windows(bits, self.c).min(self.nw);
+        let digits = self.n.saturating_mul(windows).saturating_mul(2);
         (
             digits,
-            bucket_bytes(nb)
+            bucket_bytes(bound_buckets(bits, self.c))
                 .unwrap_or(usize::MAX)
                 .saturating_add(size_of::<C>()),
         )
     }
 
-    /// Number of MSM tasks for `threads` workers within `budget`, or the
-    /// budget error when even one task does not fit.
-    fn msm_tasks(&self, threads: usize, budget: MemoryBudget) -> Result<usize, BudgetExceeded> {
-        let (digits, buckets) = self.msm_scratch();
+    /// Number of MSM tasks over scalars below `2^bits` for `threads` workers
+    /// within `budget`, or the budget error when even one task does not fit.
+    fn msm_tasks(
+        &self,
+        threads: usize,
+        budget: MemoryBudget,
+        bits: usize,
+    ) -> Result<usize, BudgetExceeded> {
+        let (digits, buckets) = self.msm_scratch(bits);
         budget.check(digits.saturating_add(buckets))?;
         let affordable = budget
             .bytes()
@@ -766,9 +793,14 @@ impl<C: PastaCurve> FixedBaseTable<C> {
             .max(1))
     }
 
+    /// The table MSM over scalars that are all below `2^bits`: [`SCALAR_BITS`]
+    /// for unbounded scalars, or a [`BoundedSecretScalars`] column's checked
+    /// bound. Only the windows that bound needs are recoded, and each task
+    /// holds only the buckets their digits reach.
     fn msm_impl<const SECRET: bool>(
         &self,
         scalars: &[C::ScalarExt],
+        bits: usize,
         budget: MemoryBudget,
         shared: &SharedMemoryBudget,
         cancellation: Option<&CancellationToken>,
@@ -783,12 +815,13 @@ impl<C: PastaCurve> FixedBaseTable<C> {
         if self.n == 0 {
             return Ok(C::identity());
         }
-        let nb = 1usize << (self.c - 1);
+        let windows = num_windows(bits, self.c).min(self.nw);
+        let nb = bound_buckets(bits, self.c);
         let threads = rayon::current_num_threads();
-        let mut tasks = self.msm_tasks(threads, budget)?;
-        let (digits_bytes, task_bytes) = self.msm_scratch();
+        let mut tasks = self.msm_tasks(threads, budget, bits)?;
+        let (digits_bytes, task_bytes) = self.msm_scratch(bits);
         let available = MemoryBudget::new(budget.bytes().min(shared.available_bytes()));
-        if let Ok(smaller) = self.msm_tasks(threads, available) {
+        if let Ok(smaller) = self.msm_tasks(threads, available, bits) {
             tasks = tasks.min(smaller);
         }
         let Some(_scratch) =
@@ -802,7 +835,7 @@ impl<C: PastaCurve> FixedBaseTable<C> {
             CancellationToken::checkpoint(cancellation)?;
             return Ok(*result);
         };
-        let digits = Digits::new_cancellable(scalars, self.c, self.nw, cancellation)?;
+        let digits = Digits::new_cancellable(scalars, self.c, windows, cancellation)?;
         let step = self.n.div_ceil(tasks);
         let mut partial = Zeroizing::new(
             (0..tasks)
@@ -1103,13 +1136,16 @@ mod tests {
         let scalars: Vec<Fp> = (0..n).map(|_| Fp::random(&mut rng)).collect();
         let expected = msm_naive::<Eq>(&scalars, &bases);
         let table = FixedBaseTable::<Eq>::with_window(&bases, 13, MemoryBudget::DEFAULT).unwrap();
-        let (digits, buckets) = table.msm_scratch();
+        let (digits, buckets) = table.msm_scratch(SCALAR_BITS);
         // Room for exactly one task's buckets: 7 workers would want 3 tasks.
         let tight = MemoryBudget::new(digits + buckets);
         let short = MemoryBudget::new(digits + buckets - 1);
         for threads in [1usize, 7] {
             let p = pool(threads);
-            assert_eq!(p.install(|| table.msm_tasks(threads, tight)), Ok(1));
+            assert_eq!(
+                p.install(|| table.msm_tasks(threads, tight, SCALAR_BITS)),
+                Ok(1)
+            );
             assert_eq!(
                 p.install(|| table.msm_public(&scalars, tight)).unwrap(),
                 expected,
@@ -1124,9 +1160,12 @@ mod tests {
                 Err(MsmError::Budget(_))
             ));
         }
-        assert_eq!(table.msm_tasks(7, MemoryBudget::DEFAULT), Ok(3));
+        assert_eq!(
+            table.msm_tasks(7, MemoryBudget::DEFAULT, SCALAR_BITS),
+            Ok(3)
+        );
         let two = MemoryBudget::new(digits + 2 * buckets);
-        assert_eq!(table.msm_tasks(7, two), Ok(2));
+        assert_eq!(table.msm_tasks(7, two, SCALAR_BITS), Ok(2));
     }
 
     /// A canonical integer below `2^bits` (`bits < 255`), built limb by limb
@@ -1166,7 +1205,8 @@ mod tests {
     }
 
     fn table_columns<C: PastaCurve>() {
-        const BOUNDS: [usize; 6] = [0, 1, 13, 88, 177, 255];
+        // 3, 8 and 12 are one window under c = 4, 9 and 13 (`bits = c - 1`).
+        const BOUNDS: [usize; 9] = [0, 1, 3, 8, 12, 13, 88, 177, 255];
         let mut rng = ChaCha20Rng::seed_from_u64(61);
         for n in [9usize, 300, 600, 1031] {
             let mut bases: Vec<C::AffineExt> =
@@ -1377,7 +1417,7 @@ mod tests {
             .unwrap();
         assert_eq!(sums, expected);
         assert_eq!(none.peak_bytes(), 0);
-        let (all_digits, task) = table.msm_scratch();
+        let (all_digits, task) = table.msm_scratch(SCALAR_BITS);
         // A loop holds one bucket set and at most one whole column's digits.
         let looped = all_digits + task;
         let one = table.column_bytes(table.nw);
@@ -1400,5 +1440,118 @@ mod tests {
             one + 4 * looped,
             "each batch admits one column and four loops together"
         );
+    }
+
+    /// Recoding a value below `2^bits` into the bound's windows is exact and
+    /// never produces a digit beyond `bound_buckets`: under one window every
+    /// value is its own digit, wider bounds use the full signed range.
+    #[test]
+    fn bound_buckets_cover_every_digit_of_the_bound() {
+        use rand_core::Rng;
+        let mut rng = ChaCha20Rng::seed_from_u64(65);
+        for c in 2..=MAX_WINDOW {
+            for bits in 0..=c + 2 {
+                let windows = num_windows(bits, c);
+                let buckets = bound_buckets(bits, c);
+                if bits < c {
+                    assert_eq!(windows, 1, "c={c} bits={bits}");
+                    assert_eq!(buckets, ((1_usize << bits) - 1).max(1), "c={c} bits={bits}");
+                } else {
+                    assert_eq!(buckets, 1 << (c - 1), "c={c} bits={bits}");
+                }
+                // Every value below the bound when that is cheap; otherwise
+                // the extremes and uniform samples.
+                let limit = 1_u64 << bits;
+                let values: Vec<u64> = if bits <= 12 {
+                    (0..limit).collect()
+                } else {
+                    let mut values = vec![0, 1, limit / 2 - 1, limit / 2, limit - 1];
+                    values.extend((0..2_000).map(|_| rng.next_u64() & (limit - 1)));
+                    values
+                };
+                let mut digits = vec![0_i16; windows];
+                for value in values {
+                    super::super::pippenger::recode_into(&[value, 0, 0, 0], c, &mut digits);
+                    let mut sum = 0_i128;
+                    for (w, &d) in digits.iter().enumerate() {
+                        assert!(
+                            usize::from(d.unsigned_abs()) <= buckets,
+                            "c={c} bits={bits} value={value}: digit {d} beyond {buckets} buckets"
+                        );
+                        sum += i128::from(d) << (c * w);
+                    }
+                    assert_eq!(sum, i128::from(value), "c={c} bits={bits} value={value}");
+                }
+            }
+        }
+    }
+
+    /// Batches of only narrow or only empty columns (the second phase of a
+    /// circuit without lookups) sum exactly with and without enough claims to
+    /// batch, and a narrow column run alone holds one window of digits and
+    /// the buckets its bound reaches instead of the full-width scratch.
+    #[test]
+    fn narrow_and_empty_columns_sum_exactly_and_hold_only_their_buckets() {
+        let mut rng = ChaCha20Rng::seed_from_u64(66);
+        let n = 1031;
+        let bases: Vec<EqAffine> = (0..n).map(|_| Eq::random(&mut rng).to_affine()).collect();
+        let table = FixedBaseTable::<Eq>::with_window(&bases, 13, MemoryBudget::DEFAULT).unwrap();
+        let empty = vec![Fp::ZERO; n];
+        let narrow: Vec<(Vec<Fp>, usize)> = [1_usize, 3, 12, 1, 7]
+            .into_iter()
+            .map(|bits| (bounded_column(&mut rng, n, bits), bits))
+            .collect();
+        let batches: [Vec<BoundedSecretScalars<'_, Fp>>; 2] = [
+            (0..5)
+                .map(|_| BoundedSecretScalars::new(&empty, 1, None).unwrap())
+                .collect(),
+            narrow
+                .iter()
+                .map(|(scalars, bits)| BoundedSecretScalars::new(scalars, *bits, None).unwrap())
+                .collect(),
+        ];
+        for (batch, columns) in batches.iter().enumerate() {
+            let expected: Vec<Eq> = columns
+                .iter()
+                .map(|column| msm_naive::<Eq>(column.scalars, &bases))
+                .collect();
+            // One worker runs every column alone; three workers have enough
+            // claims to batch five columns; eight do not.
+            for threads in [1_usize, 3, 8] {
+                let shared = SharedMemoryBudget::new(super::super::PROCESS_MSM_SCRATCH_BYTES);
+                let sums = pool(threads)
+                    .install(|| {
+                        table.msm_secret_bounded_columns_cancellable(
+                            columns,
+                            MemoryBudget::DEFAULT,
+                            &shared,
+                            None,
+                        )
+                    })
+                    .unwrap();
+                assert_eq!(sums, expected, "batch {batch} threads {threads}");
+                assert_eq!(shared.in_use_bytes(), 0);
+            }
+        }
+        let column = BoundedSecretScalars::new(&empty, 1, None).unwrap();
+        let shared = SharedMemoryBudget::new(super::super::PROCESS_MSM_SCRATCH_BYTES);
+        let sums = pool(8)
+            .install(|| {
+                table.msm_secret_bounded_columns_cancellable(
+                    core::slice::from_ref(&column),
+                    MemoryBudget::DEFAULT,
+                    &shared,
+                    None,
+                )
+            })
+            .unwrap();
+        assert_eq!(sums, vec![Eq::identity()]);
+        let tasks = table.msm_tasks(8, MemoryBudget::DEFAULT, 1).unwrap();
+        let (digits, buckets) = table.msm_scratch(1);
+        assert_eq!(digits, 2 * n, "one i16 digit per scalar");
+        assert_eq!(buckets, bucket_bytes(1).unwrap() + size_of::<Eq>());
+        assert_eq!(shared.peak_bytes(), digits + tasks * buckets);
+        let (wide_digits, wide_buckets) = table.msm_scratch(SCALAR_BITS);
+        assert!(10 * shared.peak_bytes() < wide_digits + tasks * wide_buckets);
     }
 }
