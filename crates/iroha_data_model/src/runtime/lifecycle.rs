@@ -341,6 +341,7 @@ impl ChangeSetV1 {
         let mut commitment_profile = predecessor.commitment_profile;
         let mut services_profile = predecessor.services_profile;
 
+        let import_existing = std::cell::OnceCell::new();
         for (index, transition) in self.transitions.iter().enumerate() {
             let fail = |reason| ChangeSetError::Transition { index, reason };
             let needed = |id: &DefinitionId, closures: &BTreeMap<[u8; 32], CompletionClosureV1>| {
@@ -354,7 +355,8 @@ impl ChangeSetV1 {
                     else {
                         return Err(fail("only a published storage definition can be installed"));
                     };
-                    if matches!(storage.shape, StorageShapeV1::Cell) && storage.initial.is_none() {
+                    if matches!(storage.shape, StorageShapeV1::Cell) && storage.initial.is_none()
+                        && !*import_existing.get_or_init(|| super::keyed_state::imports_existing_storage(self, predecessor.kernel)) {
                         return Err(fail(
                             "a cell without initial bytes is installed only by the act that founds its root",
                         ));

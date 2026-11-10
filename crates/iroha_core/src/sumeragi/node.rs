@@ -657,10 +657,10 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
             );
         }
     }
-    // Every replayed result bound the complete World state roots; the incrementally advanced
-    // accumulator must also equal a cold capture of the rebuilt World (Appendix E, E51).
+    // Compare the replayed publication with a cold capture under its selected commitment.
+    // The terminal cut is checked even when Kura has no successor.
     state
-        .verify_world_state_accumulator()
+        .verify_replayed_state_commitment()
         .map_err(|reason| NodeError::Replay {
             height: stored.max(GENESIS_HEIGHT),
             reason: ReplayError::StateRoot(reason),

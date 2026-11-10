@@ -6949,6 +6949,9 @@ pub(crate) mod valid {
                 crate::state::ExecutionOutputSealError::Storage(error) => {
                     BlockValidationError::StateStorageAdmission(error)
                 }
+                crate::state::ExecutionOutputSealError::Membership(original) => {
+                    BlockValidationError::MembershipAdmission(original)
+                }
                 crate::state::ExecutionOutputSealError::Owner(reason) => {
                     Self::execution_context_error(reason)
                 }

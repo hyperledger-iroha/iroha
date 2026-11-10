@@ -771,9 +771,9 @@
    "id": "wg.witness_assertion",
    "family": "none",
    "status": "absent",
-   "guarantee": "Inclusion, absence and complete-range witnesses against one keyed State commitment. Not implemented.",
+   "guarantee": "The transaction-level assertion and carried anchor validation remain absent. The governed radix profile implements portable inclusion, absence and complete-range verification. Torii serves read-only exact-key batches independently of this transaction operation.",
    "references": [
-    {"inventory": "state", "key": "open_defects/G1-D1"}
+    {"inventory": "state", "key": "roots/keyed_state_root"}
    ],
    "owner_tasks": ["G.3", "G.5"]
   },
@@ -8798,7 +8798,7 @@
     "effect": "read",
     "sdk": "true",
     "product": "wg",
-    "does": "Read the State proof material of a height.",
+    "does": "Read native block finality and the execution write-set root at a height.",
     "operations": ["wg.witness_assertion"],
     "handler": {"path": "crates/iroha_torii/src/ledger_state_finality.rs", "symbol": "fn handler_ledger_state_proof("},
     "sdk_literal": "/v1/ledger/state-proof/",
@@ -8809,7 +8809,34 @@
      "javascript": [
       {"path": "javascript/iroha_js/src/toriiBrowserClient.js", "via": ["route_path"]}
      ],
-     "python": [],
+     "python": [
+      {"path": "python/iroha_python/src/iroha_python/client.py", "via": ["route_path"]}
+     ],
+     "csharp": []
+    }
+   },
+   {
+    "id": "ledger.state_rows",
+    "method": "POST",
+    "path": "/v1/ledger/state-proof/{height}",
+    "surface": "public",
+    "effect": "read",
+    "sdk": "true",
+    "product": "wg",
+    "does": "Read a bounded ordered set of exact original State rows with inclusion or absence under the current certified keyed Global execution. Requires signed all-ledger or exact direct read authority for all positions. Python StateProofSchemaV1 and verify_state_rows_v1 verify the selected schema, certified height and exact rows independently.",
+    "operations": [],
+    "handler": {"path": "crates/iroha_torii/src/ledger_state_rows.rs", "symbol": "pub async fn handler("},
+    "sdk_literal": "/v1/ledger/state-proof/",
+    "sdk_files": {
+     "rust": [],
+     "kotlin_java_android": [],
+     "swift": [],
+     "javascript": [
+      {"path": "javascript/iroha_js/src/toriiBrowserClient.js", "via": ["route_path"]}
+     ],
+     "python": [
+      {"path": "python/iroha_python/src/iroha_python/client.py", "via": ["route_path"]}
+     ],
      "csharp": []
     }
    },
@@ -8821,7 +8848,7 @@
     "effect": "read",
     "sdk": "true",
     "product": "wg",
-    "does": "Read the certified State root of a height.",
+    "does": "Read native block finality and the certified witnessed write-set root of a height.",
     "operations": ["wg.witness_assertion"],
     "handler": {"path": "crates/iroha_torii/src/ledger_state_finality.rs", "symbol": "fn handler_ledger_state_root("},
     "sdk_literal": "/v1/ledger/state/",
@@ -9224,21 +9251,6 @@
       {"path": "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyExact12CapabilityManifestV1.cs", "via": ["route_path"]}
      ]
     }
-   },
-   {
-    "id": "privacy.ironwood.pool_cut",
-    "method": "POST",
-    "path": "/v1/privacy/ironwood/pool-cut/{height}",
-    "surface": "public",
-    "effect": "read",
-    "sdk": "true",
-    "product": "ironwood",
-    "does": "Read exact current-cut Ironwood pool/root and Global payer/reserve originals with full World hashes. Requires canonical account authentication and current CanReadAllLedgerData, rechecked before egress. Merchant note discovery uses anonymous public bridge finality frames instead. The Python verifier authenticates the cut against independently selected finality; this route grants no execution authority.",
-    "operations": [],
-    "handler": {"path": "crates/iroha_torii/src/ironwood_pool_cut.rs", "symbol": "pub async fn handler("},
-    "sdk_literal": "/v1/privacy/ironwood/pool-cut/",
-    "sdk_files": {"rust": [], "kotlin_java_android": [], "swift": [], "javascript": [], "python": [], "csharp": []},
-    "catalog_row": {"path": "crates/iroha_torii_shared/src/route_catalog.rs", "symbol": "privacy.ironwood.pool_cut"}
    },
    {
     "id": "private_settlement.auditor.approval",
@@ -11713,14 +11725,19 @@
    },
    {
     "product": "wg",
-    "owner_paths": ["crates/iroha_core/src/state/authority_registry/keyed_commitment.rs"],
-    "census": {},
-    "native": {
-     "none": "No keyed State commitment is selected; the certified World root is an unkeyed multiset hash (state inventory G1-D1). G.2 measures candidates and G.3 selects."
-    },
-    "in_circuit": {"none": "No in-circuit State witness exists."},
+    "owner_paths": ["crates/iroha_data_model/src/sumeragi_finality/keyed_state.rs", "crates/iroha_data_model/src/sumeragi_finality/keyed_schema.rs"],
+    "census": {"blake3": 2},
+    "native": [
+     {
+      "role": "governed keyed State root and row openings",
+      "algorithm": "ordered, compressed binary radix tree with domain-separated raw BLAKE3-256 commitments",
+      "path": "crates/iroha_data_model/src/sumeragi_finality/keyed_state.rs",
+      "symbol": "fn hash(tag: u8, parts: &[&[u8]]) -> Digest {"
+     }
+    ],
+    "in_circuit": {"none": "No in-circuit State witness is qualified. Portable point and range verification are native read operations."},
     "primitive_roles": [
-     {"inventory": "primitive", "key": "digest_roles/state.lthash16-accumulator"}
+     {"inventory": "state", "key": "roots/keyed_state_root"}
     ]
    },
    {

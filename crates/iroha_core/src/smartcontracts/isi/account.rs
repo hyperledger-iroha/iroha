@@ -870,12 +870,15 @@ pub mod isi {
         #[metrics(+"grant_account_permission")]
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             super::super::sorafs_authority::guard_permission_mutation(
                 &state_transaction.world,
                 self.object(),
+            )?;
+            crate::runtime::state_row_permission::guard_account_change(
+                &state_transaction.world, authority, self.object(), false,
             )?;
             let account_id = self.destination().clone();
             let permission = self.object().clone();
@@ -943,12 +946,15 @@ pub mod isi {
         #[metrics(+"revoke_account_permission")]
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             super::super::sorafs_authority::guard_permission_mutation(
                 &state_transaction.world,
                 self.object(),
+            )?;
+            crate::runtime::state_row_permission::guard_account_change(
+                &state_transaction.world, authority, self.object(), true,
             )?;
             let account_id = self.destination().clone();
             let permission = self.object().clone();

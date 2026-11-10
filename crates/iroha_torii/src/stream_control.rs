@@ -16,7 +16,7 @@ use iroha_allocation::shared::Shared;
 use iroha_core::state::{AuthorizationRead, StorageReadOnly, WorldReadOnly};
 use iroha_data_model::{account::AccountId, nexus::MAX_ACTIVE_EXECUTION_LANES};
 use iroha_executor_data_model::permission::query::{
-    CanReadAllLedgerData, CanReadCertifiedOriginals, CanReadRestrictedDataspace,
+    CanReadAllLedgerData, CanReadRestrictedDataspace,
 };
 use iroha_model_base::topology::DataSpaceId;
 use tokio::sync::OwnedSemaphorePermit;
@@ -296,18 +296,6 @@ fn scalar_permission<T: norito::json::JsonSerialize>(
 pub fn can_read_all(world: &impl WorldReadOnly, caller: &AccountId) -> Result<bool, Error> {
     account_permission_matches(world, caller, |permission| {
         scalar_permission(permission, "CanReadAllLedgerData", &CanReadAllLedgerData)
-    })
-}
-pub fn can_read_certified_originals(
-    world: &impl WorldReadOnly,
-    caller: &AccountId,
-) -> Result<bool, Error> {
-    account_permission_matches(world, caller, |permission| {
-        scalar_permission(
-            permission,
-            "CanReadCertifiedOriginals",
-            &CanReadCertifiedOriginals,
-        )
     })
 }
 pub fn can_read_dataspace(

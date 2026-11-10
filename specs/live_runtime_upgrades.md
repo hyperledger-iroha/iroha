@@ -205,15 +205,19 @@ running release does not implement yet is rejected; there is no interim path.
 
 ### 5.1 Complete State, selected by history
 
-- The foundation's first commitment profile is the LtHash accumulator
-  (`state/world_state_accumulator.rs`), extended to the complete State and with its schema chosen
-  by the selection. Today it commits only the World: transaction membership, the canonical runtime
-  policy and commit topologies sit outside it (finding G1-D2; `first_release_history_cutover.md`,
-  "Snapshots and checkpoints"). Checkpoints and code deletion need them committed, so that
-  extension lands with the foundation.
-- The keyed commitment of `sumeragi.md` §16 (task G.3, not yet selected) follows as a governed
-  commitment-profile transition, without a reset. The LtHash code is deleted once the checkpoint
-  startup floor passes that transition.
+- The foundation's baseline profile uses LtHash16 over installed canonical World entries.
+  State-level transaction membership, runtime policy and commit topologies are among
+  the owners imported when the root adopts the keyed commitment.
+- The universal root can adopt `iroha.keyed-state.radix-blake3.v1` through two
+  governed change sets. The first selects the kernel whose descriptor names the
+  complete set of existing State storage owners. The second installs those owners
+  from the original execution journals and selects the keyed commitment. Each step
+  has its own effective height and qualification, proposals and validator attestations.
+  The operator can draft each next step using
+  `iroha ops runtime upgrade draft --addition iroha.keyed-state.radix-blake3.v1`.
+  The draft call takes the effective height and qualification digest as for other
+  upgrades. A draft changes no live State. Retire LtHash after the checkpoint
+  startup floor passes its last use (§7.4).
 - The commitment covers the storage installed in the selection: every canonical field is a storage
   definition, cells stay explicit at their initial value, and storage not installed leaves every
   root unchanged.
@@ -221,20 +225,22 @@ running release does not implement yet is rejected; there is no interim path.
   capabilities keep it unreachable, and a capture asserts that it is empty.
 - At a transition the parent root uses the predecessor schema and commitment profile, migration
   reads use predecessor codecs, and the successor root uses successor codecs and profile.
-  `WorldStateAccumulator::root` takes `S` from the selection it is given, and
-  `world_state_transition` computes the parent root under the selection before the block and the
-  result root under the selection after it. Field paths and codecs still come from this release's
-  registry, and only the baseline commitment profile is implemented; migration reads under
-  predecessor codecs arrive with the migration engine (5.4).
+  During adoption the parent result field retains the predecessor's original
+  LtHash bytes. The post-execution field binds the complete radix tree built at
+  that height. Subsequent blocks update the retained version from the original
+  journals. Both fields preserve all 256 digest bits. Storage definitions bind
+  the installed table names, shapes and key/value codec identities. Generic
+  reads at the current certified tip verify against this schema and the signed
+  post-execution result ([ledger State finality](ledger_state_finality.md)).
 - Cold and incremental roots agree across activation, aborted publication, block replacement and
   restart.
 
-Every commitment profile, the LtHash one included, covers every canonical State field, is correct
-at the publication cut, rejects tampering, and a State restored from a checkpoint reaches the same
-tip roots as replay. `sumeragi.md` §16 is amended accordingly: the keyed commitment arrives as a
-commitment-profile transition, selects schemas historically and keeps its typing, absence and range
-proofs. Because the commitment profile is itself a definition, every later improvement of it is a
-governed transition, not a fresh genesis.
+The keyed profile authenticates the installed State and World rows. On restart,
+native replay checks the terminal execution against its certified result and compares
+the published root with a fresh capture of the complete State. A snapshot alone
+lacks the original pre-publication execution, so the keyed profile requires native
+replay. The baseline retains its original World-only check. An accelerated checkpoint
+restore for keyed State must reproduce these same two roots before serving reads.
 
 ### 5.2 Envelopes and dispatch
 
@@ -716,8 +722,8 @@ not a date: it happens once everything its first selection needs is implemented 
    bounded carrier-schema language, root selections and their closure check, with pinned identity
    vectors (`crates/iroha_data_model/tests/runtime_definition.rs`). Still to specify: the execution
    and effects contract (5.3), obligations (7.2) and emergency containment (7.1) as types.
-2. **Complete State and execution foundation.** The LtHash commitment extended to the complete
-   State (G1-D2), historical schema selection with separate parent and successor contexts, the definition catalog with today's
+2. **Complete State and execution foundation.** The governed transition from the baseline
+   World commitment to complete keyed State, historical schema selection with separate parent and successor contexts, the definition catalog with today's
    engine as one baseline bundle (its interfaces and storage enumerated one by one, its handlers and
    shared services one conservative implementation set with superset dependencies), root selection
    in State, stable envelopes and selection-aware dispatch with native cross-instruction calls
@@ -736,10 +742,10 @@ not a date: it happens once everything its first selection needs is implemented 
    or opaque envelope with `definition_inactive` or `malformed_payload` before any type-dependent
    check; and snapshots through the selection: the writer leaves out each top-level World member
    whose storage the selection does not install, a restore reads it as its empty default, and an
-   addition adds only top-level World fields. Still open: complete-State coverage, which first
-   needs the policy cells of G1-D3 in committed State and the decision how the pinned history
-   meets the new root; snapshots of a nested World field, before an addition adds one; storage
-   capabilities and generic carriers.
+   addition adds only top-level World fields. The keyed transition preserves the pinned
+   predecessor root and imports the registered State owners. Work remains on governing
+   changes to node-supplied semantic policy, authenticated accelerated restore,
+   snapshots of a nested World field, storage capabilities and generic carriers.
 3. **Transition and lifecycle engine.** Change sets, all-`n` attestation of resolved selections,
    committed notice and provenance policy, scheduling, the unsupported-node stop, handshake
    profiles, restrictions, completion capabilities, the deferred-kind rules for every obligation the
@@ -860,8 +866,8 @@ data space govern only that data space (section 6). Taira adopts the foundation 
 that becomes its trust anchor, keeping balances and history (section 13); it did so with
 a660d601da under node configuration, and its anchor is to be ratified by governance. The
 first-release rule holds: the import and all pre-foundation code are deleted after adoption, and old
-code is deleted rather than kept (7.4). The foundation starts on the LtHash commitment extended to the
-complete State; the keyed commitment follows as a governed profile transition (5.1).
+code is deleted rather than kept (7.4). The foundation starts on the LtHash World commitment. Section 5.1 describes
+the governed transition to the complete keyed State commitment.
 
 Recommended by review and written in as committed defaults, for the owner to confirm or change: the
 emergency panel and its leases (7.1), the notice values (section 6), the checkpoint policy (7.3),

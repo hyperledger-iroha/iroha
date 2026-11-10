@@ -28,22 +28,18 @@ pub(super) fn append(
     let runtime = &fields.canonical_runtime;
     let parameters = &fields.world.parameters;
     let mode = parameters.mode();
-    let (current_runtime, before_runtime) =
-        runtime.frozen_values().ok_or(CaptureError::NotFrozen)?;
-    let (current_parameters, before_parameters) =
-        parameters.frozen_values().ok_or(CaptureError::NotFrozen)?;
-    if !runtime.belongs_to(&fields.state_ref.canonical_runtime)
-        || runtime.mode() != mode
-        || runtime.retained_read_matches_current(&fields.state_ref.canonical_runtime) != Some(true)
-    {
-        return Err(CaptureError::Changed("state.canonical_runtime"));
-    }
-    if !parameters.belongs_to(&fields.state_ref.world.parameters)
-        || parameters.retained_read_matches_current(&fields.state_ref.world.parameters)
-            != Some(true)
-    {
-        return Err(CaptureError::Changed("world.parameters"));
-    }
+    let (current_runtime, before_runtime) = output.cell_values(
+        "state.canonical_runtime",
+        runtime,
+        &fields.state_ref.canonical_runtime,
+        mode,
+    )?;
+    let (current_parameters, before_parameters) = output.cell_values(
+        "world.parameters",
+        parameters,
+        &fields.state_ref.world.parameters,
+        mode,
+    )?;
     if current_parameters.root_fees().is_none()
         || (fields._curr_block.height().get() > 1 && before_parameters.root_fees().is_none())
     {

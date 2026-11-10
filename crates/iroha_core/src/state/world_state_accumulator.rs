@@ -757,11 +757,17 @@ impl crate::state::StateBlock<'_> {
     pub(crate) fn world_state_transition(
         &self,
     ) -> Result<crate::sumeragi::commitment::WorldStateTransition, String> {
+        if crate::runtime::keyed_state::selected(self.world.runtime_selection.get()) {
+            return self
+                .project_keyed_state_transition()
+                .map_err(|error| error.to_string());
+        }
         let (parent, post) = self.world.state_transition(self._curr_block.is_genesis())?;
         Ok(crate::sumeragi::commitment::WorldStateTransition {
             parent_world_state_root: parent
-                .root(self.world.runtime_selection.get_before_block())?,
-            world_state_root: post.root(self.world.runtime_selection.get())?,
+                .root(self.world.runtime_selection.get_before_block())?
+                .into(),
+            world_state_root: post.root(self.world.runtime_selection.get())?.into(),
             event_commitment: crate::sumeragi::commitment::event_commitment(
                 &self.world.external_event_buf,
             )
@@ -777,6 +783,20 @@ pub enum WorldStateVerificationError {
     /// Busy and capacity errors retain their exact original release observations.
     #[error("World root verification acquisition: {0}")]
     Acquisition(#[source] mv::storage::AdmittedStorageError),
+    /// The local owner could not acquire the complete set of native State writers.
+    #[error("keyed State recovery admission: {0}")]
+    KeyedAdmission(#[source] Box<crate::state::StateAdmissionError>),
+    /// A local typed refusal interrupted keyed history or original capture.
+    #[error("keyed State recovery deferred: {0}")]
+    KeyedDeferred(#[source] crate::execution_attempt::ExecutionDeferred),
+    /// Incremental publication disagrees with a cold build of the same State.
+    #[error("replayed keyed State {retained} differs from cold State {captured}")]
+    KeyedMismatch {
+        /// Published root from native execution and tail replay.
+        retained: iroha_data_model::sumeragi_finality::KeyedStateRoot,
+        /// Root rebuilt independently from every committed canonical row.
+        captured: iroha_data_model::sumeragi_finality::KeyedStateRoot,
+    },
     /// A canonical value could not be encoded or the authority inventory was invalid.
     #[error("World root verification capture: {0}")]
     Capture(String),

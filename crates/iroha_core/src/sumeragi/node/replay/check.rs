@@ -572,7 +572,7 @@ pub fn check_replay(
         progress(height, stored);
     }
     drop(executor);
-    let outcome = match state.verify_world_state_accumulator() {
+    let outcome = match state.verify_replayed_state_commitment() {
         Ok(_) => ReplayCheckOutcome::Matched,
         Err(WorldStateVerificationError::Mismatch {
             stored_root,
@@ -586,6 +586,15 @@ pub fn check_replay(
                 actual: captured_root.to_string(),
             },
             components: vec![ResultComponent::WorldStateAccumulator],
+        })),
+        Err(WorldStateVerificationError::KeyedMismatch { retained, captured }) => ReplayCheckOutcome::Diverged(Box::new(ReplayDivergence {
+            height: replayed_to,
+            first: ComponentDifference {
+                component: ResultComponent::WorldStateRoot,
+                expected: retained.to_string(),
+                actual: captured.to_string(),
+            },
+            components: vec![ResultComponent::WorldStateRoot],
         })),
         Err(error) => return Err(ReplayCheckError::StateRoot(Box::new(error))),
     };
@@ -618,7 +627,7 @@ pub fn result_differences(
         ResultComponent::ParentWorldStateRoot,
         &before.parent_world_state_root,
         &after.parent_world_state_root,
-        root,
+        ToString::to_string,
     );
     compare(
         &mut differences,
@@ -680,7 +689,7 @@ pub fn result_differences(
         ResultComponent::WorldStateRoot,
         &before.world_state_root,
         &after.world_state_root,
-        root,
+        ToString::to_string,
     );
     compare(
         &mut differences,

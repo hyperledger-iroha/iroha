@@ -243,3 +243,7 @@ path = "tests/fastpq_quantity_units_allocations.rs"
 [[test]]
 name = "amx_prepare_streaming_allocations"
 path = "tests/amx_prepare_streaming_allocations.rs"
+
+[[bench]]
+name = "keyed_state"
+harness = false

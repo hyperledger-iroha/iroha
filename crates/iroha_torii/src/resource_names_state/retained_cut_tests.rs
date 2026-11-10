@@ -97,8 +97,8 @@ fn names_proof_and_snapshot_keep_one_original_cut_while_chain_advances() {
                     .any(|key| key.as_ref() == "customer/retained-name")
             );
             assert_eq!(
-                snapshot.root().unwrap(),
-                tip.commitment().execution.world_state_root
+                tip.commitment().execution.world_state_root,
+                snapshot.root().unwrap()
             );
             let names = names
                 .iter()
@@ -127,8 +127,8 @@ fn names_proof_and_snapshot_keep_one_original_cut_while_chain_advances() {
         tip.block_hash()
     );
     assert_eq!(
-        decoded.world_snapshot.root().unwrap(),
-        tip.commitment().execution.world_state_root
+        tip.commitment().execution.world_state_root,
+        decoded.world_snapshot.root().unwrap()
     );
     decoded
         .attestation

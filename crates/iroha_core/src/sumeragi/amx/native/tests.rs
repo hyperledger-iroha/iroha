@@ -1303,7 +1303,7 @@ fn native_amx_global_source_requires_signed_parent_real_h2_and_exact_instance() 
     .unwrap()
     .into_parts();
     result.execution.world_state_root =
-        iroha_crypto::Hash::new(b"unsigned AMX genesis R substitution");
+        iroha_crypto::Hash::new(b"unsigned AMX genesis R substitution").into();
     let changed =
         genesis
             .clone()

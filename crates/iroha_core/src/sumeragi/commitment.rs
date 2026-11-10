@@ -35,7 +35,7 @@
 //! [`iroha_data_model::sumeragi_finality`]; this module produces those canonical values from
 //! Core's execution witnesses and retained schedule without defining a parallel wire layout.
 
-use iroha_crypto::{Hash, HashOf, MerkleTree, MerkleTreeCommitment};
+use iroha_crypto::{HashOf, MerkleTree, MerkleTreeCommitment};
 use iroha_data_model::{
     block::{SignedBlock, consensus::ExecWitness},
     events::EventBox,
@@ -74,9 +74,9 @@ pub use iroha_data_model::sumeragi_finality::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WorldStateTransition {
     /// Complete World state root the block executed on (the empty World for genesis).
-    pub parent_world_state_root: Hash,
+    pub parent_world_state_root: iroha_data_model::sumeragi_finality::KeyedStateRoot,
     /// Complete World state root after the block's execution.
-    pub world_state_root: Hash,
+    pub world_state_root: iroha_data_model::sumeragi_finality::KeyedStateRoot,
     /// Merkle root and count of the events the execution emitted, in emission order.
     pub event_commitment: Option<MerkleTreeCommitment<EventBox>>,
 }
@@ -381,7 +381,7 @@ mod tests {
             schedule::{ChainParamsRecord, ScheduledConfig, ScheduledSlot},
         },
     };
-    use iroha_crypto::{Algorithm, KeyPair, PublicKey, bls_normal_pop_prove};
+    use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, bls_normal_pop_prove};
     use iroha_data_model::{
         NetworkId,
         block::{BlockHeader, consensus::ExecKv},
@@ -399,8 +399,8 @@ mod tests {
 
     fn transition() -> WorldStateTransition {
         WorldStateTransition {
-            parent_world_state_root: Hash::new(b"parent world"),
-            world_state_root: Hash::new(b"world"),
+            parent_world_state_root: Hash::new(b"parent world").into(),
+            world_state_root: Hash::new(b"world").into(),
             event_commitment: None,
         }
     }
@@ -1514,11 +1514,11 @@ mod tests {
         assert_eq!(bound.event_commitment, None);
         for changed in [
             WorldStateTransition {
-                parent_world_state_root: Hash::new(b"other parent world"),
+                parent_world_state_root: Hash::new(b"other parent world").into(),
                 ..base
             },
             WorldStateTransition {
-                world_state_root: Hash::new(b"other world"),
+                world_state_root: Hash::new(b"other world").into(),
                 ..base
             },
         ] {

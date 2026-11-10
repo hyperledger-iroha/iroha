@@ -5,6 +5,13 @@ use crate::state::SnapshotNexusRuntime;
 
 pub(super) fn append(block: &StateBlock<'_>, output: &mut Collector) -> Result<(), CaptureError> {
     let fields = block.fields.as_ref().ok_or(CaptureError::NotFrozen)?;
+    append_fields(fields, output)
+}
+
+pub(super) fn append_fields(
+    fields: &crate::state::StateBlockFields<'_>,
+    output: &mut Collector,
+) -> Result<(), CaptureError> {
     let expected = fields.state_ref;
     let mode = fields.world.parameters.mode();
     output.cell(
@@ -37,13 +44,12 @@ pub(super) fn append(block: &StateBlock<'_>, output: &mut Collector) -> Result<(
         |writer| bare(&fields.network_id, writer),
     )?;
     let original = &fields.canonical_runtime;
-    let (current, before) = original.frozen_values().ok_or(CaptureError::NotFrozen)?;
-    if !original.belongs_to(&expected.canonical_runtime)
-        || original.mode() != mode
-        || original.retained_read_matches_current(&expected.canonical_runtime) != Some(true)
-    {
-        return Err(CaptureError::Changed("state.canonical_runtime"));
-    }
+    let (current, before) = output.cell_values(
+        "state.canonical_runtime",
+        original,
+        &expected.canonical_runtime,
+        mode,
+    )?;
     // Exhaustive destructuring prevents silent runtime schema growth. The semantic
     // lane vector is encoded by its existing policy owner in policies::append.
     let SnapshotNexusRuntime {

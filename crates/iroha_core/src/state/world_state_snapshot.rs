@@ -9,8 +9,6 @@
 
 #[path = "world_state_snapshot/amx_approval.rs"]
 mod amx_approval;
-#[path = "world_state_snapshot/ironwood.rs"]
-mod ironwood;
 #[cfg(feature = "iroha-core-tests")]
 #[path = "world_state_snapshot/lifecycle_fixture.rs"]
 mod lifecycle_fixture;
@@ -283,12 +281,12 @@ impl<'a> NativeResourceNamesSnapshotV1<'a> {
     ) -> Result<T, WorldStateSnapshotError> {
         require_cut(&self.view, tip)?;
         if tip.commitment().schedule.current.network_id != *self.view.network_id()
-            || self
+            || tip.commitment().execution.world_state_root
+                != self
                 .snapshot
                 .snapshot
                 .root()
                 .map_err(|error| error.to_string())?
-                != tip.commitment().execution.world_state_root
         {
             return Err("World names retained snapshot differs from certified tip".into());
         }
@@ -603,7 +601,7 @@ trait SnapshotCut {
     fn result(&self) -> iroha_sumeragi::types::Hash32;
     fn block_time_ms(&self) -> u64;
     fn network(&self) -> iroha_data_model::id::NetworkId;
-    fn world_state_root(&self) -> Hash;
+    fn world_state_root(&self) -> iroha_data_model::sumeragi_finality::KeyedStateRoot;
     fn consistent(&self) -> bool;
 }
 impl SnapshotCut for CommittedBlock {
@@ -625,7 +623,7 @@ impl SnapshotCut for CommittedBlock {
     fn network(&self) -> iroha_data_model::id::NetworkId {
         self.commitment().schedule.current.network_id
     }
-    fn world_state_root(&self) -> Hash {
+    fn world_state_root(&self) -> iroha_data_model::sumeragi_finality::KeyedStateRoot {
         self.commitment().execution.world_state_root
     }
     fn consistent(&self) -> bool {
@@ -651,7 +649,7 @@ impl SnapshotCut for CurrentCertifiedCut {
     fn network(&self) -> iroha_data_model::id::NetworkId {
         CurrentCertifiedCut::network(self)
     }
-    fn world_state_root(&self) -> Hash {
+    fn world_state_root(&self) -> iroha_data_model::sumeragi_finality::KeyedStateRoot {
         CurrentCertifiedCut::world_state_root(self)
     }
     fn consistent(&self) -> bool {
@@ -1349,7 +1347,7 @@ impl State {
             || cut.tip.core_hash() != tip.core_hash()
             || cut.tip.result() != tip.result()
             || cut.tip.creation_time_ms() != tip.block_time_ms()
-            || cut.root != tip.world_state_root()
+            || tip.world_state_root() != cut.root
         {
             // A real commit may publish between the first view and this capture.
             // Only the current original native publication can establish that race.

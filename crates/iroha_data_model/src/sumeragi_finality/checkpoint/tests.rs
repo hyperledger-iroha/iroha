@@ -379,7 +379,7 @@ fn decoded_decision_equality_never_labels_different_execution_as_native() {
         genuine.commitment()
     ));
     let mut altered = genuine.commitment().clone();
-    altered.execution.world_state_root = Hash::new(b"different synthetic World");
+    altered.execution.world_state_root = Hash::new(b"different synthetic World").into();
     assert!(!decoded.matches_native_execution_decision(
         &fixture.latest().block_header.hash(),
         genuine.core_hash().0,

@@ -162,7 +162,12 @@ impl State {
                 height: tip.height(),
                 certified_block_id: tip.id(),
                 root_scope: tip.root_scope(),
-                world_state_root: tip.commitment().execution.world_state_root,
+                world_state_root: tip
+                    .commitment()
+                    .execution
+                    .world_state_root
+                    .as_legacy_hash()
+                    .ok_or("X.509 full snapshot requires the original World root")?,
                 schema_hash: snapshot.schema_hash,
                 ledger_timestamp_ms: tip.block_time_ms(),
             })

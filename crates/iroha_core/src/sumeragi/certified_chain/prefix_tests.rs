@@ -192,7 +192,7 @@ fn unsigned_changed_genesis_result_cannot_be_exported_by_streamed_reader() {
     let (original_x, mut result) = fixture_result_parts(certificate.result_preimage());
     // Preserve the authenticated lane-write opening's structural consistency. This
     // attack changes a well-formed execution result which only the successor can bind.
-    result.execution.world_state_root = Hash::new(b"unsigned genesis result replacement");
+    result.execution.world_state_root = Hash::new(b"unsigned genesis result replacement").into();
     let changed = crate::block::reserve_block_for_tests().initialize(
         original.as_ref().clone().with_commit_certificate(Some(
             CommitCertificate::from_untrusted_parts(

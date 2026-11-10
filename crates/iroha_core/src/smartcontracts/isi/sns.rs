@@ -4509,8 +4509,8 @@ mod tests {
                 &budget,
                 |snapshot, _, _, _| {
                     assert_eq!(
-                        snapshot.root().unwrap(),
-                        tip.commitment().execution.world_state_root
+                        tip.commitment().execution.world_state_root,
+                        snapshot.root().unwrap()
                     );
                     assert_eq!(
                         snapshot.schema_hash,

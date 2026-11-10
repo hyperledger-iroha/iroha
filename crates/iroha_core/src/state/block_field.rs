@@ -128,6 +128,14 @@ impl<B: OriginalPublicationBlock> BlockField<B> {
         }
     }
 
+    /// Borrow the original executing journal without acquiring or changing publication authority.
+    pub(in crate::state) fn executing_original(&self) -> Option<&B> {
+        match self.phase.as_ref() {
+            Some(Phase::Executing(owner)) if !self.released => Some(owner),
+            _ => None,
+        }
+    }
+
     /// Transfer only an untouched executing owner to the aggregate capture path.
     pub(crate) fn into_executing(mut self) -> B {
         self.take_executing()

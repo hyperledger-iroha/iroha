@@ -10880,6 +10880,7 @@ fn build_state(
         native_execution_tip,
         // Decoded claims cannot recreate original pre-tail journal custody.
         native_world_cut: parking_lot::Mutex::new(None),
+        keyed_versions: parking_lot::Mutex::default(),
         nexus_runtime_restored_from_snapshot,
         nexus_storage_budget_last_check_height: AtomicU64::new(0),
         native_evidence_admission: parking_lot::Mutex::new(

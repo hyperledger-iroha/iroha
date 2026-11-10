@@ -115,35 +115,49 @@ fn ironwood_detached_validation_preserves_python_error_categories() {
 }
 
 #[test]
-fn ironwood_detached_pool_and_effect_keep_first_refusal_order() {
+fn ironwood_state_rows_and_payment_effect_preserve_finality_refusals() {
     Python::initialize();
     Python::attach(|py| {
-        // Even the payment path authenticates its preparation cut before inspecting
+        // Even the payment path authenticates its preparation rows before inspecting
         // the signed transaction, amount or payment page. Keep that original refusal.
+        use iroha_core::state::{World, WorldReadOnly};
+        let mut world = World::new();
+        iroha_core::runtime::ironwood::install_for_test(&mut world);
+        iroha_core::runtime::keyed_state::install_for_test(&mut world);
+        let view = world.view();
+        let selection = view.runtime_selection();
+        let schema = iroha_data_model::sumeragi_finality::SelectedStateSchemaV1::from_selection(
+            selection,
+            &iroha_core::runtime::release_catalog().unwrap().definitions,
+        )
+        .unwrap();
+        let pin = schema.digest();
+        let schema = state_rows::PyIronwoodStateSchema(
+            iroha_core_privacy::ironwood_state_rows::IronwoodStateSchemaV1::from_selected(
+                schema, pin,
+            )
+            .unwrap(),
+        );
         for (proof, checkpoint, network, message) in [
+            (b"".as_slice(), "", "", "State proof authentication failed"),
             (
-                b"".as_slice(),
-                "",
-                "",
-                "Ironwood pool cut authentication failed",
-            ),
-            (
-                b"cut".as_slice(),
+                b"rows".as_slice(),
                 "",
                 "zz",
-                "noncanonical or oversized Ironwood cut hex",
+                "noncanonical or oversized State proof hex",
             ),
             (
-                b"cut".as_slice(),
+                b"rows".as_slice(),
                 "",
                 "01",
-                "Ironwood cut identity must be 32 bytes",
+                "State proof identity must be 32 bytes",
             ),
         ] {
             assert_value_error(
                 py,
-                verify_ironwood_pool_cut_v1_py(
+                state_rows::verify_ironwood_state_rows_v1_py(
                     py,
+                    proof,
                     proof,
                     checkpoint,
                     vec!["00".into()],
@@ -153,14 +167,16 @@ fn ironwood_detached_pool_and_effect_keep_first_refusal_order() {
                     "",
                     "",
                     "",
+                    &schema,
                 )
                 .unwrap_err(),
                 message,
             );
             assert_value_error(
                 py,
-                verify_ironwood_payment_effect_v1_py(
+                state_rows::verify_ironwood_payment_effect_from_rows_v1_py(
                     py,
+                    proof,
                     proof,
                     checkpoint,
                     vec!["00".into()],
@@ -172,6 +188,7 @@ fn ironwood_detached_pool_and_effect_keep_first_refusal_order() {
                     "",
                     "",
                     "",
+                    &schema,
                     "malformed amount",
                 )
                 .unwrap_err(),

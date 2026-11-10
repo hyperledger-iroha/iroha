@@ -4,6 +4,7 @@ use super::conformance::{RULES, Violation, check_contract};
 use super::reference::{Reference, fault};
 use super::*;
 use crate::state::authority_registry::{STATE_FIELDS, V1_LAYOUT, schema};
+use iroha_data_model::sumeragi_finality::keyed_schema::SCHEMA_DOMAIN;
 
 #[test]
 fn reference_oracle_satisfies_every_contract_rule() {

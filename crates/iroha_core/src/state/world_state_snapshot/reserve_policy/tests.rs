@@ -144,8 +144,8 @@ impl Fixture {
                 |world, permissions, current| {
                     assert_eq!(permissions, &BTreeSet::from([reserve_policy_permission()]));
                     assert_eq!(
-                        world.root().unwrap(),
-                        tip.commitment().execution.world_state_root
+                        tip.commitment().execution.world_state_root,
+                        world.root().unwrap()
                     );
                     let borrowed = ReservePolicyProofRefV1::new(world, permissions, current);
                     let size = norito::canonical_frame_len(&borrowed).map_err(|e| e.to_string())?;

@@ -1521,6 +1521,8 @@ mod world_commit;
     )
 )]
 mod world_journals;
+pub(crate) mod keyed_state;
+pub use keyed_state::FundedKeyedStateRows;
 pub(crate) mod world_projection;
 pub use world_projection::world_state_accumulator::{
     NativeResourceNamesSnapshotV1, NativeZkX509StateV1, ProviderAdmissionSnapshotOriginalsV1,
@@ -12579,6 +12581,8 @@ pub struct State {
     pub(crate) canonical_runtime: Cell<SnapshotNexusRuntime>,
     /// Original native execution identity, atomically published outside World.
     pub(crate) native_execution_tip: native_execution_tip::TipCell,
+    /// Immutable State versions from the original publisher; restored claims cannot populate them.
+    keyed_versions: parking_lot::Mutex<keyed_state::KeyedVersions>,
     /// Current original certified pre-tail cut; absent after decoded snapshot restoration.
     native_world_cut: parking_lot::Mutex<
         Option<
@@ -12980,6 +12984,7 @@ struct PendingPublicLaneSlashObservability {
 /// The original fields stay in one retirement owner throughout execution.
 pub struct StateBlock<'state> {
     fields: Option<StateBlockFields<'state>>,
+    keyed_execution: Option<keyed_state::ExecutionVersion>,
     world_cut_capture:
         Option<world_projection::world_state_accumulator::world_state_cut::JournalCapture>,
     publication: Option<publication::StatePublication<'state>>,
@@ -13280,6 +13285,7 @@ impl<'state> StateBlock<'state> {
     fn from_fields(fields: StateBlockFields<'state>) -> Self {
         Self {
             fields: Some(fields),
+            keyed_execution: None,
             world_cut_capture: None,
             publication: None,
         }
@@ -28466,6 +28472,7 @@ impl State {
         let mut s = Self {
             native_execution_tip,
             native_world_cut: parking_lot::Mutex::new(None),
+            keyed_versions: parking_lot::Mutex::default(),
             world,
             block_hashes: BlockHashes::try_new(std::iter::empty(), kura.block_hash_history_budget())
                 .map_err(MergeLedgerCommitError::BlockHashAdmission)?,
@@ -29864,6 +29871,7 @@ impl State {
         }
         let acquired = self.acquire_canonical_runtime_block(false)?;
         let mut sb = self.construct_acquired_block(acquired, curr_block, Box::new);
+        sb.admit_keyed_execution()?;
         if let (Some(source), Some(prepaid)) = (carrier, ordinary_source.as_mut()) {
             prepaid.fill_from_preblock(&sb, source);
         }
@@ -30564,6 +30572,7 @@ impl State {
         let acquired = self.acquire_canonical_runtime_block(false)?;
         let mut state_block =
             self.construct_acquired_block(acquired, curr_block, core::convert::identity);
+        state_block.admit_keyed_scratch()?;
         state_block.freeze_fastpq_source_context();
         state_block.require_storage_admission()?;
         state_block.freeze_axt_block_start();
@@ -30669,6 +30678,7 @@ impl State {
         }
         let mut state_block =
             self.construct_acquired_block(acquired, curr_block, core::convert::identity);
+        state_block.admit_keyed_execution()?;
         if let (Some(source), Some(prepaid)) = (carrier, ordinary_source.as_mut()) {
             prepaid.fill_from_preblock(&state_block, source);
         }

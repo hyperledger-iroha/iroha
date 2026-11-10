@@ -301,8 +301,8 @@ impl NativeFixture {
                 &budget,
                 |world, permissions, current| {
                     assert_eq!(
-                        world.root().unwrap(),
-                        tip.commitment().execution.world_state_root
+                        tip.commitment().execution.world_state_root,
+                        world.root().unwrap()
                     );
                     let borrowed = ReservePolicyProofRefV1::new(world, permissions, current);
                     let size = norito::canonical_frame_len(&borrowed)
@@ -348,8 +348,8 @@ impl NativeFixture {
                 &budget,
                 |world, owner, policy, current, credit, capacity, pricing| {
                     assert_eq!(
-                        world.root().unwrap(),
-                        tip.commitment().execution.world_state_root
+                        tip.commitment().execution.world_state_root,
+                        world.root().unwrap()
                     );
                     let borrowed = ReserveAccountProofRefV1::new(
                         world, owner, policy, current, credit, capacity, pricing,

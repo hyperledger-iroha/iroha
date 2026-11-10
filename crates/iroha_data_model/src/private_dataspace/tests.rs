@@ -204,7 +204,7 @@ fn bad_quorum_parent_and_result_are_rejected_without_partial_progress() {
     )
     .unwrap()
     .into_parts();
-    result.execution.world_state_root = Hash::new(b"unrelated state");
+    result.execution.world_state_root = Hash::new(b"unrelated state").into();
     changed.certificate.result_preimage =
         CertifiedResultV1::from_parts_unvalidated(original_x, result)
             .preimage()

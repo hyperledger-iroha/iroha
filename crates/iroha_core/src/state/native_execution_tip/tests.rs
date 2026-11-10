@@ -280,6 +280,8 @@ fn restore_reauthenticates_native_current_and_undo_and_rejects_claim_substitutio
                 .commitment()
                 .execution
                 .parent_world_state_root
+                .as_legacy_hash()
+                .unwrap()
         )
     );
     assert_eq!(

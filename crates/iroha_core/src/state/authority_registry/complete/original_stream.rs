@@ -1,15 +1,14 @@
-//! Complete images or canonical changes from the original frozen State journals.
+//! Complete images or canonical changes from original State journals.
 //!
 //! This owner retains original-pool frames and exact no-op/absent undo entries.
 //! Canonical key order is byte order, independent of native map ordering. A retry
 //! borrows the same `StateBlock` and retains completed fields and row prefixes.
 //! Capture intent is immutable: a change-only owner cannot emit a complete image.
-//! There is no root, proof, finality or publication capability in this module.
-//! TODO: select the keyed engine and consume this exact cut in the existing
-//! `StatePublication` owner; authenticate the pre-tail cut and deterministic tail
-//! during atomic restore before replacing the current World-only commitment.
+//! The execution seal and publication tail can capture a provisional keyed image while
+//! their immutable borrow retains the active World fields and the staged membership writer.
+//! The frozen OriginalCut independently requires the retained, validated original publication.
 
-use super::{Canonical, Field, Role, STATE_FIELDS, Schema, V1_LAYOUT, find_identity, visit};
+use super::{Canonical, Field, Role, STATE_FIELDS, Schema, V1_LAYOUT, visit};
 use crate::state::{CellField, StateBlock, StorageField, block_field::AggregatePublication};
 use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};
 use mv::{Key, Value};
@@ -18,6 +17,10 @@ use std::io::Write;
 
 mod cells;
 mod encoding;
+mod registry;
+use registry::{FIELD_COUNT, registry};
+mod keyed;
+pub(in crate::state) use keyed::{verify_keyed_execution_policy, capture_committed_keyed_image, KeyedCaptureError, capture_keyed_image};
 mod membership;
 mod policies;
 mod world;
@@ -168,6 +171,10 @@ struct PendingField {
 /// Internal sink shared only with the concrete original source owners.
 /// It cannot finish without the complete registry and has no public constructor.
 pub struct Collector {
+    // Only the one-call execution capture constructs this mode. Retriable OriginalCut is always frozen.
+    executing: bool,
+    /// Registry index to retained field position. The fixed array owns no heap allocation.
+    positions: [u16; FIELD_COUNT],
     budget: AllocationBudget,
     limits: CaptureLimits,
     intent: CaptureIntent,
@@ -186,50 +193,13 @@ impl Collector {
         limits: CaptureLimits,
         intent: CaptureIntent,
     ) -> Result<Self, CaptureError> {
-        let mut count = 0;
-        let mut schema_error = None;
-        let mut duplicate = None;
-        visit(STATE_FIELDS, &mut |field| {
-            if super::count_identity(STATE_FIELDS, field.id) != 1 {
-                duplicate.get_or_insert(field.id);
-            }
-            let mut check = |schema| {
-                let accepted = match schema {
-                    Schema::Norito { layout, .. } => layout == V1_LAYOUT,
-                    Schema::Semantic {
-                        identity,
-                        encoder,
-                        layout,
-                    } => layout == V1_LAYOUT && !identity.is_empty() && !encoder.is_empty(),
-                    Schema::Required { .. } => false,
-                };
-                if !accepted {
-                    schema_error.get_or_insert(field.id);
-                }
-            };
-            match field.role {
-                Role::Canonical(Canonical::Table { key, value }) => {
-                    count += 1;
-                    check(key);
-                    check(value);
-                }
-                Role::Canonical(Canonical::Cell(schema)) => {
-                    count += 1;
-                    check(schema);
-                }
-                _ => {}
-            }
-        });
-        if let Some(id) = duplicate {
-            return Err(CaptureError::Duplicate(id));
-        }
-        if let Some(id) = schema_error {
-            return Err(CaptureError::Schema(id));
-        }
+        let count = registry().canonical_count()?;
         if count > limits.max_fields {
             return Err(CaptureError::CountLimit);
         }
         Ok(Self {
+            executing: false,
+            positions: [u16::MAX; FIELD_COUNT],
             fields: ChargedBuffer::new(count, &budget)?,
             budget,
             limits,
@@ -286,12 +256,15 @@ impl Collector {
     }
 
     fn canonical(id: &'static str) -> Result<Option<&'static Field>, CaptureError> {
-        let field = find_identity(STATE_FIELDS, id).ok_or(CaptureError::Unexpected(id))?;
-        Ok(matches!(
-            field.role,
-            Role::Canonical(Canonical::Table { .. } | Canonical::Cell(_))
-        )
-        .then_some(field))
+        let index = registry().index(id)?;
+        let field = registry().fields[index];
+        Ok(registry::is_canonical(field).then_some(field))
+    }
+
+    fn retained_field(&mut self, index: usize) -> Option<&mut FieldBytes> {
+        self.fields
+            .as_mut_slice()
+            .get_mut(usize::from(self.positions[index]))
     }
 
     /// Start or resume the same exact original field. Completed fields are not encoded twice.
@@ -302,15 +275,11 @@ impl Collector {
         current: usize,
         undo: usize,
     ) -> Result<bool, CaptureError> {
-        if Self::canonical(id)?.is_none() {
+        let index = registry().index(id)?;
+        if !registry::is_canonical(registry().fields[index]) {
             return Err(CaptureError::Unexpected(id));
         }
-        if let Some(done) = self
-            .fields
-            .as_mut_slice()
-            .iter_mut()
-            .find(|field| field.id == id)
-        {
+        if let Some(done) = self.retained_field(index) {
             if done.seen {
                 return Err(CaptureError::Duplicate(id));
             }
@@ -450,6 +419,8 @@ impl Collector {
             }
         }
         let pending = self.pending.take().expect("completed field");
+        let index = registry().index(pending.id)?;
+        let position = self.fields.as_slice().len();
         self.fields
             .try_push(FieldBytes {
                 seen: true,
@@ -459,7 +430,10 @@ impl Collector {
                 current: pending.current.expect("complete current rows"),
                 undo: pending.undo.expect("complete undo rows"),
             })
-            .map_err(|field| CaptureError::Duplicate(field.id))
+            .map_err(|field| CaptureError::Duplicate(field.id))?;
+        self.positions[index] =
+            u16::try_from(position).expect("compile-time State registry count fits u16");
+        Ok(())
     }
 
     /// Skip a completed original policy before constructing temporary projection scratch.
@@ -469,12 +443,7 @@ impl Collector {
         id: &'static str,
         source: &SourceIdentity,
     ) -> Result<bool, CaptureError> {
-        let Some(done) = self
-            .fields
-            .as_mut_slice()
-            .iter_mut()
-            .find(|field| field.id == id)
-        else {
+        let Some(done) = self.retained_field(registry().index(id)?) else {
             return Ok(false);
         };
         if &done.source != source {
@@ -528,6 +497,32 @@ impl Collector {
         };
         if !matches!(field.role, Role::Canonical(Canonical::Table { .. })) {
             return Err(CaptureError::Schema(id));
+        }
+        if self.executing {
+            use mv::storage::StorageReadOnly;
+            let owner = storage
+                .executing_original()
+                .ok_or(CaptureError::Changed(id))?;
+            if !owner.belongs_to(expected) || owner.mode() != mode {
+                return Err(CaptureError::Changed(id));
+            }
+            let identity = owner.publication_identity();
+            if self.intent == CaptureIntent::Changes {
+                return self.storage_changes(id, storage, identity, encode);
+            }
+            // A cold executing image contains only the current state. The private
+            // borrow holds the same journal through complete row encoding.
+            let rows = owner.iter();
+            self.begin(id, SourceIdentity::Journal(identity), rows.len(), 0)?;
+            self.admit_source_visits(rows.len())?;
+            for (key, value) in rows {
+                self.row(
+                    false,
+                    |out| bare(key, out),
+                    Some(|out: &mut dyn Write| encode(value, out)),
+                )?;
+            }
+            return self.finish_field();
         }
         let images = storage.frozen_images().ok_or(CaptureError::NotFrozen)?;
         if !images.belongs_to(expected)
@@ -619,6 +614,30 @@ impl Collector {
         self.finish_field()
     }
 
+    fn cell_values<'a, V: mv::CellValue, C: Send + Sync + 'static>(
+        &self,
+        id: &'static str,
+        cell: &'a CellField<'_, V, C>,
+        expected: &mv::cell::Cell<V, C>,
+        mode: mv::BlockMode,
+    ) -> Result<(&'a V, &'a V), CaptureError> {
+        if self.executing {
+            let owner = cell.executing_original().ok_or(CaptureError::Changed(id))?;
+            if !owner.belongs_to(expected) || owner.mode() != mode {
+                return Err(CaptureError::Changed(id));
+            }
+            return Ok((owner.get(), owner.get_before_block()));
+        }
+        let values = cell.frozen_values().ok_or(CaptureError::NotFrozen)?;
+        if !cell.belongs_to(expected)
+            || cell.mode() != mode
+            || cell.retained_read_matches_current(expected) != Some(true)
+        {
+            return Err(CaptureError::Changed(id));
+        }
+        Ok(values)
+    }
+
     /// Borrow one original MV cell, preserving a touched equal-value preimage.
     pub(crate) fn cell<V: mv::CellValue, C: Send + Sync + 'static>(
         &mut self,
@@ -631,13 +650,7 @@ impl Collector {
         if Self::canonical(id)?.is_none() {
             return Ok(());
         }
-        let (current, before) = cell.frozen_values().ok_or(CaptureError::NotFrozen)?;
-        if !cell.belongs_to(expected)
-            || cell.mode() != mode
-            || cell.retained_read_matches_current(expected) != Some(true)
-        {
-            return Err(CaptureError::Changed(id));
-        }
+        let (current, before) = self.cell_values(id, cell, expected, mode)?;
         self.projected_cell(
             id,
             SourceIdentity::Journal(cell.publication_identity()),
@@ -689,26 +702,29 @@ impl Collector {
         if self.pending.is_some() {
             return Err(CaptureError::NotFrozen);
         }
-        let mut missing = None;
-        visit(STATE_FIELDS, &mut |field| {
-            if matches!(
-                field.role,
-                Role::Canonical(Canonical::Table { .. } | Canonical::Cell(_))
-            ) && !self
-                .fields
-                .as_slice()
-                .iter()
-                .any(|encoded| encoded.id == field.id && encoded.seen)
-            {
-                missing.get_or_insert(field.id);
+        let registry = registry();
+        if self.fields.as_slice().len() != registry.canonical_count()?
+            || self.fields.as_slice().iter().any(|field| !field.seen)
+        {
+            for (index, field) in registry.fields.iter().enumerate() {
+                if registry::is_canonical(field)
+                    && !self
+                        .retained_field(index)
+                        .is_some_and(|retained| retained.seen)
+                {
+                    return Err(CaptureError::Missing(field.id));
+                }
             }
-        });
-        if let Some(id) = missing {
-            return Err(CaptureError::Missing(id));
+            return Err(CaptureError::Changed("State registry field count"));
         }
-        self.fields
-            .as_mut_slice()
-            .sort_unstable_by(|a, b| a.id.as_bytes().cmp(b.id.as_bytes()));
+        let fields = self.fields.as_mut_slice();
+        if !fields.is_sorted_by_key(|field| field.id) {
+            fields.sort_unstable_by_key(|field| field.id);
+            for (position, field) in fields.iter().enumerate() {
+                self.positions[registry.index(field.id)?] =
+                    u16::try_from(position).expect("compile-time State registry count fits u16");
+            }
+        }
         Ok(())
     }
 }
@@ -880,3 +896,7 @@ impl<'block, 'state> OriginalCut<'block, 'state> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "original_stream/publication_timing.rs"]
+mod publication_timing;

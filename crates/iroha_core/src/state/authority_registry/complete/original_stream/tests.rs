@@ -1232,3 +1232,55 @@ fn frame_writer_allocation_refusal_preserves_original_pool_and_exact_retry() {
     drop(retried);
     assert_eq!(budget.reserved_bytes(), 0);
 }
+
+#[test]
+fn keyed_capture_uses_same_original_membership_before_and_after_logical_preparation() {
+    use crate::state::WorldReadOnly;
+    use crate::state::publication::musubi_materializer_test_support::{fixture, staged_block};
+
+    let (state, proposal) = fixture();
+    let mut block = Box::new(staged_block(&state, proposal.header(), false, false));
+    let fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    block
+        .world
+        .set_parameter_for_testing(iroha_data_model::parameter::Parameter::Custom(
+            fees.into_custom_parameter().unwrap(),
+        ))
+        .unwrap();
+    let crypto = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+        iroha_crypto::Algorithm::Ed25519,
+        iroha_crypto::Algorithm::Secp256k1,
+        iroha_crypto::Algorithm::BlsNormal,
+    ])
+    .unwrap();
+    block
+        .world
+        .set_parameter_for_testing(crypto.into_parameter().unwrap())
+        .unwrap();
+
+    let mut selected_world = World::new();
+    crate::runtime::keyed_state::install_for_test(&mut selected_world);
+    let schema =
+        crate::state::keyed_state::schema_for(selected_world.view().runtime_selection()).unwrap();
+    assert!(OriginalCut::new(&block, limits(), CaptureIntent::Complete).is_err());
+    let active = std::time::Instant::now();
+    let first = capture_keyed_image(&block, &schema, None).unwrap();
+    let active_elapsed = active.elapsed();
+    block.transactions.try_prepare_publication().unwrap();
+    let prepared = std::time::Instant::now();
+    let second = capture_keyed_image(&block, &schema, None).unwrap();
+    eprintln!(
+        "keyed cold capture on the staged genesis fixture: active {:?}, logically prepared {:?}",
+        active_elapsed,
+        prepared.elapsed()
+    );
+    assert_eq!(first.root(), second.root());
+    let frontier = iroha_data_model::sumeragi_finality::keyed_state::StateKeyV1 {
+        table: "state.transactions.frontier".into(),
+        key: Vec::new(),
+    };
+    assert_eq!(
+        first.get(&frontier),
+        Some(proposal.header().height().get().encode().as_slice())
+    );
+}

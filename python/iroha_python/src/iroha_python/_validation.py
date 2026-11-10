@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Dict, Mapping, Optional
 
 
@@ -54,3 +55,21 @@ def _normalize_mapping_payload(payload: Mapping[str, Any], context: str) -> Dict
     if not isinstance(normalized, dict):  # pragma: no cover - mapping contract
         raise TypeError(f"{context} must serialize to a JSON object")
     return normalized
+
+
+def _validate_state_row_selectors(rows: list[dict[str, str]]) -> None:
+    """Bound originals before allocation and admit the canonical sorted (table, key) order."""
+    if type(rows) is not list or not 1 <= len(rows) <= 32:
+        raise ValueError("expected between one and 32 State selectors")
+    previous = None
+    for row in rows:
+        if type(row) is not dict or row.keys() != {"table", "key_hex"}:
+            raise ValueError("expected exactly table and key_hex for each State selector")
+        table, key = row["table"], row["key_hex"]
+        if (type(table) is not str or len(table) > 256 or not re.fullmatch(r"[A-Za-z0-9_.]+", table)
+                or type(key) is not str or len(key) > 8192 or len(key) % 2 or not re.fullmatch(r"[0-9a-f]*", key)):
+            raise ValueError("expected bounded canonical table and key_hex for each State selector")
+        position = (table, key)
+        if previous is not None and position <= previous:
+            raise ValueError("State selectors must be sorted and distinct")
+        previous = position

@@ -190,6 +190,7 @@ from iroha_torii_client.native_sumeragi import (
     SumeragiStatus,
 )
 
+from ._validation import _validate_state_row_selectors
 from ._privacy_backends import (
     _require_production_verify_backend_label,
     _verifier_backend_registry_tag_v1,
@@ -301,7 +302,8 @@ from .torii_client_streaming_query import create_torii_client_streaming_query_mi
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .connect import _ConnectControlBase as ConnectControlBase  # noqa: F401
-    from .crypto import (  # noqa: F401
+    from .crypto import (
+        IronwoodStateSchemaV1,  # noqa: F401
         Instruction,
         NetworkId,
         PrivacyExact12CapabilityManifestV1,
@@ -11812,6 +11814,17 @@ def _fetch_authenticated_privacy_capabilities_archive_v1(
         response.close()
 
 
+@dataclass(frozen=True)
+class IronwoodPoolContext:
+    """Certified payment inputs and the exact generic Torii responses retained for recovery."""
+
+    pool_rows: bytes
+    balance_rows: bytes
+    verified: dict[str, Any]
+    original_responses: tuple[bytes, ...]
+    _read_plan: Any = field(repr=False, compare=False)
+
+
 class _AccountCollections(AccountsCollection):
     """Facade account scope with its configured identity and strict permission decoder."""
 
@@ -12894,6 +12907,81 @@ class ToriiClient(
         """
 
         return self._get_dataspace_visible_response(path, params=params)
+
+    def get_state_rows_proof(
+        self, height: int, rows: list[dict[str, str]], *, canonical_auth: ToriiCanonicalRequestAuth,
+    ) -> bytes:
+        """Fetch a signed, bounded generic State lookup batch as an unverified Norito frame."""
+        if type(height) is not int or not 2 <= height <= 2**64 - 1:
+            raise ValueError("height must be a certified non-genesis height")
+        _validate_state_row_selectors(rows)
+        data = self._encode_json_body({"rows": rows})
+        if len(data) > 64 * 1024:
+            raise ValueError("State row proof request exceeds 64 KiB")
+        response = self._account_request(
+            "POST", f"/v1/ledger/state-proof/{height}", canonical_auth=canonical_auth, data=data,
+            headers={"Accept": "application/x-norito", "Accept-Encoding": "identity",
+                     "Cache-Control": "no-store"},
+            stream=True, context="State row proof",
+        )
+        expect_status_without_body(response, (200,), "State row proof")
+        return read_bounded_identity_response(
+            response, 32 * 1024 * 1024, "State row proof", expected_content_type="application/x-norito",
+        )
+
+    def get_ironwood_pool_context(
+        self, height: int, *, canonical_auth: ToriiCanonicalRequestAuth,
+        checkpoint_hex: str, proof_frames_hex: list[str], network_id_hex: str,
+        chain_discriminant: int, pool_id_hex: str, asset_definition_id: str,
+        payer_account_id: str, expected_profile_digest_hex: str, expected_schema: "IronwoodStateSchemaV1",
+        previous: Optional[IronwoodPoolContext] = None,
+    ) -> IronwoodPoolContext:
+        """Verify the pool and balance rows at a fixed certified height.
+
+        If the selected cut becomes unavailable between requests, start preparation again
+        with fresh finality. A previous verified context supplies speculative selectors.
+        Changed dependencies are fetched and authenticated at the same height.
+        """
+        from . import crypto
+
+        page = crypto._ironwood_finality_page(checkpoint_hex, proof_frames_hex, network_id_hex, height)
+        pins = dict(
+            verified=page,
+            network_id_hex=network_id_hex, chain_discriminant=chain_discriminant,
+            pool_id_hex=pool_id_hex, asset_definition_id=asset_definition_id,
+            payer_account_id=payer_account_id, expected_schema=expected_schema,
+        )
+        def fetch(rows: list[dict[str, str]]) -> bytes:
+            return self.get_state_rows_proof(height, rows, canonical_auth=canonical_auth)
+
+        if previous is None:
+            pool_rows = fetch(crypto._ironwood_pool_selectors(pool_id_hex))
+            details, plan = crypto._ironwood_balance_selectors(pool_rows, **pins)
+            balance_rows = fetch(details)
+            originals = (pool_rows, balance_rows)
+        else:
+            plan = previous._read_plan
+            predicted = json.loads(plan.request(network_id_hex, chain_discriminant, pool_id_hex,
+                asset_definition_id, payer_account_id, expected_schema))["rows"]
+            primary = fetch(predicted)
+            next_plan, missing, pool_rows, balance_rows = crypto._ironwood_warm_rows(
+                plan, primary, None, **pins,
+            )
+            originals = (primary,)
+            if balance_rows is None:
+                supplement = fetch(missing)
+                next_plan, _, pool_rows, balance_rows = crypto._ironwood_warm_rows(
+                    plan, primary, supplement, **pins,
+                )
+                originals += (supplement,)
+                if balance_rows is None:
+                    raise ValueError("supplementary State proof misses a required row")
+            plan = next_plan
+        verified = json.loads(page.verify_rows(pool_rows, balance_rows, chain_discriminant, pool_id_hex,
+            asset_definition_id, payer_account_id, expected_profile_digest_hex, expected_schema))
+        if verified["height"] != height:
+            raise ValueError("Ironwood proofs differ from the requested height")
+        return IronwoodPoolContext(pool_rows, balance_rows, verified, originals, plan)
 
     def get_explorer_metrics(self) -> Optional[Any]:
         """Fetch `/v1/explorer/metrics`. Returns `None` when telemetry is gated."""

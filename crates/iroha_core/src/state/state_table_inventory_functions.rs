@@ -1207,6 +1207,24 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         UseOwner::Other(Use::Record, RECORD_IDENTITY),
     ),
     function(
+        "crates/iroha_core/src/state/keyed_state.rs",
+        "project_keyed_state_transition",
+        1,
+        UseOwner::Roots(&["keyed_state_root"]),
+    ),
+    function(
+        "crates/iroha_core/src/state/keyed_state.rs",
+        "seal_state_transition",
+        1,
+        UseOwner::Roots(&["keyed_state_root", "world_state_root"]),
+    ),
+    function(
+        "crates/iroha_core/src/state/keyed_state/recovery.rs",
+        "verify_replayed_state_commitment",
+        1,
+        UseOwner::Roots(&["keyed_state_root", "world_state_root"]),
+    ),
+    function(
         "crates/iroha_core/src/state/lifecycle_configuration.rs",
         "lifecycle_consensus_config_fingerprint",
         1,

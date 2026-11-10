@@ -28,6 +28,17 @@ migration against this inventory, then check that each supported operation has
 one authority-appropriate API and that no stale public wrappers remain. This
 inventory alone does not establish SDK coverage or qualify node features.
 
+## Python certified State rows
+
+`ledger.state_rows` is the signed POST at `/v1/ledger/state-proof/{height}`.
+`ToriiClient.get_state_rows_proof` fetches a bounded Norito frame for the
+requested sorted table and key pairs. `StateProofSchemaV1` binds the installed
+storage descriptors to the caller's schema digest. `verify_state_rows_v1`
+authenticates the Global block from the caller's checkpoint and checks each row
+against that schema and block. It returns original value bytes or `None` for
+authenticated absence. The Python SDK README includes a complete fetch and
+verification example.
+
 ## Musubi query coverage
 
 All twelve `musubi.v1.query.*` operations are concrete asynchronous methods on

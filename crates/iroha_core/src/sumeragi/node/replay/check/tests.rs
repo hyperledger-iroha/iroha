@@ -174,7 +174,7 @@ fn certified_result_this_build_does_not_reproduce_names_the_first_differing_comp
             .into_parts();
         let replayed_root = body.execution.world_state_root;
         let certified_root = Hash::new(b"a World this build never produces");
-        body.execution.world_state_root = certified_root;
+        body.execution.world_state_root = certified_root.into();
         let preimage = CertifiedResultV1::from_parts_unvalidated(header, body)
             .preimage()
             .unwrap();
@@ -365,7 +365,7 @@ fn differences_follow_report_order_and_fall_back_to_the_whole_result() {
         let stored = decode_result_preimage(&preimage).unwrap();
         assert!(result_differences(&stored, &stored).is_empty());
         let (header, mut body) = stored.clone().into_parts();
-        body.execution.world_state_root = Hash::new(b"another World");
+        body.execution.world_state_root = Hash::new(b"another World").into();
         body.execution.executed_block_wire_len += 1;
         let produced = CertifiedResultV1::from_parts_unvalidated(header, body);
         let divergence = ReplayDivergence::between(2, &preimage, certified, &produced);

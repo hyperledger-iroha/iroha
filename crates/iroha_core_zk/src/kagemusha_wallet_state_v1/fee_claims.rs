@@ -145,7 +145,7 @@ fn verify_payout(
     if network.as_bytes() != &scheme.network_id
         || evidence.world.height() != evidence.block.height()
         || evidence.world.context_id() != evidence.block.context_id()
-        || evidence.world.world_root() != evidence.block.execution().world_state_root
+        || evidence.block.execution().world_state_root != evidence.world.world_root()
         || evidence.payout.key != KagemushaWalletPayoutKeyV1::Fee(credit)
         || evidence.payout.source != claim.payment
         || evidence.payout.amount != claim.fee

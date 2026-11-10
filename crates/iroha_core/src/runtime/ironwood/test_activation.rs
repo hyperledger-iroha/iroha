@@ -9,6 +9,7 @@ use iroha_data_model::runtime::lifecycle::{
 /// Stage the already-approved governance record in fixture World setup. The next block still
 /// uses the baseline; the following block must execute native all-validator activation.
 /// This isolates proof interpretation and does not replace Parliament/provenance tests.
+#[cfg(test)]
 pub(crate) fn schedule(chain: &CertifiedTestChain, time_ms: u64) -> u64 {
     let height = chain.height() + 2;
     let change = super::activation_change_set(chain.network_id(), height, [0x69; 32]).unwrap();

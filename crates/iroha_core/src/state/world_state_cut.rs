@@ -536,7 +536,17 @@ impl JournalCapture {
 
 impl StateBlock<'_> {
     /// Only the original completed executor calls this before constructing R.
-    pub(crate) fn capture_original_world_cut(&mut self, expected: Hash) -> Result<(), CutError> {
+    pub(crate) fn capture_original_world_cut(
+        &mut self,
+        expected: iroha_data_model::sumeragi_finality::KeyedStateRoot,
+    ) -> Result<(), CutError> {
+        if crate::runtime::keyed_state::selected(self.world.runtime_selection.get()) {
+            // The native executor retained the immutable keyed version when it sealed R.
+            return Ok(());
+        }
+        let expected = expected
+            .as_legacy_hash()
+            .ok_or_else(|| CutError::Invalid("invalid LtHash commitment".into()))?;
         if let Some(capture) = &self.world_cut_capture {
             if capture.root != expected {
                 return Err("World cut original result changed during retry"

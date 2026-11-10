@@ -112,10 +112,13 @@ Taira has no account able to propose, so its one owner-authorized route is the
    permission and that another privacy-governance operation by it refuses. Retain
    the grant, successful bootstrap and revocation receipts together.
 
-   Obtain the pool cut from the certified native proof endpoint described in
-   `ironwood_boi_integration.md`; the note scanner does not reconstruct pool state.
-   A separate operator proof reader may hold `CanReadAllLedgerData`. The merchant
-   uses anonymous public finality frames and an incoming-viewing credential.
+   After governed activation of the keyed State profile, obtain the pool state,
+   root head, provenance, payer balance and reserve balance through signed
+   `POST /v1/ledger/state-proof/{height}` reads. Verify the five rows at one
+   certified Global height as described in `ironwood_boi_integration.md`.
+   Give the operator proof reader direct `CanReadStateRow` grants for its keys
+   or use its existing `CanReadAllLedgerData` grant. The merchant uses anonymous
+   public finality frames and an incoming-viewing credential.
 8. Deploy and authenticate the actual BOI registry's contract address, code hash,
    manifest and invocation permissions; initialize its namespace, participant roles
    and scenario counters. Fund the separate payer for both the selected payment asset

@@ -367,7 +367,7 @@ fn check_coherent_source_replacement(chain: &CertifiedTestChain, view: &impl Sta
     )
     .unwrap()
     .into_parts();
-    result.execution.world_state_root = Hash::new(b"different coherent genesis execution");
+    result.execution.world_state_root = Hash::new(b"different coherent genesis execution").into();
     let preimage = iroha_data_model::sumeragi_finality::CertifiedResultV1::from_parts_unvalidated(
         original_x, result,
     )

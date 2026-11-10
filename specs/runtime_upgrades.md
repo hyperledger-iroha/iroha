@@ -352,6 +352,11 @@ mounted, and fail on a missing route. They do not verify a node's selection.
 - `iroha ops runtime abi active|active-query|hash`, `iroha ops runtime status`, `iroha ops runtime capabilities`
 - `iroha ops runtime upgrade list`
 - `iroha ops runtime upgrade draft --addition <module> --effective-height <height> --qualification <hex>`
+  Use the addition name `iroha.keyed-state.radix-blake3.v1` to draft the next adoption
+  step from the root's committed selection. The foundation kernel first switches to
+  the adoption kernel. Once that change has activated, a second draft imports the
+  existing State owners and switches the commitment profile (see
+  [governed State commitment](live_runtime_upgrades.md#51-complete-state-selected-by-history)).
   prints the change set the node drafts to activate one of its release's additions, after checking
   it against the identity the node reported; it is the `--file` input of `endorse` and `propose`.
 - `iroha ops runtime upgrade endorse --file <change_set.json> --signer-key-file <path>` prints a

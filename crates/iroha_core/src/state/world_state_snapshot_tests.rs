@@ -148,8 +148,8 @@ fn provider_snapshot_publishes_original_current_heads_and_refuses_an_obsolete_cu
             &budget,
             |originals| {
                 assert_eq!(
-                    originals.world.root().unwrap(),
-                    tip.commitment().execution.world_state_root
+                    tip.commitment().execution.world_state_root,
+                    originals.world.root().unwrap()
                 );
                 assert_eq!(
                     originals.world.schema_hash,
@@ -414,8 +414,8 @@ fn snapshot_preserves_original_request_capacity_and_release_before_retry() {
     with_asset_snapshot(state, &tip, &asset, &request, |snapshot, _, _| {
         called.set(true);
         assert_eq!(
-            snapshot.root().unwrap(),
-            tip.commitment().execution.world_state_root
+            tip.commitment().execution.world_state_root,
+            snapshot.root().unwrap()
         );
         Ok(())
     })
@@ -547,8 +547,8 @@ fn snapshot_separates_original_world_pool_from_request_and_response_capacity() {
     let original_bytes = execution.reserved_bytes();
     let (bytes, charge) = with_asset_snapshot(state, &tip, &asset, &budget, |snapshot, _, _| {
         assert_eq!(
-            snapshot.root().unwrap(),
-            tip.commitment().execution.world_state_root
+            tip.commitment().execution.world_state_root,
+            snapshot.root().unwrap()
         );
         assert!(execution.reserved_bytes() > original_bytes);
         assert!(
@@ -657,8 +657,8 @@ fn snapshot_preserves_original_world_capacity_release_and_exact_retry() {
     with_asset_snapshot(state, &tip, &asset, &request, |snapshot, _, _| {
         called.set(true);
         assert_eq!(
-            snapshot.root().unwrap(),
-            tip.commitment().execution.world_state_root
+            tip.commitment().execution.world_state_root,
+            snapshot.root().unwrap()
         );
         Ok(())
     })
@@ -690,8 +690,8 @@ fn certified_world_cut_survives_equivalent_and_refused_manifest_refresh() {
         let assert_proof = || {
             with_asset_snapshot(state, &tip, &asset, &budget, |snapshot, _, _| {
                 assert_eq!(
-                    snapshot.root().unwrap(),
-                    tip.commitment().execution.world_state_root
+                    tip.commitment().execution.world_state_root,
+                    snapshot.root().unwrap()
                 );
                 Ok(())
             })
@@ -772,8 +772,8 @@ fn certified_world_cut_survives_equivalent_and_refused_manifest_refresh() {
         &budget,
         |snapshot, _, _| {
             assert_eq!(
-                snapshot.root().unwrap(),
-                successor.commitment().execution.world_state_root
+                successor.commitment().execution.world_state_root,
+                snapshot.root().unwrap()
             );
             Ok(())
         },
@@ -825,8 +825,8 @@ fn replayed_world_cut_survives_exact_startup_queue_handoff_without_another_block
         state
             .with_native_world_state_snapshot_cut_v1(&tip, None, &budget, |snapshot, _| {
                 assert_eq!(
-                    snapshot.root().unwrap(),
-                    tip.commitment().execution.world_state_root
+                    tip.commitment().execution.world_state_root,
+                    snapshot.root().unwrap()
                 );
                 Ok(())
             })
@@ -944,7 +944,7 @@ fn sns_lease_snapshot_authenticates_native_record_and_refuses_changed_or_unfunde
     let bytes = chain
         .state()
         .with_native_sns_lease_cut_v1(&tip, &selector, &budget, |world, bytes| {
-            assert_eq!(world.root().unwrap(), tip.world_state_root());
+            assert_eq!(tip.world_state_root(), world.root().unwrap());
             norito::encode_canonical(&SnsLeaseProofRefV1::new(world, bytes))
                 .map_err(|e| e.to_string())
         })
@@ -1038,8 +1038,8 @@ fn publisher_authenticates_original_native_cut_and_borrows_exact_targets() {
                 State::native_world_schema_hash_v1().unwrap()
             );
             assert_eq!(
-                snapshot.root().unwrap(),
-                original_tip.commitment().execution.world_state_root
+                original_tip.commitment().execution.world_state_root,
+                snapshot.root().unwrap()
             );
             assert_eq!(definition.id(), &asset);
             assert!(std::ptr::eq(definition, original_definition));
@@ -1478,8 +1478,8 @@ fn names_publisher_requires_actual_native_root_and_complete_exact_cut_originals(
                     State::native_world_schema_hash_v1().unwrap()
                 );
                 assert_eq!(
-                    snapshot.root().unwrap(),
-                    tip.commitment().execution.world_state_root
+                    tip.commitment().execution.world_state_root,
+                    snapshot.root().unwrap()
                 );
                 assert_eq!(tip.block_time_ms(), 2_000);
                 assert_eq!(aliases.len(), 1);
@@ -1613,8 +1613,8 @@ fn retained_names_snapshot_keeps_its_certified_cut_across_real_publication() {
     retained
         .with_native_resource_names_snapshot_v1(&tip, |snapshot, aliases, _, names| {
             assert_eq!(
-                snapshot.root().unwrap(),
-                tip.commitment().execution.world_state_root
+                tip.commitment().execution.world_state_root,
+                snapshot.root().unwrap()
             );
             require_complete_table_count(snapshot, "world.domains", domains)?;
             assert_eq!(aliases.len(), 1);
@@ -1848,8 +1848,8 @@ fn snapshot_uses_generation_of_acquired_view_after_real_paid_h3_publication() {
             |snapshot, _| {
                 called.set(true);
                 assert_eq!(
-                    snapshot.root().unwrap(),
-                    requested.commitment().execution.world_state_root
+                    requested.commitment().execution.world_state_root,
+                    snapshot.root().unwrap()
                 );
                 Ok(())
             },

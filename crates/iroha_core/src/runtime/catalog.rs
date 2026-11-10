@@ -109,6 +109,8 @@ pub struct ReleaseCatalog {
     /// The storage definition each compiled canonical World field implements, by registry
     /// identity.
     pub world_storage: BTreeMap<&'static str, DefinitionId>,
+    /// Existing State-level authority owners available to the keyed commitment profile.
+    pub(crate) keyed_storage: Vec<DefinitionId>,
     /// What the release adds after the baseline, in activation order.
     pub additions: Vec<AdditionDefinitions>,
     /// How each cell an addition adds is installed, by storage definition.
@@ -442,6 +444,7 @@ impl ReleaseCatalog {
             },
             lifecycle_id: SelectionId([0; 32]),
             world_storage: BTreeMap::new(),
+            keyed_storage: Vec::new(),
             additions: Vec::new(),
             cell_installers: BTreeMap::new(),
             ironwood: None,
@@ -663,6 +666,21 @@ impl ReleaseCatalog {
         catalog.lifecycle_id = catalog.lifecycle.id()?;
         catalog.compile_lifecycle_compositions()?;
         super::sorafs_authority::compile(&mut catalog)?;
+        let mut state_fields = Vec::new();
+        flatten(crate::state::authority_registry::STATE_FIELDS, &mut state_fields);
+        for field in state_fields {
+            if (field.id.starts_with("state.") || field.id.starts_with("runtime."))
+                && let Some(storage) = world_storage(field)?
+            {
+                let id = catalog.publish(DefinitionDescriptorV1::Storage(storage))?;
+                catalog.keyed_storage.push(id);
+            }
+        }
+        catalog.keyed_storage.sort_unstable();
+        catalog.publish(iroha_data_model::runtime::keyed_state::adoption_kernel(&catalog.keyed_storage))?;
+        catalog.publish(super::keyed_state::descriptor())?;
+        catalog.publish(super::state_row_permission::descriptor())?;
+
         Ok(catalog)
     }
 

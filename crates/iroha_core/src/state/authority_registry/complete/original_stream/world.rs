@@ -108,12 +108,17 @@ pub(super) fn append(block: &StateBlock<'_>, output: &mut Collector) -> Result<(
     let fields = block.fields.as_ref().ok_or(CaptureError::NotFrozen)?;
     append_world(&fields.world, &fields.state_ref.world, output)
 }
-fn append_world(
+pub(super) fn append_world(
     world: &WorldBlock<'_>,
     expected: &World,
     output: &mut Collector,
 ) -> Result<(), CaptureError> {
-    if world.publication != AggregatePublication::Frozen {
+    let phase = if output.executing {
+        AggregatePublication::Executing
+    } else {
+        AggregatePublication::Frozen
+    };
+    if world.publication != phase {
         return Err(CaptureError::NotFrozen);
     }
     let mode = world.parameters.mode();

@@ -107,8 +107,8 @@ fn cold_origin_joins_genuine_native_account_proof_before_any_provider_data_reque
         .state()
         .with_native_provider_admission_snapshot_v1(&tip, provider, &budget, |originals| {
             assert_eq!(
-                originals.world.root().unwrap(),
-                tip.commitment().execution.world_state_root
+                tip.commitment().execution.world_state_root,
+                originals.world.root().unwrap()
             );
             norito::encode_canonical(&ProviderDiscoveryProofRefV1::new(
                 originals.world,

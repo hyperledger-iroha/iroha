@@ -2394,6 +2394,7 @@ impl<'s> Worker<'s> {
         reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
     )]
     fn prepare_original_result(&mut self) -> Result<(), PublicationError> {
+        use crate::state::world_projection::world_state_accumulator::world_state_cut::CutError;
         let original = self
             .finishing
             .as_ref()
@@ -2435,14 +2436,15 @@ impl<'s> Worker<'s> {
         // (§4.1, Appendix E, E51), read from the same sealed original overlay.
         let transition = match self
             .finishing
-            .as_ref()
+            .as_mut()
             .expect("original completed execution")
             .overlay
-            .world_state_transition()
+            .seal_state_transition()
         {
             Ok(transition) => transition,
+            Err(CutError::Deferred(reason)) => return Err(PublicationError::Deferred(reason.into())),
             Err(error) => {
-                let reason = format!("original World state transition requires recovery: {error}");
+                let reason = format!("original State commitment requires recovery: {error}");
                 self.recovery = Some(reason.clone());
                 return Err(PublicationError::RecoveryRequired(reason));
             }
@@ -2456,7 +2458,6 @@ impl<'s> Worker<'s> {
             .overlay
             .capture_original_world_cut(transition.world_state_root)
         {
-            use crate::state::world_projection::world_state_accumulator::world_state_cut::CutError;
             let failure = match error {
                 CutError::Deferred(original) => PublicationError::Deferred(original.into()),
                 CutError::Invalid(reason) => {

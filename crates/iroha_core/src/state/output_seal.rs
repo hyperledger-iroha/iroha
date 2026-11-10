@@ -28,6 +28,8 @@ pub struct ExecutionOutputSealMetadata {
 pub enum ExecutionOutputSealError<E> {
     /// Original local storage admission refused; the carrier is retryable.
     Storage(crate::state::StateStorageAdmissionError),
+    /// Original replay-membership reservation or acquisition refused.
+    Membership(crate::state::MembershipAdmissionError),
     /// The State owner, retained source or canonical attachment was inconsistent.
     Owner(String),
     /// Local execution did not complete; no output may be sealed or published.
@@ -495,6 +497,23 @@ impl StateBlock<'_> {
                 .map_err(|_| "committed fragment count exceeds u64")?;
             if fragments != metadata.committed_fragment_count {
                 return Err("output finalizer did not account for every applied fragment".into());
+            }
+            // Under the keyed profile X_h includes this signed carrier's membership.
+            // The apply tail checks the same funded source again and reuses its staging.
+            if crate::runtime::keyed_state::selected(state.world.runtime_selection.get()) {
+                let height = block
+                    .header()
+                    .height()
+                    .try_into()
+                    .map_err(|_| "height exceeds usize")?;
+                state
+                    .stage_prepaid_ordinary_carrier_membership(block, height)
+                    .map_err(|error| match error {
+                        crate::state::MergeLedgerCommitError::MembershipAdmission(original) => {
+                            ExecutionOutputSealError::Membership(original)
+                        }
+                        other => ExecutionOutputSealError::Owner(other.to_string()),
+                    })?;
             }
             let tx_set = iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
                 (0..block.network_entrypoint_count()).map(|index| {

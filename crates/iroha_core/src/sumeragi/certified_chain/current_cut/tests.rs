@@ -264,7 +264,7 @@ fn current_cut_snapshot_matches_original_and_refuses_tampered_or_later_cuts() {
     let mut changed = [cut; 4];
     changed[0].core_hash = Hash32([99; 32]);
     changed[1].result = Hash32([99; 32]);
-    changed[2].world_state_root = Hash::new(b"changed certified World");
+    changed[2].world_state_root = Hash::new(b"changed certified World").into();
     changed[3].block_time_ms += 1;
     for changed in changed {
         assert!(

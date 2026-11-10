@@ -474,8 +474,8 @@ impl Fixture {
                 |world, owner, policy, current, credit, capacity, pricing| {
                     assert_eq!(owner, &self.owner);
                     assert_eq!(
-                        world.root().unwrap(),
-                        tip.commitment().execution.world_state_root
+                        tip.commitment().execution.world_state_root,
+                        world.root().unwrap()
                     );
                     let borrowed = ReserveAccountProofRefV1::new(
                         world, owner, policy, current, credit, capacity, pricing,

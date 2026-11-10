@@ -77,13 +77,8 @@ fn layout() -> String {
 /// fixes the separate runtime protocol codec and three additive Ironwood wire IDs,
 /// including their storage carriers. Baseline instruction payload codecs stay frozen.
 fn extended_codec(previous: &SchemaV1) -> Result<SchemaV1, CatalogError> {
-    let encoded = norito::encode_canonical(previous)
-        .map_err(|error| CatalogError::Parameters(error.to_string()))?;
-    let id = hex::encode(digest(&[b"recursive-codec-extension", &encoded]));
-    Ok(SchemaV1::Codec(format!(
-        "semantic:iroha.ironwood.v1.{id}@{}",
-        layout()
-    )))
+    iroha_core_privacy::ironwood_state_rows::ironwood_successor_codec_v1(previous)
+        .map_err(|error| CatalogError::Parameters(error.to_string()))
 }
 
 pub(super) fn build_catalog(catalog: &mut ReleaseCatalog) -> Result<IronwoodCatalog, CatalogError> {
@@ -1255,5 +1250,5 @@ pub fn install_for_test(world: &mut crate::state::World) {
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) mod test_activation;

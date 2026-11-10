@@ -1979,12 +1979,13 @@ async fn native_snapshot_restores_its_world_against_the_certified_successor() {
         snapshot_root
     );
     assert_eq!(
-        snapshot_root,
+        snapshot_root.as_ref(),
         chain
             .committed(4)
             .commitment()
             .execution
             .parent_world_state_root
+            .as_ref()
     );
 }
 #[tokio::test]

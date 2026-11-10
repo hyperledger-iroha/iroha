@@ -48,6 +48,26 @@ fn execute(prepared: &PreparedTestChainConfig) -> (ValidBlock, Box<StateBlock<'_
 }
 
 #[test]
+fn borrowed_keyed_projection_matches_the_retained_consensus_execution() {
+    let mut world = World::new();
+    crate::runtime::keyed_state::install_for_test(&mut world);
+    let prepared = CertifiedTestChain::prepare(TestChainConfig::new(world, 1000)).unwrap();
+    let (valid, mut staged) = execute(&prepared);
+    let projected = staged.execution_commitment_for_testing(&valid).unwrap();
+    let retained = staged.seal_state_transition().unwrap();
+    assert_eq!(
+        projected.parent_world_state_root,
+        retained.parent_world_state_root
+    );
+    assert_eq!(projected.world_state_root, retained.world_state_root);
+    assert_eq!(projected.event_commitment, retained.event_commitment);
+    assert_eq!(
+        staged.execution_commitment_for_testing(&valid).unwrap(),
+        projected
+    );
+}
+
+#[test]
 fn retained_execution_projection_matches_canonical_consensus_projection_without_publication() {
     let prepared = fixture();
     let (valid, staged) = execute(&prepared);

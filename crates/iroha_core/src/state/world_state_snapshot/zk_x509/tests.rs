@@ -228,8 +228,12 @@ fn certified_provider_joins_original_records_policy_identity_and_ledger_time() {
             assert_eq!(value.height(), expected_tip.height());
             assert_eq!(value.root_scope(), expected_tip.root_scope());
             assert_eq!(
-                value.world_state_root(),
-                expected_tip.commitment().execution.world_state_root
+                value.world_state_root().as_ref(),
+                expected_tip
+                    .commitment()
+                    .execution
+                    .world_state_root
+                    .as_ref()
             );
             assert_eq!(
                 value.schema_hash(),

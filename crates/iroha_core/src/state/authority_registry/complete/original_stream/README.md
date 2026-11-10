@@ -1,8 +1,16 @@
 # Original State byte stream
 
-This internal adapter borrows the existing frozen `StateBlock`. It does not open
-State views, build another state copy, select a root implementation, or grant
-proof, finality, execution, or publication authority.
+The execution seal and the deterministic publication tail borrow the active
+State fields to capture a provisional keyed image. Both use the existing typed
+field encoders and the original staged membership writer, including a writer
+that publication has already logically prepared. Cold construction visits all
+rows. Ordinary updates on the same schema verify each journal preimage against
+the supplied predecessor and apply the changed keys. Replacement blocks and
+schema changes use cold construction. A retry begins again from the same
+immutable overlay. The consensus owner independently binds the resulting root.
+
+The frozen `OriginalCut` API retains one validated publication and its original
+journals across retries.
 
 The constructor requires immutable `CaptureIntent::Complete` or
 `CaptureIntent::Changes`. Complete intent retains every current table row and
@@ -75,17 +83,8 @@ committed base; Complete retains its existing logical-predecessor frame. Before
 any Changes callback, the consumer must accept that explicit base or preserve
 its exact refusal. This is a local physical-source binding, not authentication of
 a State root or permission to mix unrelated execution and publication cuts.
-TODO: integrate the selected commitment owner's authenticated baseline and both
-State cuts before claiming complete incremental State work. Skipping an untouched
-projection is local journal accounting, not authentication of an external prior
-root. The static configuration-policy migration above remains open. Changed
-policy projections still inspect and encode their complete internals; no claim
-of work proportional to nested policy changes is made.
-
-TODO: Select the keyed engine against the current authoritative G2 evidence,
-join all relation/history owners under the existing StatePublication capsule,
-bind this stream to the authenticated predecessor and execution cut, and replace
-the World-only root in one first-release cutover. Authenticate the final pre-tail
-cut and replay its deterministic tail during atomic restore, including a terminal
-payment with no later traffic. The adapter alone does not close G3 or G4 and does
-not enable snapshot acceptance or row disclosure.
+The execution caller binds the incremental baseline to its original predecessor.
+Changed policy projections still inspect and encode their complete internals.
+The static configuration-policy migration above remains open. Checkpoint
+restoration requires authentication of the terminal pre-tail cut and its
+deterministic publication tail before snapshot acceptance.

@@ -51,8 +51,8 @@ fn publish(
         |world, permissions| {
             assert!(permissions.contains(&approval.permission().unwrap()));
             assert_eq!(
-                world.root().unwrap(),
-                tip.commitment().execution.world_state_root
+                tip.commitment().execution.world_state_root,
+                world.root().unwrap()
             );
             let borrowed = AmxDebitApprovalProofRefV1::new(world, permissions);
             let size = norito::canonical_frame_len(&borrowed).map_err(|error| error.to_string())?;

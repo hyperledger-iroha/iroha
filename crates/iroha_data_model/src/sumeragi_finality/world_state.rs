@@ -336,7 +336,7 @@ impl WorldStateSnapshotV1 {
         block: &VerifiedSumeragiBlock,
     ) -> Result<VerifiedWorldStateSnapshotV1, FinalityError> {
         let world_root = self.root()?;
-        if block.height() < 2 || world_root != block.execution().world_state_root {
+        if block.height() < 2 || block.execution().world_state_root != world_root {
             return Err(fail(
                 "World snapshot differs from certified successor execution",
             ));

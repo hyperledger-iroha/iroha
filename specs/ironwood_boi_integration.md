@@ -1,8 +1,9 @@
 # Ironwood discovery and BOI scenario integration
 
-This is the source-level contract implemented in the private `../app-ironwood`
-copy. The live BOI app is untouched. It is not a successful localnet or Taira
-execution record.
+The in-tree Python SDK implements Ironwood State reads, payment preparation and
+receipt verification for the BOI scenario. The private application checkout
+referenced by earlier integration work is unavailable in this workspace. Its
+adoption of these APIs and its four-peer campaign remain unverified.
 
 ## Authenticated discovery transport
 
@@ -13,8 +14,8 @@ Fetch complete native finality frames **anonymously** from existing public route
 
 Request `application/x-norito`; send no account signature or merchant identifier.
 Use bounded broad height ranges rather than identifying only the payment block.
-The app acquires buckets of up to 64 heights and overlaps preceding history for
-the newest partial bucket. Retain verified frames/checkpoints durably before reporting
+Acquire buckets of up to 64 heights and overlap preceding history for the newest
+partial bucket. Retain verified frames/checkpoints durably before reporting
 credit. Recovery re-verifies those retained originals locally; it does not re-fetch
 witness bytes or use their hashes as credit identities. Fresh discovery fetches
 bounded broad ranges with explicit cache bypass to avoid narrowing cover traffic
@@ -23,48 +24,47 @@ guarantee against timing, IP or intersection analysis. These frames were already
 removed signed Ironwood aliases added no confidentiality and linked an account to
 its scanning heights. Both routes retain the native finality producer, finite
 budgets, deadlines and canonical complete signed bodies/results. Neither receives
-wallet keys nor filters notes by recipient. The app's
-`LedgerClient.finality_proof_wires` returns exact individual frames; alternatively
-hex-encode consecutive single-height responses.
+wallet keys nor filters notes by recipient. Supply exact individual frames to the scanner. An application integration may
+use `LedgerClient.finality_proof_wires` or hex-encode consecutive single-height
+responses.
 Begin each scanner page at its independently trusted checkpoint; that first block
 is authenticated but only the strict extension is scanned. Discovery returns stable
 transaction/action identities and never establishes a credit by itself.
 
 ## Pool state and registry prerequisites
 
-The authenticated cut path is `POST /v1/privacy/ironwood/pool-cut/{height}` with the
-closed JSON body `{ "pool_id_hex": "...", "payer_account_id": "..." }`, canonical
-request authentication and `Accept: application/x-norito`. A dedicated **operator
-proof reader** must hold `CanReadAllLedgerData`; never use the merchant's discovery
-identity. The response is an opaque canonical `IronwoodPoolCutProofV1` for the exact
-current certified cut. It is not an unauthenticated current-pool hint and cannot
-retrieve a discarded historical World snapshot.
+Fetch the required State rows with signed `POST /v1/ledger/state-proof/{height}`
+requests at the current certified Global tip. Use an operator proof reader with
+`CanReadAllLedgerData` or a direct `CanReadStateRow` grant for each requested
+position. The merchant's anonymous discovery path stays independent.
 
-Call `verify_ironwood_pool_cut_v1(proof, checkpoint_hex=...,
-proof_frames_hex=[...], network_id_hex=..., chain_discriminant=...,
-pool_id_hex=..., asset_definition_id=..., payer_account_id=...,
-expected_profile_digest_hex=...)` with independently selected pins and a trusted
-canonical checkpoint. The native verifier authenticates the complete consecutive
-finality prefix, World root and accepted native schema, pool state/bootstrap,
-retained head/root, selected asset/Global partition, payer and reserve balances.
-It returns the anchor and epoch, exact certified height, Iroha header identity
-(`block_hash_hex`), consensus core identity (`core_hash_hex`), execution context
-(`context_id_hex`) and balance quantities. The app matches header and context to
-its authenticated ordinary transaction projection. Retain the opaque cut and its
-checkpoint/consecutive proof frames at preparation height **C** before signing.
-The approved expiry is exactly **C + 32**. A race obtaining the current cut is a
-resumable preparation refusal; it cannot strand an already-submitted payment.
+Construct `IronwoodStateSchemaV1(schema_bundle, expected_schema_hash_hex)` from
+the independently selected schema digest and the deployed selection and storage
+definitions. `ToriiClient.get_ironwood_pool_context` checks the pool state and
+root head first, then derives the provenance and Global payer/reserve keys and
+verifies their presence or absence at the same certified block. Supply the
+trusted checkpoint, consecutive finality frames, network/chain, pool, asset,
+payer and expected profile digest. A previous verified context can supply the
+predicted keys for one batch; a changed anchor requires the missing row at the
+same height.
 
-At committed payment height **H**, call `verify_ironwood_payment_effect_v1` with
-the retained cut proof and its original checkpoint/frames, exact original signed
+Retain the original signed read responses, `pool_rows` and `balance_rows`,
+checkpoint and proof frames for preparation height **C** before signing.
+`verify_ironwood_state_rows_v1` reopens the retained pool state, anchor, epoch
+and exact balances under the independently checked schema. Match the returned `block_hash_hex`, `core_hash_hex` and `context_id_hex` to its ordinary
+transaction projection. The approved expiry is **C + 32**. If the height
+advances between reads, restart preparation with a fresh certified height.
+
+At committed payment height **H**, call `verify_ironwood_payment_effect_from_rows_v1`
+with the retained row proofs and their original checkpoint/frames, exact original signed
 transaction, expected pool/profile/asset/payer/amount, and consecutive certified
 frames **C..H**. The verifier first authenticates C, derives the checkpoint for C,
 then verifies C..H and the exact successful transaction at H. It checks the
 anchor/epoch, expiry, Global IntoPool balance and immutable governed reserve.
 A successful native effect establishes the exact **transaction-local payer debit
 and reserve credit**. Whole-block balance differences cannot do that when unrelated
-payments share a block. The app independently verifies the exact registry batch,
-its required events/counters and recipient receipt against the same H/header/context.
+payments share a block. Independently verify the registry batch, its required
+events and counters, and the recipient receipt against the same H/header/context.
 
 No cut at H−1 or H is required, and C need not equal H−1. Retained originals allow
 crash recovery after the chain advances, even if no historical World cut exists.
@@ -123,10 +123,10 @@ grant entrypoint permissions, or satisfy the first authorization transaction.
    and constructs the empty-spend/empty-change owner bundle internally. Do not
    substitute the worker's default prefix (753) for the campaign's selected 369;
    doing so derives a different authority spelling and fails the execution binding.
-   The app passes its existing scenario seed over the authenticated private worker
-   pipe and erases its mutable buffer in `finally`; Rust erases the frame and owner
-   material. No durable plaintext seed file is created. Old `payer-*` residues are
-   removed on startup. No merchant spending authority reaches the payer.
+   Pass the scenario seed over the authenticated private worker pipe and erase
+   the mutable buffer in `finally`. Keep the seed out of durable files and remove
+   any old `payer-*` residues on startup. The worker owns its frame and key material.
+   The payer receives only the merchant's public recipient.
    The placeholders are not an executable fixture. Each call has exactly
    `contract_address`, `expected_code_hash`, `entrypoint`, and `arguments`.
    Submit the returned signed transaction as one Batch:
@@ -159,29 +159,28 @@ grant entrypoint permissions, or satisfy the first authorization transaction.
 
 ## App ownership and pending four-peer qualification
 
-The private `app-ironwood` copy now renders only ANON-01 and
-STAT-01/03/04/06/07 through `scenario_ironwood.py`. Its explicitly admitted
-`boi.ironwood-catalog-selection.v1` owner passes the worker-signed original into
-`PreparedTransaction`, the ordinary Kasumi original-capsule journal and the native
-`PublicExecutionJournal` receipt pipeline. Exact-payload fee admission runs after
-worker signing but before journaling/submission; the original approved fee intent
-is unchanged, and the app never splices or re-signs the batch. Existing Privacy Lab
-Orchard paths retain their profile and APIs.
+Earlier integration notes identified ANON-01 and STAT-01/03/04/06/07 as
+`scenario_ironwood.py` scenarios and named `boi.ironwood-catalog-selection.v1`
+as the application owner. To qualify the application, confirm that it sends
+the worker-signed original through `PreparedTransaction`, the Kasumi
+original-capsule journal and the native `PublicExecutionJournal` receipt
+pipeline. Run exact-payload fee admission after worker signing and before
+journaling or submission. Preserve the approved fee intent and signed batch.
 
-The ordinary catalog business policy checks both registry completion markers, no
-`Moved`, every recipe expectation and STAT deltas against the authenticated S9
-baseline. Native pool cuts check exact payer debit/reserve credit. The merchant
-verifier has only its incoming-viewing credential and exact independent invoice
-expectation. `ironwood_receipt_journal.py` atomically stores the credit, receipt
-identity, invoice and checkpoint reference; a duplicate consume refuses, while
-recovery reauthenticates evidence and reads the identical previously committed
-credit. Memos are domain-separated by network/pool/run/scenario/namespace/label and
-recipient/amount; they remain stable for a retry of the same logical invoice.
+Check both registry completion markers, the absence of `Moved`, the recipe
+expectations and the STAT deltas against the authenticated S9 baseline.
+The native payment-effect verifier checks the transaction-local payer debit
+and reserve credit against the retained preparation rows. Supply the merchant
+verifier only its incoming-viewing credential and independent invoice
+expectation. Atomically store the credit, receipt identity, invoice and
+checkpoint reference, reject duplicate consumption, and recover the same
+credit after reauthenticating its originals. Bind memos to network, pool,
+run, scenario, namespace, label, recipient and amount, and keep them stable
+across retries of the same logical invoice.
 
-`tools/ironwood_campaign.py` and `specs/ironwood_campaign.md` in the app copy prepare
-the four-peer campaign. It has not been run. Original candidate artifact/source
-qualification and runtime admission records must be produced by the operator;
-component tests are not a substitute. Retain all four node revisions,
-genesis/committee/checkpoints, activation/bootstrap/grant/revocation proofs, signed
-originals, native receipts, note identities and event/counter assertions. The live
-app repository and Taira remain untouched.
+The earlier notes named `ironwood_receipt_journal.py`,
+`tools/ironwood_campaign.py` and `specs/ironwood_campaign.md` in the private
+checkout. Verify their current implementation when that checkout is available.
+Four-peer qualification requires the candidate node revisions, genesis and
+committee pins, checkpoints, activation/bootstrap/grant/revocation proofs,
+signed originals, native receipts, note identities and event/counter assertions.

@@ -696,6 +696,12 @@ impl<'a> SnapshotJsonMap<'a> {
             .get("runtime_selection")
             .ok_or_else(|| json::Error::missing_field("world.runtime_selection"))?
             .decode_canonical("runtime_selection")?;
+        // The snapshot has neither the original pre-tail execution version nor the
+        // replayed publication. Only the native Kura replay path reconstructs both.
+        // This selection read authorizes refusal only, never acceptance of a root.
+        if crate::runtime::keyed_state::selected(selection.view().get()) {
+            return Err(StateRestoreError::NativeExecutionReplayRequired);
+        }
         let members = crate::runtime::uninstalled_world_members(selection.view().get()).map_err(
             |message| json::Error::InvalidField {
                 field: "world.runtime_selection".to_owned(),
@@ -3787,3 +3793,18 @@ impl From<sccp_forgery_custody::ForgeryStorageError> for StateRestoreError {
 #[cfg(test)]
 #[path = "deserialize_snapshot_map_tests.rs"]
 mod snapshot_map_tests;
+
+#[cfg(test)]
+mod keyed_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn keyed_selection_requires_original_replay_before_a_snapshot_can_supply_state() {
+        let mut world=World::new();
+        crate::runtime::keyed_state::install_for_test(&mut world);
+        let raw = norito::json::to_json(&world.runtime_selection).unwrap();
+        let text=format!(r#"{{"runtime_selection":{raw}}}"#);
+        let mut map=SnapshotJsonMap::parse_world_fixture(&text).unwrap();
+        assert!(matches!(map.omit_uninstalled_world_members(), Err(StateRestoreError::NativeExecutionReplayRequired)));
+    }
+}

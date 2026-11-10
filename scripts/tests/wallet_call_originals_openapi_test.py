@@ -67,11 +67,35 @@ def native_fields(name):
     return dict(re.findall(r"pub (\w+): ([^,]+),", body))
 
 
-def test_artifact_mirrors_match_without_losing_existing_pool_cut(document):
+def test_artifact_mirrors_match(document):
     assert all(path.read_bytes() == MIRRORS[0].read_bytes() for path in MIRRORS)
-    operation = document["paths"]["/v1/privacy/ironwood/pool-cut/{height}"]["post"]
-    assert operation["x-iroha-route-auth"]["stableRouteId"] == "privacy.ironwood.pool_cut"
-    assert operation["x-iroha-max-request-bytes"] == 4096
+
+
+def test_selected_state_rows_have_a_distinct_signed_contract_from_public_finality(document):
+    assert "/v1/privacy/ironwood/pool-cut/{height}" not in document["paths"]
+    path = document["paths"]["/v1/ledger/state-proof/{height}"]
+    assert "get" in path
+    operation = path["post"]
+    assert operation["x-iroha-route-auth"]["stableRouteId"] == "ledger.state_rows"
+    assert operation["x-iroha-route-auth"]["authentication"] == "canonical_account_signature"
+    assert operation["x-iroha-max-request-bytes"] == 65536
+    schema = operation["requestBody"]["content"]["application/json"]["schema"]
+    entry = {"table": "world.assets", "key_hex": "10af"}
+    check = Draft202012Validator(schema)
+    assert check.is_valid({"rows": [entry]})
+    for invalid in [{"rows": []}, {"rows": [entry] * 2},
+                    {"rows": [{**entry, "key_hex": "1A"}]},
+                    {"rows": [{**entry, "surprise": 1}]}]:
+        assert not check.is_valid(invalid)
+    response_schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
+    lookup = {"terminal": None, "steps": []}
+    sample = {"height": 2, "block_hash": "hash:" + "A" * 64 + "#1234",
+              "schema_hash": "B" * 64, "rows": [{"position": {"table": "world.assets", "key": [1]},
+              "value": None, "witness": lookup}]}
+    response = Draft202012Validator(response_schema)
+    assert response.is_valid(sample)
+    assert not response.is_valid({**sample, "schema_hash": [0] * 32})
+    assert not response.is_valid({**sample, "block_hash": "A" * 64})
 
 
 def test_real_rust_catalog_compiles_and_projects_the_seven_wallet_reads():

@@ -78,6 +78,8 @@ pub(super) struct StatePublication<'state> {
     world_cut_pending:
         Option<world_projection::world_state_accumulator::world_state_cut::PendingCutCapsule>,
     world_cut_prepared: bool,
+    keyed_cut: Option<keyed_state::KeyedCut>,
+    retired_keyed: Option<keyed_state::KeyedVersions>,
     // Pure validation success belongs only to these immutable original fields.
     // Generation and exact predecessor installation still run on every attempt.
     musubi_live_validated: bool,
@@ -123,6 +125,8 @@ impl<'state> StatePublication<'state> {
             world_cut: None,
             world_cut_pending: None,
             world_cut_prepared: false,
+            keyed_cut: None,
+            retired_keyed: None,
             musubi_live_validated: false,
             musubi_validated: false,
             package_read: None,
@@ -270,6 +274,15 @@ impl<'state> StateBlock<'state> {
         self.publication = Some(original);
         if terminal {
             mv::BlockRetirement::release_writers(self);
+            // Releasing persistent nodes can wake allocation waiters. All publication
+            // fences and physical writers must be free before dropping retired versions.
+            drop(
+                self.publication
+                    .as_mut()
+                    .expect("publication")
+                    .retired_keyed
+                    .take(),
+            );
         }
         // Every attempt scope has ended; reversible fields recovered above and
         // terminal fields retired here before any original Kura release callback.
@@ -297,6 +310,8 @@ impl<'state> StateBlock<'state> {
             world_cut,
             world_cut_pending,
             world_cut_prepared,
+            keyed_cut,
+            retired_keyed,
             musubi_live_validated,
             musubi_validated,
             package_read: _,
@@ -406,19 +421,14 @@ impl<'state> StateBlock<'state> {
             canonical_runtime,
             native_execution_tip,
             world,
-            block_hashes,
             transactions,
             commit_topology: committed_topology,
             prev_commit_topology: prev_committed_topology,
             lane_incarnation_activation_heights,
             zk: _,
             nexus,
-            pending_da_commitments,
             pending_da_pin_intents,
             pending_autoscale_lifecycle,
-            #[cfg(feature = "telemetry")]
-            pending_parliament_telemetry_events,
-            pending_public_lane_slash_observability,
             _curr_block,
             ..
         } = this.fields.as_mut().expect("original executing State");
@@ -533,16 +543,18 @@ impl<'state> StateBlock<'state> {
             // The last World write: fold the block's complete change set, including every
             // deterministic tail write above, into the stored World state accumulator, the
             // parent World state root of the next execution result (§4.1, Appendix E, E51).
-            world
-                .advance_state_accumulator(_curr_block.is_genesis())
-                .map_err(|error| {
-                    error!(
-                        block_height,
-                        ?error,
-                        "failed to advance the World state accumulator"
-                    );
-                    TransactionsBlockError::WorldCommitPreparation
-                })?;
+            if !crate::runtime::keyed_state::selected(world.runtime_selection.get()) {
+                world
+                    .advance_state_accumulator(_curr_block.is_genesis())
+                    .map_err(|error| {
+                        error!(
+                            block_height,
+                            ?error,
+                            "failed to advance the World state accumulator"
+                        );
+                        TransactionsBlockError::WorldCommitPreparation
+                    })?;
+            }
             *world_effects = Some(effects);
         }
         if !*fields_frozen {
@@ -561,6 +573,48 @@ impl<'state> StateBlock<'state> {
             committed_topology.finish_freeze();
             *fields_frozen = true;
         }
+        // Generate P_h only after all tail writes and the joint freeze. A refused
+        // allocation releases the reacquired membership writer and leaves the same
+        // original journals available for retry. X_h remains the sealed version.
+        if keyed_cut.is_none()
+            && let Some(execution) = &this.keyed_execution
+        {
+            use world_projection::world_state_accumulator::world_state_cut::CutError;
+            let tx = &mut this.fields.as_mut().expect("original fields").transactions;
+            tx.install_frozen_publication(&state_ref.transactions);
+            tx.try_prepare_frozen_publication()
+                .map_err(original_preparation_error)?;
+            let published = this
+                .fields
+                .as_ref()
+                .expect("original tail")
+                .prepare_published_keyed_cut(execution)
+                .map_err(|error| match error {
+                    CutError::Deferred(reason) => TransactionsBlockError::ExecutionDeferred(reason),
+                    CutError::Invalid(reason) => {
+                        error!(block_height, %reason, "keyed State publication failed");
+                        TransactionsBlockError::WorldCommitPreparation
+                    }
+                })?;
+            *keyed_cut = Some(published);
+        }
+        let StateBlockFields {
+            canonical_runtime,
+            native_execution_tip,
+            world,
+            block_hashes,
+            transactions,
+            commit_topology: committed_topology,
+            prev_commit_topology: prev_committed_topology,
+            nexus,
+            pending_da_commitments,
+            pending_autoscale_lifecycle,
+            #[cfg(feature = "telemetry")]
+            pending_parliament_telemetry_events,
+            pending_public_lane_slash_observability,
+            _curr_block,
+            ..
+        } = this.fields.as_mut().expect("original publication fields");
         if !*world_cut_prepared {
             // Frozen journals retain exact preimages on resource refusal; never
             // rerun tail writes or capture a replacement overlay during retry.
@@ -765,10 +819,12 @@ impl<'state> StateBlock<'state> {
             committed_topology
                 .install_frozen_publication(&state_ref.commit_topology)
                 .map_err(|_| TransactionsBlockError::SnapshotObservationChanged)?;
-            transactions.install_frozen_publication(&state_ref.transactions);
-            transactions
-                .try_prepare_frozen_publication()
-                .map_err(original_preparation_error)?;
+            if transactions.prepared_membership_writer().is_none() {
+                transactions.install_frozen_publication(&state_ref.transactions);
+                transactions
+                    .try_prepare_frozen_publication()
+                    .map_err(original_preparation_error)?;
+            }
             block_hashes
                 .try_prepare_publication()
                 .map_err(|error| match error {
@@ -846,6 +902,7 @@ impl<'state> StateBlock<'state> {
             // block-hash publication. Raw/non-native commits retire authority;
             // decoded restores start absent and must replay genuine execution.
             *state_ref.native_world_cut.lock() = world_cut.take();
+            *retired_keyed = Some(state_ref.keyed_versions.lock().install(keyed_cut.take()));
             let block_hashes_hold = block_hashes_start.elapsed();
             world_effects
                 .take()

@@ -88240,6 +88240,503 @@
           "stableRouteId": "ledger.state_proof"
         },
         "x-iroha-tool-effect": "read"
+      },
+      "post": {
+        "description": "Read the exact requested Global State rows at the certified non-genesis tip. Each row returns its original bytes or proven absence under the same post-execution root. Supply 1 to 32 (table, key) positions in strictly ascending order. Each read requires current CanReadAllLedgerData or a direct CanReadStateRow grant for every position. Independently verify the batch against finality and a pinned schema.",
+        "operationId": "ledgerStateRowsV1",
+        "parameters": [
+          {
+            "description": "Canonical decimal u64 current certified non-genesis height, at least 2; no sign or leading zero.",
+            "in": "path",
+            "name": "height",
+            "required": true,
+            "schema": {
+              "maxLength": 20,
+              "pattern": "^(?:[2-9]|[1-9][0-9]+)$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical account; required for single-signature mode and optional with a subject-identifying witness.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical request signature; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Signed Unix timestamp; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh signed nonce; mutually exclusive with a witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical Norito multisig witness; alternative to the signature quartet.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "rows": {
+                    "description": "Strictly ascending by (table, canonical key bytes). The empty key addresses a cell.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "key_hex": {
+                          "maxLength": 8192,
+                          "pattern": "^(?:[0-9a-f]{2})*$",
+                          "type": "string"
+                        },
+                        "table": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "pattern": "^[A-Za-z0-9_.]+$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "table",
+                        "key_hex"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array",
+                    "uniqueItems": true
+                  }
+                },
+                "required": [
+                  "rows"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "block_hash": {
+                      "pattern": "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
+                      "type": "string"
+                    },
+                    "height": {
+                      "minimum": 2,
+                      "type": "integer"
+                    },
+                    "rows": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "position": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "key": {
+                                "items": {
+                                  "maximum": 255,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "maxItems": 4096,
+                                "type": "array"
+                              },
+                              "table": {
+                                "maxLength": 256,
+                                "minLength": 1,
+                                "pattern": "^[A-Za-z0-9_.]+$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "table",
+                              "key"
+                            ],
+                            "type": "object"
+                          },
+                          "value": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "maximum": 255,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "witness": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "steps": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "bit": {
+                                      "maximum": 4294967295,
+                                      "minimum": 0,
+                                      "type": "integer"
+                                    },
+                                    "sibling": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "count": {
+                                          "minimum": 0,
+                                          "type": "integer"
+                                        },
+                                        "digest": {
+                                          "pattern": "^[0-9A-Fa-f]{64}$",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "count",
+                                        "digest"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  },
+                                  "required": [
+                                    "bit",
+                                    "sibling"
+                                  ],
+                                  "type": "object"
+                                },
+                                "type": "array"
+                              },
+                              "terminal": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "key": {
+                                        "pattern": "^[0-9A-Fa-f]{64}$",
+                                        "type": "string"
+                                      },
+                                      "value": {
+                                        "pattern": "^[0-9A-Fa-f]{64}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "key",
+                                      "value"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "terminal",
+                              "steps"
+                            ],
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "position",
+                          "value",
+                          "witness"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 32,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "schema_hash": {
+                      "pattern": "^[0-9A-Fa-f]{64}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "height",
+                    "block_hash",
+                    "schema_hash",
+                    "rows"
+                  ],
+                  "type": "object"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "format": "binary",
+                  "maxLength": 33554432,
+                  "type": "string",
+                  "x-iroha-norito-frame": "iroha_data_model::sumeragi_finality::KeyedStateRowsV1"
+                }
+              }
+            },
+            "description": "Original selected values and lookup witnesses against the certified keyed State root.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account-authenticated data is never shared or retained by caches.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Height or exact canonical ordered selector frame is malformed, duplicate or out of bounds.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account-authenticated data is never shared or retained by caches.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Canonical account authentication is absent, invalid or replayed. Authentication-source capacity remains a separate retryable 429.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account-authenticated data is never shared or retained by caches.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The account lacks read authority for one or more selected rows, or deployment API-token access is denied.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account-authenticated data is never shared or retained by caches.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Accept must permit application/json or application/x-norito.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account-authenticated data is never shared or retained by caches.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Request exceeds the 65536-byte selection limit.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account-authenticated data is never shared or retained by caches.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authentication-source capacity, heavy-query admission, rate or exact egress limits refused the read.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account-authenticated data is never shared or retained by caches.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The selected keyed root or its current certified State originals are unavailable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Account-authenticated data is never shared or retained by caches.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Prove exact State rows at one certified block",
+        "tags": [
+          "Ledger"
+        ],
+        "x-iroha-canonical-auth-v1": {
+          "body_hash_bound": true,
+          "exact_request_target": true,
+          "modes": [
+            {
+              "forbidden_headers": [
+                "X-Iroha-Witness"
+              ],
+              "kind": "single_signature",
+              "required_headers": [
+                "X-Iroha-Account",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ]
+            },
+            {
+              "forbidden_headers": [
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Nonce"
+              ],
+              "kind": "multisig_witness",
+              "optional_headers": [
+                "X-Iroha-Account"
+              ],
+              "required_headers": [
+                "X-Iroha-Witness"
+              ]
+            }
+          ]
+        },
+        "x-iroha-max-request-bytes": 65536,
+        "x-iroha-max-response-bytes": 33554432,
+        "x-iroha-redaction-v1": {
+          "logs_errors_events_must_use_public_allowlist": true,
+          "plaintext_transaction_contents": "forbidden",
+          "request_body_must_not_be_logged": true,
+          "response_allowlisted_public_fields_only": true,
+          "scope": "authenticated_restricted_request_redacted_response"
+        },
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "ledger.state_rows"
+        },
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/ledger/state/{height}": {
@@ -97638,339 +98135,6 @@
           "authentication": "canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "privacy.capabilities"
-        },
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/privacy/ironwood/pool-cut/{height}": {
-      "post": {
-        "description": "Read the exact current certified Global Ironwood pool/root and payer/reserve balance originals. Canonical signed CanReadCertifiedOriginals or all-ledger proof-reader authority is required and rechecked before disclosure because the complete World hash list exposes unrelated rows. This is separate from merchant discovery: merchants anonymously fetch public /v1/bridge/finality frames. Retain the canonical cut and authenticate it against independently pinned consecutive finality proofs; query status and decoded bytes grant no authority. No historical cut fallback.",
-        "operationId": "ironwoodPoolCutV1",
-        "parameters": [
-          {
-            "description": "Canonical decimal u64 current certified non-genesis height, at least 2; no sign or leading zero.",
-            "in": "path",
-            "name": "height",
-            "required": true,
-            "schema": {
-              "maxLength": 20,
-              "pattern": "^(?:[2-9]|[1-9][0-9]+)$",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Canonical account; required for single-signature mode and optional with a subject-identifying witness.",
-            "in": "header",
-            "name": "X-Iroha-Account",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Canonical request signature; mutually exclusive with a witness.",
-            "in": "header",
-            "name": "X-Iroha-Signature",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Signed Unix timestamp; mutually exclusive with a witness.",
-            "in": "header",
-            "name": "X-Iroha-Timestamp-Ms",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Fresh signed nonce; mutually exclusive with a witness.",
-            "in": "header",
-            "name": "X-Iroha-Nonce",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Canonical Norito multisig witness; alternative to the signature quartet.",
-            "in": "header",
-            "name": "X-Iroha-Witness",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": false,
-                "properties": {
-                  "payer_account_id": {
-                    "maxLength": 512,
-                    "type": "string"
-                  },
-                  "pool_id_hex": {
-                    "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "pool_id_hex",
-                  "payer_account_id"
-                ],
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "description": "Data-only complete World hash list and exact typed pool/head/balance preimages; independent native verification required.",
-                  "type": "object"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "format": "binary",
-                  "maxLength": 33554432,
-                  "type": "string",
-                  "x-iroha-norito-frame": "iroha_core_privacy::IronwoodPoolCutProofV1"
-                }
-              }
-            },
-            "description": "Exact current-cut original pool and balances; certified evidence verification remains mandatory.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Account-authenticated data is never shared or retained by caches.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Height or exact canonical ordered selector frame is malformed, duplicate or out of bounds.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Account-authenticated data is never shared or retained by caches.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "description": "Canonical account authentication is absent, invalid or replayed. Authentication-source capacity remains a separate retryable 429.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Account-authenticated data is never shared or retained by caches.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The authenticated account lacks current CanReadAllLedgerData required for complete World hash disclosure, or deployment API-token access is denied.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Account-authenticated data is never shared or retained by caches.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "406": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Accept must permit application/json or application/x-norito.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Account-authenticated data is never shared or retained by caches.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "413": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "description": "Request exceeds the 4096-byte finite selector bound.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Account-authenticated data is never shared or retained by caches.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "429": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Authentication-source capacity, heavy-query admission, rate or exact egress limits refused the read.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Account-authenticated data is never shared or retained by caches.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Original certified cut, selected context or response capacity is locally unavailable. This is recoverable read failure and supplies no negative state, permission or execution evidence.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Account-authenticated data is never shared or retained by caches.",
-                "required": true,
-                "schema": {
-                  "const": "private, no-store",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "IrohaCanonicalAccount": [],
-            "IrohaCanonicalNonce": [],
-            "IrohaCanonicalSignature": [],
-            "IrohaCanonicalTimestampMs": []
-          },
-          {
-            "IrohaCanonicalWitness": []
-          }
-        ],
-        "summary": "Read every selected private context from one certified Global cut.",
-        "tags": [
-          "Nexus"
-        ],
-        "x-iroha-canonical-auth-v1": {
-          "body_hash_bound": true,
-          "exact_request_target": true,
-          "modes": [
-            {
-              "forbidden_headers": [
-                "X-Iroha-Witness"
-              ],
-              "kind": "single_signature",
-              "required_headers": [
-                "X-Iroha-Account",
-                "X-Iroha-Signature",
-                "X-Iroha-Timestamp-Ms",
-                "X-Iroha-Nonce"
-              ]
-            },
-            {
-              "forbidden_headers": [
-                "X-Iroha-Signature",
-                "X-Iroha-Timestamp-Ms",
-                "X-Iroha-Nonce"
-              ],
-              "kind": "multisig_witness",
-              "optional_headers": [
-                "X-Iroha-Account"
-              ],
-              "required_headers": [
-                "X-Iroha-Witness"
-              ]
-            }
-          ]
-        },
-        "x-iroha-max-request-bytes": 4096,
-        "x-iroha-max-response-bytes": 33554432,
-        "x-iroha-redaction-v1": {
-          "logs_errors_events_must_use_public_allowlist": true,
-          "plaintext_transaction_contents": "forbidden",
-          "request_body_must_not_be_logged": true,
-          "response_allowlisted_public_fields_only": true,
-          "scope": "authenticated_restricted_request_redacted_response"
-        },
-        "x-iroha-route-auth": {
-          "admission": "authenticated_account",
-          "authentication": "canonical_account_signature",
-          "schemaVersion": 1,
-          "stableRouteId": "privacy.ironwood.pool_cut"
         },
         "x-iroha-tool-effect": "read"
       }

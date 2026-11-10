@@ -246,6 +246,12 @@ transition compares with anything are enforced or removed (F.4); 45 bounds are
 committed as `zk_validity_policy_v1` and 15 as `pipeline_validity_policy_v1`,
 with no node-schema key.
 
+The signed State row route and the native Ironwood Python reader implement
+payment preparation against the governed keyed commitment. Complete the
+[BOI application campaign](specs/ironwood_boi_integration.md) with its owners.
+Confirm adoption of these APIs, archive the checked schema and original row
+responses, and qualify payment and recovery on the four-peer candidate.
+
 | ID | Outcome | Owner | Completion criteria |
 | --- | --- | --- | --- |
 | C1 | Norito/derive closure | Norito/derives/primitives/MV | Explicit archive context, fallible aligned/scalar/tree allocations and owned values; retire unused adapters, share emitters, meet compile budgets/UI tests. |

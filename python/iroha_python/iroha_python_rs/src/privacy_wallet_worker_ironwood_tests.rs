@@ -413,7 +413,7 @@ mod ironwood {
     fn ironwood_bootstrap_export_is_typed_json_and_does_not_submit() {
         let (_, _, reserve) = test_signer();
         let prefix = iroha_data_model::account::address::chain_discriminant();
-        let output = crate::ironwood_pool_cut::ironwood_pool_bootstrap_instruction_json_v1_py(
+        let output = crate::ironwood_payment::ironwood_pool_bootstrap_instruction_json_v1_py(
             &hex::encode(POOL),
             &asset().to_string(),
             &reserve.to_string(),
@@ -439,7 +439,7 @@ mod ironwood {
             .unwrap()
         );
         assert!(
-            crate::ironwood_pool_cut::ironwood_pool_bootstrap_instruction_json_v1_py(
+            crate::ironwood_payment::ironwood_pool_bootstrap_instruction_json_v1_py(
                 &hex::encode([0; 32]),
                 &asset().to_string(),
                 &reserve.to_string(),
@@ -718,8 +718,253 @@ mod ironwood {
     }
 
     #[test]
-    fn ironwood_payment_effect_survives_interleaved_blocks_and_resume_after_tip_advance() {
+    fn ironwood_payment_effect_from_generic_state_rows_survives_tip_advance() {
         payment_effect_case(None);
+    }
+
+    fn prepare_payment_context(
+        chain: &mut iroha_core::sumeragi::test_chain::CertifiedTestChain,
+        now: u64,
+        chosen: Option<&iroha_data_model::runtime::definition::RootSelectionV1>,
+    ) -> crate::ironwood_payment::state_rows::PyIronwoodStateSchema {
+        use iroha_core::state::WorldReadOnly;
+        if let Some(chosen) = chosen {
+            // Genesis emits V1 outputs. Stage the existing application composition under
+            // LtHash, then drive both certified transitions before any keyed State read.
+            chain.select_runtime_for_testing(now, chosen);
+            iroha_core::runtime::keyed_state::activate_for_test(chain);
+        } else {
+            chain.commit(Vec::new());
+        }
+        let view = chain.state().view();
+        let selection = view.world().runtime_selection();
+        let definitions = &iroha_core::runtime::release_catalog().unwrap().definitions;
+        let bundle = norito::encode_canonical(&(
+            selection.clone(),
+            selection
+                .installed_storage
+                .iter()
+                .map(|id| definitions[id].clone())
+                .collect::<Vec<_>>(),
+        ))
+        .unwrap();
+        let digest = iroha_core::runtime::keyed_state::schema_digest(selection).unwrap();
+        assert!(
+            iroha_core_privacy::ironwood_state_rows::IronwoodStateSchemaV1::from_bundle(
+                &bundle, [0xfd; 32]
+            )
+            .is_err()
+        );
+        crate::ironwood_payment::state_rows::PyIronwoodStateSchema(
+            iroha_core_privacy::ironwood_state_rows::IronwoodStateSchemaV1::from_bundle(
+                &bundle, digest,
+            )
+            .unwrap(),
+        )
+    }
+
+    fn certified_payment_rows(
+        chain: &iroha_core::sumeragi::test_chain::CertifiedTestChain,
+        height: u64,
+        checkpoint: &iroha_data_model::sumeragi_finality::SumeragiFinalityCheckpoint,
+        schema: &crate::ironwood_payment::state_rows::PyIronwoodStateSchema,
+        payer: &AccountId,
+        budget: &iroha_allocation::AllocationBudget,
+    ) -> (Vec<u8>, Vec<u8>) {
+        use iroha_core::sumeragi::finality::build_proof;
+        use iroha_core_privacy::ironwood_state_rows::{IronwoodPoolContextV1, ironwood_pool_rows};
+        use iroha_data_model::sumeragi_finality::{
+            keyed_state::StateKeyV1, verify_checkpoint_page,
+        };
+        let tip = chain.committed(height);
+        let proofs: Vec<_> = (checkpoint.height()..=height)
+            .map(|h| build_proof(&chain.state().view(), h).unwrap())
+            .collect();
+        let page =
+            verify_checkpoint_page(chain.network_id(), checkpoint, &proofs, 64, 16 << 20).unwrap();
+        let fetch = |rows: Vec<StateKeyV1>| {
+            let keys: Vec<_> = rows.into_iter().map(|row| (row.table, row.key)).collect();
+            chain.state().keyed_state_rows(&tip, &keys, budget).unwrap()
+        };
+        let pool = PrivacyPoolIdV1::new(POOL);
+        let first = fetch(ironwood_pool_rows(pool).unwrap());
+        let context =
+            IronwoodPoolContextV1::verify(page.tip(), &schema.0, pool, &asset(), payer, &first)
+                .unwrap();
+        let second = fetch(context.remaining_rows().unwrap());
+        let (balance, empty) = context.verify_balances(&second).unwrap();
+        assert_eq!(
+            balance.unwrap().0.to_string(),
+            if height == checkpoint.height() {
+                "100"
+            } else {
+                "83"
+            }
+        );
+        if height == checkpoint.height() {
+            assert!(
+                empty.is_none(),
+                "missing reserve requires a certified absence"
+            );
+        } else {
+            assert_eq!(empty.unwrap().0.to_string(), "17");
+        }
+        // The protocol-independent verifier accepts the same frame and independently
+        // chosen row order. Presence, proven absence and a mismatched key remain distinct.
+        Python::attach(|py| {
+            use pyo3::types::PyBytesMethods;
+            let positions = context.remaining_rows().unwrap();
+            let selected: Vec<_> = positions.iter().map(|pos| norito::json!({"table":(pos.table.as_str()), "key_hex":(hex::encode(&pos.key))})).collect();
+            let requested = norito::json::to_json(&selected).unwrap();
+            let wire = norito::encode_canonical(&*second).unwrap();
+            let page_frames: Vec<_> = proofs
+                .iter()
+                .map(|proof| hex::encode(norito::encode_canonical(proof).unwrap()))
+                .collect();
+            let verify = |keys: &[u8]| {
+                crate::state_rows::verify_state_rows_v1_py(
+                    py,
+                    &wire,
+                    keys,
+                    &crate::state_rows::PyStateProofSchema(schema.0.selected().clone()),
+                    &hex::encode(checkpoint.encode_canonical().unwrap()),
+                    page_frames.clone(),
+                    &hex::encode(chain.network_id().as_bytes()),
+                    height,
+                )
+            };
+            let values = verify(requested.as_bytes()).unwrap();
+            assert_eq!(values.len(), second.rows.len());
+            for (actual, row) in values.iter().zip(&second.rows) {
+                assert_eq!(
+                    actual.as_ref().map(|v| v.bind(py).as_bytes()),
+                    row.value.as_deref()
+                );
+            }
+            assert!(verify(br#"[{"table":"world.assets","key_hex":"01"}]"#).is_err());
+        });
+        let mut forged = (*second).clone();
+        forged.rows[0].value = Some(vec![0xff]);
+        assert!(context.verify_balances(&forged).is_err());
+        assert!(context.verify_balances(&first).is_err());
+        assert!(
+            IronwoodPoolContextV1::verify(
+                page.tip(),
+                &schema.0,
+                PrivacyPoolIdV1::new([0x17; 32]),
+                &asset(),
+                payer,
+                &first
+            )
+            .is_err()
+        );
+        (
+            norito::encode_canonical(&*first).unwrap(),
+            norito::encode_canonical(&*second).unwrap(),
+        )
+    }
+
+    struct WarmQuery {
+        plan: crate::ironwood_payment::state_rows::PyIronwoodReadPlan,
+        keys: Vec<(String, Vec<u8>)>,
+    }
+
+    fn warm_read_case(
+        chain: &iroha_core::sumeragi::test_chain::CertifiedTestChain,
+        height: u64,
+        original: &WarmQuery,
+        checkpoint: &str,
+        frames: &[String],
+        schema: &crate::ironwood_payment::state_rows::PyIronwoodStateSchema,
+        payer: &AccountId,
+        expected_missing: usize,
+    ) {
+        use crate::ironwood_payment::state_rows::{
+            ironwood_warm_rows_v1_py, verify_ironwood_state_rows_v1_py,
+        };
+        use pyo3::types::PyBytesMethods;
+        let budget = iroha_allocation::AllocationBudget::new(64 << 20);
+        let fetch = |keys: &[(String, Vec<u8>)]| {
+            let proof = chain
+                .state()
+                .keyed_state_rows(&chain.committed(height), keys, &budget)
+                .unwrap();
+            norito::encode_canonical(&*proof).unwrap()
+        };
+        let bulk = fetch(&original.keys);
+        Python::attach(|py| {
+            let network = hex::encode(chain.network_id().as_bytes());
+            let discriminant = iroha_data_model::account::address::chain_discriminant();
+            let page = crate::ironwood_payment::state_rows::PyFinalityPage::new(
+                py,
+                checkpoint,
+                frames.to_vec(),
+                &network,
+                height,
+            )
+            .unwrap();
+            let open = |supplement: Option<&[u8]>| {
+                ironwood_warm_rows_v1_py(
+                    py,
+                    &original.plan,
+                    &bulk,
+                    supplement,
+                    &page,
+                    &network,
+                    discriminant,
+                    &hex::encode(POOL),
+                    &asset().to_string(),
+                    &payer.to_string(),
+                    schema,
+                )
+            };
+            let (_, missing, mut pool, mut second) = open(None).unwrap();
+            let rows: Value = norito::json::from_str(&missing).unwrap();
+            let missing = rows["rows"].as_array().unwrap();
+            assert_eq!(missing.len(), expected_missing);
+            if expected_missing == 0 {
+                assert!(second.is_some());
+            } else {
+                assert!(second.is_none());
+                assert_eq!(missing[0]["table"].as_str(), Some("world.privacy_roots"));
+                let keys: Vec<_> = missing
+                    .iter()
+                    .map(|row| {
+                        (
+                            row["table"].as_str().unwrap().to_owned(),
+                            hex::decode(row["key_hex"].as_str().unwrap()).unwrap(),
+                        )
+                    })
+                    .collect();
+                assert!(
+                    open(Some(&bulk)).is_err(),
+                    "supplement must prove exactly the missing selector"
+                );
+                (_, _, pool, second) = open(Some(&fetch(&keys))).unwrap();
+            }
+            let second = second.unwrap();
+            let context = verify_ironwood_state_rows_v1_py(
+                py,
+                pool.bind(py).as_bytes(),
+                second.bind(py).as_bytes(),
+                checkpoint,
+                frames.to_vec(),
+                &network,
+                discriminant,
+                &hex::encode(POOL),
+                &asset().to_string(),
+                &payer.to_string(),
+                &hex::encode(ironwood_profile_binding_v1().unwrap()),
+                schema,
+            )
+            .unwrap();
+            let context: Value = norito::json::from_str(&context).unwrap();
+            assert_eq!(context["height"].as_u64(), Some(height));
+            assert_eq!(
+                context["payer_balance_decimal"].as_str(),
+                Some(if expected_missing == 0 { "100" } else { "83" })
+            );
+        });
     }
 
     fn payment_effect_case(
@@ -757,6 +1002,9 @@ mod ironwood {
             .build(&payer)],
         );
         iroha_core::runtime::ironwood::install_for_test(&mut world);
+        if selection.is_none() {
+            iroha_core::runtime::keyed_state::install_for_test(&mut world);
+        }
         let mut config = TestChainConfig::new(world, now);
         config.genesis_instructions = vec![
             BootstrapPrivacyIronwoodPoolV1::new(
@@ -772,45 +1020,81 @@ mod ironwood {
             Mint::asset_quantity(100u32, AssetId::new(asset(), payer.clone())).into(),
         ];
         let mut chain = CertifiedTestChain::start(config).unwrap();
-        if let Some(selection) = selection {
-            chain.select_runtime_for_testing(now, selection);
-        }
-        chain.commit(Vec::new());
+        let schema = prepare_payment_context(&mut chain, now, selection);
+        let start = chain.height();
         assert!(
             chain
-                .committed(2)
+                .committed(start)
                 .block()
                 .execution_outputs()
                 .iter()
                 .all(|row| row.trigger_lifecycle().is_some() == selection.is_some())
         );
-        let checkpoint = build_checkpoint(&chain.state().view(), 2).unwrap();
+        let checkpoint = build_checkpoint(&chain.state().view(), start).unwrap();
         let network = *chain.network_id().as_bytes();
         let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
-        let cut = chain
-            .state()
-            .with_native_ironwood_pool_cut_v1(
-                &chain.committed(2),
-                PrivacyPoolIdV1::new(POOL),
-                &payer,
-                &budget,
-                |proof| norito::encode_canonical(&proof).map_err(|e| e.to_string()),
+        let (cut, balance_rows) =
+            certified_payment_rows(&chain, start, &checkpoint, &schema, &payer, &budget);
+        let prepare_frames = vec![hex::encode(
+            norito::encode_canonical(&build_proof(&chain.state().view(), start).unwrap()).unwrap(),
+        )];
+        let checkpoint_hex = hex::encode(checkpoint.encode_canonical().unwrap());
+        let (_, plan) = Python::attach(|py| {
+            let page = crate::ironwood_payment::state_rows::PyFinalityPage::new(
+                py,
+                &checkpoint_hex,
+                prepare_frames.clone(),
+                &hex::encode(network),
+                start,
             )
             .unwrap();
-        let prepare_frames = vec![hex::encode(
-            norito::encode_canonical(&build_proof(&chain.state().view(), 2).unwrap()).unwrap(),
-        )];
+            crate::ironwood_payment::state_rows::ironwood_balance_rows_request_v1_py(
+                py,
+                &cut,
+                &page,
+                &hex::encode(network),
+                iroha_data_model::account::address::chain_discriminant(),
+                &hex::encode(POOL),
+                &asset().to_string(),
+                &payer.to_string(),
+                &schema,
+            )
+        })
+        .unwrap();
+        let mut keys = Vec::new();
+        for wire in [&cut, &balance_rows] {
+            let frame: iroha_data_model::sumeragi_finality::KeyedStateRowsV1 =
+                norito::decode_canonical(wire).unwrap();
+            keys.extend(
+                frame
+                    .rows
+                    .into_iter()
+                    .map(|row| (row.position.table, row.position.key)),
+            );
+        }
+        keys.sort();
+        let warm = WarmQuery { plan, keys };
+        warm_read_case(
+            &chain,
+            start,
+            &warm,
+            &checkpoint_hex,
+            &prepare_frames,
+            &schema,
+            &payer,
+            0,
+        );
         // The fixture supplies unrelated submitted work for an otherwise empty commit.
         chain.commit(Vec::new());
         let mut action = public_action(POOL);
         action
             .as_object_mut()
             .unwrap()
-            .insert("expiry_height".into(), Value::from(34u64));
+            .insert("expiry_height".into(), Value::from(start + 32));
         let paid = execute(&action, network, false);
         let original = iroha_version::codec::EncodeVersioned::encode_versioned(&paid);
         assert_eq!(chain.commit(vec![paid.clone()]), vec![true]);
-        let retained = (2..=4)
+        let retained = (start..=start + 2)
             .map(|h| {
                 hex::encode(
                     norito::encode_canonical(&build_proof(&chain.state().view(), h).unwrap())
@@ -818,14 +1102,25 @@ mod ironwood {
                 )
             })
             .collect::<Vec<_>>();
+        warm_read_case(
+            &chain,
+            start + 2,
+            &warm,
+            &checkpoint_hex,
+            &retained,
+            &schema,
+            &payer,
+            1,
+        );
         chain.commit(Vec::new());
         chain.commit(Vec::new());
-        assert_eq!(chain.height(), 6);
+        assert_eq!(chain.height(), start + 4);
         let verify = |original: &[u8], frames: Vec<String>, amount: &str| {
             Python::attach(|py| {
-                crate::ironwood_pool_cut::verify_ironwood_payment_effect_v1_py(
+                crate::ironwood_payment::state_rows::verify_ironwood_payment_effect_from_rows_v1_py(
                     py,
                     &cut,
+                    &balance_rows,
                     &hex::encode(checkpoint.encode_canonical().unwrap()),
                     prepare_frames.clone(),
                     frames,
@@ -836,18 +1131,19 @@ mod ironwood {
                     &asset().to_string(),
                     &payer.to_string(),
                     &hex::encode(ironwood_profile_binding_v1().unwrap()),
+                    &schema,
                     amount,
                 )
             })
         };
         // The barrier holds the main GIL until the actual exported verifier detaches;
         // only Python work completed before that call returns counts as progress.
-        let effect_json = crate::ironwood_pool_cut::tests::assert_python_thread_progress(|| {
+        let effect_json = crate::ironwood_payment::tests::assert_python_thread_progress(|| {
             verify(&original, retained.clone(), "17")
         })
         .unwrap();
         let effect: Value = norito::json::from_str(&effect_json).unwrap();
-        assert_eq!(effect["height"].as_u64(), Some(4));
+        assert_eq!(effect["height"].as_u64(), Some(start + 2));
         assert_eq!(effect["payer_debit_decimal"].as_str(), Some("17"));
         assert_eq!(effect["reserve_credit_decimal"].as_str(), Some("17"));
         assert_eq!(
@@ -886,7 +1182,7 @@ mod ironwood {
         let rejected = execute(&unaffordable, network, false);
         let rejected_original = iroha_version::codec::EncodeVersioned::encode_versioned(&rejected);
         assert_eq!(chain.commit(vec![rejected]), vec![false]);
-        let rejected_frames = (2..=7)
+        let rejected_frames = (start..=start + 5)
             .map(|h| {
                 hex::encode(
                     norito::encode_canonical(&build_proof(&chain.state().view(), h).unwrap())
@@ -942,6 +1238,9 @@ mod ironwood {
             .build(&payer)],
         );
         iroha_core::runtime::ironwood::install_for_test(&mut world);
+        if selection.is_none() {
+            iroha_core::runtime::keyed_state::install_for_test(&mut world);
+        }
         let mut config = TestChainConfig::new(world, now);
         config.genesis_instructions = vec![
             BootstrapPrivacyIronwoodPoolV1::new(
@@ -957,19 +1256,17 @@ mod ironwood {
             Mint::asset_quantity(100u32, AssetId::new(asset(), payer.clone())).into(),
         ];
         let mut chain = CertifiedTestChain::start(config).unwrap();
-        if let Some(selection) = selection {
-            chain.select_runtime_for_testing(now, selection);
-        }
-        chain.commit(Vec::new());
+        let schema = prepare_payment_context(&mut chain, now, selection);
+        let start = chain.height();
         assert!(
             chain
-                .committed(2)
+                .committed(start)
                 .block()
                 .execution_outputs()
                 .iter()
                 .all(|row| row.trigger_lifecycle().is_some() == selection.is_some())
         );
-        let checkpoint = build_checkpoint(&chain.state().view(), 2).unwrap();
+        let checkpoint = build_checkpoint(&chain.state().view(), start).unwrap();
         let network = *chain.network_id().as_bytes();
         let paid = execute(&public_action(POOL), network, false);
         let paid_statement = statement(&paid);
@@ -995,17 +1292,9 @@ mod ironwood {
             );
         }
         let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
-        let cut = chain
-            .state()
-            .with_native_ironwood_pool_cut_v1(
-                &chain.committed(3),
-                PrivacyPoolIdV1::new(POOL),
-                &payer,
-                &budget,
-                |proof| norito::encode_canonical(&proof).map_err(|e| e.to_string()),
-            )
-            .unwrap();
-        let frames = (2..=3)
+        let (cut, balances) =
+            certified_payment_rows(&chain, start + 1, &checkpoint, &schema, &payer, &budget);
+        let frames = (start..=start + 1)
             .map(|h| {
                 hex::encode(
                     norito::encode_canonical(&build_proof(&chain.state().view(), h).unwrap())
@@ -1015,9 +1304,10 @@ mod ironwood {
             .collect::<Vec<_>>();
         let check_cut = |cut: &[u8]| {
             Python::attach(|py| {
-                crate::ironwood_pool_cut::verify_ironwood_pool_cut_v1_py(
+                crate::ironwood_payment::state_rows::verify_ironwood_state_rows_v1_py(
                     py,
                     cut,
+                    &balances,
                     &hex::encode(checkpoint.encode_canonical().unwrap()),
                     frames.clone(),
                     &hex::encode(network),
@@ -1026,21 +1316,22 @@ mod ironwood {
                     &asset().to_string(),
                     &payer.to_string(),
                     &hex::encode(ironwood_profile_binding_v1().unwrap()),
+                    &schema,
                 )
             })
         };
         let verified_json =
-            crate::ironwood_pool_cut::tests::assert_python_thread_progress(|| check_cut(&cut))
+            crate::ironwood_payment::tests::assert_python_thread_progress(|| check_cut(&cut))
                 .unwrap();
         let verified: Value = norito::json::from_str(&verified_json).unwrap();
-        assert_eq!(verified["height"].as_u64(), Some(3));
+        assert_eq!(verified["height"].as_u64(), Some(start + 1));
         assert_eq!(verified["payer_balance_decimal"].as_str(), Some("83"));
         assert_eq!(verified["reserve_balance_decimal"].as_str(), Some("17"));
         assert_eq!(verified["anchor_epoch"].as_u64(), Some(2));
         let authenticated_page = iroha_data_model::sumeragi_finality::verify_checkpoint_page(
             chain.network_id(),
             &checkpoint,
-            &(2..=3)
+            &(start..=start + 1)
                 .map(|h| build_proof(&chain.state().view(), h).unwrap())
                 .collect::<Vec<_>>(),
             64,
@@ -1086,10 +1377,11 @@ mod ironwood {
             ),
         ] {
             assert!(
-                Python::attach(
-                    |py| crate::ironwood_pool_cut::verify_ironwood_pool_cut_v1_py(
+                Python::attach(|py| {
+                    crate::ironwood_payment::state_rows::verify_ironwood_state_rows_v1_py(
                         py,
                         &cut,
+                        &balances,
                         &hex::encode(checkpoint.encode_canonical().unwrap()),
                         selected_frames,
                         &hex::encode(network),
@@ -1097,22 +1389,23 @@ mod ironwood {
                         &pool,
                         &asset().to_string(),
                         &selected_payer,
-                        &profile
+                        &profile,
+                        &schema,
                     )
-                )
+                })
                 .is_err()
             );
         }
 
-        let mut forged: iroha_core_privacy::ironwood_pool_cut::IronwoodPoolCutProofV1 =
+        let mut forged: iroha_data_model::sumeragi_finality::KeyedStateRowsV1 =
             norito::decode_canonical(&cut).unwrap();
-        forged.payer_balance = None;
+        forged.rows[0].value = None;
         assert!(check_cut(&norito::encode_canonical(&forged).unwrap()).is_err());
         assert_eq!(budget.reserved_bytes(), 0);
         let directory = TempDir::new().unwrap();
         let key_path = credential_file(&directory, "merchant-key", &MERCHANT_KEY);
         let expected = norito::json!({"transaction_hash_hex": transaction, "direct_instruction_index": 0u32, "action_index": 0u32, "recipient_hex": (hex::encode(wallet::recipient_address_v1(MERCHANT_KEY, false, 0).unwrap())), "amount_decimal": "17", "memo_hex": (hex::encode(MEMO))});
-        let mut request = norito::json!({"network_id_hex": (hex::encode(network)), "chain_id": (checkpoint.chain_id()), "checkpoint_hex": (hex::encode(checkpoint.encode_canonical().unwrap())), "proofs_hex": ((2..=3).map(|h| hex::encode(norito::to_bytes(&build_proof(&chain.state().view(), h).unwrap()).unwrap())).collect::<Vec<_>>()), "asset_definition_id": (asset().to_string()), "pool_id_hex": (hex::encode(POOL)), "compiled_profile_digest_hex": (hex::encode(ironwood_profile_binding_v1().unwrap())), "internal_scope": false, "expected_receipt": expected});
+        let mut request = norito::json!({"network_id_hex": (hex::encode(network)), "chain_id": (checkpoint.chain_id()), "checkpoint_hex": (hex::encode(checkpoint.encode_canonical().unwrap())), "proofs_hex": ((start..=start+1).map(|h| hex::encode(norito::to_bytes(&build_proof(&chain.state().view(), h).unwrap()).unwrap())).collect::<Vec<_>>()), "asset_definition_id": (asset().to_string()), "pool_id_hex": (hex::encode(POOL)), "compiled_profile_digest_hex": (hex::encode(ironwood_profile_binding_v1().unwrap())), "internal_scope": false, "expected_receipt": expected});
         let mut payload = Vec::new();
         put_text(&mut payload, key_path.to_str().unwrap());
         put_bytes_u32(&mut payload, &json(&request)).unwrap();
@@ -1162,7 +1455,7 @@ mod ironwood {
             receipt["receipts"][0]["receipt_identity"]
         );
         assert_eq!(receipt["receipts"].as_array().unwrap().len(), 1);
-        assert_eq!(receipt["receipts"][0]["height"].as_u64(), Some(3));
+        assert_eq!(receipt["receipts"][0]["height"].as_u64(), Some(start + 1));
         assert_eq!(
             receipt["receipts"][0]["amount_decimal"].as_str(),
             Some("17")
@@ -1262,7 +1555,7 @@ mod ironwood {
         .unwrap();
         assert_eq!(discovered["receipts"], receipt["receipts"]);
         let mut tampered = request.clone();
-        let mut bad_proof = build_proof(&chain.state().view(), 3).unwrap();
+        let mut bad_proof = build_proof(&chain.state().view(), start + 1).unwrap();
         let last = bad_proof.block_wire.len() - 1;
         bad_proof.block_wire[last] ^= 1;
         tampered
@@ -1280,7 +1573,7 @@ mod ironwood {
         request.as_object_mut().unwrap().insert(
             "proofs_hex".into(),
             Value::Array(
-                (2..=4)
+                (start..=start + 2)
                     .map(|h| {
                         Value::String(hex::encode(
                             norito::to_bytes(&build_proof(&chain.state().view(), h).unwrap())
@@ -1301,7 +1594,7 @@ mod ironwood {
         next_page.as_object_mut().unwrap().insert(
             "proofs_hex".into(),
             Value::Array(
-                (3..=4)
+                (start + 1..=start + 2)
                     .map(|h| {
                         Value::String(hex::encode(
                             norito::to_bytes(&build_proof(&chain.state().view(), h).unwrap())

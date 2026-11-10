@@ -620,7 +620,7 @@ named_route_policy_test!(
                 runtime_governance::RUNTIME_ABI_ACTIVE,
                 runtime_governance::RUNTIME_METRICS,
                 runtime_governance::PRIVACY_CAPABILITIES,
-                runtime_governance::PRIVACY_IRONWOOD_POOL_CUT,
+                crate::route_catalog::core::LEDGER_STATE_ROWS_POST,
                 runtime_governance::NODE_PROJECTION_CHECKPOINT,
                 runtime_governance::MINISTRY_AGENDA_DRAFT,
                 runtime_governance::MINISTRY_AGENDA_GET,

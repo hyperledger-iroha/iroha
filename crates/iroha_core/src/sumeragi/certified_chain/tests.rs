@@ -783,7 +783,8 @@ fn pinned_genesis_result_is_unsigned_until_a_real_successor_authenticates_it() {
     let genesis = frame(&chain, 1);
     let certificate = genesis.commit_certificate().unwrap();
     let (original_x, mut result) = fixture_result_parts(certificate.result_preimage());
-    result.execution.world_state_root = Hash::new(b"unsigned pinned genesis execution replacement");
+    result.execution.world_state_root =
+        Hash::new(b"unsigned pinned genesis execution replacement").into();
     let changed = crate::block::reserve_block_for_tests().initialize(
         genesis.as_ref().clone().with_commit_certificate(Some(
             CommitCertificate::from_untrusted_parts(

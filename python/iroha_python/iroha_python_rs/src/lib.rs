@@ -12,7 +12,7 @@ mod contract_arguments;
 mod crypto_admission_tests;
 mod identity_codec_v1;
 mod ironwood_inspection;
-mod ironwood_pool_cut;
+mod ironwood_payment;
 mod privacy_capability_manifest;
 pub mod privacy_native_actions;
 pub mod privacy_wallet_bundle;
@@ -22,6 +22,7 @@ mod public_finality_checkpoint;
 mod scheduled_contract_trigger;
 mod scheduled_execution_verification;
 mod sorafs_orderbook_submission;
+mod state_rows;
 mod transaction_details;
 mod zk_vk_draft;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -15649,16 +15650,36 @@ fn canonical_genesis_header_hash_v1_py(
 #[pymodule]
 fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     ironwood_inspection::register(module)?;
+    module.add_class::<state_rows::PyStateProofSchema>()?;
     module.add_function(wrap_pyfunction!(
-        ironwood_pool_cut::verify_ironwood_pool_cut_v1_py,
+        state_rows::verify_state_rows_v1_py,
+        module
+    )?)?;
+    module.add_class::<ironwood_payment::state_rows::PyIronwoodStateSchema>()?;
+    module.add_class::<ironwood_payment::state_rows::PyIronwoodReadPlan>()?;
+    module.add_class::<ironwood_payment::state_rows::PyFinalityPage>()?;
+    module.add_function(wrap_pyfunction!(
+        ironwood_payment::state_rows::ironwood_warm_rows_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        ironwood_pool_cut::verify_ironwood_payment_effect_v1_py,
+        ironwood_payment::state_rows::verify_ironwood_state_rows_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        ironwood_pool_cut::ironwood_pool_bootstrap_instruction_json_v1_py,
+        ironwood_payment::state_rows::verify_ironwood_payment_effect_from_rows_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        ironwood_payment::state_rows::ironwood_pool_rows_request_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        ironwood_payment::state_rows::ironwood_balance_rows_request_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        ironwood_payment::ironwood_pool_bootstrap_instruction_json_v1_py,
         module
     )?)?;
     public_finality_checkpoint::register(module)?;

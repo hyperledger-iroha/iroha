@@ -566,12 +566,12 @@ impl NativeFinalityFixture {
     pub fn certify_with_world_root(
         &mut self,
         block: SignedBlock,
-        world_root: Hash,
+        world_root: impl Into<super::KeyedStateRoot>,
     ) -> SumeragiFinalityProof {
         let parent = self.verifier.verify_retained_decision(&self.tip).unwrap();
         let mut result = Self::result(&block, &self.epoch);
         result.execution.parent_world_state_root = parent.execution().world_state_root;
-        result.execution.world_state_root = world_root;
+        result.execution.world_state_root = world_root.into();
         result.validate().unwrap();
         self.certify_result(block, &result)
     }
@@ -719,8 +719,8 @@ impl NativeFinalityFixture {
                 parent_state_root: Hash::new(b"fixture parent"),
                 post_state_root: ordinary_root,
                 ordinary_writes_root: ordinary_root,
-                parent_world_state_root: Hash::new(b"fixture parent world"),
-                world_state_root: Hash::new(b"fixture world"),
+                parent_world_state_root: Hash::new(b"fixture parent world").into(),
+                world_state_root: Hash::new(b"fixture world").into(),
                 event_commitment: None,
                 executed_block_wire_len: len,
                 executed_block_wire_hash: hash,

@@ -781,7 +781,6 @@ mod tests {
             privacy_routes,
             vec![
                 &runtime_governance::PRIVACY_CAPABILITIES,
-                &runtime_governance::PRIVACY_IRONWOOD_POOL_CUT,
                 &runtime_governance::PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE,
                 &runtime_governance::PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE,
             ]

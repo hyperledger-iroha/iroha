@@ -487,7 +487,7 @@ impl IsolatedNativeReplay {
                 ));
             }
         }
-        self.prepared.state.verify_world_state_accumulator()?;
+        self.prepared.state.verify_replayed_state_commitment()?;
         if Instant::now() >= deadline {
             return Err(IsolatedReplayError::Deadline);
         }

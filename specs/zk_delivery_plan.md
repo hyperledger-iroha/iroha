@@ -867,6 +867,35 @@ Deliverable: Choose and freeze the tree/hash and semantic root schema from G.2; 
 
 Acceptance: Final measurements use the frozen selection. Differential dual-root calculation is test-only; no retained LtHash/old-root compatibility branch. Cover crash/publication boundaries, genesis replay, mutation of every table and randomized four-validator root agreement.
 
+G.2 measured the earlier 215-table, 58-cell registry descriptor
+(`6e9f994ca2abab729b501c98b8531aa2d9313724214862661272c5abd04816b8`).
+The registry now contains 278 canonical fields. The candidate checker detects this
+drift. Historical prototype timings and circuit projections therefore do not qualify
+the current schema.
+
+The governed native profile now identifies the ordered binary radix tree and its raw
+BLAKE3-256 digest. Native execution and publication issue different versions of that
+same tree when deterministic tail writes change State. Strict restart replays original
+frames and cold-checks the terminal published State against the replayed version;
+the original native result authenticates the execution version. The K1–K12 contract
+suite exercises the selected construction, including complete ranges. Crash-boundary
+qualification, per-table mutations, four-validator agreement, F.4 configuration
+closure and checkpoint-floor retirement remain open.
+
+`cargo bench -p iroha_data_model --bench keyed_state` measures the commitment
+primitive using identical 32-byte keys and values and nine-run medians. In an optimized
+local run at 16,384 rows, LtHash and the keyed profile took 31.2 ms and 14.1 ms for
+cold construction, 7.12 µs and 4.68 µs for a single update, and 5.33 µs and 3.75 µs
+for a deletion. A five-key read took 49.1 ms to build, check and encode the complete
+World snapshot and 75.8 µs to produce and encode the five openings. The encoded
+snapshot was 1,441,876 bytes before adding the target originals. The five individually
+encoded witnesses plus raw keys, table names and values used 7,218 bytes, excluding
+the HTTP envelope. Checking decoded evidence took 34.4 ms for the complete root and
+13.3 µs for the five keyed statements. The keyed tree retained 7,814,968 charged
+bytes beside the original State. The baseline accumulator has 2 KiB of lanes plus
+its metadata. These measurements exclude State row acquisition, consensus, Torii
+admission, transport and finality verification.
+
 ### G.4 Carried historical witnesses and committed bounds
 
 Deliverable: Use committed root history, anchor ages and witness/work caps; validate carried witnesses and result openings solely against transaction bytes and current replicated State.

@@ -212,11 +212,35 @@ impl PreparedTransactionsBlock<'_> {
         max_row_visits: usize,
     ) -> Result<TransactionMembershipPublicationDelta<'_>, TransactionMembershipAuthorityError>
     {
-        let surface = self.publication_surface();
+        self.membership_transition().admit_delta(
+            self.publication_surface(),
+            expected,
+            max_row_visits,
+        )
+    }
+
+    /// Admit both successor streams once before encoding or constructing any nodes.
+    pub(in crate::state) fn membership_publication_authority_cut(
+        &self,
+        max_row_visits: usize,
+    ) -> Result<TransactionMembershipPublicationCut<'_>, TransactionMembershipAuthorityError> {
+        self.membership_transition().admit_complete(max_row_visits)
+    }
+}
+
+impl<'a> TransactionsMembershipTransition<'a> {
+    /// Admit a paired delta from this exact immutable transition and original staged allocation.
+    pub(in crate::state) fn admit_delta(
+        self,
+        surface: TransactionsPublicationSurface,
+        expected: &TransactionsPublicationSurface,
+        max_row_visits: usize,
+    ) -> Result<TransactionMembershipPublicationDelta<'a>, TransactionMembershipAuthorityError>
+    {
         if &surface != expected && !cfg!(all(test, sumeragi_core_mutation = "HC451")) {
             return Err(TransactionMembershipAuthorityError::ChangedPublicationBase);
         }
-        let transition = self.membership_transition();
+        let transition = self;
         let height = |value: usize| {
             u64::try_from(value).map_err(|_| TransactionMembershipAuthorityError::HeightOverflow)
         };
@@ -242,12 +266,12 @@ impl PreparedTransactionsBlock<'_> {
         })
     }
 
-    /// Admit both successor streams once before encoding or constructing any nodes.
-    pub(in crate::state) fn membership_publication_authority_cut(
-        &self,
+    /// Admit the complete logical maps of this staged membership.
+    pub(in crate::state) fn admit_complete(
+        self,
         max_row_visits: usize,
-    ) -> Result<TransactionMembershipPublicationCut<'_>, TransactionMembershipAuthorityError> {
-        let transition = self.membership_transition();
+    ) -> Result<TransactionMembershipPublicationCut<'a>, TransactionMembershipAuthorityError> {
+        let transition = self;
         let frontier_height = u64::try_from(transition.staged_height().get())
             .map_err(|_| TransactionMembershipAuthorityError::HeightOverflow)?;
         let row_visits = transition

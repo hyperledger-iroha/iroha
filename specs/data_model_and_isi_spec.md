@@ -184,11 +184,17 @@ Types: `Grant<O, D>` and `Revoke<O, D>`, with boxed enums for `Permission`/`Role
 `CanReadCertifiedOriginals` has the exact unit (`null`) payload. Only an existing
 `CanReadAllLedgerData` holder may grant or revoke it; a recipient cannot delegate
 it directly or through a role. It authorizes only the signed native
-resource-name, fixed-family authority-original and Ironwood pool-cut endpoints.
-Those endpoints recheck the current permission before source capture and before
-egress. A pool-cut reader may name any payer. It grants
+resource-name and fixed-family authority-original endpoints. Those endpoints
+recheck the current permission before source capture and before egress. It grants
 no generic private query, full-block carrier, event-stream, SoraFS publication,
 or write authority. `CanReadAllLedgerData` remains genesis-only and nondelegable.
+
+The governed keyed State profile introduces `CanReadStateRow`. Its exact
+payload is a registry `table` and a lowercase `key_hex` containing bare
+Norito key bytes. A current all-ledger reader may issue or revoke a direct
+account grant. This grant authorizes reading that key's value or absence
+on the signed Global State row proof route; it grants no other row or write
+authority. Activation rejects pre-existing direct grants carrying that name.
 
 - Grant Permission to Account: adds `Permission` unless already inherent. Events: `AccountEvent::PermissionAdded`. Errors: `Repetition(Grant, Permission)` if duplicate. Code: `core/.../isi/account.rs`.
 - Revoke Permission from Account: removes if present. Events: `AccountEvent::PermissionRemoved`. Errors: `FindError::Permission` if absent. Code: `core/.../isi/account.rs`.

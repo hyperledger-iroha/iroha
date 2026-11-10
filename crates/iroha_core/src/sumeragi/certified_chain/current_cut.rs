@@ -59,7 +59,7 @@ pub struct CurrentCertifiedCut {
     block_time_ms: u64,
     root_scope: SumeragiRootScope,
     network: NetworkId,
-    world_state_root: Hash,
+    world_state_root: iroha_data_model::sumeragi_finality::KeyedStateRoot,
 }
 impl CurrentCertifiedCut {
     fn from_committed(original: &CommittedBlock) -> Option<Self> {
@@ -109,7 +109,7 @@ impl CurrentCertifiedCut {
         self.network
     }
     /// Complete original certified World state root.
-    pub const fn world_state_root(&self) -> Hash {
+    pub const fn world_state_root(&self) -> iroha_data_model::sumeragi_finality::KeyedStateRoot {
         self.world_state_root
     }
 }

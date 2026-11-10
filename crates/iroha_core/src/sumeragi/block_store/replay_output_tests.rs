@@ -341,8 +341,8 @@ fn stale_cache_and_malformed_joins_fail_on_both_comparison_sides() {
         // the stored-frame consumer above and the replayed-result commitment producer.
         let replayed = corrupted.with_commit_certificate(None);
         let transition = crate::sumeragi::commitment::WorldStateTransition {
-            parent_world_state_root: Hash::new(b"structural replay parent World"),
-            world_state_root: Hash::new(b"structural replay World"),
+            parent_world_state_root: Hash::new(b"structural replay parent World").into(),
+            world_state_root: Hash::new(b"structural replay World").into(),
             event_commitment: None,
         };
         let error = crate::sumeragi::commitment::execution_commitment(

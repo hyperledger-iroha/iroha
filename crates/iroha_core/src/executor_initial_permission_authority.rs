@@ -940,6 +940,11 @@ fn initial_permission_delegation_allowed(
     authority: &AccountId,
     permission: &Permission,
 ) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+    if permission.name() == "CanReadStateRow"
+        && crate::runtime::keyed_state::selected(state_transaction.world.runtime_selection())
+    {
+        return Ok(authority_has_permission(&state_transaction.world, authority, &executor_permission::query::CanReadAllLedgerData.into())?);
+    }
     if initial_permission_is_genesis_only(permission) {
         return Ok(false);
     }

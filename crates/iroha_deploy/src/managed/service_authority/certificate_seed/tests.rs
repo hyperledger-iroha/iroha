@@ -479,7 +479,8 @@ fn alternate_certificate(
         .unwrap();
     let (finality_header, mut commitment) = original_result.into_parts();
     if conflicting_result {
-        commitment.execution.world_state_root = Hash::new(b"conflicting native certificate claim");
+        commitment.execution.world_state_root =
+            Hash::new(b"conflicting native certificate claim").into();
         assert_ne!(
             commitment.execution.world_state_root,
             verified.execution().world_state_root

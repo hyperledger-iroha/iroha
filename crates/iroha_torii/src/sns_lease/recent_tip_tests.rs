@@ -81,7 +81,7 @@ fn lease_current_tip_uses_three_frames_at_increasing_heights_and_keeps_complete_
             proof.world.schema_hash,
             CoreState::native_world_schema_hash_v1().unwrap()
         );
-        assert_eq!(proof.world.root().unwrap(), tip.world_state_root());
+        assert_eq!(tip.world_state_root(), proof.world.root().unwrap());
         drop(body);
         assert_eq!(budget.reserved_bytes(), 0);
     }
@@ -247,7 +247,7 @@ fn lease_default_finality_allowance_handles_consecutive_maximum_payments_and_rel
         proof.world.schema_hash,
         CoreState::native_world_schema_hash_v1().unwrap()
     );
-    assert_eq!(proof.world.root().unwrap(), expected_root);
+    assert_eq!(expected_root, proof.world.root().unwrap());
     let last = body.slice(..1);
     drop(body);
     assert_eq!(pool.available_bytes(), 0);

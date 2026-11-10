@@ -56,6 +56,16 @@ pub(super) struct OtherDomains {
 pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     OtherDomains {
         usage: Use::Record,
+        reason: "Immutable identity and closure of the selected commitment profile and its adoption kernel",
+        literals: &[
+            r"iroha keyed State adoption kernel v1",
+            r"iroha keyed State commitment profile v1",
+            r"iroha.kernel.adopt-keyed-state.v1",
+            r"iroha.keyed-state.radix-blake3.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Record,
         reason: "Committed rollout identity over original signed genesis, selected runtime and governed activation change set/height; not a State root or certificate",
         literals: &[r"iroha:governed:lifecycle-activation:v1\0"],
     },
@@ -747,10 +757,9 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Name,
-        reason: "Schema descriptor domain of the specified keyed State commitment (sumeragi.md section 16.1) and the root domain of its test-only reference oracle; no root is built from them before G.3",
+        reason: "Root domain of the keyed State contract's test-only reference oracle",
         literals: &[
             r"iroha:state-keyed-commitment:reference-oracle:root:v1\0",
-            r"iroha:state-keyed-commitment:schema:v1\0",
         ],
     },
     OtherDomains {

@@ -446,6 +446,20 @@ impl<'storage> TransactionsBlockField<'storage> {
         self.slot.try_prepare()
     }
 
+    /// Borrow a live, unprepared membership journal while the execution seal owns the block.
+    pub(in crate::state) fn executing_membership_writer(
+        &self,
+    ) -> Option<&TransactionsBlock<'storage>> {
+        match &self.slot.phase {
+            MembershipCapturePhase::Attached(block)
+                if !self.slot.released && !self.slot.attempted =>
+            {
+                Some(block)
+            }
+            _ => None,
+        }
+    }
+
     /// Borrow the existing logically admitted writer without reopening committed storage.
     /// Detached captures become readable only after the original publication slot reacquires
     /// and fully prepares that same source; released or terminal phases never grant a cut.

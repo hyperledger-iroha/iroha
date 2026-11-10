@@ -29,8 +29,6 @@ mod game_partitions;
 mod history_producer;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
-#[cfg(feature = "app_api")]
-mod ironwood_pool_cut;
 mod iso_profile;
 #[cfg(feature = "app_api")]
 mod kagemusha_enrollment;
@@ -39,6 +37,8 @@ mod kagemusha_wallet;
 #[cfg(feature = "app_api")]
 mod kagemusha_wallet_finality;
 mod ledger_state_finality;
+#[cfg(feature = "app_api")]
+mod ledger_state_rows;
 #[cfg(feature = "app_api")]
 mod multisig_approval_landings;
 mod multisig_execution_evidence;
@@ -38002,6 +38002,11 @@ impl Torii {
     fn add_core_info_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
         let app_state = builder.state().clone();
+        #[cfg(feature = "app_api")]
+        mount_catalog_route_rows!(
+            builder, core;
+            LEDGER_STATE_ROWS_POST => limited_canonical_signature_post(ledger_state_rows::handler, ledger_state_rows::MAX_REQUEST_BYTES);
+        );
         mount_catalog_route_rows!(
             builder, core;
             CONFIGURATION_GET => operator_get(handler_get_configuration, app_state);
@@ -39324,7 +39329,6 @@ impl Torii {
             RUNTIME_METRICS => canonical_account_get(handler_runtime_metrics, app_state, 0);
             NODE_CAPABILITIES => public_get(handler_node_capabilities);
             PRIVACY_CAPABILITIES => canonical_account_get(handler_privacy_capabilities, app_state, 0);
-            PRIVACY_IRONWOOD_POOL_CUT => limited_canonical_signature_post(ironwood_pool_cut::handler, 4096);
             // Complete canonical finality frames preserve original signed work and execution
             // results. Merchants scan locally; these routes never accept viewing/spending keys.
             PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE => limited_protocol_handshake_post(handler_post_bootle_lantern_issuance_authorize, 1);

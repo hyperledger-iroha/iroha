@@ -1578,6 +1578,21 @@ pub mod core {
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
+    /// Read exact original values or absence witnesses under the current certified keyed State.
+    pub const LEDGER_STATE_ROWS_POST: RouteDescriptor = RouteDescriptor::new(
+        "ledger.state_rows",
+        HttpMethod::Post,
+        "/v1/ledger/state-proof/{height}",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::AuthenticatedAccount,
+    )
+    .with_feature_gate(FeatureGate::Feature("app_api"))
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_private_no_store()
+    .with_cors_options(true);
     /// Read this validator's consensus-relevant lifecycle activation policy.
     pub const TRIGGER_LIFECYCLE_ACTIVATION: RouteDescriptor = RouteDescriptor::new(
         "trigger.lifecycle_activation",
@@ -1864,6 +1879,7 @@ pub mod core {
         LEDGER_HEADERS,
         LEDGER_STATE_ROOT,
         LEDGER_STATE_PROOF,
+        LEDGER_STATE_ROWS_POST,
         TRIGGER_LIFECYCLE_WITNESS,
         TRIGGER_LIFECYCLE_ACTIVATION,
         LEDGER_EXECUTED_BLOCK_WIRE,
@@ -2927,12 +2943,6 @@ pub mod runtime_governance {
     /// Read the authoritative committed privacy capability snapshot.
     pub const PRIVACY_CAPABILITIES: RouteDescriptor =
         signed_get("privacy.capabilities", "/v1/privacy/capabilities");
-    /// Certified pool anchor and balances; complete World disclosure requires certified-original or all-ledger read authority.
-    pub const PRIVACY_IRONWOOD_POOL_CUT: RouteDescriptor = app_signed_post(
-        "privacy.ironwood.pool_cut",
-        "/v1/privacy/ironwood/pool-cut/{height}",
-    )
-    .with_private_no_store();
     /// Mint one canonical Bootle/Lantern blind-issuance authorization.
     pub const PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE: RouteDescriptor = public_post(
         "privacy.bootle_lantern.issuance.authorize",
@@ -3198,7 +3208,6 @@ pub mod runtime_governance {
         RUNTIME_METRICS,
         NODE_CAPABILITIES,
         PRIVACY_CAPABILITIES,
-        PRIVACY_IRONWOOD_POOL_CUT,
         PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE,
         PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE,
         NODE_PROJECTION_CHECKPOINT,

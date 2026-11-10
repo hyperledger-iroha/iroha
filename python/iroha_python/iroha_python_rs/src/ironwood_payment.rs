@@ -1,127 +1,30 @@
-//! Native verification of the certified pool cut used to fund an Ironwood registry payment.
+//! Finality, certified State context and original transaction verification for Ironwood payments.
 use crate::privacy_native_actions::network_id_from_genesis_hash_bytes;
 use crate::*;
-use iroha_core_privacy::{
-    ironwood_pool_cut::IronwoodPoolCutProofV1, privacy_profiles::compiled_privacy_profile_v1,
-};
+use iroha_core_privacy::privacy_profiles::compiled_privacy_profile_v1;
 use iroha_data_model::{
     privacy::{PrivacyPoolIdV1, PrivacyRuntimeProtocolIdV1},
     sumeragi_finality::{
-        SumeragiFinalityCheckpoint, SumeragiFinalityProof, verify_checkpoint_page,
+        SumeragiFinalityCheckpoint, SumeragiFinalityProof, VerifiedFinalityPage,
+        verify_checkpoint_page,
     },
 };
+#[path = "ironwood_state_rows.rs"]
+pub(crate) mod state_rows;
+
 const MAX: usize = 16 * 1024 * 1024;
-fn bytes(text: &str, max: usize) -> Result<Vec<u8>, NativeValidationError> {
-    if text.is_empty()
-        || text.len() > max * 2
-        || text.len() % 2 != 0
-        || !text
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    {
-        return Err(NativeValidationError::Value(
-            "noncanonical or oversized Ironwood cut hex".into(),
-        ));
-    }
-    hex::decode(text).map_err(|_| NativeValidationError::Value("malformed Ironwood cut hex".into()))
-}
-fn fixed(text: &str) -> Result<[u8; 32], NativeValidationError> {
-    bytes(text, 32)?
-        .try_into()
-        .map_err(|_| NativeValidationError::Value("Ironwood cut identity must be 32 bytes".into()))
-}
-/// Verify one exact cut against an independently retained checkpoint and consecutive full frames.
-#[pyfunction]
-#[pyo3(name = "verify_ironwood_pool_cut_v1")]
-pub(super) fn verify_ironwood_pool_cut_v1_py(
-    py: Python<'_>,
-    proof: &[u8],
-    checkpoint_hex: &str,
-    proof_frames_hex: Vec<String>,
-    network_id_hex: &str,
-    #[pyo3(from_py_with = exact_chain_discriminant)] chain_discriminant: u16,
+use crate::state_rows::{bytes, finality_page, fixed, invalid};
+
+fn verified_context_json(
+    page: &VerifiedFinalityPage,
     pool_id_hex: &str,
-    asset_definition_id: &str,
-    payer_account_id: &str,
+    asset: &iroha_data_model::asset::AssetDefinitionId,
+    payer: &AccountId,
     expected_profile_digest_hex: &str,
-) -> PyResult<String> {
-    // PyO3 keeps the immutable bytes/strings alive for this call. Only Rust views
-    // and owned frame strings cross this boundary; errors become Python values
-    // after reattachment. Keep decoding, finality, cut and signature checks detached.
-    py.detach(move || {
-        verify_ironwood_pool_cut_v1(
-            proof,
-            checkpoint_hex,
-            proof_frames_hex,
-            network_id_hex,
-            chain_discriminant,
-            pool_id_hex,
-            asset_definition_id,
-            payer_account_id,
-            expected_profile_digest_hex,
-        )
-    })
-    .map_err(NativeValidationError::into_py)
-}
-fn verify_ironwood_pool_cut_v1(
-    proof: &[u8],
-    checkpoint_hex: &str,
-    proof_frames_hex: Vec<String>,
-    network_id_hex: &str,
-    chain_discriminant: u16,
-    pool_id_hex: &str,
-    asset_definition_id: &str,
-    payer_account_id: &str,
-    expected_profile_digest_hex: &str,
+    state: &iroha_core_privacy::privacy_state::PrivacyOrchardPoolStateV1,
+    payer_balance: &Option<iroha_data_model::asset::AssetValue>,
+    reserve_balance: &Option<iroha_data_model::asset::AssetValue>,
 ) -> Result<String, NativeValidationError> {
-    let invalid = || NativeValidationError::Value("Ironwood pool cut authentication failed".into());
-    if proof.is_empty()
-        || proof.len() > MAX
-        || proof_frames_hex.is_empty()
-        || proof_frames_hex.len() > 64
-    {
-        return Err(invalid());
-    }
-    let network_bytes = fixed(network_id_hex)?;
-    if network_bytes[31] & 1 == 0 {
-        return Err(invalid());
-    }
-    let network = network_id_from_genesis_hash_bytes(network_bytes);
-    let checkpoint = SumeragiFinalityCheckpoint::decode_canonical(&bytes(checkpoint_hex, MAX)?)
-        .map_err(|_| invalid())?;
-    let mut total = 0usize;
-    let mut frames = Vec::new();
-    for frame in &proof_frames_hex {
-        let encoded = bytes(frame, MAX)?;
-        total = total
-            .checked_add(encoded.len())
-            .filter(|n| *n <= MAX)
-            .ok_or_else(invalid)?;
-        frames.push(
-            norito::decode_canonical_for_admission::<SumeragiFinalityProof>(
-                &encoded,
-                norito::canonical_decode_limits(encoded.len()),
-            )
-            .map_err(|_| invalid())?,
-        );
-    }
-    let page =
-        verify_checkpoint_page(network, &checkpoint, &frames, 64, MAX).map_err(|_| invalid())?;
-    page.tip()
-        .verify_global_scope(network, checkpoint.chain_id())
-        .map_err(|_| invalid())?;
-    let cut: IronwoodPoolCutProofV1 =
-        norito::decode_canonical_for_admission(proof, norito::canonical_decode_limits(proof.len()))
-            .map_err(|_| invalid())?;
-    let _guard = ChainDiscriminantGuard::enter(chain_discriminant);
-    let asset: iroha_data_model::asset::AssetDefinitionId =
-        asset_definition_id.parse().map_err(|_| invalid())?;
-    if asset.to_string() != asset_definition_id {
-        return Err(invalid());
-    }
-    let payer =
-        parse_selected_account_id_native(payer_account_id, "payer_account_id", chain_discriminant)?;
-    let pool = PrivacyPoolIdV1::new(fixed(pool_id_hex)?);
     let profile = compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1)
         .map_err(|_| invalid())?;
     let digest = crate::privacy_wallet_worker::compiled_profile_digest(
@@ -138,17 +41,6 @@ fn verify_ironwood_pool_cut_v1(
     if fixed(expected_profile_digest_hex)? != digest {
         return Err(invalid());
     }
-    let schemas = iroha_data_model::sumeragi_finality::native_world_schema_family_v1();
-    let state = cut
-        .verify(
-            network,
-            schemas.as_slice(),
-            pool,
-            &asset,
-            &payer,
-            page.tip(),
-        )
-        .map_err(|_| invalid())?;
     let amount = |value: &Option<iroha_data_model::asset::AssetValue>| {
         value
             .as_ref()
@@ -160,55 +52,13 @@ fn verify_ironwood_pool_cut_v1(
         "pool_id_hex": pool_id_hex, "profile_digest_hex": (hex::encode(digest)), "parameter_id_hex": (hex::encode(profile.parameter_id.as_bytes())),
         "asset_definition_id": (asset.to_string()), "payer_account_id": (payer.to_string()), "reserve_account_id": (state.reserve_account().to_string()),
         "public_balance_scope": "global", "anchor_hex": (hex::encode(state.root().as_bytes())), "anchor_epoch": (state.epoch()),
-        "payer_balance_decimal": (amount(&cut.payer_balance)), "reserve_balance_decimal": (amount(&cut.reserve_balance)),
+        "payer_balance_decimal": (amount(payer_balance)), "reserve_balance_decimal": (amount(reserve_balance)),
         "checkpoint_hex": (hex::encode(page.checkpoint().encode_canonical().map_err(|_| invalid())?)),
     })).map_err(|_| invalid())
 }
 
-/// Authenticate the exact committed public bridge effect using a retained preparation cut.
-/// No live-tip balance subtraction is used: unrelated transactions may change either account.
-#[pyfunction]
-#[pyo3(name = "verify_ironwood_payment_effect_v1")]
-pub(super) fn verify_ironwood_payment_effect_v1_py(
-    py: Python<'_>,
-    proof: &[u8],
-    checkpoint_hex: &str,
-    proof_frames_hex: Vec<String>,
-    payment_proof_frames_hex: Vec<String>,
-    signed_transaction_versioned: &[u8],
-    network_id_hex: &str,
-    #[pyo3(from_py_with = exact_chain_discriminant)] chain_discriminant: u16,
-    pool_id_hex: &str,
-    asset_definition_id: &str,
-    payer_account_id: &str,
-    expected_profile_digest_hex: &str,
-    expected_amount_decimal: &str,
-) -> PyResult<String> {
-    // PyO3 keeps the immutable bytes/strings alive for this call. Only Rust views
-    // and owned frame strings cross this boundary; errors become Python values
-    // after reattachment. Keep decoding, finality, cut and signature checks detached.
-    py.detach(move || {
-        verify_ironwood_payment_effect_v1(
-            proof,
-            checkpoint_hex,
-            proof_frames_hex,
-            payment_proof_frames_hex,
-            signed_transaction_versioned,
-            network_id_hex,
-            chain_discriminant,
-            pool_id_hex,
-            asset_definition_id,
-            payer_account_id,
-            expected_profile_digest_hex,
-            expected_amount_decimal,
-        )
-    })
-    .map_err(NativeValidationError::into_py)
-}
-fn verify_ironwood_payment_effect_v1(
-    proof: &[u8],
-    checkpoint_hex: &str,
-    proof_frames_hex: Vec<String>,
+fn verify_payment_from_context(
+    cut_json: &str,
     payment_proof_frames_hex: Vec<String>,
     signed_transaction_versioned: &[u8],
     network_id_hex: &str,
@@ -221,18 +71,7 @@ fn verify_ironwood_payment_effect_v1(
 ) -> Result<String, NativeValidationError> {
     let invalid =
         || NativeValidationError::Value("Ironwood payment effect authentication failed".into());
-    let cut_json = verify_ironwood_pool_cut_v1(
-        proof,
-        checkpoint_hex,
-        proof_frames_hex,
-        network_id_hex,
-        chain_discriminant,
-        pool_id_hex,
-        asset_definition_id,
-        payer_account_id,
-        expected_profile_digest_hex,
-    )?;
-    let cut: norito::json::Value = norito::json::from_str(&cut_json).map_err(|_| invalid())?;
+    let cut: norito::json::Value = norito::json::from_str(cut_json).map_err(|_| invalid())?;
     let cut_height = cut["height"].as_u64().ok_or_else(invalid)?;
     let amount: u64 = expected_amount_decimal.parse().map_err(|_| invalid())?;
     if amount == 0 || amount.to_string() != expected_amount_decimal {
@@ -384,5 +223,5 @@ pub(super) fn ironwood_pool_bootstrap_instruction_json_v1_py(
 }
 
 #[cfg(test)]
-#[path = "tests/ironwood_pool_cut_tests.rs"]
+#[path = "tests/ironwood_payment_tests.rs"]
 pub(crate) mod tests;

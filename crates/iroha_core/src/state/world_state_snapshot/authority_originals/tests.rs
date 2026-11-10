@@ -347,8 +347,8 @@ fn certified_fee_cut_requires_existing_read_root_and_releases_budget_on_refusal(
             &budget,
             |snapshot, _, _, _, _, _, _, _, _, _, _, _, _, _| {
                 assert_eq!(
-                    snapshot.root().unwrap(),
-                    tip.commitment().execution.world_state_root
+                    tip.commitment().execution.world_state_root,
+                    snapshot.root().unwrap()
                 );
                 assert_eq!(
                     snapshot.schema_hash,
@@ -637,8 +637,8 @@ fn certified_account_cut_resolves_nondefault_protected_catalog_and_never_infers_
                 assert_eq!(value.as_ref().label(), Some(selected));
                 assert_eq!(actual_lease, lease);
                 assert_eq!(
-                    snapshot.root().unwrap(),
-                    tip.commitment().execution.world_state_root
+                    tip.commitment().execution.world_state_root,
+                    snapshot.root().unwrap()
                 );
                 Ok(())
             },
@@ -1041,8 +1041,8 @@ fn certified_identifier_originals_keep_read_root_budget_and_tip_fences() {
             &budget,
             |snapshot, policy, program| {
                 assert_eq!(
-                    snapshot.root().unwrap(),
-                    tip.commitment().execution.world_state_root
+                    tip.commitment().execution.world_state_root,
+                    snapshot.root().unwrap()
                 );
                 assert_eq!(&policy.id, &id);
                 assert_eq!(policy.program_id, program.program_id);
@@ -1310,8 +1310,8 @@ fn certified_retail_originals_keep_read_permission_budget_and_tip_fences() {
             &budget,
             |snapshot, policy, activation| {
                 assert_eq!(
-                    snapshot.root().unwrap(),
-                    tip.commitment().execution.world_state_root
+                    tip.commitment().execution.world_state_root,
+                    snapshot.root().unwrap()
                 );
                 assert_eq!(policy, &[1, 3, 5]);
                 assert_eq!(activation, &[2, 4, 6]);

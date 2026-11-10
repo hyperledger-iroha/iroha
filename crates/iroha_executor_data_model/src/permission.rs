@@ -495,13 +495,41 @@ pub mod query {
         pub struct CanReadAllLedgerData;
     }
     permission! {
-        /// Read complete certified native resource-name, authority and Ironwood pool originals.
+        /// Read complete certified native resource-name and authority originals.
         ///
         /// Only an existing [`CanReadAllLedgerData`] holder may grant or revoke
         /// this capability. Its holder cannot delegate it. It grants no generic
         /// private query, full-block carrier, event-stream or write authority.
         #[derive(Copy)]
         pub struct CanReadCertifiedOriginals;
+    }
+    permission! {
+        /// Read the value or proven absence of one exact key in the Global State.
+        /// A current all-ledger reader may grant or revoke this permission.
+        #[norito(deny_unknown_fields)]
+        pub struct CanReadStateRow {
+            /// Exact registry table identity.
+            pub table: String,
+            /// Lowercase hexadecimal bare Norito key. The empty key selects a cell.
+            pub key_hex: String,
+        }
+    }
+    impl CanReadStateRow {
+        /// Whether this is an exact, bounded selector in the certified State read API.
+        pub fn is_valid(&self) -> bool {
+            use iroha_data_model::sumeragi_finality::{
+                MAX_STATE_PROOF_KEY_BYTES_V1, MAX_STATE_PROOF_TABLE_BYTES_V1,
+            };
+            iroha_data_model::sumeragi_finality::keyed_state::StateKeyV1::valid_table_id(
+                &self.table,
+            ) && self.table.len() <= MAX_STATE_PROOF_TABLE_BYTES_V1
+                && self.key_hex.len() <= 2 * MAX_STATE_PROOF_KEY_BYTES_V1
+                && self.key_hex.len().is_multiple_of(2)
+                && self
+                    .key_hex
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        }
     }
     permission! {
         /// Permission to read private data belonging to one exact account.
@@ -1633,6 +1661,40 @@ mod tests {
             );
             assert!(CanReadCertifiedOriginals::try_from(&malformed).is_err());
         }
+    }
+
+    #[test]
+    fn state_row_read_permission_binds_the_complete_table_and_key() {
+        use super::query::CanReadStateRow;
+        for key_hex in ["", "00", "00af"] {
+            let row = CanReadStateRow {
+                table: "world.assets".into(),
+                key_hex: key_hex.into(),
+            };
+            assert!(row.is_valid());
+            let token = iroha_data_model::permission::Permission::from(row.clone());
+            assert_eq!(CanReadStateRow::try_from(&token).unwrap(), row);
+        }
+        for (table, key_hex) in [
+            ("world.assets", "F0"),
+            ("world.assets", "a"),
+            ("", "00"),
+            ("world.*", "00"),
+        ] {
+            assert!(
+                !CanReadStateRow {
+                    table: table.into(),
+                    key_hex: key_hex.into()
+                }
+                .is_valid()
+            );
+        }
+        assert!(
+            norito::json::from_str::<CanReadStateRow>(
+                r#"{"table":"world.assets","key_hex":"01","prefix":true}"#
+            )
+            .is_err()
+        );
     }
     #[test]
     fn oracle_permissions_use_expected_names_and_payloads() {

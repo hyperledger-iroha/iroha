@@ -258,6 +258,7 @@ fn finish_genesis(
     stored: Option<&CommitCertificate>,
     fastpq_target: Option<u64>,
 ) -> Result<GenesisTip, StartupError> {
+    use crate::state::world_projection::world_state_accumulator::world_state_cut::CutError;
     let (committee, valid, mut overlay) = executed;
     let inputs = overlay
         .take_sumeragi_execution_inputs()
@@ -284,8 +285,11 @@ fn finish_genesis(
             .map_err(StartupError::LaneProof)?;
     // Genesis starts from the empty World and absorbs everything it holds (§4.1, E51).
     let transition = overlay
-        .world_state_transition()
-        .map_err(StartupError::Local)?;
+        .seal_state_transition()
+        .map_err(|error| match error {
+            CutError::Deferred(original) => StartupError::Deferred(original),
+            CutError::Invalid(reason) => StartupError::Local(reason),
+        })?;
     let header = overlay
         .sealed_sccp_finality_header(valid.as_ref())
         .map_err(StartupError::Local)?;

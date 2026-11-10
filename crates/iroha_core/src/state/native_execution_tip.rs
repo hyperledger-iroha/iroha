@@ -314,7 +314,12 @@ fn restored_successor_world_root(
     {
         return Err("certified successor does not extend the snapshot tip".into());
     }
-    Ok(committed.commitment().execution.parent_world_state_root)
+    committed
+        .commitment()
+        .execution
+        .parent_world_state_root
+        .as_legacy_hash()
+        .ok_or_else(|| "restoring an LtHash State requires its original certified root".into())
 }
 
 // Keep the complete H1 receipt outside the restore frame. It retires before the

@@ -12,8 +12,10 @@ pub(crate) mod change_set;
 pub(crate) mod containment;
 pub(crate) mod envelope;
 pub mod ironwood;
+pub mod keyed_state;
 pub mod lifecycle_activation;
 pub mod lifecycle_preflight;
+pub mod state_row_permission;
 pub(crate) mod lifecycle_support;
 pub(crate) mod obligations;
 pub(crate) mod sorafs_authority;
@@ -157,10 +159,15 @@ pub fn draft_addition(
     effective_height: u64,
     qualification: [u8; 32],
 ) -> Result<iroha_data_model::runtime::lifecycle::ChangeSetV1, CatalogError> {
+    let published = change_set::PublishedDefinitions(world.runtime_definitions());
+    if module == iroha_data_model::runtime::keyed_state::PROFILE_NAME {
+        return keyed_state::next_change_set(network, world.runtime_selection(), &published, effective_height, qualification)
+            .map_err(|reason| CatalogError::Addition { module: module.to_owned(), reason });
+    }
     release_catalog()?.activation(
         module,
         world.runtime_selection(),
-        &change_set::PublishedDefinitions(world.runtime_definitions()),
+        &published,
         network,
         effective_height,
         qualification,

@@ -1230,8 +1230,8 @@ fn complete_context_witness(network: NetworkId, height: u64) -> ExecWitness {
 /// Synthetic complete-World roots: these fixtures certify structural results, not a World.
 fn synthetic_world() -> crate::sumeragi::commitment::WorldStateTransition {
     crate::sumeragi::commitment::WorldStateTransition {
-        parent_world_state_root: iroha_crypto::Hash::new(b"synthetic parent World"),
-        world_state_root: iroha_crypto::Hash::new(b"synthetic World"),
+        parent_world_state_root: iroha_crypto::Hash::new(b"synthetic parent World").into(),
+        world_state_root: iroha_crypto::Hash::new(b"synthetic World").into(),
         event_commitment: None,
     }
 }

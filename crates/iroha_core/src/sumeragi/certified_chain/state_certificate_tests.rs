@@ -124,7 +124,7 @@ fn ascending_native_continuation_refuses_same_proposal_changed_result_before_fir
     let changed = with_parts(&original, |_, qc, preimage| {
         let (original_x, mut result) = fixture_result_parts(preimage);
         result.execution.world_state_root =
-            Hash::new(b"different quorum-certified execution result");
+            Hash::new(b"different quorum-certified execution result").into();
         *preimage = fixture_result_preimage(&original_x, &result);
         *qc = chain.commit_qc(
             4,

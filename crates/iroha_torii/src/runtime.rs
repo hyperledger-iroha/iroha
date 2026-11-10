@@ -1711,7 +1711,8 @@ pub async fn handle_runtime_draft_upgrade(
     let qualification = hex_32("qualification", &request.qualification_hex)?;
     let catalog = iroha_core::runtime::release_catalog()
         .map_err(|error| runtime_conversion_error(format!("release catalog: {error}")))?;
-    if !catalog
+    let keyed_profile = iroha_data_model::runtime::keyed_state::PROFILE_NAME;
+    if request.addition != keyed_profile && !catalog
         .additions
         .iter()
         .any(|addition| addition.module == request.addition)
@@ -1720,6 +1721,7 @@ pub async fn handle_runtime_draft_upgrade(
             .additions
             .iter()
             .map(|addition| addition.module)
+            .chain(std::iter::once(keyed_profile))
             .collect();
         return Err(runtime_conversion_error(format!(
             "{} is not an addition of this release, which adds: {}",
@@ -2744,6 +2746,12 @@ mod tests {
             ))) => message,
             other => panic!("expected a refused draft, got {other:?}"),
         };
+        let keyed = handle_runtime_draft_upgrade(state.clone(), NoritoJson(RuntimeDraftUpgradeRequest {
+            addition: iroha_data_model::runtime::keyed_state::PROFILE_NAME.into(),
+            ..request.clone()
+        })).await.expect("draft keyed profile adoption from the current selection");
+        assert!(matches!(&keyed.change_set.transitions[..], [SelectionTransitionV1::SetKernel(_)]));
+        assert_eq!(keyed.change_set.predecessor, catalog.baseline_id);
         let unknown = refusal(
             handle_runtime_draft_upgrade(
                 state.clone(),

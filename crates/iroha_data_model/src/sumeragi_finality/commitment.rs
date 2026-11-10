@@ -133,9 +133,9 @@ pub struct ExecutionCommitment {
     pub ordinary_writes_root: Hash,
     /// Complete World state root the block executed on: every canonical World entry after the
     /// parent block's publication (the empty World for genesis, which absorbs everything).
-    pub parent_world_state_root: Hash,
+    pub parent_world_state_root: super::KeyedStateRoot,
     /// Complete World state root after the block's execution (the post-state root of §4.1).
-    pub world_state_root: Hash,
+    pub world_state_root: super::KeyedStateRoot,
     /// Merkle root and count of the events the block's execution emitted, in emission order
     /// (the event root of §4.1); `None` when it emitted none.
     pub event_commitment: Option<MerkleTreeCommitment<EventBox>>,
@@ -434,8 +434,8 @@ mod execution_validation_tests {
             parent_state_root: Hash::new(b"parent"),
             post_state_root: Hash::new(b"post"),
             ordinary_writes_root: Hash::new(b"writes"),
-            parent_world_state_root: Hash::new(b"parent world"),
-            world_state_root: Hash::new(b"world"),
+            parent_world_state_root: Hash::new(b"parent world").into(),
+            world_state_root: Hash::new(b"world").into(),
             event_commitment: None,
             executed_block_wire_len: 1,
             executed_block_wire_hash: Hash::new(b"wire"),

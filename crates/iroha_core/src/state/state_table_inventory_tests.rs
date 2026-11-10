@@ -116,14 +116,14 @@ const CONTRACT: &str = "specs/sumeragi.md §16";
 const CONTRACT_PATH: &str = "specs/sumeragi.md";
 const INTERFACE: &str = "crates/iroha_core/src/state/authority_registry/keyed_commitment.rs";
 
-/// How a field relates to the certified roots today.
+/// Coverage under the LtHash predecessor; keyed-profile coverage is classified separately.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Commitment {
     /// A nested owner: its children are classified, it holds no row itself.
     Owner,
     /// Canonical and bound by the certified World state root.
     Certified,
-    /// Canonical but bound by no certified State root (open defect G1-D2).
+    /// Canonical State row outside the LtHash predecessor; included when installed by the keyed profile.
     Uncommitted,
     /// Secondary state: excluded as independent authority, rebuilt from its sources.
     Derived,
@@ -504,11 +504,11 @@ const ROOTS: &[Root] = &[
         class: RootClass::CertifiedStateRoot,
         carrier: "ExecutionCommitment.parent_world_state_root, ExecutionCommitment.world_state_root",
         keyed: false,
-        scope: "every canonical World table and cell the root's selection installs, trigger stores included",
+        scope: "LtHash profile: every installed canonical World table and cell, including trigger stores",
         construction: "LtHash16 multiset hash over field, key and value hashes",
         witnesses: "none: a multiset hash has no inclusion, absence or range witness",
         owner: "G.3",
-        disposition: "replaced in place by parent_keyed_state_root and keyed_state_root; the accumulator, its World cell and the World-element snapshot format are deleted",
+        disposition: "Past and current LtHash selections use this profile. Adoption replaces it in the same result slots; retire it after the checkpoint startup floor and outstanding uses permit deletion.",
         defect: Some("G1-D1"),
         domains: &[
             r"iroha 2026-09-30 world-state lthash16 element v1",
@@ -527,16 +527,39 @@ const ROOTS: &[Root] = &[
             ),
             (
                 "crates/iroha_data_model/src/sumeragi_finality/commitment.rs",
-                "pub parent_world_state_root: Hash,",
+                "pub parent_world_state_root: super::KeyedStateRoot,",
             ),
             (
                 "crates/iroha_data_model/src/sumeragi_finality/commitment.rs",
-                "pub world_state_root: Hash,",
+                "pub world_state_root: super::KeyedStateRoot,",
             ),
             (
                 "specs/sumeragi.md",
                 "| E51 | Application `R` (node integration, §4.1) |",
             ),
+        ],
+    },
+    Root {
+        id: "keyed_state_root",
+        class: RootClass::CertifiedStateRoot,
+        carrier: "ExecutionCommitment.parent_world_state_root, ExecutionCommitment.world_state_root under the governed radix profile",
+        keyed: true,
+        scope: "all canonical bytes of installed State and World tables and cells at one execution cut",
+        construction: "ordered, path-compressed binary radix tree with raw BLAKE3 digests, split positions and subtree cardinalities; the root binds the selected profile and table schemas",
+        witnesses: "exact membership or absence; complete half-open raw-key ranges with consecutive authenticated ranks",
+        owner: "G.3",
+        disposition: "Retained as the governed keyed profile in the same two result slots as its predecessor. Native publication retains execution and published versions; restart rebuilds and cross-checks them by certified replay.",
+        defect: None,
+        domains: &[
+            r"iroha keyed State profile and schema v1",
+            r"iroha:keyed-state:radix:blake3:v1\0",
+            r"iroha:state-keyed-commitment:schema:v1\0",
+        ],
+        evidence: &[
+            ("crates/iroha_data_model/src/sumeragi_finality/keyed_state.rs", "pub struct KeyedStateTreeV1 {"),
+            ("crates/iroha_core/src/state/keyed_state.rs", "world_state_root: self.tree.root().into(),"),
+            ("crates/iroha_core/src/state/publication.rs", ".install(keyed_cut.take())"),
+            ("crates/iroha_core/src/state/keyed_state/recovery.rs", "fn verify_replayed_state_commitment("),
         ],
     },
     Root {
@@ -6540,11 +6563,11 @@ const PREMISES: &[Premise] = &[
         evidence: &[
             (
                 "crates/iroha_core/src/state/world_state_accumulator.rs",
-                ".root(self.world.runtime_selection.get_before_block())?,",
+                ".root(self.world.runtime_selection.get_before_block())?",
             ),
             (
                 "crates/iroha_core/src/state/world_state_accumulator.rs",
-                "world_state_root: post.root(self.world.runtime_selection.get())?,",
+                "world_state_root: post.root(self.world.runtime_selection.get())?",
             ),
             (
                 "crates/iroha_core/src/sumeragi/commitment.rs",
@@ -6615,7 +6638,7 @@ struct Defect {
 const DEFECTS: &[Defect] = &[
     Defect {
         id: "G1-D1",
-        title: "The certified World state root is an unkeyed multiset hash",
+        title: "Retire the LtHash World profile after governed adoption and the checkpoint startup floor",
         assigned: "G.3",
         related: &["G.2", "G.4", "G.5"],
         required: "Replace parent_world_state_root and world_state_root by the selected keyed commitment in one cutover and delete the LtHash16 accumulator and the World-element snapshot format. A second calculation may exist only as a test differential.",
@@ -6636,10 +6659,10 @@ const DEFECTS: &[Defect] = &[
     },
     Defect {
         id: "G1-D2",
-        title: "Canonical State-level tables and cells affect no certified root",
+        title: "Qualify complete coverage of State-level rows under the governed keyed profile",
         assigned: "G.3",
         related: &["G.4"],
-        required: "Commit every listed field in the keyed State root: transaction membership, commit topologies, the canonical runtime, chain and network identity, lane manifests and compliance, and the policy cells.",
+        required: "The keyed profile includes these original sources when installed. Qualify per-field mutations, crash boundaries and four-validator replay agreement before retiring the LtHash profile, which excludes them.",
         evidence: &[
             (
                 "crates/iroha_core/src/state/world_projection.rs",
@@ -6938,6 +6961,9 @@ fn field_line(
         Role::Local(_) => "local",
     };
     write!(line, ",\"role\":\"{role}\"").expect("write to a String");
+    if matches!(row.field.role, Role::Canonical(Canonical::Table { .. } | Canonical::Cell(_))) {
+        write!(line, ",\"keyed_profile_if_installed\":true").expect("write to a String");
+    }
     if !matches!(row.commitment, Commitment::Owner) {
         write!(line, ",\"shape\":{}", shape_name(row.shape)).expect("write to a String");
     }
@@ -10650,7 +10676,11 @@ fn every_listed_commitment_has_one_owner_and_disposition() {
             "{}",
             root.id
         );
-        if root.class.kept() {
+        // Superseded State roots track cutover defects. The selected profile
+        // remains the root over all installed State entries.
+        let retained_state_root = root.class == RootClass::CertifiedStateRoot
+            && root.id == "keyed_state_root" && root.keyed;
+        if root.class.kept() || retained_state_root {
             assert_eq!(root.defect, None, "{}", root.id);
             assert!(
                 root.disposition.starts_with("kept ") || root.disposition.starts_with("Retained "),
@@ -10927,9 +10957,8 @@ fn every_listed_commitment_has_one_owner_and_disposition() {
             .disposition
             .contains("still pending")
     );
-    // Two commitments are certified State roots today: the complete World state root, and
-    // the retail fee receipt-head root, a per-table State root that rule P1 forbids and
-    // that open defect G1-D9 removes.
+    // LtHash and the governed keyed construction occupy the same result slots at
+    // different cuts. G1-D9 tracks the separate retail receipt-head commitment.
     assert_eq!(
         ROOTS
             .iter()
@@ -10938,6 +10967,7 @@ fn every_listed_commitment_has_one_owner_and_disposition() {
             .collect::<Vec<_>>(),
         [
             ("world_state_root", Some("G1-D1")),
+            ("keyed_state_root", None),
             ("retail_fee_receipt_head_root", Some("G1-D9"))
         ]
     );
@@ -12463,8 +12493,8 @@ fn contract_section_states_every_publication_and_binding_rule_once() {
         .split_once("\n## Appendix E. As-built reconciliation\n")
         .expect("section 16 precedes Appendix E");
     assert!(
-        section.contains("**Status: specified by ZK delivery plan task G.1, built by G.3;"),
-        "the section states that it is not built"
+        section.contains("The governed profile `iroha.keyed-state.radix-blake3.v1` selects a path-compressed"),
+        "the section identifies the governed profile and construction"
     );
     for number in 1..=8 {
         assert_eq!(

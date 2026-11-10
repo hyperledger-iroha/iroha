@@ -159,7 +159,7 @@ impl State {
         if !is_stable_state_view_generation(generation, self.state_view_generation()) {
             return Err(crate::state::StateViewError::Busy(publication_release).into());
         }
-        if world_root != stored_root || world_root != expected {
+        if world_root != stored_root || expected != world_root {
             return Err(PredecessorWorldError::WorldMismatch);
         }
         Ok(Some(PredecessorWorldReceipt {
@@ -212,13 +212,13 @@ mod tests {
         );
         assert_eq!(receipt.successor.committed().height(), 2);
         assert_eq!(
-            receipt.world_root,
             receipt
                 .successor
                 .committed()
                 .commitment()
                 .execution
-                .parent_world_state_root
+                .parent_world_state_root,
+            receipt.world_root
         );
         assert!(receipt.require_current(chain.state()).is_ok());
         assert!(

@@ -11,11 +11,11 @@
 //!   inclusion, absence and a complete half-open key range of one table;
 //! - the **update**: one block's net change set, applied atomically.
 //!
-//! It selects no tree, arity, hash or witness encoding. Task G.2 prototypes
-//! candidates behind [`KeyedStateCommitment`] and measures them; task G.3 selects
-//! one, publishes its root in the execution result and deletes the alternatives.
-//! Until then nothing here is consensus state: no root produced through this
-//! interface is published, certified or admitted.
+//! The governed radix profile selects the production tree in
+//! `iroha_data_model::sumeragi_finality::keyed_state`. Native publication reads
+//! the original State journals, binds the pre-tail execution version in the
+//! result and retains the published version for the next block. The LtHash
+//! predecessor continues to interpret the slots at cuts that select that profile.
 //!
 //! Witnesses are opaque canonical byte strings, so native and in-circuit
 //! measurements count the same bytes and a carried witness is validated from
@@ -28,234 +28,35 @@
 //! `fastpq_prover::state_commitment_prototypes`; `candidates_tests.rs` puts each
 //! behind this interface and runs `conformance::check_contract` on it (unit tests
 //! built with the `state-commitment-prototypes` feature). Their measurements are
-//! in `specs/state_commitment_candidates.json`. No candidate is selected here.
-//! TODO(G.3): bind the selected construction to the State publication owner and
-//! replace the World state accumulator root in the execution result. Move
-//! [`KeyedStateRoot`] beside `ExecutionCommitment` as the one shared type, with an
-//! explicit Norito codec for the payload that [`KeyedStateRoot::from_payload`] fixes.
+//! in `specs/state_commitment_candidates.json`. The selected radix implementation
+//! runs the same suite in `selected_tests`. The shared wire type is [`KeyedStateRoot`].
+
+pub(crate) mod selected_schema;
 
 use super::{Canonical, CanonicalLayout, Field, Role, Schema};
 
-/// Domain tag of [`StateSchema::canonical_bytes`].
-pub const SCHEMA_DOMAIN: &[u8] = b"iroha:state-keyed-commitment:schema:v1\0";
+pub use iroha_data_model::sumeragi_finality::keyed_schema::{
+    CELL_KEY, SchemaError, StatementError, TableDescriptor, TableShape,
+};
+use iroha_data_model::sumeragi_finality::keyed_schema::StateTableDirectoryV1;
 
-/// Byte length of every keyed State root, whatever the construction.
+/// Byte length of every keyed State root.
 pub const ROOT_BYTES: usize = 32;
 
-/// The only key of a cell: a cell is the single entry at the empty key of its table.
-pub const CELL_KEY: &[u8] = &[];
+pub use iroha_data_model::sumeragi_finality::KeyedStateRoot;
 
-/// Root of the keyed State commitment: 32 opaque bytes fixed by the construction.
-///
-/// The bytes carry no `iroha_crypto::Hash` marker bit and no field-element
-/// interpretation; only equality is meaningful outside the construction.
-///
-/// This is the prototype of the wire type of `parent_keyed_state_root` and
-/// `keyed_state_root` (`specs/sumeragi.md` §16.6). A construction whose native root
-/// is not 32 bytes commits a normalisation hash of it; G.2 measures and G.3 freezes
-/// that encoding. A marker-setting `Hash` conversion is never used.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct KeyedStateRoot(pub(crate) [u8; ROOT_BYTES]);
-
-impl KeyedStateRoot {
-    /// The Norito payload of a root field: exactly [`ROOT_BYTES`] raw bytes with all 256
-    /// bits preserved. The enclosing record keeps its own field framing.
-    pub(crate) const fn payload(&self) -> &[u8; ROOT_BYTES] {
-        &self.0
-    }
-
-    /// Decode the payload of a root field.
-    ///
-    /// Only exactly [`ROOT_BYTES`] bytes are a root. An element-framed array, a
-    /// length-prefixed byte string, a shorter or a longer payload is not one, and no
-    /// marker bit is checked, set or cleared.
-    pub(crate) fn from_payload(payload: &[u8]) -> Option<Self> {
-        <[u8; ROOT_BYTES]>::try_from(payload).ok().map(Self)
-    }
-}
-
-/// Whether a committed identity is a keyed table or a singleton cell.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum TableShape {
-    /// Zero or more entries under canonical key bytes.
-    Table,
-    /// At most one entry, at [`CELL_KEY`].
-    Cell,
-}
-
-impl TableShape {
-    /// Stable tag in the canonical schema descriptor.
-    const fn tag(self) -> u8 {
-        match self {
-            Self::Table => 0,
-            Self::Cell => 1,
-        }
-    }
-}
-
-/// One committed table or cell: its registry identity and codec identities.
+/// Construction-independent schema with conformance checks and native registry resolution.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TableDescriptor {
-    id: String,
-    shape: TableShape,
-    key_schema: String,
-    value_schema: String,
-}
+pub struct StateSchema(StateTableDirectoryV1);
 
-impl TableDescriptor {
-    /// Describe a keyed table with its key and value codec identities.
-    pub(crate) fn table(
-        id: impl Into<String>,
-        key_schema: impl Into<String>,
-        value_schema: impl Into<String>,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            shape: TableShape::Table,
-            key_schema: key_schema.into(),
-            value_schema: value_schema.into(),
-        }
-    }
-
-    /// Describe a singleton cell with its value codec identity.
-    pub(crate) fn cell(id: impl Into<String>, value_schema: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            shape: TableShape::Cell,
-            key_schema: String::new(),
-            value_schema: value_schema.into(),
-        }
-    }
-
-    /// Stable registry identity, for example `world.accounts`.
-    pub(crate) fn id(&self) -> &str {
-        &self.id
-    }
-
-    /// Table or cell.
-    pub(crate) fn shape(&self) -> TableShape {
-        self.shape
-    }
-
-    /// Codec identity of the key; empty for a cell.
-    pub(crate) fn key_schema(&self) -> &str {
-        &self.key_schema
-    }
-
-    /// Codec identity of the value.
-    pub(crate) fn value_schema(&self) -> &str {
-        &self.value_schema
-    }
-}
-
-/// A schema that cannot be committed.
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum SchemaError {
-    /// A table identity is empty.
-    #[error("keyed State schema has an empty table identity")]
-    EmptyIdentity,
-    /// Two descriptors share one identity.
-    #[error("keyed State schema declares {0} twice")]
-    DuplicateTable(String),
-    /// A table has no key codec, or a cell declares one.
-    #[error("keyed State schema has an inconsistent key codec for {0}")]
-    KeyCodec(String),
-    /// A value codec identity is empty.
-    #[error("keyed State schema has no value codec for {0}")]
-    ValueCodec(String),
-    /// An identity or the table count does not fit the descriptor's `u32` lengths.
-    #[error("keyed State schema exceeds the descriptor length bound")]
-    Length,
-    /// The registry still declares an unresolved projection for this field.
-    #[error("State authority field has no complete V1 schema: {0}")]
-    Unresolved(&'static str),
-}
-
-/// The complete ordered set of committed tables and cells (rule K1).
-///
-/// Tables are held in the canonical order: ascending bytes of their identities.
-/// That order is the table order of every root, range and result layout.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StateSchema {
-    tables: Vec<TableDescriptor>,
+impl std::ops::Deref for StateSchema {
+    type Target = StateTableDirectoryV1;
+    fn deref(&self) -> &Self::Target { &self.0 }
 }
 
 impl StateSchema {
-    /// Validate descriptors and place them in the canonical identity order.
-    ///
-    /// # Errors
-    /// An identity is empty or repeated, a codec identity is missing or misplaced, or a
-    /// length exceeds `u32`.
-    pub(crate) fn new(mut tables: Vec<TableDescriptor>) -> Result<Self, SchemaError> {
-        if u32::try_from(tables.len()).is_err() {
-            return Err(SchemaError::Length);
-        }
-        for table in &tables {
-            if table.id.is_empty() {
-                return Err(SchemaError::EmptyIdentity);
-            }
-            let key_declared = !table.key_schema.is_empty();
-            if key_declared != (table.shape == TableShape::Table) {
-                return Err(SchemaError::KeyCodec(table.id.clone()));
-            }
-            if table.value_schema.is_empty() {
-                return Err(SchemaError::ValueCodec(table.id.clone()));
-            }
-            for text in [&table.id, &table.key_schema, &table.value_schema] {
-                if u32::try_from(text.len()).is_err() {
-                    return Err(SchemaError::Length);
-                }
-            }
-        }
-        tables.sort_by(|left, right| left.id.as_bytes().cmp(right.id.as_bytes()));
-        if let Some(pair) = tables.windows(2).find(|pair| pair[0].id == pair[1].id) {
-            return Err(SchemaError::DuplicateTable(pair[0].id.clone()));
-        }
-        Ok(Self { tables })
-    }
-
-    /// The committed tables and cells in canonical order.
-    pub(crate) fn tables(&self) -> &[TableDescriptor] {
-        &self.tables
-    }
-
-    /// Canonical position and descriptor of a declared identity.
-    pub(crate) fn table(&self, id: &str) -> Option<(usize, &TableDescriptor)> {
-        self.tables
-            .binary_search_by(|table| table.id.as_bytes().cmp(id.as_bytes()))
-            .ok()
-            .map(|index| (index, &self.tables[index]))
-    }
-
-    /// The canonical descriptor bytes that every construction binds into its root (K1):
-    ///
-    /// ```text
-    /// SCHEMA_DOMAIN ‖ le32(count) ‖ for each table in canonical order:
-    ///   shape ‖ le32(len(id)) ‖ id ‖ le32(len(key)) ‖ key ‖ le32(len(value)) ‖ value
-    /// ```
-    pub(crate) fn canonical_bytes(&self) -> Vec<u8> {
-        let mut bytes = SCHEMA_DOMAIN.to_vec();
-        push_len(&mut bytes, self.tables.len());
-        for table in &self.tables {
-            bytes.push(table.shape.tag());
-            for text in [&table.id, &table.key_schema, &table.value_schema] {
-                push_len(&mut bytes, text.len());
-                bytes.extend_from_slice(text.as_bytes());
-            }
-        }
-        bytes
-    }
-
-    /// Check one `(table, key)` position: the table is declared and a cell uses [`CELL_KEY`].
-    ///
-    /// # Errors
-    /// See [`StatementError`].
-    pub(crate) fn check_key(&self, table: &str, key: &[u8]) -> Result<usize, StatementError> {
-        let (index, descriptor) = self.table(table).ok_or(StatementError::UnknownTable)?;
-        if descriptor.shape == TableShape::Cell && key != CELL_KEY {
-            return Err(StatementError::CellKey);
-        }
-        Ok(index)
+    pub(crate) fn new(tables: Vec<TableDescriptor>) -> Result<Self, SchemaError> {
+        StateTableDirectoryV1::new(tables).map(Self)
     }
 
     /// Check a range statement (K6): the table is declared, the interval is nonempty and
@@ -279,7 +80,7 @@ impl StateSchema {
             if !range.contains(entry.key) {
                 return Err(StatementError::EntryOutsideRange);
             }
-            if descriptor.shape == TableShape::Cell && entry.key != CELL_KEY {
+            if descriptor.shape() == TableShape::Cell && entry.key != CELL_KEY {
                 return Err(StatementError::CellKey);
             }
             if previous.is_some_and(|previous| previous >= entry.key) {
@@ -307,30 +108,18 @@ impl StateSchema {
     }
 }
 
-fn push_len(bytes: &mut Vec<u8>, length: usize) {
-    // `StateSchema::new` bounds every length by `u32`.
-    let length = u32::try_from(length).expect("schema lengths were validated");
-    bytes.extend_from_slice(&length.to_le_bytes());
-}
-
 fn collect_registry(
     fields: &'static [Field],
     tables: &mut Vec<TableDescriptor>,
 ) -> Result<(), SchemaError> {
     for field in fields {
         match field.role {
-            Role::Canonical(Canonical::Table { key, value }) => tables.push(TableDescriptor {
-                id: field.id.to_owned(),
-                shape: TableShape::Table,
-                key_schema: codec_identity(field.id, key)?,
-                value_schema: codec_identity(field.id, value)?,
-            }),
-            Role::Canonical(Canonical::Cell(value)) => tables.push(TableDescriptor {
-                id: field.id.to_owned(),
-                shape: TableShape::Cell,
-                key_schema: String::new(),
-                value_schema: codec_identity(field.id, value)?,
-            }),
+            Role::Canonical(Canonical::Table { key, value }) => tables.push(TableDescriptor::table(
+                field.id, codec_identity(field.id, key)?, codec_identity(field.id, value)?
+            )),
+            Role::Canonical(Canonical::Cell(value)) => tables.push(TableDescriptor::cell(
+                field.id, codec_identity(field.id, value)?
+            )),
             Role::Canonical(Canonical::Owner(children)) => collect_registry(children, tables)?,
             Role::Derived { .. } | Role::History { .. } | Role::Local(_) => {}
         }
@@ -454,26 +243,6 @@ impl Witness {
     pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.0
     }
-}
-
-/// A statement that is ill-formed before any commitment is consulted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum StatementError {
-    /// The table identity is not declared by the schema.
-    #[error("the keyed State schema does not declare this table")]
-    UnknownTable,
-    /// A cell was addressed with a key other than the empty key.
-    #[error("a cell has only the empty key")]
-    CellKey,
-    /// The interval's upper bound does not exceed its lower bound.
-    #[error("the key interval is empty")]
-    EmptyRange,
-    /// A claimed range entry lies outside the interval.
-    #[error("a claimed entry lies outside the key interval")]
-    EntryOutsideRange,
-    /// Claimed range entries are not strictly ascending by key bytes.
-    #[error("claimed entries are not strictly ascending")]
-    EntryOrder,
 }
 
 /// Why a construction could not complete an operation on this node.
@@ -632,3 +401,5 @@ pub mod conformance;
 pub mod reference;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod selected_tests;

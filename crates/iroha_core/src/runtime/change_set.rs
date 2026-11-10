@@ -240,6 +240,8 @@ fn check_transition_support(
     applied: &AppliedChangeSet,
     published: &impl DefinitionLookup,
 ) -> Result<(), Error> {
+    super::keyed_state::validate_transition(previous, &applied.selection)
+        .map_err(|reason| Error::InvariantViolation(reason.into()))?;
     let descriptor = |id: &DefinitionId| {
         applied
             .published
@@ -477,6 +479,13 @@ pub fn activate_due(
                         .is_ok_and(|catalog| catalog.unsupported(&applied.selection).is_some())
                     {
                         return true;
+                    }
+                    if !super::state_row_permission::selected(&current)
+                        && super::state_row_permission::selected(&applied.selection)
+                        && let Err(reason) = super::state_row_permission::validate_activation_inventory(&*wtx)
+                    {
+                        iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
+                        return false;
                     }
                     if matches!(
                         (

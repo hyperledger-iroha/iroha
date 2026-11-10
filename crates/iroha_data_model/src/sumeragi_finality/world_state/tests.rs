@@ -178,7 +178,7 @@ fn complete_snapshot_binds_real_typed_asset_and_registry_preimages_to_certified_
     let verified = snapshot.authenticate(&tip).unwrap();
     assert_eq!(verified.height(), tip.height());
     assert_eq!(verified.context_id(), tip.context_id());
-    assert_eq!(verified.world_root(), tip.execution().world_state_root);
+    assert_eq!(tip.execution().world_state_root, verified.world_root());
     assert_eq!(verified.schema_hash(), snapshot.schema_hash);
     assert_eq!(verified.block_time_ms(), tip.header().creation_time_ms);
     verified

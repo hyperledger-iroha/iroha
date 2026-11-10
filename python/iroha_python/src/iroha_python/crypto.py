@@ -22,7 +22,7 @@ from typing import (
 
 from iroha_native import load_crypto_extension
 
-from ._validation import _normalize_mapping_payload, _optional_uint
+from ._validation import _normalize_mapping_payload, _optional_uint, _validate_state_row_selectors
 from .address import AccountAddress
 
 _crypto = load_crypto_extension()
@@ -30,6 +30,8 @@ _crypto = load_crypto_extension()
 # This public exception is provided by the matching native extension. A stale
 # extension cannot supply this API; do not substitute a Python fallback class.
 PublicFinalityReadError = _crypto.PublicFinalityReadError
+IronwoodStateSchemaV1 = _crypto.IronwoodStateSchemaV1
+StateProofSchemaV1 = _crypto.StateProofSchemaV1
 
 # Exact genesis-derived transaction domain. Construction is closed in the
 # native boundary so ordinary signing APIs cannot reinterpret labels or bare
@@ -240,8 +242,11 @@ __all__ = [
     "inspect_signed_privacy_anonymous_pgc_payment_action_v1",
     "inspect_signed_privacy_orchard_note_action_v1",
     "inspect_signed_privacy_ironwood_note_action_v1",
-    "verify_ironwood_pool_cut_v1",
-    "verify_ironwood_payment_effect_v1",
+    "IronwoodStateSchemaV1",
+    "StateProofSchemaV1",
+    "verify_state_rows_v1",
+    "verify_ironwood_state_rows_v1",
+    "verify_ironwood_payment_effect_from_rows_v1",
     "ironwood_pool_bootstrap_instruction_json_v1",
     "inspect_signed_privacy_fcmp_membership_payment_action_v1",
     "inspect_signed_privacy_ivm_private_note_action_v1",
@@ -3208,52 +3213,112 @@ def inspect_signed_privacy_anonymous_pgc_payment_action_v1(
     )
 
 
-def verify_ironwood_pool_cut_v1(
-    proof: bytes, *, checkpoint_hex: str, proof_frames_hex: list[str],
+def verify_state_rows_v1(
+    proof: bytes, rows: list[dict[str, str]], *, schema: StateProofSchemaV1,
+    checkpoint_hex: str, proof_frames_hex: list[str], network_id_hex: str, height: int,
+) -> list[bytes | None]:
+    """Verify a generic State proof against independently selected finality, schema and keys.
+
+    Use the same canonical, sorted selectors sent to Torii. The returned list matches their
+    order. An absent row returns None. A present zero-byte value returns b"".
+    """
+    if type(proof) is not bytes or not 0 < len(proof) <= 32 * 1024 * 1024:
+        raise ValueError("State proof must be a nonempty frame of at most 32 MiB")
+    if type(height) is not int or not 2 <= height <= 2**64 - 1:
+        raise ValueError("height must be a certified non-genesis height")
+    _validate_state_row_selectors(rows)
+    expected = json.dumps(rows, ensure_ascii=True, separators=(",", ":")).encode("ascii")
+    return _crypto.verify_state_rows_v1(
+        proof, expected, schema, checkpoint_hex, proof_frames_hex, network_id_hex, height,
+    )
+
+
+def _require_ironwood_row_proofs(*frames: bytes) -> None:
+    if any(type(frame) is not bytes or not frame for frame in frames):
+        raise TypeError("State row proof frames must be nonempty exact bytes")
+    if sum(map(len, frames)) > 16 * 1024 * 1024:
+        raise ValueError("State row proof frames exceed the verification budget")
+
+
+def _ironwood_pool_selectors(pool_id_hex: str) -> list[dict[str, str]]:
+    return json.loads(_crypto.ironwood_pool_rows_request_v1(pool_id_hex))["rows"]
+
+
+def _ironwood_finality_page(checkpoint_hex: str, proof_frames_hex: list[str], network_id_hex: str, height: int) -> Any:
+    return _crypto._IronwoodFinalityPage(checkpoint_hex, proof_frames_hex, network_id_hex, height)
+
+
+def _ironwood_balance_selectors(
+    pool_rows: bytes, *, verified: Any,
+    network_id_hex: str, chain_discriminant: int, pool_id_hex: str,
+    asset_definition_id: str, payer_account_id: str, expected_schema: IronwoodStateSchemaV1,
+) -> tuple[list[dict[str, str]], Any]:
+    _require_ironwood_row_proofs(pool_rows)
+    raw, plan = _crypto.ironwood_balance_rows_request_v1(
+        pool_rows, verified, network_id_hex,
+        _require_chain_discriminant(chain_discriminant), pool_id_hex, asset_definition_id,
+        payer_account_id, expected_schema,
+    )
+    return json.loads(raw)["rows"], plan
+
+
+def _ironwood_warm_rows(plan: Any, primary: bytes, supplement: bytes | None, *, verified: Any, network_id_hex: str, chain_discriminant: int, pool_id_hex: str,
+    asset_definition_id: str, payer_account_id: str, expected_schema: IronwoodStateSchemaV1,
+) -> tuple[Any, list[dict[str, str]], bytes, bytes | None]:
+    next_plan, missing, pool, detail = _crypto.ironwood_warm_rows_v1(
+        plan, primary, supplement, verified, network_id_hex,
+        _require_chain_discriminant(chain_discriminant), pool_id_hex, asset_definition_id,
+        payer_account_id, expected_schema,
+    )
+    return next_plan, json.loads(missing)["rows"], pool, detail
+
+
+def verify_ironwood_state_rows_v1(
+    pool_rows: bytes, balance_rows: bytes, *, checkpoint_hex: str, proof_frames_hex: list[str],
     network_id_hex: str, chain_discriminant: int, pool_id_hex: str,
     asset_definition_id: str, payer_account_id: str, expected_profile_digest_hex: str,
+    expected_schema: IronwoodStateSchemaV1,
 ) -> dict[str, Any]:
-    """Verify an exact native World pool cut against independently trusted finality."""
-    if type(proof) is not bytes or not proof:
-        raise TypeError("pool-cut proof must be nonempty exact bytes")
+    """Verify the two generic State row proofs against the independently trusted block and schema."""
+    _require_ironwood_row_proofs(pool_rows, balance_rows)
     chain_discriminant = _require_chain_discriminant(chain_discriminant)
     try:
-        raw = _crypto.verify_ironwood_pool_cut_v1(proof, checkpoint_hex,
+        raw = _crypto.verify_ironwood_state_rows_v1(pool_rows, balance_rows, checkpoint_hex,
             proof_frames_hex, network_id_hex, chain_discriminant, pool_id_hex,
-            asset_definition_id, payer_account_id, expected_profile_digest_hex)
+            asset_definition_id, payer_account_id, expected_profile_digest_hex, expected_schema)
     except AttributeError as exc:
-        raise RuntimeError("native Ironwood pool-cut verifier is missing; rebuild the extension") from exc
+        raise RuntimeError("native Ironwood State row verifier is missing; rebuild the extension") from exc
     result = json.loads(raw)
     if type(result) is not dict:
-        raise RuntimeError("native pool-cut verifier returned an invalid result")
+        raise RuntimeError("native State row verifier returned an invalid result")
     return result
 
 
-def verify_ironwood_payment_effect_v1(
-    proof: bytes, *, checkpoint_hex: str, proof_frames_hex: list[str],
+def verify_ironwood_payment_effect_from_rows_v1(
+    pool_rows: bytes, balance_rows: bytes, *, checkpoint_hex: str, proof_frames_hex: list[str],
     payment_proof_frames_hex: list[str], signed_transaction_versioned: bytes,
     network_id_hex: str, chain_discriminant: int, pool_id_hex: str,
     asset_definition_id: str, payer_account_id: str, expected_profile_digest_hex: str,
+    expected_schema: IronwoodStateSchemaV1,
     expected_amount_decimal: str,
 ) -> dict[str, Any]:
-    """Verify the original payment's certified native debit/credit from its retained pool cut.
+    """Verify the original payment's certified debit and credit using its retained State row proofs.
 
     These are per-transaction effects, not historical whole-block account balances.
     Public frames extend the authenticated preparation cut through the payment height.
     """
-    if type(proof) is not bytes or not proof:
-        raise TypeError("pool-cut proof must be nonempty exact bytes")
+    _require_ironwood_row_proofs(pool_rows, balance_rows)
     if type(signed_transaction_versioned) is not bytes or not signed_transaction_versioned:
         raise TypeError("signed_transaction_versioned must be nonempty exact bytes")
     chain_discriminant = _require_chain_discriminant(chain_discriminant)
     try:
-        native = _crypto.verify_ironwood_payment_effect_v1
+        native = _crypto.verify_ironwood_payment_effect_from_rows_v1
     except AttributeError as exc:
         raise RuntimeError("native Ironwood payment-effect verifier is missing; rebuild the extension") from exc
-    result = json.loads(native(proof, checkpoint_hex, proof_frames_hex,
+    result = json.loads(native(pool_rows, balance_rows, checkpoint_hex, proof_frames_hex,
         payment_proof_frames_hex, signed_transaction_versioned, network_id_hex,
         chain_discriminant, pool_id_hex, asset_definition_id, payer_account_id,
-        expected_profile_digest_hex, expected_amount_decimal))
+        expected_profile_digest_hex, expected_schema, expected_amount_decimal))
     if type(result) is not dict:
         raise RuntimeError("native payment-effect verifier returned an invalid result")
     return result
@@ -3287,7 +3352,7 @@ def inspect_signed_privacy_ironwood_note_action_v1(
 
     Returns the canonical unsigned payload, public statement and profile identity.
     Recipient acceptance still requires merchant viewing-key decryption of a
-    finality-certified successful execution, and exact native pool-cut proofs.
+    finality-certified successful execution, and certified proofs for the selected pool and balance rows.
     """
     if not isinstance(signed_transaction_versioned, (bytes, bytearray, memoryview)):
         raise TypeError("signed_transaction_versioned must be bytes-like")

@@ -229,7 +229,8 @@ fn genesis_execution_finality_requires_a_verified_successor() {
                 )
                 .unwrap()
                 .into_parts();
-            preimage.execution.world_state_root = Hash::new(b"unsigned replacement genesis result");
+            preimage.execution.world_state_root =
+                Hash::new(b"unsigned replacement genesis result").into();
             preimage.validate().expect(
                 "the forged World root preserves result shape and the native-lane proof; only authenticated R rejects it",
             );

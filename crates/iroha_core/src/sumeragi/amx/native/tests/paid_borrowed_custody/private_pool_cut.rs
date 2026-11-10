@@ -276,8 +276,8 @@ fn private_pool_cut_borrows_real_paid_native_world_and_authenticates_selected_ro
     assert_eq!(request.reserved_bytes(), bytes.len());
     let proof = PrivateSettlementPoolCutProofV1::decode_frame(&bytes).unwrap();
     assert_eq!(
-        proof.world.root().unwrap(),
-        tip.commitment().execution.world_state_root
+        tip.commitment().execution.world_state_root,
+        proof.world.root().unwrap()
     );
     drop(bytes);
     drop(charge);
@@ -449,8 +449,8 @@ fn private_context_borrows_same_paid_world_assignment_and_refuses_local_capacity
         .unwrap();
     let proof = &batch.contexts[0];
     assert_eq!(
-        proof.pool.world.root().unwrap(),
-        tip.commitment().execution.world_state_root
+        tip.commitment().execution.world_state_root,
+        proof.pool.world.root().unwrap()
     );
     let block = verified_tip(&chain);
     let context = proof
