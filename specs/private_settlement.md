@@ -242,6 +242,11 @@ other supported hardware. The prover has one outer suite and no digest-device
 option. Local batch limits do not change the proof profile. The ignored N=3
 smoke is selected with `atomic-private-settlement-smoke`.
 
+The verifier evaluates the complete AIR at the transcript-derived out-of-domain
+point from the DEEP openings and requires the opened composition chunks to equal
+the combined residues divided by the trace vanishing polynomial. The quotient
+check on each queried row remains, but it is not the source of AIR soundness.
+
 The aggregate descriptor's 197-bit minimum is an interactive FRI algebraic
 error bound. It does not account for Merkle binding, Fiat--Shamir composition
 or quantum queries. SHA3-specific protocol soundness and independent review,

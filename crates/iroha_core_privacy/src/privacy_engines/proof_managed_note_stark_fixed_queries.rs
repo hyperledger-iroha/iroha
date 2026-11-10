@@ -3,10 +3,18 @@
 //! The values are the same degree-<N interpolants used by the prover's IFFT/LDE.
 //! All inputs come from the compiled adapter; proof bytes supply neither these
 //! polynomials nor their evaluations. The verifier uses one path for every profile.
+//! The same interpolants are evaluated at the transcript-derived out-of-domain
+//! point, where the verifier checks the complete AIR.
 
-use super::{F, ProofManagedNoteStarkErrorV1, checked_trace_size_v1, map_transparent_error_v1};
-use crate::privacy_engines::transparent_stark::{
-    GOLDILOCKS_GENERATOR_V1, goldilocks_batch_invert_v1, goldilocks_primitive_root_v1,
+use super::{
+    E, F, ProofManagedNoteStarkErrorV1, checked_trace_size_v1, map_aggregate_error_v1,
+    map_transparent_error_v1,
+};
+use crate::privacy_engines::{
+    aggregate_stark::batch_invert_fp4_nonzero_v1,
+    transparent_stark::{
+        GOLDILOCKS_GENERATOR_V1, goldilocks_batch_invert_v1, goldilocks_primitive_root_v1,
+    },
 };
 use rayon::prelude::*;
 use std::collections::BTreeMap;
@@ -179,15 +187,92 @@ impl Oracle {
         }
         Ok(result)
     }
+
+    /// Evaluate every fixed interpolant at one extension-field point.
+    ///
+    /// These are the barycentric weights of [`Self::evaluate`] lifted to Fp4. A
+    /// point in the native subgroup has no finite weight and is rejected; the
+    /// transcript never derives one as an out-of-domain point.
+    fn evaluate_extension(&self, point: E) -> Result<Vec<E>, ProofManagedNoteStarkErrorV1> {
+        let size = self.roots.len();
+        if !point.is_canonical() {
+            return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
+        }
+        let factor = point
+            .pow(size as u128)
+            .sub(E::ONE)
+            .mul_base(self.inverse_size);
+        if factor == E::ZERO {
+            return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
+        }
+        let mut weights = Vec::<E>::new();
+        weights
+            .try_reserve_exact(size)
+            .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
+        weights.extend(self.roots.iter().map(|root| point.sub(E::from_base(*root))));
+        batch_invert_fp4_nonzero_v1(&mut weights).map_err(map_aggregate_error_v1)?;
+        // L_j(z) = (z^N-1) * omega^j / (N * (z-omega^j)).
+        for (weight, root) in weights.iter_mut().zip(&self.roots) {
+            *weight = weight.mul_base(*root).mul(factor);
+        }
+        let mut result = Vec::<E>::new();
+        result
+            .try_reserve_exact(self.columns.len())
+            .map_err(|_| ProofManagedNoteStarkErrorV1::Resource)?;
+        for column in &self.columns {
+            result.push(match column {
+                Column::Constant(value) => E::from_base(*value),
+                Column::Shift { source, offset } => result[*source].add(E::from_base(*offset)),
+                Column::Dense { offset, deltas } => deltas.iter().zip(&weights).fold(
+                    E::from_base(*offset),
+                    |sum, (delta, weight)| {
+                        if *delta == F::ZERO {
+                            sum
+                        } else {
+                            sum.add(weight.mul_base(*delta))
+                        }
+                    },
+                ),
+                Column::Sparse { offset, deltas } => deltas
+                    .iter()
+                    .fold(E::from_base(*offset), |sum, (index, delta)| {
+                        sum.add(weights[*index].mul_base(*delta))
+                    }),
+            });
+        }
+        Ok(result)
+    }
+
+    /// Evaluate precisely the authenticated query indices on the shifted LDE coset.
+    fn query_rows(
+        &self,
+        lde_log2: u8,
+        query_indices: &[usize],
+    ) -> Result<BTreeMap<usize, Vec<F>>, ProofManagedNoteStarkErrorV1> {
+        let lde_root = goldilocks_primitive_root_v1(lde_log2).map_err(map_transparent_error_v1)?;
+        let mut rows = BTreeMap::new();
+        for batch in query_indices.chunks(QUERY_BATCH) {
+            let results = batch
+                .par_iter()
+                .map(|index| {
+                    let x = F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(*index as u128));
+                    self.evaluate(x)
+                })
+                .collect::<Vec<_>>();
+            for (index, row) in batch.iter().copied().zip(results) {
+                rows.insert(index, row?);
+            }
+        }
+        Ok(rows)
+    }
 }
 
-/// Evaluate precisely the authenticated query indices; no LDE-sized matrix is allocated.
-pub(super) fn query_rows_v1(
-    columns: Vec<Vec<F>>,
+/// Reject a query set that is empty, oversized, out of range or repeated.
+fn validate_query_geometry_v1(
     trace_log2: u8,
     lde_log2: u8,
     query_indices: &[usize],
-) -> Result<BTreeMap<usize, Vec<F>>, ProofManagedNoteStarkErrorV1> {
+) -> Result<(), ProofManagedNoteStarkErrorV1> {
     let lde_size = checked_trace_size_v1(lde_log2)?;
     if lde_log2 <= trace_log2
         || query_indices.is_empty()
@@ -201,22 +286,37 @@ pub(super) fn query_rows_v1(
     if sorted.windows(2).any(|pair| pair[0] == pair[1]) {
         return Err(ProofManagedNoteStarkErrorV1::InvalidProfile);
     }
+    Ok(())
+}
+
+/// Evaluate precisely the authenticated query indices; no LDE-sized matrix is allocated.
+#[cfg(test)]
+pub(super) fn query_rows_v1(
+    columns: Vec<Vec<F>>,
+    trace_log2: u8,
+    lde_log2: u8,
+    query_indices: &[usize],
+) -> Result<BTreeMap<usize, Vec<F>>, ProofManagedNoteStarkErrorV1> {
+    validate_query_geometry_v1(trace_log2, lde_log2, query_indices)?;
+    Oracle::new(columns, trace_log2)?.query_rows(lde_log2, query_indices)
+}
+
+/// Evaluate the authenticated query indices and the one transcript-derived
+/// out-of-domain point from a single compiled oracle.
+///
+/// The second value holds every fixed column at `deep_point`, in column order.
+pub(super) fn query_rows_and_deep_point_v1(
+    columns: Vec<Vec<F>>,
+    trace_log2: u8,
+    lde_log2: u8,
+    query_indices: &[usize],
+    deep_point: E,
+) -> Result<(BTreeMap<usize, Vec<F>>, Vec<E>), ProofManagedNoteStarkErrorV1> {
+    validate_query_geometry_v1(trace_log2, lde_log2, query_indices)?;
     let oracle = Oracle::new(columns, trace_log2)?;
-    let lde_root = goldilocks_primitive_root_v1(lde_log2).map_err(map_transparent_error_v1)?;
-    let mut rows = BTreeMap::new();
-    for batch in query_indices.chunks(QUERY_BATCH) {
-        let results = batch
-            .par_iter()
-            .map(|index| {
-                let x = F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(*index as u128));
-                oracle.evaluate(x)
-            })
-            .collect::<Vec<_>>();
-        for (index, row) in batch.iter().copied().zip(results) {
-            rows.insert(index, row?);
-        }
-    }
-    Ok(rows)
+    let rows = oracle.query_rows(lde_log2, query_indices)?;
+    let deep_row = oracle.evaluate_extension(deep_point)?;
+    Ok((rows, deep_row))
 }
 
 #[cfg(test)]
@@ -258,6 +358,95 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// One column of every packed shape: constant, dense, shifted, sparse and near-constant.
+    fn every_column_shape(size: usize) -> Vec<Vec<F>> {
+        let dense = (0..size)
+            .map(|row| F((row * row * 17 + row * 29 + 3) as u64))
+            .collect::<Vec<_>>();
+        vec![
+            vec![F::ZERO; size],
+            vec![F(83); size],
+            dense.clone(),
+            dense.iter().map(|value| value.add(F(47))).collect(),
+            (0..size)
+                .map(|row| if row % 17 == 0 { F(7) } else { F::ZERO })
+                .collect(),
+            (0..size)
+                .map(|row| if row + 1 == size { F(11) } else { F(13) })
+                .collect(),
+        ]
+    }
+
+    #[test]
+    fn deep_point_row_equals_coefficient_horner_for_every_column_shape() {
+        let point = E::canonical([5, 11, 17, 23]).expect("canonical extension point");
+        for trace_log2 in [3, 6, 9] {
+            let columns = every_column_shape(1_usize << trace_log2);
+            let root = goldilocks_primitive_root_v1(trace_log2).expect("native root");
+            let reference = columns
+                .iter()
+                .map(|column| {
+                    let mut coefficients = column.clone();
+                    crate::privacy_engines::transparent_stark::goldilocks_ifft_v1(
+                        &mut coefficients,
+                        root,
+                    )
+                    .expect("native interpolant");
+                    coefficients
+                        .iter()
+                        .rev()
+                        .fold(E::ZERO, |value, coefficient| {
+                            value.mul(point).add(E::from_base(*coefficient))
+                        })
+                })
+                .collect::<Vec<_>>();
+            let (_, actual) =
+                query_rows_and_deep_point_v1(columns, trace_log2, trace_log2 + 3, &[0], point)
+                    .expect("selected rows and deep point");
+            assert_eq!(actual, reference);
+        }
+    }
+
+    #[test]
+    fn deep_point_row_at_an_embedded_base_point_equals_the_base_query_row() {
+        let (trace_log2, lde_log2) = (6, 9);
+        let lde_root = goldilocks_primitive_root_v1(lde_log2).expect("LDE root");
+        for index in [0, 5, (1_usize << lde_log2) - 1] {
+            let x = F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(index as u128));
+            let (rows, deep_row) = query_rows_and_deep_point_v1(
+                every_column_shape(1_usize << trace_log2),
+                trace_log2,
+                lde_log2,
+                &[index],
+                E::from_base(x),
+            )
+            .expect("selected rows and deep point");
+            assert_eq!(
+                deep_row,
+                rows[&index]
+                    .iter()
+                    .map(|value| E::from_base(*value))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn deep_point_in_the_native_subgroup_or_noncanonical_is_rejected() {
+        let oracle = Oracle::new(every_column_shape(8), 3).expect("small native oracle");
+        for root in &oracle.roots {
+            assert_eq!(
+                oracle.evaluate_extension(E::from_base(*root)),
+                Err(ProofManagedNoteStarkErrorV1::InvalidProfile),
+                "a zero denominator must never produce an interpolated value"
+            );
+        }
+        assert_eq!(
+            oracle.evaluate_extension(E::noncanonical_fixture_v1()),
+            Err(ProofManagedNoteStarkErrorV1::InvalidProfile)
+        );
     }
 
     #[test]
