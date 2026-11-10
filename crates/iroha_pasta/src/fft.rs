@@ -21,11 +21,25 @@
 //! into the first pass of [`FftDomain::coset_fft`]; the inverse transforms fuse
 //! the `1/n` scaling (and the inverse shift) into the final reordering pass.
 //!
+//! # Scheduling
+//!
+//! A transform offers each pass over the whole array as [`TASKS_PER_WORKER`]
+//! tasks per worker, and a block that finishes depth first offers its quarters
+//! once it is larger than that share, so a worker on a slow core never holds
+//! more than a small part of a transform. A batch runs one claiming loop per
+//! worker: a loop takes the next column and transforms it with the same
+//! kernels. While every worker has a column, each column stays with its
+//! worker; a worker whose loop has ended takes tasks of the columns still
+//! running. A batch narrower than the pool, or one whose width is not a
+//! multiple of it, therefore keeps every worker busy to the end.
+//!
 //! # Determinism
 //!
 //! The transforms are exact field arithmetic, so the output is a pure function
 //! of the input regardless of the Rayon pool size or chunking.
 #![allow(clippy::many_single_char_names)]
+
+use std::sync::Mutex;
 
 use rayon::prelude::*;
 
@@ -35,6 +49,19 @@ use crate::{CancellationToken, Cancelled};
 /// Below this many elements per pass the transforms run on the calling
 /// thread; above it they split work across the caller's Rayon pool.
 const PARALLEL_MIN: usize = 1 << 12;
+
+/// Tasks per worker that a pass over the whole array, and the depth-first
+/// stage after it, offer the pool. A pass split into one or two tasks per
+/// worker lasts as long as its slowest worker's share, and the cores of one
+/// phone differ about six-fold in speed. Eight tasks bound that share at an
+/// eighth of a fair one, at no measurable cost on equal cores.
+const TASKS_PER_WORKER: usize = 8;
+
+/// Fewest butterflies in one task of a parallel pass.
+const PASS_TASK_MIN: usize = 64;
+
+/// Fewest elements a depth-first block offers the pool as one task.
+const LEAF_MIN: usize = 256;
 
 /// At most this many elements per block finish their remaining stages
 /// depth first. 2^12 elements of 32 bytes is 128 KiB, inside the L2 cache of
@@ -153,9 +180,9 @@ impl<F: PastaField> CosetFftPlan<'_, '_, F> {
             dif::<_, true>(column, &self.domain.forward, shift, cancellation);
             bit_reverse_scale::<_, true>(column, self.domain.k, None, cancellation);
         } else {
-            columns.par_iter_mut().for_each(|column| {
-                dif::<_, false>(column, &self.domain.forward, shift, cancellation);
-                bit_reverse_scale::<_, false>(column, self.domain.k, None, cancellation);
+            claim_each(columns.iter_mut(), |column| {
+                dif::<_, true>(column, &self.domain.forward, shift, cancellation);
+                bit_reverse_scale::<_, true>(column, self.domain.k, None, cancellation);
             });
         }
         CancellationToken::checkpoint(cancellation)?;
@@ -208,35 +235,19 @@ impl<F: PastaField> CosetFftPlan<'_, '_, F> {
             );
             bit_reverse_scale::<_, true>(column, self.domain.k, None, cancellation);
         } else {
-            // Two k16 columns otherwise occupy only half of a four-worker pool.
-            // Keep the disjoint outer tasks and let their existing kernels split
-            // within the same pool. Other public shapes retain column scheduling.
-            let cooperative =
-                self.domain.k == 16 && columns.len() == 2 && rayon::current_num_threads() == 4;
-            columns
-                .par_iter_mut()
-                .zip(sources.par_iter())
-                .for_each(|(column, source)| {
-                    if cooperative {
-                        dif_from::<_, true>(
-                            source,
-                            column,
-                            &self.domain.forward,
-                            self.powers,
-                            cancellation,
-                        );
-                        bit_reverse_scale::<_, true>(column, self.domain.k, None, cancellation);
-                    } else {
-                        dif_from::<_, false>(
-                            source,
-                            column,
-                            &self.domain.forward,
-                            self.powers,
-                            cancellation,
-                        );
-                        bit_reverse_scale::<_, false>(column, self.domain.k, None, cancellation);
-                    }
-                });
+            claim_each(
+                columns.iter_mut().zip(sources.iter()),
+                |(column, source)| {
+                    dif_from::<_, true>(
+                        source,
+                        column,
+                        &self.domain.forward,
+                        self.powers,
+                        cancellation,
+                    );
+                    bit_reverse_scale::<_, true>(column, self.domain.k, None, cancellation);
+                },
+            );
         }
         CancellationToken::checkpoint(cancellation)?;
         Ok(())
@@ -427,12 +438,12 @@ impl<F: PastaField> FftDomain<F> {
 
     /// Evaluates several coefficient columns on the same coset, in place.
     ///
-    /// Multiple columns run independently across the caller's Rayon pool;
-    /// each uses the same butterfly arithmetic as [`Self::coset_fft`], without
-    /// nested parallel passes. One column retains the single-transform
-    /// scheduling. The domain's immutable twiddles are shared and no field
-    /// scratch buffers are allocated. Column order and worker count cannot
-    /// affect the output.
+    /// Multiple columns are claimed one at a time by the workers of the
+    /// caller's Rayon pool (see the module's scheduling notes); each uses the
+    /// same butterfly arithmetic and kernels as [`Self::coset_fft`]. One column
+    /// retains the single-transform scheduling. The domain's immutable twiddles
+    /// are shared and no field scratch buffers are allocated. Column order and
+    /// worker count cannot affect the output.
     ///
     /// # Errors
     ///
@@ -463,14 +474,14 @@ impl<F: PastaField> FftDomain<F> {
         if let [column] = columns {
             return self.coset_fft_cancellable(column, shift, cancellation);
         }
-        columns.par_iter_mut().for_each(|column| {
-            dif::<_, false>(
+        claim_each(columns.iter_mut(), |column| {
+            dif::<_, true>(
                 column,
                 &self.forward,
                 Some(CosetShift::Geometric(shift)),
                 cancellation,
             );
-            bit_reverse_scale::<_, false>(column, self.k, None, cancellation);
+            bit_reverse_scale::<_, true>(column, self.k, None, cancellation);
         });
         CancellationToken::checkpoint(cancellation)?;
         Ok(())
@@ -577,6 +588,41 @@ fn check_shift<F: PastaField>(shift: &F) -> Result<(), FftError> {
     }
 }
 
+/// Runs `transform` on every item with one claiming loop per worker of the
+/// caller's pool.
+///
+/// The loops are not pool tasks: a worker that waits for a task of its own
+/// column cannot start a whole other column in the meantime, which would
+/// leave the first one waiting for the second. A loop that finds the queue
+/// empty ends, and its worker then takes tasks of the columns still running.
+/// Every worker runs its loop once and the call returns when all have, so a
+/// worker held in a long task outside this batch delays the return until it
+/// yields. The queue lock covers only the hand-over of the next item.
+fn claim_each<T: Send>(items: impl Iterator<Item = T> + Send, transform: impl Fn(T) + Sync) {
+    let mut items = items.peekable();
+    if items.peek().is_none() {
+        // An empty batch wakes no worker.
+        return;
+    }
+    let queue = Mutex::new(items);
+    rayon::broadcast(|_| {
+        loop {
+            // A poisoned queue ends the loop: a transform has panicked and the
+            // broadcast reports it.
+            let next = queue.lock().ok().and_then(|mut queue| queue.next());
+            let Some(item) = next else {
+                return;
+            };
+            transform(item);
+        }
+    });
+}
+
+/// Butterflies per task of a parallel pass over `n` elements.
+fn pass_task(n: usize) -> usize {
+    (n / 4 / (rayon::current_num_threads() * TASKS_PER_WORKER)).max(PASS_TASK_MIN)
+}
+
 /// `tw[s][j] = w^j` with `w` the primitive `2^(s+1)`-th root, for `j < 2^s`.
 fn stage_twiddles<F: PastaField>(omega: F, k: u32) -> Vec<Vec<F>> {
     (0..k)
@@ -637,11 +683,15 @@ fn dif_stages<F: PastaField, const PARALLEL: bool>(
             && block <= DEPTH_FIRST_ELEMENTS
             && (!first || shift.is_none())
         {
-            let finish = |chunk: &mut [F]| dif_stages::<F, false>(chunk, tw, None, s, cancellation);
             if PARALLEL && n >= PARALLEL_MIN {
-                a.par_chunks_exact_mut(block).for_each(finish);
+                let leaf = (n / (rayon::current_num_threads() * TASKS_PER_WORKER))
+                    .clamp(LEAF_MIN, DEPTH_FIRST_ELEMENTS);
+                a.par_chunks_exact_mut(block)
+                    .with_max_len(1)
+                    .for_each(|chunk| dif_block_shared(chunk, tw, s, leaf, cancellation));
             } else {
-                a.chunks_exact_mut(block).for_each(finish);
+                a.chunks_exact_mut(block)
+                    .for_each(|chunk| dif_stages::<F, false>(chunk, tw, None, s, cancellation));
             }
             return;
         }
@@ -679,6 +729,32 @@ fn dif_stages<F: PastaField, const PARALLEL: bool>(
             body(a);
         }
     }
+}
+
+/// Finishes one depth-first block of `2^s` elements. A block larger than
+/// `leaf` runs its first two stages on the worker that holds it, still in that
+/// worker's cache, and then offers its quarters to the pool, so an idle worker
+/// can take over most of a block that a slower worker started. Quarters are
+/// independent from that stage on: only the order of exact butterflies changes.
+fn dif_block_shared<F: PastaField>(
+    a: &mut [F],
+    tw: &[Vec<F>],
+    s: usize,
+    leaf: usize,
+    cancellation: Option<&CancellationToken>,
+) {
+    if a.len() <= leaf || s < 4 {
+        dif_stages::<F, false>(a, tw, None, s, cancellation);
+        return;
+    }
+    if CancellationToken::checkpoint(cancellation).is_err() {
+        return;
+    }
+    let m = 1usize << (s - 2);
+    dif_pass4::<F, false>(a, m, &tw[s - 1], &tw[s - 2], None, cancellation);
+    a.par_chunks_exact_mut(m)
+        .with_max_len(1)
+        .for_each(|quarter| dif_block_shared(quarter, tw, s - 2, leaf, cancellation));
 }
 
 /// Shared two-stage butterfly; preserves the exact in-place operation order.
@@ -771,16 +847,14 @@ fn dif_from<F: PastaField, const PARALLEL: bool>(
     let (q2, q3) = rest.split_at_mut(m);
     if PARALLEL && n >= PARALLEL_MIN {
         // Same scheduling as the single large block of the in-place first pass.
-        let chunk = (m / (rayon::current_num_threads() * 2))
-            .max(256)
-            .min(m)
-            .max(1);
-        q0.par_chunks_mut(chunk)
-            .zip(q1.par_chunks_mut(chunk))
-            .zip(q2.par_chunks_mut(chunk))
-            .zip(q3.par_chunks_mut(chunk))
+        let task = pass_task(n).min(m);
+        q0.par_chunks_mut(task)
+            .zip(q1.par_chunks_mut(task))
+            .zip(q2.par_chunks_mut(task))
+            .zip(q3.par_chunks_mut(task))
             .enumerate()
-            .for_each(|(c, (((c0, c1), c2), c3))| butterfly(c0, c1, c2, c3, c * chunk));
+            .with_max_len(1)
+            .for_each(|(c, (((c0, c1), c2), c3))| butterfly(c0, c1, c2, c3, c * task));
     } else {
         butterfly(q0, q1, q2, q3, 0);
     }
@@ -846,38 +920,39 @@ fn dif_pass4<F: PastaField, const PARALLEL: bool>(
             *x3 = r3;
         }
     };
-    let blocks = n / block;
-    // A quarter no larger than the minimum inner chunk cannot split. Expose
-    // independent blocks instead of running one inner task per serial block.
-    if !PARALLEL || n < PARALLEL_MIN || blocks >= rayon::current_num_threads() * 4 || m <= 256 {
-        let run = |blk: &mut [F]| {
-            let (q0, rest) = blk.split_at_mut(m);
-            let (q1, rest) = rest.split_at_mut(m);
-            let (q2, q3) = rest.split_at_mut(m);
-            butterfly(q0, q1, q2, q3, 0);
-        };
-        if !PARALLEL || n < PARALLEL_MIN {
-            a.chunks_exact_mut(block).for_each(run);
-        } else {
-            a.par_chunks_exact_mut(block).for_each(run);
-        }
+    let run = |blk: &mut [F]| {
+        let (q0, rest) = blk.split_at_mut(m);
+        let (q1, rest) = rest.split_at_mut(m);
+        let (q2, q3) = rest.split_at_mut(m);
+        butterfly(q0, q1, q2, q3, 0);
+    };
+    if !PARALLEL || n < PARALLEL_MIN {
+        a.chunks_exact_mut(block).for_each(run);
+        return;
+    }
+    // One region per pass, in tasks of `task` butterflies each.
+    let task = pass_task(n);
+    if m <= task {
+        // A quarter no larger than a task cannot split: whole blocks share one.
+        a.par_chunks_mut(block * (task / m))
+            .with_max_len(1)
+            .for_each(|blocks| blocks.chunks_exact_mut(block).for_each(&run));
     } else {
-        // Few large blocks: split each block's j range across the pool.
-        let chunk = (m / (rayon::current_num_threads() * 2))
-            .max(256)
-            .min(m)
-            .max(1);
-        for blk in a.chunks_exact_mut(block) {
-            let (q0, rest) = blk.split_at_mut(m);
-            let (q1, rest) = rest.split_at_mut(m);
-            let (q2, q3) = rest.split_at_mut(m);
-            q0.par_chunks_mut(chunk)
-                .zip(q1.par_chunks_mut(chunk))
-                .zip(q2.par_chunks_mut(chunk))
-                .zip(q3.par_chunks_mut(chunk))
-                .enumerate()
-                .for_each(|(c, (((c0, c1), c2), c3))| butterfly(c0, c1, c2, c3, c * chunk));
-        }
+        // Larger blocks each offer their j range; no block waits for another.
+        a.par_chunks_exact_mut(block)
+            .with_max_len(1)
+            .for_each(|blk| {
+                let (q0, rest) = blk.split_at_mut(m);
+                let (q1, rest) = rest.split_at_mut(m);
+                let (q2, q3) = rest.split_at_mut(m);
+                q0.par_chunks_mut(task)
+                    .zip(q1.par_chunks_mut(task))
+                    .zip(q2.par_chunks_mut(task))
+                    .zip(q3.par_chunks_mut(task))
+                    .enumerate()
+                    .with_max_len(1)
+                    .for_each(|(c, (((c0, c1), c2), c3))| butterfly(c0, c1, c2, c3, c * task));
+            });
     }
 }
 
@@ -1065,6 +1140,81 @@ mod tests {
                             }
                         }
                     }
+                });
+            }
+        }
+        check::<Fp>();
+        check::<Fq>();
+    }
+
+    /// A batch gives every worker a claiming loop and every transform splits
+    /// its own passes. Batches narrower than the pool, wider than it by one, of
+    /// exactly its width, and batches started by tasks of the same pool must
+    /// all produce the outputs of single transforms.
+    #[test]
+    fn batches_of_every_width_match_single_transforms() {
+        fn batch_of<F: PastaField>(source: &[Vec<F>]) -> Vec<Vec<F>> {
+            source.to_vec()
+        }
+        fn check<F: PastaField>() {
+            for (workers, k) in [(1usize, 13u32), (3, 13), (3, 16), (8, 13)] {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(workers)
+                    .build()
+                    .unwrap();
+                pool.install(|| {
+                    let domain = FftDomain::<F>::new(k).unwrap();
+                    let shift = F::from(7);
+                    let widest = 2 * workers + 1;
+                    let source: Vec<Vec<F>> = (0..widest as u64)
+                        .map(|index| random_vec(domain.n(), 31 * u64::from(k) + index))
+                        .collect();
+                    let expected: Vec<Vec<F>> = source
+                        .iter()
+                        .map(|column| {
+                            let mut single = column.clone();
+                            domain.coset_fft(&mut single, shift).unwrap();
+                            single
+                        })
+                        .collect();
+                    let mut powers = vec![F::ZERO; domain.n()];
+                    let plan = domain.coset_plan(&mut powers, shift).unwrap();
+                    for width in [2, workers.max(2), workers + 1, widest] {
+                        let what = format!("k={k} workers={workers} width={width}");
+                        let mut outputs = vec![vec![F::ZERO; domain.n()]; width];
+                        let mut columns: Vec<_> =
+                            outputs.iter_mut().map(Vec::as_mut_slice).collect();
+                        plan.fft_many_from_cancellable(&source[..width], &mut columns, None)
+                            .unwrap();
+                        assert!(
+                            outputs[..] == expected[..width],
+                            "from coefficients, {what}"
+                        );
+                        let mut batch = batch_of(&source[..width]);
+                        let mut columns: Vec<_> = batch.iter_mut().map(Vec::as_mut_slice).collect();
+                        plan.fft_many(&mut columns).unwrap();
+                        assert!(batch[..] == expected[..width], "prepared in place, {what}");
+                        let mut batch = batch_of(&source[..width]);
+                        let mut columns: Vec<_> = batch.iter_mut().map(Vec::as_mut_slice).collect();
+                        domain.coset_fft_many(&mut columns, shift).unwrap();
+                        assert!(batch[..] == expected[..width], "in place, {what}");
+                    }
+                    // Two batches started by two tasks of this pool at once.
+                    let (mut left, mut right) = (batch_of(&source[..3]), batch_of(&source[..3]));
+                    rayon::join(
+                        || {
+                            let mut columns: Vec<_> =
+                                left.iter_mut().map(Vec::as_mut_slice).collect();
+                            domain.coset_fft_many(&mut columns, shift).unwrap();
+                        },
+                        || {
+                            let mut columns: Vec<_> =
+                                right.iter_mut().map(Vec::as_mut_slice).collect();
+                            domain.coset_fft_many(&mut columns, shift).unwrap();
+                        },
+                    );
+                    assert!(left[..] == expected[..3], "left of a join, k={k}");
+                    assert!(right[..] == expected[..3], "right of a join, k={k}");
                 });
             }
         }
