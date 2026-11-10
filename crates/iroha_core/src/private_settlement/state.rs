@@ -974,7 +974,6 @@ where
     availability.validate_for(payload)?;
     validate_private_settlement_audit_approvals_v1(approvals, policy, payload, current_height)
         .map_err(|_| PrivateSettlementStateErrorV1::Approvals)?;
-    verify_proof()?;
 
     if pool_governance.governance_digest == zero_hash_v1()
         || pool_governance.governance_digest != pool_state.restricted_pool_policy_digest
@@ -1014,6 +1013,10 @@ where
     {
         return Err(PrivateSettlementStateErrorV1::CallerSelectedSuccessor);
     }
+    // Every gate above reads only public state and the leg's own bytes. The native
+    // proof verifier runs last, so a stale, replayed or misrouted leg is refused
+    // without its cost. No verified leg is returned unless it has succeeded.
+    verify_proof()?;
     let manifest_digest = manifest
         .manifest_digest()
         .map_err(|_| PrivateSettlementStateErrorV1::CanonicalEncoding)?;
@@ -1040,6 +1043,43 @@ where
             .map_err(|_| PrivateSettlementStateErrorV1::CanonicalEncoding)?;
     verified.validate_digest()?;
     Ok(verified)
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+/// Run every committee state gate with a caller-observed stand-in for the STARK verifier.
+///
+/// This test-only seam lets a test see whether, and how often, a leg reaches
+/// proof verification.
+pub fn validate_private_settlement_leg_with_proof_probe_for_test_v1<F>(
+    manifest: &AtomicPrivateSettlementV1,
+    payload: &PrivateSettlementLegPayloadV1,
+    policy: &PrivateSettlementAuditPolicyV1,
+    approvals: &[PrivateSettlementAuditApprovalV1],
+    availability: &PrivateSettlementDurableAvailabilityV1,
+    pool_state: &PrivateSettlementPoolStateV1,
+    pool_governance: &PrivateSettlementPoolGovernanceProjectionV1,
+    existing_nullifiers: &BTreeSet<PrivacyNullifierV1>,
+    existing_commitments: &BTreeSet<PrivacyCommitmentV1>,
+    current_height: u64,
+    verify_proof: F,
+) -> Result<ValidatedPrivateSettlementLegV1, PrivateSettlementStateErrorV1>
+where
+    F: FnOnce() -> Result<(), PrivateSettlementStateErrorV1>,
+{
+    validate_private_settlement_leg_with_proof_verifier_v1(
+        manifest,
+        payload,
+        policy,
+        approvals,
+        availability,
+        pool_state,
+        pool_governance,
+        existing_nullifiers,
+        existing_commitments,
+        current_height,
+        verify_proof,
+    )
 }
 
 #[cfg(test)]

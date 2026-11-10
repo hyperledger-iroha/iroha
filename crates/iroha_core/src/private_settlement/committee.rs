@@ -24,9 +24,8 @@ use crate::private_settlement::state::{
 };
 use crate::state::{StateView, WorldView};
 use iroha_crypto::Hash;
-#[cfg(test)]
-use iroha_data_model::nexus::PrivateSettlementNullifierKeyV1;
 use iroha_data_model::nexus::{
+    PrivateSettlementNullifierKeyV1, PrivateSettlementOutputKeyV1,
     PrivateSettlementPoolGovernanceProjectionV1, PrivateSettlementPoolKeyV1,
     PrivateSettlementPoolStateV1,
 };
@@ -35,7 +34,6 @@ use iroha_data_model::{
     privacy::{PrivacyCommitmentV1, PrivacyNullifierV1},
 };
 use iroha_model_base::peer::PeerId;
-use mv::storage::StorageReadOnly as _;
 use std::collections::BTreeSet;
 use thiserror::Error;
 
@@ -43,7 +41,9 @@ struct PrivateSettlementCommitteeValidationInputsV1 {
     material: PrivateSettlementCommitteeValidationMaterialV1,
     pool_state: PrivateSettlementPoolStateV1,
     pool_governance: PrivateSettlementPoolGovernanceProjectionV1,
+    /// Those of the leg's own nullifiers that its pool has already finalized.
     existing_nullifiers: BTreeSet<PrivacyNullifierV1>,
+    /// Those of the leg's own output commitments that its pool has already finalized.
     existing_commitments: BTreeSet<PrivacyCommitmentV1>,
     canonical_genesis_hash: [u8; 32],
     current_height: u64,
@@ -146,15 +146,37 @@ where
     {
         return Err(PrivateSettlementCommitteeErrorV1);
     }
-    let existing_nullifiers = world
-        .private_settlement_nullifiers
+    // Validation asks only whether this leg's own nullifiers and output
+    // commitments are already finalized in its pool. Read exactly those keys;
+    // both tables grow with every settlement in every pool.
+    let statement = &material.payload.statement;
+    let existing_nullifiers = statement
+        .nullifiers
         .iter()
-        .filter_map(|(key, _)| (key.pool == pool_key).then_some(key.nullifier))
+        .copied()
+        .filter(|nullifier| {
+            world
+                .private_settlement_nullifiers
+                .get(&PrivateSettlementNullifierKeyV1 {
+                    pool: pool_key,
+                    nullifier: *nullifier,
+                })
+                .is_some()
+        })
         .collect::<BTreeSet<_>>();
-    let existing_commitments = world
-        .private_settlement_outputs
+    let existing_commitments = statement
+        .output_commitments
         .iter()
-        .filter_map(|(key, _)| (key.pool == pool_key).then_some(key.commitment))
+        .copied()
+        .filter(|commitment| {
+            world
+                .private_settlement_outputs
+                .get(&PrivateSettlementOutputKeyV1 {
+                    pool: pool_key,
+                    commitment: *commitment,
+                })
+                .is_some()
+        })
         .collect::<BTreeSet<_>>();
     let inputs = PrivateSettlementCommitteeValidationInputsV1 {
         material,
@@ -190,7 +212,9 @@ mod tests {
     use super::*;
     use crate::{
         private_settlement::{
-            global_state::PrivateSettlementFinalizationReferenceV1,
+            global_state::{
+                PrivateSettlementFinalizationReferenceV1, PrivateSettlementOutputRecordV1,
+            },
             sidecar_store::{
                 PrivateSettlementSidecarLifecycleV1, PrivateSettlementSidecarStoreConfigV1,
                 tests::{
@@ -512,6 +536,31 @@ mod tests {
             Err(PrivateSettlementCommitteeErrorV1)
         );
 
+        let mut output_replay_world = world_with_pool(&fixture, fixture.pool.clone());
+        output_replay_world.private_settlement_outputs.insert(
+            PrivateSettlementOutputKeyV1 {
+                pool: pool_key,
+                commitment: fixture
+                    .restricted
+                    .sidecar
+                    .payload
+                    .statement
+                    .output_commitments[2],
+            },
+            prior_output_record(&fixture),
+        );
+        assert_eq!(
+            prepare_from_world(
+                &fixture,
+                &output_replay_world,
+                &store,
+                digest,
+                &fixture.restricted.validator,
+                12,
+            ),
+            Err(PrivateSettlementCommitteeErrorV1)
+        );
+
         let mut recipient_replay_world = world_with_pool(&fixture, fixture.pool.clone());
         recipient_replay_world
             .private_settlement_recipient_index
@@ -535,6 +584,169 @@ mod tests {
             ),
             Err(PrivateSettlementCommitteeErrorV1)
         );
+    }
+
+    /// A finalized output record owned by an earlier bundle.
+    fn prior_output_record(fixture: &CommitteeFixtureV1) -> PrivateSettlementOutputRecordV1 {
+        PrivateSettlementOutputRecordV1 {
+            reference: PrivateSettlementFinalizationReferenceV1 {
+                bundle_id: Hash::new(b"prior output bundle"),
+                receipt_digest: Hash::new(b"prior output receipt"),
+                leg_ordinal: 0,
+                finalized_height: 11,
+            },
+            encrypted_output: fixture.restricted.sidecar.payload.delta.encrypted_outputs[0].clone(),
+        }
+    }
+
+    #[test]
+    fn finalized_identifiers_outside_the_leg_or_its_pool_do_not_block_prepare() {
+        let fixture = align_fixture_with_governed_pool(sidecar_fixture());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (store, digest) = open_and_audit(&fixture, temp.path());
+        let statement = &fixture.restricted.sidecar.payload.statement;
+        let pool_key =
+            PrivateSettlementPoolKeyV1::new(fixture.pool.route(), fixture.pool.pool_id())
+                .expect("fixture pool key");
+        let other_pool = PrivateSettlementPoolKeyV1 {
+            route: pool_key.route,
+            pool_id: iroha_data_model::privacy::PrivacyPoolIdV1::new([0xD7; 32]),
+        };
+        assert_ne!(other_pool, pool_key);
+        let reference = prior_output_record(&fixture).reference;
+
+        let mut world = world_with_pool(&fixture, fixture.pool.clone());
+        // The leg's own identifiers, finalized in a different pool of the same route.
+        for nullifier in &statement.nullifiers {
+            world.private_settlement_nullifiers.insert(
+                PrivateSettlementNullifierKeyV1 {
+                    pool: other_pool,
+                    nullifier: *nullifier,
+                },
+                reference,
+            );
+        }
+        for commitment in &statement.output_commitments {
+            world.private_settlement_outputs.insert(
+                PrivateSettlementOutputKeyV1 {
+                    pool: other_pool,
+                    commitment: *commitment,
+                },
+                prior_output_record(&fixture),
+            );
+        }
+        // Unrelated identifiers finalized in the leg's own pool.
+        let unrelated_nullifier = PrivacyNullifierV1::new([0xC3; 32]);
+        let unrelated_commitment = PrivacyCommitmentV1::new([0xC4; 32]);
+        assert!(!statement.nullifiers.contains(&unrelated_nullifier));
+        assert!(!statement.output_commitments.contains(&unrelated_commitment));
+        world.private_settlement_nullifiers.insert(
+            PrivateSettlementNullifierKeyV1 {
+                pool: pool_key,
+                nullifier: unrelated_nullifier,
+            },
+            reference,
+        );
+        world.private_settlement_outputs.insert(
+            PrivateSettlementOutputKeyV1 {
+                pool: pool_key,
+                commitment: unrelated_commitment,
+            },
+            prior_output_record(&fixture),
+        );
+
+        let candidate = prepare_from_world(
+            &fixture,
+            &world,
+            &store,
+            digest,
+            &fixture.restricted.validator,
+            12,
+        )
+        .expect("only the leg's own identifiers in its own pool can conflict");
+        assert_eq!(candidate.phase, PrivateSettlementPhaseV1::Prepare);
+    }
+
+    #[test]
+    fn proof_verification_runs_last_and_only_for_an_admissible_leg() {
+        use crate::private_settlement::state::validate_private_settlement_leg_with_proof_probe_for_test_v1;
+
+        let fixture = align_fixture_with_governed_pool(sidecar_fixture());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (store, digest) = open_and_audit(&fixture, temp.path());
+        let proof_checks = std::cell::Cell::new(0_u32);
+        // The stand-in verifier counts its calls and then refuses, so no leg is staged.
+        let prepare = |world: &World| {
+            prepare_private_settlement_leg_from_world_v1(
+                &world.view(),
+                &store,
+                digest,
+                &fixture.restricted.validator,
+                *fixture.restricted.sidecar.manifest.network_id.as_bytes(),
+                12,
+                |inputs: &PrivateSettlementCommitteeValidationInputsV1| {
+                    validate_private_settlement_leg_with_proof_probe_for_test_v1(
+                        &inputs.material.manifest,
+                        &inputs.material.payload,
+                        &inputs.material.policy,
+                        &inputs.material.audit_approvals,
+                        &inputs.material.availability,
+                        &inputs.pool_state,
+                        &inputs.pool_governance,
+                        &inputs.existing_nullifiers,
+                        &inputs.existing_commitments,
+                        inputs.current_height,
+                        || {
+                            proof_checks.set(proof_checks.get() + 1);
+                            Err(PrivateSettlementStateErrorV1::Proof)
+                        },
+                    )
+                },
+            )
+        };
+
+        let stale_pool = PrivateSettlementPoolStateV1::bootstrap(
+            fixture.pool.route(),
+            fixture.pool.pool_id(),
+            fixture.governance.governance_digest,
+            &[PrivacyCommitmentV1::new([0xEE; 32])],
+        )
+        .expect("different authoritative pool head");
+        assert_eq!(
+            prepare(&world_with_pool(&fixture, stale_pool)),
+            Err(PrivateSettlementCommitteeErrorV1)
+        );
+        assert_eq!(
+            proof_checks.get(),
+            0,
+            "a stale pool head needs no proof check"
+        );
+
+        let mut replay_world = world_with_pool(&fixture, fixture.pool.clone());
+        replay_world.private_settlement_nullifiers.insert(
+            PrivateSettlementNullifierKeyV1 {
+                pool: PrivateSettlementPoolKeyV1::new(fixture.pool.route(), fixture.pool.pool_id())
+                    .expect("fixture pool key"),
+                nullifier: fixture.restricted.sidecar.payload.statement.nullifiers[1],
+            },
+            prior_output_record(&fixture).reference,
+        );
+        assert_eq!(
+            prepare(&replay_world),
+            Err(PrivateSettlementCommitteeErrorV1)
+        );
+        assert_eq!(
+            proof_checks.get(),
+            0,
+            "a spent nullifier needs no proof check"
+        );
+
+        assert_eq!(
+            prepare(&world_with_pool(&fixture, fixture.pool.clone())),
+            Err(PrivateSettlementCommitteeErrorV1),
+            "the refusing stand-in verifier decides an otherwise admissible leg"
+        );
+        assert_eq!(proof_checks.get(), 1);
     }
 
     #[test]

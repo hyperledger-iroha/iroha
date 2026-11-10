@@ -513,7 +513,10 @@ Collecting -> Audited -> Prepared -> CommitCertified -> Finalized
 3. Every committee validator independently verifies the proof, approvals,
    current governed pool head, nullifier/output uniqueness, expiry, fixed shape,
    and durable availability. It fsyncs the verified delta and reservations
-   before returning its Prepare vote.
+   before returning its Prepare vote. The gates that read only public state and
+   the leg's own bytes run first, with keyed reads of exactly the leg's two
+   nullifiers and three output commitments; the native proof verifier runs last,
+   so a stale or replayed leg is refused without its cost.
 4. The coordinator selects the canonical lowest exact three valid votes and
    persists the resulting Prepare QC on every successfully staged responder.
    Once every leg has a Prepare QC, the complete Prepare barrier is immutable.
