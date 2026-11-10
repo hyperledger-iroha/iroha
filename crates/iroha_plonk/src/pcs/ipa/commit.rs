@@ -49,7 +49,8 @@ use iroha_pasta::{
     CancellationToken, PastaAffine, PastaCurve, PastaField,
     msm::{
         BoundedSecretScalars, FixedBaseTable, MemoryBudget, MsmError, SharedMemoryBudget,
-        msm_public_cancellable, msm_secret_bounded_cancellable, msm_secret_cancellable,
+        msm_public_cancellable, msm_secret_bounded_cancellable,
+        msm_secret_bounded_columns_cancellable, msm_secret_cancellable,
         msm_secret_columns_cancellable,
     },
     params::ParamsIpa,
@@ -472,6 +473,130 @@ impl<C: PastaCurve> CommitmentTables<C> {
         *sum += params.w().to_curve() * *blind;
         CancellationToken::checkpoint(cancellation)?;
         Ok(*sum)
+    }
+
+    /// Commits several secret evaluation columns of one length, in order. Column
+    /// `j` with bound `Some(bits)` is the point
+    /// [`Self::commit_lagrange_bounded_prefix_cancellable`] returns for
+    /// `(prefix_len, bits)`; with `None` it is the point
+    /// [`Self::commit_lagrange_cancellable`] returns for a secret column.
+    ///
+    /// Without a `g_lagrange` table every prefix is checked against its bound
+    /// first (an unbounded column against 255 bits, which every scalar meets),
+    /// then all prefixes share one [`msm_secret_bounded_columns_cancellable`]
+    /// and all random paddings one [`msm_secret_columns_cancellable`]. One
+    /// narrow column alone keeps few workers busy: sixteen 15-bit k16 columns
+    /// took 358-393 ms one at a time on a Pixel 6 and 171 ms in one batch. A
+    /// table keeps every column's single-column route, in order.
+    ///
+    /// # Errors
+    /// [`MsmError::LengthMismatch`] for unequal column and blind counts, unequal
+    /// column lengths, a column shorter than `prefix_len` or longer than the
+    /// bases; otherwise as the single-column methods, so a prefix value at or
+    /// above its bound is [`MsmError::ScalarBound`] before any MSM runs.
+    pub(crate) fn commit_lagrange_bounded_prefix_columns_cancellable(
+        &self,
+        params: &ParamsIpa<C>,
+        columns: &[(&[C::ScalarExt], Option<usize>)],
+        prefix_len: usize,
+        blinds: &[C::ScalarExt],
+        budget: MemoryBudget,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<Vec<C>, MsmError> {
+        if columns.len() != blinds.len() {
+            return Err(MsmError::LengthMismatch(iroha_pasta::LengthMismatch {
+                left: columns.len(),
+                right: blinds.len(),
+            }));
+        }
+        if self.g_lagrange.is_some() {
+            return columns
+                .iter()
+                .zip(blinds)
+                .map(|((values, bound), blind)| match bound {
+                    Some(bits) => self.commit_lagrange_bounded_prefix_cancellable(
+                        params,
+                        values,
+                        (prefix_len, *bits),
+                        blind,
+                        budget,
+                        cancellation,
+                    ),
+                    None => self.commit_lagrange_cancellable(
+                        params,
+                        values,
+                        blind,
+                        Secrecy::Secret,
+                        budget,
+                        cancellation,
+                    ),
+                })
+                .collect();
+        }
+        CancellationToken::checkpoint(cancellation)?;
+        let Some((first, _)) = columns.first() else {
+            return Ok(Vec::new());
+        };
+        let len = first.len();
+        let all_bases = params.g_lagrange();
+        let bases =
+            all_bases
+                .get(..len)
+                .ok_or(MsmError::LengthMismatch(iroha_pasta::LengthMismatch {
+                    left: len,
+                    right: all_bases.len(),
+                }))?;
+        let checked = columns
+            .iter()
+            .map(|(values, bound)| {
+                if values.len() != len {
+                    return Err(MsmError::LengthMismatch(iroha_pasta::LengthMismatch {
+                        left: values.len(),
+                        right: len,
+                    }));
+                }
+                let prefix = values.get(..prefix_len).ok_or(MsmError::LengthMismatch(
+                    iroha_pasta::LengthMismatch {
+                        left: prefix_len,
+                        right: values.len(),
+                    },
+                ))?;
+                BoundedSecretScalars::new(prefix, bound.unwrap_or(255), cancellation)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        #[cfg(test)]
+        for _ in columns {
+            test_observation::record();
+        }
+        let shared = SharedMemoryBudget::process_default();
+        let prefixes = zeroize::Zeroizing::new(msm_secret_bounded_columns_cancellable::<C>(
+            &checked,
+            &bases[..prefix_len],
+            budget,
+            &shared,
+            cancellation,
+        )?);
+        // The prefix kernels have released their scratch before the paddings.
+        let tails: Vec<&[C::ScalarExt]> = columns
+            .iter()
+            .map(|(values, _)| &values[prefix_len..])
+            .collect();
+        let paddings = zeroize::Zeroizing::new(msm_secret_columns_cancellable::<C>(
+            &tails,
+            &bases[prefix_len..],
+            budget,
+            &shared,
+            cancellation,
+        )?);
+        let w = params.w().to_curve();
+        let commitments = prefixes
+            .iter()
+            .zip(paddings.iter())
+            .zip(blinds)
+            .map(|((prefix, padding), blind)| *prefix + *padding + w * *blind)
+            .collect();
+        CancellationToken::checkpoint(cancellation)?;
+        Ok(commitments)
     }
 
     /// Commits with a caller-owned cancellation signal, joining every task.

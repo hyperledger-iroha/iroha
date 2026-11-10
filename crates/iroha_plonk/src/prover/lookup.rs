@@ -39,10 +39,7 @@ use super::{
     write_point,
 };
 use crate::{
-    keys::ProvingKey,
-    pcs::ipa::{PinnedParams, commit::Secrecy},
-    protocol::Shape,
-    transcript::TranscriptWrite,
+    keys::ProvingKey, pcs::ipa::PinnedParams, protocol::Shape, transcript::TranscriptWrite,
 };
 
 /// A lookup after its permuted columns are committed.
@@ -295,6 +292,11 @@ fn public_table_bits<F: PastaField>(
 /// Compresses, permutes (with `permutation`), blinds, commits and writes
 /// every lookup's `A'` and `S'` (`BlindingScheduleV1` item 2).
 ///
+/// Every lookup is permuted and its padding and blinds drawn in lookup order
+/// first; every `A'` and `S'` is then committed in one batch (narrow prefixes
+/// at their public table bound) and the points written in the same order, so
+/// the proof bytes equal committing one column at a time.
+///
 /// # Errors
 ///
 /// [`ProverError::LookupInputMissing`], or MSM, FFT and transcript errors.
@@ -333,6 +335,7 @@ where
     let mut compressed = crate::secret::SecretLookupColumns::new(compressed);
     let tables = pk.commitment_tables();
     let mut permuted = Vec::with_capacity(compressed.len());
+    let mut bounds = Vec::with_capacity(compressed.len());
     for (lookup, (compressed_input, compressed_table)) in compressed.iter_mut().enumerate() {
         CancellationToken::checkpoint(cancellation)?;
         let compressed_input = SecretPolynomial::new(core::mem::take(compressed_input));
@@ -359,34 +362,7 @@ where
         } else {
             None
         };
-        let commit = |values: &[C::ScalarExt], blind: &C::ScalarExt| {
-            public_bits.map_or_else(
-                || {
-                    tables.commit_lagrange_cancellable(
-                        params.params(),
-                        values,
-                        blind,
-                        Secrecy::Secret,
-                        budget,
-                        cancellation,
-                    )
-                },
-                |bits| {
-                    tables.commit_lagrange_bounded_prefix_cancellable(
-                        params.params(),
-                        values,
-                        (shape.usable_rows, bits),
-                        blind,
-                        budget,
-                        cancellation,
-                    )
-                },
-            )
-        };
-        let input_commitment = commit(&permuted_input, &input_blind)?.to_affine();
-        let table_commitment = commit(&permuted_table, &table_blind)?.to_affine();
-        write_point(transcript, &input_commitment)?;
-        write_point(transcript, &table_commitment)?;
+        bounds.push(public_bits);
         permuted.push(Permuted {
             compressed_input: compressed_input.into_vec(),
             compressed_table: compressed_table.into_vec(),
@@ -395,6 +371,33 @@ where
             input_blind,
             table_blind,
         });
+    }
+    let columns: Vec<(&[C::ScalarExt], Option<usize>)> = permuted
+        .iter()
+        .zip(&bounds)
+        .flat_map(|(lookup, bound)| {
+            [
+                (&lookup.input_values[..], *bound),
+                (&lookup.table_values[..], *bound),
+            ]
+        })
+        .collect();
+    let blinds = SecretPolynomial::new(
+        permuted
+            .iter()
+            .flat_map(|lookup| [lookup.input_blind, lookup.table_blind])
+            .collect(),
+    );
+    let commitments = tables.commit_lagrange_bounded_prefix_columns_cancellable(
+        params.params(),
+        &columns,
+        shape.usable_rows,
+        &blinds,
+        budget,
+        cancellation,
+    )?;
+    for commitment in &commitments {
+        write_point(transcript, &commitment.to_affine())?;
     }
     Ok(permuted)
 }
@@ -518,6 +521,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        pcs::ipa::commit::Secrecy,
         protocol::Protocol,
         test_circuits::{BUDGET, CHOICES, Lookups, setup},
         transcript::{Blake2bHash, TranscriptWriter},
