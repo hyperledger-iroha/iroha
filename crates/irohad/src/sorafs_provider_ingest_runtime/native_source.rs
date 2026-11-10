@@ -197,6 +197,7 @@ impl ProviderIngestAuthenticatedSourceFetchV1 for NativeAssignedSourceV1 {
                             deadline,
                             index: 0,
                             chunk: io::Cursor::new(Vec::new()),
+                            busy_retry_delay: SOURCE_BUSY_RETRY_INITIAL_V1,
                         };
                         // Every read rechecks native authority and its chunk digest. Ordinary storage
                         // ingest validates the whole CAR, payload, PoR and PDP before admitting the pin.
@@ -286,6 +287,11 @@ fn fetch_response(
         .body(bytes)
         .send()
         .map_err(|_| rejected())?;
+    // A source whose signed-request replay window or query admission is full can serve the same
+    // request shortly; report it as temporarily unavailable rather than as a rejection.
+    if source_busy(response.status()) {
+        return Err(ProviderIngestSourceFetchErrorV1::Unavailable);
+    }
     if !response.status().is_success()
         || response.headers().get_all("Content-Type").iter().count() != 1
         || response
@@ -323,6 +329,35 @@ fn fetch_response(
     )
     .map_err(|_| rejected())?;
     Ok(result)
+}
+
+// First and longest wait before re-requesting a chunk from a source that answered busy.
+const SOURCE_BUSY_RETRY_INITIAL_V1: Duration = Duration::from_millis(250);
+const SOURCE_BUSY_RETRY_MAX_V1: Duration = Duration::from_secs(8);
+
+fn source_busy(status: reqwest::StatusCode) -> bool {
+    matches!(
+        status,
+        reqwest::StatusCode::TOO_MANY_REQUESTS | reqwest::StatusCode::SERVICE_UNAVAILABLE
+    )
+}
+
+// Sleep `delay` and double it (capped) when the attempt deadline still allows a retry after it.
+fn wait_for_busy_source(delay: &mut Duration, deadline: Instant) -> bool {
+    let wait = *delay;
+    if Instant::now()
+        .checked_add(wait)
+        .is_none_or(|resume| resume >= deadline)
+    {
+        return false;
+    }
+    std::thread::sleep(wait);
+    *delay = next_busy_retry_delay(wait);
+    true
+}
+
+fn next_busy_retry_delay(delay: Duration) -> Duration {
+    delay.saturating_mul(2).min(SOURCE_BUSY_RETRY_MAX_V1)
 }
 
 fn response_matches_request(
@@ -390,6 +425,7 @@ struct AssignedChunkReaderV1 {
     deadline: Instant,
     index: usize,
     chunk: io::Cursor<Vec<u8>>,
+    busy_retry_delay: Duration,
 }
 impl Read for AssignedChunkReaderV1 {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
@@ -409,24 +445,37 @@ impl Read for AssignedChunkReaderV1 {
                     .map_err(|_| io::Error::other("native source index rejected"))?,
             );
             let mut verified = None;
+            let mut busy = false;
             for (provider, endpoint) in &self.candidates {
                 self.wire.source_provider = *provider;
-                if let Ok(response) = fetch_response(
+                match fetch_response(
                     &self.resolver,
                     &self.client,
                     endpoint,
                     &self.wire,
                     self.deadline,
-                ) && let ProviderSourceResponseV1::Chunk(upload) = response
-                    && verified_chunk(&self.header, self.index, &upload)
-                {
-                    verified = Some(upload.bytes);
-                    break;
+                ) {
+                    Ok(ProviderSourceResponseV1::Chunk(upload))
+                        if verified_chunk(&self.header, self.index, &upload) =>
+                    {
+                        verified = Some(upload.bytes);
+                        break;
+                    }
+                    Err(ProviderIngestSourceFetchErrorV1::Unavailable) => busy = true,
+                    _ => {}
                 }
             }
-            self.chunk = io::Cursor::new(
-                verified.ok_or_else(|| io::Error::other("native assigned source unavailable"))?,
-            );
+            let Some(bytes) = verified else {
+                // A busy source can serve this chunk shortly. Wait inside this attempt's deadline
+                // instead of failing the attempt, which discards every staged chunk and spends a
+                // bounded retry.
+                if busy && wait_for_busy_source(&mut self.busy_retry_delay, self.deadline) {
+                    continue;
+                }
+                return Err(io::Error::other("native assigned source unavailable"));
+            };
+            self.busy_retry_delay = SOURCE_BUSY_RETRY_INITIAL_V1;
+            self.chunk = io::Cursor::new(bytes);
             self.index += 1;
         }
     }
@@ -499,6 +548,47 @@ mod tests {
         request.chunk_index = None;
         request.assignment_revision += 1;
         assert!(!response_matches_request(&metadata, &request));
+    }
+    #[test]
+    fn busy_sources_are_retried_with_capped_backoff_inside_the_deadline() {
+        assert!(source_busy(reqwest::StatusCode::TOO_MANY_REQUESTS));
+        assert!(source_busy(reqwest::StatusCode::SERVICE_UNAVAILABLE));
+        for status in [
+            reqwest::StatusCode::OK,
+            reqwest::StatusCode::FORBIDDEN,
+            reqwest::StatusCode::NOT_FOUND,
+            reqwest::StatusCode::PAYLOAD_TOO_LARGE,
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+        ] {
+            assert!(
+                !source_busy(status),
+                "{status} is not a transient busy answer"
+            );
+        }
+        // Each wait doubles the next one, up to the cap.
+        let mut delay = Duration::from_millis(1);
+        assert!(wait_for_busy_source(
+            &mut delay,
+            Instant::now() + Duration::from_secs(30)
+        ));
+        assert_eq!(delay, Duration::from_millis(2));
+        assert_eq!(
+            next_busy_retry_delay(SOURCE_BUSY_RETRY_MAX_V1 - Duration::from_millis(1)),
+            SOURCE_BUSY_RETRY_MAX_V1
+        );
+        assert_eq!(
+            next_busy_retry_delay(SOURCE_BUSY_RETRY_MAX_V1),
+            SOURCE_BUSY_RETRY_MAX_V1
+        );
+        // A wait that would reach the attempt deadline fails the read instead of sleeping.
+        let mut long = SOURCE_BUSY_RETRY_MAX_V1;
+        let started = Instant::now();
+        assert!(!wait_for_busy_source(
+            &mut long,
+            Instant::now() + Duration::from_millis(5)
+        ));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(long, SOURCE_BUSY_RETRY_MAX_V1);
     }
     #[test]
     fn native_source_origins_require_explicit_tls_or_local_loopback() {

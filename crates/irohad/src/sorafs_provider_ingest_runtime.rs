@@ -1222,6 +1222,22 @@ impl ObservedArchivedFinalizedAssignmentLedgerV1 {
         Self { archived, probe }
     }
 }
+impl sorafs_node::provider_ingest_runtime::ProviderIngestFinalizedAnchorRetainerV1
+    for ObservedArchivedFinalizedAssignmentLedgerV1
+{
+    fn retain_exact_cursor(
+        &self,
+        cursor: ProviderIngestFinalizedCursorV1,
+    ) -> ProviderIngestFutureV1<
+        '_,
+        Result<
+            sorafs_node::provider_ingest_runtime::ProviderIngestFinalizedAnchorLeaseV1,
+            ProviderIngestFinalizedLedgerErrorV1,
+        >,
+    > {
+        sorafs_node::provider_ingest_runtime::ProviderIngestFinalizedAnchorRetainerV1::retain_exact_cursor(self.archived.as_ref(), cursor)
+    }
+}
 impl ProviderIngestFinalizedLedgerV1 for ObservedArchivedFinalizedAssignmentLedgerV1 {
     fn read_assignment_page(
         &self,
@@ -1268,9 +1284,6 @@ impl NativeProviderIngestLocalStorageV1 {
     }
 }
 
-/// Longest reuse of a successful staged-publisher authority check while the committed head is
-/// unchanged. Staging deadlines are hours away and the reader enforces its own deadline per call.
-const STAGED_PUBLISHER_AUTHORITY_MAX_AGE: Duration = Duration::from_secs(600);
 fn staged_publisher_authority_rejected_v1() -> StorageError {
     StorageError::Io(io::Error::new(
         io::ErrorKind::PermissionDenied,
@@ -1293,22 +1306,32 @@ fn current_staged_publisher_assignment_v1(
     let now = staged_publisher_unix_now_v1()?;
     current_staged_publisher_assignment_in_view_v1(&view, authorization, expected_revision, now)
 }
-/// Whether a successful staged-publisher check still stands: same committed head, and younger than
-/// [`STAGED_PUBLISHER_AUTHORITY_MAX_AGE`]. Any new block forces a full re-check.
-fn staged_publisher_check_stands_v1<H: PartialEq>(
-    verified: Option<&(H, Instant)>,
-    head: &H,
-    now: Instant,
-) -> bool {
-    verified.is_some_and(|(checked, at)| {
-        checked == head && now.saturating_duration_since(*at) < STAGED_PUBLISHER_AUTHORITY_MAX_AGE
-    })
+/// Capture the exact assignment revision and check current authority on every storage boundary.
+///
+/// An unchanged committed head cannot extend provider admission or establish that durable
+/// finality remains readable. Each invocation releases its State view before returning to storage.
+fn staged_publisher_authority_callback_v1<'a>(
+    state: &'a State,
+    authorization: &'a FinalizedProviderIngestAuthorizationV1,
+    mut now: impl FnMut() -> std::result::Result<u64, StorageError> + 'a,
+) -> std::result::Result<
+    (
+        u64,
+        impl FnMut() -> std::result::Result<(), StorageError> + 'a,
+    ),
+    StorageError,
+> {
+    let revision = {
+        let view = state.view();
+        current_staged_publisher_assignment_in_view_v1(&view, authorization, None, now()?)?
+    };
+    Ok((revision, move || {
+        let view = state.view();
+        current_staged_publisher_assignment_in_view_v1(&view, authorization, Some(revision), now()?)
+            .map(|_| ())
+    }))
 }
 /// Exact live-authority check for one committed view and wall-clock second.
-///
-/// The result depends only on the committed view (identified by its height and head hash) and the
-/// second used for staging-deadline checks. See [`staged_publisher_check_stands_v1`] for how long
-/// callers may reuse a successful result.
 fn current_staged_publisher_assignment_in_view_v1(
     view: &iroha_core::state::StateView<'_>,
     authorization: &FinalizedProviderIngestAuthorizationV1,
@@ -1553,47 +1576,12 @@ impl ProviderIngestLocalStorageV1<VerifiedProviderIngestPayloadV1>
                     if existing.is_some() {
                         return Ok(existing);
                     }
-                    // Authority is a function of the committed view plus far-off staging
-                    // deadlines (the reader separately enforces its own deadline on every call).
-                    // A full check can take tens of seconds when finality must be re-walked, so
-                    // reuse a successful check while the committed head is unchanged, for at most
-                    // STAGED_PUBLISHER_AUTHORITY_MAX_AGE; any new block forces a full re-check.
-                    let (revision, mut verified_head) = {
-                        let view = state.view();
-                        let now = staged_publisher_unix_now_v1()
-                            .map_err(|_| ProviderIngestLocalStorageErrorV1::Retryable)?;
-                        let revision = current_staged_publisher_assignment_in_view_v1(
-                            &view,
-                            &authorization,
-                            None,
-                            now,
-                        )
-                        .map_err(|_| ProviderIngestLocalStorageErrorV1::Retryable)?;
-                        (
-                            revision,
-                            Some(((view.height(), view.latest_block_hash()), Instant::now())),
-                        )
-                    };
-                    let mut current_authority = || -> std::result::Result<(), StorageError> {
-                        let view = state.view();
-                        let head = (view.height(), view.latest_block_hash());
-                        if staged_publisher_check_stands_v1(
-                            verified_head.as_ref(),
-                            &head,
-                            Instant::now(),
-                        ) {
-                            return Ok(());
-                        }
-                        let now = staged_publisher_unix_now_v1()?;
-                        current_staged_publisher_assignment_in_view_v1(
-                            &view,
-                            &authorization,
-                            Some(revision),
-                            now,
-                        )?;
-                        verified_head = Some((head, Instant::now()));
-                        Ok(())
-                    };
+                    let (revision, mut current_authority) = staged_publisher_authority_callback_v1(
+                        &state,
+                        &authorization,
+                        staged_publisher_unix_now_v1,
+                    )
+                    .map_err(|_| ProviderIngestLocalStorageErrorV1::Retryable)?;
                     if node
                         .ingest_staged_publisher_source(
                             &authorization,

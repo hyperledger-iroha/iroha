@@ -300,7 +300,8 @@ pub use provider_ingest_runtime::{
     ProviderIngestCompletionSignerErrorV1, ProviderIngestCompletionSignerQualificationV1,
     ProviderIngestCompletionSignerResolutionContextV1,
     ProviderIngestCompletionSignerResolverErrorV1, ProviderIngestCompletionSignerResolverV1,
-    ProviderIngestCompletionSignerV1, ProviderIngestFinalizedAssignmentPageV1,
+    ProviderIngestCompletionSignerV1, ProviderIngestFinalizedAnchorLeaseV1,
+    ProviderIngestFinalizedAnchorRetainerV1, ProviderIngestFinalizedAssignmentPageV1,
     ProviderIngestFinalizedAssignmentV1, ProviderIngestFinalizedClaimFactoryV1,
     ProviderIngestFinalizedLedgerErrorV1, ProviderIngestFinalizedLedgerV1,
     ProviderIngestFinalizedMusubiArchiveClaimV1, ProviderIngestFinalizedMusubiCompletionClaimV1,
@@ -3141,11 +3142,71 @@ pub trait RepairOrchestrator: Send + Sync + std::fmt::Debug {
         sink: &mut dyn FnMut(RepairChunkPayload) -> Result<(), RepairOrchestratorError>,
     ) -> Result<(), RepairOrchestratorError>;
 }
+/// Exclusive startup owner of the authenticated provider-ingest outbox.
+///
+/// Open this after adapter preflight and before archive reconciliation. It exposes
+/// pending admission pins without exposing a writer, then moves the exact outbox,
+/// its sealed authority and its retained filesystem lock into [`NodeHandle`].
+#[derive(Debug)]
+pub struct PreparedProviderIngestOutboxV1 {
+    outbox: ProviderIngestOutbox,
+}
+impl PreparedProviderIngestOutboxV1 {
+    /// Open the configured production outbox exactly once.
+    ///
+    /// # Errors
+    /// Rejects disabled or incomplete configuration and every sealed-checkpoint
+    /// qualification, ownership, rollback or durability failure.
+    pub fn open(
+        config: &StorageConfig,
+        runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1>,
+    ) -> Result<Self, ProviderIngestOutboxError> {
+        if !config.enabled() {
+            return Err(ProviderIngestOutboxError::InvalidPolicy);
+        }
+        let policy = config
+            .provider_ingest_outbox_policy()
+            .ok_or(ProviderIngestOutboxError::InvalidPolicy)?;
+        let binding = config
+            .provider_ingest_checkpoint_provider()
+            .cloned()
+            .ok_or(ProviderIngestOutboxError::InvalidCheckpointProviderBinding)?;
+        let outbox = ProviderIngestOutbox::open_with_checkpoint_authority(
+            config.data_dir().join(PROVIDER_INGEST_OUTBOX_FILE_V1),
+            policy,
+            binding,
+            runtime,
+        )?;
+        Ok(Self { outbox })
+    }
+
+    /// Read every non-terminal job's immutable admission cursor from the sealed outbox.
+    ///
+    /// # Errors
+    /// Fails closed if its filesystem ownership or sealed authority changed.
+    pub fn active_admission_cursors(
+        &self,
+    ) -> Result<Vec<ProviderIngestFinalizedCursorV1>, ProviderIngestOutboxError> {
+        self.outbox.active_admission_cursors()
+    }
+
+    fn into_outbox(
+        self,
+        path: &std::path::Path,
+        policy: ProviderIngestOutboxPolicyV1,
+        binding: &ProviderIngestCheckpointProviderBindingV1,
+    ) -> Result<ProviderIngestOutbox, ProviderIngestOutboxError> {
+        self.outbox
+            .revalidate_startup_binding(path, policy, binding)?;
+        Ok(self.outbox)
+    }
+}
+
 /// Runtime-only dependencies supplied by the embedding daemon.
 ///
 /// Secret-bearing providers are deliberately absent from [`StorageConfig`]. This container records
 /// only opaque service handles and never formats their implementation state.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct NodeRuntimeDeps {
     moderation_quarantine_key_wrapper: Option<Arc<dyn ModerationQuarantineKeyWrapper>>,
     privacy_cycle_prf_provider: Option<Arc<dyn ProductionPrivacyCyclePrfProviderV1>>,
@@ -3156,7 +3217,7 @@ pub struct NodeRuntimeDeps {
     fenced_transparency_head_reader: Option<Arc<dyn FencedTransparencyAuthoritativeHeadReaderV1>>,
     governance_dag_signer: Option<Arc<dyn GovernanceDagRuntimeSigner>>,
     governance_dag_checkpoint_store: Option<Arc<dyn GovernanceDagSealedCheckpointStore>>,
-    provider_ingest_checkpoint_runtime: Option<Arc<dyn ProviderIngestCheckpointRuntimeV1>>,
+    provider_ingest_outbox: Option<PreparedProviderIngestOutboxV1>,
     por_finalized_replay_archive: Option<Arc<dyn PorFinalizedReplayArchiveV1>>,
 }
 impl std::fmt::Debug for NodeRuntimeDeps {
@@ -3196,8 +3257,8 @@ impl std::fmt::Debug for NodeRuntimeDeps {
                 &self.governance_dag_checkpoint_store.is_some(),
             )
             .field(
-                "provider_ingest_checkpoint_runtime",
-                &self.provider_ingest_checkpoint_runtime.is_some(),
+                "provider_ingest_outbox",
+                &self.provider_ingest_outbox.is_some(),
             )
             .field(
                 "por_finalized_replay_archive",
@@ -3291,13 +3352,14 @@ impl NodeRuntimeDeps {
         self.governance_dag_checkpoint_store = Some(store);
         self
     }
-    /// Attach the production sealed monotonic provider-ingest checkpoint store.
+    /// Transfer the already authenticated provider-ingest outbox into the node.
+    /// The owner cannot be cloned or reopened during this handoff.
     #[must_use]
-    pub fn with_provider_ingest_checkpoint_runtime(
+    pub fn with_prepared_provider_ingest_outbox(
         mut self,
-        runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1>,
+        outbox: PreparedProviderIngestOutboxV1,
     ) -> Self {
-        self.provider_ingest_checkpoint_runtime = Some(runtime);
+        self.provider_ingest_outbox = Some(outbox);
         self
     }
     /// Attach the deployment-owned authenticated finalized-PoR replay archive.
@@ -5341,7 +5403,7 @@ impl NodeHandle {
             fenced_transparency_head_reader,
             governance_dag_signer,
             governance_dag_checkpoint_store,
-            provider_ingest_checkpoint_runtime,
+            provider_ingest_outbox: prepared_provider_ingest_outbox,
             por_finalized_replay_archive,
         } = runtime_deps;
         if config.por_replay_archive_policy().is_some() && !config.enabled() {
@@ -5770,57 +5832,32 @@ impl NodeHandle {
         let event_history_limit = config.runtime_retention().event_history_limit();
         let state_entry_limit = config.runtime_retention().state_entry_limit();
         let provider_ingest_outbox_path = config.data_dir().join(PROVIDER_INGEST_OUTBOX_FILE_V1);
-        let provider_ingest_outbox_policy = config.provider_ingest_outbox_policy();
-        let provider_ingest_checkpoint_provider =
-            config.provider_ingest_checkpoint_provider().cloned();
-        let provider_ingest_outbox = if storage.is_none() {
-            if provider_ingest_outbox_policy.is_some()
-                || provider_ingest_checkpoint_provider.is_some()
-                || provider_ingest_checkpoint_runtime.is_some()
-            {
-                return Err(NodeInitError::ProviderIngestOutbox {
-                    path: provider_ingest_outbox_path,
-                    message: "provider-ingest checkpoint authority is unexpected while storage is disabled"
-                        .to_owned(),
-                });
-            }
-            None
-        } else {
-            match (
-                provider_ingest_outbox_policy,
-                provider_ingest_checkpoint_provider,
-                provider_ingest_checkpoint_runtime,
-            ) {
-                (None, None, None) => None,
-                (Some(policy), Some(binding), Some(runtime)) => Some(
-                    ProviderIngestOutbox::open_with_checkpoint_authority(
-                        &provider_ingest_outbox_path,
-                        policy,
-                        binding,
-                        runtime,
-                    )
+        let provider_ingest_outbox = match (
+            storage.is_some(),
+            config.provider_ingest_outbox_policy(),
+            config.provider_ingest_checkpoint_provider(),
+            prepared_provider_ingest_outbox,
+        ) {
+            (_, None, None, None) => None,
+            #[cfg(test)]
+            (true, Some(policy), None, None) => Some(
+                ProviderIngestOutbox::open(&provider_ingest_outbox_path, policy)
                     .map_err(|error| NodeInitError::ProviderIngestOutbox {
                         path: provider_ingest_outbox_path.clone(),
                         message: error.to_string(),
                     })?,
-                ),
-                #[cfg(test)]
-                (Some(policy), None, None) => Some(
-                    ProviderIngestOutbox::open(&provider_ingest_outbox_path, policy).map_err(
-                        |error| NodeInitError::ProviderIngestOutbox {
-                            path: provider_ingest_outbox_path.clone(),
-                            message: error.to_string(),
-                        },
-                    )?,
-                ),
-                _ => {
-                    return Err(NodeInitError::ProviderIngestOutbox {
-                        path: provider_ingest_outbox_path,
-                        message: "enabled provider ingest requires exactly one configured and injected production sealed checkpoint provider; disabled provider ingest rejects unexpected providers"
-                            .to_owned(),
-                    });
-                }
-            }
+            ),
+            (true, Some(policy), Some(binding), Some(prepared)) => Some(
+                prepared.into_outbox(&provider_ingest_outbox_path, policy, binding)
+                    .map_err(|error| NodeInitError::ProviderIngestOutbox {
+                        path: provider_ingest_outbox_path.clone(),
+                        message: error.to_string(),
+                    })?,
+            ),
+            _ => return Err(NodeInitError::ProviderIngestOutbox {
+                path: provider_ingest_outbox_path,
+                message: "enabled provider ingest requires exactly one preopened authenticated outbox; disabled provider ingest rejects unexpected owners".to_owned(),
+            }),
         };
         let potr_state_dir = config.data_dir().join("potr-receipts");
         // Strict receipt admission remains durable even when this process does not host provider
@@ -15080,6 +15117,16 @@ impl NodeHandle {
             .as_ref()
             .ok_or(FinalizedProviderIngestError::Disabled)?
             .statuses_page(after_job_id, limit)
+            .map_err(Into::into)
+    }
+    /// Return the exact immutable admission cursor of every non-terminal provider-ingest job.
+    pub fn finalized_provider_ingest_active_admission_cursors(
+        &self,
+    ) -> Result<Vec<ProviderIngestFinalizedCursorV1>, FinalizedProviderIngestError> {
+        self.provider_ingest_outbox
+            .as_ref()
+            .ok_or(FinalizedProviderIngestError::Disabled)?
+            .active_admission_cursors()
             .map_err(Into::into)
     }
     /// Return exact payload-free provider-ingest outbox counts from one bounded cached snapshot.

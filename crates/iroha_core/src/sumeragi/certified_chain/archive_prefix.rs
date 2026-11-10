@@ -13,8 +13,8 @@
 //! the reader starts again at signed genesis.
 //!
 //! A frame below the retained height that changes in place leaves the journal unchanged,
-//! and a resume does not read it. Fresh walks own that detection: each process start, each
-//! retention decision, and the archive's periodic audit. Chain authority is unaffected: a
+//! and a resume does not read it. Fresh walks own that detection: each process start and the
+//! archive's periodic audit. Chain authority is unaffected: a
 //! prefix the verifier completed stays completed when a local copy later rots, and any
 //! peer or restart reading that copy still rejects it.
 //!

@@ -80,7 +80,10 @@ pub fn scalar_words<C: PastaCurve>(value: &C::ScalarExt) -> Vec<C::Base> {
     if scalar_is_one_word::<C>() {
         vec![C::Base::from_raw_reduced(value.to_canonical_limbs())]
     } else {
-        s6_limbs(value).iter().map(|limb| C::Base::from_u128(*limb)).collect()
+        s6_limbs(value)
+            .iter()
+            .map(|limb| C::Base::from_u128(*limb))
+            .collect()
     }
 }
 
@@ -112,7 +115,10 @@ impl<C: PastaCurve> Transcript<C> {
         for chunk in domain.as_chunks::<16>().0 {
             sponge.update(&[C::Base::from_u128(u128::from_le_bytes(*chunk))]);
         }
-        Self { sponge, marker: PhantomData }
+        Self {
+            sponge,
+            marker: PhantomData,
+        }
     }
 
     /// Absorbs a count or length.
@@ -231,9 +237,15 @@ mod tests {
         let s = -Fq::ONE;
         let [lo, hi] = s6_limbs(&s);
         assert!(hi < 1 << 127);
-        assert_eq!(scalar_words::<Ep>(&s), vec![Fp::from_u128(lo), Fp::from_u128(hi)]);
+        assert_eq!(
+            scalar_words::<Ep>(&s),
+            vec![Fp::from_u128(lo), Fp::from_u128(hi)]
+        );
         let t = -Fp::ONE;
-        assert_eq!(scalar_words::<Eq>(&t), vec![Fq::from_raw_reduced(t.to_canonical_limbs())]);
+        assert_eq!(
+            scalar_words::<Eq>(&t),
+            vec![Fq::from_raw_reduced(t.to_canonical_limbs())]
+        );
     }
 
     #[test]
@@ -244,7 +256,10 @@ mod tests {
         assert_eq!(map_challenge_128::<Ep>(&w), Fq::from_u128(s6_limbs(&w)[0]));
         // Fq -> Fp subtracts p exactly when w >= p.
         let w = -Fq::ONE;
-        assert_eq!(map_challenge::<Eq>(&w), Fp::from_raw_reduced(w.to_canonical_limbs()));
+        assert_eq!(
+            map_challenge::<Eq>(&w),
+            Fp::from_raw_reduced(w.to_canonical_limbs())
+        );
         assert_eq!(map_challenge::<Eq>(&Fq::from(7u64)), Fp::from(7u64));
     }
 }

@@ -32,13 +32,19 @@
 //! PIPA-AS transcript) turns back into one structured claim.
 
 use ff::Field;
-use iroha_pasta::{PastaCurve, msm::{MemoryBudget, msm_public}};
+use iroha_pasta::{
+    PastaCurve,
+    msm::{MemoryBudget, msm_public},
+};
 use iroha_plonk::pcs::ipa::GeneratorClaim;
 
 use crate::{
     Error,
     commit::{fold_point, fold_scalar},
-    transcript::{FieldTranscript, TAG_CLAIM_ACCUMULATOR, TAG_CLAIM_DIGEST, TAG_CLAIM_FOLD, TAG_CLAIM_RESTRUCTURE, Transcript},
+    transcript::{
+        FieldTranscript, TAG_CLAIM_ACCUMULATOR, TAG_CLAIM_DIGEST, TAG_CLAIM_FOLD,
+        TAG_CLAIM_RESTRUCTURE, Transcript,
+    },
 };
 
 /// Rounds of a claim (`2^16` generators).
@@ -130,15 +136,26 @@ fn constraint<F: Field>(s: &[F], u: &[F; ROUNDS], t: usize) -> F {
 ///
 /// # Errors
 /// [`Error::Shape`] unless there are exactly `2^16` generators; [`Error::Msm`].
-pub fn claim_for<C: PastaCurve>(generators: &[C::AffineExt], u: [C::ScalarExt; ROUNDS]) -> Result<Claim<C>, Error> {
+pub fn claim_for<C: PastaCurve>(
+    generators: &[C::AffineExt],
+    u: [C::ScalarExt; ROUNDS],
+) -> Result<Claim<C>, Error> {
     if generators.len() != SIZE {
         return Err(Error::Shape("claim generators"));
     }
-    let g = msm_public::<C>(&tensor(&u), generators, MemoryBudget::DEFAULT).map_err(|_| Error::Msm)?;
-    Ok(Claim { g: g.to_affine(), u })
+    let g =
+        msm_public::<C>(&tensor(&u), generators, MemoryBudget::DEFAULT).map_err(|_| Error::Msm)?;
+    Ok(Claim {
+        g: g.to_affine(),
+        u,
+    })
 }
 
-fn absorb_claim<C: PastaCurve>(transcript: &mut Transcript<C>, g: &C::AffineExt, u: &[C::ScalarExt]) {
+fn absorb_claim<C: PastaCurve>(
+    transcript: &mut Transcript<C>,
+    g: &C::AffineExt,
+    u: &[C::ScalarExt],
+) {
     transcript.absorb_point(g);
     transcript.absorb_scalars(u);
 }
@@ -164,7 +181,12 @@ impl<C: PastaCurve> ClaimAccumulator<C> {
         absorb_claim::<C>(&mut transcript, &claim.g, &claim.u);
         let beta = core::array::from_fn(|_| transcript.challenge());
         (
-            Self { g: claim.g, u: claim.u, beta, e: <C::ScalarExt as Field>::ZERO },
+            Self {
+                g: claim.g,
+                u: claim.u,
+                beta,
+                e: <C::ScalarExt as Field>::ZERO,
+            },
             tensor(&claim.u),
         )
     }
@@ -179,7 +201,11 @@ fn mul_linear<F: Field>(poly: &[F], a: F, b: F) -> Vec<F> {
     out
 }
 
-fn fold_transcript<C: PastaCurve>(domain: &[u8; 32], acc: &ClaimAccumulator<C>, claim: &Claim<C>) -> Transcript<C> {
+fn fold_transcript<C: PastaCurve>(
+    domain: &[u8; 32],
+    acc: &ClaimAccumulator<C>,
+    claim: &Claim<C>,
+) -> Transcript<C> {
     let mut transcript = Transcript::<C>::new(TAG_CLAIM_FOLD, domain);
     absorb_claim::<C>(&mut transcript, &acc.g, &acc.u);
     transcript.absorb_scalars(&acc.beta);
@@ -257,7 +283,11 @@ pub fn fold_claim<C: PastaCurve>(
     let beta_star: [S<C>; ROUNDS] = core::array::from_fn(|i| acc.beta[i] + alpha * delta[i]);
     let fresh = tensor(&claim.u);
     let two = S::<C>::from(2u64);
-    let s2: Vec<S<C>> = s.iter().zip(&fresh).map(|(a, n)| *a + two * (*n - *a)).collect();
+    let s2: Vec<S<C>> = s
+        .iter()
+        .zip(&fresh)
+        .map(|(a, n)| *a + two * (*n - *a))
+        .collect();
     let u2: [S<C>; ROUNDS] = core::array::from_fn(|i| acc.u[i] + two * (claim.u[i] - acc.u[i]));
     // pow(beta*) by doubling, consumed in index order.
     let mut pow = Vec::with_capacity(SIZE);
@@ -274,7 +304,11 @@ pub fn fold_claim<C: PastaCurve>(
     transcript.absorb_scalars(&[k]);
     let gamma = transcript.challenge_128();
     let folded = finish(acc, claim, beta_star, f_alpha, k, gamma);
-    let witness = s.iter().zip(&fresh).map(|(a, n)| fold_scalar(a, n, &gamma)).collect();
+    let witness = s
+        .iter()
+        .zip(&fresh)
+        .map(|(a, n)| fold_scalar(a, n, &gamma))
+        .collect();
     Ok((folded, witness, ClaimProof { f, k }))
 }
 
@@ -294,7 +328,14 @@ pub fn fold_or_start_claim<C: PastaCurve>(
         None => {
             let (started, s) = ClaimAccumulator::from_claim(domain, claim);
             let zero = <C::ScalarExt as Field>::ZERO;
-            Ok((started, s, ClaimProof { f: [zero; ROUNDS], k: zero }))
+            Ok((
+                started,
+                s,
+                ClaimProof {
+                    f: [zero; ROUNDS],
+                    k: zero,
+                },
+            ))
         }
     }
 }
@@ -304,7 +345,12 @@ pub fn fold_or_start_claim<C: PastaCurve>(
 #[must_use]
 pub fn placeholder_claim_accumulator<C: PastaCurve>() -> ClaimAccumulator<C> {
     let zero = <C::ScalarExt as Field>::ZERO;
-    ClaimAccumulator { g: C::AffineExt::default(), u: [zero; ROUNDS], beta: [zero; ROUNDS], e: zero }
+    ClaimAccumulator {
+        g: C::AffineExt::default(),
+        u: [zero; ROUNDS],
+        beta: [zero; ROUNDS],
+        e: zero,
+    }
 }
 
 /// The native claim-fold verifier: recomputes the challenges and the folded
@@ -321,7 +367,13 @@ pub fn verify_claim_fold<C: PastaCurve>(
     let delta = delta_powers(transcript.challenge());
     transcript.absorb_scalars(&proof.f);
     let alpha = transcript.challenge();
-    let f_alpha = proof.f.iter().rev().fold(S::<C>::ZERO, |a, c| a * alpha + c) * alpha + acc.e;
+    let f_alpha = proof
+        .f
+        .iter()
+        .rev()
+        .fold(S::<C>::ZERO, |a, c| a * alpha + c)
+        * alpha
+        + acc.e;
     let beta_star = core::array::from_fn(|i| acc.beta[i] + alpha * delta[i]);
     transcript.absorb_scalars(&[proof.k]);
     let gamma = transcript.challenge_128();
@@ -414,7 +466,10 @@ pub fn restructured_weights<C: PastaCurve>(acc: &ClaimAccumulator<C>) -> Vec<C::
 /// `B~(rho)`, the multilinear extension of [`restructured_weights`] at `rho`,
 /// in `O(16)`: index 0, then the indices `t` with `msb t = m` for each `m`.
 #[must_use]
-pub fn restructured_weight_at<C: PastaCurve>(acc: &ClaimAccumulator<C>, rho: &[C::ScalarExt; ROUNDS]) -> C::ScalarExt {
+pub fn restructured_weight_at<C: PastaCurve>(
+    acc: &ClaimAccumulator<C>,
+    rho: &[C::ScalarExt; ROUNDS],
+) -> C::ScalarExt {
     type S<C> = <C as PastaCurve>::ScalarExt;
     let one = S::<C>::ONE;
     let t = suffix_weights(acc);
@@ -435,7 +490,10 @@ pub fn restructured_weight_at<C: PastaCurve>(acc: &ClaimAccumulator<C>, rho: &[C
 /// The restructuring sumcheck's field transcript (over the claims' scalar
 /// field): the claim-accumulator digest `kgwfcld1` as limbs, then `u`, `beta`
 /// and `e` natively.
-fn restructure_transcript<C: PastaCurve>(domain: &[u8; 32], acc: &ClaimAccumulator<C>) -> FieldTranscript<C::ScalarExt> {
+fn restructure_transcript<C: PastaCurve>(
+    domain: &[u8; 32],
+    acc: &ClaimAccumulator<C>,
+) -> FieldTranscript<C::ScalarExt> {
     let mut transcript = FieldTranscript::<C::ScalarExt>::new(TAG_CLAIM_RESTRUCTURE, domain);
     transcript.absorb_foreign(&acc.digest(domain));
     transcript.absorb(&acc.u);
@@ -486,7 +544,14 @@ pub fn restructure_prove<C: PastaCurve>(
     }
     let value = left[0];
     transcript.absorb(&[value]);
-    Ok((RestructureProof { rounds, value }, RestructureStatement { commitment: acc.g, point: rho, value }))
+    Ok((
+        RestructureProof { rounds, value },
+        RestructureStatement {
+            commitment: acc.g,
+            point: rho,
+            value,
+        },
+    ))
 }
 
 /// Verifies a restructuring sumcheck for `acc` and returns its statement, which
@@ -520,5 +585,9 @@ pub fn restructure_verify<C: PastaCurve>(
         return Err(Error::Rejected("restructuring sumcheck"));
     }
     transcript.absorb(&[proof.value]);
-    Ok(RestructureStatement { commitment: acc.g, point: rho, value: proof.value })
+    Ok(RestructureStatement {
+        commitment: acc.g,
+        point: rho,
+        value: proof.value,
+    })
 }

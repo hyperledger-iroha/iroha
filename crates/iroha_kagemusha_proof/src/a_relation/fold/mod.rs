@@ -42,7 +42,8 @@ use iroha_plonk_recursion::{
 };
 
 use super::{
-    LINEAGE_FIELDS, LineagePublicCells, ProofMessageCells, VestaClaimCells, native::receive::INTERNAL_RANGE_BUSES,
+    LINEAGE_FIELDS, LineagePublicCells, ProofMessageCells, VestaClaimCells,
+    native::receive::INTERNAL_RANGE_BUSES,
 };
 use crate::{
     admin_sigma::StateWitness,
@@ -86,8 +87,9 @@ impl AStepConfig {
     /// # Panics
     /// Never for the fixed bus count.
     pub fn configure(meta: &mut ConstraintSystem<Fp>) -> Self {
-        let verifier = VerifierConfig::configure_serialized_foreign_tagged(meta, INTERNAL_RANGE_BUSES)
-            .expect("the internal tagged range layout is valid");
+        let verifier =
+            VerifierConfig::configure_serialized_foreign_tagged(meta, INTERNAL_RANGE_BUSES)
+                .expect("the internal tagged range layout is valid");
         let a = meta.advice_column();
         let b = meta.advice_column();
         let bytes = BytesConfig::configure(meta, a, b);
@@ -95,7 +97,12 @@ impl AStepConfig {
         meta.enable_equality(frame);
         let export = meta.instance_column(A_EXPORT);
         meta.enable_equality(export);
-        Self { verifier, bytes, frame, export }
+        Self {
+            verifier,
+            bytes,
+            frame,
+            export,
+        }
     }
 }
 
@@ -108,7 +115,11 @@ pub(crate) struct Assign {
 
 impl Assign {
     pub(crate) fn value<T: Copy>(self, value: T) -> Value<T> {
-        if self.known { Value::known(value) } else { Value::unknown() }
+        if self.known {
+            Value::known(value)
+        } else {
+            Value::unknown()
+        }
     }
 
     pub(crate) fn words<const N: usize>(
@@ -179,7 +190,10 @@ impl Assign {
         let rest = self.words(chip, region, &state.rest)?;
         let cells = StateCells::constrain_with_verifier(chip, region, &core, &rest)?;
         let public = self.words(chip, region, &state.lineage)?;
-        Ok((cells, LineagePublicCells::constrain(&mut chip.uint(), region, &public)?))
+        Ok((
+            cells,
+            LineagePublicCells::constrain(&mut chip.uint(), region, &public)?,
+        ))
     }
 
     /// An original tape of at most `capacity` bytes, with its active length.
@@ -192,7 +206,11 @@ impl Assign {
         capacity: usize,
         segments: &[SegmentSpec],
     ) -> Result<ActiveBytes<Fp>, SynthesisError> {
-        let values = if self.known { Value::known(raw.to_vec()) } else { Value::unknown() };
+        let values = if self.known {
+            Value::known(raw.to_vec())
+        } else {
+            Value::unknown()
+        };
         ActiveBytes::assign(&mut chip.uint(), bytes, region, capacity, &values, segments)
     }
 
@@ -208,7 +226,12 @@ impl Assign {
         let TranscriptRepr::Base(representation) = *key.transcript_repr() else {
             return Err(SynthesisError::Synthesis);
         };
-        let points = |points: &[iroha_pasta::EpAffine]| points.iter().map(|p| self.value(Ep::from(*p))).collect::<Vec<_>>();
+        let points = |points: &[iroha_pasta::EpAffine]| {
+            points
+                .iter()
+                .map(|p| self.value(Ep::from(*p)))
+                .collect::<Vec<_>>()
+        };
         chip.witness_key(
             region,
             self.value(representation),
@@ -249,12 +272,20 @@ impl Assign {
         let leaf = witness.leaf;
         let values = uint
             .glue()
-            .witnesses(region, &[leaf.key, leaf.value, leaf.next_key].map(|v| self.value(v)))?
+            .witnesses(
+                region,
+                &[leaf.key, leaf.value, leaf.next_key].map(|v| self.value(v)),
+            )?
             .try_into()
             .map_err(|_| SynthesisError::Synthesis)?;
         let mut paths = Vec::with_capacity(2);
-        for (index, siblings) in [(witness.leaf_slot, witness.leaf_siblings), (witness.slot, witness.slot_siblings)] {
-            let index = uint.glue().witness(region, self.value(Fp::from(u64::from(index))))?;
+        for (index, siblings) in [
+            (witness.leaf_slot, witness.leaf_siblings),
+            (witness.slot, witness.slot_siblings),
+        ] {
+            let index = uint
+                .glue()
+                .witness(region, self.value(Fp::from(u64::from(index))))?;
             let siblings = uint
                 .glue()
                 .witnesses(region, &siblings.map(|v| self.value(v)))?
@@ -263,7 +294,13 @@ impl Assign {
             paths.push(PathCells::from_words(uint, region, &index, siblings)?);
         }
         let [low, slot] = paths.try_into().map_err(|_| SynthesisError::Synthesis)?;
-        Ok(InsertCells { low: OpeningCells { leaf: LeafCells::from_words(values), path: low }, slot })
+        Ok(InsertCells {
+            low: OpeningCells {
+                leaf: LeafCells::from_words(values),
+                path: low,
+            },
+            slot,
+        })
     }
 }
 
@@ -343,7 +380,10 @@ impl AStateCells {
             return Err(SynthesisError::Synthesis);
         }
         Ok(Self {
-            lineage: state[..LINEAGE_FIELDS].to_vec().try_into().map_err(|_| SynthesisError::Synthesis)?,
+            lineage: state[..LINEAGE_FIELDS]
+                .to_vec()
+                .try_into()
+                .map_err(|_| SynthesisError::Synthesis)?,
             context: state[A_CONTEXT].clone(),
             pc: state[A_PC].clone(),
         })

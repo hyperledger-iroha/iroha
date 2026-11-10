@@ -2,7 +2,9 @@
 
 use iroha_pasta::{PastaCurve, poseidon::PoseidonField};
 use iroha_plonk::frontend::Error;
-use iroha_plonk_gadgets::{GlueChip, RunningSumChip, ecc::EccChip, ff::FfChip, pow5_fq::DuplexChip};
+use iroha_plonk_gadgets::{
+    GlueChip, RunningSumChip, ecc::EccChip, ff::FfChip, pow5_fq::DuplexChip,
+};
 
 use crate::verifier::VerifierChip;
 

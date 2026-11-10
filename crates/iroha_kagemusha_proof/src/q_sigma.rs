@@ -576,20 +576,40 @@ impl QSigmaCircuit {
         region: &mut iroha_plonk::frontend::Region<'_, Fq>,
     ) -> Result<FoldIncomingCells, Error> {
         Self::check_structure(&self.plan, &self.witness)?;
-        let (Some(class), Some(incoming), None) = (&self.plan.incoming, &self.witness.incoming, &self.plan.own) else {
+        let (Some(class), Some(incoming), None) =
+            (&self.plan.incoming, &self.witness.incoming, &self.plan.own)
+        else {
             return Err(Error::Synthesis);
         };
-        let tape = self.proof_tape(chip, bytes, region, &incoming.sigma.proof, incoming.sigma.length)?;
-        let slot = self.slot(chip, tape, region, class, &incoming.sigma, VerificationMode::Soft)?;
+        let tape = self.proof_tape(
+            chip,
+            bytes,
+            region,
+            &incoming.sigma.proof,
+            incoming.sigma.length,
+        )?;
+        let slot = self.slot(
+            chip,
+            tape,
+            region,
+            class,
+            &incoming.sigma,
+            VerificationMode::Soft,
+        )?;
         let modes = incoming
             .mode
-            .map(|value| chip.uint().glue().witness(region, self.value(Fq::from(u64::from(value)))))
+            .map(|value| {
+                chip.uint()
+                    .glue()
+                    .witness(region, self.value(Fq::from(u64::from(value))))
+            })
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?;
         let modes: [Word<Fq>; 3] = modes.try_into().map_err(|_| Error::Synthesis)?;
         let mode = ModeCells::constrain(chip.uint().glue(), region, &modes)?;
         let corrected = chip.witness_generator(region, self.value(incoming.corrected))?;
-        let selected = FoldInputCells::select_incoming(chip, region, &slot.claim, &corrected, &mode)?;
+        let selected =
+            FoldInputCells::select_incoming(chip, region, &slot.claim, &corrected, &mode)?;
         let mut statements = vec![slot.statement];
         statements.extend(slot.chunks);
         let one = chip.uint().glue().constant(region, Fq::ONE)?;

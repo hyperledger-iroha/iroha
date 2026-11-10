@@ -2313,3 +2313,24 @@ def test_current_executor_path_children_refuse_absence_and_guessed_neighbor(
     assert failures == [
         f"crates/iroha_core/src/executor.rs:2: #[path] source path is missing or not a regular file: {name}"
     ]
+
+
+@pytest.mark.parametrize("raw_spawn", ["tokio::task::spawn_blocking", "handle.spawn_blocking"])
+def test_archive_retention_preserves_its_recoverable_worker(raw_spawn: str) -> None:
+    module = load_guard_module()
+    relative = "crates/irohad/src/sorafs_provider_ingest_finalized_query/archive_retention.rs"
+    source = (module.ROOT / relative).read_text(encoding="utf-8")
+    assert relative in module.NO_BARE_BLOCKING
+    assert relative in module.NO_BARE_STD_THREAD
+    assert module._bare_blocking_lines(source) == []
+    assert module._bare_std_thread_lines(source) == []
+    assert module._required_recovery_marker_failures(relative, source) == []
+    guarded = "spawn_blocking_recoverable(move || worker.tick())"
+    assert source.count(guarded) == 1
+    substituted = source.replace(guarded, f"{raw_spawn}(move || worker.tick())")
+    assert len(module._bare_blocking_lines(substituted)) == 1
+    for marker in module.REQUIRED_SNIPPETS[relative]:
+        removed = source.replace(marker, "removed_archive_retention_boundary")
+        assert module._required_recovery_marker_failures(relative, removed) == [
+            f"{relative}: missing audited recovery marker {marker!r}"
+        ]

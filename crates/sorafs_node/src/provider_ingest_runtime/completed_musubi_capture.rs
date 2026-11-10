@@ -314,7 +314,9 @@ impl ProviderIngestCompletedMusubiSignedCapturePageV1 {
 /// reconstruct and sign the same immutable page without consuming adapter-local continuation state.
 /// The scanner pins [`Self::capture_verifier_binding`] once, verifies the canonical transcript,
 /// validates every unsealed field, and only then seals completed-row claims.
-pub trait ProviderIngestCompletedMusubiSignedCaptureLedgerV1: Send + Sync + 'static {
+pub trait ProviderIngestCompletedMusubiSignedCaptureLedgerV1:
+    ProviderIngestFinalizedAnchorRetainerV1
+{
     /// Return this reader's immutable ephemeral session verifier binding.
     ///
     /// # Errors
@@ -722,8 +724,9 @@ impl ProviderIngestCompletedMusubiCaptureCandidateV1 {
 /// then starts a new snapshot and may observe a later finalized head. When that probe still
 /// resolves to the last completely scanned head, every bounded row is revalidated but candidates
 /// are suppressed and an empty terminal page is returned.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) struct ProviderIngestCompletedMusubiCapturePageV1 {
+    anchor_lease: ProviderIngestFinalizedAnchorLeaseV1,
     finalized_cursor: ProviderIngestFinalizedCursorV1,
     candidates: Vec<ProviderIngestCompletedMusubiCaptureCandidateV1>,
     scan_complete: bool,
@@ -1204,16 +1207,45 @@ where
             self.request_generation,
         )
         .map_err(map_capture_ledger_error)?;
-        let signed_page = self
+        let signed_page = match self
             .ledger
             .read_signed_completed_musubi_capture_page(request.clone())
             .await
-            .map_err(map_capture_ledger_error)?;
+        {
+            Ok(page) => page,
+            Err(ProviderIngestFinalizedLedgerErrorV1::ScanAnchorRetired) => {
+                self.scan_cursor = None;
+                self.scan_after_order_id = None;
+                return Err(ProviderIngestRuntimeErrorV1::FinalizedLedgerUnavailable);
+            }
+            Err(error) => return Err(map_capture_ledger_error(error)),
+        };
         let source_page = verify_completed_musubi_signed_capture_page(
             signed_page,
             &request,
             &self.verifier_binding,
         )?;
+        // The signed transcript authenticates the page; this separate local lease protects
+        // its immutable anchor until inventory admission and approval reach durable boundaries.
+        let anchor_lease = match self
+            .ledger
+            .retain_exact_cursor(source_page.finalized_cursor)
+            .await
+        {
+            Ok(lease) => lease,
+            Err(ProviderIngestFinalizedLedgerErrorV1::ScanAnchorRetired) => {
+                // This signed response consumed the request generation. A fresh scan
+                // must advance it, otherwise the reader replays this retired page forever.
+                self.request_generation = self
+                    .request_generation
+                    .checked_add(1)
+                    .ok_or(ProviderIngestRuntimeErrorV1::InvalidFinalizedPage)?;
+                self.scan_cursor = None;
+                self.scan_after_order_id = None;
+                return Err(ProviderIngestRuntimeErrorV1::FinalizedLedgerUnavailable);
+            }
+            Err(error) => return Err(map_capture_ledger_error(error)),
+        };
         let validation =
             self.validate_and_seal_source_page(source_page, after_order_id, expected_cursor);
         let (finalized_cursor, candidates, next_after_order_id) = match validation {
@@ -1233,6 +1265,7 @@ where
                     .ok_or(ProviderIngestRuntimeErrorV1::InvalidFinalizedPage)?;
                 self.last_finalized_cursor = Some(finalized_cursor);
                 return Ok(ProviderIngestCompletedMusubiCapturePageV1 {
+                    anchor_lease,
                     finalized_cursor,
                     candidates: Vec::new(),
                     scan_complete: true,
@@ -1256,6 +1289,7 @@ where
         }
         self.request_generation = next_request_generation;
         Ok(ProviderIngestCompletedMusubiCapturePageV1 {
+            anchor_lease,
             finalized_cursor,
             candidates,
             scan_complete,
@@ -1439,7 +1473,8 @@ fn map_capture_ledger_error(
     error: ProviderIngestFinalizedLedgerErrorV1,
 ) -> ProviderIngestRuntimeErrorV1 {
     match error {
-        ProviderIngestFinalizedLedgerErrorV1::Unavailable => {
+        ProviderIngestFinalizedLedgerErrorV1::Unavailable
+        | ProviderIngestFinalizedLedgerErrorV1::ScanAnchorRetired => {
             ProviderIngestRuntimeErrorV1::FinalizedLedgerUnavailable
         }
         ProviderIngestFinalizedLedgerErrorV1::Rejected => {
@@ -1475,6 +1510,7 @@ where
     Ledger: ProviderIngestCompletedMusubiSignedCaptureLedgerV1 + ?Sized,
 {
     rollback: ProviderIngestCompletedMusubiCaptureProgressRollbackV1<'a, Ledger>,
+    _anchor_lease: ProviderIngestFinalizedAnchorLeaseV1,
     approvals: Vec<ProviderIngestCompletedMusubiPreparedApprovalV1>,
     outcome: ProviderIngestCompletedMusubiReconcileOutcomeV1,
 }
@@ -1607,6 +1643,7 @@ impl crate::NodeHandle {
             scan_complete: page.scan_complete(),
         };
         Ok(ProviderIngestCompletedMusubiPreparedPageV1 {
+            _anchor_lease: page.anchor_lease,
             rollback,
             approvals,
             outcome,

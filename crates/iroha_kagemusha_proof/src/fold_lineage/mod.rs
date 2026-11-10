@@ -71,12 +71,15 @@ use iroha_fold::{
     circuit::{
         FoldLanes, FoldVerifierChips, FoldVerifierConfig, ScalarCell,
         claims::{
-            ClaimCells, assign_claim_accumulator, assign_claim_proof, claim_accumulator_digest, verify_claim_fold,
-            verify_claim_fold_or_start,
+            ClaimCells, assign_claim_accumulator, assign_claim_proof, claim_accumulator_digest,
+            verify_claim_fold, verify_claim_fold_or_start,
         },
         ivc::{assert_equal_unless, fold_frame, foreign_bounded_word, frame_outputs},
     },
-    claims::{Claim, ClaimAccumulator, ClaimProof, fold_claim, fold_or_start_claim, placeholder_claim_accumulator},
+    claims::{
+        Claim, ClaimAccumulator, ClaimProof, fold_claim, fold_or_start_claim,
+        placeholder_claim_accumulator,
+    },
     ivc::{ChainSide, FrameWitness, embed, ivc_hash},
     relation::FoldShape,
 };
@@ -180,7 +183,13 @@ pub const Q_CLAIM_SLOT: usize = 5;
 
 impl AKind {
     /// Every A kind, in digest order.
-    pub const ALL: [Self; 5] = [Self::Receive1, Self::Receive3, Self::Receive4, Self::Receive5, Self::Rebase];
+    pub const ALL: [Self; 5] = [
+        Self::Receive1,
+        Self::Receive3,
+        Self::Receive4,
+        Self::Receive5,
+        Self::Rebase,
+    ];
 
     /// The Q kind a step of this kind folds.
     #[must_use]
@@ -196,7 +205,14 @@ impl AKind {
     #[must_use]
     pub const fn chain(self) -> ChainSide {
         let slot = self.folds() as usize;
-        ChainSide { ivc_domain: IVC_A, fold_domain: FOLD_Q, first_step: 2, slot, digests: A_DIGESTS, choices: 1 << slot }
+        ChainSide {
+            ivc_domain: IVC_A,
+            fold_domain: FOLD_Q,
+            first_step: 2,
+            slot,
+            digests: A_DIGESTS,
+            choices: 1 << slot,
+        }
     }
 }
 
@@ -211,7 +227,9 @@ impl QKind {
     pub const fn choices(self) -> u64 {
         match self {
             Self::Frame => {
-                (1 << AKind::Receive4 as usize) | (1 << AKind::Receive5 as usize) | (1 << AKind::Rebase as usize)
+                (1 << AKind::Receive4 as usize)
+                    | (1 << AKind::Receive5 as usize)
+                    | (1 << AKind::Rebase as usize)
             }
             Self::Sigma => 1 << AKind::Receive1 as usize,
             Self::Signature => 1 << AKind::Receive3 as usize,
@@ -245,7 +263,13 @@ impl QKind {
 /// the segment starts from.
 #[must_use]
 pub fn start_passthrough(a_base: &[Fp]) -> Fq {
-    embed(&ivc_hash::<Fp>(&IVC_A, 0, Fp::from(BASE), a_base, &[Fp::ZERO; A_DIGESTS]))
+    embed(&ivc_hash::<Fp>(
+        &IVC_A,
+        0,
+        Fp::from(BASE),
+        a_base,
+        &[Fp::ZERO; A_DIGESTS],
+    ))
 }
 
 /// The A state every segment starts from: no lineage, no context and
@@ -273,7 +297,8 @@ pub fn segment_start() -> Fq {
 /// Never: the trivial generator is a fixed canonical point.
 #[must_use]
 pub fn trivial_vesta() -> FoldInput<Eq> {
-    let point = decode_point::<Eq>(&VESTA_TRIVIAL_GENERATOR).expect("the trivial generator decodes");
+    let point =
+        decode_point::<Eq>(&VESTA_TRIVIAL_GENERATOR).expect("the trivial generator decodes");
     FoldInput::from_normalized(point, 16, [Fp::ONE; 16]).expect("the trivial claim is canonical")
 }
 
@@ -328,38 +353,76 @@ pub(crate) fn export_claim_cells(
     for cell in column[..4].iter().chain(&column[20..]) {
         small.push(foreign_bounded_word(lanes, region, cell)?);
     }
-    let [x_lo, x_hi, y_lo, y_hi, accept, trivial, corrected, cx_lo, cx_hi, cy_lo, cy_hi] = &small[..] else {
+    let [
+        x_lo,
+        x_hi,
+        y_lo,
+        y_hi,
+        accept,
+        trivial,
+        corrected,
+        cx_lo,
+        cx_hi,
+        cy_lo,
+        cy_hi,
+    ] = &small[..]
+    else {
         return Err(Error::Synthesis);
     };
-    let mode = ModeCells::constrain(&mut *lanes.glue, region, &[accept.clone(), trivial.clone(), corrected.clone()])?;
+    let mode = ModeCells::constrain(
+        &mut *lanes.glue,
+        region,
+        &[accept.clone(), trivial.clone(), corrected.clone()],
+    )?;
     let shift = Fq::from(2).pow_vartime([128]);
-    let mut coordinate =
-        |lo: &Word<Fq>, hi: &Word<Fq>| lanes.glue.linear(region, &[(Fq::ONE, lo), (shift, hi)], Fq::ZERO);
+    let mut coordinate = |lo: &Word<Fq>, hi: &Word<Fq>| {
+        lanes
+            .glue
+            .linear(region, &[(Fq::ONE, lo), (shift, hi)], Fq::ZERO)
+    };
     let (x, y) = (coordinate(x_lo, x_hi)?, coordinate(y_lo, y_hi)?);
     let (cx, cy) = (coordinate(cx_lo, cx_hi)?, coordinate(cy_lo, cy_hi)?);
     let same_x = lanes.glue.is_equal(region, &x, &cx)?;
     let same_y = lanes.glue.is_equal(region, &y, &cy)?;
     let same = lanes.glue.and(region, &same_x, &same_y)?;
     let forbidden = lanes.glue.and(region, mode.corrected(), &same)?;
-    lanes.glue.enforce_constant(region, forbidden.word(), Fq::ZERO)?;
+    lanes
+        .glue
+        .enforce_constant(region, forbidden.word(), Fq::ZERO)?;
     let pinned = trivial_vesta();
     let (tx, ty) = generator_coordinates::<Eq>(pinned.g());
     let mut point = Vec::with_capacity(2);
     for (original, correction, constant) in [(&x, &cx, tx), (&y, &cy, ty)] {
-        let selected = lanes.glue.select(region, mode.corrected(), correction, original)?;
+        let selected = lanes
+            .glue
+            .select(region, mode.corrected(), correction, original)?;
         let constant = lanes.glue.constant(region, constant)?;
-        point.push(lanes.glue.select(region, mode.trivial(), &constant, &selected)?);
+        point.push(
+            lanes
+                .glue
+                .select(region, mode.trivial(), &constant, &selected)?,
+        );
     }
-    let g = lanes.assign_point(region, value.map_or_else(Value::unknown, |v| Value::known(Eq::from(*v.g()))))?;
+    let g = lanes.assign_point(
+        region,
+        value.map_or_else(Value::unknown, |v| Value::known(Eq::from(*v.g()))),
+    )?;
     GlueChip::assert_equal(region, g.x(), &point[0])?;
     GlueChip::assert_equal(region, g.y(), &point[1])?;
     let one = lanes.glue.constant(region, Fq::ONE)?;
     let zero = lanes.glue.constant(region, Fq::ZERO)?;
     let mut u = Vec::with_capacity(16);
     for (i, cell) in column[4..20].iter().enumerate() {
-        let lo = lanes.glue.select(region, mode.trivial(), &one, cell.s6.lo().word())?;
-        let hi = lanes.glue.select(region, mode.trivial(), &zero, cell.s6.hi().word())?;
-        let scalar = lanes.assign_scalar(region, value.map_or_else(Value::unknown, |v| Value::known(v.challenges()[i])))?;
+        let lo = lanes
+            .glue
+            .select(region, mode.trivial(), &one, cell.s6.lo().word())?;
+        let hi = lanes
+            .glue
+            .select(region, mode.trivial(), &zero, cell.s6.hi().word())?;
+        let scalar = lanes.assign_scalar(
+            region,
+            value.map_or_else(Value::unknown, |v| Value::known(v.challenges()[i])),
+        )?;
         GlueChip::assert_equal(region, scalar.s6.lo().word(), &lo)?;
         GlueChip::assert_equal(region, scalar.s6.hi().word(), &hi)?;
         u.push(scalar);
@@ -371,7 +434,10 @@ pub(crate) fn export_claim_cells(
 /// challenges (zero-padded to k16).
 #[must_use]
 pub fn claim_of<C: PastaCurve>(input: &FoldInput<C>) -> Claim<C> {
-    Claim { g: *input.g(), u: *input.challenges() }
+    Claim {
+        g: *input.g(),
+        u: *input.challenges(),
+    }
 }
 
 /// The claim folds of a step, natively: the claim accumulator its side keeps
@@ -396,7 +462,9 @@ pub fn fold_claims<C: PastaCurve>(
     kept: Option<(&ClaimAccumulator<C>, &[C::ScalarExt])>,
     claims: &[Claim<C>],
 ) -> Result<(ClaimAccumulator<C>, Vec<C::ScalarExt>, ClaimFolds<C>), iroha_fold::Error> {
-    let (first, rest) = claims.split_first().ok_or(iroha_fold::Error::Shape("claim folds"))?;
+    let (first, rest) = claims
+        .split_first()
+        .ok_or(iroha_fold::Error::Shape("claim folds"))?;
     let before = kept.map(|(acc, _)| *acc);
     let (mut acc, mut s, proof) = fold_or_start_claim(domain, kept, first)?;
     let mut proofs = vec![proof];
@@ -405,7 +473,14 @@ pub fn fold_claims<C: PastaCurve>(
         (acc, s) = (next, next_s);
         proofs.push(proof);
     }
-    Ok((acc, s, ClaimFolds { kept: before, proofs }))
+    Ok((
+        acc,
+        s,
+        ClaimFolds {
+            kept: before,
+            proofs,
+        },
+    ))
 }
 
 /// The claim cells of a selected claim on the fold lanes: a point and sixteen
@@ -423,7 +498,10 @@ pub(crate) fn claim_cells<C: PastaCurve>(
     GlueChip::assert_equal(region, g.y(), selected.g().y())?;
     let mut u = Vec::with_capacity(selected.challenges().len());
     for (i, cell) in selected.challenges().iter().enumerate() {
-        let scalar = lanes.assign_scalar(region, value.map_or_else(Value::unknown, |v| Value::known(v.challenges()[i])))?;
+        let scalar = lanes.assign_scalar(
+            region,
+            value.map_or_else(Value::unknown, |v| Value::known(v.challenges()[i])),
+        )?;
         GlueChip::assert_equal(region, scalar.s6.lo().word(), cell.lo().word())?;
         GlueChip::assert_equal(region, scalar.s6.hi().word(), cell.hi().word())?;
         u.push(scalar);
@@ -444,11 +522,18 @@ pub(crate) fn fold_claims_cells<C: PastaCurve>(
     claims: &[ClaimCells<C>],
     witness: Option<&ClaimFolds<C>>,
 ) -> Result<Vec<Word<C::Base>>, Error> {
-    if claims.is_empty() || slot >= digests.len() || witness.is_some_and(|w| w.proofs.len() != claims.len()) {
+    if claims.is_empty()
+        || slot >= digests.len()
+        || witness.is_some_and(|w| w.proofs.len() != claims.len())
+    {
         return Err(Error::Synthesis);
     }
     let placeholder = placeholder_claim_accumulator::<C>();
-    let acc = assign_claim_accumulator(lanes, region, witness.map(|w| w.kept.as_ref().unwrap_or(&placeholder)))?;
+    let acc = assign_claim_accumulator(
+        lanes,
+        region,
+        witness.map(|w| w.kept.as_ref().unwrap_or(&placeholder)),
+    )?;
     let stored = digests[slot].clone();
     let absent = lanes.glue.is_zero(region, &stored)?;
     let opened = claim_accumulator_digest(lanes, region, domain, &acc)?;
@@ -457,7 +542,9 @@ pub(crate) fn fold_claims_cells<C: PastaCurve>(
     for (i, claim) in claims.iter().enumerate() {
         let proof = assign_claim_proof(lanes, region, witness.map(|w| &w.proofs[i]))?;
         folded = Some(match &folded {
-            None => verify_claim_fold_or_start(lanes, region, domain, &acc, claim, &proof, &absent)?,
+            None => {
+                verify_claim_fold_or_start(lanes, region, domain, &acc, claim, &proof, &absent)?
+            }
             Some(acc) => verify_claim_fold(lanes, region, domain, acc, claim, &proof)?,
         });
     }
@@ -505,7 +592,10 @@ impl Circuit<Fq> for QFrameStep {
     type Params = ();
 
     fn without_witnesses(&self) -> Self {
-        Self { witness: None, ..self.clone() }
+        Self {
+            witness: None,
+            ..self.clone()
+        }
     }
 
     fn configure(meta: &mut ConstraintSystem<Fq>) -> QFrameConfig {
@@ -515,7 +605,11 @@ impl Circuit<Fq> for QFrameStep {
         QFrameConfig { fold, frame }
     }
 
-    fn synthesize(&self, config: QFrameConfig, mut layouter: impl Layouter<Fq>) -> Result<(), Error> {
+    fn synthesize(
+        &self,
+        config: QFrameConfig,
+        mut layouter: impl Layouter<Fq>,
+    ) -> Result<(), Error> {
         let mut chips = FoldVerifierChips::new(&config.fold);
         chips.load_tables(&mut layouter)?;
         let chain = QKind::Frame.chain(AKind::Receive5);
@@ -535,7 +629,12 @@ impl Circuit<Fq> for QFrameStep {
                     witness.map(|w| &w.frame),
                 )?;
                 let column = frame.public.get(1).ok_or(Error::Synthesis)?;
-                let claim = export_claim_cells(&mut lanes, &mut region, column, witness.map(|w| &w.selected))?;
+                let claim = export_claim_cells(
+                    &mut lanes,
+                    &mut region,
+                    column,
+                    witness.map(|w| &w.selected),
+                )?;
                 let digests = fold_claims_cells(
                     &mut lanes,
                     &mut region,

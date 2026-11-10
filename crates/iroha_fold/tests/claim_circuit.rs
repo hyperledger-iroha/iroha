@@ -8,16 +8,19 @@ use iroha_fold::{
     circuit::{
         FoldVerifierChips, FoldVerifierConfig,
         claims::{
-            assign_claim, assign_claim_accumulator, assign_claim_accumulator_field, assign_claim_proof,
-            assign_restructure_field, claim_accumulator_digest, verify_claim_fold, verify_claim_fold_or_start,
-            verify_restructure_field,
+            assign_claim, assign_claim_accumulator, assign_claim_accumulator_field,
+            assign_claim_proof, assign_restructure_field, claim_accumulator_digest,
+            verify_claim_fold, verify_claim_fold_or_start, verify_restructure_field,
         },
         field::{FieldVerifierChips, FieldVerifierConfig},
     },
-    claims::{self, Claim, ClaimAccumulator, ClaimProof, ROUNDS, RestructureProof, restructure_prove, restructure_verify},
+    claims::{
+        self, Claim, ClaimAccumulator, ClaimProof, ROUNDS, RestructureProof, restructure_prove,
+        restructure_verify,
+    },
 };
-use iroha_plonk::pcs::ipa::PinnedParams;
 use iroha_pasta::{Ep, Eq, PastaCurve};
+use iroha_plonk::pcs::ipa::PinnedParams;
 use iroha_plonk::{
     check::{CheckMode, check_circuit},
     cs::{Column, ConstraintSystem, Instance as InstanceColumn},
@@ -37,7 +40,11 @@ struct Inputs<C: PastaCurve> {
 
 impl<C: PastaCurve> Clone for Inputs<C> {
     fn clone(&self) -> Self {
-        Self { acc: self.acc, claim: self.claim, proof: self.proof }
+        Self {
+            acc: self.acc,
+            claim: self.claim,
+            proof: self.proof,
+        }
     }
 }
 
@@ -67,7 +74,11 @@ impl<C: PastaCurve> Circuit<C::Base> for ClaimCircuit<C> {
         Config { fold, instance }
     }
 
-    fn synthesize(&self, config: Config<C>, mut layouter: impl Layouter<C::Base>) -> Result<(), Error> {
+    fn synthesize(
+        &self,
+        config: Config<C>,
+        mut layouter: impl Layouter<C::Base>,
+    ) -> Result<(), Error> {
         let mut chips = FoldVerifierChips::new(&config.fold);
         chips.load_tables(&mut layouter)?;
         let inputs = self.inputs.as_ref();
@@ -75,10 +86,12 @@ impl<C: PastaCurve> Circuit<C::Base> for ClaimCircuit<C> {
             || "claim fold",
             |mut region| {
                 let mut lanes = chips.lanes();
-                let acc = assign_claim_accumulator(&mut lanes, &mut region, inputs.map(|i| &i.acc))?;
+                let acc =
+                    assign_claim_accumulator(&mut lanes, &mut region, inputs.map(|i| &i.acc))?;
                 let claim = assign_claim(&mut lanes, &mut region, inputs.map(|i| &i.claim))?;
                 let proof = assign_claim_proof(&mut lanes, &mut region, inputs.map(|i| &i.proof))?;
-                let folded = verify_claim_fold(&mut lanes, &mut region, &DOMAIN, &acc, &claim, &proof)?;
+                let folded =
+                    verify_claim_fold(&mut lanes, &mut region, &DOMAIN, &acc, &claim, &proof)?;
                 claim_accumulator_digest(&mut lanes, &mut region, &DOMAIN, &folded)
             },
         )?;
@@ -102,17 +115,31 @@ fn honest<C: PastaCurve>() -> (Inputs<C>, ClaimAccumulator<C>) {
     let (acc, s, _) = claims::fold_claim(&DOMAIN, &acc, &s, &second).expect("fold");
     let third = random_claim::<C>(&mut rng);
     let (next, _, proof) = claims::fold_claim(&DOMAIN, &acc, &s, &third).expect("fold");
-    (Inputs { acc, claim: third, proof }, next)
+    (
+        Inputs {
+            acc,
+            claim: third,
+            proof,
+        },
+        next,
+    )
 }
 
 fn satisfied<C: PastaCurve>(inputs: &Inputs<C>, digest: C::Base) -> bool {
-    let circuit = ClaimCircuit { inputs: Some(inputs.clone()) };
-    check_circuit(&circuit, K, &[vec![digest]], CheckMode::Strict).expect("synthesis").is_satisfied()
+    let circuit = ClaimCircuit {
+        inputs: Some(inputs.clone()),
+    };
+    check_circuit(&circuit, K, &[vec![digest]], CheckMode::Strict)
+        .expect("synthesis")
+        .is_satisfied()
 }
 
 fn folds_exactly_as_the_native_verifier<C: PastaCurve>() {
     let (inputs, folded) = honest::<C>();
-    assert_eq!(claims::verify_claim_fold(&DOMAIN, &inputs.acc, &inputs.claim, &inputs.proof), folded);
+    assert_eq!(
+        claims::verify_claim_fold(&DOMAIN, &inputs.acc, &inputs.claim, &inputs.proof),
+        folded
+    );
     assert_eq!(ROUNDS, inputs.claim.u.len());
     let digest = folded.digest(&DOMAIN);
     assert!(satisfied(&inputs, digest));
@@ -152,7 +179,11 @@ impl<C: PastaCurve> Circuit<C::Base> for StartCircuit<C> {
         ClaimCircuit::<C>::configure(meta)
     }
 
-    fn synthesize(&self, config: Config<C>, mut layouter: impl Layouter<C::Base>) -> Result<(), Error> {
+    fn synthesize(
+        &self,
+        config: Config<C>,
+        mut layouter: impl Layouter<C::Base>,
+    ) -> Result<(), Error> {
         let mut chips = FoldVerifierChips::new(&config.fold);
         chips.load_tables(&mut layouter)?;
         let inputs = self.inputs.as_ref();
@@ -160,11 +191,24 @@ impl<C: PastaCurve> Circuit<C::Base> for StartCircuit<C> {
             || "claim fold or start",
             |mut region| {
                 let mut lanes = chips.lanes();
-                let acc = assign_claim_accumulator(&mut lanes, &mut region, inputs.map(|i| &i.0.acc))?;
+                let acc =
+                    assign_claim_accumulator(&mut lanes, &mut region, inputs.map(|i| &i.0.acc))?;
                 let claim = assign_claim(&mut lanes, &mut region, inputs.map(|i| &i.0.claim))?;
-                let proof = assign_claim_proof(&mut lanes, &mut region, inputs.map(|i| &i.0.proof))?;
-                let start = lanes.glue.boolean(&mut region, inputs.map_or_else(Value::unknown, |i| Value::known(i.1)))?;
-                let folded = verify_claim_fold_or_start(&mut lanes, &mut region, &DOMAIN, &acc, &claim, &proof, &start)?;
+                let proof =
+                    assign_claim_proof(&mut lanes, &mut region, inputs.map(|i| &i.0.proof))?;
+                let start = lanes.glue.boolean(
+                    &mut region,
+                    inputs.map_or_else(Value::unknown, |i| Value::known(i.1)),
+                )?;
+                let folded = verify_claim_fold_or_start(
+                    &mut lanes,
+                    &mut region,
+                    &DOMAIN,
+                    &acc,
+                    &claim,
+                    &proof,
+                    &start,
+                )?;
                 claim_accumulator_digest(&mut lanes, &mut region, &DOMAIN, &folded)
             },
         )?;
@@ -174,15 +218,27 @@ impl<C: PastaCurve> Circuit<C::Base> for StartCircuit<C> {
 
 fn starts_or_folds_as_the_native_fold_or_start<C: PastaCurve>() {
     let satisfied = |inputs: &Inputs<C>, start: bool, digest: C::Base| {
-        let circuit = StartCircuit { inputs: Some((inputs.clone(), start)) };
-        check_circuit(&circuit, K, &[vec![digest]], CheckMode::Strict).expect("synthesis").is_satisfied()
+        let circuit = StartCircuit {
+            inputs: Some((inputs.clone(), start)),
+        };
+        check_circuit(&circuit, K, &[vec![digest]], CheckMode::Strict)
+            .expect("synthesis")
+            .is_satisfied()
     };
     // The first claim starts the accumulator: from_claim, whatever the ignored
     // accumulator and messages are.
     let (inputs, folded) = honest::<C>();
-    let (started, _, zero) = claims::fold_or_start_claim(&DOMAIN, None, &inputs.claim).expect("start");
-    assert_eq!(started, ClaimAccumulator::from_claim(&DOMAIN, &inputs.claim).0);
-    let start = Inputs { acc: claims::placeholder_claim_accumulator(), claim: inputs.claim, proof: zero };
+    let (started, _, zero) =
+        claims::fold_or_start_claim(&DOMAIN, None, &inputs.claim).expect("start");
+    assert_eq!(
+        started,
+        ClaimAccumulator::from_claim(&DOMAIN, &inputs.claim).0
+    );
+    let start = Inputs {
+        acc: claims::placeholder_claim_accumulator(),
+        claim: inputs.claim,
+        proof: zero,
+    };
     assert!(satisfied(&start, true, started.digest(&DOMAIN)));
     assert!(satisfied(&inputs, true, started.digest(&DOMAIN)));
     assert!(!satisfied(&start, true, folded.digest(&DOMAIN)));
@@ -228,7 +284,10 @@ impl<C: PastaCurve> Circuit<C::ScalarExt> for RestructureCircuit<C> {
     type Params = ();
 
     fn without_witnesses(&self) -> Self {
-        Self { acc: None, proof: None }
+        Self {
+            acc: None,
+            proof: None,
+        }
     }
 
     fn configure(meta: &mut ConstraintSystem<C::ScalarExt>) -> RestructureConfig<C> {
@@ -238,15 +297,25 @@ impl<C: PastaCurve> Circuit<C::ScalarExt> for RestructureCircuit<C> {
         RestructureConfig { field, instance }
     }
 
-    fn synthesize(&self, config: RestructureConfig<C>, mut layouter: impl Layouter<C::ScalarExt>) -> Result<(), Error> {
+    fn synthesize(
+        &self,
+        config: RestructureConfig<C>,
+        mut layouter: impl Layouter<C::ScalarExt>,
+    ) -> Result<(), Error> {
         let mut chips = FieldVerifierChips::new(&config.field);
         chips.load_tables(&mut layouter)?;
         let (rho, value) = layouter.assign_region(
             || "restructure field side",
             |mut region| {
                 let mut lanes = chips.lanes();
-                let acc = assign_claim_accumulator_field::<C>(&mut lanes, &mut region, &DOMAIN, self.acc.as_ref())?;
-                let proof = assign_restructure_field::<C>(&mut lanes, &mut region, self.proof.as_ref())?;
+                let acc = assign_claim_accumulator_field::<C>(
+                    &mut lanes,
+                    &mut region,
+                    &DOMAIN,
+                    self.acc.as_ref(),
+                )?;
+                let proof =
+                    assign_restructure_field::<C>(&mut lanes, &mut region, self.proof.as_ref())?;
                 verify_restructure_field::<C>(&mut lanes, &mut region, &DOMAIN, &acc, &proof)
             },
         )?;
@@ -261,7 +330,8 @@ fn restructures_exactly_as_the_native_sumcheck<C: PastaCurve>(seed: u64) {
     let params = PinnedParams::<C>::derive(16).expect("params");
     let g = params.params().g();
     let mut rng = ChaCha20Rng::seed_from_u64(seed);
-    let mut challenges = || -> [C::ScalarExt; ROUNDS] { core::array::from_fn(|_| C::ScalarExt::random(&mut rng)) };
+    let mut challenges =
+        || -> [C::ScalarExt; ROUNDS] { core::array::from_fn(|_| C::ScalarExt::random(&mut rng)) };
     let first = claims::claim_for::<C>(g, challenges()).expect("claim");
     let second = claims::claim_for::<C>(g, challenges()).expect("claim");
     let (acc, s) = ClaimAccumulator::from_claim(&DOMAIN, &first);
@@ -271,9 +341,16 @@ fn restructures_exactly_as_the_native_sumcheck<C: PastaCurve>(seed: u64) {
     assert_eq!(restructure_verify(&DOMAIN, &acc, &proof), Ok(statement));
     let mut public: Vec<C::ScalarExt> = statement.point.to_vec();
     public.push(statement.value);
-    let satisfied = |acc: &ClaimAccumulator<C>, proof: &RestructureProof<C::ScalarExt>, public: &[C::ScalarExt]| {
-        let circuit = RestructureCircuit::<C> { acc: Some(*acc), proof: Some(*proof) };
-        check_circuit(&circuit, K, &[public.to_vec()], CheckMode::Strict).expect("synthesis").is_satisfied()
+    let satisfied = |acc: &ClaimAccumulator<C>,
+                     proof: &RestructureProof<C::ScalarExt>,
+                     public: &[C::ScalarExt]| {
+        let circuit = RestructureCircuit::<C> {
+            acc: Some(*acc),
+            proof: Some(*proof),
+        };
+        check_circuit(&circuit, K, &[public.to_vec()], CheckMode::Strict)
+            .expect("synthesis")
+            .is_satisfied()
     };
     assert!(satisfied(&acc, &proof, &public));
     let mut other = public.clone();

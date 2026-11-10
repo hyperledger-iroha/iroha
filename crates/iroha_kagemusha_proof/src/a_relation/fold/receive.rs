@@ -46,7 +46,9 @@ use iroha_plonk::{
     frontend::{Circuit, Error as SynthesisError, Layouter, Region, SimpleFloorPlanner},
     transcript::{decode_point, generator_coordinates},
 };
-use iroha_plonk_gadgets::{GlueChip, UintChip, Word, bytes::tape::BytesChip, statement::foreign_limbs};
+use iroha_plonk_gadgets::{
+    GlueChip, UintChip, Word, bytes::tape::BytesChip, statement::foreign_limbs,
+};
 use iroha_plonk_recursion::{
     AccumulatorT, FoldInput, PALLAS_TRIVIAL_GENERATOR, VESTA_TRIVIAL_GENERATOR,
     accumulation_circuit::FoldInputCells,
@@ -55,30 +57,36 @@ use iroha_plonk_recursion::{
     verifier::VerifierChip,
 };
 
-use super::{AStateCells, AStepConfig, Assign, Error, pin_pallas, pin_vesta, push_pallas, vesta_words};
+use super::{
+    AStateCells, AStepConfig, Assign, Error, pin_pallas, pin_vesta, push_pallas, vesta_words,
+};
 use crate::{
     a_relation::{
-        IncomingLineageCells, LineagePublicCells, VestaClaimCells,
+        IncomingLineageCells, LineagePublicCells, SigmaBindingCells, VerifiedQCells,
+        VestaClaimCells, bind_signature_q, bounded_word,
         context::{
             ContextIncoming, ContextIncomingProof, ContextInputs, ContextObjectCells, ContextPlan,
             ContextPredecessor, ContextState,
         },
-        SigmaBindingCells, VerifiedQCells, bind_signature_q, bounded_word,
         incoming_transport::IncomingTransportPlan,
         native::receive::{IncomingWitness, Transition},
         own::OwnPolicy,
         receive::{
-            ReceiveObjectInputs, ReceiveObjectSources, ReceiveObjects, ReceiveProofDigest, ReceiveProofInputs,
-            ReceiveProofSources, ReceiveSignedObjects, ReceiveStageInputs, ReceiveStagePlan, ReceiveStageWitness,
-            authorization::{ReceiveAuthorizationObjects, ReceiveAuthorizationSources, ReceiveSignatureQProjection},
+            ReceiveObjectInputs, ReceiveObjectSources, ReceiveObjects, ReceiveProofDigest,
+            ReceiveProofInputs, ReceiveProofSources, ReceiveSignedObjects, ReceiveStageInputs,
+            ReceiveStagePlan, ReceiveStageWitness,
+            authorization::{
+                ReceiveAuthorizationObjects, ReceiveAuthorizationSources,
+                ReceiveSignatureQProjection,
+            },
         },
         results::ReceiveResultClaims,
         transition::TransitionInputs,
     },
     circuit::{PrefixMode, RelationShape},
     fold_lineage::{
-        A_CLAIM_SLOT, A_EXPORT, A_STATE, AKind, BASE, CLAIM_A, ClaimFolds, REBASE_PC, claim_cells, fold_claims_cells,
-        trivial_export,
+        A_CLAIM_SLOT, A_EXPORT, A_STATE, AKind, BASE, CLAIM_A, ClaimFolds, REBASE_PC, claim_cells,
+        fold_claims_cells, trivial_export,
     },
     operation_relation::{
         incoming_statement::{IncomingStatementCells, StatementView},
@@ -153,28 +161,48 @@ impl ReceiveFoldPlan {
     /// # Errors
     /// [`Error::Artifact`] for another variant or schedule, or an Omega key of
     /// another descriptor.
-    pub fn new(stage: ReceiveStagePlan, policy: OwnPolicy, omega_key: VerifyingKey<Ep>) -> Result<Self, Error> {
+    pub fn new(
+        stage: ReceiveStagePlan,
+        policy: OwnPolicy,
+        omega_key: VerifyingKey<Ep>,
+    ) -> Result<Self, Error> {
         let context = stage.context();
         let omega = context.operation().omega().ok_or(Error::Artifact)?;
         if omega_key.descriptor_digest() != omega.binding().digest()
-            || !matches!(omega_key.transcript_repr(), iroha_plonk::transcript::TranscriptRepr::Base(_))
+            || !matches!(
+                omega_key.transcript_repr(),
+                iroha_plonk::transcript::TranscriptRepr::Base(_)
+            )
         {
             return Err(Error::Artifact);
         }
         if context.operation().frame().variant() != Variant::Receive
             || context.stage_count() != Q_PARTITIONS.len()
-            || Q_PARTITIONS.iter().enumerate().any(|(i, q)| context.q_partition(i) != Some(*q))
-            || context.operation_tasks(1).is_none_or(|tasks| !tasks.is_empty())
+            || Q_PARTITIONS
+                .iter()
+                .enumerate()
+                .any(|(i, q)| context.q_partition(i) != Some(*q))
+            || context
+                .operation_tasks(1)
+                .is_none_or(|tasks| !tasks.is_empty())
         {
             return Err(Error::Artifact);
         }
         // The pinned trivial claims: every challenge one, the generator they fold.
         let pallas = decode_point::<Ep>(&PALLAS_TRIVIAL_GENERATOR).map_err(|_| Error::Artifact)?;
         let vesta = decode_point::<Eq>(&VESTA_TRIVIAL_GENERATOR).map_err(|_| Error::Artifact)?;
-        let trivial_pallas = FoldInput::from_normalized(pallas, 16, [Fq::ONE; 16]).map_err(|_| Error::Artifact)?;
+        let trivial_pallas =
+            FoldInput::from_normalized(pallas, 16, [Fq::ONE; 16]).map_err(|_| Error::Artifact)?;
         let trivial_vesta = AccumulatorT::new(vesta, [Fp::ONE; 16]).map_err(|_| Error::Artifact)?;
         let schema_digest = hash_with_domain(FOLD_SCHEMA_DOMAIN, stage.context().schema());
-        Ok(Self { stage, policy, omega_key, schema_digest, trivial_pallas, trivial_vesta })
+        Ok(Self {
+            stage,
+            policy,
+            omega_key,
+            schema_digest,
+            trivial_pallas,
+            trivial_vesta,
+        })
     }
 
     /// Today's Receive stage plan.
@@ -219,7 +247,9 @@ impl ReceiveFoldPlan {
         }
         let incoming = &source.incoming;
         words.extend(incoming.public);
-        words.push(Fp::from(u64::from(incoming.public_valid && lineage_fields_fit(&incoming.public))));
+        words.push(Fp::from(u64::from(
+            incoming.public_valid && lineage_fields_fit(&incoming.public),
+        )));
         push_pallas(&mut words, &incoming.pallas.as_input())?;
         words.extend(vesta_words(&incoming.vesta.as_input()));
         words.extend(source.commitments.iter().flatten().copied());
@@ -244,7 +274,12 @@ impl ReceiveFoldPlan {
     /// # Errors
     /// [`Error::Input`] for a state the sub-step refuses; [`Error::Artifact`]
     /// for a kind not folded yet.
-    pub fn next_state(&self, kind: AKind, source: &ReceiveFoldSource, state: &[Fp]) -> Result<Vec<Fp>, Error> {
+    pub fn next_state(
+        &self,
+        kind: AKind,
+        source: &ReceiveFoldSource,
+        state: &[Fp],
+    ) -> Result<Vec<Fp>, Error> {
         let digest = self.context_digest(source)?;
         if state != self.state_before(kind, source)? {
             return Err(Error::Input);
@@ -307,11 +342,24 @@ impl ReceiveFoldPlan {
     /// # Errors
     /// [`Error::Input`] for a Corrected claim whose correction is its own
     /// generator (the circuit refuses it).
-    pub fn incoming_pallas_claims(&self, source: &ReceiveFoldSource) -> Result<[FoldInput<Ep>; 2], Error> {
+    pub fn incoming_pallas_claims(
+        &self,
+        source: &ReceiveFoldSource,
+    ) -> Result<[FoldInput<Ep>; 2], Error> {
         let incoming = &source.incoming;
         Ok([
-            select_incoming(incoming.pallas.as_input(), &incoming.pallas_corrections[0], incoming.modes[0], &self.trivial_pallas)?,
-            select_incoming(incoming.opening.clone(), &incoming.pallas_corrections[1], incoming.modes[1], &self.trivial_pallas)?,
+            select_incoming(
+                incoming.pallas.as_input(),
+                &incoming.pallas_corrections[0],
+                incoming.modes[0],
+                &self.trivial_pallas,
+            )?,
+            select_incoming(
+                incoming.opening.clone(),
+                &incoming.pallas_corrections[1],
+                incoming.modes[1],
+                &self.trivial_pallas,
+            )?,
         ])
     }
 
@@ -322,7 +370,12 @@ impl ReceiveFoldPlan {
     /// As [`Self::incoming_pallas_claims`].
     pub fn incoming_vesta_claim(&self, source: &ReceiveFoldSource) -> Result<FoldInput<Eq>, Error> {
         let incoming = &source.incoming;
-        select_incoming(incoming.vesta.as_input(), &incoming.vesta_correction, incoming.modes[2], &self.trivial_vesta.as_input())
+        select_incoming(
+            incoming.vesta.as_input(),
+            &incoming.vesta_correction,
+            incoming.modes[2],
+            &self.trivial_vesta.as_input(),
+        )
     }
 }
 
@@ -340,7 +393,8 @@ fn select_incoming<C: PastaCurve>(
         IncomingMode::Trivial => Ok(trivial.clone()),
         IncomingMode::Corrected if correction == original.g() => Err(Error::Input),
         IncomingMode::Corrected => {
-            FoldInput::from_normalized(*correction, 16, *original.challenges()).map_err(|_| Error::Input)
+            FoldInput::from_normalized(*correction, 16, *original.challenges())
+                .map_err(|_| Error::Input)
         }
     }
 }
@@ -356,17 +410,26 @@ fn lineage_fields_fit(fields: &[Fp; 18]) -> bool {
         repr[bytes..].iter().all(|byte| *byte == 0)
     };
     fields[0] == Fp::ONE
-        && [1, 2, 3, 4, 6, 7, 9, 10, 11, 12, 14].iter().all(|i| below(&fields[*i], 128))
+        && [1, 2, 3, 4, 6, 7, 9, 10, 11, 12, 14]
+            .iter()
+            .all(|i| below(&fields[*i], 128))
         && below(&fields[13], 104)
 }
 
 /// The context words of a full-k16 Pallas claim in circuit: `k`, the generator
 /// coordinates, then each challenge's two limbs.
-fn push_pallas_cells(words: &mut Vec<Word<Fp>>, claim: &FoldInputCells<Ep>) -> Result<(), SynthesisError> {
+fn push_pallas_cells(
+    words: &mut Vec<Word<Fp>>,
+    claim: &FoldInputCells<Ep>,
+) -> Result<(), SynthesisError> {
     if claim.source() != iroha_plonk_recursion::accumulation_circuit::FoldSource::Fixed(16) {
         return Err(SynthesisError::Synthesis);
     }
-    words.extend([claim.source_k().clone(), claim.g().x().clone(), claim.g().y().clone()]);
+    words.extend([
+        claim.source_k().clone(),
+        claim.g().x().clone(),
+        claim.g().y().clone(),
+    ]);
     for value in claim.challenges() {
         words.extend([value.lo().word().clone(), value.hi().word().clone()]);
     }
@@ -382,7 +445,12 @@ fn q_cells(
     lengths: &[u32],
 ) -> Result<Vec<Vec<ScalarCells<Ep>>>, SynthesisError> {
     let columns = folded.get(1..).ok_or(SynthesisError::Synthesis)?;
-    if columns.len() != lengths.len() || columns.iter().zip(lengths).any(|(c, n)| c.len() != *n as usize) {
+    if columns.len() != lengths.len()
+        || columns
+            .iter()
+            .zip(lengths)
+            .any(|(c, n)| c.len() != *n as usize)
+    {
         return Err(SynthesisError::Synthesis);
     }
     columns
@@ -390,7 +458,9 @@ fn q_cells(
         .map(|column| {
             column
                 .iter()
-                .map(|value| ScalarCells::from_limbs(&mut chip.uint(), region, value.s6.lo(), value.s6.hi()))
+                .map(|value| {
+                    ScalarCells::from_limbs(&mut chip.uint(), region, value.s6.lo(), value.s6.hi())
+                })
                 .collect()
         })
         .collect()
@@ -445,7 +515,14 @@ impl ReceiveFoldSource {
         if !native.violations.is_empty() || native.statement != transition.statement {
             return Err(Error::Input);
         }
-        let source = Self { transition, incoming_statement, step: Some((step, native)), objects, commitments, incoming };
+        let source = Self {
+            transition,
+            incoming_statement,
+            step: Some((step, native)),
+            objects,
+            commitments,
+            incoming,
+        };
         source.check_shape(plan)?;
         Ok(source)
     }
@@ -453,8 +530,11 @@ impl ReceiveFoldSource {
     /// The cells' shapes for key generation: zero values and trivial claims.
     #[must_use]
     pub fn blank(plan: &ReceiveFoldPlan) -> Self {
-        let zero_state =
-            crate::admin_sigma::StateWitness { core: [Fp::ZERO; 29], rest: [Fp::ZERO; 6], lineage: [Fp::ZERO; 18] };
+        let zero_state = crate::admin_sigma::StateWitness {
+            core: [Fp::ZERO; 29],
+            rest: [Fp::ZERO; 6],
+            lineage: [Fp::ZERO; 18],
+        };
         let insert = crate::tree::IndexedInsert {
             leaf: crate::tree::IndexedLeaf::default(),
             leaf_slot: 0,
@@ -476,13 +556,18 @@ impl ReceiveFoldSource {
             step: None,
             objects: core::array::from_fn(|i| {
                 let spec = plan.context().object_specs()[i];
-                if matches!(i, 4 | 5) { Vec::new() } else { vec![0; spec.capacity as usize] }
+                if matches!(i, 4 | 5) {
+                    Vec::new()
+                } else {
+                    vec![0; spec.capacity as usize]
+                }
             }),
             commitments: vec![[Fp::ZERO; 3]; plan.context().object_specs().len()],
             incoming: IncomingWitness {
                 public: [Fp::ZERO; 18],
                 public_valid: false,
-                pallas: AccumulatorT::new(g, *plan.trivial_pallas.challenges()).expect("the trivial claim is canonical"),
+                pallas: AccumulatorT::new(g, *plan.trivial_pallas.challenges())
+                    .expect("the trivial claim is canonical"),
                 vesta: plan.trivial_vesta.clone(),
                 opening: plan.trivial_pallas.clone(),
                 results: [false; 4],
@@ -497,10 +582,19 @@ impl ReceiveFoldSource {
         let specs = plan.context().object_specs();
         if self.commitments.len() != specs.len()
             || specs.len() != self.objects.len()
-            || self.objects.iter().zip(specs).enumerate().any(|(i, (raw, spec))| {
-                let capacity = spec.capacity as usize;
-                if matches!(i, 4 | 5) { raw.len() > capacity } else { raw.len() != capacity }
-            })
+            || self
+                .objects
+                .iter()
+                .zip(specs)
+                .enumerate()
+                .any(|(i, (raw, spec))| {
+                    let capacity = spec.capacity as usize;
+                    if matches!(i, 4 | 5) {
+                        raw.len() > capacity
+                    } else {
+                        raw.len() != capacity
+                    }
+                })
         {
             return Err(Error::Input);
         }
@@ -552,7 +646,8 @@ impl ContextCells {
         let (before, pred_public) = assign.state(chip, region, &transition.before)?;
         let (after, next_public) = assign.state(chip, region, &transition.after)?;
         let fields = assign.words(chip, region, &transition.statement)?;
-        let statement = StatementCells::constrain_with_verifier(chip, region, Variant::Receive, &fields)?;
+        let statement =
+            StatementCells::constrain_with_verifier(chip, region, Variant::Receive, &fields)?;
         let fields = assign.words(chip, region, &source.incoming_statement)?;
         let lanes = chip.operation_lanes()?;
         let incoming_statement = IncomingStatementCells::constrain(
@@ -572,8 +667,18 @@ impl ContextCells {
         };
         let q_instances = (0..context.operation().q_count())
             .map(|index| {
-                let lengths = &context.operation().q(index).ok_or(SynthesisError::Synthesis)?.verifier().binding().descriptor().instance_lengths;
-                Ok(lengths.iter().map(|n| vec![zero.clone(); *n as usize]).collect())
+                let lengths = &context
+                    .operation()
+                    .q(index)
+                    .ok_or(SynthesisError::Synthesis)?
+                    .verifier()
+                    .binding()
+                    .descriptor()
+                    .instance_lengths;
+                Ok(lengths
+                    .iter()
+                    .map(|n| vec![zero.clone(); *n as usize])
+                    .collect())
             })
             .collect::<Result<Vec<_>, SynthesisError>>()?;
         // Inside a segment the predecessor carries no transport claims: the
@@ -586,8 +691,12 @@ impl ContextCells {
         let incoming_pallas = assign.pallas(chip, region, &incoming.pallas.as_input())?;
         let incoming_vesta = assign.vesta(chip, region, &incoming.vesta)?;
         let original = assign.words(chip, region, &incoming.public)?;
-        let public_valid = chip.uint().glue().boolean(region, assign.value(incoming.public_valid))?;
-        let incoming_public = IncomingLineageCells::constrain(&mut chip.uint(), region, &original, &public_valid)?;
+        let public_valid = chip
+            .uint()
+            .glue()
+            .boolean(region, assign.value(incoming.public_valid))?;
+        let incoming_public =
+            IncomingLineageCells::constrain(&mut chip.uint(), region, &original, &public_valid)?;
         let modes = incoming
             .modes
             .iter()
@@ -602,7 +711,10 @@ impl ContextCells {
             .map(|point| chip.witness_generator(region, assign.value(Ep::from(*point))))
             .collect::<Result<Vec<_>, _>>()?;
         let (x, y) = generator_coordinates::<Eq>(&incoming.vesta_correction);
-        let vesta_corrections = vec![[assign.scalar(chip, region, x)?, assign.scalar(chip, region, y)?]];
+        let vesta_corrections = vec![[
+            assign.scalar(chip, region, x)?,
+            assign.scalar(chip, region, y)?,
+        ]];
         let opening = assign.pallas(chip, region, &incoming.opening)?;
         let results = ReceiveResultClaims::assign(
             chip.uint().glue(),
@@ -611,7 +723,11 @@ impl ContextCells {
             incoming.results.map(|v| assign.value(v)),
         )?
         .with_opening(&opening)?;
-        let commitments = source.commitments.iter().map(|v| v.map(|v| assign.value(v))).collect::<Vec<_>>();
+        let commitments = source
+            .commitments
+            .iter()
+            .map(|v| v.map(|v| assign.value(v)))
+            .collect::<Vec<_>>();
         let objects = context.assign_receive_object_claims(chip, region, &commitments)?;
         Ok(Self {
             statement,
@@ -647,7 +763,10 @@ impl ContextCells {
         let mut words = vec![chip.uint().glue().constant(region, plan.schema_digest)?];
         words.extend(self.statement.fields().iter().cloned());
         words.extend(self.incoming_statement.fields().iter().cloned());
-        for (state, public) in [(&self.before, &self.pred_public), (&self.after, &self.next_public)] {
+        for (state, public) in [
+            (&self.before, &self.pred_public),
+            (&self.after, &self.next_public),
+        ] {
             state.bind_lineage(&mut chip.uint(), region, public)?;
             words.extend(state.core().iter().cloned());
             words.extend(state.rest().iter().cloned());
@@ -660,9 +779,16 @@ impl ContextCells {
         for object in &self.objects {
             words.extend(object.commitment_words());
         }
-        words.extend(self.results.context_words(context.receive_results().ok_or(SynthesisError::Synthesis)?)?);
+        words.extend(
+            self.results
+                .context_words(context.receive_results().ok_or(SynthesisError::Synthesis)?)?,
+        );
         for mode in &self.modes {
-            words.extend([mode.accept().word().clone(), mode.trivial().word().clone(), mode.corrected().word().clone()]);
+            words.extend([
+                mode.accept().word().clone(),
+                mode.trivial().word().clone(),
+                mode.corrected().word().clone(),
+            ]);
         }
         for point in &self.corrections {
             words.extend([point.x().clone(), point.y().clone()]);
@@ -685,7 +811,10 @@ impl ContextCells {
                 pallas: &self.pred_pallas,
                 vesta: &self.pred_vesta,
             }),
-            successor: ContextState { state: &self.after, public: &self.next_public },
+            successor: ContextState {
+                state: &self.after,
+                public: &self.next_public,
+            },
             incoming: Some(ContextIncoming {
                 public: &self.incoming_public,
                 pallas: &self.incoming_pallas,
@@ -740,7 +869,12 @@ impl ReceiveFoldStep {
         if stage_of(kind).is_none() {
             return Err(Error::Artifact);
         }
-        Ok(Self { plan, kind, shape, witness })
+        Ok(Self {
+            plan,
+            kind,
+            shape,
+            witness,
+        })
     }
 
     fn layout(
@@ -749,7 +883,9 @@ impl ReceiveFoldStep {
         bytes: &mut BytesChip<Fp>,
         region: &mut Region<'_, Fp>,
     ) -> Result<(Vec<Word<Fp>>, Vec<Word<Fp>>), SynthesisError> {
-        let assign = Assign { known: self.witness.is_some() };
+        let assign = Assign {
+            known: self.witness.is_some(),
+        };
         let blank;
         let source = match &self.witness {
             Some(witness) => witness.source.as_ref(),
@@ -761,8 +897,13 @@ impl ReceiveFoldStep {
         let chain = self.kind.chain();
         let frame = {
             let refs = chip.fold_lanes()?;
-            let mut lanes =
-                FoldLanes { glue: refs.glue, range: refs.range, ff: refs.ff, ecc: refs.ecc, duplex: refs.hash };
+            let mut lanes = FoldLanes {
+                glue: refs.glue,
+                range: refs.range,
+                ff: refs.ff,
+                ecc: refs.ecc,
+                duplex: refs.hash,
+            };
             fold_frame(
                 &mut lanes,
                 region,
@@ -781,8 +922,18 @@ impl ReceiveFoldStep {
         let operation = self.plan.context().operation();
         match self.kind {
             AKind::Receive3 | AKind::Receive4 => {
-                let index = if self.kind == AKind::Receive3 { 0 } else { ReceiveStagePlan::SIGNATURE_Q };
-                let lengths = &operation.q(index).ok_or(SynthesisError::Synthesis)?.verifier().binding().descriptor().instance_lengths;
+                let index = if self.kind == AKind::Receive3 {
+                    0
+                } else {
+                    ReceiveStagePlan::SIGNATURE_Q
+                };
+                let lengths = &operation
+                    .q(index)
+                    .ok_or(SynthesisError::Synthesis)?
+                    .verifier()
+                    .binding()
+                    .descriptor()
+                    .instance_lengths;
                 context.q_instances[index] = q_cells(chip, region, &frame.public, lengths)?;
             }
             AKind::Receive1 | AKind::Receive5 => {}
@@ -802,9 +953,15 @@ impl ReceiveFoldStep {
         }
         match self.kind {
             AKind::Receive1 => self.receive1(assign, chip, region, &context, &input, source)?,
-            AKind::Receive3 => self.receive3(assign, chip, bytes, region, &context, &input, source)?,
-            AKind::Receive4 => self.receive4(assign, chip, bytes, region, &context, &input, source)?,
-            AKind::Receive5 => self.receive5(assign, chip, bytes, region, &context, &input, source)?,
+            AKind::Receive3 => {
+                self.receive3(assign, chip, bytes, region, &context, &input, source)?
+            }
+            AKind::Receive4 => {
+                self.receive4(assign, chip, bytes, region, &context, &input, source)?
+            }
+            AKind::Receive5 => {
+                self.receive5(assign, chip, bytes, region, &context, &input, source)?
+            }
             AKind::Rebase => return Err(SynthesisError::Synthesis),
         }
         let next = if self.kind == AKind::Receive5 {
@@ -814,30 +971,61 @@ impl ReceiveFoldStep {
             next.extend([zero.clone(), zero]);
             next
         } else {
-            let pc = chip.uint().glue().constant(region, Fp::from(pc_before(self.kind) + 1))?;
+            let pc = chip
+                .uint()
+                .glue()
+                .constant(region, Fp::from(pc_before(self.kind) + 1))?;
             let mut next = state.lineage.to_vec();
             next.extend([digest, pc]);
             next
         };
         let export = self.export(chip, region, &context)?;
-        let selected = if self.kind == AKind::Receive5 { Some(self.incoming_pallas(chip, region, &context)?) } else { None };
+        let selected = if self.kind == AKind::Receive5 {
+            Some(self.incoming_pallas(chip, region, &context)?)
+        } else {
+            None
+        };
         let refs = chip.fold_lanes()?;
-        let mut lanes = FoldLanes { glue: refs.glue, range: refs.range, ff: refs.ff, ecc: refs.ecc, duplex: refs.hash };
+        let mut lanes = FoldLanes {
+            glue: refs.glue,
+            range: refs.range,
+            ff: refs.ff,
+            ecc: refs.ecc,
+            duplex: refs.hash,
+        };
         let digests = match &selected {
             // A5 folds the incoming Pallas claims into A's claim accumulator.
             Some(selected) => {
                 let (values, folds) = match &self.witness {
                     Some(witness) => {
-                        let values = self.plan.incoming_pallas_claims(source).map_err(|_| SynthesisError::Synthesis)?;
-                        (Some(values), Some(witness.claims.as_ref().ok_or(SynthesisError::Synthesis)?))
+                        let values = self
+                            .plan
+                            .incoming_pallas_claims(source)
+                            .map_err(|_| SynthesisError::Synthesis)?;
+                        (
+                            Some(values),
+                            Some(witness.claims.as_ref().ok_or(SynthesisError::Synthesis)?),
+                        )
                     }
                     None => (None, None),
                 };
                 let mut claims = Vec::with_capacity(2);
                 for (i, cells) in selected.iter().enumerate() {
-                    claims.push(claim_cells(&mut lanes, region, cells, values.as_ref().map(|v| &v[i]))?);
+                    claims.push(claim_cells(
+                        &mut lanes,
+                        region,
+                        cells,
+                        values.as_ref().map(|v| &v[i]),
+                    )?);
                 }
-                fold_claims_cells(&mut lanes, region, (&CLAIM_A, A_CLAIM_SLOT), &frame.digests, &claims, folds)?
+                fold_claims_cells(
+                    &mut lanes,
+                    region,
+                    (&CLAIM_A, A_CLAIM_SLOT),
+                    &frame.digests,
+                    &claims,
+                    folds,
+                )?
             }
             None => frame.digests.clone(),
         };
@@ -859,9 +1047,20 @@ impl ReceiveFoldStep {
         let words = if self.kind == AKind::Receive1 {
             let mut words = context.incoming_vesta.words();
             let mode = context.modes.get(2).ok_or(SynthesisError::Synthesis)?;
-            words.extend([mode.accept().word().clone(), mode.trivial().word().clone(), mode.corrected().word().clone()]);
-            for coordinate in context.vesta_corrections.first().ok_or(SynthesisError::Synthesis)? {
-                words.extend([coordinate.lo().word().clone(), coordinate.hi().word().clone()]);
+            words.extend([
+                mode.accept().word().clone(),
+                mode.trivial().word().clone(),
+                mode.corrected().word().clone(),
+            ]);
+            for coordinate in context
+                .vesta_corrections
+                .first()
+                .ok_or(SynthesisError::Synthesis)?
+            {
+                words.extend([
+                    coordinate.lo().word().clone(),
+                    coordinate.hi().word().clone(),
+                ]);
             }
             words
         } else {
@@ -870,7 +1069,11 @@ impl ReceiveFoldStep {
                 .map(|value| chip.uint().glue().constant(region, value))
                 .collect::<Result<Vec<_>, _>>()?
         };
-        if words.len() == A_EXPORT { Ok(words) } else { Err(SynthesisError::Synthesis) }
+        if words.len() == A_EXPORT {
+            Ok(words)
+        } else {
+            Err(SynthesisError::Synthesis)
+        }
     }
 
     /// The incoming Omega's Pallas claims selected with today's selector: the
@@ -889,7 +1092,13 @@ impl ReceiveFoldStep {
         }
         let opening = context.results.opening()?;
         Ok([
-            FoldInputCells::select_incoming(chip, region, &context.incoming_pallas, &corrections[0], &modes[0])?,
+            FoldInputCells::select_incoming(
+                chip,
+                region,
+                &context.incoming_pallas,
+                &corrections[0],
+                &modes[0],
+            )?,
             FoldInputCells::select_incoming(chip, region, opening, &corrections[1], &modes[1])?,
         ])
     }
@@ -915,7 +1124,9 @@ impl ReceiveFoldStep {
         let operation = plan.operation();
         let specs = plan.object_specs();
         let sigma_plan = operation.sigma_plan()?;
-        let class = sigma_plan.class(QSigmaPlan::INCOMING).ok_or(SynthesisError::Synthesis)?;
+        let class = sigma_plan
+            .class(QSigmaPlan::INCOMING)
+            .ok_or(SynthesisError::Synthesis)?;
         let proof_length = class.verifier().proof_length();
         let transport_plan = IncomingTransportPlan::new(operation)?;
         let omega_raw = assign.active(
@@ -934,9 +1145,15 @@ impl ReceiveFoldStep {
             specs[5].capacity as usize,
             &SigmaBindingCells::incoming_segments(proof_length)?,
         )?;
-        let transport =
-            transport_plan.decode_active(chip, region, &omega_raw, context.next_public.omega_key_digest())?;
-        let row = sigma_plan.position(QSigmaPlan::INCOMING).ok_or(SynthesisError::Synthesis)?;
+        let transport = transport_plan.decode_active(
+            chip,
+            region,
+            &omega_raw,
+            context.next_public.omega_key_digest(),
+        )?;
+        let row = sigma_plan
+            .position(QSigmaPlan::INCOMING)
+            .ok_or(SynthesisError::Synthesis)?;
         let index = bounded_word(chip, region, &context.q_instances[0][2][row])?;
         let sigma = SigmaBindingCells::from_incoming_active(
             chip,
@@ -946,13 +1163,22 @@ impl ReceiveFoldStep {
             &sigma_raw,
             proof_length,
         )?;
-        let values = source.objects.each_ref().map(|raw| raw.iter().map(|byte| assign.value(*byte)).collect::<Vec<_>>());
+        let values = source.objects.each_ref().map(|raw| {
+            raw.iter()
+                .map(|byte| assign.value(*byte))
+                .collect::<Vec<_>>()
+        });
         let objects = ReceiveObjects::decode(
             chip,
             bytes,
             region,
             self.plan.policy,
-            ReceiveObjectSources { request: &values[0], payer: &values[1], receipt: &values[2], payment: &values[3] },
+            ReceiveObjectSources {
+                request: &values[0],
+                payer: &values[1],
+                receipt: &values[2],
+                payment: &values[3],
+            },
             ReceiveObjectInputs {
                 own: &context.statement,
                 receiver: &context.pred_public,
@@ -976,7 +1202,10 @@ impl ReceiveFoldStep {
                 authorization: None,
             },
             ReceiveStageWitness {
-                proofs: Some(ReceiveProofInputs { sources: &sources, omega_key: &omega_key }),
+                proofs: Some(ReceiveProofInputs {
+                    sources: &sources,
+                    omega_key: &omega_key,
+                }),
                 ..ReceiveStageWitness::default()
             },
         )?;
@@ -1002,18 +1231,33 @@ impl ReceiveFoldStep {
         source: &ReceiveFoldSource,
     ) -> Result<(), SynthesisError> {
         let index = ReceiveStagePlan::SIGNATURE_Q;
-        let values = source.objects.each_ref().map(|raw| raw.iter().map(|byte| assign.value(*byte)).collect::<Vec<_>>());
-        let signed = ReceiveSignedObjects::decode(chip, bytes, region, [&values[0], &values[1], &values[2]])?;
+        let values = source.objects.each_ref().map(|raw| {
+            raw.iter()
+                .map(|byte| assign.value(*byte))
+                .collect::<Vec<_>>()
+        });
+        let signed = ReceiveSignedObjects::decode(
+            chip,
+            bytes,
+            region,
+            [&values[0], &values[1], &values[2]],
+        )?;
         let authorization = ReceiveAuthorizationObjects::decode(
             chip,
             bytes,
             region,
             Variant::Receive,
-            ReceiveAuthorizationSources { receipt: &values[6], quoted: [&values[7], &values[8]] },
+            ReceiveAuthorizationSources {
+                receipt: &values[6],
+                quoted: [&values[7], &values[8]],
+            },
         )?;
         let operation = self.plan.context().operation();
         let fixed = operation.q(index).ok_or(SynthesisError::Synthesis)?;
-        let key_digest = fixed.key.kagemusha_digest(fixed.verifier().binding()).map_err(|_| SynthesisError::Synthesis)?;
+        let key_digest = fixed
+            .key
+            .kagemusha_digest(fixed.verifier().binding())
+            .map_err(|_| SynthesisError::Synthesis)?;
         let opening = assign.pallas(chip, region, &self.plan.trivial_pallas)?;
         pin_pallas(region, &opening, &self.plan.trivial_pallas)?;
         let verified = VerifiedQCells {
@@ -1022,11 +1266,21 @@ impl ReceiveFoldStep {
             instances: context.q_instances[index].clone(),
             key_digest: chip.uint().glue().constant(region, key_digest)?,
         };
-        let schema = self.plan.stage.signature_schema(index).ok_or(SynthesisError::Synthesis)?;
+        let schema = self
+            .plan
+            .stage
+            .signature_schema(index)
+            .ok_or(SynthesisError::Synthesis)?;
         let own = bind_signature_q(chip, region, operation, index, schema, &verified)?;
         let stage = receive_stage(self.kind)?;
-        let incoming =
-            ReceiveSignatureQProjection::from_context(chip, region, self.plan.context(), stage, self.plan.policy, input)?;
+        let incoming = ReceiveSignatureQProjection::from_context(
+            chip,
+            region,
+            self.plan.context(),
+            stage,
+            self.plan.policy,
+            input,
+        )?;
         self.plan.stage.constrain_stage(
             chip,
             region,
@@ -1062,11 +1316,32 @@ impl ReceiveFoldStep {
         source: &ReceiveFoldSource,
     ) -> Result<(), SynthesisError> {
         let specs = self.plan.context().object_specs();
-        let omega = assign.active(chip, bytes, region, &source.objects[4], specs[4].capacity as usize, &[])?;
-        let sigma = assign.active(chip, bytes, region, &source.objects[5], specs[5].capacity as usize, &[])?;
-        let proof_digest =
-            ReceiveProofDigest::from_active(chip, region, &omega, &sigma, context.objects[5].authenticated_digest())?;
-        let nonmembership = assign.insertion(&mut chip.uint(), region, &source.transition.consumed)?.low;
+        let omega = assign.active(
+            chip,
+            bytes,
+            region,
+            &source.objects[4],
+            specs[4].capacity as usize,
+            &[],
+        )?;
+        let sigma = assign.active(
+            chip,
+            bytes,
+            region,
+            &source.objects[5],
+            specs[5].capacity as usize,
+            &[],
+        )?;
+        let proof_digest = ReceiveProofDigest::from_active(
+            chip,
+            region,
+            &omega,
+            &sigma,
+            context.objects[5].authenticated_digest(),
+        )?;
+        let nonmembership = assign
+            .insertion(&mut chip.uint(), region, &source.transition.consumed)?
+            .low;
         let stage = receive_stage(self.kind)?;
         self.plan.stage.constrain_stage(
             chip,
@@ -1079,7 +1354,10 @@ impl ReceiveFoldStep {
                 signed: None,
                 authorization: None,
             },
-            ReceiveStageWitness { nonmembership: Some(&nonmembership), ..ReceiveStageWitness::default() },
+            ReceiveStageWitness {
+                nonmembership: Some(&nonmembership),
+                ..ReceiveStageWitness::default()
+            },
         )?;
         Ok(())
     }
@@ -1100,9 +1378,15 @@ impl ReceiveFoldStep {
         let credit = assign.insertion(&mut chip.uint(), region, &transition.credit)?;
         let fields = context.statement.fields();
         let inserted_key = fields[17].clone();
-        let inserted_value =
-            chip.hash_words(region, CONSUMED_DOMAIN, &[inserted_key.clone(), fields[20].clone(), fields[9].clone()])?;
-        let insert = chip.uint().glue().boolean(region, assign.value(transition.insert))?;
+        let inserted_value = chip.hash_words(
+            region,
+            CONSUMED_DOMAIN,
+            &[inserted_key.clone(), fields[20].clone(), fields[9].clone()],
+        )?;
+        let insert = chip
+            .uint()
+            .glue()
+            .boolean(region, assign.value(transition.insert))?;
         let effects = ReceiveMapWitness {
             consumed,
             credit,
@@ -1117,12 +1401,22 @@ impl ReceiveFoldStep {
             chip,
             region,
             stage,
-            ReceiveStageInputs { context: input, proof_digest: None, objects: None, signed: None, authorization: None },
+            ReceiveStageInputs {
+                context: input,
+                proof_digest: None,
+                objects: None,
+                signed: None,
+                authorization: None,
+            },
             ReceiveStageWitness {
                 effects: Some(&effects),
                 transition: Some(TransitionInputs {
                     shape,
-                    witness: source.step.as_ref().filter(|_| assign.known).map(|(step, native)| (step, native)),
+                    witness: source
+                        .step
+                        .as_ref()
+                        .filter(|_| assign.known)
+                        .map(|(step, native)| (step, native)),
                 }),
                 ..ReceiveStageWitness::default()
             },
@@ -1137,20 +1431,29 @@ impl Circuit<Fp> for ReceiveFoldStep {
     type Params = ();
 
     fn without_witnesses(&self) -> Self {
-        Self { witness: None, ..self.clone() }
+        Self {
+            witness: None,
+            ..self.clone()
+        }
     }
 
     fn configure(meta: &mut ConstraintSystem<Fp>) -> AStepConfig {
         AStepConfig::configure(meta)
     }
 
-    fn synthesize(&self, config: AStepConfig, mut layouter: impl Layouter<Fp>) -> Result<(), SynthesisError> {
+    fn synthesize(
+        &self,
+        config: AStepConfig,
+        mut layouter: impl Layouter<Fp>,
+    ) -> Result<(), SynthesisError> {
         let mut chip = VerifierChip::new(config.verifier);
         let mut bytes = BytesChip::new(config.bytes);
         chip.load_tables(&mut layouter)?;
         bytes.load_table(&mut layouter)?;
-        let (out, export) =
-            layouter.assign_region(|| "folded Receive A step", |mut region| self.layout(&mut chip, &mut bytes, &mut region))?;
+        let (out, export) = layouter.assign_region(
+            || "folded Receive A step",
+            |mut region| self.layout(&mut chip, &mut bytes, &mut region),
+        )?;
         for (row, word) in out.iter().enumerate() {
             layouter.constrain_instance(word.cell(), config.frame, row)?;
         }

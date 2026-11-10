@@ -18,6 +18,7 @@
 //! selecting a later head.
 /// Archive startup and activation boundary rules shared with the reputation archive adapter.
 pub(crate) mod archive_boundary;
+mod archive_retention;
 mod current_source_assignment;
 mod current_source_stream_token_custody;
 
@@ -170,6 +171,8 @@ pub(crate) struct PreparedProviderIngestFinalizedArchiveV1 {
     query: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
     runtime_query: Arc<ArchivedProviderIngestFinalizedLedgerV1>,
     signed_capture_reader: Option<ArchivedProviderIngestFinalizedLedgerV1>,
+    // Stays readable after the capture reader moves to its coordinator.
+    capture_scan_pin: archive_retention::ArchiveScanPinSlotV1,
     retention_authority: Option<QualifiedProviderIngestRetentionAuthorityV1>,
 }
 impl PreparedProviderIngestFinalizedArchiveV1 {
@@ -207,8 +210,56 @@ impl PreparedProviderIngestFinalizedArchiveV1 {
     ) -> Option<&QualifiedProviderIngestRetentionAuthorityV1> {
         self.retention_authority.as_ref()
     }
+    /// Start the one supervised worker that keeps this archive below its capacity bounds.
+    ///
+    /// Reaching a bound stops this node committing, so the worker runs whether or not an
+    /// authority is configured: without one it can only warn in time for an operator to act.
+    /// It reads what active jobs and reader scans still need from `node` and this archive's
+    /// readers, so call this once both exist.
+    pub(crate) fn start_retention_worker(
+        &self,
+        node: sorafs_node::NodeHandle,
+        shutdown_signal: iroha_futures::supervisor::ShutdownSignal,
+    ) -> iroha_futures::supervisor::Child {
+        let pin_archive = Arc::clone(&self.archive);
+        let pin_network_id = self.query.network_id;
+        archive_retention::start(
+            archive_retention::ProviderIngestArchiveRetentionWorkerV1::new(
+                Arc::clone(&self.archive),
+                Arc::clone(&self.query.state),
+                Arc::clone(&self.query.kura),
+                self.retention_authority.clone(),
+                archive_retention::running_node_pins(
+                    move || {
+                        node.finalized_provider_ingest_active_admission_cursors()
+                            .map_err(eyre::Report::new)?
+                            .into_iter()
+                            .map(|cursor| {
+                                pin_archive
+                                    .resolve_exact_key(
+                                        &pin_network_id,
+                                        cursor.height,
+                                        cursor.block_hash,
+                                    )
+                                    .map(|key| key.height)
+                                    .map_err(eyre::Report::new)
+                            })
+                            .collect()
+                    },
+                    [
+                        Arc::clone(&self.query.scan_pin),
+                        Arc::clone(&self.runtime_query.scan_pin),
+                        Arc::clone(&self.capture_scan_pin),
+                    ],
+                ),
+                Arc::clone(&self.query.anchor_leases),
+            ),
+            shutdown_signal,
+        )
+    }
 }
 /// Exact configured retention authority retained after startup qualification.
+#[derive(Clone)]
 pub(crate) struct QualifiedProviderIngestRetentionAuthorityV1 {
     binding: ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
     authority: Arc<dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1>,
@@ -284,6 +335,7 @@ pub(crate) fn prepare_provider_ingest_finalized_archive_v1(
     daemon_storage_root: &Path,
     state: &Arc<State>,
     kura: &Arc<Kura>,
+    pending_admission_cursors: &[ProviderIngestFinalizedCursorV1],
     retention_authority: Option<Arc<dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1>>,
 ) -> Result<PreparedProviderIngestFinalizedArchiveV1, ProviderIngestFinalizedArchiveStartupErrorV1>
 {
@@ -301,7 +353,23 @@ pub(crate) fn prepare_provider_ingest_finalized_archive_v1(
         kura.as_ref(),
         daemon_storage_root,
         retention_authority,
+        pending_admission_cursors,
     )?;
+    // Restored obligations must already resolve exactly, including their hash. A pin below
+    // the retained floor is an obligation failure, never an ignorable retention hint.
+    let pending_admission_keys = pending_admission_cursors
+        .iter()
+        .map(|cursor| {
+            archive
+                .resolve_exact_key(&network_id, cursor.height, cursor.block_hash)
+                .map_err(
+                    |source| ProviderIngestFinalizedArchiveStartupErrorV1::Archive {
+                        stage: "restored active-job exact admission anchor",
+                        source: Box::new(source),
+                    },
+                )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let boundary = authenticate_archive_startup_boundary(state.as_ref(), kura.as_ref())?;
     let archive_empty = archive.is_empty().map_err(|source| {
         ProviderIngestFinalizedArchiveStartupErrorV1::Archive {
@@ -315,6 +383,8 @@ pub(crate) fn prepare_provider_ingest_finalized_archive_v1(
         kura.as_ref(),
         &boundary,
         archive_empty,
+        retention_authority.as_ref(),
+        &pending_admission_keys,
     )?;
     if let Some(authority) = &retention_authority {
         authority.revalidate()?;
@@ -328,6 +398,7 @@ pub(crate) fn prepare_provider_ingest_finalized_archive_v1(
         max_page_rows: config.max_page_rows,
         max_kura_tip_lag_blocks: config.max_kura_tip_lag_blocks,
         activation_gate: activation_gate_for_startup_mode(&startup_mode),
+        anchor_leases: Arc::new(archive_retention::ArchiveAnchorLeaseRegistryV1::default()),
     };
     let query = Arc::new(ArchivedProviderIngestFinalizedLedgerV1::new(
         reader_args.clone(),
@@ -336,13 +407,15 @@ pub(crate) fn prepare_provider_ingest_finalized_archive_v1(
         reader_args.clone(),
     ));
     let signed_capture_reader =
-        Some(ArchivedProviderIngestFinalizedLedgerV1::new_replay_safe_capture(reader_args));
+        ArchivedProviderIngestFinalizedLedgerV1::new_replay_safe_capture(reader_args);
+    let capture_scan_pin = Arc::clone(&signed_capture_reader.scan_pin);
     Ok(PreparedProviderIngestFinalizedArchiveV1 {
         startup_mode,
         archive,
         query,
         runtime_query,
-        signed_capture_reader,
+        signed_capture_reader: Some(signed_capture_reader),
+        capture_scan_pin,
         retention_authority,
     })
 }
@@ -353,6 +426,7 @@ fn open_provider_ingest_finalized_archive(
     kura: &Kura,
     daemon_storage_root: &Path,
     authority: Option<Arc<dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1>>,
+    pending_admission_cursors: &[ProviderIngestFinalizedCursorV1],
 ) -> Result<
     (
         Arc<ProviderIngestFinalizedArchiveV1>,
@@ -403,6 +477,15 @@ fn open_provider_ingest_finalized_archive(
                 kura,
                 &binding,
                 authority.as_ref(),
+                &pending_admission_cursors
+                    .iter()
+                    .map(|cursor| {
+                        iroha_data_model::sorafs::pin_registry::ProviderIngestFinalizedAnchorV1 {
+                            height: cursor.height,
+                            block_hash: cursor.block_hash,
+                        }
+                    })
+                    .collect::<Vec<_>>(),
             );
             (
                 archive,
@@ -475,6 +558,8 @@ fn select_archive_startup_mode(
     kura: &Kura,
     boundary: &AuthenticatedArchiveStartupBoundaryV1<'_>,
     archive_empty: bool,
+    retention_authority: Option<&QualifiedProviderIngestRetentionAuthorityV1>,
+    pending_admission_keys: &[ProviderIngestFinalizedArchiveKeyV1],
 ) -> Result<ProviderIngestFinalizedArchiveStartupModeV1, ProviderIngestFinalizedArchiveStartupErrorV1>
 {
     match boundary.kind {
@@ -488,9 +573,14 @@ fn select_archive_startup_mode(
             }
             Ok(ProviderIngestFinalizedArchiveStartupModeV1::BootstrapAwaitingGenesisCapture)
         }
-        ArchiveStartupBoundaryV1::Qualified => {
-            prepare_qualified_archive_mode(config, archive, kura, &boundary.state_view)
-        }
+        ArchiveStartupBoundaryV1::Qualified => prepare_qualified_archive_mode(
+            config,
+            archive,
+            kura,
+            &boundary.state_view,
+            retention_authority,
+            pending_admission_keys,
+        ),
     }
 }
 fn prepare_qualified_archive_mode(
@@ -498,16 +588,26 @@ fn prepare_qualified_archive_mode(
     archive: &ProviderIngestFinalizedArchiveV1,
     kura: &Kura,
     state_view: &StateQueryView<'_>,
+    retention_authority: Option<&QualifiedProviderIngestRetentionAuthorityV1>,
+    pending_admission_keys: &[ProviderIngestFinalizedArchiveKeyV1],
 ) -> Result<ProviderIngestFinalizedArchiveStartupModeV1, ProviderIngestFinalizedArchiveStartupErrorV1>
 {
-    let reconciliation = archive
-        .reconcile_certified_state_tip(state_view, kura)
-        .map_err(
-            |source| ProviderIngestFinalizedArchiveStartupErrorV1::Archive {
-                stage: "exact Kura-tip reconciliation",
-                source: Box::new(source),
-            },
-        )?;
+    let reconciliation = match retention_authority {
+        Some(retention) => archive.reconcile_certified_state_tip_with_retention(
+            state_view,
+            kura,
+            retention.binding(),
+            retention.authority().as_ref(),
+            pending_admission_keys,
+        ),
+        None => archive.reconcile_certified_state_tip(state_view, kura),
+    }
+    .map_err(
+        |source| ProviderIngestFinalizedArchiveStartupErrorV1::Archive {
+            stage: "exact Kura-tip reconciliation",
+            source: Box::new(source),
+        },
+    )?;
     let live_qualification = archive
         .qualify_against_certified_tip(state_view, kura, config.max_kura_tip_lag_blocks)
         .map_err(
@@ -684,6 +784,20 @@ pub struct ArchivedProviderIngestFinalizedLedgerV1 {
     #[cfg(test)]
     live_qualification_attempts: Arc<AtomicUsize>,
     active: Arc<Mutex<Option<ActiveArchiveScanV1>>>,
+    scan_pin: archive_retention::ArchiveScanPinSlotV1,
+    anchor_leases: Arc<archive_retention::ArchiveAnchorLeaseRegistryV1>,
+}
+/// Tell a scan apart from a transient failure when retention has passed its anchor: retrying
+/// that page can never succeed, so the scan has to start again at a newer head.
+fn scan_read_error(
+    error: ProviderIngestFinalizedArchiveErrorV1,
+) -> ProviderIngestFinalizedLedgerErrorV1 {
+    match error {
+        ProviderIngestFinalizedArchiveErrorV1::BelowRetentionFloor { .. } => {
+            ProviderIngestFinalizedLedgerErrorV1::ScanAnchorRetired
+        }
+        _ => ProviderIngestFinalizedLedgerErrorV1::Unavailable,
+    }
 }
 #[derive(Clone)]
 struct ArchivedProviderIngestFinalizedLedgerArgsV1 {
@@ -695,6 +809,7 @@ struct ArchivedProviderIngestFinalizedLedgerArgsV1 {
     max_page_rows: usize,
     max_kura_tip_lag_blocks: u64,
     activation_gate: ArchiveActivationGateV1,
+    anchor_leases: Arc<archive_retention::ArchiveAnchorLeaseRegistryV1>,
 }
 impl fmt::Debug for ArchivedProviderIngestFinalizedLedgerV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -753,6 +868,7 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             max_page_rows: 2,
             max_kura_tip_lag_blocks: 0,
             activation_gate: ArchiveActivationGateV1::StrictLive,
+            anchor_leases: Arc::new(archive_retention::ArchiveAnchorLeaseRegistryV1::default()),
         });
         (root, reader)
     }
@@ -775,6 +891,7 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             max_page_rows,
             max_kura_tip_lag_blocks,
             activation_gate,
+            anchor_leases,
         } = args;
         Self {
             network_id,
@@ -792,6 +909,8 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             #[cfg(test)]
             live_qualification_attempts: Arc::new(AtomicUsize::new(0)),
             active: Arc::new(Mutex::new(None)),
+            scan_pin: Arc::new(Mutex::new(None)),
+            anchor_leases,
         }
     }
     fn completed_musubi_capture_verifier_binding(
@@ -1179,7 +1298,8 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
         let lookup = || {
             self.lookup_current_assignment(network_id, source_provider_id, request.authorization())
                 .map_err(|error| match error {
-                    ProviderIngestFinalizedLedgerErrorV1::Unavailable => {
+                    ProviderIngestFinalizedLedgerErrorV1::Unavailable
+                    | ProviderIngestFinalizedLedgerErrorV1::ScanAnchorRetired => {
                         ProviderIngestSourceFetchErrorV1::Unavailable
                     }
                     ProviderIngestFinalizedLedgerErrorV1::Rejected => {
@@ -1252,7 +1372,15 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
         let archive_page = self
             .archive
             .read_provider_page(&key, self.provider_id, cursor.as_ref(), limit)
-            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
+            .map_err(|error| {
+                let error = scan_read_error(error);
+                if error == ProviderIngestFinalizedLedgerErrorV1::ScanAnchorRetired {
+                    // Nothing can continue this scan now, so a fresh one must be able to start.
+                    *active = None;
+                }
+                error
+            })?;
+        archive_retention::note_scan_page(&self.scan_pin, key.height);
         let page = map_archive_page(
             self.network_id,
             self.provider_id,
@@ -1299,7 +1427,7 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
                         public_cursor.height,
                         public_cursor.block_hash,
                     )
-                    .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
+                    .map_err(scan_read_error)?;
                 (key, Some(after_order_id), qualification.generation())
             }
             (None, Some(_)) | (Some(_), None) => unreachable!("validated capture cursor shape"),
@@ -1426,7 +1554,7 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
             let first = self
                 .archive
                 .read_provider_page(key, self.provider_id, None, 1)
-                .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
+                .map_err(scan_read_error)?;
             Some(ProviderIngestFinalizedArchiveCursorV1 {
                 key: *key,
                 provider_id: self.provider_id,
@@ -1439,7 +1567,8 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
         let archive_page = self
             .archive
             .read_provider_page(key, self.provider_id, cursor.as_ref(), limit)
-            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
+            .map_err(scan_read_error)?;
+        archive_retention::note_scan_page(&self.scan_pin, key.height);
         map_archive_capture_source_page(self.network_id, self.provider_id, &archive_page)
     }
     #[cfg(test)]
@@ -1450,6 +1579,35 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
         limit: usize,
     ) -> Result<ProviderIngestFinalizedAssignmentPageV1, ProviderIngestFinalizedLedgerErrorV1> {
         self.read_page_with_claim_factory(None, at_finalized_cursor, after_order_id, limit)
+    }
+}
+impl sorafs_node::provider_ingest_runtime::ProviderIngestFinalizedAnchorRetainerV1
+    for ArchivedProviderIngestFinalizedLedgerV1
+{
+    fn retain_exact_cursor(
+        &self,
+        cursor: ProviderIngestFinalizedCursorV1,
+    ) -> ProviderIngestFutureV1<
+        '_,
+        Result<
+            sorafs_node::provider_ingest_runtime::ProviderIngestFinalizedAnchorLeaseV1,
+            ProviderIngestFinalizedLedgerErrorV1,
+        >,
+    > {
+        let query = self.clone();
+        Box::pin(async move {
+            crate::panic_recovery::join_recoverable(
+                crate::panic_recovery::spawn_blocking_recoverable(move || {
+                    query.anchor_leases.retain_exact_cursor(
+                        query.archive.as_ref(),
+                        &query.network_id,
+                        cursor,
+                    )
+                }),
+            )
+            .await
+            .unwrap_or(Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable))
+        })
     }
 }
 impl ProviderIngestFinalizedLedgerV1 for ArchivedProviderIngestFinalizedLedgerV1 {
@@ -2096,6 +2254,7 @@ mod tests {
                 kura.as_ref(),
                 daemon_root.path(),
                 None,
+                &[],
             ),
             Err(
                 ProviderIngestFinalizedArchiveStartupErrorV1::RetentionAuthorityConfiguration { .. }
@@ -2116,6 +2275,7 @@ mod tests {
             daemon_root.path(),
             &state,
             &kura,
+            &[],
             None,
         )
         .expect("fresh empty archive must await genesis capture");
@@ -2239,6 +2399,7 @@ mod tests {
                 root.path(),
                 chain.state(),
                 chain.kura(),
+                &[],
                 None,
             )
         };
@@ -2290,6 +2451,7 @@ mod tests {
             root.path(),
             chain.state(),
             chain.kura(),
+            &[],
             None,
         )
         .unwrap();
@@ -2443,6 +2605,7 @@ mod tests {
             root.path(),
             chain.state(),
             chain.kura(),
+            &[],
             None,
         )
         .unwrap();
@@ -2497,6 +2660,7 @@ mod tests {
             root.path(),
             chain.state(),
             chain.kura(),
+            &[],
             None,
         )
         .unwrap();
@@ -2677,6 +2841,7 @@ mod tests {
             max_page_rows: 2,
             max_kura_tip_lag_blocks: 0,
             activation_gate: ArchiveActivationGateV1::StrictLive,
+            anchor_leases: Arc::new(archive_retention::ArchiveAnchorLeaseRegistryV1::default()),
         };
         let query = ArchivedProviderIngestFinalizedLedgerV1::new(args.clone());
         let capture_query = ArchivedProviderIngestFinalizedLedgerV1::new_replay_safe_capture(args);
@@ -2761,6 +2926,7 @@ mod tests {
                 max_page_rows: 2,
                 max_kura_tip_lag_blocks: 0,
                 activation_gate: ArchiveActivationGateV1::StrictLive,
+                anchor_leases: Arc::new(archive_retention::ArchiveAnchorLeaseRegistryV1::default()),
             },
         );
         let first = query
@@ -2939,6 +3105,7 @@ mod tests {
                 max_page_rows: 2,
                 max_kura_tip_lag_blocks: 0,
                 activation_gate: ArchiveActivationGateV1::StrictLive,
+                anchor_leases: Arc::new(archive_retention::ArchiveAnchorLeaseRegistryV1::default()),
             },
         );
         assert_eq!(
@@ -3106,6 +3273,7 @@ mod tests {
                 max_page_rows: 2,
                 max_kura_tip_lag_blocks: 0,
                 activation_gate: ArchiveActivationGateV1::StrictLive,
+                anchor_leases: Arc::new(archive_retention::ArchiveAnchorLeaseRegistryV1::default()),
             },
         );
         let key = ProviderIngestFinalizedArchiveKeyV1::try_new(

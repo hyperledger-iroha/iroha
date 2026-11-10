@@ -242,7 +242,7 @@ fn certified_capture_moves_original_archive_to_worker_without_a_detached_produce
 }
 
 #[test]
-fn certified_retention_waits_for_actual_index_owner_before_authority_or_file_mutation() {
+fn certified_retention_waits_for_actual_index_owner_before_changing_the_index_or_unlinking() {
     let directory = physical_tempdir().unwrap();
     let mut chain = chain();
     let archive = Arc::new(
@@ -291,9 +291,21 @@ fn certified_retention_waits_for_actual_index_owner_before_authority_or_file_mut
             .unwrap()
     });
     started.recv().unwrap();
-    assert!(authority.latest.lock().unwrap().is_none());
+    // The approval and the checkpoint file need no index owner, so a held reader delays neither.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    while authority.latest.lock().unwrap().is_none()
+        || fs::read_dir(&archive.checkpoints).unwrap().count() == 0
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "approval never landed"
+        );
+        std::thread::yield_now();
+    }
+    // The reader still sees the whole prefix, and every file behind it remains.
     assert_eq!(fs::read_dir(&archive.records).unwrap().count(), 2);
-    assert_eq!(fs::read_dir(&archive.checkpoints).unwrap().count(), 0);
+    assert!(reader.virtual_bases.is_empty());
+    assert_eq!(reader.by_height.len(), 2);
     drop(reader);
     let compacted = worker.join().unwrap();
     assert_eq!(compacted.retention_floor(), &key);
@@ -394,6 +406,7 @@ fn certified_retention_requires_exact_result_identity_and_survives_reopen() {
         chain.kura(),
         &binding,
         &authority,
+        &[],
     )
     .unwrap();
     let qualification = reopened

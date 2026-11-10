@@ -590,14 +590,26 @@ impl KagemushaLedgerAttemptV1 {
                 account,
                 ordinal,
                 ..
-            } => Some((wallet, authority, account, *ordinal, KagemushaLedgerSuffixStageV1::Begin)),
+            } => Some((
+                wallet,
+                authority,
+                account,
+                *ordinal,
+                KagemushaLedgerSuffixStageV1::Begin,
+            )),
             KagemushaWalletLedgerActionV1::SuffixUnloadAppend {
                 wallet,
                 authority,
                 account,
                 ordinal,
                 ..
-            } => Some((wallet, authority, account, *ordinal, KagemushaLedgerSuffixStageV1::Append)),
+            } => Some((
+                wallet,
+                authority,
+                account,
+                *ordinal,
+                KagemushaLedgerSuffixStageV1::Append,
+            )),
             KagemushaWalletLedgerActionV1::SuffixUnloadFinalize {
                 wallet,
                 authority,

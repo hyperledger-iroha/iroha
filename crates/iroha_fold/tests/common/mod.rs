@@ -10,7 +10,10 @@ pub mod step;
 
 use iroha_pasta::PastaField;
 use iroha_plonk::{
-    cs::{Advice, Column, ConstraintSystem, Expression, Fixed, Instance, Rotation, Selector, TableColumn},
+    cs::{
+        Advice, Column, ConstraintSystem, Expression, Fixed, Instance, Rotation, Selector,
+        TableColumn,
+    },
     frontend::{Circuit, Error, Layouter, SimpleFloorPlanner, Value},
 };
 
@@ -44,7 +47,11 @@ pub struct Toy {
 
 impl Toy {
     pub fn x(self, row: usize) -> u64 {
-        if row == 0 { 3 } else { (row as u64 * 5 + self.seed) % 15 }
+        if row == 0 {
+            3
+        } else {
+            (row as u64 * 5 + self.seed) % 15
+        }
     }
     pub fn instances<F: PastaField>(self) -> Vec<Vec<F>> {
         let last = self.x(ROWS - 1);
@@ -73,52 +80,97 @@ impl<F: PastaField> Circuit<F> for Toy {
             meta.enable_equality(column);
         }
         meta.enable_equality(instance);
-        let (mul, add, rot, cube) = (meta.selector(), meta.selector(), meta.selector(), meta.selector());
+        let (mul, add, rot, cube) = (
+            meta.selector(),
+            meta.selector(),
+            meta.selector(),
+            meta.selector(),
+        );
         let lookup = meta.complex_selector();
         let values = meta.lookup_table_column();
         let squares = meta.lookup_table_column();
         meta.create_gate("mul", |v| {
             let s = v.query_selector(mul);
-            let (a, b, c) = (v.query_advice(a, Rotation::cur()), v.query_advice(b, Rotation::cur()), v.query_advice(c, Rotation::cur()));
+            let (a, b, c) = (
+                v.query_advice(a, Rotation::cur()),
+                v.query_advice(b, Rotation::cur()),
+                v.query_advice(c, Rotation::cur()),
+            );
             vec![s * (a * b - c)]
         });
         meta.create_gate("add", |v| {
             let s = v.query_selector(add);
             let k = v.query_fixed(coeff, Rotation::cur());
-            let (a, b, e) = (v.query_advice(a, Rotation::cur()), v.query_advice(b, Rotation::cur()), v.query_advice(e, Rotation::cur()));
+            let (a, b, e) = (
+                v.query_advice(a, Rotation::cur()),
+                v.query_advice(b, Rotation::cur()),
+                v.query_advice(e, Rotation::cur()),
+            );
             vec![s * (a + k * b - e)]
         });
         meta.create_gate("rot", |v| {
             let s = v.query_selector(rot);
-            let (b, next, d) = (v.query_advice(b, Rotation::cur()), v.query_advice(b, Rotation::next()), v.query_advice(d, Rotation::cur()));
+            let (b, next, d) = (
+                v.query_advice(b, Rotation::cur()),
+                v.query_advice(b, Rotation::next()),
+                v.query_advice(d, Rotation::cur()),
+            );
             vec![s * (next - b - d)]
         });
         meta.create_gate("cube", |v| {
             let s = v.query_selector(cube);
-            let (a, c) = (v.query_advice(a, Rotation::cur()), v.query_advice(c, Rotation::cur()));
+            let (a, c) = (
+                v.query_advice(a, Rotation::cur()),
+                v.query_advice(c, Rotation::cur()),
+            );
             vec![s * (c - a.clone() * a.clone() * a)]
         });
         meta.lookup("pairs", |v| {
             let s = v.query_selector(lookup);
-            let (a, b) = (v.query_advice(a, Rotation::cur()), v.query_advice(b, Rotation::cur()));
+            let (a, b) = (
+                v.query_advice(a, Rotation::cur()),
+                v.query_advice(b, Rotation::cur()),
+            );
             vec![(s.clone() * a, values), (s * b, squares)]
         });
         meta.lookup_any("range a", |v| {
             let s = v.query_selector(lookup);
             let a = v.query_advice(a, Rotation::cur());
-            vec![(s * (a + Expression::Constant(F::ONE)), v.query_fixed(values.inner(), Rotation::cur()))]
+            vec![(
+                s * (a + Expression::Constant(F::ONE)),
+                v.query_fixed(values.inner(), Rotation::cur()),
+            )]
         });
         meta.lookup_any("range d", |v| {
             let s = v.query_selector(lookup);
             let a = v.query_advice(a, Rotation::cur());
-            vec![(s * (a * Expression::Constant(F::ONE)), v.query_fixed(values.inner(), Rotation::cur()))]
+            vec![(
+                s * (a * Expression::Constant(F::ONE)),
+                v.query_fixed(values.inner(), Rotation::cur()),
+            )]
         });
         meta.lookup_any("cubes", |v| {
             let s = v.query_selector(lookup);
             let c = v.query_advice(c, Rotation::cur());
             vec![(s * c, v.query_advice(cubes, Rotation::cur()))]
         });
-        Config { a, b, c, d, e, cubes, coeff, instance, mul, add, rot, cube, lookup, values, squares }
+        Config {
+            a,
+            b,
+            c,
+            d,
+            e,
+            cubes,
+            coeff,
+            instance,
+            mul,
+            add,
+            rot,
+            cube,
+            lookup,
+            values,
+            squares,
+        }
     }
 
     fn synthesize(&self, config: Config, mut layouter: impl Layouter<F>) -> Result<(), Error> {
@@ -128,7 +180,12 @@ impl<F: PastaField> Circuit<F> for Toy {
                 for i in 0..16u64 {
                     let row = usize::try_from(i).expect("small");
                     table.assign_cell(|| "i", config.values, row, || Value::known(F::from(i)))?;
-                    table.assign_cell(|| "i^2", config.squares, row, || Value::known(F::from(i * i)))?;
+                    table.assign_cell(
+                        || "i^2",
+                        config.squares,
+                        row,
+                        || Value::known(F::from(i * i)),
+                    )?;
                 }
                 Ok(())
             },
@@ -146,13 +203,23 @@ impl<F: PastaField> Circuit<F> for Toy {
                     region.enable_selector(|| "lookup", &config.lookup, row)?;
                     region.assign_fixed(config.coeff, row, F::from(5))?;
                     if row == 0 {
-                        region.assign_advice_from_instance(|| "x0", config.instance, 0, config.a, 0)?;
+                        region.assign_advice_from_instance(
+                            || "x0",
+                            config.instance,
+                            0,
+                            config.a,
+                            0,
+                        )?;
                         region.assign_advice_from_constant(|| "nine", config.b, 0, F::from(9))?;
                     } else {
                         region.assign_advice(config.a, row, Value::known(F::from(x)))?;
                         region.assign_advice(config.b, row, Value::known(F::from(b)))?;
                     }
-                    last = Some(region.assign_advice(config.c, row, Value::known(F::from(c)))?.cell());
+                    last = Some(
+                        region
+                            .assign_advice(config.c, row, Value::known(F::from(c)))?
+                            .cell(),
+                    );
                     region.assign_advice(config.e, row, Value::known(F::from(x + 5 * b)))?;
                     if row + 1 < ROWS {
                         config.rot.enable(&mut region, row)?;
@@ -162,7 +229,11 @@ impl<F: PastaField> Circuit<F> for Toy {
                     }
                 }
                 for i in 0..16u64 {
-                    region.assign_advice(config.cubes, usize::try_from(i).expect("small"), Value::known(F::from(i * i * i)))?;
+                    region.assign_advice(
+                        config.cubes,
+                        usize::try_from(i).expect("small"),
+                        Value::known(F::from(i * i * i)),
+                    )?;
                 }
                 last.ok_or(Error::Synthesis)
             },
@@ -170,4 +241,3 @@ impl<F: PastaField> Circuit<F> for Toy {
         layouter.constrain_instance(last, config.instance, 1)
     }
 }
-

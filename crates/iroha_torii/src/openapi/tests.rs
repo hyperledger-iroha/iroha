@@ -628,6 +628,8 @@ fn expected_read_operation(method: &str, path: &str) -> bool {
                 path,
                 "/v1/amx/debit-approval/{height}"
                     | "/v1/accounts/query"
+                    | "/v1/roles/query"
+                    | "/v1/accounts/{account_id}/roles/query"
                     | "/v1/accounts/inspect"
                     | "/v1/accounts/{account_id}/assets/query"
                     | "/v1/assets/{definition_id}/holders/query"
@@ -695,6 +697,7 @@ fn expected_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/nexus/private-settlements/legs/{payload_digest}/audit-capsule"
                     | "/v1/nexus/staking/prepare"
                     | "/v1/nfts/query"
+                    | "/v1/privacy/ironwood/pool-cut/{height}"
                     | "/v1/proofs/query"
                     | "/v1/rwas/query"
                     | "/v1/soracloud/ciphertext/query"
@@ -3375,6 +3378,7 @@ include!("tests/sorafs_pop_contracts.rs");
 include!("tests/vpn_da.rs");
 include!("tests/sumeragi_lanes_contract.rs");
 mod catalog_and_contracts;
+mod role_lifecycle_contracts;
 mod sccp_native_contract;
 
 #[test]

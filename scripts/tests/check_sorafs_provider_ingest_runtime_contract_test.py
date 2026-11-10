@@ -300,7 +300,8 @@ def _assert_quarantine_restart_contract(source: str, parent: str) -> None:
         ".ingest_manifest(&manifest, &plan, &mut primary_reader)",
         ".provider_ingest_outbox_policy(Some(outbox_policy))",
         ".provider_ingest_checkpoint_provider(Some(CrashRestartCheckpointRuntimeV1::binding()))",
-        "NodeRuntimeDeps::default().with_provider_ingest_checkpoint_runtime(checkpoint.clone())",
+        "PreparedProviderIngestOutboxV1::open(&outbox_config, checkpoint.clone())",
+        "with_prepared_provider_ingest_outbox",
         "let node = NodeHandle::try_new_with_runtime_deps(configured.clone(), runtime_deps())",
         ".build_provider_ingest_runtime(",
         "Arc::clone(&fetch), storage, Arc::new(NeverBuildCompletionV1), "

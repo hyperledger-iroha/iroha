@@ -1,7 +1,7 @@
 use super::*;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Barrier,
+    atomic::{AtomicUsize, Ordering},
 };
 
 struct DropCounter {
@@ -134,12 +134,14 @@ fn poison_refuses_use_and_end_still_releases_retained_review() {
     let drops = Arc::new(AtomicUsize::new(0));
     let review = lifetime.review(DropCounter::new(&drops)).unwrap();
     let poisoned = lifetime.clone();
-    assert!(std::thread::spawn(move || {
-        let _guard = poisoned.state.lock().unwrap();
-        panic!("poison lifecycle for cleanup test");
-    })
-    .join()
-    .is_err());
+    assert!(
+        std::thread::spawn(move || {
+            let _guard = poisoned.state.lock().unwrap();
+            panic!("poison lifecycle for cleanup test");
+        })
+        .join()
+        .is_err()
+    );
     assert!(lifetime.ended());
     status(lifetime.require_live(), INTERNAL);
     lifetime.end();

@@ -2372,6 +2372,52 @@ impl ProviderIngestOutbox {
             })),
         })
     }
+    /// Revalidate the exact preopened owner before the node consumes it. No checkpoint
+    /// is reopened and no new writer or authority is substituted during this handoff.
+    pub(crate) fn revalidate_startup_binding(
+        &self,
+        path: &Path,
+        policy: ProviderIngestOutboxPolicyV1,
+        binding: &ProviderIngestCheckpointProviderBindingV1,
+    ) -> Result<(), ProviderIngestOutboxError> {
+        let absolute = crate::absolute_local_checkpoint_path(path)
+            .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
+        crate::reject_unsafe_checkpoint_ancestors(&absolute)
+            .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?;
+        let parent = absolute
+            .parent()
+            .ok_or(ProviderIngestOutboxError::InvalidCheckpoint)?;
+        let name = absolute
+            .file_name()
+            .ok_or(ProviderIngestOutboxError::InvalidCheckpoint)?;
+        let canonical = fs::canonicalize(parent)
+            .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?
+            .join(name);
+        if self.path.as_deref().map(|path| path.as_path()) != Some(canonical.as_path())
+            || self.policy != policy
+            || self
+                .checkpoint_authority
+                .as_ref()
+                .map(|authority| &authority.binding)
+                != Some(binding)
+        {
+            return Err(ProviderIngestOutboxError::InvalidCheckpointProviderBinding);
+        }
+        // lock_state checks the retained writer lock and reads back the same sealed head.
+        drop(self.lock_state()?);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn same_state_for_testing(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.state, &other.state)
+            && self
+                .writer_lock
+                .as_ref()
+                .zip(other.writer_lock.as_ref())
+                .is_some_and(|(left, right)| Arc::ptr_eq(left, right))
+    }
+
     /// Return the validated policy.
     #[must_use]
     pub const fn policy(&self) -> ProviderIngestOutboxPolicyV1 {
@@ -4583,6 +4629,28 @@ impl ProviderIngestOutbox {
         let state = self.lock_state()?;
         validate_checkpoint_count_snapshot(&state.checkpoint, state.aggregate_counts, self.policy)?;
         Ok(state.aggregate_counts)
+    }
+    /// Return the exact immutable admission cursor of every non-terminal job.
+    ///
+    /// A job's current-source checks require its immutable admission anchor to stay resolvable
+    /// in the finalized archive, so archive retention must not move its floor past these. Terminal
+    /// jobs no longer read that anchor.
+    pub fn active_admission_cursors(
+        &self,
+    ) -> Result<Vec<ProviderIngestFinalizedCursorV1>, ProviderIngestOutboxError> {
+        let state = self.lock_state()?;
+        let mut heights = Vec::new();
+        heights
+            .try_reserve_exact(state.checkpoint.active.len())
+            .map_err(|_| ProviderIngestOutboxError::StateUnavailable)?;
+        heights.extend(
+            state
+                .checkpoint
+                .active
+                .iter()
+                .map(|entry| entry.authorization.admission_finalized_cursor),
+        );
+        Ok(heights)
     }
     /// Return the exact cloned finalized authorization retained for one job.
     ///
@@ -7573,6 +7641,64 @@ mod tests {
         assert_eq!(
             boundary.validate(),
             Err(ProviderIngestOutboxError::InvalidPolicy)
+        );
+    }
+
+    #[test]
+    fn sealed_restart_preserves_pending_exact_admission_cursor_and_hash() {
+        let directory = tempdir().expect("checkpoint directory");
+        let runtime = Arc::new(TestCheckpointRuntime::new(0x78));
+        let outbox = open_sealed_with_deadline(&directory, Arc::clone(&runtime)).unwrap();
+        let pending = authorization(0x51, 7);
+        outbox.enqueue(pending.clone()).unwrap();
+        outbox.enqueue(authorization(0x51, 8)).unwrap();
+        assert_eq!(
+            outbox.active_admission_cursors().unwrap(),
+            [pending.admission_finalized_cursor()]
+        );
+        drop(outbox);
+        let restored = reopen_sealed_after_worker_release(&directory, runtime).unwrap();
+        assert_eq!(
+            restored.active_admission_cursors().unwrap(),
+            [pending.admission_finalized_cursor()]
+        );
+        assert_eq!(restored.authorization(pending.job_id()).unwrap(), pending);
+    }
+    #[test]
+    fn active_admission_cursors_list_each_active_jobs_first_admission() {
+        let outbox = ProviderIngestOutbox::in_memory(policy()).expect("outbox");
+        assert_eq!(
+            outbox.active_admission_cursors().unwrap(),
+            Vec::<ProviderIngestFinalizedCursorV1>::new()
+        );
+        let first = authorization(0x51, 7);
+        let second = authorization(0x52, 9);
+        outbox.enqueue(first.clone()).expect("first enqueue");
+        outbox.enqueue(second.clone()).expect("second enqueue");
+        // Seeing the same job at a later head does not move its immutable admission anchor.
+        outbox
+            .enqueue(authorization(0x51, 8))
+            .expect("head-advance replay");
+        let mut heights = outbox.active_admission_cursors().unwrap();
+        heights.sort_unstable_by_key(|cursor| cursor.height);
+        assert_eq!(heights, [cursor(7), cursor(9)]);
+        outbox
+            .observe_finalized_snapshot(cursor(10), 1_000)
+            .expect("the cancelling head is observed");
+        outbox
+            .cancel(
+                first.job_id(),
+                cancellation_evidence(
+                    &first,
+                    ProviderIngestCancellationReasonV1::ManifestRetired,
+                    10,
+                ),
+            )
+            .expect("cancel the first job");
+        assert_eq!(
+            outbox.active_admission_cursors().unwrap(),
+            [cursor(9)],
+            "a terminal job no longer pins its admission anchor"
         );
     }
     #[test]

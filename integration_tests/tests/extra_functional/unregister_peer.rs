@@ -653,7 +653,7 @@ fn trust_removal_preserves_all_voter_endpoints_and_consensus_pops() -> Result<()
         layers
             .into_iter()
             .filter_map(|layer| layer.get("trusted_peers_pop").cloned())
-            .last()
+            .next_back()
             .unwrap()
     };
     let original_layers = network

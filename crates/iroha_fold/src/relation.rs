@@ -128,7 +128,11 @@ pub struct FoldedRelation<F> {
 /// Greedy colouring of gate polynomials and `LogUp` slots by row-set
 /// disjointness (largest row sets first); sets every member's class and each
 /// group's table constraint (after the classes). Returns the number of classes.
-fn assign_classes<F>(n: usize, gates: &mut [GateConstraint<F>], groups: &mut [LookupGroup<F>]) -> usize {
+fn assign_classes<F>(
+    n: usize,
+    gates: &mut [GateConstraint<F>],
+    groups: &mut [LookupGroup<F>],
+) -> usize {
     let words = n.div_ceil(64);
     // (gate index or usize::MAX, group, slot) with its rows.
     let mut items: Vec<(Option<usize>, usize, usize, Vec<u32>)> = Vec::new();
@@ -143,7 +147,10 @@ fn assign_classes<F>(n: usize, gates: &mut [GateConstraint<F>], groups: &mut [Lo
     items.sort_by_key(|item| core::cmp::Reverse(item.3.len()));
     let mut occupied: Vec<Vec<u64>> = Vec::new();
     for (gate, g, slot, rows) in items {
-        let fits = |bits: &Vec<u64>| rows.iter().all(|r| bits[*r as usize / 64] >> (*r % 64) & 1 == 0);
+        let fits = |bits: &Vec<u64>| {
+            rows.iter()
+                .all(|r| bits[*r as usize / 64] >> (*r % 64) & 1 == 0)
+        };
         let class = match occupied.iter().position(fits) {
             Some(class) => class,
             None => {
@@ -168,7 +175,12 @@ fn assign_classes<F>(n: usize, gates: &mut [GateConstraint<F>], groups: &mut [Lo
 
 /// Pseudo-random advice and instance columns (splitmix64 per cell) for the
 /// polynomial identity test of gate bodies; `seed` picks one of two points.
-fn probe_columns<F: PastaField>(advice: usize, instance_lengths: &[usize], n: usize, seed: u64) -> StageColumns<F> {
+fn probe_columns<F: PastaField>(
+    advice: usize,
+    instance_lengths: &[usize],
+    n: usize,
+    seed: u64,
+) -> StageColumns<F> {
     let mut state = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15);
     let mut next = || {
         state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
@@ -178,8 +190,13 @@ fn probe_columns<F: PastaField>(advice: usize, instance_lengths: &[usize], n: us
         z ^ (z >> 31)
     };
     let mut cell = || F::from_u128((u128::from(next()) << 64) | u128::from(next()));
-    let advice = (0..advice).map(|_| (0..n).map(|_| cell()).collect()).collect();
-    let instance = instance_lengths.iter().map(|len| (0..*len).map(|_| cell()).collect()).collect();
+    let advice = (0..advice)
+        .map(|_| (0..n).map(|_| cell()).collect())
+        .collect();
+    let instance = instance_lengths
+        .iter()
+        .map(|len| (0..*len).map(|_| cell()).collect())
+        .collect();
     (advice, instance)
 }
 
@@ -201,9 +218,16 @@ impl<F: PastaField> FoldedRelation<F> {
         let usable = assigned.usable_rows();
         let fixed = assigned.fixed().to_vec();
         let selectors = assigned.selectors().to_vec();
-        let tables = Tables { fixed: &fixed, selectors: &selectors, n };
+        let tables = Tables {
+            fixed: &fixed,
+            selectors: &selectors,
+            n,
+        };
         let empty: [Vec<F>; 0] = [];
-        let point = Point { advice: &empty, instance: &empty };
+        let point = Point {
+            advice: &empty,
+            instance: &empty,
+        };
         let mut stack = Vec::with_capacity(64);
         let mut gates = Vec::new();
         let mut degree = 2;
@@ -224,7 +248,14 @@ impl<F: PastaField> FoldedRelation<F> {
                     // vanishes there for every witness constrains nothing.
                     if row >= usable {
                         let [first, second] = probes.get_or_insert_with(|| {
-                            [1, 2].map(|seed| probe_columns(cs.num_advice_columns(), cs.instance_lengths(), n, seed))
+                            [1, 2].map(|seed| {
+                                probe_columns(
+                                    cs.num_advice_columns(),
+                                    cs.instance_lengths(),
+                                    n,
+                                    seed,
+                                )
+                            })
                         });
                         let vanishes = [&*first, &*second].iter().all(|(advice, instance)| {
                             let probe = Point { advice, instance };
@@ -267,8 +298,18 @@ impl<F: PastaField> FoldedRelation<F> {
                 .max()
                 .unwrap_or(0);
             // A compressed component theta_j * a has degree deg(a) + 1 (j > 0).
-            let compressed = if width > 1 { input_degree + 1 } else { input_degree };
-            let per_cell = group.slots.iter().flatten().map(|c| c.members().len()).max().unwrap_or(1);
+            let compressed = if width > 1 {
+                input_degree + 1
+            } else {
+                input_degree
+            };
+            let per_cell = group
+                .slots
+                .iter()
+                .flatten()
+                .map(|c| c.members().len())
+                .max()
+                .unwrap_or(1);
             degree = degree.max(1 + per_cell * compressed.max(1));
             let table_degree = cs.lookups()[group.members[0].lookup]
                 .table_expressions()
@@ -276,7 +317,11 @@ impl<F: PastaField> FoldedRelation<F> {
                 .map(folded_degree)
                 .max()
                 .unwrap_or(0);
-            let table_compressed = if width > 1 { table_degree + 1 } else { table_degree };
+            let table_compressed = if width > 1 {
+                table_degree + 1
+            } else {
+                table_degree
+            };
             degree = degree.max(1 + table_compressed.max(1));
         }
         if degree > MAX_POINTS + 1 {
@@ -332,7 +377,12 @@ impl<F: PastaField> FoldedRelation<F> {
             gate_rows: self.gates.iter().map(|g| g.rows.len()).sum(),
             usable_rows: self.usable,
             lookup_groups: self.groups.len(),
-            reciprocal_cells: self.groups.iter().flat_map(|g| g.slots.iter()).map(Vec::len).sum(),
+            reciprocal_cells: self
+                .groups
+                .iter()
+                .flat_map(|g| g.slots.iter())
+                .map(Vec::len)
+                .sum(),
             copies: self.copies.len(),
             columns: self.columns(),
             degree: self.degree,
@@ -349,7 +399,10 @@ impl<F: PastaField> FoldedRelation<F> {
             groups: self
                 .groups
                 .iter()
-                .map(|g| GroupShape { m_column: g.m_column(), g_column: g.g_column() })
+                .map(|g| GroupShape {
+                    m_column: g.m_column(),
+                    g_column: g.g_column(),
+                })
                 .collect(),
             instance_lengths: self.instance_lengths.clone(),
             theta_len: self.theta_len,
@@ -401,7 +454,11 @@ impl<F: PastaField> FoldedRelation<F> {
     }
 
     pub(crate) fn tables(&self) -> Tables<'_, F> {
-        Tables { fixed: &self.fixed, selectors: &self.selectors, n: self.n }
+        Tables {
+            fixed: &self.fixed,
+            selectors: &self.selectors,
+            n: self.n,
+        }
     }
 
     /// The advice and instance columns of a synthesized stage of this relation.
@@ -410,12 +467,24 @@ impl<F: PastaField> FoldedRelation<F> {
     /// [`Error::MissingWitness`] for a key-generation synthesis; [`Error::Shape`]
     /// when the stage does not match the relation.
     pub fn stage_witness(&self, synthesized: &Synthesized<F>) -> Result<StageColumns<F>, Error> {
-        let advice = synthesized.tables.advice().ok_or(Error::MissingWitness)?.to_vec();
-        let instance = synthesized.tables.instance().ok_or(Error::MissingWitness)?.to_vec();
+        let advice = synthesized
+            .tables
+            .advice()
+            .ok_or(Error::MissingWitness)?
+            .to_vec();
+        let instance = synthesized
+            .tables
+            .instance()
+            .ok_or(Error::MissingWitness)?
+            .to_vec();
         if advice.len() != self.advice_columns || advice.iter().any(|c| c.len() != self.n) {
             return Err(Error::Shape("advice columns"));
         }
-        if instance.iter().map(Vec::len).ne(self.instance_lengths.iter().copied()) {
+        if instance
+            .iter()
+            .map(Vec::len)
+            .ne(self.instance_lengths.iter().copied())
+        {
             return Err(Error::Shape("instance columns"));
         }
         Ok((advice, instance))

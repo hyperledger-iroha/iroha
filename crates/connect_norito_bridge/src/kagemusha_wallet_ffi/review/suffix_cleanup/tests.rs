@@ -1,7 +1,7 @@
 use super::*;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 struct Entry {
@@ -24,20 +24,22 @@ fn insert(
     ended: bool,
 ) -> Arc<AtomicUsize> {
     let drops = Arc::new(AtomicUsize::new(0));
-    assert!(table
-        .values
-        .insert(
-            token,
-            OriginBound::new(
-                origin,
-                Entry {
-                    suffix,
-                    ended,
-                    drops: Arc::clone(&drops),
-                },
-            ),
-        )
-        .is_none());
+    assert!(
+        table
+            .values
+            .insert(
+                token,
+                OriginBound::new(
+                    origin,
+                    Entry {
+                        suffix,
+                        ended,
+                        drops: Arc::clone(&drops),
+                    },
+                ),
+            )
+            .is_none()
+    );
     drops
 }
 fn cleanup(table: &mut Table, origin: u64, token: u64) -> Result<()> {

@@ -32,6 +32,8 @@ mod suffix_inventory;
 pub use suffix_inventory::KagemushaSuffixRowInventoryV1;
 mod sorafs_authority_inspect;
 pub use sorafs_authority_inspect::run_sorafs_authority_inspection;
+mod world_payout_export;
+pub use world_payout_export::run_world_payout_export;
 
 /// `start.source` of a replay that re-executed signed genesis first.
 pub const START_GENESIS: &str = "genesis";

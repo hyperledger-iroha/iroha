@@ -38,8 +38,8 @@ use super::{AStateCells, AStepConfig, Assign, Error, receive::ReceiveFoldPlan};
 use crate::{
     a_relation::{LINEAGE_FIELDS, LineagePublicCells, verify_predecessor},
     fold_lineage::{
-        A_CLAIM_SLOT, A_EXPORT, A_STATE, AKind, BASE, CLAIM_A, ClaimFolds, REBASE_PC, claim_cells, export_words,
-        fold_claims_cells, trivial_vesta,
+        A_CLAIM_SLOT, A_EXPORT, A_STATE, AKind, BASE, CLAIM_A, ClaimFolds, REBASE_PC, claim_cells,
+        export_words, fold_claims_cells, trivial_vesta,
     },
     q_sigma::native::IncomingMode,
 };
@@ -70,7 +70,8 @@ impl RebaseSource {
         let pallas = plan.trivial_pallas().clone();
         Ok(Self {
             lineage: [Fp::ZERO; LINEAGE_FIELDS],
-            pallas: AccumulatorT::new(*pallas.g(), *pallas.challenges()).map_err(|_| Error::Artifact)?,
+            pallas: AccumulatorT::new(*pallas.g(), *pallas.challenges())
+                .map_err(|_| Error::Artifact)?,
             vesta: plan.trivial_vesta().clone(),
             proof: vec![0; omega.proof_length()],
             opening: pallas,
@@ -102,7 +103,11 @@ impl RebaseSource {
     /// Accept (the correction slot holds the trivial generator).
     #[must_use]
     pub fn export(&self) -> Vec<Fp> {
-        export_words(&self.vesta.as_input(), IncomingMode::Accept, trivial_vesta().g())
+        export_words(
+            &self.vesta.as_input(),
+            IncomingMode::Accept,
+            trivial_vesta().g(),
+        )
     }
 }
 
@@ -129,8 +134,16 @@ impl RebaseFoldStep {
     /// The Rebase folding instances of the Q relation of `shape` (the Frame
     /// step's), under `plan`'s Omega program and key.
     #[must_use]
-    pub const fn new(plan: Arc<ReceiveFoldPlan>, shape: FoldShape, witness: Option<RebaseStepWitness>) -> Self {
-        Self { plan, shape, witness }
+    pub const fn new(
+        plan: Arc<ReceiveFoldPlan>,
+        shape: FoldShape,
+        witness: Option<RebaseStepWitness>,
+    ) -> Self {
+        Self {
+            plan,
+            shape,
+            witness,
+        }
     }
 
     fn layout(
@@ -138,7 +151,9 @@ impl RebaseFoldStep {
         chip: &mut VerifierChip<Ep>,
         region: &mut Region<'_, Fp>,
     ) -> Result<(Vec<Word<Fp>>, Vec<Word<Fp>>), SynthesisError> {
-        let assign = Assign { known: self.witness.is_some() };
+        let assign = Assign {
+            known: self.witness.is_some(),
+        };
         let blank;
         let source = match &self.witness {
             Some(witness) => witness.source.as_ref(),
@@ -150,8 +165,13 @@ impl RebaseFoldStep {
         let chain = AKind::Rebase.chain();
         let frame = {
             let refs = chip.fold_lanes()?;
-            let mut lanes =
-                FoldLanes { glue: refs.glue, range: refs.range, ff: refs.ff, ecc: refs.ecc, duplex: refs.hash };
+            let mut lanes = FoldLanes {
+                glue: refs.glue,
+                range: refs.range,
+                ff: refs.ff,
+                ecc: refs.ecc,
+                duplex: refs.hash,
+            };
             fold_frame(
                 &mut lanes,
                 region,
@@ -178,16 +198,41 @@ impl RebaseFoldStep {
         let vesta = assign.vesta(chip, region, &source.vesta)?;
         let key = assign.omega_key(chip, region, self.plan.omega_key())?;
         let proof = assign.proof(chip, region, &source.proof)?;
-        let predecessor =
-            verify_predecessor(chip, region, self.plan.context().operation(), &key, &public, &public, &pallas, &vesta, &proof)?;
+        let predecessor = verify_predecessor(
+            chip,
+            region,
+            self.plan.context().operation(),
+            &key,
+            &public,
+            &public,
+            &pallas,
+            &vesta,
+            &proof,
+        )?;
         let export = export_cells(chip, region, &predecessor.vesta.words())?;
         // Its Pallas claims start A's claim accumulator.
         let values = self.witness.as_ref().map(|w| w.source.pallas_claims());
         let refs = chip.fold_lanes()?;
-        let mut lanes = FoldLanes { glue: refs.glue, range: refs.range, ff: refs.ff, ecc: refs.ecc, duplex: refs.hash };
+        let mut lanes = FoldLanes {
+            glue: refs.glue,
+            range: refs.range,
+            ff: refs.ff,
+            ecc: refs.ecc,
+            duplex: refs.hash,
+        };
         let claims = [
-            claim_cells(&mut lanes, region, &predecessor.pallas, values.as_ref().map(|v| &v[0]))?,
-            claim_cells(&mut lanes, region, &predecessor.opening, values.as_ref().map(|v| &v[1]))?,
+            claim_cells(
+                &mut lanes,
+                region,
+                &predecessor.pallas,
+                values.as_ref().map(|v| &v[0]),
+            )?,
+            claim_cells(
+                &mut lanes,
+                region,
+                &predecessor.opening,
+                values.as_ref().map(|v| &v[1]),
+            )?,
         ];
         let digests = fold_claims_cells(
             &mut lanes,
@@ -222,7 +267,11 @@ fn export_cells(
             words.push(chip.uint().glue().constant(region, Fp::from_u128(limb))?);
         }
     }
-    if words.len() == A_EXPORT { Ok(words) } else { Err(SynthesisError::Synthesis) }
+    if words.len() == A_EXPORT {
+        Ok(words)
+    } else {
+        Err(SynthesisError::Synthesis)
+    }
 }
 
 impl Circuit<Fp> for RebaseFoldStep {
@@ -231,20 +280,29 @@ impl Circuit<Fp> for RebaseFoldStep {
     type Params = ();
 
     fn without_witnesses(&self) -> Self {
-        Self { witness: None, ..self.clone() }
+        Self {
+            witness: None,
+            ..self.clone()
+        }
     }
 
     fn configure(meta: &mut ConstraintSystem<Fp>) -> AStepConfig {
         AStepConfig::configure(meta)
     }
 
-    fn synthesize(&self, config: AStepConfig, mut layouter: impl Layouter<Fp>) -> Result<(), SynthesisError> {
+    fn synthesize(
+        &self,
+        config: AStepConfig,
+        mut layouter: impl Layouter<Fp>,
+    ) -> Result<(), SynthesisError> {
         let mut chip = VerifierChip::new(config.verifier);
         let bytes = BytesChip::new(config.bytes);
         chip.load_tables(&mut layouter)?;
         bytes.load_table(&mut layouter)?;
-        let (outputs, export) =
-            layouter.assign_region(|| "folded lineage rebase", |mut region| self.layout(&mut chip, &mut region))?;
+        let (outputs, export) = layouter.assign_region(
+            || "folded lineage rebase",
+            |mut region| self.layout(&mut chip, &mut region),
+        )?;
         for (row, word) in outputs.iter().enumerate() {
             layouter.constrain_instance(word.cell(), config.frame, row)?;
         }

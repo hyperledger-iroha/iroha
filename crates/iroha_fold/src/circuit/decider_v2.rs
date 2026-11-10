@@ -37,16 +37,16 @@ use iroha_plonk_gadgets::{Word, ecc::AssignedPoint};
 use super::{FoldLanes, ScalarCell, field::FieldLanes, transcript as t, verify::AccumulatorCells};
 use crate::{
     decider_v2::{
-        DeciderV2Plan, DeciderV2Proof, batch_claims, helper_offsets,
+        DeciderV2Plan, DeciderV2Proof, batch_claims,
         eval::Op,
-        mle,
+        helper_offsets, mle,
         plan::{Committed, Source, Weight},
     },
     fold::Accumulator,
     relation::FoldShape,
     transcript::{
-        TAG_DECIDER_FIELD, TAG_DECIDER_HELPERS, TAG_DECIDER_OPENING, TAG_DECIDER_PERMUTATION, TAG_DECIDER_SHIFT,
-        s6_limbs,
+        TAG_DECIDER_FIELD, TAG_DECIDER_HELPERS, TAG_DECIDER_OPENING, TAG_DECIDER_PERMUTATION,
+        TAG_DECIDER_SHIFT, s6_limbs,
     },
 };
 
@@ -112,7 +112,12 @@ fn witnesses<C: PastaCurve>(
         return Err(Error::Synthesis);
     }
     (0..count)
-        .map(|i| lanes.glue.witness(region, values.map_or_else(Value::unknown, |v| Value::known(v[i]))))
+        .map(|i| {
+            lanes.glue.witness(
+                region,
+                values.map_or_else(Value::unknown, |v| Value::known(v[i])),
+            )
+        })
         .collect()
 }
 
@@ -138,13 +143,43 @@ pub fn assign_accumulator_field<C: PastaCurve>(
         .instance_lengths
         .iter()
         .enumerate()
-        .map(|(c, len)| witnesses::<C>(lanes, region, acc.map(|a| a.instance.public[c].as_slice()), *len))
+        .map(|(c, len)| {
+            witnesses::<C>(
+                lanes,
+                region,
+                acc.map(|a| a.instance.public[c].as_slice()),
+                *len,
+            )
+        })
         .collect::<Result<_, _>>()?;
-    let theta = witnesses::<C>(lanes, region, acc.map(|a| a.instance.theta.as_slice()), shape.theta_len)?;
-    let r = witnesses::<C>(lanes, region, acc.map(|a| a.instance.r.as_slice()), shape.groups.len())?;
-    let beta = witnesses::<C>(lanes, region, acc.map(|a| a.beta.as_slice()), shape.index_bits)?;
+    let theta = witnesses::<C>(
+        lanes,
+        region,
+        acc.map(|a| a.instance.theta.as_slice()),
+        shape.theta_len,
+    )?;
+    let r = witnesses::<C>(
+        lanes,
+        region,
+        acc.map(|a| a.instance.r.as_slice()),
+        shape.groups.len(),
+    )?;
+    let beta = witnesses::<C>(
+        lanes,
+        region,
+        acc.map(|a| a.beta.as_slice()),
+        shape.index_bits,
+    )?;
     let e = witnesses::<C>(lanes, region, acc.map(|a| core::slice::from_ref(&a.e)), 1)?.remove(0);
-    Ok(AccumulatorFieldCells { digest: [digest[0].clone(), digest[1].clone()], public, copy_terms: None, theta, r, beta, e })
+    Ok(AccumulatorFieldCells {
+        digest: [digest[0].clone(), digest[1].clone()],
+        public,
+        copy_terms: None,
+        theta,
+        r,
+        beta,
+        e,
+    })
 }
 
 /// Assigns an accumulator's field data without its public columns: the digest
@@ -169,11 +204,32 @@ pub fn assign_accumulator_field_terms<C: PastaCurve>(
         [C::ScalarExt::from_u128(lo), C::ScalarExt::from_u128(hi)]
     });
     let digest = witnesses::<C>(lanes, region, limbs.as_ref().map(<[_; 2]>::as_slice), 2)?;
-    let theta = witnesses::<C>(lanes, region, acc.map(|a| a.instance.theta.as_slice()), shape.theta_len)?;
-    let r = witnesses::<C>(lanes, region, acc.map(|a| a.instance.r.as_slice()), shape.groups.len())?;
-    let beta = witnesses::<C>(lanes, region, acc.map(|a| a.beta.as_slice()), shape.index_bits)?;
+    let theta = witnesses::<C>(
+        lanes,
+        region,
+        acc.map(|a| a.instance.theta.as_slice()),
+        shape.theta_len,
+    )?;
+    let r = witnesses::<C>(
+        lanes,
+        region,
+        acc.map(|a| a.instance.r.as_slice()),
+        shape.groups.len(),
+    )?;
+    let beta = witnesses::<C>(
+        lanes,
+        region,
+        acc.map(|a| a.beta.as_slice()),
+        shape.index_bits,
+    )?;
     let e = witnesses::<C>(lanes, region, acc.map(|a| core::slice::from_ref(&a.e)), 1)?.remove(0);
-    let terms = witnesses::<C>(lanes, region, copy_terms.as_ref().map(core::slice::from_ref), 1)?.remove(0);
+    let terms = witnesses::<C>(
+        lanes,
+        region,
+        copy_terms.as_ref().map(core::slice::from_ref),
+        1,
+    )?
+    .remove(0);
     Ok(AccumulatorFieldCells {
         digest: [digest[0].clone(), digest[1].clone()],
         public: Vec::new(),
@@ -186,7 +242,9 @@ pub fn assign_accumulator_field_terms<C: PastaCurve>(
 }
 
 /// The shape of a batch: rounds, round degree, reads, claims.
-fn shape<C: PastaCurve>(plans: &[&DeciderV2Plan<C>]) -> Result<(usize, usize, usize, usize), Error> {
+fn shape<C: PastaCurve>(
+    plans: &[&DeciderV2Plan<C>],
+) -> Result<(usize, usize, usize, usize), Error> {
     let first = plans.first().ok_or(Error::Synthesis)?;
     if plans.iter().any(|plan| plan.mu != first.mu) {
         return Err(Error::Synthesis);
@@ -221,7 +279,14 @@ pub fn assign_decider_v2_field_proof<C: PastaCurve>(
         }
     }
     let zero_check = (0..mu)
-        .map(|j| witnesses::<C>(lanes, region, proof.map(|p| p.zero_check[j].as_slice()), degree))
+        .map(|j| {
+            witnesses::<C>(
+                lanes,
+                region,
+                proof.map(|p| p.zero_check[j].as_slice()),
+                degree,
+            )
+        })
         .collect::<Result<_, _>>()?;
     let at_rho = witnesses::<C>(lanes, region, proof.map(|p| p.at_rho.as_slice()), reads)?;
     let shift = (0..mu)
@@ -230,8 +295,18 @@ pub fn assign_decider_v2_field_proof<C: PastaCurve>(
             Ok([round[0].clone(), round[1].clone()])
         })
         .collect::<Result<_, Error>>()?;
-    let at_sigma = witnesses::<C>(lanes, region, proof.map(|p| p.at_sigma.as_slice()), committed)?;
-    Ok(DeciderV2FieldProofCells { zero_check, at_rho, shift, at_sigma })
+    let at_sigma = witnesses::<C>(
+        lanes,
+        region,
+        proof.map(|p| p.at_sigma.as_slice()),
+        committed,
+    )?;
+    Ok(DeciderV2FieldProofCells {
+        zero_check,
+        at_rho,
+        shift,
+        at_sigma,
+    })
 }
 
 /// Native arithmetic helpers over the field lanes.
@@ -242,23 +317,52 @@ struct Arith<'l, 'a, C: PastaCurve> {
 }
 
 impl<C: PastaCurve> Arith<'_, '_, C> {
-    fn constant(&mut self, region: &mut Region<'_, C::ScalarExt>, value: C::ScalarExt) -> Result<W<C>, Error> {
+    fn constant(
+        &mut self,
+        region: &mut Region<'_, C::ScalarExt>,
+        value: C::ScalarExt,
+    ) -> Result<W<C>, Error> {
         self.lanes.constant(region, value)
     }
-    fn add(&mut self, region: &mut Region<'_, C::ScalarExt>, a: &W<C>, b: &W<C>) -> Result<W<C>, Error> {
+    fn add(
+        &mut self,
+        region: &mut Region<'_, C::ScalarExt>,
+        a: &W<C>,
+        b: &W<C>,
+    ) -> Result<W<C>, Error> {
         self.lanes.add(region, a, b)
     }
-    fn sub(&mut self, region: &mut Region<'_, C::ScalarExt>, a: &W<C>, b: &W<C>) -> Result<W<C>, Error> {
+    fn sub(
+        &mut self,
+        region: &mut Region<'_, C::ScalarExt>,
+        a: &W<C>,
+        b: &W<C>,
+    ) -> Result<W<C>, Error> {
         self.lanes.sub(region, a, b)
     }
-    fn mul(&mut self, region: &mut Region<'_, C::ScalarExt>, a: &W<C>, b: &W<C>) -> Result<W<C>, Error> {
+    fn mul(
+        &mut self,
+        region: &mut Region<'_, C::ScalarExt>,
+        a: &W<C>,
+        b: &W<C>,
+    ) -> Result<W<C>, Error> {
         self.lanes.mul(region, a, b)
     }
-    fn scale(&mut self, region: &mut Region<'_, C::ScalarExt>, a: &W<C>, factor: C::ScalarExt) -> Result<W<C>, Error> {
+    fn scale(
+        &mut self,
+        region: &mut Region<'_, C::ScalarExt>,
+        a: &W<C>,
+        factor: C::ScalarExt,
+    ) -> Result<W<C>, Error> {
         self.lanes.affine(region, a, factor, C::ScalarExt::ZERO)
     }
-    fn complement(&mut self, region: &mut Region<'_, C::ScalarExt>, a: &W<C>) -> Result<W<C>, Error> {
-        self.lanes.affine(region, a, -C::ScalarExt::ONE, C::ScalarExt::ONE)
+    fn complement(
+        &mut self,
+        region: &mut Region<'_, C::ScalarExt>,
+        a: &W<C>,
+    ) -> Result<W<C>, Error> {
+        self.lanes
+            .affine(region, a, -C::ScalarExt::ONE, C::ScalarExt::ONE)
     }
     fn inverse(&mut self, region: &mut Region<'_, C::ScalarExt>, a: &W<C>) -> Result<W<C>, Error> {
         let value = a.value().map(|v| v.invert().unwrap_or(C::ScalarExt::ZERO));
@@ -270,11 +374,21 @@ impl<C: PastaCurve> Arith<'_, '_, C> {
     }
 
     /// The polynomial through `(t, values[t])`, `t = 0..values.len()`, at `x`.
-    fn interpolate(&mut self, region: &mut Region<'_, C::ScalarExt>, values: &[W<C>], x: &W<C>) -> Result<W<C>, Error> {
+    fn interpolate(
+        &mut self,
+        region: &mut Region<'_, C::ScalarExt>,
+        values: &[W<C>],
+        x: &W<C>,
+    ) -> Result<W<C>, Error> {
         let m = values.len();
         let mut diffs = Vec::with_capacity(m);
         for j in 0..m {
-            diffs.push(self.lanes.affine(region, x, C::ScalarExt::ONE, -C::ScalarExt::from(j as u64))?);
+            diffs.push(self.lanes.affine(
+                region,
+                x,
+                C::ScalarExt::ONE,
+                -C::ScalarExt::from(j as u64),
+            )?);
         }
         let mut prefix = vec![self.one.clone()];
         for d in diffs.iter().take(m - 1) {
@@ -295,7 +409,11 @@ impl<C: PastaCurve> Arith<'_, '_, C> {
             }
             let basis = self.mul(region, &prefix[i], &suffix[i])?;
             let weighted = self.mul(region, value, &basis)?;
-            let term = self.scale(region, &weighted, denominator.invert().expect("distinct nodes"))?;
+            let term = self.scale(
+                region,
+                &weighted,
+                denominator.invert().expect("distinct nodes"),
+            )?;
             total = self.add(region, &total, &term)?;
         }
         Ok(total)
@@ -339,7 +457,13 @@ impl<C: PastaCurve> Arith<'_, '_, C> {
     }
 
     /// `eq(point, row)` for a constant row, given `1 - point`.
-    fn eq_row(&mut self, region: &mut Region<'_, C::ScalarExt>, point: &[W<C>], complements: &[W<C>], row: usize) -> Result<W<C>, Error> {
+    fn eq_row(
+        &mut self,
+        region: &mut Region<'_, C::ScalarExt>,
+        point: &[W<C>],
+        complements: &[W<C>],
+        row: usize,
+    ) -> Result<W<C>, Error> {
         let mut acc = self.one.clone();
         for (j, (x, not_x)) in point.iter().zip(complements).enumerate() {
             let factor = if (row >> j) & 1 == 1 { x } else { not_x };
@@ -442,19 +566,29 @@ pub fn verify_decider_v2_field<C: PastaCurve>(
     let alpha = lanes.challenge(region)?;
     let kappa = lanes.challenge(region)?;
     let lambda = lanes.challenge(region)?;
-    let tau = (0..mu).map(|_| lanes.challenge(region)).collect::<Result<Vec<_>, _>>()?;
+    let tau = (0..mu)
+        .map(|_| lanes.challenge(region))
+        .collect::<Result<Vec<_>, _>>()?;
     let one = lanes.constant(region, S::<C>::ONE)?;
     let zero = lanes.constant(region, S::<C>::ZERO)?;
     let mut ar = Arith::<C> { lanes, one, zero };
 
     // Powers of alpha and kappa.
-    let max_alpha = plans.iter().map(|plan| plan.relation.groups.len() + 2).max().unwrap_or(2);
+    let max_alpha = plans
+        .iter()
+        .map(|plan| plan.relation.groups.len() + 2)
+        .max()
+        .unwrap_or(2);
     let mut alpha_powers = vec![ar.one.clone()];
     for _ in 0..max_alpha {
         let next = ar.mul(region, alpha_powers.last().expect("seeded"), &alpha)?;
         alpha_powers.push(next);
     }
-    let max_kappa = plans.iter().map(|plan| plan.helper_count()).max().unwrap_or(0);
+    let max_kappa = plans
+        .iter()
+        .map(|plan| plan.helper_count())
+        .max()
+        .unwrap_or(0);
     let mut kappa_powers = vec![ar.one.clone()];
     for _ in 0..max_kappa {
         let next = ar.mul(region, kappa_powers.last().expect("seeded"), &kappa)?;
@@ -471,8 +605,12 @@ pub fn verify_decider_v2_field<C: PastaCurve>(
             None => {
                 let mut sum = ar.zero.clone();
                 for (column, row, id, sigma) in &plan.copies.instance_cells {
-                    let value =
-                        acc.public.get(*column).and_then(|c| c.get(*row)).cloned().unwrap_or_else(|| ar.zero.clone());
+                    let value = acc
+                        .public
+                        .get(*column)
+                        .and_then(|c| c.get(*row))
+                        .cloned()
+                        .unwrap_or_else(|| ar.zero.clone());
                     let base = ar.add(region, &gamma, &value)?;
                     let id_term = ar.scale(region, &eta, S::<C>::from(*id))?;
                     let sigma_term = ar.scale(region, &eta, S::<C>::from(*sigma))?;
@@ -486,7 +624,11 @@ pub fn verify_decider_v2_field<C: PastaCurve>(
                 sum
             }
         };
-        let weighted = ar.mul(region, &alpha_powers[plan.relation.groups.len() + 2], &instance_terms)?;
+        let weighted = ar.mul(
+            region,
+            &alpha_powers[plan.relation.groups.len() + 2],
+            &instance_terms,
+        )?;
         let member = ar.sub(region, &acc.e, &weighted)?;
         let scaled = ar.mul(region, &scale, &member)?;
         claim = ar.add(region, &claim, &scaled)?;
@@ -508,7 +650,10 @@ pub fn verify_decider_v2_field<C: PastaCurve>(
 
     // The final evaluation of every member's terms at rho. Prefix indicators
     // (usable rows, step keys) share their partial products.
-    let complements = rho.iter().map(|x| ar.complement(region, x)).collect::<Result<Vec<_>, _>>()?;
+    let complements = rho
+        .iter()
+        .map(|x| ar.complement(region, x))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut prefixes: Prefixes<C> = HashMap::new();
     let mut total = ar.zero.clone();
     let mut read_offset = 0;
@@ -521,7 +666,13 @@ pub fn verify_decider_v2_field<C: PastaCurve>(
         scalar_values.push(gamma.clone());
         scalar_values.push(eta.clone());
         for (column, row) in &plan.cells {
-            scalar_values.push(acc.public.get(*column).and_then(|c| c.get(*row)).cloned().unwrap_or_else(|| ar.zero.clone()));
+            scalar_values.push(
+                acc.public
+                    .get(*column)
+                    .and_then(|c| c.get(*row))
+                    .cloned()
+                    .unwrap_or_else(|| ar.zero.clone()),
+            );
         }
         let mut pow_lo = vec![ar.one.clone()];
         for b in &acc.beta[..pb] {
@@ -543,7 +694,8 @@ pub fn verify_decider_v2_field<C: PastaCurve>(
                     Source::Instance(c, k) => {
                         let mut sum = ar.zero.clone();
                         for (row, cell) in acc.public[c].iter().enumerate() {
-                            let weight = ar.eq_row(region, &rho, &complements, mle::rotate(row, -k, n))?;
+                            let weight =
+                                ar.eq_row(region, &rho, &complements, mle::rotate(row, -k, n))?;
                             let term = ar.mul(region, cell, &weight)?;
                             sum = ar.add(region, &sum, &term)?;
                         }
@@ -553,12 +705,18 @@ pub fn verify_decider_v2_field<C: PastaCurve>(
                         // first + sum delta (1 - P(row)) = (first + sum delta)
                         // - sum delta P(row), two changes per glue row.
                         let steps = plan.steps[index].as_ref().ok_or(Error::Synthesis)?;
-                        let constant = steps.changes.iter().fold(steps.first, |sum, (_, delta)| sum + delta);
+                        let constant = steps
+                            .changes
+                            .iter()
+                            .fold(steps.first, |sum, (_, delta)| sum + delta);
                         let mut value = ar.constant(region, constant)?;
                         for pair in steps.changes.chunks(2) {
                             let mut terms = Vec::with_capacity(2);
                             for (row, delta) in pair {
-                                terms.push((-*delta, ar.prefix(region, (&rho, &complements), *row, &mut prefixes)?));
+                                terms.push((
+                                    -*delta,
+                                    ar.prefix(region, (&rho, &complements), *row, &mut prefixes)?,
+                                ));
                             }
                             let mut linear: Vec<(S<C>, &W<C>)> = vec![(S::<C>::ONE, &value)];
                             linear.extend(terms.iter().map(|(delta, prefix)| (*delta, prefix)));
@@ -587,7 +745,9 @@ pub fn verify_decider_v2_field<C: PastaCurve>(
                         }
                         acc_eq
                     }
-                    Source::Usable => ar.prefix(region, (&rho, &complements), relation.usable, &mut prefixes)?,
+                    Source::Usable => {
+                        ar.prefix(region, (&rho, &complements), relation.usable, &mut prefixes)?
+                    }
                     Source::Index => {
                         let mut sum = ar.zero.clone();
                         let mut power = S::<C>::ONE;
@@ -598,7 +758,9 @@ pub fn verify_decider_v2_field<C: PastaCurve>(
                         }
                         sum
                     }
-                    Source::Witness(..) | Source::Key(..) | Source::Helper(_) => return Err(Error::Synthesis),
+                    Source::Witness(..) | Source::Key(..) | Source::Helper(_) => {
+                        return Err(Error::Synthesis);
+                    }
                 }
             };
             leaves[index] = Some(value);
@@ -613,7 +775,9 @@ pub fn verify_decider_v2_field<C: PastaCurve>(
             for op in term.poly.ops() {
                 match op {
                     Op::Const(value) => stack.push(ar.constant(region, *value)?),
-                    Op::Table(index) => stack.push(leaves[*index as usize].clone().ok_or(Error::Synthesis)?),
+                    Op::Table(index) => {
+                        stack.push(leaves[*index as usize].clone().ok_or(Error::Synthesis)?)
+                    }
                     Op::Scalar(index) => stack.push(scalar_values[*index as usize].clone()),
                     Op::Neg => {
                         let v = stack.pop().ok_or(Error::Synthesis)?;
@@ -689,7 +853,12 @@ pub fn verify_decider_v2_field<C: PastaCurve>(
     FieldLanes::assert_equal(region, &expected, &claim)?;
     ar.lanes.absorb(&proof.at_sigma);
     let field_digest = ar.lanes.finish(region)?;
-    Ok(DeciderV2FieldOutput { copy_challenges: [gamma, eta], point: sigma, at_sigma: proof.at_sigma.clone(), field_digest })
+    Ok(DeciderV2FieldOutput {
+        copy_challenges: [gamma, eta],
+        point: sigma,
+        at_sigma: proof.at_sigma.clone(),
+        field_digest,
+    })
 }
 
 /// The batched opening's field scalars: `v* = sum_c alpha^c v_c` (Horner) and
@@ -776,7 +945,12 @@ pub fn claim_commitments<C: PastaCurve>(
     members: &[(&DeciderV2Plan<C>, &AccumulatorCells<C>)],
     helpers: &[AssignedPoint<C::Base>],
 ) -> Result<Vec<AssignedPoint<C::Base>>, Error> {
-    if helpers.len() != members.iter().map(|(plan, _)| plan.helper_count()).sum::<usize>() {
+    if helpers.len()
+        != members
+            .iter()
+            .map(|(plan, _)| plan.helper_count())
+            .sum::<usize>()
+    {
         return Err(Error::Synthesis);
     }
     let plans: Vec<&DeciderV2Plan<C>> = members.iter().map(|(plan, _)| *plan).collect();
@@ -785,8 +959,15 @@ pub fn claim_commitments<C: PastaCurve>(
     for (member, index) in batch_claims(&plans).opened {
         let (plan, acc) = members[member];
         commitments.push(match plan.committed[index] {
-            Committed::Witness(c) => acc.instance.commitments.get(c).cloned().ok_or(Error::Synthesis)?,
-            Committed::Key(p) => lanes.ecc.constant_point(region, &C::from(plan.key_commitments[p]))?,
+            Committed::Witness(c) => acc
+                .instance
+                .commitments
+                .get(c)
+                .cloned()
+                .ok_or(Error::Synthesis)?,
+            Committed::Key(p) => lanes
+                .ecc
+                .constant_point(region, &C::from(plan.key_commitments[p]))?,
             Committed::Helper(j) => helpers[offsets[member] + j].clone(),
         });
     }

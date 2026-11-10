@@ -42,8 +42,9 @@ pub(crate) fn list(
     loop {
         // The cursor binds identity/filter/order, not page size. Bound the last
         // fetch to the requested prefix instead of reading unwanted role rows.
-        let requested = remaining.map_or(u64::from(page_size), |left| {
-            u64::from(page_size).min(offset.saturating_add(left))
+        let page_bound = u64::from(page_size);
+        let requested = remaining.map_or(page_bound, |left| {
+            page_bound.min(offset.saturating_add(left))
         });
         let requested = u32::try_from(requested)?;
         query = query.limit(requested);

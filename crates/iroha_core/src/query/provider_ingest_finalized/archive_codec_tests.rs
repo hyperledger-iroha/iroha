@@ -68,6 +68,7 @@ fn retention_restart_rejects_extra_crash_candidate_without_cleanup() {
             kura.as_ref(),
             &binding,
             &authority,
+            &[],
         ),
         Err(ProviderIngestFinalizedArchiveErrorV1::UnapprovedRetentionCheckpoint)
     ));

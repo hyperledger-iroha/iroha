@@ -166,6 +166,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         UseOwner::Roots(&["execution_witness_roots", "fee_evidence_record_root"]),
     ),
     function(
+        "crates/iroha_core/src/query/provider_ingest_finalized/retention.rs",
+        "authenticate_proved_retention_anchors",
+        1,
+        UseOwner::Other(Use::ResultBinding, CERTIFIED_IDENTITY),
+    ),
+    function(
         "crates/iroha_core/src/retail_fee/native_maintenance.rs",
         "into_entries",
         1,

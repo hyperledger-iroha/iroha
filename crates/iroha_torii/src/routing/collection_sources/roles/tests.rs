@@ -280,3 +280,172 @@ fn exact_role_lookup_does_not_scan_the_prefix_and_source_bytes_remain_bounded() 
         .is_err()
     );
 }
+
+#[test]
+fn role_projections_and_metrics_preserve_the_actual_query_output_shapes() {
+    let (state, alice, bob, roles) = fixture();
+    let limits = collection_limits();
+    let visibility = DataspaceReadVisibility::all();
+    for target in [
+        CollectionTarget::Roles,
+        CollectionTarget::AccountRoles(alice.to_string()),
+        CollectionTarget::AccountRoles(bob.to_string()),
+    ] {
+        let page = run(
+            &state,
+            &target,
+            &ListQuery::new().select(["id"]).include_total(),
+            &visibility,
+            &limits,
+        )
+        .unwrap();
+        let expected = if target == CollectionTarget::AccountRoles(bob.to_string()) {
+            1
+        } else {
+            7
+        };
+        assert_eq!(page.total, Some(expected));
+        assert!(
+            page.items
+                .iter()
+                .all(|row| row.len() == 1 && row.contains_key("id"))
+        );
+
+        let query: ListQuery = norito::json::from_str(
+            r#"{"aggregate":{"metrics":[{"alias":"n","fn":"count"},{"alias":"id","fn":"distinct_count","field":"id"}]},"include_total":true}"#,
+        )
+        .unwrap();
+        let page = run(&state, &target, &query, &visibility, &limits).unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].len(), 2);
+        assert_eq!(page.items[0]["n"].as_u64(), Some(expected));
+        // An ungrouped metric alias may be id; it is then a metric, not a role name.
+        assert_eq!(page.items[0]["id"].as_u64(), Some(expected));
+        assert_eq!(page.total, Some(1));
+        assert!(page.next_cursor.is_none());
+
+        let empty = query.filter(field("id").eq("missing_role"));
+        let page = run(&state, &target, &empty, &visibility, &limits).unwrap();
+        assert!(page.items.is_empty());
+        assert_eq!(page.total, Some(0));
+    }
+
+    let projected = run(
+        &state,
+        &CollectionTarget::Roles,
+        &ListQuery::new().select(["permissions"]).limit(1),
+        &visibility,
+        &limits,
+    )
+    .unwrap();
+    assert_eq!(projected.items[0].len(), 1);
+    let full = norito::json::to_value(&roles[0]).unwrap();
+    assert_eq!(projected.items[0]["permissions"], full["permissions"]);
+    let query: ListQuery = norito::json::from_str(
+        r#"{"aggregate":{"metrics":[{"alias":"sets","fn":"distinct_count","field":"permissions"},{"alias":"sum","fn":"sum","field":"permissions"},{"alias":"min","fn":"min","field":"permissions"},{"alias":"max","fn":"max","field":"permissions"},{"alias":"avg","fn":"avg","field":"permissions"}]}}"#,
+    )
+    .unwrap();
+    let page = run(
+        &state,
+        &CollectionTarget::Roles,
+        &query,
+        &visibility,
+        &limits,
+    )
+    .unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].len(), 5);
+    assert_eq!(page.items[0]["sets"].as_u64(), Some(1));
+    for alias in ["sum", "min", "max", "avg"] {
+        assert!(page.items[0][alias].is_null());
+    }
+}
+
+#[test]
+fn role_aggregate_filter_having_and_pagination_stay_in_the_exact_account_scope() {
+    let (state, alice, bob, _) = fixture();
+    let limits = collection_limits();
+    let visibility = DataspaceReadVisibility::all();
+    let query: ListQuery = norito::json::from_str(
+        r#"{"filter":"id in [\"role_2\", \"role_3\", \"role_4\"] and exists(id) and id is not null","aggregate":{"group_by":["id"],"metrics":[{"alias":"n","fn":"count"}],"having":"n = 1 and id != \"role_4\""},"sort":["id"],"limit":1,"include_total":true}"#,
+    )
+    .unwrap();
+    for target in [
+        CollectionTarget::Roles,
+        CollectionTarget::AccountRoles(alice.to_string()),
+    ] {
+        let first = run(&state, &target, &query, &visibility, &limits).unwrap();
+        assert_eq!(first.items.len(), 1);
+        assert_eq!(first.items[0]["id"].as_str(), Some("role_2"));
+        assert_eq!(first.items[0]["n"].as_u64(), Some(1));
+        assert_eq!(first.total, Some(2));
+        let next = query.clone().cursor(first.next_cursor.unwrap());
+        let second = run(&state, &target, &next, &visibility, &limits).unwrap();
+        assert_eq!(second.items.len(), 1);
+        assert_eq!(second.items[0]["id"].as_str(), Some("role_3"));
+        assert_eq!(second.total, Some(2));
+        assert!(second.next_cursor.is_none());
+        assert!(
+            run(
+                &state,
+                &CollectionTarget::AccountRoles(bob.to_string()),
+                &next,
+                &visibility,
+                &limits
+            )
+            .is_err()
+        );
+        let mut changed = next;
+        let metric = &mut changed.aggregate.as_mut().unwrap().metrics[0];
+        metric.r#fn = iroha_torii_shared::list_query::AggregateFn::DistinctCount;
+        metric.field = Some("id".into());
+        assert!(run(&state, &target, &changed, &visibility, &limits).is_err());
+    }
+    let bob_page = run(
+        &state,
+        &CollectionTarget::AccountRoles(bob.to_string()),
+        &query,
+        &visibility,
+        &limits,
+    )
+    .unwrap();
+    assert_eq!(bob_page.items.len(), 1);
+    assert_eq!(bob_page.items[0]["id"].as_str(), Some("role_3"));
+    assert_eq!(bob_page.total, Some(1));
+    assert!(bob_page.next_cursor.is_none());
+}
+
+#[test]
+fn role_queries_refuse_unknown_fields_empty_projection_and_conflicting_controls() {
+    let (state, alice, _, _) = fixture();
+    let limits = collection_limits();
+    for target in [
+        CollectionTarget::Roles,
+        CollectionTarget::AccountRoles(alice.to_string()),
+    ] {
+        for body in [
+            r#"{"filter":"owned_by = \"role_1\""}"#,
+            r#"{"sort":["permissions"]}"#,
+            r#"{"select":[]}"#,
+            r#"{"select":["id"],"aggregate":{"metrics":[{"alias":"n","fn":"count"}]}}"#,
+            r#"{"aggregate":{"group_by":["permissions"],"metrics":[{"alias":"n","fn":"count"}]}}"#,
+            r#"{"aggregate":{"metrics":[{"alias":"n","fn":"sum","field":"id"}]}}"#,
+            r#"{"aggregate":{"group_by":["id"],"metrics":[{"alias":"id","fn":"count"}]}}"#,
+        ] {
+            // Shape/control conflicts fail while decoding; collection-specific fields
+            // and aggregate types are then checked by the common planner.
+            let refused = match norito::json::from_str::<ListQuery>(body) {
+                Ok(query) => run(
+                    &state,
+                    &target,
+                    &query,
+                    &DataspaceReadVisibility::all(),
+                    &limits,
+                )
+                .is_err(),
+                Err(_) => true,
+            };
+            assert!(refused, "{body}");
+        }
+    }
+}

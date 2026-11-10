@@ -25,6 +25,6 @@ on macOS). The plugins intentionally share C symbol names for separate loading;
 linking both C-exporting Rust libraries into one executable is not supported.
 
 Existing portable codec tests now run under `gpuzstd_codec`. Metal's hardware
-parity tests consume that crate's `test-support` CPU references. Real-device
+parity tests consume that crate's `test-fixtures` CPU references. Real-device
 qualification remains the separate check described in
 [`gpuzstd_cuda_pipeline.md`](../../specs/gpuzstd_cuda_pipeline.md).

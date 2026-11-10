@@ -39,15 +39,21 @@ fn id(value: usize) -> u32 {
 
 impl<F: PastaField> Poly<F> {
     pub(crate) fn constant(value: F) -> Self {
-        Self { ops: vec![Op::Const(value)] }
+        Self {
+            ops: vec![Op::Const(value)],
+        }
     }
 
     pub(crate) fn table(index: usize) -> Self {
-        Self { ops: vec![Op::Table(id(index))] }
+        Self {
+            ops: vec![Op::Table(id(index))],
+        }
     }
 
     pub(crate) fn scalar(index: usize) -> Self {
-        Self { ops: vec![Op::Scalar(id(index))] }
+        Self {
+            ops: vec![Op::Scalar(id(index))],
+        }
     }
 
     fn binary(mut self, other: Self, op: Op<F>) -> Self {
@@ -112,7 +118,10 @@ impl<F: PastaField> Poly<F> {
 
     /// Multiplications of one evaluation (products and scalings).
     pub(crate) fn multiplications(&self) -> usize {
-        self.ops.iter().filter(|op| matches!(op, Op::Mul | Op::Scale(_))).count()
+        self.ops
+            .iter()
+            .filter(|op| matches!(op, Op::Mul | Op::Scale(_)))
+            .count()
     }
 
     /// Evaluates at one point from table values and scalars.

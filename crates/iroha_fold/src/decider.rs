@@ -115,16 +115,36 @@ impl<F: PastaField> DeciderPlan<F> {
         if usable < 2 {
             return Err(crate::Error::Shape("decider: fewer than two usable rows"));
         }
-        if relation.gates.iter().any(|g| g.rows.iter().any(|r| past(*r))) {
-            return Err(crate::Error::Shape("decider: a gate constrains rows past the usable ones"));
-        }
-        if relation.groups.iter().any(|g| g.slots.iter().flatten().any(|c| past(c.row))) {
-            return Err(crate::Error::Shape("decider: a LogUp cell lies past the usable rows"));
-        }
-        if relation.fixed.iter().any(|c| c[usable..].iter().any(|v| !bool::from(v.is_zero())))
-            || relation.selectors.iter().any(|c| c[usable..].iter().any(|v| *v))
+        if relation
+            .gates
+            .iter()
+            .any(|g| g.rows.iter().any(|r| past(*r)))
         {
-            return Err(crate::Error::Shape("decider: fixed values past the usable rows"));
+            return Err(crate::Error::Shape(
+                "decider: a gate constrains rows past the usable ones",
+            ));
+        }
+        if relation
+            .groups
+            .iter()
+            .any(|g| g.slots.iter().flatten().any(|c| past(c.row)))
+        {
+            return Err(crate::Error::Shape(
+                "decider: a LogUp cell lies past the usable rows",
+            ));
+        }
+        if relation
+            .fixed
+            .iter()
+            .any(|c| c[usable..].iter().any(|v| !bool::from(v.is_zero())))
+            || relation
+                .selectors
+                .iter()
+                .any(|c| c[usable..].iter().any(|v| *v))
+        {
+            return Err(crate::Error::Shape(
+                "decider: fixed values past the usable rows",
+            ));
         }
         Ok(Self { relation })
     }
@@ -206,8 +226,15 @@ pub fn decider_witness<C: PastaCurve>(
     let mut p = pow_vector(&acc.beta[pb..]);
     p.truncate(usable);
     let mut phi = vec![S::<C>::ZERO; n];
-    let view = View::of(witness, &acc.instance.public, &acc.instance.theta, &acc.instance.r);
-    constraints_at(relation, view, |row, index, value| phi[row] += pow_lo[index] * value);
+    let view = View::of(
+        witness,
+        &acc.instance.public,
+        &acc.instance.theta,
+        &acc.instance.r,
+    );
+    constraints_at(relation, view, |row, index, value| {
+        phi[row] += pow_lo[index] * value
+    });
     let mut s = Vec::with_capacity(usable);
     let mut sum = S::<C>::ZERO;
     for row in 0..usable {
@@ -236,7 +263,12 @@ pub fn decider_witness<C: PastaCurve>(
             running
         })
         .collect();
-    DeciderWitness { columns: witness.columns.clone(), p, s, t }
+    DeciderWitness {
+        columns: witness.columns.clone(),
+        p,
+        s,
+        t,
+    }
 }
 
 /// The columns of a decider.
@@ -268,13 +300,19 @@ impl<F: PastaField> Decider<F> {
     /// A key-generation layout.
     #[must_use]
     pub const fn layout(plan: Arc<DeciderPlan<F>>) -> Self {
-        Self { plan, witness: None }
+        Self {
+            plan,
+            witness: None,
+        }
     }
 
     /// A witness layout.
     #[must_use]
     pub fn new(plan: Arc<DeciderPlan<F>>, witness: DeciderWitness<F>) -> Self {
-        Self { plan, witness: Some(Arc::new(witness)) }
+        Self {
+            plan,
+            witness: Some(Arc::new(witness)),
+        }
     }
 }
 
@@ -287,17 +325,35 @@ struct Remap<'a> {
 }
 
 impl Remap<'_> {
-    fn expression<F: PastaField>(&self, cells: &mut VirtualCells<'_, F>, expression: &Expression<F>) -> Expression<F> {
+    fn expression<F: PastaField>(
+        &self,
+        cells: &mut VirtualCells<'_, F>,
+        expression: &Expression<F>,
+    ) -> Expression<F> {
         match expression {
             Expression::Constant(value) => Expression::Constant(*value),
-            Expression::Selector(selector) => cells.query_fixed(self.selectors[selector.index()], Rotation::cur()),
-            Expression::Fixed(query) => cells.query_fixed(self.fixed[query.column_index], query.rotation),
-            Expression::Advice(query) => cells.query_advice(self.witness[query.column_index], query.rotation),
-            Expression::Instance(query) => cells.query_instance(self.instances[query.column_index], query.rotation),
-            Expression::InstanceCell(cell) => Expression::instance_cell(self.instances[cell.column_index], cell.row),
+            Expression::Selector(selector) => {
+                cells.query_fixed(self.selectors[selector.index()], Rotation::cur())
+            }
+            Expression::Fixed(query) => {
+                cells.query_fixed(self.fixed[query.column_index], query.rotation)
+            }
+            Expression::Advice(query) => {
+                cells.query_advice(self.witness[query.column_index], query.rotation)
+            }
+            Expression::Instance(query) => {
+                cells.query_instance(self.instances[query.column_index], query.rotation)
+            }
+            Expression::InstanceCell(cell) => {
+                Expression::instance_cell(self.instances[cell.column_index], cell.row)
+            }
             Expression::Negated(inner) => -self.expression(cells, inner),
-            Expression::Sum(left, right) => self.expression(cells, left) + self.expression(cells, right),
-            Expression::Product(left, right) => self.expression(cells, left) * self.expression(cells, right),
+            Expression::Sum(left, right) => {
+                self.expression(cells, left) + self.expression(cells, right)
+            }
+            Expression::Product(left, right) => {
+                self.expression(cells, left) * self.expression(cells, right)
+            }
             Expression::Scaled(inner, factor) => self.expression(cells, inner) * *factor,
         }
     }
@@ -332,13 +388,23 @@ impl<F: PastaField> Circuit<F> for Decider<F> {
         let plan = plan.expect("a decider is configured with its plan");
         let relation = &plan.relation;
         let layout = plan.scalars();
-        let instances: Vec<Column<Instance>> =
-            relation.instance_lengths.iter().map(|len| meta.instance_column(*len)).collect();
+        let instances: Vec<Column<Instance>> = relation
+            .instance_lengths
+            .iter()
+            .map(|len| meta.instance_column(*len))
+            .collect();
         let scalars = meta.instance_column(layout.len());
         meta.enable_equality(scalars);
-        let fixed: Vec<Column<Fixed>> = relation.fixed.iter().map(|_| meta.fixed_column()).collect();
-        let selectors: Vec<Column<Fixed>> = relation.selectors.iter().map(|_| meta.fixed_column()).collect();
-        let witness: Vec<Column<Advice>> = (0..relation.columns()).map(|_| meta.advice_column()).collect();
+        let fixed: Vec<Column<Fixed>> =
+            relation.fixed.iter().map(|_| meta.fixed_column()).collect();
+        let selectors: Vec<Column<Fixed>> = relation
+            .selectors
+            .iter()
+            .map(|_| meta.fixed_column())
+            .collect();
+        let witness: Vec<Column<Advice>> = (0..relation.columns())
+            .map(|_| meta.advice_column())
+            .collect();
         // Every column a relation copy touches takes part in the permutation.
         for (a, b) in &relation.copies {
             for cell in [a, b] {
@@ -353,7 +419,11 @@ impl<F: PastaField> Circuit<F> for Decider<F> {
         meta.enable_equality(ratio);
         let weight_column = meta.advice_column();
         let error_column = meta.advice_column();
-        let logup_columns: Vec<Column<Advice>> = relation.groups.iter().map(|_| meta.advice_column()).collect();
+        let logup_columns: Vec<Column<Advice>> = relation
+            .groups
+            .iter()
+            .map(|_| meta.advice_column())
+            .collect();
         let q_main = meta.fixed_column();
         let q_first = meta.fixed_column();
         let q_last = meta.fixed_column();
@@ -397,12 +467,19 @@ impl<F: PastaField> Circuit<F> for Decider<F> {
             for gate in &relation.gates {
                 phi = phi + scalar(gate.class) * remap.expression(cells, &gate.expression);
             }
-            let theta: Vec<Expression<F>> = (0..layout.theta).map(|j| scalar(layout.theta_start() + j)).collect();
+            let theta: Vec<Expression<F>> = (0..layout.theta)
+                .map(|j| scalar(layout.theta_start() + j))
+                .collect();
             let compress = |cells: &mut VirtualCells<'_, F>, expressions: &[Expression<F>]| {
                 let mut out = Expression::Constant(F::ZERO);
                 for (j, expression) in expressions.iter().enumerate() {
                     let term = remap.expression(cells, expression);
-                    out = out + if j == 0 { term } else { theta[j - 1].clone() * term };
+                    out = out
+                        + if j == 0 {
+                            term
+                        } else {
+                            theta[j - 1].clone() * term
+                        };
                 }
                 out
             };
@@ -418,13 +495,20 @@ impl<F: PastaField> Circuit<F> for Decider<F> {
                     let terms: Vec<Expression<F>> = chosen
                         .iter()
                         .map(|member| {
-                            challenge.clone() + compress(cells, &group.members[usize::from(*member)].expressions)
+                            challenge.clone()
+                                + compress(cells, &group.members[usize::from(*member)].expressions)
                         })
                         .collect();
                     let mut cell = reciprocal * product(terms.iter().cloned());
                     for k in 0..terms.len() {
                         cell = cell
-                            - product(terms.iter().enumerate().filter(|(j, _)| *j != k).map(|(_, term)| term.clone()));
+                            - product(
+                                terms
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(j, _)| *j != k)
+                                    .map(|(_, term)| term.clone()),
+                            );
                     }
                     phi = phi + scalar(group.slot_constraints[slot]) * active * cell;
                 }
@@ -433,7 +517,8 @@ impl<F: PastaField> Circuit<F> for Decider<F> {
                 let table = compress(cells, &group.table_expressions);
                 // On rows past the usable ones m = g = 0, so the constraint is zero there.
                 phi = phi
-                    + scalar(group.table_constraint) * (table_reciprocal.clone() * (challenge + table) - multiplicity);
+                    + scalar(group.table_constraint)
+                        * (table_reciprocal.clone() * (challenge + table) - multiplicity);
                 logup_sums.push(reciprocal_sum - table_reciprocal);
             }
             let q_main = cells.query_fixed(columns.q_main, cur);
@@ -466,12 +551,18 @@ impl<F: PastaField> Circuit<F> for Decider<F> {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn synthesize(&self, config: DeciderConfig, mut layouter: impl Layouter<F>) -> Result<(), Error> {
+    fn synthesize(
+        &self,
+        config: DeciderConfig,
+        mut layouter: impl Layouter<F>,
+    ) -> Result<(), Error> {
         let relation = &self.plan.relation;
         let layout = self.plan.scalars();
         let n = relation.usable;
         let witness = self.witness.as_deref();
-        let value = |f: &dyn Fn(&DeciderWitness<F>) -> F| witness.map_or_else(Value::unknown, |w| Value::known(f(w)));
+        let value = |f: &dyn Fn(&DeciderWitness<F>) -> F| {
+            witness.map_or_else(Value::unknown, |w| Value::known(f(w)))
+        };
         // Cells a relation copy needs, keyed by (kind, column, row).
         let mut needed = std::collections::BTreeSet::new();
         for (a, b) in &relation.copies {
@@ -482,11 +573,15 @@ impl<F: PastaField> Circuit<F> for Decider<F> {
         let instance_copies = layouter.assign_region(
             || "decider",
             |mut region| {
-                let mut handles: std::collections::BTreeMap<Cell, PlonkCell> = std::collections::BTreeMap::new();
+                let mut handles: std::collections::BTreeMap<Cell, PlonkCell> =
+                    std::collections::BTreeMap::new();
                 for (c, column) in config.fixed.iter().enumerate() {
                     for row in 0..n {
                         let cell = region.assign_fixed(*column, row, relation.fixed[c][row])?;
-                        let key = Cell::Fixed(u32::try_from(c).expect("fits"), u32::try_from(row).expect("fits"));
+                        let key = Cell::Fixed(
+                            u32::try_from(c).expect("fits"),
+                            u32::try_from(row).expect("fits"),
+                        );
                         if needed.contains(&key) {
                             handles.insert(key, cell);
                         }
@@ -494,15 +589,27 @@ impl<F: PastaField> Circuit<F> for Decider<F> {
                 }
                 for (s, column) in config.selectors.iter().enumerate() {
                     for row in 0..n {
-                        let bit = if relation.selectors[s][row] { F::ONE } else { F::ZERO };
+                        let bit = if relation.selectors[s][row] {
+                            F::ONE
+                        } else {
+                            F::ZERO
+                        };
                         region.assign_fixed(*column, row, bit)?;
                     }
                 }
                 for row in 0..n {
                     let main = if row + 1 < n { F::ONE } else { F::ZERO };
                     region.assign_fixed(config.q_main, row, main)?;
-                    region.assign_fixed(config.q_first, row, if row == 0 { F::ONE } else { F::ZERO })?;
-                    region.assign_fixed(config.q_last, row, if row + 1 == n { F::ONE } else { F::ZERO })?;
+                    region.assign_fixed(
+                        config.q_first,
+                        row,
+                        if row == 0 { F::ONE } else { F::ZERO },
+                    )?;
+                    region.assign_fixed(
+                        config.q_last,
+                        row,
+                        if row + 1 == n { F::ONE } else { F::ZERO },
+                    )?;
                 }
                 for (g, group) in relation.groups.iter().enumerate() {
                     for (slot, cells) in group.slots.iter().enumerate() {
@@ -517,8 +624,12 @@ impl<F: PastaField> Circuit<F> for Decider<F> {
                 }
                 for (c, column) in config.witness.iter().enumerate() {
                     for row in 0..n {
-                        let cell = region.assign_advice(*column, row, value(&|w| w.columns[c][row]))?;
-                        let key = Cell::Advice(u32::try_from(c).expect("fits"), u32::try_from(row).expect("fits"));
+                        let cell =
+                            region.assign_advice(*column, row, value(&|w| w.columns[c][row]))?;
+                        let key = Cell::Advice(
+                            u32::try_from(c).expect("fits"),
+                            u32::try_from(row).expect("fits"),
+                        );
                         if needed.contains(&key) {
                             handles.insert(key, cell.cell());
                         }

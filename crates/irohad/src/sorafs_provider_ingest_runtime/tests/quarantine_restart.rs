@@ -121,6 +121,28 @@ struct CrashRestartLedgerV1 {
     order: ReplicationOrderRecord,
     archive: MusubiReplicationOrderArchiveBindingV1,
 }
+impl sorafs_node::provider_ingest_runtime::ProviderIngestFinalizedAnchorRetainerV1
+    for CrashRestartLedgerV1
+{
+    fn retain_exact_cursor(
+        &self,
+        _cursor: sorafs_node::provider_ingest_outbox::ProviderIngestFinalizedCursorV1,
+    ) -> sorafs_node::provider_ingest_runtime::ProviderIngestFutureV1<
+        '_,
+        Result<
+            sorafs_node::provider_ingest_runtime::ProviderIngestFinalizedAnchorLeaseV1,
+            sorafs_node::provider_ingest_runtime::ProviderIngestFinalizedLedgerErrorV1,
+        >,
+    > {
+        Box::pin(async {
+            Ok(
+                sorafs_node::provider_ingest_runtime::ProviderIngestFinalizedAnchorLeaseV1::retain(
+                    (),
+                ),
+            )
+        })
+    }
+}
 impl ProviderIngestFinalizedLedgerV1 for CrashRestartLedgerV1 {
     fn read_assignment_page(
         &self,
@@ -489,8 +511,13 @@ async fn post_admission_quarantine_survives_restart_with_shared_chunks() {
         .provider_ingest_checkpoint_provider(Some(CrashRestartCheckpointRuntimeV1::binding()))
         .data_dir(storage_dir)
         .build();
-    let runtime_deps =
-        || NodeRuntimeDeps::default().with_provider_ingest_checkpoint_runtime(checkpoint.clone());
+    let outbox_config = configured.clone();
+    let runtime_deps = || {
+        let prepared =
+            sorafs_node::PreparedProviderIngestOutboxV1::open(&outbox_config, checkpoint.clone())
+                .expect("open the exact authenticated outbox before node startup");
+        NodeRuntimeDeps::default().with_prepared_provider_ingest_outbox(prepared)
+    };
     let node = NodeHandle::try_new_with_runtime_deps(configured.clone(), runtime_deps())
         .expect("restart node with sealed outbox");
     let fetch = Arc::new(CrashRestartFetchV1 {

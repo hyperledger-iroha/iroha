@@ -11,6 +11,8 @@
 mod amx_approval;
 #[path = "world_state_snapshot/ironwood.rs"]
 mod ironwood;
+#[path = "world_state_snapshot/kagemusha_fee.rs"]
+mod kagemusha_fee;
 #[cfg(feature = "iroha-core-tests")]
 #[path = "world_state_snapshot/lifecycle_fixture.rs"]
 mod lifecycle_fixture;

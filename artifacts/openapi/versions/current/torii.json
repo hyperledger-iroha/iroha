@@ -1820,6 +1820,97 @@
         ],
         "type": "object"
       },
+      "AccountRoleAggregateRow": {
+        "description": "POST aggregate output has exactly the requested metric aliases and, when group_by is [id], the grouped role id. Aliases match [A-Za-z_][A-Za-z0-9_]* and are unique; at least one and at most 16 metrics are required. count and distinct_count emit nonnegative integers. The account-role source exposes only id, so numeric sum/min/max/avg metrics are refused.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "Ungrouped metrics; an alias may itself be id.",
+            "maxProperties": 16,
+            "minProperties": 1,
+            "patternProperties": {
+              "^[A-Za-z_][A-Za-z0-9_]*(?![\\s\\S])": {
+                "maximum": 18446744073709551615,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Metrics grouped by id; a metric alias cannot overwrite the group field.",
+            "maxProperties": 17,
+            "minProperties": 2,
+            "patternProperties": {
+              "^(?!id$)[A-Za-z_][A-Za-z0-9_]*(?![\\s\\S])": {
+                "maximum": 18446744073709551615,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/NativeNameV1"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "AccountRolePage": {
+        "additionalProperties": false,
+        "description": "Collection page: full rows by default, exactly the selected fields with select, or aggregate rows for POST aggregate. select and aggregate cannot be combined. Empty aggregate input emits no rows.",
+        "properties": {
+          "items": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AccountRoleRow"
+                },
+                {
+                  "$ref": "#/components/schemas/AccountRoleAggregateRow"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass unchanged as cursor until null. Binds the collection, canonical account scope when present, filter, sort and aggregate. limit, select and include_total may change between pages. A scan-bounded page may be short or empty while still carrying a cursor.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "Present only with include_total: exact filtered row count, or aggregate group count after having, including matches before the cursor.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "AccountRoleRow": {
+        "additionalProperties": false,
+        "description": "One stored role assignment of the requested canonical account.",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/NativeNameV1"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
       "AccountRow": {
         "additionalProperties": true,
         "description": "Account row; `id` is the canonical I105 account id. With `select`, items carry only the selected fields; with `aggregate`, items are aggregate rows.",
@@ -22751,6 +22842,56 @@
         ],
         "type": "object"
       },
+      "LifecycleRuntimeProofStepV1": {
+        "additionalProperties": false,
+        "description": "One nonempty sibling, counted upward from leaf level zero; explicit empty siblings are noncanonical.",
+        "properties": {
+          "hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "level": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hash",
+          "level"
+        ],
+        "type": "object"
+      },
+      "LifecycleRuntimeProofV1": {
+        "additionalProperties": false,
+        "description": "Untrusted native branch transport. Only verification against the matching certified execution root grants authority; sibling levels must increase strictly.",
+        "properties": {
+          "execution_selection": {
+            "$ref": "#/components/schemas/RuntimeSelectionIdV1"
+          },
+          "height": {
+            "format": "uint64",
+            "minimum": 2,
+            "type": "integer"
+          },
+          "post_selection": {
+            "$ref": "#/components/schemas/RuntimeSelectionIdV1"
+          },
+          "siblings": {
+            "items": {
+              "$ref": "#/components/schemas/LifecycleRuntimeProofStepV1"
+            },
+            "maxItems": 256,
+            "type": "array"
+          }
+        },
+        "required": [
+          "execution_selection",
+          "height",
+          "post_selection",
+          "siblings"
+        ],
+        "type": "object"
+      },
       "MaintenanceTierV1": {
         "additionalProperties": false,
         "properties": {
@@ -39263,6 +39404,116 @@
         ],
         "type": "object"
       },
+      "RoleAggregateRow": {
+        "description": "POST aggregate output has exactly the requested metric aliases and, when group_by is [id], the grouped role id. Aliases match [A-Za-z_][A-Za-z0-9_]* and are unique; at least one and at most 16 metrics are required. count and distinct_count emit nonnegative integers. The only non-id field is the permissions array: distinct_count compares complete arrays; sum/min/max/avg on that nonnumeric value emit null. Numeric metrics on id are refused.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "description": "Ungrouped metrics; an alias may itself be id.",
+            "maxProperties": 16,
+            "minProperties": 1,
+            "patternProperties": {
+              "^[A-Za-z_][A-Za-z0-9_]*(?![\\s\\S])": {
+                "oneOf": [
+                  {
+                    "maximum": 18446744073709551615,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "description": "Metrics grouped by id; a metric alias cannot overwrite the group field.",
+            "maxProperties": 17,
+            "minProperties": 2,
+            "patternProperties": {
+              "^(?!id$)[A-Za-z_][A-Za-z0-9_]*(?![\\s\\S])": {
+                "oneOf": [
+                  {
+                    "maximum": 18446744073709551615,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/NativeNameV1"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RolePage": {
+        "additionalProperties": false,
+        "description": "Collection page: full rows by default, exactly the selected fields with select, or aggregate rows for POST aggregate. select and aggregate cannot be combined. Empty aggregate input emits no rows.",
+        "properties": {
+          "items": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/NativeRoleV1"
+                },
+                {
+                  "$ref": "#/components/schemas/RoleProjectionRow"
+                },
+                {
+                  "$ref": "#/components/schemas/RoleAggregateRow"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass unchanged as cursor until null. Binds the collection, canonical account scope when present, filter, sort and aggregate. limit, select and include_total may change between pages. A scan-bounded page may be short or empty while still carrying a cursor.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "Present only with include_total: exact filtered row count, or aggregate group count after having, including matches before the cursor.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "RoleProjectionRow": {
+        "additionalProperties": false,
+        "description": "Exactly one selected stored-role field. Selecting both fields returns NativeRoleV1; an empty select is refused.",
+        "maxProperties": 1,
+        "minProperties": 1,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/NativeNameV1"
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/NativePermissionsV1"
+          }
+        },
+        "type": "object"
+      },
       "RollbackPayload": {
         "additionalProperties": false,
         "properties": {
@@ -40907,6 +41158,22 @@
         ],
         "type": "object"
       },
+      "RuntimeRestrictionEntryV1": {
+        "additionalProperties": false,
+        "properties": {
+          "definition": {
+            "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+          },
+          "restriction": {
+            "$ref": "#/components/schemas/RuntimeRestrictionV1"
+          }
+        },
+        "required": [
+          "definition",
+          "restriction"
+        ],
+        "type": "object"
+      },
       "RuntimeRestrictionKindV1": {
         "description": "A restriction a transition applies; its height is the change set's effective height.",
         "oneOf": [
@@ -40980,6 +41247,142 @@
           }
         ]
       },
+      "RuntimeRestrictionV1": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "Deprecated",
+                "type": "string"
+              }
+            },
+            "required": [
+              "content",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "AdmissionClosed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "content",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "CompletionOnly",
+                "type": "string"
+              }
+            },
+            "required": [
+              "content",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "const": "Disabled",
+                "type": "string"
+              }
+            },
+            "required": [
+              "content",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RuntimeRootSelectionV1": {
+        "additionalProperties": false,
+        "description": "Exact RootSelectionV1. Lists preserve the native sorted, unique identities and closure rules.",
+        "properties": {
+          "active": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+            },
+            "type": "array"
+          },
+          "bindings": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeBindingV1"
+            },
+            "type": "array"
+          },
+          "commitment_profile": {
+            "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+          },
+          "completion_closures": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeCompletionClosureV1"
+            },
+            "type": "array"
+          },
+          "installed_storage": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+            },
+            "type": "array"
+          },
+          "kernel": {
+            "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+          },
+          "restrictions": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeRestrictionEntryV1"
+            },
+            "type": "array"
+          },
+          "services_profile": {
+            "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+          }
+        },
+        "required": [
+          "active",
+          "bindings",
+          "commitment_profile",
+          "completion_closures",
+          "installed_storage",
+          "kernel",
+          "restrictions",
+          "services_profile"
+        ],
+        "type": "object"
+      },
       "RuntimeSchemaV1": {
         "description": "Schema of a payload, storage value, key, event or parameter.",
         "oneOf": [
@@ -41022,6 +41425,13 @@
             "type": "object"
           }
         ]
+      },
+      "RuntimeSelectionIdV1": {
+        "description": "Exact content identity of one root selection.",
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
       },
       "RuntimeSelectionSupport": {
         "additionalProperties": false,
@@ -58321,6 +58731,75 @@
         ],
         "type": "object"
       },
+      "TriggerLifecycleActivationV1": {
+        "additionalProperties": false,
+        "description": "Observation of this validator's committed lifecycle activation and original consensus configuration fingerprint. The existing v2_activation_height JSON member is the native response name; this read is not an independent activation proof.",
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "committed_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "consensus_config_fingerprint": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "network_id": {
+            "$ref": "#/components/schemas/NetworkId"
+          },
+          "v2_activation_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "active",
+          "committed_height",
+          "consensus_config_fingerprint",
+          "network_id",
+          "v2_activation_height"
+        ],
+        "type": "object"
+      },
+      "TriggerLifecycleWitnessV1": {
+        "additionalProperties": false,
+        "description": "Exact selected lifecycle descriptors and consecutive native runtime branches. The initial proof and every continuation must be checked against independently verified native finality.",
+        "properties": {
+          "continuation_proofs": {
+            "items": {
+              "$ref": "#/components/schemas/LifecycleRuntimeProofV1"
+            },
+            "maxItems": 4095,
+            "type": "array"
+          },
+          "implementation": {
+            "$ref": "#/components/schemas/RuntimeDefinitionDescriptorV1"
+          },
+          "runtime_proof": {
+            "$ref": "#/components/schemas/LifecycleRuntimeProofV1"
+          },
+          "selection": {
+            "$ref": "#/components/schemas/RuntimeRootSelectionV1"
+          },
+          "services": {
+            "$ref": "#/components/schemas/RuntimeDefinitionDescriptorV1"
+          }
+        },
+        "required": [
+          "continuation_proofs",
+          "implementation",
+          "runtime_proof",
+          "selection",
+          "services"
+        ],
+        "type": "object"
+      },
       "UaidManifestPage": {
         "additionalProperties": false,
         "properties": {
@@ -60419,7 +60898,7 @@
             "items": {
               "$ref": "#/components/schemas/WorldStateSnapshotEntryV1"
             },
-            "maxItems": 131072,
+            "maxItems": 262144,
             "type": "array"
           },
           "schema_hash": {
@@ -64841,6 +65320,482 @@
           "authentication": "optional_canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "application.accounts_by_account_id_permissions_query_post"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/accounts/{account_id}/roles": {
+      "get": {
+        "description": "Requires a canonically signed caller who is the target account or holds CanReadAccountData for that exact account or CanReadAllLedgerData. Reads only assignments of that canonical account, including for filters, totals and aggregates. Authorization is rechecked by the authoritative peer. Full rows contain id; select returns exactly its nonempty subset. In row mode only id is sortable; the default is ascending id. Filters use the common comparison, membership, exists, is_null and boolean operators on the exposed fields. Accepts filter, sort, select, limit, cursor and include_total. Follow next_cursor until null, even after an empty page.",
+        "parameters": [
+          {
+            "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Text filter over id, e.g. `id in [\"auditor\", \"operator\"]`.",
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "maxLength": 32768,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Sort by id (ascending, the default) or -id (descending). Other fields are not sortable.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Nonempty, comma-separated subset of id; the response contains exactly the selected fields.",
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Previous next_cursor, bound to the collection, canonical account scope when present, filter and sort. Continue until null.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Add the exact filtered row count across all pages as total; costs a full scan.",
+            "in": "query",
+            "name": "include_total",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountRolePage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid or noncanonical account selector, or a collection query that is invalid or exceeds its admitted budget.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A valid canonical account signature is required for role reads.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is absent or invalid.",
+                "schema": {
+                  "enum": [
+                    "alias_auth_invalid",
+                    "canonical_authentication_invalid",
+                    "canonical_authentication_required"
+                  ],
+                  "example": "canonical_authentication_required",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The current exact-account or whole-ledger grant does not authorize this read, or a required API token is missing or invalid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Request rate or query admission capacity is exhausted.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The native root scope or an authoritative read route is unavailable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "List account role assignments.",
+        "tags": [
+          "Accounts"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.accounts_by_account_id_roles_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/accounts/{account_id}/roles/query": {
+      "post": {
+        "description": "Requires a canonically signed caller who is the target account or holds CanReadAccountData for that exact account or CanReadAllLedgerData. Reads only assignments of that canonical account, including for filters, totals and aggregates. Authorization is rechecked by the authoritative peer. Full rows contain id; select returns exactly its nonempty subset. In row mode only id is sortable; the default is ascending id. Filters use the common comparison, membership, exists, is_null and boolean operators on the exposed fields. Accepts the common CollectionQuery JSON body. aggregate replaces full rows with the requested metrics, optionally grouped by id, and cannot be combined with select. Filtering precedes aggregation; having precedes pagination. Aggregate sort and having address output columns; the default aggregate order follows group_by. include_total counts matching rows, or groups after having, across all pages. Empty aggregate input emits no rows.",
+        "parameters": [
+          {
+            "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectionQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountRolePage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid or noncanonical account selector, or a collection query that is invalid or exceeds its admitted budget.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A valid canonical account signature is required for role reads.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is absent or invalid.",
+                "schema": {
+                  "enum": [
+                    "canonical_authentication_invalid",
+                    "canonical_authentication_required"
+                  ],
+                  "example": "canonical_authentication_required",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The current exact-account or whole-ledger grant does not authorize this read, or a required API token is missing or invalid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The request body exceeds the configured route limit.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when the request body exceeds its route limit.",
+                "schema": {
+                  "enum": [
+                    "request_payload_too_large"
+                  ],
+                  "example": "request_payload_too_large",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The request must declare exactly one canonical JSON media type.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Request rate or query admission capacity is exhausted.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The native root scope or an authoritative read route is unavailable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query account role assignments.",
+        "tags": [
+          "Accounts"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.accounts_by_account_id_roles_query_post"
         },
         "x-iroha-tool-effect": "read"
       }
@@ -99056,6 +100011,463 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/roles": {
+      "get": {
+        "description": "Requires a canonically signed caller with current CanReadAllLedgerData. Reads stored role definitions and their exact permission sets. Authorization is rechecked by the authoritative peer. Full rows contain id and permissions; select returns exactly its nonempty subset. In row mode only id is sortable; the default is ascending id. Filters use the common comparison, membership, exists, is_null and boolean operators on the exposed fields. Accepts filter, sort, select, limit, cursor and include_total. Follow next_cursor until null, even after an empty page.",
+        "parameters": [
+          {
+            "description": "Text filter over id and permissions, e.g. `id in [\"auditor\", \"operator\"]`.",
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "maxLength": 32768,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Sort by id (ascending, the default) or -id (descending). Other fields are not sortable.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Nonempty, comma-separated subset of id and permissions; the response contains exactly the selected fields.",
+            "in": "query",
+            "name": "select",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Previous next_cursor, bound to the collection, canonical account scope when present, filter and sort. Continue until null.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Add the exact filtered row count across all pages as total; costs a full scan.",
+            "in": "query",
+            "name": "include_total",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RolePage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Collection query is invalid or exceeds its admitted budget.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A valid canonical account signature is required for role reads.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is absent or invalid.",
+                "schema": {
+                  "enum": [
+                    "alias_auth_invalid",
+                    "canonical_authentication_invalid",
+                    "canonical_authentication_required"
+                  ],
+                  "example": "canonical_authentication_required",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The signed caller lacks current CanReadAllLedgerData, or a required API token is missing or invalid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Request rate or query admission capacity is exhausted.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The native root scope or an authoritative read route is unavailable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "List stored role definitions.",
+        "tags": [
+          "Accounts"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.roles_get"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/roles/query": {
+      "post": {
+        "description": "Requires a canonically signed caller with current CanReadAllLedgerData. Reads stored role definitions and their exact permission sets. Authorization is rechecked by the authoritative peer. Full rows contain id and permissions; select returns exactly its nonempty subset. In row mode only id is sortable; the default is ascending id. Filters use the common comparison, membership, exists, is_null and boolean operators on the exposed fields. Accepts the common CollectionQuery JSON body. aggregate replaces full rows with the requested metrics, optionally grouped by id, and cannot be combined with select. Filtering precedes aggregation; having precedes pagination. Aggregate sort and having address output columns; the default aggregate order follows group_by. include_total counts matching rows, or groups after having, across all pages. Empty aggregate input emits no rows.",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectionQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RolePage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Collection query is invalid or exceeds its admitted budget.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A valid canonical account signature is required for role reads.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is absent or invalid.",
+                "schema": {
+                  "enum": [
+                    "canonical_authentication_invalid",
+                    "canonical_authentication_required"
+                  ],
+                  "example": "canonical_authentication_required",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The signed caller lacks current CanReadAllLedgerData, or a required API token is missing or invalid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The request body exceeds the configured route limit.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when the request body exceeds its route limit.",
+                "schema": {
+                  "enum": [
+                    "request_payload_too_large"
+                  ],
+                  "example": "request_payload_too_large",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The request must declare exactly one canonical JSON media type.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Request rate or query admission capacity is exhausted.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The native root scope or an authoritative read route is unavailable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query stored role definitions.",
+        "tags": [
+          "Accounts"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "dataspace_visible",
+          "authentication": "optional_canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.roles_query_post"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/runtime/abi/active": {
       "get": {
         "description": "Return the fixed runtime ABI version.",
@@ -129947,6 +131359,206 @@
           "stableRouteId": "trigger.completion.list"
         },
         "x-iroha-tool-effect": "operator"
+      }
+    },
+    "/v1/triggers/lifecycle-activation": {
+      "get": {
+        "description": "Returns this validator's committed lifecycle selection observation, original activation height and consensus configuration fingerprint.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerLifecycleActivationV1"
+                }
+              }
+            },
+            "description": "Successful native observation."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The committed activation lineage or original signed genesis is missing or inconsistent."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Request rate or query admission capacity is exhausted."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The bounded activation read worker could not complete."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Read committed lifecycle activation.",
+        "tags": [
+          "Ledger"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "trigger.lifecycle_activation"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/triggers/lifecycle-witness": {
+      "get": {
+        "description": "Returns 1 through 4096 consecutive certified-cut branches for the selected lifecycle closure. start_height must be at least 2; end_height must be at least start_height and less than start_height + 4096. Missing archives, selection changes and malformed evidence fail closed. The response is bounded to 32 MiB and does not independently supply the finality certificates needed to verify these branches.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "start_height",
+            "required": true,
+            "schema": {
+              "format": "uint64",
+              "minimum": 2,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end_height",
+            "required": true,
+            "schema": {
+              "format": "uint64",
+              "minimum": 2,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerLifecycleWitnessV1"
+                }
+              }
+            },
+            "description": "Successful native observation."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid closed query, uncommitted or inconsistent requested window, changed selection, or missing or corrupt retained evidence."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A required API token is missing or invalid."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A requested height has no committed native finality proof in view."
+          },
+          "408": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The route execution deadline passed."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The query parameters or the requested history read exceed their bound."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Request rate, proof egress, query admission or memory capacity is exhausted, or the response cannot fit its bound."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The native read failed internally."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The native root scope is unavailable, or State publication did not complete before the deadline."
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Read native lifecycle runtime branches.",
+        "tags": [
+          "Ledger"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "trigger.lifecycle_witness"
+        },
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/validation-fee/accounts/{account_id}/receipts": {

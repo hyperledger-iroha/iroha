@@ -9,14 +9,21 @@ pub use epochs::NativeEpochProgressV1;
 mod ledger;
 mod ledger_outcome;
 mod ledger_producer;
-mod unload;
 mod suffix;
 mod suffix_ledger;
-pub use suffix::{ProvedSuffixPreparationV1, SuffixPreparationJobV1, SuffixPreparationCancellationV1, SuffixUnloadRequestV1, SuffixNotApplicableV1, SuffixUnloadDecisionV1, SuffixUnloadExecutionV1, ReviewedSuffixUnloadV1, ReviewedSuffixFailureV1};
-pub use suffix_ledger::{SuffixStageOutcomeV1, SuffixStageIngestV1, SUFFIX_INSTRUCTION_MAX_BYTES_V1, SUFFIX_SIGNED_WIRE_MAX_BYTES_V1};
+mod unload;
 pub use ledger::{LEDGER_PROOF_MAX_BYTES_V1, LedgerProgressV1, PAYOUT_RECORD_MAX_BYTES_V1};
 pub use ledger_outcome::{LedgerAttemptIngestV1, LedgerAttemptOutcomeV1, LedgerCommitV1};
 pub use ledger_producer::{LEDGER_INSTRUCTION_MAX_BYTES_V1, NativePreparedLedgerLoadV1};
+pub use suffix::{
+    ProvedSuffixPreparationV1, ReviewedSuffixFailureV1, ReviewedSuffixUnloadV1,
+    SuffixNotApplicableV1, SuffixPreparationCancellationV1, SuffixPreparationJobV1,
+    SuffixUnloadDecisionV1, SuffixUnloadExecutionV1, SuffixUnloadRequestV1,
+};
+pub use suffix_ledger::{
+    SUFFIX_INSTRUCTION_MAX_BYTES_V1, SUFFIX_SIGNED_WIRE_MAX_BYTES_V1, SuffixStageIngestV1,
+    SuffixStageOutcomeV1,
+};
 mod output;
 pub use output::{NativeReleasedOutputV1, NativeWalletMetadataV1};
 mod bootstrap;

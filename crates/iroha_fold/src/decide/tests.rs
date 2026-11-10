@@ -67,7 +67,11 @@ impl Circuit<Fq> for Sparse {
         Config { a, q, table }
     }
 
-    fn synthesize(&self, config: Config, mut layouter: impl Layouter<Fq>) -> Result<(), PlonkError> {
+    fn synthesize(
+        &self,
+        config: Config,
+        mut layouter: impl Layouter<Fq>,
+    ) -> Result<(), PlonkError> {
         layouter.assign_table(
             || "range",
             |mut table| {
@@ -111,7 +115,12 @@ pub(crate) fn stage_with(key: CommitKey<Ep>) -> Stage {
     let none: Vec<Vec<Fq>> = Vec::new();
     let synthesized = synthesize(&Sparse, K, Some(&none)).expect("witness");
     let (advice, public) = relation.stage_witness(&synthesized).expect("stage witness");
-    Stage { relation, key, advice, public }
+    Stage {
+        relation,
+        key,
+        advice,
+        public,
+    }
 }
 
 /// Where a forger puts the value that balances the `LogUp` sum.
@@ -135,11 +144,18 @@ pub(crate) fn forged(stage: &Stage, balance: Balance) -> (Instance<Ep>, Witness<
     let mut columns = stage.advice.clone();
     columns[0][1] = Fq::from(NON_MEMBER);
     columns.resize(relation.columns(), vec![Fq::ZERO; relation.n]);
-    let blinds: Vec<Fq> = (0..relation.columns()).map(|_| Fq::random(&mut rng)).collect();
+    let blinds: Vec<Fq> = (0..relation.columns())
+        .map(|_| Fq::random(&mut rng))
+        .collect();
     let commit = |column: usize, columns: &[Vec<Fq>]| {
-        stage.key.commit(&columns[column], &blinds[column]).expect("commit")
+        stage
+            .key
+            .commit(&columns[column], &blinds[column])
+            .expect("commit")
     };
-    let mut commitments: Vec<_> = (0..relation.columns()).map(|column| commit(column, &columns)).collect();
+    let mut commitments: Vec<_> = (0..relation.columns())
+        .map(|column| commit(column, &columns))
+        .collect();
     // Round one draws theta and r from the advice and m commitments only.
     let probe = Instance::<Ep> {
         commitments: commitments.clone(),
@@ -149,11 +165,23 @@ pub(crate) fn forged(stage: &Stage, balance: Balance) -> (Instance<Ep>, Witness<
     };
     let (theta, challenges, _) = probe.transcript(relation, &DOMAIN).expect("transcript");
     let tables = relation.tables();
-    let point = Point { advice: &columns[..relation.advice_columns], instance: &stage.public };
-    let (mut reciprocals, mut table) =
-        logup::reciprocals(group, &tables, point, &columns[group.m_column()], &theta, challenges[0])
-            .expect("reciprocals");
-    assert!(table.iter().all(|v| bool::from(v.is_zero())), "no table row is used");
+    let point = Point {
+        advice: &columns[..relation.advice_columns],
+        instance: &stage.public,
+    };
+    let (mut reciprocals, mut table) = logup::reciprocals(
+        group,
+        &tables,
+        point,
+        &columns[group.m_column()],
+        &theta,
+        challenges[0],
+    )
+    .expect("reciprocals");
+    assert!(
+        table.iter().all(|v| bool::from(v.is_zero())),
+        "no table row is used"
+    );
     let total: Fq = reciprocals.iter().flatten().sum();
     let usable = relation.usable;
     match balance {
@@ -173,24 +201,42 @@ pub(crate) fn forged(stage: &Stage, balance: Balance) -> (Instance<Ep>, Witness<
     for column in (group.m_column() + 1)..=group.g_column() {
         commitments[column] = commit(column, &columns);
     }
-    let instance = Instance { commitments, public: stage.public.clone(), theta, r: challenges };
+    let instance = Instance {
+        commitments,
+        public: stage.public.clone(),
+        theta,
+        r: challenges,
+    };
     assert!(instance.has_fresh_challenges(relation, &DOMAIN));
     (instance, Witness { columns, blinds })
 }
 
-fn circuit_satisfied(relation: &FoldedRelation<Fq>, acc: &Accumulator<Ep>, witness: &Witness<Fq>) -> bool {
+fn circuit_satisfied(
+    relation: &FoldedRelation<Fq>,
+    acc: &Accumulator<Ep>,
+    witness: &Witness<Fq>,
+) -> bool {
     let plan = Arc::new(DeciderPlan::new(relation.clone()).expect("plan"));
     let instances = decider_instances(&plan, acc);
     let circuit = Decider::new(Arc::clone(&plan), decider_witness(&plan, acc, witness));
-    check_circuit(&circuit, K, &instances, CheckMode::Strict).expect("synthesis").is_satisfied()
+    check_circuit(&circuit, K, &instances, CheckMode::Strict)
+        .expect("synthesis")
+        .is_satisfied()
 }
 
 #[test]
 fn honest_sparse_lookups_decide() {
     let s = stage();
     let mut rng = ChaCha20Rng::seed_from_u64(76);
-    let (instance, witness) =
-        fresh_instance(&s.relation, &s.key, &DOMAIN, s.advice.clone(), s.public.clone(), &mut rng).expect("fresh");
+    let (instance, witness) = fresh_instance(
+        &s.relation,
+        &s.key,
+        &DOMAIN,
+        s.advice.clone(),
+        s.public.clone(),
+        &mut rng,
+    )
+    .expect("fresh");
     decide_fresh(&s.relation, &s.key, &DOMAIN, &instance, &witness).expect("honest instance");
     let acc = Accumulator::from_fresh(&s.relation, &DOMAIN, instance).expect("accumulator");
     decide(&s.relation, &s.key, &acc, &witness).expect("honest accumulator");
@@ -200,7 +246,11 @@ fn honest_sparse_lookups_decide() {
 #[test]
 fn no_unconstrained_cell_balances_a_lookup_input_outside_its_table() {
     let s = stage();
-    for balance in [Balance::InactiveReciprocal, Balance::ReciprocalPastUsable, Balance::TablePastUsable] {
+    for balance in [
+        Balance::InactiveReciprocal,
+        Balance::ReciprocalPastUsable,
+        Balance::TablePastUsable,
+    ] {
         let (instance, witness) = forged(&s, balance);
         assert_eq!(
             decide_fresh(&s.relation, &s.key, &DOMAIN, &instance, &witness),
@@ -208,7 +258,14 @@ fn no_unconstrained_cell_balances_a_lookup_input_outside_its_table() {
             "{balance:?}"
         );
         let acc = Accumulator::from_fresh(&s.relation, &DOMAIN, instance).expect("accumulator");
-        assert_eq!(decide(&s.relation, &s.key, &acc, &witness), Err(Error::Rejected("LogUp sum")), "{balance:?}");
-        assert!(!circuit_satisfied(&s.relation, &acc, &witness), "{balance:?}");
+        assert_eq!(
+            decide(&s.relation, &s.key, &acc, &witness),
+            Err(Error::Rejected("LogUp sum")),
+            "{balance:?}"
+        );
+        assert!(
+            !circuit_satisfied(&s.relation, &acc, &witness),
+            "{balance:?}"
+        );
     }
 }

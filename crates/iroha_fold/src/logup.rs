@@ -119,7 +119,10 @@ pub(crate) fn compile<F: PastaField>(
         }
     }
     let empty: [Vec<F>; 0] = [];
-    let point = Point { advice: &empty, instance: &empty };
+    let point = Point {
+        advice: &empty,
+        instance: &empty,
+    };
     let mut stack = Vec::with_capacity(64);
     let mut groups = Vec::with_capacity(grouped.len());
     let mut column = first_column;
@@ -167,13 +170,24 @@ pub(crate) fn compile<F: PastaField>(
         // contributes its exactly zero tuple, whose membership the original lookup
         // asserts on that row too.
         let per_cell = if width == 1 { CELL_INPUTS } else { 1 };
-        let counts: Vec<usize> = active_rows.iter().map(|a| a.iter().filter(|x| **x).count()).collect();
-        let firsts: Vec<usize> = active_rows.iter().map(|a| a.iter().position(|x| *x).unwrap_or(usable)).collect();
+        let counts: Vec<usize> = active_rows
+            .iter()
+            .map(|a| a.iter().filter(|x| **x).count())
+            .collect();
+        let firsts: Vec<usize> = active_rows
+            .iter()
+            .map(|a| a.iter().position(|x| *x).unwrap_or(usable))
+            .collect();
         let mut order: Vec<usize> = (0..members.len()).collect();
         order.sort_by_key(|m| (core::cmp::Reverse(counts[*m]), firsts[*m], *m));
         let slot_members: Vec<Vec<u16>> = order
             .chunks(per_cell)
-            .map(|chunk| chunk.iter().map(|m| u16::try_from(*m).expect("members fit u16")).collect())
+            .map(|chunk| {
+                chunk
+                    .iter()
+                    .map(|m| u16::try_from(*m).expect("members fit u16"))
+                    .collect()
+            })
             .collect();
         let slots = slot_members
             .iter()
@@ -186,7 +200,10 @@ pub(crate) fn compile<F: PastaField>(
                 cell.members[..chosen.len()].copy_from_slice(chosen);
                 (0..usable)
                     .filter(|row| chosen.iter().any(|m| active_rows[usize::from(*m)][*row]))
-                    .map(|row| HCell { row: u32::try_from(row).expect("rows fit u32"), ..cell })
+                    .map(|row| HCell {
+                        row: u32::try_from(row).expect("rows fit u32"),
+                        ..cell
+                    })
                     .collect()
             })
             .collect::<Vec<Vec<HCell>>>();
@@ -266,7 +283,9 @@ pub(crate) fn multiplicities<F: PastaField>(
     let mut index: HashMap<Vec<[u64; 4]>, u32> = HashMap::new();
     for row in 0..group.usable {
         let key = tuple(&group.table, tables, point, row, &mut stack);
-        index.entry(key).or_insert_with(|| u32::try_from(row).expect("rows fit u32"));
+        index
+            .entry(key)
+            .or_insert_with(|| u32::try_from(row).expect("rows fit u32"));
     }
     let mut counts = vec![0u64; tables.n];
     for slot in &group.slots {
@@ -320,7 +339,16 @@ pub(crate) fn reciprocals<F: PastaField>(
         for cell in slot {
             for member in cell.members() {
                 let member = &group.members[usize::from(*member)];
-                denominators.push(r + compress(&member.inputs, theta, tables, point, cell.row as usize, &mut stack));
+                denominators.push(
+                    r + compress(
+                        &member.inputs,
+                        theta,
+                        tables,
+                        point,
+                        cell.row as usize,
+                        &mut stack,
+                    ),
+                );
             }
         }
     }

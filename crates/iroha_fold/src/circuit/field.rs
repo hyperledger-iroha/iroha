@@ -8,15 +8,14 @@
 //! S6 limbs (`lo < 2^128`, `hi < 2^127`): [`FieldLanes::limbs`] exports a word,
 //! and [`FieldLanes::recompose`] imports one (`lo + 2^128 hi`).
 
-
 use iroha_pasta::{PastaField, poseidon::PoseidonField};
 use iroha_plonk::{
     cs::ConstraintSystem,
     frontend::{Error, Layouter, Region},
 };
 use iroha_plonk_gadgets::{
-    GlueChip, GlueConfig, LimbBits, Pow5Columns, RoundConstantColumns, RunningSumChip, RunningSumConfig,
-    UintChip, Word,
+    GlueChip, GlueConfig, LimbBits, Pow5Columns, RoundConstantColumns, RunningSumChip,
+    RunningSumConfig, UintChip, Word,
     ff::CanonicalS6,
     pow5_fq::{DuplexChip, DuplexConfig},
 };
@@ -38,11 +37,19 @@ impl<F: PastaField + PoseidonField> FieldVerifierConfig<F> {
         let constants = meta.fixed_column();
         let glue = GlueConfig::configure(meta, glue_columns, constants);
         let range_column = meta.advice_column();
-        let range = RunningSumConfig::configure(meta, range_column, LimbBits::new(15).expect("15 is a valid limb width"));
+        let range = RunningSumConfig::configure(
+            meta,
+            range_column,
+            LimbBits::new(15).expect("15 is a valid limb width"),
+        );
         let lane = Pow5Columns::allocate(meta);
         let round_constants = RoundConstantColumns::allocate(meta);
         let duplex = DuplexConfig::configure(meta, lane, round_constants, &[]);
-        Self { glue, range, duplex }
+        Self {
+            glue,
+            range,
+            duplex,
+        }
     }
 }
 
@@ -78,7 +85,11 @@ impl<F: PastaField + PoseidonField> FieldVerifierChips<F> {
 
     /// The lanes, borrowed together.
     pub fn lanes(&mut self) -> FieldLanes<'_, F> {
-        FieldLanes { glue: &mut self.glue, range: &mut self.range, duplex: &mut self.duplex }
+        FieldLanes {
+            glue: &mut self.glue,
+            range: &mut self.range,
+            duplex: &mut self.duplex,
+        }
     }
 }
 
@@ -106,7 +117,12 @@ impl<F: PastaField + PoseidonField> FieldLanes<'_, F> {
     ///
     /// # Errors
     /// Layout errors.
-    pub fn add(&mut self, region: &mut Region<'_, F>, a: &Word<F>, b: &Word<F>) -> Result<Word<F>, Error> {
+    pub fn add(
+        &mut self,
+        region: &mut Region<'_, F>,
+        a: &Word<F>,
+        b: &Word<F>,
+    ) -> Result<Word<F>, Error> {
         self.glue.add(region, a, b)
     }
 
@@ -114,7 +130,12 @@ impl<F: PastaField + PoseidonField> FieldLanes<'_, F> {
     ///
     /// # Errors
     /// Layout errors.
-    pub fn sub(&mut self, region: &mut Region<'_, F>, a: &Word<F>, b: &Word<F>) -> Result<Word<F>, Error> {
+    pub fn sub(
+        &mut self,
+        region: &mut Region<'_, F>,
+        a: &Word<F>,
+        b: &Word<F>,
+    ) -> Result<Word<F>, Error> {
         self.glue.sub(region, a, b)
     }
 
@@ -122,7 +143,12 @@ impl<F: PastaField + PoseidonField> FieldLanes<'_, F> {
     ///
     /// # Errors
     /// Layout errors.
-    pub fn mul(&mut self, region: &mut Region<'_, F>, a: &Word<F>, b: &Word<F>) -> Result<Word<F>, Error> {
+    pub fn mul(
+        &mut self,
+        region: &mut Region<'_, F>,
+        a: &Word<F>,
+        b: &Word<F>,
+    ) -> Result<Word<F>, Error> {
         self.glue.mul(region, a, b)
     }
 
@@ -130,7 +156,13 @@ impl<F: PastaField + PoseidonField> FieldLanes<'_, F> {
     ///
     /// # Errors
     /// Layout errors.
-    pub fn affine(&mut self, region: &mut Region<'_, F>, a: &Word<F>, factor: F, offset: F) -> Result<Word<F>, Error> {
+    pub fn affine(
+        &mut self,
+        region: &mut Region<'_, F>,
+        a: &Word<F>,
+        factor: F,
+        offset: F,
+    ) -> Result<Word<F>, Error> {
         self.glue.linear(region, &[(factor, a)], offset)
     }
 
@@ -146,7 +178,11 @@ impl<F: PastaField + PoseidonField> FieldLanes<'_, F> {
     ///
     /// # Errors
     /// Layout errors.
-    pub fn limbs(&mut self, region: &mut Region<'_, F>, word: &Word<F>) -> Result<CanonicalS6<F>, Error> {
+    pub fn limbs(
+        &mut self,
+        region: &mut Region<'_, F>,
+        word: &Word<F>,
+    ) -> Result<CanonicalS6<F>, Error> {
         let mut uint = UintChip::new(self.glue, self.range);
         CanonicalS6::from_native_word(&mut uint, region, word)
     }
@@ -156,9 +192,15 @@ impl<F: PastaField + PoseidonField> FieldLanes<'_, F> {
     ///
     /// # Errors
     /// Layout errors.
-    pub fn recompose(&mut self, region: &mut Region<'_, F>, lo: &Word<F>, hi: &Word<F>) -> Result<Word<F>, Error> {
+    pub fn recompose(
+        &mut self,
+        region: &mut Region<'_, F>,
+        lo: &Word<F>,
+        hi: &Word<F>,
+    ) -> Result<Word<F>, Error> {
         let two64 = F::from_u128(1 << 64);
-        self.glue.linear(region, &[(F::ONE, lo), (two64 * two64, hi)], F::ZERO)
+        self.glue
+            .linear(region, &[(F::ONE, lo), (two64 * two64, hi)], F::ZERO)
     }
 
     /// Starts a transcript for role `tag` under `domain` on a clear lane, as
@@ -172,7 +214,8 @@ impl<F: PastaField + PoseidonField> FieldLanes<'_, F> {
         }
         self.duplex.absorb_constant(F::from(tag));
         for chunk in domain.as_chunks::<16>().0 {
-            self.duplex.absorb_constant(F::from_u128(u128::from_le_bytes(*chunk)));
+            self.duplex
+                .absorb_constant(F::from_u128(u128::from_le_bytes(*chunk)));
         }
         Ok(())
     }

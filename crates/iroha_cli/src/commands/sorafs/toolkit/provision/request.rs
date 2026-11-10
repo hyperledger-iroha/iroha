@@ -93,11 +93,13 @@ pub(super) fn run(args: RequestArgs) -> Result<()> {
     let key = read_private_key(&args.private_key_file)?;
     let receipt = sign(&request, &body, &key, timestamp_ms, &hex::encode(nonce))?;
     write_new(&args.body_output, &body)?;
-    let headers = receipt
-        .headers
-        .iter()
-        .map(|(name, value)| format!("{name}: {value}\n"))
-        .collect::<String>();
+    let mut headers = String::new();
+    for (name, value) in &receipt.headers {
+        headers.push_str(name);
+        headers.push_str(": ");
+        headers.push_str(value);
+        headers.push('\n');
+    }
     write_new(&args.headers_output, headers.as_bytes())?;
     write_new(&args.input.output, &norito::json::to_vec(&receipt)?)
 }

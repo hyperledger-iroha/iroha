@@ -799,6 +799,24 @@ fn finalized_provider_ingest_fixture(seed: u8) -> (FinalizedProviderIngestFixtur
 #[test]
 fn provider_ingest_outbox_is_not_opened_when_runtime_policy_is_absent() {
     struct DisabledCaptureLedger;
+    impl crate::provider_ingest_runtime::ProviderIngestFinalizedAnchorRetainerV1
+        for DisabledCaptureLedger
+    {
+        fn retain_exact_cursor(
+            &self,
+            _cursor: crate::provider_ingest_outbox::ProviderIngestFinalizedCursorV1,
+        ) -> crate::provider_ingest_runtime::ProviderIngestFutureV1<
+            '_,
+            Result<
+                crate::provider_ingest_runtime::ProviderIngestFinalizedAnchorLeaseV1,
+                crate::provider_ingest_runtime::ProviderIngestFinalizedLedgerErrorV1,
+            >,
+        > {
+            Box::pin(async {
+                Ok(crate::provider_ingest_runtime::ProviderIngestFinalizedAnchorLeaseV1::retain(()))
+            })
+        }
+    }
     impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1 for DisabledCaptureLedger {
         fn capture_verifier_binding(
             &self,
@@ -848,37 +866,111 @@ fn provider_ingest_startup_requires_exact_sealed_checkpoint_injection() {
         "sealed.sorafs.provider-ingest.substituted",
         0x61,
     ));
-    assert_node_init_variant!(ProviderIngestOutbox =>
-        NodeHandle::try_new_with_runtime_deps(
-            config,
-            NodeRuntimeDeps::default().with_provider_ingest_checkpoint_runtime(substituted),
-        )
-    );
+    assert!(PreparedProviderIngestOutboxV1::open(&config, substituted).is_err());
 }
 #[test]
 fn provider_ingest_startup_rejects_unexpected_and_test_marked_checkpoint_providers() {
     const HANDLE: &str = "sealed.sorafs.provider-ingest.unexpected";
     let (config, _temp_dir) = storage_config_with_temp_dir();
     let unexpected = Arc::new(StartupProviderIngestCheckpointRuntime::new(HANDLE, 0x62));
-    assert_node_init_variant!(ProviderIngestOutbox =>
-        NodeHandle::try_new_with_runtime_deps(
-            config,
-            NodeRuntimeDeps::default().with_provider_ingest_checkpoint_runtime(unexpected),
-        )
-    );
+    assert!(PreparedProviderIngestOutboxV1::open(&config, unexpected).is_err());
     let (test_marked_config, _test_marked_temp_dir) =
         storage_config_with_provider_ingest_checkpoint("sealed.sorafs.provider-ingest.test", 0x63);
     let test_marked = Arc::new(StartupProviderIngestCheckpointRuntime::new(
         "sealed.sorafs.provider-ingest.test",
         0x63,
     ));
-    assert_node_init_variant!(ProviderIngestOutbox =>
-        NodeHandle::try_new_with_runtime_deps(
-            test_marked_config,
-            NodeRuntimeDeps::default().with_provider_ingest_checkpoint_runtime(test_marked),
-        )
-    );
+    assert!(PreparedProviderIngestOutboxV1::open(&test_marked_config, test_marked).is_err());
 }
+fn reopen_prepared_ingest_outbox_after_worker_release(
+    config: &StorageConfig,
+    runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1>,
+) -> PreparedProviderIngestOutboxV1 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match PreparedProviderIngestOutboxV1::open(config, Arc::clone(&runtime)) {
+            Err(ProviderIngestOutboxError::CheckpointBusy)
+                if std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            result => {
+                return result
+                    .expect("the stopped sealed worker releases its retained writer lock");
+            }
+        }
+    }
+}
+#[test]
+fn prepared_ingest_outbox_moves_the_same_state_and_writer_lock_into_the_node() {
+    const HANDLE: &str = "sealed.sorafs.provider-ingest.preopened";
+    let (config, _directory) = storage_config_with_provider_ingest_checkpoint(HANDLE, 0x71);
+    let runtime = Arc::new(StartupProviderIngestCheckpointRuntime::new(HANDLE, 0x71));
+    let prepared = PreparedProviderIngestOutboxV1::open(&config, runtime.clone()).unwrap();
+    let retained = prepared.outbox.clone();
+    assert!(prepared.active_admission_cursors().unwrap().is_empty());
+    assert!(matches!(
+        PreparedProviderIngestOutboxV1::open(&config, runtime.clone()),
+        Err(ProviderIngestOutboxError::CheckpointBusy)
+    ));
+    let node = NodeHandle::try_new_with_runtime_deps(
+        config.clone(),
+        NodeRuntimeDeps::default().with_prepared_provider_ingest_outbox(prepared),
+    )
+    .unwrap();
+    let installed = node.provider_ingest_outbox.as_ref().unwrap();
+    assert!(installed.same_state_for_testing(&retained));
+    drop(retained);
+    assert!(matches!(
+        PreparedProviderIngestOutboxV1::open(&config, runtime.clone()),
+        Err(ProviderIngestOutboxError::CheckpointBusy)
+    ));
+    drop(node);
+    drop(reopen_prepared_ingest_outbox_after_worker_release(
+        &config, runtime,
+    ));
+}
+
+#[test]
+fn prepared_ingest_outbox_rejects_changed_policy_and_authority_binding() {
+    const HANDLE: &str = "sealed.sorafs.provider-ingest.preopened-policy";
+    let (config, _directory) = storage_config_with_provider_ingest_checkpoint(HANDLE, 0x73);
+    let runtime = Arc::new(StartupProviderIngestCheckpointRuntime::new(HANDLE, 0x73));
+    let path = config.data_dir().join(PROVIDER_INGEST_OUTBOX_FILE_V1);
+    let binding = config.provider_ingest_checkpoint_provider().unwrap();
+    let mut changed_policy = config.provider_ingest_outbox_policy().unwrap();
+    changed_policy.retry_base_delay_ms += 1;
+    let prepared = PreparedProviderIngestOutboxV1::open(&config, runtime.clone()).unwrap();
+    assert!(matches!(
+        prepared.into_outbox(&path, changed_policy, binding),
+        Err(ProviderIngestOutboxError::InvalidCheckpointProviderBinding)
+    ));
+    let prepared = reopen_prepared_ingest_outbox_after_worker_release(&config, runtime);
+    let mut changed_binding = binding.clone();
+    changed_binding.policy_digest = [0x74; 32];
+    assert!(matches!(
+        prepared.into_outbox(
+            &path,
+            config.provider_ingest_outbox_policy().unwrap(),
+            &changed_binding
+        ),
+        Err(ProviderIngestOutboxError::InvalidCheckpointProviderBinding)
+    ));
+}
+
+#[test]
+fn prepared_ingest_outbox_rejects_a_changed_node_path() {
+    const HANDLE: &str = "sealed.sorafs.provider-ingest.preopened-binding";
+    let (config, _directory) = storage_config_with_provider_ingest_checkpoint(HANDLE, 0x72);
+    let (different, _other_directory) =
+        storage_config_with_provider_ingest_checkpoint(HANDLE, 0x72);
+    let runtime = Arc::new(StartupProviderIngestCheckpointRuntime::new(HANDLE, 0x72));
+    let prepared = PreparedProviderIngestOutboxV1::open(&config, runtime).unwrap();
+    assert_node_init_variant!(ProviderIngestOutbox => NodeHandle::try_new_with_runtime_deps(
+        different, NodeRuntimeDeps::default().with_prepared_provider_ingest_outbox(prepared),
+    ));
+}
+
 fn install_finalized_provider_ingest_projection(
     handle: &NodeHandle,
     fixture: &FinalizedProviderIngestFixture,

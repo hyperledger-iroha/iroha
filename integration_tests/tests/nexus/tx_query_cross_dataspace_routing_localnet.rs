@@ -2759,7 +2759,7 @@ mod tests {
             &expected
         ));
         assert!(!super::ingress_registry_matches(
-            &peers[..TOTAL_PEERS + 1],
+            &peers[..=TOTAL_PEERS],
             &expected
         ));
         assert!(!super::ingress_registry_matches(&peers, &expected));

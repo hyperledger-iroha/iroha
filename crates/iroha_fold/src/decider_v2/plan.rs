@@ -128,13 +128,20 @@ impl<F: Field> Steps<F> {
     /// The step function of a column.
     pub(crate) fn of(column: &[F]) -> Self {
         let first = column.first().copied().unwrap_or(F::ZERO);
-        let changes = column.windows(2).enumerate().filter(|(_, w)| w[1] != w[0]).map(|(i, w)| (i + 1, w[1] - w[0])).collect();
+        let changes = column
+            .windows(2)
+            .enumerate()
+            .filter(|(_, w)| w[1] != w[0])
+            .map(|(i, w)| (i + 1, w[1] - w[0]))
+            .collect();
         Self { first, changes }
     }
 
     /// Its multilinear extension at `x`.
     pub(crate) fn eval(&self, x: &[F]) -> F {
-        self.changes.iter().fold(self.first, |total, (row, delta)| total + *delta * (F::ONE - mle::prefix_indicator(*row, x)))
+        self.changes.iter().fold(self.first, |total, (row, delta)| {
+            total + *delta * (F::ONE - mle::prefix_indicator(*row, x))
+        })
     }
 }
 
@@ -142,7 +149,10 @@ impl<F: Field> Steps<F> {
 /// constant column has one).
 fn cyclic_runs<F: Field>(column: &[F]) -> usize {
     let n = column.len();
-    (0..n).filter(|&i| column[i] != column[(i + n - 1) % n]).count().max(1)
+    (0..n)
+        .filter(|&i| column[i] != column[(i + n - 1) % n])
+        .count()
+        .max(1)
 }
 
 /// A column with copy cells.
@@ -259,7 +269,10 @@ fn top_factors<F: Clone>(expression: &Expression<F>, out: &mut Vec<Expression<F>
 }
 
 fn product<F: PastaField>(polys: impl IntoIterator<Item = Poly<F>>) -> Poly<F> {
-    polys.into_iter().reduce(Poly::mul).unwrap_or_else(|| Poly::constant(F::ONE))
+    polys
+        .into_iter()
+        .reduce(Poly::mul)
+        .unwrap_or_else(|| Poly::constant(F::ONE))
 }
 
 impl<F: PastaField> Builder<'_, F> {
@@ -280,7 +293,10 @@ impl<F: PastaField> Builder<'_, F> {
             value.to_canonical_limbs().hash(&mut hasher);
         }
         let candidates = self.contents.entry(hasher.finish()).or_default();
-        if let Some(index) = candidates.iter().find(|index| self.key_polys[**index] == values) {
+        if let Some(index) = candidates
+            .iter()
+            .find(|index| self.key_polys[**index] == values)
+        {
             return *index;
         }
         let index = self.key_polys.len();
@@ -297,9 +313,10 @@ impl<F: PastaField> Builder<'_, F> {
         let relation = self.relation;
         let values = match name {
             KeyName::Fixed(c) => relation.fixed[c].clone(),
-            KeyName::Selector(s) => {
-                relation.selectors[s].iter().map(|on| if *on { F::ONE } else { F::ZERO }).collect()
-            }
+            KeyName::Selector(s) => relation.selectors[s]
+                .iter()
+                .map(|on| if *on { F::ONE } else { F::ZERO })
+                .collect(),
         };
         let index = self.add_key(values);
         self.named.insert(name, index);
@@ -329,7 +346,11 @@ impl<F: PastaField> Builder<'_, F> {
     /// The zero-check table of key polynomial `key` at `rotation`: a step
     /// function the verifier evaluates, or a committed table.
     fn key_source(&mut self, key: usize, rotation: i32) -> usize {
-        self.table(if self.stepped[key] { Source::Steps(key, rotation) } else { Source::Key(key, rotation) })
+        self.table(if self.stepped[key] {
+            Source::Steps(key, rotation)
+        } else {
+            Source::Key(key, rotation)
+        })
     }
 
     fn key_table(&mut self, name: KeyName, rotation: i32) -> usize {
@@ -350,15 +371,21 @@ impl<F: PastaField> Builder<'_, F> {
     fn compile(&mut self, expression: &Expression<F>) -> Poly<F> {
         match expression {
             Expression::Constant(value) => Poly::constant(*value),
-            Expression::Selector(selector) => Poly::table(self.key_table(KeyName::Selector(selector.index()), 0)),
+            Expression::Selector(selector) => {
+                Poly::table(self.key_table(KeyName::Selector(selector.index()), 0))
+            }
             Expression::Fixed(query) => {
                 Poly::table(self.key_table(KeyName::Fixed(query.column_index), query.rotation.0))
             }
-            Expression::Advice(query) => Poly::table(self.table(Source::Witness(query.column_index, query.rotation.0))),
+            Expression::Advice(query) => {
+                Poly::table(self.table(Source::Witness(query.column_index, query.rotation.0)))
+            }
             Expression::Instance(query) => {
                 Poly::table(self.table(Source::Instance(query.column_index, query.rotation.0)))
             }
-            Expression::InstanceCell(query) => Poly::scalar(self.cell(query.column_index, query.row)),
+            Expression::InstanceCell(query) => {
+                Poly::scalar(self.cell(query.column_index, query.row))
+            }
             Expression::Negated(inner) => self.compile(inner).neg(),
             Expression::Sum(left, right) => {
                 let left = self.compile(left);
@@ -377,7 +404,11 @@ impl<F: PastaField> Builder<'_, F> {
         let mut out = Poly::constant(F::ZERO);
         for (j, expression) in expressions.iter().enumerate() {
             let term = self.compile(expression);
-            out = out.add(if j == 0 { term } else { Poly::scalar(j - 1).mul(term) });
+            out = out.add(if j == 0 {
+                term
+            } else {
+                Poly::scalar(j - 1).mul(term)
+            });
         }
         out
     }
@@ -416,14 +447,21 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
     /// [`Error::Shape`] for a basis shorter than the domain, [`Error::Degree`]
     /// for a term of degree above 15, [`Error::Msm`].
     #[allow(clippy::too_many_lines)]
-    pub fn with_step_runs(relation: FoldedRelation<C::ScalarExt>, key: &CommitKey<C>, step_runs: usize) -> Result<Self, Error> {
+    pub fn with_step_runs(
+        relation: FoldedRelation<C::ScalarExt>,
+        key: &CommitKey<C>,
+        step_runs: usize,
+    ) -> Result<Self, Error> {
         type S<C> = <C as PastaCurve>::ScalarExt;
         let n = relation.n;
         if key.len() < n {
             return Err(Error::Shape("commitment basis shorter than the domain"));
         }
         let mu = n.trailing_zeros() as usize;
-        let scalars = Scalars { theta: relation.theta_len, groups: relation.groups.len() };
+        let scalars = Scalars {
+            theta: relation.theta_len,
+            groups: relation.groups.len(),
+        };
         let mut b = Builder {
             relation: &relation,
             sources: Vec::new(),
@@ -455,7 +493,11 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
             let guard = b.sparse_key(&gate.rows, &gate.guards);
             let guard = b.key_source(guard, 0);
             let poly = Poly::table(pow).mul(Poly::table(guard)).mul(product(body));
-            terms.push(Term { weight: Weight::Index(gate.class), poly, support: Support::Rows(gate.rows.clone()) });
+            terms.push(Term {
+                weight: Weight::Index(gate.class),
+                poly,
+                support: Support::Rows(gate.rows.clone()),
+            });
         }
 
         // LogUp: slot cells, table rows, and the linear sums over exactly the
@@ -478,7 +520,13 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
                     .collect();
                 let mut cell = Poly::table(h).mul(product(parts.iter().cloned()));
                 for k in 0..parts.len() {
-                    cell = cell.sub(product(parts.iter().enumerate().filter(|(j, _)| *j != k).map(|(_, p)| p.clone())));
+                    cell = cell.sub(product(
+                        parts
+                            .iter()
+                            .enumerate()
+                            .filter(|(j, _)| *j != k)
+                            .map(|(_, p)| p.clone()),
+                    ));
                 }
                 let poly = Poly::table(pow).mul(Poly::table(activity)).mul(cell);
                 terms.push(Term {
@@ -498,7 +546,11 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
             let poly = Poly::table(pow)
                 .mul(Poly::table(usable))
                 .mul(Poly::table(gc).mul(r.add(table)).sub(Poly::table(m)));
-            terms.push(Term { weight: Weight::Index(group.table_constraint), poly, support: Support::Prefix(relation.usable) });
+            terms.push(Term {
+                weight: Weight::Index(group.table_constraint),
+                poly,
+                support: Support::Prefix(relation.usable),
+            });
             terms.push(Term {
                 weight: Weight::Alpha(1 + g),
                 poly: Poly::table(usable).mul(Poly::table(gc)).neg(),
@@ -518,7 +570,11 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
                     Cell::Instance(..) => continue,
                 };
                 column_index.entry(key).or_insert_with(|| {
-                    columns.push(if key.0 { CopyColumn::Witness(key.1) } else { CopyColumn::Fixed(key.1) });
+                    columns.push(if key.0 {
+                        CopyColumn::Witness(key.1)
+                    } else {
+                        CopyColumn::Fixed(key.1)
+                    });
                     columns.len() - 1
                 });
             }
@@ -540,15 +596,20 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
             }
         }
         let mut cycles: HashMap<u64, Vec<u64>> = HashMap::new();
-        let mut members: Vec<u64> = relation.copies.iter().flat_map(|(a, c)| [id_of(a), id_of(c)]).collect();
+        let mut members: Vec<u64> = relation
+            .copies
+            .iter()
+            .flat_map(|(a, c)| [id_of(a), id_of(c)])
+            .collect();
         members.sort_unstable();
         members.dedup();
         for id in members {
             let r = root(&mut parent, id);
             cycles.entry(r).or_default().push(id);
         }
-        let mut sigma_columns: Vec<Vec<u64>> =
-            (0..columns.len()).map(|j| (0..n64).map(|i| j as u64 * n64 + i).collect()).collect();
+        let mut sigma_columns: Vec<Vec<u64>> = (0..columns.len())
+            .map(|j| (0..n64).map(|i| j as u64 * n64 + i).collect())
+            .collect();
         let mut moved: Vec<Vec<u32>> = vec![Vec::new(); columns.len()];
         let mut instance_cells = Vec::new();
         for cycle in cycles.values_mut() {
@@ -585,54 +646,104 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
             };
             let sigma_table = b.key_source(s, 0);
             let id = Poly::constant(S::<C>::from(j as u64 * n64)).add(Poly::table(index));
-            let left = gamma.clone().add(Poly::table(value)).add(eta.clone().mul(id.clone()));
-            let right = gamma.clone().add(Poly::table(value)).add(eta.clone().mul(Poly::table(sigma_table)));
+            let left = gamma
+                .clone()
+                .add(Poly::table(value))
+                .add(eta.clone().mul(id.clone()));
+            let right = gamma
+                .clone()
+                .add(Poly::table(value))
+                .add(eta.clone().mul(Poly::table(sigma_table)));
             let correction = eta.clone().mul(Poly::table(sigma_table).sub(id));
             parts.push((left, right, correction));
         }
         // One helper per group of columns: z = sum_c (1 / L_c - 1 / R_c), by the
         // row constraint z prod_c L_c R_c = sum_c eta (sigma_c - id_c)
         // prod_{c' != c} L_c' R_c', which vanishes off the group's moved rows.
-        let helpers: Vec<Vec<usize>> =
-            (0..columns.len()).collect::<Vec<_>>().chunks(COPY_GROUP).map(<[usize]>::to_vec).collect();
+        let helpers: Vec<Vec<usize>> = (0..columns.len())
+            .collect::<Vec<_>>()
+            .chunks(COPY_GROUP)
+            .map(<[usize]>::to_vec)
+            .collect();
         for (q, members) in helpers.iter().enumerate() {
             let helper = b.table(Source::Helper(q));
-            let mut rows: Vec<u32> = members.iter().flat_map(|j| moved[*j].iter().copied()).collect();
+            let mut rows: Vec<u32> = members
+                .iter()
+                .flat_map(|j| moved[*j].iter().copied())
+                .collect();
             rows.sort_unstable();
             rows.dedup();
-            let products: Vec<Poly<S<C>>> =
-                members.iter().map(|j| parts[*j].0.clone().mul(parts[*j].1.clone())).collect();
+            let products: Vec<Poly<S<C>>> = members
+                .iter()
+                .map(|j| parts[*j].0.clone().mul(parts[*j].1.clone()))
+                .collect();
             let mut row = Poly::table(helper).mul(product(products.iter().cloned()));
             for (k, j) in members.iter().enumerate() {
-                let others: Vec<Poly<S<C>>> =
-                    products.iter().enumerate().filter(|(i, _)| *i != k).map(|(_, p)| p.clone()).collect();
+                let others: Vec<Poly<S<C>>> = products
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != k)
+                    .map(|(_, p)| p.clone())
+                    .collect();
                 let correction = parts[*j].2.clone();
-                row = row.sub(if others.is_empty() { correction } else { correction.mul(product(others)) });
+                row = row.sub(if others.is_empty() {
+                    correction
+                } else {
+                    correction.mul(product(others))
+                });
             }
             terms.push(Term {
                 weight: Weight::AlphaKappa(groups + 1, q),
                 poly: Poly::table(eq_tau).mul(row),
                 support: Support::Rows(rows.clone()),
             });
-            terms.push(Term { weight: Weight::Alpha(groups + 2), poly: Poly::table(helper), support: Support::Rows(rows) });
+            terms.push(Term {
+                weight: Weight::Alpha(groups + 2),
+                poly: Poly::table(helper),
+                support: Support::Rows(rows),
+            });
         }
 
-        let degree = terms.iter().map(|t| t.poly.degree()).max().unwrap_or(1).max(1);
+        let degree = terms
+            .iter()
+            .map(|t| t.poly.degree())
+            .max()
+            .unwrap_or(1)
+            .max(1);
         if degree > MAX_DEGREE {
             return Err(Error::Degree(degree));
         }
-        let key_commitments =
-            b.key_polys.iter().map(|poly| key.commit(poly, &S::<C>::ZERO)).collect::<Result<Vec<_>, _>>()?;
-        let copies = CopyPlan { columns, sigma, rows: moved, helpers, instance_cells };
-        let Builder { sources, key_polys, cells, .. } = b;
+        let key_commitments = b
+            .key_polys
+            .iter()
+            .map(|poly| key.commit(poly, &S::<C>::ZERO))
+            .collect::<Result<Vec<_>, _>>()?;
+        let copies = CopyPlan {
+            columns,
+            sigma,
+            rows: moved,
+            helpers,
+            instance_cells,
+        };
+        let Builder {
+            sources,
+            key_polys,
+            cells,
+            ..
+        } = b;
         let steps = sources
             .iter()
             .map(|source| match *source {
-                Source::Steps(key, rotation) => Some(Steps::of(&mle::rotated(&key_polys[key], rotation))),
+                Source::Steps(key, rotation) => {
+                    Some(Steps::of(&mle::rotated(&key_polys[key], rotation)))
+                }
                 _ => None,
             })
             .collect();
-        let mut committed: Vec<Committed> = sources.iter().filter_map(|s| s.committed().map(|(p, _)| p)).collect();
+        let mut committed: Vec<Committed> = sources
+            .iter()
+            .filter_map(|s| s.committed().map(|(p, _)| p))
+            .collect();
         committed.sort_unstable();
         committed.dedup();
         let reads = sources
@@ -712,7 +823,11 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
     /// (an imported `I`) requires that it does not.
     #[must_use]
     pub fn reads_public_beyond_copies(&self) -> bool {
-        !self.cells.is_empty() || self.sources.iter().any(|source| matches!(source, Source::Instance(..)))
+        !self.cells.is_empty()
+            || self
+                .sources
+                .iter()
+                .any(|source| matches!(source, Source::Instance(..)))
     }
 
     /// The verifier's work beyond the opening: field multiplications of the
@@ -722,9 +837,20 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
     /// helper).
     #[must_use]
     pub fn verifier_profile(&self) -> (usize, usize, (usize, usize, usize)) {
-        let steps: usize = self.steps.iter().flatten().map(|s| s.changes.len() * (2 * self.mu + 1)).sum();
-        let multiplications = self.terms.iter().map(|t| t.poly.multiplications() + 1).sum::<usize>() + steps;
-        let absorbed = self.mu * self.degree + self.reads.len() + 2 * self.mu + self.committed.len();
+        let steps: usize = self
+            .steps
+            .iter()
+            .flatten()
+            .map(|s| s.changes.len() * (2 * self.mu + 1))
+            .sum();
+        let multiplications = self
+            .terms
+            .iter()
+            .map(|t| t.poly.multiplications() + 1)
+            .sum::<usize>()
+            + steps;
+        let absorbed =
+            self.mu * self.degree + self.reads.len() + 2 * self.mu + self.committed.len();
         let mut opened = (0, 0, 0);
         for poly in &self.committed {
             match poly {
@@ -759,7 +885,9 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
             .iter()
             .map(|poly| {
                 let n = poly.len();
-                let boundaries: Vec<usize> = (0..n).filter(|&i| poly[i] != poly[(i + n - 1) % n]).collect();
+                let boundaries: Vec<usize> = (0..n)
+                    .filter(|&i| poly[i] != poly[(i + n - 1) % n])
+                    .collect();
                 (boundaries.len().max(1), boundaries)
             })
             .collect()
@@ -769,6 +897,11 @@ impl<C: PastaCurve> DeciderV2Plan<C> {
     /// terms.
     #[must_use]
     pub fn sizes(&self) -> (usize, usize, usize, usize) {
-        (self.sources.len(), self.key_polys.len(), self.copies.helpers.len(), self.terms.len())
+        (
+            self.sources.len(),
+            self.key_polys.len(),
+            self.copies.helpers.len(),
+            self.terms.len(),
+        )
     }
 }

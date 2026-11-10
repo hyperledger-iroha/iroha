@@ -125,7 +125,7 @@ fn council_signing_rejects_wrong_key_and_nonexact_threshold() {
         .council
         .trusted_signers
         .push(ed25519_bytes(key(99).public_key()).expect("second key"));
-    request.council.trusted_signers.sort();
+    request.council.trusted_signers.sort_unstable();
     request.council.signature_threshold = 2;
     let materials = validate_request(&request, &network, NOW).expect("2-of-2 material");
     assert!(

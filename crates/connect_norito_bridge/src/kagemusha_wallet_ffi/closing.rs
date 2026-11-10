@@ -41,8 +41,12 @@ impl Target {
         match self {
             Self::Wallet(owner) => {
                 owner.closing.begin();
-                owner.exchanges.lock().unwrap_or_else(std::sync::PoisonError::into_inner).end_suffix();
-            },
+                owner
+                    .exchanges
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .end_suffix();
+            }
             Self::Runtime(owner) => owner.closing.begin(),
         }
     }
