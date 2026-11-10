@@ -6,4 +6,5 @@ mod torii_routed_read_tests {
     include!("lib_routed_reads/part_1.rs");
     include!("lib_routed_reads/fanout_memory_bounds.rs");
     include!("lib_routed_reads/skipped_responses.rs");
+    include!("lib_routed_reads/account_permission_pages.rs");
 }

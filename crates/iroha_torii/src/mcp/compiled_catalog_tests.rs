@@ -115,16 +115,15 @@ fn sorafs_authority_reads_project_exact_typed_schemas_and_required_canonical_aut
             Some(false),
             "OpenAPI presence cannot widen the explicit SDK-only catalog projection"
         );
-        let projected: Vec<_> = tools
+        let projected = tools
             .iter()
             .filter(|tool| {
                 tool.route_backing()
                     .is_some_and(|(_, method, target)| method == &Method::GET && target == path)
             })
-            .collect();
+            .count();
         assert_eq!(
-            projected.len(),
-            0,
+            projected, 0,
             "the catalog excludes generated MCP tools for {path}"
         );
         let operation = spec["paths"].get(path).and_then(|item| item.get("get"));

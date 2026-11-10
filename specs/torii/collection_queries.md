@@ -64,6 +64,13 @@ Domain, account and NFT sources evaluate available scalar fields before
 serializing metadata. Unknown metadata predicates remain undecided through
 `and`, `or` and `not`; every surviving complete row still passes the ordinary
 filter. Rejected source entries continue to count toward the scan limit.
+Effective account permissions hold each payload as its canonical text through
+the filter, `include_total`, the order and the cursor seek. A list of object
+payloads of any length therefore spends the read's decode budget only on the
+rows of the returned page. Scalar payloads are decoded for their order and array
+payloads for a `payload` predicate, because those comparisons need their values,
+and an aggregate decodes every row. A refused decode follows the owner ladder
+below.
 
 ## Request controls
 
