@@ -11,6 +11,9 @@
 //! - points are processed in blocks of up to 2048 lanes that run the same
 //!   doubling/addition sequence in lockstep, so each step costs one shared
 //!   field inversion for the whole block (batch-affine arithmetic);
+//! - several workers share a large fold in about eight blocks each, taken one
+//!   at a time, so cores of unequal speed fold in proportion to their speed
+//!   ([`block_lanes`]);
 //! - the endomorphism half reuses the odd-multiple table with `x` scaled by
 //!   `beta`.
 //!
@@ -31,6 +34,34 @@ use crate::field::PastaField;
 
 /// Lanes per lockstep block.
 pub const FOLD_BLOCK: usize = 2048;
+/// Fewest lanes per block when several workers share a fold. A block's steps
+/// share one inversion each, which costs about 6% of the block's work at 128
+/// lanes (13% at 64, 3% at 256 and under 1% at 2048; one worker, `2^13`
+/// lanes).
+const SHARED_BLOCK_MIN: usize = 128;
+/// Blocks per worker when several workers share a fold.
+const BLOCKS_PER_WORKER: usize = 8;
+
+/// Lanes per block for a fold of `half` lanes on `threads` workers.
+///
+/// With one equal block per worker a fold lasts as long as its slowest core's
+/// block, and the cores of one phone differ about six-fold in speed. A large
+/// fold therefore gives each worker about [`BLOCKS_PER_WORKER`] blocks, taken
+/// one at a time, so a fast core folds more of them. A block is never smaller
+/// than [`SHARED_BLOCK_MIN`] lanes and never larger than the one-per-worker
+/// block, so small folds keep that split. On a Pixel 6 the folds of a
+/// `2^16`-point IPA with full-width challenges took 9% less time under this
+/// rule (834 to 760 ms); on eight equal cores they take about 2% more, because
+/// the shared inversions cover fewer lanes.
+fn block_lanes(half: usize, threads: usize) -> usize {
+    let whole = FOLD_BLOCK.min(half.div_ceil(threads).max(64));
+    if threads <= 1 {
+        return whole;
+    }
+    (half / (threads * BLOCKS_PER_WORKER))
+        .max(SHARED_BLOCK_MIN)
+        .min(whole)
+}
 /// wNAF window width of the challenge recoding.
 const WIDTH: u32 = 5;
 /// Odd multiples `1, 3, ..., 15` held per lane.
@@ -316,10 +347,12 @@ fn fold_blocks<C: PastaCurve>(
     }
     let (lo, rest) = g.split_at_mut(half);
     let hi = &rest[..half];
-    let threads = rayon::current_num_threads().max(1);
-    let block = FOLD_BLOCK.min(half.div_ceil(threads).max(64));
+    let block = block_lanes(half, rayon::current_num_threads().max(1));
+    // Every block is its own task: an idle worker takes the next block
+    // instead of a share of the blocks fixed when the fold starts.
     lo.par_chunks_mut(block)
         .zip(hi.par_chunks(block))
+        .with_max_len(1)
         .for_each(|(l, h)| {
             if CancellationToken::checkpoint(cancellation).is_err() {
                 return;
@@ -408,6 +441,43 @@ mod tests {
         let mut with = g.clone();
         fold_generators_with::<Ep>(&mut with, &challenge);
         assert_eq!(&with[..100], &reference::<Ep>(&g, &random)[..]);
+    }
+
+    /// One worker keeps full blocks and small folds keep one block per
+    /// worker; a large fold gives several workers about eight blocks each of
+    /// at least 128 lanes; and every split folds to the same points, also when
+    /// the last block is short.
+    #[test]
+    fn several_workers_share_blocks_and_fold_to_the_same_points() {
+        assert_eq!(block_lanes(8192, 1), FOLD_BLOCK);
+        assert_eq!(block_lanes(40, 1), 64);
+        assert_eq!(block_lanes(32768, 8), 512);
+        assert_eq!(block_lanes(8192, 8), 128);
+        assert_eq!(block_lanes(2048, 8), 128);
+        assert_eq!(block_lanes(1024, 8), 128);
+        assert_eq!(block_lanes(512, 8), 64);
+        assert_eq!(block_lanes(1, 8), 64);
+        assert_eq!(block_lanes(1 << 20, 8), FOLD_BLOCK);
+        let mut rng = ChaCha20Rng::seed_from_u64(14);
+        // 2 * 1100 generators: eight blocks of 128 lanes and one of 76 on four
+        // and on eight workers, one block on one worker.
+        let g: Vec<EqAffine> = (0..2200)
+            .map(|_| Eq::random(&mut rng).to_affine())
+            .collect();
+        let u = Fp::random(&mut rng);
+        let expected = reference::<Eq>(&g, &u);
+        for threads in [1usize, 2, 3, 4, 8] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("thread pool");
+            let mut ours = g.clone();
+            assert_eq!(
+                pool.install(|| fold_generators_vartime::<Eq>(&mut ours, &u)),
+                1100
+            );
+            assert_eq!(&ours[..1100], &expected[..], "threads = {threads}");
+        }
     }
 
     #[test]
