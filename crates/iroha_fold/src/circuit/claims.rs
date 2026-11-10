@@ -26,7 +26,9 @@ use super::{
 };
 use crate::{
     claims::{Claim, ClaimAccumulator, ClaimProof, ROUNDS, RestructureProof},
-    transcript::{TAG_CLAIM_ACCUMULATOR, TAG_CLAIM_DIGEST, TAG_CLAIM_FOLD, TAG_CLAIM_RESTRUCTURE, s6_limbs},
+    transcript::{
+        TAG_CLAIM_ACCUMULATOR, TAG_CLAIM_DIGEST, TAG_CLAIM_FOLD, TAG_CLAIM_RESTRUCTURE, s6_limbs,
+    },
 };
 
 /// A claim `(G, u)` in circuit.
@@ -69,7 +71,9 @@ fn scalars<C: PastaCurve>(
     region: &mut Region<'_, C::Base>,
     values: Option<&[C::ScalarExt; ROUNDS]>,
 ) -> Result<Vec<ScalarCell<C>>, Error> {
-    (0..ROUNDS).map(|i| lanes.assign_scalar(region, value_of(values.map(|v| &v[i])))).collect()
+    (0..ROUNDS)
+        .map(|i| lanes.assign_scalar(region, value_of(values.map(|v| &v[i]))))
+        .collect()
 }
 
 /// Assigns a claim.
@@ -181,7 +185,11 @@ fn claim_fold_cells<C: PastaCurve>(
     proof: &ClaimProofCells<C>,
     start: Option<&Bit<C::Base>>,
 ) -> Result<ClaimAccumulatorCells<C>, Error> {
-    if acc.u.len() != ROUNDS || acc.beta.len() != ROUNDS || claim.u.len() != ROUNDS || proof.f.len() != ROUNDS {
+    if acc.u.len() != ROUNDS
+        || acc.beta.len() != ROUNDS
+        || claim.u.len() != ROUNDS
+        || proof.f.len() != ROUNDS
+    {
         return Err(Error::Synthesis);
     }
     // The beta of an accumulator started from the claim (kgwfcla1).
@@ -192,7 +200,11 @@ fn claim_fold_cells<C: PastaCurve>(
             t::absorb_scalars(lanes, region, &claim.u)?;
             let mut beta = Vec::with_capacity(ROUNDS);
             for j in 0..ROUNDS {
-                beta.push(if j + 1 == ROUNDS { t::challenge_last(lanes, region)? } else { t::challenge(lanes, region)? });
+                beta.push(if j + 1 == ROUNDS {
+                    t::challenge_last(lanes, region)?
+                } else {
+                    t::challenge(lanes, region)?
+                });
             }
             Some(beta)
         }
@@ -216,7 +228,9 @@ fn claim_fold_cells<C: PastaCurve>(
         None => (gamma_limb, gamma.ff),
         Some(bit) => {
             let one_word = lanes.glue.constant(region, <C::Base as Field>::ONE)?;
-            let selected = lanes.glue.select(region, bit, &one_word, gamma_limb.word())?;
+            let selected = lanes
+                .glue
+                .select(region, bit, &one_word, gamma_limb.word())?;
             let limb = lanes.uint().range_check::<128>(region, &selected)?;
             let scalar = lanes.ff.select(lanes.glue, region, bit, &one, &gamma.ff)?;
             (limb, scalar)
@@ -235,7 +249,9 @@ fn claim_fold_cells<C: PastaCurve>(
         let scaled = lanes.mul(region, &alpha.ff, &power)?;
         let mut folded = lanes.add(region, &b.ff, &scaled)?;
         if let (Some(bit), Some(started)) = (start, &started) {
-            folded = lanes.ff.select(lanes.glue, region, bit, &started[i].ff, &folded)?;
+            folded = lanes
+                .ff
+                .select(lanes.glue, region, bit, &started[i].ff, &folded)?;
         }
         beta.push(lanes.export(region, folded)?);
     }
@@ -251,9 +267,15 @@ fn claim_fold_cells<C: PastaCurve>(
         let folded = lanes.lerp(region, &a.ff, &b.ff, &gamma)?;
         u.push(lanes.export(region, folded)?);
     }
-    let g = fold_commitments(lanes, region, core::slice::from_ref(&acc.g), core::slice::from_ref(&claim.g), &gamma_limb)?
-        .pop()
-        .ok_or(Error::Synthesis)?;
+    let g = fold_commitments(
+        lanes,
+        region,
+        core::slice::from_ref(&acc.g),
+        core::slice::from_ref(&claim.g),
+        &gamma_limb,
+    )?
+    .pop()
+    .ok_or(Error::Synthesis)?;
     Ok(ClaimAccumulatorCells { g, u, beta, e })
 }
 
@@ -292,7 +314,12 @@ fn field_witnesses<C: PastaCurve>(
         return Err(Error::Synthesis);
     }
     (0..count)
-        .map(|i| lanes.glue.witness(region, values.map_or_else(Value::unknown, |v| Value::known(v[i]))))
+        .map(|i| {
+            lanes.glue.witness(
+                region,
+                values.map_or_else(Value::unknown, |v| Value::known(v[i])),
+            )
+        })
         .collect()
 }
 
@@ -311,8 +338,14 @@ pub fn assign_claim_accumulator_field<C: PastaCurve>(
     let digest = field_witnesses::<C>(lanes, region, limbs.as_ref().map(<[_; 2]>::as_slice), 2)?;
     let u = field_witnesses::<C>(lanes, region, acc.map(|a| a.u.as_slice()), ROUNDS)?;
     let beta = field_witnesses::<C>(lanes, region, acc.map(|a| a.beta.as_slice()), ROUNDS)?;
-    let e = field_witnesses::<C>(lanes, region, acc.map(|a| core::slice::from_ref(&a.e)), 1)?.remove(0);
-    Ok(ClaimAccumulatorFieldCells { digest: [digest[0].clone(), digest[1].clone()], u, beta, e })
+    let e =
+        field_witnesses::<C>(lanes, region, acc.map(|a| core::slice::from_ref(&a.e)), 1)?.remove(0);
+    Ok(ClaimAccumulatorFieldCells {
+        digest: [digest[0].clone(), digest[1].clone()],
+        u,
+        beta,
+        e,
+    })
 }
 
 /// Assigns a restructuring sumcheck's messages (`None`: key generation).
@@ -326,11 +359,18 @@ pub fn assign_restructure_field<C: PastaCurve>(
 ) -> Result<RestructureFieldCells<C>, Error> {
     let rounds = (0..ROUNDS)
         .map(|j| {
-            let round = field_witnesses::<C>(lanes, region, proof.map(|p| p.rounds[j].as_slice()), 2)?;
+            let round =
+                field_witnesses::<C>(lanes, region, proof.map(|p| p.rounds[j].as_slice()), 2)?;
             Ok([round[0].clone(), round[1].clone()])
         })
         .collect::<Result<_, Error>>()?;
-    let value = field_witnesses::<C>(lanes, region, proof.map(|p| core::slice::from_ref(&p.value)), 1)?.remove(0);
+    let value = field_witnesses::<C>(
+        lanes,
+        region,
+        proof.map(|p| core::slice::from_ref(&p.value)),
+        1,
+    )?
+    .remove(0);
     Ok(RestructureFieldCells { rounds, value })
 }
 

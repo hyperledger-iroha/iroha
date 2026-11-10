@@ -956,8 +956,38 @@ fn runtime_policy() -> ProviderIngestRuntimePolicyV1 {
         ingress_timeout_ms: 100,
     }
 }
+struct TestAnchorLeaseOwner(Arc<AtomicUsize>);
+impl Drop for TestAnchorLeaseOwner {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+fn test_anchor_lease(count: &Arc<AtomicUsize>) -> ProviderIngestFinalizedAnchorLeaseV1 {
+    count.fetch_add(1, Ordering::SeqCst);
+    ProviderIngestFinalizedAnchorLeaseV1::retain(TestAnchorLeaseOwner(Arc::clone(count)))
+}
 struct TestLedger {
+    anchor_leases: Arc<AtomicUsize>,
+    refuse_anchor_lease: AtomicBool,
     page: Mutex<ProviderIngestFinalizedAssignmentPageV1>,
+    // Archive retention has passed the anchor of any scan already under way.
+    anchor_retired: AtomicBool,
+}
+impl ProviderIngestFinalizedAnchorRetainerV1 for TestLedger {
+    fn retain_exact_cursor(
+        &self,
+        _cursor: ProviderIngestFinalizedCursorV1,
+    ) -> ProviderIngestFutureV1<
+        '_,
+        Result<ProviderIngestFinalizedAnchorLeaseV1, ProviderIngestFinalizedLedgerErrorV1>,
+    > {
+        Box::pin(async {
+            if self.refuse_anchor_lease.load(Ordering::SeqCst) {
+                return Err(ProviderIngestFinalizedLedgerErrorV1::ScanAnchorRetired);
+            }
+            Ok(test_anchor_lease(&self.anchor_leases))
+        })
+    }
 }
 impl ProviderIngestFinalizedLedgerV1 for TestLedger {
     fn read_assignment_page<'a>(
@@ -971,7 +1001,11 @@ impl ProviderIngestFinalizedLedgerV1 for TestLedger {
         Result<ProviderIngestFinalizedAssignmentPageV1, ProviderIngestFinalizedLedgerErrorV1>,
     > {
         let page = self.page.lock().unwrap().clone();
+        let anchor_retired = self.anchor_retired.load(Ordering::SeqCst);
         Box::pin(async move {
+            if anchor_retired && at_finalized_cursor.is_some() {
+                return Err(ProviderIngestFinalizedLedgerErrorV1::ScanAnchorRetired);
+            }
             if at_finalized_cursor.is_some_and(|cursor| cursor != page.finalized_cursor) {
                 return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
             }
@@ -1018,8 +1052,11 @@ enum CaptureScannerLedgerFaultV1 {
     RequestMismatch,
     ReplayPrevious,
     Unavailable,
+    AnchorRetired,
+    LeaseAnchorRetired,
 }
 struct CaptureScannerLedgerV1 {
+    anchor_leases: Arc<AtomicUsize>,
     rows: Vec<ProviderIngestCompletedMusubiCaptureSourceRowV1>,
     finalized_height: AtomicU64,
     fault: Mutex<CaptureScannerLedgerFaultV1>,
@@ -1051,6 +1088,7 @@ impl CaptureScannerLedgerV1 {
             )
             .expect("capture test verifier binding");
         Self {
+            anchor_leases: Arc::new(AtomicUsize::new(0)),
             rows,
             finalized_height: AtomicU64::new(finalized_height),
             fault: Mutex::new(fault),
@@ -1072,6 +1110,22 @@ impl CaptureScannerLedgerV1 {
     }
     fn requested_generations(&self) -> Vec<u64> {
         self.requested_generations.lock().unwrap().clone()
+    }
+}
+impl ProviderIngestFinalizedAnchorRetainerV1 for CaptureScannerLedgerV1 {
+    fn retain_exact_cursor(
+        &self,
+        _cursor: ProviderIngestFinalizedCursorV1,
+    ) -> ProviderIngestFutureV1<
+        '_,
+        Result<ProviderIngestFinalizedAnchorLeaseV1, ProviderIngestFinalizedLedgerErrorV1>,
+    > {
+        Box::pin(async {
+            if *self.fault.lock().unwrap() == CaptureScannerLedgerFaultV1::LeaseAnchorRetired {
+                return Err(ProviderIngestFinalizedLedgerErrorV1::ScanAnchorRetired);
+            }
+            Ok(test_anchor_lease(&self.anchor_leases))
+        })
     }
 }
 impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1 for CaptureScannerLedgerV1 {
@@ -1103,6 +1157,11 @@ impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1 for CaptureScannerLedger
             let fault = *self.fault.lock().unwrap();
             if fault == CaptureScannerLedgerFaultV1::Unavailable {
                 return Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable);
+            }
+            if fault == CaptureScannerLedgerFaultV1::AnchorRetired
+                && request.at_finalized_cursor().is_some()
+            {
+                return Err(ProviderIngestFinalizedLedgerErrorV1::ScanAnchorRetired);
             }
             if fault == CaptureScannerLedgerFaultV1::ReplayPrevious {
                 return self
@@ -1151,7 +1210,9 @@ impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1 for CaptureScannerLedger
                 | CaptureScannerLedgerFaultV1::WrongSigningKey
                 | CaptureScannerLedgerFaultV1::RequestMismatch
                 | CaptureScannerLedgerFaultV1::ReplayPrevious
-                | CaptureScannerLedgerFaultV1::Unavailable => {}
+                | CaptureScannerLedgerFaultV1::Unavailable
+                | CaptureScannerLedgerFaultV1::AnchorRetired
+                | CaptureScannerLedgerFaultV1::LeaseAnchorRetired => {}
             }
             let next_after_order_id = has_more.then(|| {
                 *rows

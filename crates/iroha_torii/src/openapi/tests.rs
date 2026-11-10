@@ -628,6 +628,8 @@ fn expected_read_operation(method: &str, path: &str) -> bool {
                 path,
                 "/v1/amx/debit-approval/{height}"
                     | "/v1/accounts/query"
+                    | "/v1/roles/query"
+                    | "/v1/accounts/{account_id}/roles/query"
                     | "/v1/accounts/inspect"
                     | "/v1/accounts/{account_id}/assets/query"
                     | "/v1/assets/{definition_id}/holders/query"
@@ -643,6 +645,7 @@ fn expected_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/contracts/activity/query"
                     | "/v1/contracts/events/query"
                     | "/v1/ledger/authority-originals"
+                    | "/v1/ledger/state-proof/{height}"
                     | "/v1/explorer/accounts/query"
                     | "/v1/explorer/asset-definitions/query"
                     | "/v1/explorer/assets/query"
@@ -3375,6 +3378,7 @@ include!("tests/sorafs_pop_contracts.rs");
 include!("tests/vpn_da.rs");
 include!("tests/sumeragi_lanes_contract.rs");
 mod catalog_and_contracts;
+mod role_lifecycle_contracts;
 mod sccp_native_contract;
 
 #[test]

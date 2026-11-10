@@ -4,7 +4,7 @@ use super::publication_evidence;
 use axum::http::StatusCode;
 use iroha_allocation::AllocationBudget;
 use iroha_core::{
-    state::{StateReadOnly, World},
+    state::World,
     sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
 use iroha_crypto::{Algorithm, KeyPair};

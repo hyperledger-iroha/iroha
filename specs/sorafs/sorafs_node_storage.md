@@ -583,7 +583,57 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
   authoritative readback, and only then publishes the checkpoint and unlinks
   its prefix. Manual mode is the default and rejects every checkpoint candidate
   at startup; authority mode recovers only the exact approved checkpoint and
-  rejects missing, substituted, stale, or test-marked providers. Native ingest
+  rejects missing, substituted, stale, or test-marked providers.
+  A capture refused at the archive's entry or byte bound holds its committed
+  decision, so a bound reached stops that node committing, and a network whose
+  provider seats reach it together loses quorum. In authority mode one
+  supervised `irohad` worker prevents this. When either bound is three quarters
+  used it starts a retention cycle, which compacts down to half of that bound
+  and ends. Each step prunes at most 1,024 records or 64 MiB. A step prunes only
+  anchors this process already proved, through its fresh walk at open and its
+  captures since, so it checks no commit certificates: it needs each hash in the
+  durable journal, and the target's block id, read down from the nearest local
+  history checkpoint. The chain's sparse checkpoints reach back a bounded
+  distance, so the first step of a cycle can read every frame from there down to
+  its target. That walk leaves checkpoints behind it, so later steps read a
+  handful of frames. The next open's walk rechecks that id, and the periodic audit
+  rereads the frames, the records and the checkpoint meanwhile. The commit path
+  waits on none of this: the file and authority work holds no index lock, the
+  writer only swaps the published checkpoint into memory, and the commit's retained
+  walk continues over the new base. A pruned file's capacity is freed only after
+  its unlink, so a reopen never finds more record files than the bound. The floor
+  never rises above the exact admission anchor of a non-terminal job or a page
+  being admitted, and it always keeps the tip record. All three archive readers
+  share a local lease registry. After reading a page, a runtime must acquire an
+  exact height-and-hash lease before admitting any row; a retired anchor refuses
+  admission and restarts the scan. These leases do not expire. Ordinary ingest
+  retains its page lease through each row's durable boundary; completed-Musubi
+  capture retains it through inventory admission and the prepared approval CAS.
+  The worker locks the registry before reading sealed active-job pins and holds
+  that fence through compaction, so a job's transition from page lease to durable
+  outbox cannot disappear between snapshots. A failed retention attempt blocks new
+  leases until exact approved-floor recovery succeeds: locally present bytes below
+  an approved but unpublished floor cannot authorize admission. Recovery preserves
+  all obligation pins and ignores only advisory continuation hints recorded while
+  admission was blocked. A poisoned registry refuses admission and retention until
+  restart reauthenticates the sealed outbox and archive. Recent scan continuations retain
+  separate two-hour hints; their expiry never releases an admission lease.
+  A fence's generation is the one its checkpoint binds: preparation requires it
+  exactly, and installation and recovery accept a later one, because captures
+  only append above the fence and the base and prefix are compared directly.
+  Before startup archive reconciliation, the daemon opens the qualified sealed
+  job outbox once and retains its exclusive writer ownership. Every pending job's
+  exact admission cursor must resolve before startup can reconcile or compact;
+  a missing, retired or substituted anchor refuses startup. The same outbox and
+  retained lock move into the node, with path, policy and authority binding
+  rechecked rather than reopened. At capacity, startup may compact bounded
+  prefixes under the qualified authority while preserving those pending anchors
+  and retry the exact held commit. If active obligations prevent enough space
+  being reclaimed, startup still refuses without dropping jobs or lowering caps.
+  Manual mode cannot compact without a qualified retention authority; its worker
+  warns from the high watermark onward. Long-lived active obligations can still
+  exhaust capacity; preserve their history and the pending jobs when resolving it.
+  Native ingest
   uses authenticated publisher staging, assignment-authorized source transport,
   same-State completion signing and durable local checkpoints. Deployments
   choosing the external pool, external signer or sealed retention authority
@@ -777,7 +827,9 @@ revision, durable finality, provider admission, pin owner and retention before
 consumption, on every read (including buffered reads and EOF), immediately
 before serialized storage publication, and before success. The prepublication
 callback releases its native State view before storage performs its commit;
-refusal leaves the transaction in staging for cleanup and releases its quota
+an unchanged head never permits reuse of a prior successful authority check
+across provider-admission expiry or a durable-finality read refusal.
+Refusal leaves the transaction in staging for cleanup and releases its quota
 reservations. Failures remain terminal for that reader. Ordinary ingest still verifies every
 chunk, full payload digest, PoR and reconstructed CAR before publishing storage;
 only the existing durable completion path submits provider completion.

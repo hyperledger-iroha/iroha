@@ -41,6 +41,129 @@ fn certify(snapshot: &WorldStateSnapshotV1) -> VerifiedSumeragiBlock {
     native.verifier().verify_retained_decision(&proof).unwrap()
 }
 
+// These data-only fixtures exercise the production canonical decoder and its two
+// independent bounds. They do not confer ledger finality or release qualification.
+fn boundary_cells(count: usize, field_width: usize) -> WorldStateSnapshotV1 {
+    assert!(count < 1_000_000);
+    assert!((21..=192).contains(&field_width));
+    let (template, _, _, _) = snapshot();
+    let value_hash = template.entries[0].value_hash;
+    WorldStateSnapshotV1 {
+        schema_hash: template.schema_hash,
+        entries: (0..count)
+            .map(|index| {
+                // Equal-width numeric identities retain strict ordering even when
+                // later byte-boundary controls append legal underscore bytes.
+                let mut field_id = format!("world.boundary_{index:06}");
+                field_id.extend(std::iter::repeat_n('_', field_width - field_id.len()));
+                WorldStateSnapshotEntryV1 {
+                    field_id,
+                    kind: WorldStateElementKindV1::Cell,
+                    key_hash: None,
+                    value_hash,
+                }
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn world_original_accepts_262144_entries_and_refuses_262145_below_the_byte_limit() {
+    assert_eq!(MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1, 262_144);
+    let mut original = boundary_cells(262_144, 21);
+    let wire = norito::encode_canonical(&original).unwrap();
+    assert!(wire.len() < MAX_WORLD_STATE_SNAPSHOT_BYTES_V1);
+    let decoded = WorldStateSnapshotV1::decode_bounded_canonical(&wire).unwrap();
+    assert_eq!(decoded, original);
+    drop(decoded);
+    drop(wire);
+
+    let mut extra = original.entries.last().unwrap().clone();
+    extra.field_id = "world.boundary_262144".into();
+    original.entries.push(extra);
+    let wire = norito::encode_canonical(&original).unwrap();
+    // Prove that neither malformed framing nor the byte cap caused this refusal.
+    assert!(wire.len() < MAX_WORLD_STATE_SNAPSHOT_BYTES_V1);
+    let structural: WorldStateSnapshotV1 = norito::decode_canonical(&wire).unwrap();
+    assert_eq!(structural, original);
+    drop(structural);
+    let error = WorldStateSnapshotV1::decode_bounded_canonical(&wire).unwrap_err();
+    let FinalityReadError::Invalid(error) = error else {
+        panic!("a completed over-count read must be an invalid snapshot");
+    };
+    assert_eq!(
+        error.to_string(),
+        "World snapshot entries or schema exceed their bound"
+    );
+}
+
+#[test]
+fn world_original_accepts_exactly_32_mib_and_refuses_one_extra_canonical_byte() {
+    assert_eq!(MAX_WORLD_STATE_SNAPSHOT_BYTES_V1, 32 * 1024 * 1024);
+    let maximum = MAX_WORLD_STATE_SNAPSHOT_BYTES_V1;
+    // Measure with the real native encoder. Do not duplicate the frame layout or
+    // append junk: both the boundary and over-boundary inputs must be canonical.
+    // At this width, legal underscore growth stays within the same compact-length
+    // ranges; the final emitted frame length is asserted independently below.
+    let one = norito::canonical_frame_len(&boundary_cells(1, 128)).unwrap();
+    let two = norito::canonical_frame_len(&boundary_cells(2, 128)).unwrap();
+    let per_entry = two.checked_sub(one).unwrap();
+    assert!(per_entry > 0);
+    let count = (maximum - one) / per_entry + 1;
+    assert!(count < MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1);
+    let mut original = boundary_cells(count, 128);
+    // Outer native length prefixes can grow with the sequence. Keep their size
+    // under the native encoder's ownership instead of predicting those bytes.
+    let mut length = norito::canonical_frame_len(&original).unwrap();
+    while length > maximum {
+        assert!(original.entries.pop().is_some());
+        length = norito::canonical_frame_len(&original).unwrap();
+    }
+    let mut remaining = maximum - length;
+    for entry in original.entries.iter_mut().rev() {
+        let added = remaining.min(192 - entry.field_id.len());
+        entry.field_id.extend(std::iter::repeat_n('_', added));
+        remaining -= added;
+        if remaining == 0 {
+            break;
+        }
+    }
+    assert_eq!(
+        remaining, 0,
+        "legal field identities must span the byte boundary"
+    );
+    let wire = norito::encode_canonical(&original).unwrap();
+    assert_eq!(wire.len(), maximum, "native canonical layout changed");
+    let decoded = WorldStateSnapshotV1::decode_bounded_canonical(&wire).unwrap();
+    assert_eq!(decoded, original);
+    drop(decoded);
+    drop(wire);
+
+    // Add one legal byte to an unfilled identity; its fixed numeric prefix keeps
+    // the entries unique and ordered. Entry count stays strictly below its cap.
+    original
+        .entries
+        .iter_mut()
+        .find(|entry| entry.field_id.len() < 192)
+        .expect("an unfilled legal identity")
+        .field_id
+        .push('_');
+    let wire = norito::encode_canonical(&original).unwrap();
+    assert_eq!(wire.len(), maximum + 1);
+    let structural: WorldStateSnapshotV1 = norito::decode_canonical(&wire).unwrap();
+    assert_eq!(structural, original);
+    structural.root().unwrap();
+    drop(structural);
+    let error = WorldStateSnapshotV1::decode_bounded_canonical(&wire).unwrap_err();
+    let FinalityReadError::Invalid(error) = error else {
+        panic!("an over-byte-bound original must be refused before decoding");
+    };
+    assert_eq!(
+        error.to_string(),
+        "World snapshot original exceeds its byte bound"
+    );
+}
+
 #[test]
 fn world_original_decoder_refusal_keeps_its_origin_after_scope_retirement() {
     let (snapshot, _, _, _) = snapshot();

@@ -8,7 +8,11 @@
 //! The first record for a network is an explicit activation floor. Authenticated retention may
 //! replace a prefix with a content-addressed virtual base while preserving the exact page and
 //! cursor bytes at the new floor. Queries below an activation or retention floor fail with distinct
-//! typed errors; no current-head fallback or inferred historical coverage exists. Runtime
+//! typed errors; no current-head fallback or inferred historical coverage exists. A refused
+//! capture holds its committed decision, so an archive at a capacity bound stops its node
+//! committing. A daemon with a sealed retention authority stays below the bounds through
+//! [`ProviderIngestFinalizedArchiveV1::reconcile_retention_once`], off the commit path; without
+//! one, retention is manual and the bounds are the operator's to watch. Runtime
 //! credentials, grants, endpoints, private keys, and payload bytes are absent from every public and
 //! durable type.
 //!
@@ -290,6 +294,7 @@ impl ProviderIngestFinalizedArchiveBoundsV1 {
     }
 }
 include!("provider_ingest_finalized/archive_key.rs");
+include!("provider_ingest_finalized/retention.rs");
 /// One exact provider-scoped replication order at a finalized anchor.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -572,8 +577,11 @@ impl ProviderIngestFinalizedArchiveRetentionFenceV1 {
     ///
     /// # Errors
     ///
-    /// Rejects a malformed exact key or a zero certified block id. The
-    /// generation is checked atomically by the compaction operation.
+    /// Rejects a malformed exact key or a zero certified block id. Preparation requires this
+    /// exact generation, and the checkpoint binds it. Installation accepts a later generation,
+    /// because captures only append above the fence and an unchanged base and prefix is checked
+    /// directly: requiring an unmoved tip across an external approval would let steady commits
+    /// starve retention until the capacity bound stops them.
     pub fn try_new(
         key: ProviderIngestFinalizedArchiveKeyV1,
         certified_block_id: [u8; 32],
@@ -945,9 +953,10 @@ pub enum ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1 {
 /// identifies an independent linearizable namespace containing only canonical
 /// [`ProviderIngestFinalizedArchiveRetentionApprovalRecordV1`] values.
 ///
-/// Calls run while the archive writer is held. Implementations must not acquire State/World
-/// writer guards or wait for canonical State publication; candidate publication acquires
-/// State ownership before reserving this archive. The production broker adapters perform
+/// Calls run on the retention worker with no archive lock held, so a slow authority delays
+/// retention and never a commit. Startup recovery also calls it, before Sumeragi starts.
+/// Implementations must not acquire State/World writer guards or wait for canonical State
+/// publication, because that caller retains a State view. The production broker adapters perform
 /// independent bounded RPCs and retain no State owner.
 pub trait ProviderIngestFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt::Debug {
     /// Return the stable credential-free production handle.
@@ -1323,6 +1332,11 @@ struct ProviderIngestFinalizedArchiveCheckpointMaterialV1 {
     pruned_bytes: u64,
     projection: ProviderIngestFinalizedProjectionV1,
     provider_state_root: [u8; 32],
+    // TODO: every order and policy digest ever seen stays inline, so one checkpoint must hold the
+    // whole history and retention stops at `RecordTooLarge` once it outgrows `max_record_bytes`
+    // (about four million orders at the default). Move these to authenticated content-addressed
+    // shards, as the reputation checkpoint's source index also needs, before that population
+    // can get there.
     policy_history: Vec<ProviderPolicyHistoryCheckpointV1>,
     active_order_ids: Vec<ReplicationOrderId>,
     seen_order_ids: Vec<ReplicationOrderId>,
@@ -1371,6 +1385,10 @@ struct ArchiveIndexV1 {
     // The completed coverage walk at each network's tip, so one insertion validates only
     // its own successor. Absent or stale entries select the complete walk.
     tip_walks: BTreeMap<NetworkId, ProviderCoverageWalkV1>,
+    // An installed compaction's files that are not unlinked yet. Capture still counts them, so
+    // a reopen, which counts files before recovery can remove any, never finds too many.
+    pending_unlink_entries: usize,
+    pending_unlink_bytes: u64,
 }
 impl ArchiveIndexV1 {
     // A walk serves only the exact retained tip and virtual base that it covered.
@@ -1632,6 +1650,8 @@ pub struct ProviderIngestFinalizedArchiveV1 {
     index: ArchiveIndexLock<ArchiveIndexV1>,
     // Process-local: what this open archive has proved against certified history.
     authentication: ArchiveAuthentication,
+    // Serializes compactions. Taken only by retention, never on the commit path.
+    retention: parking_lot::Mutex<ArchiveRetentionProgressV1>,
 }
 struct PreparedProviderRecord {
     entry: ArchiveRecordEntryV1,
@@ -1742,6 +1762,10 @@ impl ProviderIngestFinalizedArchiveV1 {
     /// Rejects a missing, substituted, stale, test-marked, drifting, malformed,
     /// rolled-back, or equivocated authority; an unapproved checkpoint; a
     /// Kura/fence mismatch; or any ordinary archive-open failure.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Startup requires the sealed outbox obligations alongside its exact State, Kura and authority bindings."
+    )]
     pub fn try_open_with_retention_authority(
         root: impl Into<PathBuf>,
         bounds: ProviderIngestFinalizedArchiveBoundsV1,
@@ -1750,6 +1774,7 @@ impl ProviderIngestFinalizedArchiveV1 {
         kura: &Kura,
         binding: &ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
         authority: &dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1,
+        pending_admission_anchors: &[ProviderIngestFinalizedAnchorV1],
     ) -> Result<Self, ProviderIngestFinalizedArchiveErrorV1> {
         if network_id != state_ro.network_id() || !std::ptr::eq(state_ro.kura(), kura) {
             return Err(
@@ -1772,6 +1797,7 @@ impl ProviderIngestFinalizedArchiveV1 {
             binding,
             authority,
             &(checkpoint_candidates),
+            pending_admission_anchors,
         )?;
         archive.verify_storage_boundaries()?;
         Ok(archive)
@@ -1864,9 +1890,69 @@ impl ProviderIngestFinalizedArchiveV1 {
             native,
             index: ArchiveIndexLock::new(index),
             authentication: ArchiveAuthentication::default(),
+            retention: parking_lot::Mutex::default(),
         };
         archive.verify_storage_boundaries()?;
         Ok((archive, checkpoint_candidates))
+    }
+    fn validate_pending_admissions_before_recovery(
+        &self,
+        network_id: &NetworkId,
+        state_ro: &impl StateReadOnly,
+        kura: &Kura,
+        approval: Option<&ProviderIngestFinalizedArchiveRetentionApprovalRecordV1>,
+        checkpoint_candidates: &[ArchiveVirtualBaseV1],
+        pending_admission_anchors: &[ProviderIngestFinalizedAnchorV1],
+    ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
+        if pending_admission_anchors.is_empty() {
+            return Ok(());
+        }
+        let index = self.read_index()?;
+        let certified =
+            CertifiedArchiveView::new(state_ro, kura).map_err(certified_authentication_error)?;
+        for anchor in pending_admission_anchors {
+            if anchor.height == 0 || anchor.block_hash == [0; 32] {
+                return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
+                    reason: "restored pending admission must contain an exact non-zero height and hash",
+                });
+            }
+            if approval.is_some_and(|record| anchor.height < record.proposal().fence().key.height) {
+                return Err(
+                    ProviderIngestFinalizedArchiveErrorV1::InvalidRetentionFence {
+                        reason: "approved startup recovery would retire a restored active-job admission anchor",
+                    },
+                );
+            }
+            let key = if let Some(entry) = index.by_height.get(&(*network_id, anchor.height)) {
+                verify_record_entry(entry, self.bounds)?;
+                entry.record.material.key
+            } else if let Some(candidate) = checkpoint_candidates.iter().find(|candidate| {
+                candidate.checkpoint.material.retention_floor.height == anchor.height
+                    && approval.is_some_and(|record| {
+                        candidate.checkpoint.checkpoint_digest
+                            == record.proposal().checkpoint_digest()
+                    })
+            }) {
+                verify_checkpoint_entry(candidate, self.bounds)?;
+                candidate.checkpoint.material.retention_floor
+            } else {
+                return Err(ProviderIngestFinalizedArchiveErrorV1::UnknownExactAnchor {
+                    network_id: *network_id,
+                    height: anchor.height,
+                });
+            };
+            if key.block_hash != anchor.block_hash {
+                return Err(ProviderIngestFinalizedArchiveErrorV1::FinalizedFork {
+                    network_id: *network_id,
+                    height: anchor.height,
+                });
+            }
+            authenticate_archive_anchor(&key, network_id, &certified)?;
+        }
+        certified
+            .verify_unchanged()
+            .map_err(certified_authentication_error)?;
+        Ok(())
     }
     fn recover_approved_retention(
         &self,
@@ -1876,6 +1962,7 @@ impl ProviderIngestFinalizedArchiveV1 {
         binding: &ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
         authority: &dyn ProviderIngestFinalizedArchiveRetentionAuthorityV1,
         checkpoint_candidates: &[ArchiveVirtualBaseV1],
+        pending_admission_anchors: &[ProviderIngestFinalizedAnchorV1],
     ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
         if checkpoint_candidates.iter().any(|candidate| {
             &candidate.checkpoint.material.retention_floor.network_id != network_id
@@ -1883,6 +1970,25 @@ impl ProviderIngestFinalizedArchiveV1 {
             return Err(ProviderIngestFinalizedArchiveErrorV1::UnapprovedRetentionCheckpoint);
         }
         let approval = load_retention_approval(binding, authority, network_id)?;
+        if let Some(approval) = approval.as_ref() {
+            validate_retention_approval_record(approval, binding, network_id)?;
+            validate_retention_checkpoint_candidate_inventory(
+                checkpoint_candidates,
+                approval,
+                network_id,
+            )?;
+            authenticate_retention_fence(approval.proposal().fence(), state_ro, kura)?;
+        }
+        // This check precedes every cleanup/publication path, including recovery of an
+        // irrevocably approved checkpoint left behind by a previous process.
+        self.validate_pending_admissions_before_recovery(
+            network_id,
+            state_ro,
+            kura,
+            approval.as_ref(),
+            checkpoint_candidates,
+            pending_admission_anchors,
+        )?;
         let Some(approval) = approval else {
             if !checkpoint_candidates.is_empty() {
                 return Err(ProviderIngestFinalizedArchiveErrorV1::UnapprovedRetentionCheckpoint);
@@ -1892,13 +1998,6 @@ impl ProviderIngestFinalizedArchiveV1 {
             install_validated_tip_walks(&mut index, self.bounds)?;
             return Ok(());
         };
-        validate_retention_approval_record(&approval, binding, network_id)?;
-        validate_retention_checkpoint_candidate_inventory(
-            checkpoint_candidates,
-            &approval,
-            network_id,
-        )?;
-        authenticate_retention_fence(approval.proposal().fence(), state_ro, kura)?;
         let approved_candidate = checkpoint_candidates.iter().find(|candidate| {
             candidate.checkpoint.checkpoint_digest == approval.proposal().checkpoint_digest()
         });
@@ -1983,6 +2082,7 @@ impl ProviderIngestFinalizedArchiveV1 {
         require_exact_retention_readback(binding, authority, network_id, &approval)?;
         let _recovered =
             self.publish_prepared_compaction(&mut index, prepared, || {}, &mut |_| {})?;
+        install_validated_tip_walks(&mut index, self.bounds)?;
         Ok(())
     }
     /// Return the explicit first archived key for `network_id`.
@@ -2317,8 +2417,18 @@ impl ProviderIngestFinalizedArchiveV1 {
             // captures or commits advanced the sources meanwhile, and without this a walk could
             // never finish ahead of steady traffic.
             certified.retain_verified_prefix();
-            self.authentication
-                .record_audit(identity, qualification.archive_tip().height);
+            // A compaction during the walk carried any coverage to its new base, and this walk's
+            // identity no longer names that content. Holding the reader keeps the next compaction
+            // from installing between this check and the record.
+            let retired = if let Ok(index) = self.read_index()
+                && index.content_identity(network_id).base == identity.base
+            {
+                self.authentication
+                    .record_audit_retiring(identity, qualification.archive_tip().height)
+            } else {
+                None
+            };
+            drop(retired);
         }
         archive_exit?;
         certified_exit?;
@@ -2385,19 +2495,63 @@ impl ProviderIngestFinalizedArchiveV1 {
         let Some((after, end)) = slice else {
             return Ok(());
         };
-        let entries = self
+        let (base, entries) = {
+            let index = self.read_index()?;
+            // A cycle's first slice covers the base.
+            let base = (after == 0)
+                .then(|| index.virtual_bases.get(network_id).cloned())
+                .flatten();
+            let entries = index
+                .by_height
+                .range((
+                    std::ops::Bound::Excluded((*network_id, after)),
+                    std::ops::Bound::Included((*network_id, end)),
+                ))
+                .map(|(subject, entry)| (*subject, entry.clone()))
+                .collect::<Vec<_>>();
+            (base, entries)
+        };
+        if let Some(base) = base {
+            self.verify_audit_base(network_id, &base)?;
+        }
+        self.verify_audit_entries(&entries)
+    }
+
+    // As for the records below: a base retention replaced meanwhile is not damage.
+    fn verify_audit_base(
+        &self,
+        network_id: &NetworkId,
+        base: &ArchiveVirtualBaseV1,
+    ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
+        let Err(error) = verify_checkpoint_entry(base, self.bounds) else {
+            return Ok(());
+        };
+        let current = self
             .read_index()?
-            .by_height
-            .range((
-                std::ops::Bound::Excluded((*network_id, after)),
-                std::ops::Bound::Included((*network_id, end)),
-            ))
-            .map(|(_, entry)| entry.clone())
-            .collect::<Vec<_>>();
-        for entry in &entries {
-            verify_record_entry(entry, self.bounds).inspect_err(|_| {
+            .virtual_bases
+            .get(network_id)
+            .map(|current| current.checkpoint.checkpoint_digest);
+        if current != Some(base.checkpoint.checkpoint_digest) {
+            return Ok(());
+        }
+        self.authentication.forget_coverage();
+        Err(error)
+    }
+
+    // No lock is held across these reads, so retention can compact an entry and unlink its file
+    // meanwhile. That is not damage. Only an entry still in the index fails the audit.
+    fn verify_audit_entries(
+        &self,
+        entries: &[((NetworkId, u64), ArchiveRecordEntryV1)],
+    ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
+        for (subject, entry) in entries {
+            if let Err(error) = verify_record_entry(entry, self.bounds) {
+                if !self.read_index()?.by_height.contains_key(subject) {
+                    continue;
+                }
                 self.authentication.forget_coverage();
-            })?;
+                return Err(error);
+            }
         }
         Ok(())
     }
@@ -2456,7 +2610,13 @@ impl ProviderIngestFinalizedArchiveV1 {
             );
         }
         if let Some(base) = index.virtual_bases.get(network_id) {
-            verify_checkpoint_entry(base, self.bounds)?;
+            // Rereading a checkpoint costs its whole size, and this holds the reader capture needs
+            // on every tick. Proved history leaves the file to the audit, as it does for records.
+            if proved {
+                verify_checkpoint_metadata(base, self.bounds)?;
+            } else {
+                verify_checkpoint_entry(base, self.bounds)?;
+            }
             if authenticate_in_place {
                 authenticate_qualification_base(
                     &base.checkpoint.material.retention_floor,
@@ -2586,14 +2746,17 @@ impl ProviderIngestFinalizedArchiveV1 {
     }
     /// Prepare the exact canonical checkpoint proposed for sealed retention.
     ///
-    /// Preparation is read-only. Every physical prefix anchor and the fence's certified block are
-    /// reauthenticated against one frozen Kura boundary, then the complete canonical checkpoint
-    /// bytes are digested into the returned proposal.
+    /// Preparation is read-only and holds no index lock during its chain and file work, so a
+    /// commit's capture proceeds beside it. Every physical prefix anchor and the fence's certified
+    /// block are reauthenticated from signed genesis against one frozen Kura boundary, then the
+    /// complete canonical checkpoint bytes are digested into the returned proposal. That walk
+    /// grows with chain height, so a long-running daemon uses
+    /// [`Self::reconcile_retention_once`], which does the same work in bounded steps.
     ///
     /// # Errors
     ///
-    /// Rejects an absent, stale, forked, unauthenticated, or non-advancing fence, any archive/Kura
-    /// boundary change, resource exhaustion, or a damaged archive.
+    /// Rejects an absent, stale, forked, unauthenticated, or non-advancing fence, any archive or
+    /// finalized-prefix change, resource exhaustion, or a damaged archive.
     pub fn prepare_certified_compaction(
         &self,
         fence: &ProviderIngestFinalizedArchiveRetentionFenceV1,
@@ -2603,20 +2766,26 @@ impl ProviderIngestFinalizedArchiveV1 {
         ProviderIngestFinalizedArchiveCompactionProposalV1,
         ProviderIngestFinalizedArchiveErrorV1,
     > {
-        let index = self.read_index()?;
-        self.verify_storage_boundaries()?;
-        validate_index_coverage(&index, self.bounds)?;
-        authenticate_retention_prefix(&index, fence, state_ro, kura, self.bounds)?;
-        let prepared = prepare_archive_compaction(&index, fence, self.bounds)?;
-        validate_prepared_compaction_capacity(&index, &prepared, self.bounds)?;
+        let snapshot = self.retention_snapshot(&fence.key)?;
+        if fence.expected_archive_generation != snapshot.generation {
+            return Err(
+                ProviderIngestFinalizedArchiveErrorV1::RetentionFenceGenerationMismatch {
+                    expected: fence.expected_archive_generation,
+                    observed: snapshot.generation,
+                },
+            );
+        }
+        authenticate_retention_prefix(&snapshot, fence, state_ro, kura, self.bounds)?;
+        let prepared = prepare_retention_from_snapshot(&snapshot, fence, self.bounds)?;
         compaction_proposal(&prepared, fence)
     }
     /// Durably approve and install one previously prepared compaction.
     ///
-    /// This is the only production compaction entry point. It repeats all archive and Kura
-    /// qualification while holding the archive write lock, installs a monotonic canonical record
-    /// through the deployment-owned CAS authority, and requires exact authoritative readback before
-    /// publishing a checkpoint or unlinking any prefix object.
+    /// All archive and Kura qualification repeats first, with no index lock held. A monotonic
+    /// canonical record is then installed through the deployment-owned CAS authority, and exact
+    /// authoritative readback is required before publishing a checkpoint or unlinking any prefix
+    /// object. The archive writer is held only to swap the published checkpoint into the index, so
+    /// neither the walk nor the authority can delay a commit's capture.
     ///
     /// # Errors
     ///
@@ -2637,72 +2806,16 @@ impl ProviderIngestFinalizedArchiveV1 {
         proposal.validate()?;
         assert_retention_authority_identity(binding, authority)?;
         let fence = proposal.fence();
-        let mut index = self.write_index()?;
-        self.verify_storage_boundaries()?;
-        validate_index_coverage(&index, self.bounds)?;
-        authenticate_retention_prefix(&index, fence, state_ro, kura, self.bounds)?;
-        let prepared = prepare_archive_compaction(&index, fence, self.bounds)?;
-        validate_prepared_compaction_capacity(&index, &prepared, self.bounds)?;
+        let mut progress = self.retention.lock();
+        self.finish_pending_retention_cleanup(&mut progress)?;
+        let snapshot = self.retention_snapshot(&fence.key)?;
+        authenticate_retention_prefix(&snapshot, fence, state_ro, kura, self.bounds)?;
+        let prepared = prepare_retention_from_snapshot(&snapshot, fence, self.bounds)?;
         if compaction_proposal(&prepared, fence)? != *proposal {
             return Err(ProviderIngestFinalizedArchiveErrorV1::RetentionProposalMismatch);
         }
-        let network_id = &fence.key.network_id;
-        let current = load_retention_approval(binding, authority, network_id)?;
-        let expected_checkpoint = prepared
-            .previous_base
-            .as_ref()
-            .map(|base| base.checkpoint.checkpoint_digest);
-        let next = if let Some(current) = current
-            .as_ref()
-            .filter(|record| record.proposal() == proposal)
-        {
-            validate_approval_for_prepared(
-                current,
-                binding,
-                &prepared,
-                proposal,
-                expected_checkpoint,
-            )?;
-            current.clone()
-        } else {
-            if let Some(current) = &current {
-                validate_retention_approval_record(current, binding, network_id)?;
-            }
-            validate_retention_authority_predecessor(current.as_ref(), expected_checkpoint, fence)?;
-            let sequence = current.as_ref().map_or(Ok(1), |record| {
-                record.sequence().checked_add(1).ok_or(
-                    ProviderIngestFinalizedArchiveErrorV1::InvalidRetentionApproval {
-                        reason: "approval sequence overflowed",
-                    },
-                )
-            })?;
-            let next = ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::try_new(
-                sequence,
-                binding.qualification(),
-                proposal.clone(),
-                current
-                    .as_ref()
-                    .map(ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::revision),
-                expected_checkpoint,
-            )?;
-            compare_and_read_back_retention_approval(
-                binding,
-                authority,
-                network_id,
-                current.as_ref(),
-                &next,
-            )?;
-            next
-        };
-        let readback = load_retention_approval(binding, authority, network_id)?;
-        if readback.as_ref() != Some(&next) {
-            return Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityEquivocation);
-        }
-        let before = index.content_identity(network_id);
-        let outcome = self.publish_prepared_compaction(&mut index, prepared, || {}, &mut |_| {})?;
-        self.authentication
-            .note_compaction(&before, index.content_identity(network_id));
-        Ok(outcome)
+        drop(snapshot);
+        self.approve_and_publish_compaction(&mut progress, prepared, proposal, binding, authority)
     }
     #[cfg(test)]
     fn compact_prefix_locked<AfterPublish, AfterUnlink>(
@@ -4889,7 +5002,9 @@ fn authenticate_retention_prefix(
     kura: &Kura,
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-    if fence.expected_archive_generation != index.generation {
+    // Later captures only append above the fence, so an archive past this generation still holds
+    // the exact prefix. One behind it has lost history the fence covers.
+    if fence.expected_archive_generation > index.generation {
         return Err(
             ProviderIngestFinalizedArchiveErrorV1::RetentionFenceGenerationMismatch {
                 expected: fence.expected_archive_generation,
@@ -4926,7 +5041,7 @@ fn authenticate_retention_prefix(
     }
     authenticate_retention_identity(fence, state_ro.network_id(), &certified)?;
     certified
-        .verify_unchanged()
+        .verify_unchanged_through(fence.key.height)
         .map_err(certified_authentication_error)
 }
 fn prepare_archive_compaction(
@@ -5001,7 +5116,9 @@ fn prepare_archive_compaction(
             prior_checkpoint_digest: previous_base
                 .as_ref()
                 .map(|base| base.checkpoint.checkpoint_digest),
-            total_generation: index.generation,
+            // From the fence, not the index: a restart must reconstruct the approved bytes even
+            // after later captures advanced the archive.
+            total_generation: fence.expected_archive_generation,
             pruned_entries,
             pruned_bytes,
             projection,
@@ -5476,8 +5593,10 @@ fn validate_successor_from_tip_walk(
 ) -> Result<ProviderCoverageWalkV1, ProviderIngestFinalizedArchiveErrorV1> {
     validate_coverage_capacity(index, bounds, true, total_bytes)?;
     let network_id = successor.record.material.key.network_id;
+    // The walk already carries the base's history, and a checkpoint grows with every order ever
+    // seen, so a commit checks only the file's shape. Every qualification reads the whole file.
     if let Some(base) = index.virtual_bases.get(&network_id) {
-        verify_checkpoint_entry(base, bounds)?;
+        verify_checkpoint_metadata(base, bounds)?;
     }
     let mut next = walk.clone();
     next.step(index, network_id, successor, true, bounds)?;
@@ -6329,7 +6448,7 @@ fn refresh_archive_accounting(
     }
     Ok(())
 }
-fn verify_checkpoint_entry(
+fn verify_checkpoint_metadata(
     entry: &ArchiveVirtualBaseV1,
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
@@ -6346,6 +6465,13 @@ fn verify_checkpoint_entry(
             reason: "immutable checkpoint length changed after archive qualification",
         });
     }
+    Ok(())
+}
+fn verify_checkpoint_entry(
+    entry: &ArchiveVirtualBaseV1,
+    bounds: ProviderIngestFinalizedArchiveBoundsV1,
+) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
+    verify_checkpoint_metadata(entry, bounds)?;
     if load_checkpoint_at(&entry.path, bounds)? != entry.checkpoint {
         return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidStorage {
             path: entry.path.clone(),
@@ -6442,7 +6568,9 @@ fn ensure_insert_capacity(
     bounds: ProviderIngestFinalizedArchiveBoundsV1,
     record_bytes: usize,
 ) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-    let observed_entries = retained_archive_entries(index).saturating_add(1);
+    let observed_entries = retained_archive_entries(index)
+        .saturating_add(index.pending_unlink_entries)
+        .saturating_add(1);
     if observed_entries > bounds.max_archive_entries() {
         return Err(
             ProviderIngestFinalizedArchiveErrorV1::ArchiveCapacityExceeded {
@@ -6452,7 +6580,10 @@ fn ensure_insert_capacity(
         );
     }
     let record_bytes = u64::try_from(record_bytes).unwrap_or(u64::MAX);
-    let observed_bytes = index.total_bytes.saturating_add(record_bytes);
+    let observed_bytes = index
+        .total_bytes
+        .saturating_add(index.pending_unlink_bytes)
+        .saturating_add(record_bytes);
     if observed_bytes > bounds.max_total_bytes() {
         return Err(
             ProviderIngestFinalizedArchiveErrorV1::ArchiveBytesExceeded {
@@ -7435,14 +7566,14 @@ pub enum ProviderIngestFinalizedArchiveErrorV1 {
         /// Stable validation failure.
         reason: &'static str,
     },
-    /// The archive advanced after the retention decision was made.
+    /// The archive is not at a generation the retention decision can apply to.
     #[error(
         "finalized provider-ingest retention fence expected archive generation {expected}, observed {observed}"
     )]
     RetentionFenceGenerationMismatch {
         /// Generation captured by the retention decision.
         expected: u64,
-        /// Generation held under the archive write lock.
+        /// Generation the archive holds.
         observed: u64,
     },
     /// A configured retention-authority handle, revision, or digest is invalid.
@@ -7908,6 +8039,8 @@ mod tests {
     #[path = "../certified_capture_tests.rs"]
     mod certified_capture_tests;
     mod frame_identity_tests;
+    #[path = "../retention_tests.rs"]
+    mod retention_tests;
     include!("provider_ingest_finalized/preparation_tests.rs");
     use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};

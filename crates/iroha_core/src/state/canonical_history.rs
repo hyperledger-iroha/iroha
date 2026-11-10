@@ -448,6 +448,33 @@ impl<'a> CanonicalHistorySource<'a> {
         })
     }
 
+    /// [`Self::executed_receipt`] for off-chain readers: the same authenticated read, starting at
+    /// the nearest verified checkpoint at or above `height` instead of the tip. Source work then
+    /// depends on node-local checkpoints, so this must never feed on-chain metering.
+    pub(crate) fn executed_receipt_from_checkpoints(
+        &self,
+        height: NonZeroUsize,
+    ) -> Result<
+        crate::sumeragi::certified_chain::CommittedBlock,
+        ExecutionAttemptError<QueryExecutionFail>,
+    > {
+        let mut receipt = None;
+        self.visit_executed_backwards_from_checkpoints(
+            height,
+            height,
+            |_, _| Ok(()),
+            |value| {
+                receipt = Some(value);
+                Ok(core::ops::ControlFlow::Break(()))
+            },
+        )?;
+        receipt.ok_or_else(|| {
+            ExecutionAttemptError::Rejected(QueryExecutionFail::Conversion(
+                "requested execution was absent from its authenticated interval".into(),
+            ))
+        })
+    }
+
     /// Visit one inclusive execution interval in descending height order after a single
     /// authenticated walk from this source's original native tip. Every physical source
     /// is charged before reading; only authenticated receipts in the selected interval

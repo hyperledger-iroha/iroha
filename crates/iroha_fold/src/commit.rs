@@ -68,7 +68,11 @@ impl<C: PastaCurve> CommitKey<C> {
     /// # Errors
     /// [`Error::Shape`] for a column longer than the basis; [`Error::Msm`] when the
     /// MSM fails.
-    pub fn commit(&self, column: &[C::ScalarExt], blind: &C::ScalarExt) -> Result<C::AffineExt, Error> {
+    pub fn commit(
+        &self,
+        column: &[C::ScalarExt],
+        blind: &C::ScalarExt,
+    ) -> Result<C::AffineExt, Error> {
         if column.len() > self.bases.len() {
             return Err(Error::Shape("column longer than the commitment basis"));
         }
@@ -87,12 +91,20 @@ impl<C: PastaCurve> CommitKey<C> {
     ///
     /// # Errors
     /// As [`Self::commit`].
-    pub fn commit_many(&self, columns: &[&[C::ScalarExt]], blinds: &[C::ScalarExt]) -> Result<Vec<C::AffineExt>, Error> {
+    pub fn commit_many(
+        &self,
+        columns: &[&[C::ScalarExt]],
+        blinds: &[C::ScalarExt],
+    ) -> Result<Vec<C::AffineExt>, Error> {
         use rayon::prelude::*;
         if columns.len() != blinds.len() {
             return Err(Error::Shape("blinds"));
         }
-        columns.par_iter().zip(blinds).map(|(column, blind)| self.commit(column, blind)).collect()
+        columns
+            .par_iter()
+            .zip(blinds)
+            .map(|(column, blind)| self.commit(column, blind))
+            .collect()
     }
 }
 

@@ -547,11 +547,19 @@ impl QSigmaPlan {
             return Err(QSigmaError::Layout(LayoutError::Synthesis));
         }
         let index = class.index(&input.sigma)?;
-        let original =
-            self.incoming_original_cancellable(&input.sigma, index, config.kernel_budget, config.cancellation.as_ref())?;
+        let original = self.incoming_original_cancellable(
+            &input.sigma,
+            index,
+            config.kernel_budget,
+            config.cancellation.as_ref(),
+        )?;
         let valid = original.is_some();
-        let trivial = AccumulatorT::trivial_cancellable(params, config.kernel_budget, config.cancellation.as_ref())
-            .map_err(QSigmaError::Fold)?;
+        let trivial = AccumulatorT::trivial_cancellable(
+            params,
+            config.kernel_budget,
+            config.cancellation.as_ref(),
+        )
+        .map_err(QSigmaError::Fold)?;
         let (selected, corrected) = match input.mode {
             IncomingMode::Accept => {
                 let original = original.ok_or(QSigmaError::IncomingMode)?;
@@ -564,9 +572,16 @@ impl QSigmaPlan {
             IncomingMode::Corrected => {
                 let original = original.ok_or(QSigmaError::IncomingMode)?;
                 let correction = original
-                    .corrected_cancellable(params, config.kernel_budget, config.cancellation.as_ref())
+                    .corrected_cancellable(
+                        params,
+                        config.kernel_budget,
+                        config.cancellation.as_ref(),
+                    )
                     .map_err(QSigmaError::Fold)?;
-                (correction.replacement().clone(), Eq::from(*correction.replacement().g()))
+                (
+                    correction.replacement().clone(),
+                    Eq::from(*correction.replacement().g()),
+                )
             }
         };
         let mut statements = vec![scalar(input.sigma.statement)];
@@ -592,7 +607,11 @@ impl QSigmaPlan {
             }),
         };
         let circuit = QSigmaCircuit::new(self.clone(), witness).map_err(QSigmaError::Layout)?;
-        Ok(FoldedQSigma { circuit, instances, selected })
+        Ok(FoldedQSigma {
+            circuit,
+            instances,
+            selected,
+        })
     }
 }
 

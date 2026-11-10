@@ -29,11 +29,13 @@ impl<'role> RoleIdByAccountBounds<'role> {
         }
     }
     /// Restrict this account's role range to identities strictly after `role`.
+    #[must_use]
     pub fn after(mut self, role: &'role RoleId) -> Self {
         self.start.role_id = MinMaxExt::Value(role);
         self
     }
     /// Restrict this account's role range to identities strictly before `role`.
+    #[must_use]
     pub fn before(mut self, role: &'role RoleId) -> Self {
         self.end.role_id = MinMaxExt::Value(role);
         self

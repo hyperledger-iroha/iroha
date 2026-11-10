@@ -117,6 +117,16 @@ const fn json(name: &'static str) -> FieldSpec {
     }
 }
 
+/// Field names of a collection whose rows are one text field and one JSON field
+/// held as canonical text ([`super::CanonicalRow`]).
+#[derive(Clone, Copy, Debug)]
+pub struct CanonicalFields {
+    /// The text field; it carries [`FieldType::String`].
+    pub(crate) text: &'static str,
+    /// The field holding canonical JSON.
+    pub(crate) json: &'static str,
+}
+
 /// A collection's query surface.
 #[derive(Debug)]
 pub struct CollectionSpec {
@@ -415,6 +425,12 @@ pub static ACCOUNT_PERMISSIONS: CollectionSpec = CollectionSpec {
     identity: &["name", "payload"],
     positioned: 0,
     ordered: false,
+};
+
+/// Source layout of [`ACCOUNT_PERMISSIONS`] rows.
+pub(crate) const ACCOUNT_PERMISSION_FIELDS: CanonicalFields = CanonicalFields {
+    text: "name",
+    json: "payload",
 };
 
 /// `/v1/subscriptions/plans`
@@ -753,6 +769,19 @@ mod tests {
                 assert!(spec.field(field).is_some(), "{}: identity {field}", spec.id);
             }
         }
+    }
+
+    #[test]
+    fn account_permission_fields_are_the_declared_text_and_json_fields() {
+        let name = ACCOUNT_PERMISSIONS
+            .field(ACCOUNT_PERMISSION_FIELDS.text)
+            .expect("text field");
+        assert_eq!(name.ty, FieldType::String);
+        let payload = ACCOUNT_PERMISSIONS
+            .field(ACCOUNT_PERMISSION_FIELDS.json)
+            .expect("JSON field");
+        assert_eq!(payload.ty, FieldType::Json);
+        assert_eq!(ACCOUNT_PERMISSIONS.fields.len(), 2);
     }
 
     #[test]

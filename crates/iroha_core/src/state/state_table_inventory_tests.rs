@@ -9976,9 +9976,18 @@ fn enrollment_expiry_domains_bind_records_without_state_authority() {
 /// requires no registered authoritative ballot State owner. Admission refusal paths and
 /// their fixtures may name the model without creating that owner. A new canonical ballot
 /// table or cell requires review of its corpus, roster and result commitments.
+///
+/// The node links `iroha_parliament_ballot` for one reviewed purpose: candidate registration
+/// preparation in `parliament_registration.rs` verifies a proof from the direct signed
+/// original against the supplied authority and a context read from Parliament attempts. It
+/// persists no digest in State and writes no authoritative table. It has no production caller,
+/// so every tag above keeps its record role. Another node use of a ballot crate, a State write
+/// in that module or its first production caller requires this review again.
 #[test]
 fn anonymous_ballot_tags_hash_records_without_an_authoritative_state_owner() {
     const MODULE: &str = "crates/iroha_data_model/src/governance/anonymous_ballot";
+    const PREPARATION: &str = "crates/iroha_core/src/state/parliament_registration.rs";
+    const REVIEW: &str = "review the anonymous-ballot tag classification";
     let record = DomainOwner::Other(Use::Record);
     let fixture_use = DomainOwner::Other(Use::Test);
     let tags: Vec<(&str, DomainOwner)> = domain_owners()
@@ -10071,9 +10080,65 @@ fn anonymous_ballot_tags_hash_records_without_an_authoritative_state_owner() {
             );
         }
     }
-    assert!(
-        !source("crates/iroha_core/Cargo.toml").contains("iroha_parliament_ballot"),
-        "the node depends on a ballot crate: review the anonymous-ballot tag classification"
+    let manifest = source("crates/iroha_core/Cargo.toml");
+    assert_eq!(
+        manifest
+            .lines()
+            .filter(|line| line.contains("iroha_parliament_ballot"))
+            .collect::<Vec<_>>(),
+        ["iroha_parliament_ballot = { workspace = true }"],
+        "the node's ballot-crate dependency changed: {REVIEW}"
+    );
+    let node_sources: Vec<(String, String)> = rust_sources(&["crates/iroha_core/src"])
+        .into_iter()
+        .filter(|path| !is_test_source(path))
+        .map(|path| {
+            let code = split_source(&source(&path)).1;
+            (path, code)
+        })
+        .collect();
+    let node_uses: Vec<(&str, &str)> = node_sources
+        .iter()
+        .flat_map(|(path, code)| {
+            code.lines()
+                .filter(|line| line.contains("iroha_parliament_ballot"))
+                .map(move |line| (path.as_str(), line.trim()))
+        })
+        .collect();
+    assert_eq!(
+        node_uses,
+        [(
+            PREPARATION,
+            "use iroha_parliament_ballot::registration::{RegistrationErrorV1, verify_registration_v1};"
+        )],
+        "the node uses a ballot crate differently: {REVIEW}"
+    );
+    let preparation = &node_sources
+        .iter()
+        .find(|(path, _)| path == PREPARATION)
+        .expect("the reviewed preparation source")
+        .1;
+    for write in [".insert(", ".remove(", ".get_mut(", ".set("] {
+        assert!(
+            !preparation.contains(write),
+            "registration preparation may write State through {write}: {REVIEW}"
+        );
+    }
+    let callers: Vec<(&str, usize)> = node_sources
+        .iter()
+        .map(|(path, code)| {
+            (
+                path.as_str(),
+                code.matches("prepare_candidate_parliament_registration")
+                    .count(),
+            )
+        })
+        .filter(|(_, count)| *count != 0)
+        .collect();
+    assert_eq!(
+        callers,
+        [(PREPARATION, 1)],
+        "registration preparation gained a production caller: {REVIEW}"
     );
 }
 

@@ -103,7 +103,10 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
             return Ok(([0; 32], Manifest::empty(self.scheme_id, self.wallet_id)));
         };
         let selected = suffix_custody::decode_checkpoint(
-            &mut self.archive, (self.scheme_id, self.wallet_id), digest, &bytes,
+            &mut self.archive,
+            (self.scheme_id, self.wallet_id),
+            digest,
+            &bytes,
         )?;
         Ok((digest, selected.manifest))
     }

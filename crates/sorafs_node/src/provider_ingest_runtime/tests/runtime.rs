@@ -282,9 +282,15 @@ fn test_runtime_with_network_id(
     let page = fixture_page(row.clone());
     let finalized_cursor = page.finalized_cursor;
     let ledger = Arc::new(TestLedger {
+        anchor_leases: Arc::new(AtomicUsize::new(0)),
+        refuse_anchor_lease: AtomicBool::new(false),
         page: Mutex::new(page),
+        anchor_retired: AtomicBool::new(false),
     });
     let fetch = Arc::new(TestFetch {
+        block: AtomicBool::new(false),
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
         result: Mutex::new(fetch_result),
         delay_ms: fetch_delay_ms,
         calls: AtomicUsize::new(0),
@@ -1973,6 +1979,34 @@ async fn payload_and_preflight_failures_are_durably_backed_off() {
     ingress_runtime.tick().await.expect("signed retry not due");
     assert_eq!(*ingress.events.lock().unwrap(), vec!["prepare_signed"]);
 }
+/// Archive retention passed the anchor of a scan under way. Retrying that page could never
+/// succeed, so the scan starts again at a newer head, which lists every current assignment.
+#[tokio::test]
+async fn a_scan_whose_anchor_was_retired_starts_again_at_a_newer_head() {
+    let row = fixture_row(0x3B);
+    let (mut runtime, ledger, _, _) = test_runtime(
+        row,
+        true,
+        Ok(vec![0xA5]),
+        0,
+        ProviderIngestIngressDispositionV1::Submitted,
+        false,
+    );
+    runtime.scan_cursor = Some(cursor(8));
+    runtime.scan_after_order_id = Some([0x10; 32]);
+    ledger.anchor_retired.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        runtime.tick().await,
+        Err(ProviderIngestRuntimeErrorV1::FinalizedLedgerUnavailable)
+    ));
+    assert_eq!(runtime.scan_cursor, None);
+    assert_eq!(runtime.scan_after_order_id, None);
+    let outcome = runtime
+        .tick()
+        .await
+        .expect("a fresh scan needs no old anchor");
+    assert_eq!(outcome.rows_scanned, 1);
+}
 #[tokio::test]
 async fn ambiguous_unknown_retries_only_after_a_later_finalized_cursor() {
     let row = fixture_row(0x3A);
@@ -2562,4 +2596,69 @@ async fn dedicated_completion_key_drives_full_runtime_without_using_owner_to_sig
         vec!["prepare_signed", "expose_ambiguous"]
     );
     assert_eq!(ingress.exposed.lock().unwrap().as_ref(), Some(&retained));
+}
+
+#[tokio::test]
+async fn exact_anchor_lease_spans_source_work_and_hands_off_to_active_outbox() {
+    let (mut runtime, ledger, fetch, _) = test_runtime(
+        fixture_row(0x32),
+        false,
+        Ok(vec![0xA5]),
+        0,
+        ProviderIngestIngressDispositionV1::Submitted,
+        false,
+    );
+    fetch.block.store(true, Ordering::SeqCst);
+    let outbox = runtime.outbox.clone();
+    {
+        let tick = runtime.tick();
+        tokio::pin!(tick);
+        tokio::select! {
+            () = fetch.entered.notified() => {}
+            result = &mut tick => panic!("source did not block: {result:?}"),
+            () = tokio::time::sleep(Duration::from_secs(5)) => panic!("source was not entered"),
+        }
+        assert_eq!(ledger.anchor_leases.load(Ordering::SeqCst), 1);
+        assert_eq!(outbox.active_admission_cursors().unwrap(), [cursor(8)]);
+        fetch.release.notify_one();
+        tick.await.expect("complete page at a durable boundary");
+    }
+    assert_eq!(ledger.anchor_leases.load(Ordering::SeqCst), 0);
+    assert_eq!(outbox.active_admission_cursors().unwrap(), [cursor(8)]);
+}
+
+#[tokio::test]
+async fn exact_anchor_retired_after_read_refuses_admission_and_restarts_scan() {
+    let (mut runtime, ledger, fetch, _) = test_runtime(
+        fixture_row(0x32),
+        false,
+        Ok(vec![0xA5]),
+        0,
+        ProviderIngestIngressDispositionV1::Submitted,
+        false,
+    );
+    ledger.refuse_anchor_lease.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        runtime.tick().await,
+        Err(ProviderIngestRuntimeErrorV1::FinalizedLedgerUnavailable)
+    ));
+    assert!(
+        runtime
+            .outbox
+            .active_admission_cursors()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(fetch.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(runtime.scan_cursor, None);
+    assert_eq!(runtime.scan_after_order_id, None);
+    ledger.refuse_anchor_lease.store(false, Ordering::SeqCst);
+    runtime
+        .tick()
+        .await
+        .expect("fresh scan admits while pinned");
+    assert_eq!(
+        runtime.outbox.active_admission_cursors().unwrap(),
+        [cursor(8)]
+    );
 }

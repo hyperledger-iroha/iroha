@@ -937,7 +937,6 @@ pub(crate) fn validate_projection(
 mod tests {
     use super::terms::{SorafsAuthorityApprovalV1, SorafsAuthorityExecutionV1};
     use super::*;
-    use iroha_model_base::metadata::Metadata;
     use crate::{
         executor::Executor,
         kura::Kura,
@@ -949,6 +948,7 @@ mod tests {
     use iroha_data_model::{
         block::BlockHeader, runtime::lifecycle::RootScopeV1, sorafs::capacity::ProviderId,
     };
+    use iroha_model_base::metadata::Metadata;
     use iroha_primitives::json::Json;
     use std::num::NonZeroU64;
 

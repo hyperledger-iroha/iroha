@@ -8,10 +8,10 @@ use iroha_data_model::kagemusha::*;
 mod native_frames;
 pub use native_frames::{NativeCapsuleV1, NativeCompletionV1, NativeProviderV1};
 mod suffix_owner;
-pub(super) use suffix_owner::SuffixTransitionOwnerV1;
 use suffix_owner::NativeTransitionOwnerV1;
-mod suffix_recovery;
+pub(super) use suffix_owner::SuffixTransitionOwnerV1;
 mod deletion;
+mod suffix_recovery;
 pub use deletion::{CustodyDeletionProgressV1, CustodyDeletionReviewV1, ReviewedCustodyDeletionV1};
 
 use super::{AdvanceOutcome, AdvanceRequest, Lookup, ProviderError, SlotStatus};
@@ -72,7 +72,9 @@ pub trait Custody {
         &mut self,
         operation_id: &[u8; 32],
     ) -> Result<Lookup<NativeCompletionV1>, ProviderError> {
-        native_frames::map_lookup(self.lookup(operation_id)?, |value| Ok(NativeCompletionV1::Ordinary(value)))
+        native_frames::map_lookup(self.lookup(operation_id)?, |value| {
+            Ok(NativeCompletionV1::Ordinary(value))
+        })
     }
     /// Recover only an exact provider-selected suffix transition; never select a new head.
     /// Ordinary-only custody test providers reject this unsupported schema.
@@ -81,8 +83,10 @@ pub trait Custody {
     fn resume_suffix_selected(
         &mut self,
         _frozen: &super::SuffixFrozenTransitionV1,
-    ) -> Result<AdvanceOutcome<iroha_data_model::kagemusha::kagemusha_wallet_suffix_unload_v1::SuffixCompletionRecordV1>, super::Error> {
-        Err(super::Error::Invalid("custody does not own selected suffix recovery"))
+    ) -> Result<AdvanceOutcome<iroha_data_model::kagemusha::kagemusha_wallet_suffix_unload_v1::SuffixCompletionRecordV1>, super::Error>{
+        Err(super::Error::Invalid(
+            "custody does not own selected suffix recovery",
+        ))
     }
 
     /// Remove exactly one older capsule's redundant copies after durable owner collection intent.
@@ -127,7 +131,10 @@ pub struct AdvanceHandle<F: KagemushaWalletFsV1, P> {
 impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> AdvanceHandle<F, P> {
     /// Move the exclusive provider into the shared coordinator's slot adapter.
     #[must_use]
-    pub fn new<C, R>(provider: KagemushaWalletProviderV1<F, P, C, R>, slot: KagemushaWalletSlotIdV1) -> Self {
+    pub fn new<C, R>(
+        provider: KagemushaWalletProviderV1<F, P, C, R>,
+        slot: KagemushaWalletSlotIdV1,
+    ) -> Self {
         let provider: NativeProviderV1<F, P> = provider.into_frame_types();
         Self {
             provider: Arc::new(Mutex::new(provider)),
@@ -276,15 +283,21 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> Custody for AdvanceHa
         &mut self,
         operation_id: &[u8; 32],
     ) -> Result<Lookup<KagemushaWalletCompletionRecordV1>, ProviderError> {
-        native_frames::map_lookup(self.lock()?.lookup(&self.slot, operation_id)?, NativeCompletionV1::into_ordinary)
+        native_frames::map_lookup(
+            self.lock()?.lookup(&self.slot, operation_id)?,
+            NativeCompletionV1::into_ordinary,
+        )
     }
-    fn lookup_any(&mut self, operation_id: &[u8; 32]) -> Result<Lookup<NativeCompletionV1>, ProviderError> {
+    fn lookup_any(
+        &mut self,
+        operation_id: &[u8; 32],
+    ) -> Result<Lookup<NativeCompletionV1>, ProviderError> {
         self.lock()?.lookup(&self.slot, operation_id)
     }
     fn resume_suffix_selected(
         &mut self,
         frozen: &super::SuffixFrozenTransitionV1,
-    ) -> Result<AdvanceOutcome<iroha_data_model::kagemusha::kagemusha_wallet_suffix_unload_v1::SuffixCompletionRecordV1>, super::Error> {
+    ) -> Result<AdvanceOutcome<iroha_data_model::kagemusha::kagemusha_wallet_suffix_unload_v1::SuffixCompletionRecordV1>, super::Error>{
         self.recover_selected_suffix(frozen)
     }
     fn collect_capsule(
@@ -315,7 +328,11 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1> Custody for AdvanceHa
             capsule: NativeCapsuleV1::Ordinary(request.capsule.clone()),
             growth_bytes: request.growth_bytes,
         };
-        let outcome = self.lock()?.advance(&self.slot, &NativeTransitionOwnerV1::Ordinary(owner), &request)?;
+        let outcome = self.lock()?.advance(
+            &self.slot,
+            &NativeTransitionOwnerV1::Ordinary(owner),
+            &request,
+        )?;
         native_frames::map_outcome(outcome, NativeCompletionV1::into_ordinary)
     }
 }

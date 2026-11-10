@@ -4,8 +4,9 @@
 //! byte-level construction in `specs/parliament_ballot_proof_profile.md` §6, and the
 //! production integration decisions of 2026-10-18 fix the envelope, the admission order,
 //! the corpus, the stamp, the encodings and the full-verification interface. This crate is
-//! the one implementation of those rules. No crate depends on it yet: its integration into
-//! Core, Torii, the CLI, the Rust client and the native bridge is P.8 work still to come.
+//! the one implementation of those rules. Core depends on it only for its uncalled candidate
+//! registration preparation: integration into Core, Torii, the CLI, the Rust client and the
+//! native bridge is P.8 work still to come.
 //! It sits between the data-model wire types
 //! ([`iroha_data_model::governance::anonymous_ballot`]) and the state-free proof relations
 //! ([`iroha_parliament_ballot_proof`]):
@@ -26,8 +27,10 @@
 //! # Status
 //!
 //! **Nothing here is qualified.** The data-model launch gate
-//! [`PARLIAMENT_BALLOT_QUALIFICATION_V1`] is `None`. No Core path reads that gate or this
-//! crate. Core and Torii recognize the wire entrypoint but defer its admission and execution
+//! [`PARLIAMENT_BALLOT_QUALIFICATION_V1`] is `None`. No Core path reads that gate, and no
+//! production Core path calls this crate: Core's one import, the registration verifier, serves
+//! a preparation with no production caller, which writes no State.
+//! Core and Torii recognize the wire entrypoint but defer its admission and execution
 //! because the authenticated State/context adapter is unavailable. Registration, sealing,
 //! casting and closure integration remain P.8 work, so no node accepts a binding anonymous
 //! ballot. This crate neither reads nor changes the gate: its real candidate proofs and
@@ -45,7 +48,8 @@
 //! [`ProofProfileIdV1::V1`]. This crate depends on the proof crate without its
 //! `diagnostics` feature, so the comparator row (integration decision 6: test and
 //! diagnostic support only) is not compiled into it, nor into any build that depends on it
-//! (no node, wallet or native-bridge build does yet).
+//! (the node does, for candidate registration preparation; no wallet or native-bridge build
+//! does yet).
 //!
 //! # Determinism and secrets
 //!

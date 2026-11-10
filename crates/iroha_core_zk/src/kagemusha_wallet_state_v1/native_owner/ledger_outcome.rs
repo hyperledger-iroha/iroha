@@ -130,7 +130,10 @@ pub(super) fn signed_original(bytes: &[u8]) -> Result<SignedTransaction, Error> 
 
 /// Canonical wire intake with a caller-selected closed bound. Only the suffix stage owner
 /// passes its larger envelope cap, then requires exact retained instruction equality.
-pub(super) fn signed_original_bounded(bytes: &[u8], maximum: usize) -> Result<SignedTransaction, Error> {
+pub(super) fn signed_original_bounded(
+    bytes: &[u8],
+    maximum: usize,
+) -> Result<SignedTransaction, Error> {
     if bytes.is_empty() || bytes.len() > maximum {
         return Err(Error::Invalid("ledger signed transaction bound"));
     }

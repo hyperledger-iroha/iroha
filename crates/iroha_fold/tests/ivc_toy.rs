@@ -31,7 +31,10 @@ use rand_core::SeedableRng;
 
 mod common;
 
-use common::step::{BASE, DIGESTS, DOMAIN_A, DOMAIN_Q, IVC_A, K, Side, Step, business, business_digests, claim_digest, start_passthrough};
+use common::step::{
+    BASE, DIGESTS, DOMAIN_A, DOMAIN_Q, IVC_A, K, Side, Step, business, business_digests,
+    claim_digest, start_passthrough,
+};
 
 /// The two relations: Q steps (over `Fq`, instances committed on Pallas) and A
 /// steps (over `Fp`, instances committed on Vesta).
@@ -55,14 +58,36 @@ fn relations() -> Relations {
         degree: 5,
     };
     let a_shape = |shape: FoldShape| {
-        let layout = synthesize(&Step::<Ep> { side: Side::A, shape, witness: None }, K, None).expect("A layout");
+        let layout = synthesize(
+            &Step::<Ep> {
+                side: Side::A,
+                shape,
+                witness: None,
+            },
+            K,
+            None,
+        )
+        .expect("A layout");
         FoldedRelation::<Fp>::from_synthesized(&layout).expect("A relation")
     };
     let first = a_shape(placeholder).shape();
-    let layout = synthesize(&Step::<Eq> { side: Side::Q, shape: first.clone(), witness: None }, K, None).expect("Q layout");
+    let layout = synthesize(
+        &Step::<Eq> {
+            side: Side::Q,
+            shape: first.clone(),
+            witness: None,
+        },
+        K,
+        None,
+    )
+    .expect("Q layout");
     let q = FoldedRelation::<Fq>::from_synthesized(&layout).expect("Q relation");
     let a = a_shape(q.shape());
-    assert_eq!(a.shape(), first, "a step's shape does not depend on the shape it folds");
+    assert_eq!(
+        a.shape(),
+        first,
+        "a step's shape does not depend on the shape it folds"
+    );
     Relations {
         key_q: CommitKey::lagrange(PinnedParams::<Ep>::derive(K).expect("params").params()),
         key_a: CommitKey::lagrange(PinnedParams::<Eq>::derive(K).expect("params").params()),
@@ -112,21 +137,57 @@ fn run_step<C: PastaCurve, K: PastaCurve<ScalarExt = C::Base>>(
 ) -> (Fresh<K>, bool) {
     let chain = side.chain();
     let base = C::Base::from(BASE);
-    let state = if j == chain.first_step { base } else { me.state };
-    let state = if lie { state + <C::Base as Field>::ONE } else { state };
+    let state = if j == chain.first_step {
+        base
+    } else {
+        me.state
+    };
+    let state = if lie {
+        state + <C::Base as Field>::ONE
+    } else {
+        state
+    };
     // Q's first instance has no predecessor: its passthrough is A's base hash.
     let start = start_passthrough();
-    let digests = if j == chain.first_step { vec![<C::Base as Field>::ZERO; DIGESTS] } else { me.digests.clone() };
-    let prepared =
-        prepare_step(&chain, j, other, me.kept.as_ref(), their_last, vec![state], digests, start).expect("prepare");
+    let digests = if j == chain.first_step {
+        vec![<C::Base as Field>::ZERO; DIGESTS]
+    } else {
+        me.digests.clone()
+    };
+    let prepared = prepare_step(
+        &chain,
+        j,
+        other,
+        me.kept.as_ref(),
+        their_last,
+        vec![state],
+        digests,
+        start,
+    )
+    .expect("prepare");
     let next = business(side, state, prepared.bridge[0]);
     let digests = business_digests(side, j == chain.first_step, prepared.digests.clone());
-    let public = vec![step_public(&chain, j, base, prepared.passthrough, &[next], &digests, &[C::Base::from(j)])];
-    let circuit = Step::<C> { side, shape: other.shape(), witness: Some(prepared.witness) };
-    let satisfied = check_circuit(&circuit, K, &public, CheckMode::Strict).expect("synthesis").is_satisfied();
+    let public = vec![step_public(
+        &chain,
+        j,
+        base,
+        prepared.passthrough,
+        &[next],
+        &digests,
+        &[C::Base::from(j)],
+    )];
+    let circuit = Step::<C> {
+        side,
+        shape: other.shape(),
+        witness: Some(prepared.witness),
+    };
+    let satisfied = check_circuit(&circuit, K, &public, CheckMode::Strict)
+        .expect("synthesis")
+        .is_satisfied();
     let synthesized = synthesize(&circuit, K, Some(&public)).expect("witness");
     let (advice, public) = own.stage_witness(&synthesized).expect("stage witness");
-    let instance = fresh_instance(own, own_key, own_domain, advice, public, rng).expect("fresh instance");
+    let instance =
+        fresh_instance(own, own_key, own_domain, advice, public, rng).expect("fresh instance");
     me.kept = prepared.kept;
     me.state = next;
     me.digests = digests;
@@ -137,8 +198,18 @@ impl Chain {
     fn new(corrupt: Option<u64>) -> Self {
         Self {
             rel: relations(),
-            q: SideState { state: Fq::from(BASE), digests: vec![Fq::ZERO; DIGESTS], kept: None, last: None },
-            a: SideState { state: Fp::from(BASE), digests: vec![Fp::ZERO; DIGESTS], kept: None, last: None },
+            q: SideState {
+                state: Fq::from(BASE),
+                digests: vec![Fq::ZERO; DIGESTS],
+                kept: None,
+                last: None,
+            },
+            a: SideState {
+                state: Fp::from(BASE),
+                digests: vec![Fp::ZERO; DIGESTS],
+                kept: None,
+                last: None,
+            },
             rng: ChaCha20Rng::seed_from_u64(77),
             corrupt,
             satisfied: Vec::new(),
@@ -150,14 +221,32 @@ impl Chain {
         if j % 2 == 1 {
             let their = self.a.last.take();
             let (instance, ok) = run_step::<Eq, Ep>(
-                Side::Q, j, &self.rel.a, &self.rel.q, &self.rel.key_q, &DOMAIN_Q, &mut self.q, their.as_ref(), lie, &mut self.rng,
+                Side::Q,
+                j,
+                &self.rel.a,
+                &self.rel.q,
+                &self.rel.key_q,
+                &DOMAIN_Q,
+                &mut self.q,
+                their.as_ref(),
+                lie,
+                &mut self.rng,
             );
             self.q.last = Some(instance);
             self.satisfied.push(ok);
         } else {
             let their = self.q.last.take();
             let (instance, ok) = run_step::<Ep, Eq>(
-                Side::A, j, &self.rel.q, &self.rel.a, &self.rel.key_a, &DOMAIN_A, &mut self.a, their.as_ref(), lie, &mut self.rng,
+                Side::A,
+                j,
+                &self.rel.q,
+                &self.rel.a,
+                &self.rel.key_a,
+                &DOMAIN_A,
+                &mut self.a,
+                their.as_ref(),
+                lie,
+                &mut self.rng,
             );
             self.a.last = Some(instance);
             self.satisfied.push(ok);
@@ -182,7 +271,11 @@ fn a_toy_two_curve_chain_folds_and_decides() {
     for j in 1..=6 {
         chain.step(j);
     }
-    assert!(chain.satisfied.iter().all(|ok| *ok), "every step circuit is satisfied: {:?}", chain.satisfied);
+    assert!(
+        chain.satisfied.iter().all(|ok| *ok),
+        "every step circuit is satisfied: {:?}",
+        chain.satisfied
+    );
     assert!(chain.decides());
     // The last hash recomputes from A's state, the Q accumulator it keeps and
     // its claim accumulator.
@@ -216,17 +309,45 @@ fn the_chain_start_passes_exactly_the_other_sides_base_hash() {
     let rel = relations();
     let chain = Side::Q.chain();
     let base = Fq::from(BASE);
-    let prepared =
-        prepare_step::<Eq>(&chain, 1, &rel.a, None, None, vec![base], vec![Fq::ZERO; DIGESTS], start_passthrough())
-            .expect("prepare");
+    let prepared = prepare_step::<Eq>(
+        &chain,
+        1,
+        &rel.a,
+        None,
+        None,
+        vec![base],
+        vec![Fq::ZERO; DIGESTS],
+        start_passthrough(),
+    )
+    .expect("prepare");
     let next = business(Side::Q, base, prepared.bridge[0]);
     let digests = business_digests(Side::Q, true, prepared.digests.clone());
-    let public = vec![step_public(&chain, 1, base, prepared.passthrough, &[next], &digests, &[Fq::from(1)])];
-    let circuit = Step::<Eq> { side: Side::Q, shape: rel.a.shape(), witness: Some(prepared.witness) };
-    assert!(check_circuit(&circuit, K, &public, CheckMode::Strict).expect("synthesis").is_satisfied());
+    let public = vec![step_public(
+        &chain,
+        1,
+        base,
+        prepared.passthrough,
+        &[next],
+        &digests,
+        &[Fq::from(1)],
+    )];
+    let circuit = Step::<Eq> {
+        side: Side::Q,
+        shape: rel.a.shape(),
+        witness: Some(prepared.witness),
+    };
+    assert!(
+        check_circuit(&circuit, K, &public, CheckMode::Strict)
+            .expect("synthesis")
+            .is_satisfied()
+    );
     // Any other passthrough at the chain start (for example one that lets A
     // continue a later chain) leaves the circuit unsatisfied.
     let mut other = public;
     other[0][0] += Fq::ONE;
-    assert!(!check_circuit(&circuit, K, &other, CheckMode::Strict).expect("synthesis").is_satisfied());
+    assert!(
+        !check_circuit(&circuit, K, &other, CheckMode::Strict)
+            .expect("synthesis")
+            .is_satisfied()
+    );
 }

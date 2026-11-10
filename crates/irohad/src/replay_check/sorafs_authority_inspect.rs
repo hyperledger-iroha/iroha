@@ -565,7 +565,7 @@ fn checked_path(path: &Path) -> Result<PathBuf, String> {
     Ok(checked)
 }
 
-fn output_destination(
+pub(super) fn output_destination(
     config: &Config,
     output: &Path,
     config_path: Option<&Path>,
@@ -700,7 +700,7 @@ fn write_package(
     })
 }
 
-fn publish_file(directory: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
+pub(super) fn publish_file(directory: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
     let mut staged =
         tempfile::NamedTempFile::new_in(directory).map_err(|error| error.to_string())?;
     staged.write_all(bytes).map_err(|error| error.to_string())?;

@@ -93,7 +93,10 @@ pub fn assign_instance<C: PastaCurve>(
 ) -> Result<InstanceCells<C>, Error> {
     if let Some(v) = value
         && (v.commitments.len() != shape.columns
-            || v.public.iter().map(Vec::len).ne(shape.instance_lengths.iter().copied()))
+            || v.public
+                .iter()
+                .map(Vec::len)
+                .ne(shape.instance_lengths.iter().copied()))
     {
         return Err(Error::Synthesis);
     }
@@ -104,9 +107,17 @@ pub fn assign_instance<C: PastaCurve>(
     }
     let mut public = Vec::with_capacity(shape.instance_lengths.len());
     for (column, len) in shape.instance_lengths.iter().enumerate() {
-        public.push(assign_scalars(chips, region, value.map(|v| v.public[column].as_slice()), *len)?);
+        public.push(assign_scalars(
+            chips,
+            region,
+            value.map(|v| v.public[column].as_slice()),
+            *len,
+        )?);
     }
-    Ok(InstanceCells { commitments, public })
+    Ok(InstanceCells {
+        commitments,
+        public,
+    })
 }
 
 /// Assigns an accumulator of the relation.
@@ -120,11 +131,32 @@ pub fn assign_accumulator<C: PastaCurve>(
     value: Option<&Accumulator<C>>,
 ) -> Result<AccumulatorCells<C>, Error> {
     let instance = assign_instance(chips, region, shape, value.map(|v| &v.instance))?;
-    let theta = assign_scalars(chips, region, value.map(|v| v.instance.theta.as_slice()), shape.theta_len)?;
-    let r = assign_scalars(chips, region, value.map(|v| v.instance.r.as_slice()), shape.groups.len())?;
-    let beta = assign_scalars(chips, region, value.map(|v| v.beta.as_slice()), shape.index_bits)?;
+    let theta = assign_scalars(
+        chips,
+        region,
+        value.map(|v| v.instance.theta.as_slice()),
+        shape.theta_len,
+    )?;
+    let r = assign_scalars(
+        chips,
+        region,
+        value.map(|v| v.instance.r.as_slice()),
+        shape.groups.len(),
+    )?;
+    let beta = assign_scalars(
+        chips,
+        region,
+        value.map(|v| v.beta.as_slice()),
+        shape.index_bits,
+    )?;
     let e = chips.assign_scalar(region, value_of(value.map(|v| &v.e)))?;
-    Ok(AccumulatorCells { instance, theta, r, beta, e })
+    Ok(AccumulatorCells {
+        instance,
+        theta,
+        r,
+        beta,
+        e,
+    })
 }
 
 /// Assigns the messages of a fold of the relation.
@@ -137,8 +169,18 @@ pub fn assign_proof<C: PastaCurve>(
     shape: &FoldShape,
     value: Option<&FoldProof<C::ScalarExt>>,
 ) -> Result<FoldProofCells<C>, Error> {
-    let f = assign_scalars(chips, region, value.map(|v| v.f.as_slice()), shape.index_bits)?;
-    let k = assign_scalars(chips, region, value.map(|v| v.k.as_slice()), shape.degree - 1)?;
+    let f = assign_scalars(
+        chips,
+        region,
+        value.map(|v| v.f.as_slice()),
+        shape.index_bits,
+    )?;
+    let k = assign_scalars(
+        chips,
+        region,
+        value.map(|v| v.k.as_slice()),
+        shape.degree - 1,
+    )?;
     Ok(FoldProofCells { f, k })
 }
 
@@ -194,7 +236,11 @@ pub fn fresh_transcript<C: PastaCurve>(
         }
     }
     let digest = t::finish(chips, region)?;
-    Ok(FreshTranscript { theta: powers, r, digest })
+    Ok(FreshTranscript {
+        theta: powers,
+        r,
+        digest,
+    })
 }
 
 /// The accumulator digest.
@@ -254,7 +300,12 @@ pub(crate) fn fold_commitments<C: PastaCurve>(
         let scaled = match &split {
             Some(split) => chips.ecc.mul_with(region, split, &difference)?,
             None => {
-                let (scaled, glv) = chips.ecc.mul(region, chips.range, ScalarLimbs::new(gamma, &zero), &difference)?;
+                let (scaled, glv) = chips.ecc.mul(
+                    region,
+                    chips.range,
+                    ScalarLimbs::new(gamma, &zero),
+                    &difference,
+                )?;
                 split = Some(glv);
                 scaled
             }
@@ -284,7 +335,11 @@ pub fn fresh_beta<C: PastaCurve>(
     }
     let mut out = Vec::with_capacity(bits);
     for j in 0..bits {
-        out.push(if j + 1 == bits { t::challenge_last(chips, region)? } else { t::challenge(chips, region)? });
+        out.push(if j + 1 == bits {
+            t::challenge_last(chips, region)?
+        } else {
+            t::challenge(chips, region)?
+        });
     }
     Ok(out)
 }
@@ -371,7 +426,9 @@ fn fold_cells<C: PastaCurve>(
         None => (gamma_limb, gamma.ff),
         Some(bit) => {
             let one_word = chips.glue.constant(region, <C::Base as Field>::ONE)?;
-            let selected = chips.glue.select(region, bit, &one_word, gamma_limb.word())?;
+            let selected = chips
+                .glue
+                .select(region, bit, &one_word, gamma_limb.word())?;
             let limb = chips.uint().range_check::<128>(region, &selected)?;
             let scalar = chips.ff.select(chips.glue, region, bit, &one, &gamma.ff)?;
             (limb, scalar)
@@ -392,7 +449,9 @@ fn fold_cells<C: PastaCurve>(
         let scaled = chips.mul(region, &alpha.ff, &power)?;
         let mut folded = chips.add(region, &b.ff, &scaled)?;
         if let (Some(bit), Some(started)) = (start, &started_beta) {
-            folded = chips.ff.select(chips.glue, region, bit, &started[j].ff, &folded)?;
+            folded = chips
+                .ff
+                .select(chips.glue, region, bit, &started[j].ff, &folded)?;
         }
         beta.push(chips.export(region, folded)?);
     }
@@ -429,6 +488,21 @@ fn fold_cells<C: PastaCurve>(
         let folded = chips.lerp(region, &a.ff, &b.ff, &gamma)?;
         r.push(chips.export(region, folded)?);
     }
-    let commitments = fold_commitments(chips, region, &acc.instance.commitments, &fresh.commitments, &gamma_limb)?;
-    Ok(AccumulatorCells { instance: InstanceCells { commitments, public }, theta, r, beta, e })
+    let commitments = fold_commitments(
+        chips,
+        region,
+        &acc.instance.commitments,
+        &fresh.commitments,
+        &gamma_limb,
+    )?;
+    Ok(AccumulatorCells {
+        instance: InstanceCells {
+            commitments,
+            public,
+        },
+        theta,
+        r,
+        beta,
+        e,
+    })
 }

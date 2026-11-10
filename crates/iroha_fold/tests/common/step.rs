@@ -94,8 +94,22 @@ pub enum Side {
 impl Side {
     pub fn chain(self) -> ChainSide {
         match self {
-            Self::Q => ChainSide { ivc_domain: IVC_Q, fold_domain: DOMAIN_A, first_step: 1, slot: 0, digests: DIGESTS, choices: 1 },
-            Self::A => ChainSide { ivc_domain: IVC_A, fold_domain: DOMAIN_Q, first_step: 2, slot: 0, digests: DIGESTS, choices: 1 },
+            Self::Q => ChainSide {
+                ivc_domain: IVC_Q,
+                fold_domain: DOMAIN_A,
+                first_step: 1,
+                slot: 0,
+                digests: DIGESTS,
+                choices: 1,
+            },
+            Self::A => ChainSide {
+                ivc_domain: IVC_A,
+                fold_domain: DOMAIN_Q,
+                first_step: 2,
+                slot: 0,
+                digests: DIGESTS,
+                choices: 1,
+            },
         }
     }
 }
@@ -118,7 +132,11 @@ impl<C: PastaCurve> Circuit<C::Base> for Step<C> {
     type Params = ();
 
     fn without_witnesses(&self) -> Self {
-        Self { side: self.side, shape: self.shape.clone(), witness: None }
+        Self {
+            side: self.side,
+            shape: self.shape.clone(),
+            witness: None,
+        }
     }
 
     fn configure(meta: &mut ConstraintSystem<C::Base>) -> Config<C> {
@@ -128,10 +146,15 @@ impl<C: PastaCurve> Circuit<C::Base> for Step<C> {
         Config { fold, instance }
     }
 
-    fn synthesize(&self, config: Config<C>, mut layouter: impl Layouter<C::Base>) -> Result<(), Error> {
+    fn synthesize(
+        &self,
+        config: Config<C>,
+        mut layouter: impl Layouter<C::Base>,
+    ) -> Result<(), Error> {
         let mut chips = FoldVerifierChips::new(&config.fold);
         chips.load_tables(&mut layouter)?;
-        let outputs = layouter.assign_region(|| "step", |mut region| self.layout(&mut chips, &mut region))?;
+        let outputs =
+            layouter.assign_region(|| "step", |mut region| self.layout(&mut chips, &mut region))?;
         for (row, word) in outputs.iter().enumerate() {
             layouter.constrain_instance(word.cell(), config.instance, row)?;
         }
@@ -140,7 +163,11 @@ impl<C: PastaCurve> Circuit<C::Base> for Step<C> {
 }
 
 impl<C: PastaCurve> Step<C> {
-    fn layout(&self, chips: &mut FoldVerifierChips<C>, region: &mut Region<'_, C::Base>) -> Result<Vec<Word<C::Base>>, Error> {
+    fn layout(
+        &self,
+        chips: &mut FoldVerifierChips<C>,
+        region: &mut Region<'_, C::Base>,
+    ) -> Result<Vec<Word<C::Base>>, Error> {
         let chain = self.side.chain();
         let frame = fold_frame(
             &mut chips.lanes(),
@@ -154,17 +181,35 @@ impl<C: PastaCurve> Step<C> {
         )?;
         // The side's first instance starts from the base state.
         let later = chips.glue.not(region, &frame.first)?;
-        assert_equal_unless(&mut chips.lanes(), region, &frame.state[0], &frame.base, Some(&later))?;
+        assert_equal_unless(
+            &mut chips.lanes(),
+            region,
+            &frame.state[0],
+            &frame.base,
+            Some(&later),
+        )?;
         let digests = claim_business(chips, region, self.side, &frame)?;
         // Toy business: Q doubles and adds one; A adds the square of Q's bridge.
         let next = match self.side {
-            Side::Q => chips.glue.linear(region, &[(C::Base::from(2), &frame.state[0])], <C::Base as Field>::ONE)?,
+            Side::Q => chips.glue.linear(
+                region,
+                &[(C::Base::from(2), &frame.state[0])],
+                <C::Base as Field>::ONE,
+            )?,
             Side::A => {
                 let square = chips.glue.mul(region, &frame.bridge[0], &frame.bridge[0])?;
                 chips.glue.add(region, &frame.state[0], &square)?
             }
         };
-        frame_outputs(&mut chips.lanes(), region, &chain, &frame, &[next], &digests, &[frame.step.clone()])
+        frame_outputs(
+            &mut chips.lanes(),
+            region,
+            &chain,
+            &frame,
+            &[next],
+            &digests,
+            &[frame.step.clone()],
+        )
     }
 }
 
@@ -181,7 +226,10 @@ pub fn claim_business<C: PastaCurve>(
 ) -> Result<Vec<Word<C::Base>>, Error> {
     let started = chips.glue.constant(region, claim_digest(side))?;
     let mut digests = frame.digests.clone();
-    digests[CLAIM_SLOT] = chips.glue.select(region, &frame.first, &started, &frame.digests[CLAIM_SLOT])?;
+    digests[CLAIM_SLOT] =
+        chips
+            .glue
+            .select(region, &frame.first, &started, &frame.digests[CLAIM_SLOT])?;
     Ok(digests)
 }
 
@@ -193,10 +241,15 @@ pub fn business<F: PastaField>(side: Side, state: F, bridge: F) -> F {
     }
 }
 
-
 /// The passthrough of the chain's first instance (Q's first step): A's base hash
 /// `H_A(0, base, [base], [0, 0])`, a circuit constant.
 #[must_use]
 pub fn start_passthrough<F: PastaField>() -> F {
-    embed(&ivc_hash::<Fp>(&IVC_A, 0, Fp::from(BASE), &[Fp::from(BASE)], &[Fp::ZERO; DIGESTS]))
+    embed(&ivc_hash::<Fp>(
+        &IVC_A,
+        0,
+        Fp::from(BASE),
+        &[Fp::from(BASE)],
+        &[Fp::ZERO; DIGESTS],
+    ))
 }

@@ -97,24 +97,6 @@ impl ProviderFixture {
             policy_digest: [self.id.as_bytes()[0] + 1; 32],
         }
     }
-    /// Every distinct account this provider uses: owner, completion signer and four roles.
-    pub fn accounts(&self) -> Vec<AccountId> {
-        [self.owner(), self.completion_signer()]
-            .into_iter()
-            .chain(
-                self.role_keys
-                    .iter()
-                    .map(|key| AccountId::new(key.public_key().clone())),
-            )
-            .collect()
-    }
-    /// Ordinary account registrations only: no permission, admission or `SoraFS` state.
-    pub fn genesis_registrations(&self) -> Vec<InstructionBox> {
-        self.accounts()
-            .into_iter()
-            .map(|account| Register::account(Account::new(account)).into())
-            .collect()
-    }
     pub fn genesis_accounts(&self) -> Vec<InstructionBox> {
         let owner = self.owner();
         let mut instructions = vec![

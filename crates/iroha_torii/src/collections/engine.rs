@@ -3,7 +3,7 @@ use super::{
     CollectionError,
     cursor::{self, CursorError, DIGEST_BYTES},
     memory::{self, BytePolicy},
-    specs::{CollectionSpec, FieldType},
+    specs::{CanonicalFields, CollectionSpec, FieldType},
 };
 use iroha_primitives::numeric::{Numeric, RoundingMode};
 #[cfg(test)]
@@ -213,15 +213,18 @@ enum Compiled {
 }
 
 impl Compiled {
-    /// Evaluate only fields present in a source prefix. Unknown fields are
-    /// deferred, including through negation and disjunction; they are never
-    /// treated as absent metadata.
-    fn matches_partial(&self, row: &Map) -> Option<bool> {
+    /// Combine what `leaf` can decide about each comparison. An undecided
+    /// comparison stays undecided through negation and disjunction unless another
+    /// operand settles the result.
+    fn decide<F>(&self, leaf: &F) -> Option<bool>
+    where
+        F: Fn(&Self, &Path) -> Option<bool>,
+    {
         match self {
             Self::And(list) => {
                 let mut unknown = false;
                 for item in list {
-                    match item.matches_partial(row) {
+                    match item.decide(leaf) {
                         Some(false) => return Some(false),
                         None => unknown = true,
                         Some(true) => {}
@@ -232,7 +235,7 @@ impl Compiled {
             Self::Or(list) => {
                 let mut unknown = false;
                 for item in list {
-                    match item.matches_partial(row) {
+                    match item.decide(leaf) {
                         Some(true) => return Some(true),
                         None => unknown = true,
                         Some(false) => {}
@@ -240,21 +243,48 @@ impl Compiled {
                 }
                 (!unknown).then_some(false)
             }
-            Self::Not(inner) => inner.matches_partial(row).map(|matched| !matched),
+            Self::Not(inner) => inner.decide(leaf).map(|matched| !matched),
             Self::Eq(path, ..)
             | Self::Ne(path, ..)
             | Self::Range(path, ..)
             | Self::In(path, ..)
             | Self::Nin(path, ..)
             | Self::Exists(path)
-            | Self::IsNull(path) => {
-                let known = row.contains_key(&path.full)
-                    || path
-                        .segments
-                        .first()
-                        .is_some_and(|field| row.contains_key(field));
-                known.then(|| self.matches(row))
+            | Self::IsNull(path) => leaf(self, path),
+        }
+    }
+
+    /// Evaluate only fields present in a source prefix. Unknown fields are
+    /// deferred, including through negation and disjunction; they are never
+    /// treated as absent metadata.
+    fn matches_partial(&self, row: &Map) -> Option<bool> {
+        self.decide(&|leaf, path| leaf.matches_known(path, row))
+    }
+
+    fn matches_known(&self, path: &Path, row: &Map) -> Option<bool> {
+        let known = row.contains_key(&path.full)
+            || path
+                .segments
+                .first()
+                .is_some_and(|field| row.contains_key(field));
+        known.then(|| self.matches(row))
+    }
+
+    /// Decide one comparison on a field holding an object, from that fact alone.
+    /// An object equals no scalar literal and has no numeric or text order against
+    /// one. A structured literal compares whole values, so it stays undecided.
+    fn matches_object(&self) -> Option<bool> {
+        let scalar = |literal: &Literal| !literal.is_structured();
+        match self {
+            Self::Eq(_, _, literal) | Self::Range(_, _, _, literal) => {
+                scalar(literal).then_some(false)
             }
+            Self::Ne(_, _, literal) => scalar(literal).then_some(true),
+            Self::In(_, _, literals) => literals.iter().all(scalar).then_some(false),
+            Self::Nin(_, _, literals) => literals.iter().all(scalar).then_some(true),
+            Self::Exists(_) => Some(true),
+            Self::IsNull(_) => Some(false),
+            Self::And(_) | Self::Or(_) | Self::Not(_) => None,
         }
     }
 
@@ -595,10 +625,7 @@ impl SortValue {
         if matches!(ty, FieldType::Number | FieldType::Json) && numeric_may_allocate(value) {
             memory::ensure(256, bytes.scratch_bytes, "numeric ordering key")?;
         }
-        let text_key = |text: &str| {
-            memory::ensure(text.len(), bytes.scratch_bytes, "ordering key")?;
-            Ok(Self::Text(text.to_owned()))
-        };
+        let text_key = |text: &str| Self::from_text(text, bytes);
         match ty {
             FieldType::Number => {
                 numeric(value).map_or_else(|| Self::other(value, bytes), |v| Ok(Self::Number(v)))
@@ -627,6 +654,28 @@ impl SortValue {
 
     fn other(value: &Value, bytes: BytePolicy) -> Result<Self, CollectionError> {
         Ok(Self::Other(bytes.key(value)?))
+    }
+
+    fn from_text(text: &str, bytes: BytePolicy) -> Result<Self, CollectionError> {
+        memory::ensure(text.len(), bytes.scratch_bytes, "ordering key")?;
+        Ok(Self::Text(text.to_owned()))
+    }
+
+    /// The key of a canonical JSON document, read from its text where that is exact.
+    ///
+    /// Objects and arrays order by their canonical rendering, which is the document
+    /// itself. Scalars are decoded: a number or decimal string orders by value and a
+    /// string by its unescaped text.
+    fn from_canonical_json(
+        json: &str,
+        ty: FieldType,
+        bytes: BytePolicy,
+    ) -> Result<Self, CollectionError> {
+        if matches!(json.as_bytes().first(), Some(b'{' | b'[')) {
+            memory::ensure(json.len(), bytes.scratch_bytes, "ordering key")?;
+            return Ok(Self::Other(json.to_owned()));
+        }
+        Self::from_value(&decode_canonical_json(json)?, ty, bytes)
     }
 
     const fn rank(&self) -> u8 {
@@ -688,31 +737,52 @@ impl PartialOrd for RowKey {
     }
 }
 
-struct Entry {
+struct Entry<R = Map> {
     key: RowKey,
     seq: u64,
-    row: Map,
+    row: R,
     charge: usize,
 }
 
-impl PartialEq for Entry {
+impl<R> PartialEq for Entry<R> {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == Ordering::Equal
     }
 }
 
-impl Eq for Entry {}
+impl<R> Eq for Entry<R> {}
 
-impl Ord for Entry {
+impl<R> Ord for Entry<R> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.key.cmp(&other.key).then(self.seq.cmp(&other.seq))
     }
 }
 
-impl PartialOrd for Entry {
+impl<R> PartialOrd for Entry<R> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
+}
+
+/// One row held as borrowed canonical text: its text field and its JSON field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CanonicalRow<'a> {
+    /// Value of the row's text field.
+    pub(crate) text: &'a str,
+    /// Canonical rendering of the row's JSON field, as ledger `Json` stores it.
+    pub(crate) json: &'a str,
+}
+
+/// Decode stored canonical JSON under the active budget. A refused charge belongs
+/// to the owner that set the budget, so a larger owner may serve the read.
+fn decode_canonical_json(json: &str) -> Result<Value, CollectionError> {
+    norito::json::from_str::<Value>(json).map_err(|error| {
+        if error.is_decode_resource_limit() {
+            memory::capacity("source decode")
+        } else {
+            CollectionError::new("internal", "row", "a stored JSON document did not parse")
+        }
+    })
 }
 
 /// Aggregate plan with resolved output columns.
@@ -1672,6 +1742,34 @@ impl Prepared<'_> {
     }
 
     fn key_of(&self, row: &Map) -> Result<RowKey, CollectionError> {
+        self.key_with(|field, bytes| {
+            field_value(row, &field.name).map_or(Ok(SortValue::Null), |value| {
+                SortValue::from_value(value, field.ty, bytes)
+            })
+        })
+    }
+
+    /// The same key as [`Self::key_of`] on the decoded row, read from canonical text.
+    fn canonical_key(
+        &self,
+        fields: CanonicalFields,
+        row: CanonicalRow<'_>,
+    ) -> Result<RowKey, CollectionError> {
+        self.key_with(|field, bytes| {
+            if field.name == fields.json {
+                SortValue::from_canonical_json(row.json, field.ty, bytes)
+            } else if field.name == fields.text {
+                SortValue::from_text(row.text, bytes)
+            } else {
+                Ok(SortValue::Null)
+            }
+        })
+    }
+
+    fn key_with(
+        &self,
+        value_of: impl Fn(&SortField, BytePolicy) -> Result<SortValue, CollectionError>,
+    ) -> Result<RowKey, CollectionError> {
         let mut charge = memory::add(
             memory::slots::<SortValue>(self.sort.len())?,
             memory::slots::<Order>(self.sort.len())?,
@@ -1688,17 +1786,13 @@ impl Prepared<'_> {
             "ordering key containers",
         )?;
         for field in &self.sort {
-            let remaining = self.bytes.scratch_bytes - charge;
-            let key = field_value(row, &field.name).map_or(Ok(SortValue::Null), |v| {
-                SortValue::from_value(
-                    v,
-                    field.ty,
-                    BytePolicy {
-                        scratch_bytes: remaining,
-                        ..self.bytes
-                    },
-                )
-            })?;
+            let key = value_of(
+                field,
+                BytePolicy {
+                    scratch_bytes: self.bytes.scratch_bytes - charge,
+                    ..self.bytes
+                },
+            )?;
             charge = memory::add(charge, sort_value_bytes(&key))?;
             memory::ensure(charge, self.bytes.scratch_bytes, "ordering keys")?;
             values.push(key);
@@ -1851,6 +1945,138 @@ impl Prepared<'_> {
         self.execute_entries(rows.into_iter().map(Some), limits)
     }
 
+    /// Execute an unordered read over rows held as canonical text.
+    ///
+    /// Ledger `Json` stores one canonical rendering of each document, so the filter,
+    /// the total, the order and the cursor seek read that text, and an object or array
+    /// is decoded only if its row is on the returned page. A long list of them therefore
+    /// costs one scan, not the request's cumulative decode budget. What the text cannot
+    /// settle is decoded under that budget: a scalar's ordering key, a non-object value
+    /// under a predicate on the JSON field, and every row of an aggregate, whose metrics
+    /// read decoded values. A refused decode is the owner's capacity refusal, so a larger
+    /// owner may serve the same read.
+    ///
+    /// # Errors
+    /// Fails when the scan or byte budgets are exceeded.
+    pub(crate) fn execute_canonical<'r, I>(
+        &self,
+        fields: CanonicalFields,
+        rows: I,
+        limits: &Limits,
+    ) -> Result<RowPage, CollectionError>
+    where
+        I: IntoIterator<Item = CanonicalRow<'r>>,
+    {
+        if self.aggregate.is_some() {
+            let mut failure = None;
+            let decoded = rows
+                .into_iter()
+                .map_while(|row| match self.canonical_row(fields, row) {
+                    Ok(row) => Some(Some(row)),
+                    Err(error) => {
+                        failure = Some(error);
+                        None
+                    }
+                });
+            let page = self.execute_entries(decoded, limits);
+            return match failure {
+                Some(error) => Err(error),
+                None => page,
+            };
+        }
+        let mut kept = self.heap()?;
+        let mut retained = memory::slots::<Entry<CanonicalRow<'r>>>(kept.capacity())?;
+        let mut scanned = 0usize;
+        let mut total = 0u64;
+        let mut seq = 0u64;
+        for row in rows {
+            scanned += 1;
+            if scanned > limits.max_scanned_rows {
+                return Err(scan_limit_exceeded(limits));
+            }
+            if !self.canonical_row_matches(fields, row)? {
+                continue;
+            }
+            total += 1;
+            let key = self.canonical_key(fields, row)?;
+            self.keep_keyed(&mut kept, &mut retained, &mut seq, key, row, |_| Ok(0))?;
+        }
+        let mut entries = kept.into_sorted_vec();
+        let has_more = entries.len() > self.limit;
+        entries.truncate(self.limit);
+        retained = memory::add(retained, memory::slots::<Map>(entries.len())?)?;
+        memory::ensure(retained, self.bytes.retained_bytes, "page output slots")?;
+        let mut items = memory::vector(
+            entries.len(),
+            self.bytes.retained_bytes,
+            "page output slots",
+        )?;
+        for entry in entries {
+            let row = self.canonical_row(fields, entry.row)?;
+            retained = memory::add(retained, memory::map_heap_bytes(&row)?)?;
+            memory::ensure(
+                retained,
+                self.bytes.retained_bytes,
+                "retained page and ordering keys",
+            )?;
+            items.push(row);
+        }
+        let next_cursor = has_more
+            .then(|| items.last())
+            .flatten()
+            .map(|last| self.cursor_after(last))
+            .transpose()?;
+        Ok(RowPage {
+            items,
+            next_cursor,
+            total: self.query.include_total.then_some(total),
+        })
+    }
+
+    /// Whether a canonical row passes the filter. Its JSON is decoded only when
+    /// its text and the row's text field cannot settle a comparison.
+    fn canonical_row_matches(
+        &self,
+        fields: CanonicalFields,
+        row: CanonicalRow<'_>,
+    ) -> Result<bool, CollectionError> {
+        let Some(filter) = &self.filter else {
+            return Ok(true);
+        };
+        let known = Map::from_iter([(fields.text.to_owned(), Value::from(row.text))]);
+        let object = row.json.starts_with('{');
+        let decided = filter.decide(&|leaf, path| {
+            if path.full == fields.json {
+                object.then(|| leaf.matches_object()).flatten()
+            } else {
+                leaf.matches_known(path, &known)
+            }
+        });
+        match decided {
+            Some(matched) => Ok(matched),
+            None => Ok(filter.matches(&self.canonical_row(fields, row)?)),
+        }
+    }
+
+    /// The complete row, decoded under the active budget and the current-row ceiling.
+    fn canonical_row(
+        &self,
+        fields: CanonicalFields,
+        row: CanonicalRow<'_>,
+    ) -> Result<Map, CollectionError> {
+        let json = decode_canonical_json(row.json)?;
+        let row = Map::from_iter([
+            (fields.text.to_owned(), Value::from(row.text)),
+            (fields.json.to_owned(), json),
+        ]);
+        memory::ensure(
+            memory::map_heap_bytes(&row)?,
+            self.bytes.row_bytes,
+            "current row",
+        )?;
+        Ok(row)
+    }
+
     /// Execute an unordered storage scan, charging skipped and hidden entries
     /// to the same budget as visible rows.
     pub(crate) fn execute_entries<I>(
@@ -1869,14 +2095,7 @@ impl Prepared<'_> {
         let mut admit = |row: &Option<Map>| -> Result<bool, CollectionError> {
             scanned += 1;
             if scanned > limits.max_scanned_rows {
-                return Err(CollectionError::new(
-                    "query_scan_limit_exceeded",
-                    "filter",
-                    format!(
-                        "the query would examine more than {} rows; add a more selective filter",
-                        limits.max_scanned_rows
-                    ),
-                ));
+                return Err(scan_limit_exceeded(limits));
             }
             if let Some(row) = row {
                 memory::ensure(
@@ -1890,7 +2109,7 @@ impl Prepared<'_> {
         match &self.aggregate {
             None => {
                 let mut kept = self.heap()?;
-                let mut retained = memory::slots::<Entry>(kept.capacity())?;
+                let mut retained = memory::slots::<Entry<Map>>(kept.capacity())?;
                 let mut total = 0u64;
                 let mut seq = 0u64;
                 for row in rows {
@@ -1906,7 +2125,7 @@ impl Prepared<'_> {
             }
             Some(plan) => {
                 let mut kept = self.heap()?;
-                let mut retained = memory::slots::<Entry>(kept.capacity())?;
+                let mut retained = memory::slots::<Entry<Map>>(kept.capacity())?;
                 let mut total = 0u64;
                 let mut seq = 0u64;
                 aggregate_rows(
@@ -1932,7 +2151,7 @@ impl Prepared<'_> {
         }
     }
 
-    fn heap(&self) -> Result<BinaryHeap<Entry>, CollectionError> {
+    fn heap<R>(&self) -> Result<BinaryHeap<Entry<R>>, CollectionError> {
         Ok(BinaryHeap::from(memory::vector(
             self.limit.saturating_add(2),
             self.bytes.retained_bytes,
@@ -1948,6 +2167,18 @@ impl Prepared<'_> {
         row: Map,
     ) -> Result<(), CollectionError> {
         let key = self.key_of(&row)?;
+        self.keep_keyed(kept, retained, seq, key, row, memory::map_heap_bytes)
+    }
+
+    fn keep_keyed<R>(
+        &self,
+        kept: &mut BinaryHeap<Entry<R>>,
+        retained: &mut usize,
+        seq: &mut u64,
+        key: RowKey,
+        row: R,
+        row_bytes: impl FnOnce(&R) -> Result<usize, CollectionError>,
+    ) -> Result<(), CollectionError> {
         if !self.after_cursor(&key) {
             return Ok(());
         }
@@ -1958,7 +2189,7 @@ impl Prepared<'_> {
         {
             return Ok(());
         }
-        let charge = memory::add(memory::map_heap_bytes(&row)?, row_key_bytes(&key)?)?;
+        let charge = memory::add(row_bytes(&row)?, row_key_bytes(&key)?)?;
         let next = memory::add(*retained, charge)?;
         memory::ensure(
             next,
@@ -2049,6 +2280,17 @@ impl Prepared<'_> {
         }
         Ok(page)
     }
+}
+
+fn scan_limit_exceeded(limits: &Limits) -> CollectionError {
+    CollectionError::new(
+        "query_scan_limit_exceeded",
+        "filter",
+        format!(
+            "the query would examine more than {} rows; add a more selective filter",
+            limits.max_scanned_rows
+        ),
+    )
 }
 
 #[derive(Debug)]
@@ -2381,6 +2623,9 @@ where
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod canonical_rows_tests;
 
 #[cfg(test)]
 mod tests {

@@ -19,13 +19,19 @@ use super::{FoldLanes, ScalarCell, scalar_modulus};
 ///
 /// # Errors
 /// [`Error::Synthesis`] when another transcript is live on the lane.
-pub fn start<C: PastaCurve>(chips: &mut FoldLanes<'_, C>, tag: u64, domain: &[u8; 32]) -> Result<(), Error> {
+pub fn start<C: PastaCurve>(
+    chips: &mut FoldLanes<'_, C>,
+    tag: u64,
+    domain: &[u8; 32],
+) -> Result<(), Error> {
     if !chips.duplex.is_clear() {
         return Err(Error::Synthesis);
     }
     chips.duplex.absorb_constant(C::Base::from(tag));
     for chunk in domain.as_chunks::<16>().0 {
-        chips.duplex.absorb_constant(C::Base::from_u128(u128::from_le_bytes(*chunk)));
+        chips
+            .duplex
+            .absorb_constant(C::Base::from_u128(u128::from_le_bytes(*chunk)));
     }
     Ok(())
 }
@@ -80,14 +86,21 @@ fn squeeze<C: PastaCurve>(
     region: &mut Region<'_, C::Base>,
     last: bool,
 ) -> Result<Word<C::Base>, Error> {
-    if last { chips.duplex.squeeze_and_clear(region) } else { chips.duplex.squeeze(region) }
+    if last {
+        chips.duplex.squeeze_and_clear(region)
+    } else {
+        chips.duplex.squeeze(region)
+    }
 }
 
 /// Ends the transcript with a digest squeeze.
 ///
 /// # Errors
 /// Layout errors.
-pub fn finish<C: PastaCurve>(chips: &mut FoldLanes<'_, C>, region: &mut Region<'_, C::Base>) -> Result<Word<C::Base>, Error> {
+pub fn finish<C: PastaCurve>(
+    chips: &mut FoldLanes<'_, C>,
+    region: &mut Region<'_, C::Base>,
+) -> Result<Word<C::Base>, Error> {
     squeeze(chips, region, true)
 }
 
@@ -134,7 +147,10 @@ fn map_128<C: PastaCurve>(
 ///
 /// # Errors
 /// Layout errors.
-pub fn challenge<C: PastaCurve>(chips: &mut FoldLanes<'_, C>, region: &mut Region<'_, C::Base>) -> Result<ScalarCell<C>, Error> {
+pub fn challenge<C: PastaCurve>(
+    chips: &mut FoldLanes<'_, C>,
+    region: &mut Region<'_, C::Base>,
+) -> Result<ScalarCell<C>, Error> {
     let word = squeeze(chips, region, false)?;
     map(chips, region, &word)
 }
@@ -143,7 +159,10 @@ pub fn challenge<C: PastaCurve>(chips: &mut FoldLanes<'_, C>, region: &mut Regio
 ///
 /// # Errors
 /// Layout errors.
-pub fn challenge_last<C: PastaCurve>(chips: &mut FoldLanes<'_, C>, region: &mut Region<'_, C::Base>) -> Result<ScalarCell<C>, Error> {
+pub fn challenge_last<C: PastaCurve>(
+    chips: &mut FoldLanes<'_, C>,
+    region: &mut Region<'_, C::Base>,
+) -> Result<ScalarCell<C>, Error> {
     let word = squeeze(chips, region, true)?;
     map(chips, region, &word)
 }

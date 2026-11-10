@@ -469,7 +469,10 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> NativeWa
             state::ReviewDecisionV1::Waiting(wait) => return Ok(waiting_response(wait)),
         };
         let bytes = projection(review.projection())?;
-        let token = self.reviews.put(OriginBound::new(exchange_id, FinancialReview::Ordinary(review)))?;
+        let token = self.reviews.put(OriginBound::new(
+            exchange_id,
+            FinancialReview::Ordinary(review),
+        ))?;
         Ok(Response {
             kind: 18,
             sequence: u128::from(token),
@@ -484,7 +487,8 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> NativeWa
     ) -> Result<Response> {
         // Actual execution consumes even on an invalid identity or failed source recheck.
         // Only Native's pre-execution maintenance refusal can return this same genuine review.
-        let FinancialReview::Ordinary(reviewed) = self.reviews.take_bound(token, exchange_id)? else {
+        let FinancialReview::Ordinary(reviewed) = self.reviews.take_bound(token, exchange_id)?
+        else {
             return Err(Failure::code(INVALID));
         };
         match self.wallet.execute_reviewed(reviewed) {
@@ -495,8 +499,10 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> NativeWa
                 let (error, retained) = failure.into_parts();
                 match (wait, retained) {
                     (Some(wait), Some(reviewed)) => {
-                        self.reviews
-                            .restore_exact(token, OriginBound::new(exchange_id, FinancialReview::Ordinary(reviewed)))?;
+                        self.reviews.restore_exact(
+                            token,
+                            OriginBound::new(exchange_id, FinancialReview::Ordinary(reviewed)),
+                        )?;
                         retained_response(&self.reviews, exchange_id, token, wait_detail(wait))
                     }
                     (None, None) => Err(error.into()),
@@ -661,7 +667,11 @@ impl Drop for CapabilityDelivery {
             // Keep exact custody registered for explicit close retry. Never join while
             // this failed foreign handoff still owns an accepted invocation child.
             owner.closing.begin();
-            owner.exchanges.lock().unwrap_or_else(std::sync::PoisonError::into_inner).end_suffix();
+            owner
+                .exchanges
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .end_suffix();
             owner.background.stop();
             owner.scheduler.close();
         }

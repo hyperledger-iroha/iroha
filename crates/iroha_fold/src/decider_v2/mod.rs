@@ -63,14 +63,14 @@ mod tests;
 
 use ff::Field;
 use iroha_pasta::{PastaCurve, msm::MemoryBudget, params::ParamsIpa};
-use rayon::prelude::*;
 use iroha_plonk::pcs::{
     ipa::GeneratorClaim,
     mle::{self as pcs_mle, BatchOpening, MleClaim, open_batch_bound, verify_batch_bound},
 };
+use rayon::prelude::*;
 
-pub use plan::{DeciderV2Plan, STEP_RUNS};
 use plan::{Committed, CopyColumn, Source, Support, Weight};
+pub use plan::{DeciderV2Plan, STEP_RUNS};
 
 use crate::{
     Error,
@@ -78,8 +78,8 @@ use crate::{
     fold::{Accumulator, pow_vector},
     logup::batch_invert,
     transcript::{
-        FieldTranscript, TAG_DECIDER_FIELD, TAG_DECIDER_HELPERS, TAG_DECIDER_OPENING, TAG_DECIDER_PERMUTATION,
-        TAG_DECIDER_SHIFT, Transcript,
+        FieldTranscript, TAG_DECIDER_FIELD, TAG_DECIDER_HELPERS, TAG_DECIDER_OPENING,
+        TAG_DECIDER_PERMUTATION, TAG_DECIDER_SHIFT, Transcript,
     },
 };
 
@@ -193,13 +193,21 @@ struct Challenges<F> {
     tau: Vec<F>,
 }
 
-fn check_accumulator<C: PastaCurve>(plan: &DeciderV2Plan<C>, acc: &Accumulator<C>) -> Result<(), Error> {
+fn check_accumulator<C: PastaCurve>(
+    plan: &DeciderV2Plan<C>,
+    acc: &Accumulator<C>,
+) -> Result<(), Error> {
     let relation = &plan.relation;
     if acc.beta.len() != relation.index_bits()
         || acc.instance.commitments.len() != relation.columns()
         || acc.instance.theta.len() != relation.theta_len
         || acc.instance.r.len() != relation.groups.len()
-        || acc.instance.public.iter().map(Vec::len).ne(relation.instance_lengths.iter().copied())
+        || acc
+            .instance
+            .public
+            .iter()
+            .map(Vec::len)
+            .ne(relation.instance_lengths.iter().copied())
     {
         return Err(Error::Shape("accumulator"));
     }
@@ -207,7 +215,12 @@ fn check_accumulator<C: PastaCurve>(plan: &DeciderV2Plan<C>, acc: &Accumulator<C
 }
 
 /// The scalars: `theta`, `r`, `gamma`, `eta`, then the instance cells.
-fn scalars<C: PastaCurve>(plan: &DeciderV2Plan<C>, acc: &Accumulator<C>, gamma: C::ScalarExt, eta: C::ScalarExt) -> Vec<C::ScalarExt> {
+fn scalars<C: PastaCurve>(
+    plan: &DeciderV2Plan<C>,
+    acc: &Accumulator<C>,
+    gamma: C::ScalarExt,
+    eta: C::ScalarExt,
+) -> Vec<C::ScalarExt> {
     let mut out = acc.instance.theta.clone();
     out.extend_from_slice(&acc.instance.r);
     out.push(gamma);
@@ -218,8 +231,16 @@ fn scalars<C: PastaCurve>(plan: &DeciderV2Plan<C>, acc: &Accumulator<C>, gamma: 
     out
 }
 
-fn public_cell<C: PastaCurve>(public: &[Vec<C::ScalarExt>], column: usize, row: usize) -> C::ScalarExt {
-    public.get(column).and_then(|c| c.get(row)).copied().unwrap_or(<C::ScalarExt as Field>::ZERO)
+fn public_cell<C: PastaCurve>(
+    public: &[Vec<C::ScalarExt>],
+    column: usize,
+    row: usize,
+) -> C::ScalarExt {
+    public
+        .get(column)
+        .and_then(|c| c.get(row))
+        .copied()
+        .unwrap_or(<C::ScalarExt as Field>::ZERO)
 }
 
 /// The term coefficients of one accumulator, scaled by its batch weight.
@@ -238,7 +259,9 @@ fn weights<C: PastaCurve>(
                 * match term.weight {
                     Weight::Index(c) => pow_lo[c],
                     Weight::Alpha(k) => power(challenges.alpha, k),
-                    Weight::AlphaKappa(k, j) => power(challenges.alpha, k) * power(challenges.kappa, j),
+                    Weight::AlphaKappa(k, j) => {
+                        power(challenges.alpha, k) * power(challenges.kappa, j)
+                    }
                 }
         })
         .collect()
@@ -260,7 +283,8 @@ pub fn instance_copy_terms<C: PastaCurve>(
         let value = public_cell::<C>(&acc.instance.public, *column, *row);
         let left = gamma + value + eta * C::ScalarExt::from(*id);
         let right = gamma + value + eta * C::ScalarExt::from(*sigma);
-        let (left, right): (Option<C::ScalarExt>, Option<C::ScalarExt>) = (left.invert().into(), right.invert().into());
+        let (left, right): (Option<C::ScalarExt>, Option<C::ScalarExt>) =
+            (left.invert().into(), right.invert().into());
         let (Some(left), Some(right)) = (left, right) else {
             return Err(Error::Rejected("copy denominator"));
         };
@@ -300,22 +324,35 @@ pub fn helper_digest<C: PastaCurve>(domain: &[u8; 32], helpers: &[C::AffineExt])
 }
 
 /// The opening transcript, seeded with the field transcript's digest `d_F`.
-fn opening_transcript<C: PastaCurve>(domain: &[u8; 32], field_digest: C::ScalarExt) -> Transcript<C> {
+fn opening_transcript<C: PastaCurve>(
+    domain: &[u8; 32],
+    field_digest: C::ScalarExt,
+) -> Transcript<C> {
     let mut transcript = Transcript::<C>::new(TAG_DECIDER_OPENING, domain);
     transcript.absorb_scalars(&[field_digest]);
     transcript
 }
 
-fn draw<C: PastaCurve>(transcript: &mut FieldTranscript<C::ScalarExt>, mu: usize) -> Challenges<C::ScalarExt> {
+fn draw<C: PastaCurve>(
+    transcript: &mut FieldTranscript<C::ScalarExt>,
+    mu: usize,
+) -> Challenges<C::ScalarExt> {
     let alpha = transcript.challenge();
     let kappa = transcript.challenge();
     let lambda = transcript.challenge();
     let tau = (0..mu).map(|_| transcript.challenge()).collect();
-    Challenges { alpha, kappa, lambda, tau }
+    Challenges {
+        alpha,
+        kappa,
+        lambda,
+        tau,
+    }
 }
 
 /// The common row-bit count and the round degree of a batch.
-fn batch_shape<'a, C: PastaCurve + 'a>(plans: impl Iterator<Item = &'a DeciderV2Plan<C>>) -> Result<(usize, usize), Error> {
+fn batch_shape<'a, C: PastaCurve + 'a>(
+    plans: impl Iterator<Item = &'a DeciderV2Plan<C>>,
+) -> Result<(usize, usize), Error> {
     let mut shape: Option<(usize, usize)> = None;
     for plan in plans {
         shape = match shape {
@@ -330,7 +367,12 @@ fn batch_shape<'a, C: PastaCurve + 'a>(plans: impl Iterator<Item = &'a DeciderV2
 /// The copy helper columns: per group of columns, the sum of its columns'
 /// copy terms `1 / (gamma + v + eta id) - 1 / (gamma + v + eta sigma)` on
 /// their moved rows.
-fn copy_helpers<C: PastaCurve>(plan: &DeciderV2Plan<C>, witness: &Witness<C::ScalarExt>, gamma: C::ScalarExt, eta: C::ScalarExt) -> Result<Vec<Vec<C::ScalarExt>>, Error> {
+fn copy_helpers<C: PastaCurve>(
+    plan: &DeciderV2Plan<C>,
+    witness: &Witness<C::ScalarExt>,
+    gamma: C::ScalarExt,
+    eta: C::ScalarExt,
+) -> Result<Vec<Vec<C::ScalarExt>>, Error> {
     type S<C> = <C as PastaCurve>::ScalarExt;
     let n = plan.relation.n;
     let mut helpers = Vec::with_capacity(plan.copies.helpers.len());
@@ -437,7 +479,15 @@ fn lane_tables<C: PastaCurve>(lane: &Lane<'_, C>, tau: &[C::ScalarExt]) -> Vec<V
             Source::Helper(j) => lane.helpers[j].clone(),
             Source::Pow => pow_vector(&acc.beta[pb..]),
             Source::EqTau => pcs_mle::eq_table(tau),
-            Source::Usable => (0..n).map(|i| if i < relation.usable { S::<C>::ONE } else { S::<C>::ZERO }).collect(),
+            Source::Usable => (0..n)
+                .map(|i| {
+                    if i < relation.usable {
+                        S::<C>::ONE
+                    } else {
+                        S::<C>::ZERO
+                    }
+                })
+                .collect(),
             Source::Index => (0..n).map(|i| S::<C>::from(i as u64)).collect(),
         })
         .collect()
@@ -474,7 +524,9 @@ pub fn prove_many<C: PastaCurve>(
     let n = 1usize << mu;
     for &(plan, acc, witness) in inputs {
         check_accumulator(plan, acc)?;
-        if witness.columns.len() != plan.relation.columns() || witness.columns.iter().any(|c| c.len() != n) {
+        if witness.columns.len() != plan.relation.columns()
+            || witness.columns.iter().any(|c| c.len() != n)
+        {
             return Err(Error::Shape("witness"));
         }
     }
@@ -483,10 +535,21 @@ pub fn prove_many<C: PastaCurve>(
     for &(plan, acc, witness) in inputs {
         let helpers = copy_helpers(plan, witness, gamma, eta)?;
         let slices: Vec<&[S<C>]> = helpers.iter().map(Vec::as_slice).collect();
-        let helper_commitments = plan.key.commit_many(&slices, &vec![S::<C>::ZERO; helpers.len()])?;
-        lanes.push(Lane { plan, acc, witness, helpers, helper_commitments });
+        let helper_commitments = plan
+            .key
+            .commit_many(&slices, &vec![S::<C>::ZERO; helpers.len()])?;
+        lanes.push(Lane {
+            plan,
+            acc,
+            witness,
+            helpers,
+            helper_commitments,
+        });
     }
-    let helpers: Vec<C::AffineExt> = lanes.iter().flat_map(|lane| lane.helper_commitments.iter().copied()).collect();
+    let helpers: Vec<C::AffineExt> = lanes
+        .iter()
+        .flat_map(|lane| lane.helper_commitments.iter().copied())
+        .collect();
     transcript.absorb_foreign(&helper_digest::<C>(domain, &helpers));
     let challenges = draw::<C>(&mut transcript, mu);
 
@@ -497,7 +560,12 @@ pub fn prove_many<C: PastaCurve>(
         let scalars = scalars(lane.plan, lane.acc, gamma, eta);
         let weights = weights(lane.plan, lane.acc, &challenges, scale);
         let tables = lane_tables(lane, &challenges.tau);
-        let pairs: Vec<Pairs> = lane.plan.terms.iter().map(|t| Pairs::of(&t.support)).collect();
+        let pairs: Vec<Pairs> = lane
+            .plan
+            .terms
+            .iter()
+            .map(|t| Pairs::of(&t.support))
+            .collect();
         states.push((scalars, weights, tables, pairs));
         scale *= challenges.lambda;
     }
@@ -545,7 +613,9 @@ pub fn prove_many<C: PastaCurve>(
         transcript.absorb(&sums);
         let challenge = transcript.challenge();
         states.par_iter_mut().for_each(|(_, _, tables, pairs)| {
-            tables.par_iter_mut().for_each(|table| mle::fold(table, challenge));
+            tables
+                .par_iter_mut()
+                .for_each(|table| mle::fold(table, challenge));
             pairs.iter_mut().for_each(Pairs::halve);
         });
         zero_check.push(sums);
@@ -565,7 +635,12 @@ pub fn prove_many<C: PastaCurve>(
     let mut combined: Vec<(i32, Vec<S<C>>)> = Vec::new();
     for lane in &lanes {
         for read in &lane.plan.reads {
-            let poly = committed_poly(lane.plan, lane.witness, &lane.helpers, lane.plan.committed[read.poly]);
+            let poly = committed_poly(
+                lane.plan,
+                lane.witness,
+                &lane.helpers,
+                lane.plan.committed[read.poly],
+            );
             let slot = match combined.iter().position(|(k, _)| *k == read.rotation) {
                 Some(slot) => slot,
                 None => {
@@ -573,13 +648,20 @@ pub fn prove_many<C: PastaCurve>(
                     combined.len() - 1
                 }
             };
-            combined[slot].1.par_iter_mut().zip(poly).for_each(|(q, v)| *q += power * v);
+            combined[slot]
+                .1
+                .par_iter_mut()
+                .zip(poly)
+                .for_each(|(q, v)| *q += power * v);
             power *= zeta;
         }
     }
     let mut shift_lanes: Vec<(Vec<S<C>>, Vec<S<C>>)> = Vec::with_capacity(combined.len());
     for (k, q) in combined {
-        shift_lanes.push((pcs_mle::shifted_eq_table(&rho, k).ok_or(Error::Shape("shift weights"))?, q));
+        shift_lanes.push((
+            pcs_mle::shifted_eq_table(&rho, k).ok_or(Error::Shape("shift weights"))?,
+            q,
+        ));
     }
     let mut shift = Vec::with_capacity(mu);
     let mut sigma = Vec::with_capacity(mu);
@@ -595,9 +677,15 @@ pub fn prove_many<C: PastaCurve>(
                         let (e0, e1, q0, q1) = (e[2 * p], e[2 * p + 1], q[2 * p], q[2 * p + 1]);
                         (e0 * q0, (two * e1 - e0) * (two * q1 - q0))
                     })
-                    .reduce(|| (S::<C>::ZERO, S::<C>::ZERO), |a, b| (a.0 + b.0, a.1 + b.1))
+                    .reduce(
+                        || (S::<C>::ZERO, S::<C>::ZERO),
+                        |a, b| (a.0 + b.0, a.1 + b.1),
+                    )
             })
-            .reduce(|| (S::<C>::ZERO, S::<C>::ZERO), |a, b| (a.0 + b.0, a.1 + b.1));
+            .reduce(
+                || (S::<C>::ZERO, S::<C>::ZERO),
+                |a, b| (a.0 + b.0, a.1 + b.1),
+            );
         let sent = [s0, s2];
         transcript.absorb(&sent);
         let challenge = transcript.challenge();
@@ -634,15 +722,43 @@ pub fn prove_many<C: PastaCurve>(
         .collect::<Result<Vec<S<C>>, _>>()?;
     transcript.absorb(&at_sigma);
     let field_digest = transcript.challenge();
-    let claims = commitments.into_iter().zip(&at_sigma).map(|(commitment, value)| MleClaim { commitment, value: *value }).collect();
-    let proof = DeciderV2Proof { helpers, zero_check, at_rho, shift, at_sigma };
+    let claims = commitments
+        .into_iter()
+        .zip(&at_sigma)
+        .map(|(commitment, value)| MleClaim {
+            commitment,
+            value: *value,
+        })
+        .collect();
+    let proof = DeciderV2Proof {
+        helpers,
+        zero_check,
+        at_rho,
+        shift,
+        at_sigma,
+    };
     let transcript = opening_transcript::<C>(domain, field_digest);
-    Ok(Proved { proof, point: sigma, claims, polys, blinds, field_digest, copy_challenges: [gamma, eta], transcript })
+    Ok(Proved {
+        proof,
+        point: sigma,
+        claims,
+        polys,
+        blinds,
+        field_digest,
+        copy_challenges: [gamma, eta],
+        transcript,
+    })
 }
 
 /// The `eq(point, row)` weight of one hypercube row.
 fn eq_row<F: Field>(point: &[F], row: usize) -> F {
-    point.iter().enumerate().fold(F::ONE, |acc, (j, x)| if (row >> j) & 1 == 1 { acc * x } else { acc * (F::ONE - x) })
+    point.iter().enumerate().fold(F::ONE, |acc, (j, x)| {
+        if (row >> j) & 1 == 1 {
+            acc * x
+        } else {
+            acc * (F::ONE - x)
+        }
+    })
 }
 
 /// Verifies a decider proof for `acc` down to opening claims at one point.
@@ -731,20 +847,29 @@ pub fn verify_many<C: PastaCurve>(
                 Source::Instance(c, k) => acc.instance.public[c]
                     .iter()
                     .enumerate()
-                    .fold(S::<C>::ZERO, |sum, (row, x)| sum + *x * eq_row(&rho, mle::rotate(row, -k, n))),
-                Source::Steps(..) => plan.steps[index].as_ref().expect("a step table has its steps").eval(&rho),
+                    .fold(S::<C>::ZERO, |sum, (row, x)| {
+                        sum + *x * eq_row(&rho, mle::rotate(row, -k, n))
+                    }),
+                Source::Steps(..) => plan.steps[index]
+                    .as_ref()
+                    .expect("a step table has its steps")
+                    .eval(&rho),
                 Source::Pow => mle::pow(&acc.beta[pb..], &rho),
                 Source::EqTau => mle::eq(&challenges.tau, &rho),
                 Source::Usable => mle::prefix_indicator(relation.usable, &rho),
                 Source::Index => mle::index(0, &rho),
-                Source::Witness(..) | Source::Key(..) | Source::Helper(_) => unreachable!("committed tables are read"),
+                Source::Witness(..) | Source::Key(..) | Source::Helper(_) => {
+                    unreachable!("committed tables are read")
+                }
             }
         };
         total += plan
             .terms
             .iter()
             .zip(&weights)
-            .fold(S::<C>::ZERO, |sum, (term, weight)| sum + *weight * term.poly.eval(&value, &scalars));
+            .fold(S::<C>::ZERO, |sum, (term, weight)| {
+                sum + *weight * term.poly.eval(&value, &scalars)
+            });
         read_offset += plan.reads.len();
         scale *= challenges.lambda;
     }
@@ -777,7 +902,8 @@ pub fn verify_many<C: PastaCurve>(
             let weight = match by_rotation.iter().position(|(k, _)| *k == read.rotation) {
                 Some(slot) => by_rotation[slot].1,
                 None => {
-                    let w = pcs_mle::shifted_eq(&rho, &sigma, read.rotation).ok_or(Error::Shape("shift weights"))?;
+                    let w = pcs_mle::shifted_eq(&rho, &sigma, read.rotation)
+                        .ok_or(Error::Shape("shift weights"))?;
                     by_rotation.push((read.rotation, w));
                     w
                 }
@@ -803,11 +929,20 @@ pub fn verify_many<C: PastaCurve>(
                 Committed::Key(p) => plan.key_commitments[p],
                 Committed::Helper(j) => proof.helpers[offsets[member] + j],
             };
-            MleClaim { commitment, value: *value }
+            MleClaim {
+                commitment,
+                value: *value,
+            }
         })
         .collect();
     let transcript = opening_transcript::<C>(domain, field_digest);
-    Ok(Verified { point: sigma, claims, field_digest, copy_challenges: [gamma, eta], transcript })
+    Ok(Verified {
+        point: sigma,
+        claims,
+        field_digest,
+        copy_challenges: [gamma, eta],
+        transcript,
+    })
 }
 
 /// Opens the decider's claims with one batched IPA opening, continuing the
@@ -827,8 +962,16 @@ pub fn open<C: PastaCurve>(
     proved: &mut Proved<C>,
 ) -> Result<(BatchOpening<C>, GeneratorClaim<C>), Error> {
     let columns: Vec<&[C::ScalarExt]> = proved.polys.iter().map(Vec::as_slice).collect();
-    open_batch_bound(params, &mut proved.transcript, &proved.point, &proved.claims, &columns, &proved.blinds, MemoryBudget::DEFAULT)
-        .map_err(|_| Error::Rejected("batched opening"))
+    open_batch_bound(
+        params,
+        &mut proved.transcript,
+        &proved.point,
+        &proved.claims,
+        &columns,
+        &proved.blinds,
+        MemoryBudget::DEFAULT,
+    )
+    .map_err(|_| Error::Rejected("batched opening"))
 }
 
 /// Verifies the batched opening of a verified decider's claims, continuing its
@@ -842,6 +985,13 @@ pub fn verify_opening<C: PastaCurve>(
     verified: &mut Verified<C>,
     opening: &BatchOpening<C>,
 ) -> Result<GeneratorClaim<C>, Error> {
-    verify_batch_bound(params, &mut verified.transcript, &verified.point, &verified.claims, opening, MemoryBudget::DEFAULT)
-        .map_err(|_| Error::Rejected("batched opening"))
+    verify_batch_bound(
+        params,
+        &mut verified.transcript,
+        &verified.point,
+        &verified.claims,
+        opening,
+        MemoryBudget::DEFAULT,
+    )
+    .map_err(|_| Error::Rejected("batched opening"))
 }

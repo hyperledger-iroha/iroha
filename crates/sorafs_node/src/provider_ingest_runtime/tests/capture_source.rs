@@ -132,6 +132,43 @@ async fn completed_musubi_capture_scanner_retries_an_unavailable_page_without_ge
     assert_eq!(ledger.requested_limits(), vec![1, 1]);
     assert_eq!(ledger.requested_generations(), vec![1, 1]);
 }
+/// Archive retention passed the anchor of a capture scan under way. The scan starts again at a
+/// newer head instead of retrying the lost page until a restart, without any generation drift.
+#[tokio::test]
+async fn completed_musubi_capture_scanner_restarts_when_its_anchor_was_retired() {
+    let ledger = Arc::new(CaptureScannerLedgerV1::new(
+        vec![
+            fixture_completed_musubi_capture_row(0x3D, 0x8A),
+            fixture_completed_musubi_capture_row(0x3E, 0x8B),
+        ],
+        8,
+        CaptureScannerLedgerFaultV1::None,
+    ));
+    let mut scanner = ProviderIngestCompletedMusubiCaptureScannerV1::new(
+        CompletedMusubiStoreInstanceV1::new(),
+        LOCAL_PROVIDER,
+        test_network_id(),
+        1,
+        Arc::clone(&ledger),
+    )
+    .expect("construct capture scanner");
+    let first = scanner.next_page().await.expect("first page");
+    assert_eq!(first.finalized_cursor(), cursor(8));
+    assert!(!first.scan_complete());
+    ledger.set_finalized_height(9);
+    ledger.set_fault(CaptureScannerLedgerFaultV1::AnchorRetired);
+    assert!(matches!(
+        scanner.next_page().await,
+        Err(ProviderIngestRuntimeErrorV1::FinalizedLedgerUnavailable)
+    ));
+    let restarted = scanner
+        .next_page()
+        .await
+        .expect("a fresh scan needs no old anchor");
+    assert_eq!(restarted.finalized_cursor(), cursor(9));
+    assert_eq!(restarted.candidates().len(), 1);
+    assert_eq!(ledger.requested_generations(), vec![1, 2, 2]);
+}
 #[tokio::test]
 async fn completed_musubi_capture_scanner_rejects_a_previous_generation_replay() {
     let ledger = Arc::new(CaptureScannerLedgerV1::new(
@@ -278,6 +315,24 @@ impl CaptureCoordinatorProbeLedgerV1 {
             binding_calls: AtomicUsize::new(0),
             page_reads: AtomicUsize::new(0),
         }
+    }
+}
+impl crate::provider_ingest_runtime::ProviderIngestFinalizedAnchorRetainerV1
+    for CaptureCoordinatorProbeLedgerV1
+{
+    fn retain_exact_cursor(
+        &self,
+        _cursor: crate::provider_ingest_outbox::ProviderIngestFinalizedCursorV1,
+    ) -> crate::provider_ingest_runtime::ProviderIngestFutureV1<
+        '_,
+        Result<
+            crate::provider_ingest_runtime::ProviderIngestFinalizedAnchorLeaseV1,
+            crate::provider_ingest_runtime::ProviderIngestFinalizedLedgerErrorV1,
+        >,
+    > {
+        Box::pin(async {
+            Ok(crate::provider_ingest_runtime::ProviderIngestFinalizedAnchorLeaseV1::retain(()))
+        })
     }
 }
 impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1 for CaptureCoordinatorProbeLedgerV1 {
@@ -679,7 +734,17 @@ async fn completed_musubi_capture_reconciliation_replays_a_durable_prefix_after_
                 panic!("reconciliation did not reach the second blocked inventory read");
             }
         }
+        assert_eq!(
+            ledger.anchor_leases.load(Ordering::SeqCst),
+            1,
+            "the exact anchor remains retained while inventory admission is in flight"
+        );
     }
+    assert_eq!(
+        ledger.anchor_leases.load(Ordering::SeqCst),
+        0,
+        "cancelling the page releases its lease after the durable prefix"
+    );
     assert_eq!(
         scanner.progress(),
         initial_progress,
@@ -995,6 +1060,9 @@ fn completed_musubi_capture_scanner_enforces_identity_and_page_bounds() {
     }
 }
 struct TestFetch {
+    block: AtomicBool,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
     result: Mutex<Result<Vec<u8>, ProviderIngestSourceFetchErrorV1>>,
     delay_ms: u64,
     calls: AtomicUsize,
@@ -1010,6 +1078,10 @@ impl ProviderIngestAuthenticatedSourceFetchV1 for TestFetch {
         let result = self.result.lock().unwrap().clone();
         let delay_ms = self.delay_ms;
         Box::pin(async move {
+            if self.block.load(Ordering::SeqCst) {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
             if delay_ms != 0 {
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
             }
@@ -1637,4 +1709,35 @@ fn completed_capture_transcript_roots_use_the_actual_including_module() {
             request_bytes
         );
     }
+}
+
+#[tokio::test]
+async fn completed_capture_retired_after_signature_advances_generation_and_releases_page_lease() {
+    let ledger = Arc::new(CaptureScannerLedgerV1::new(
+        vec![fixture_completed_musubi_capture_row(0x39, 0x86)],
+        8,
+        CaptureScannerLedgerFaultV1::LeaseAnchorRetired,
+    ));
+    let mut scanner = ProviderIngestCompletedMusubiCaptureScannerV1::new(
+        CompletedMusubiStoreInstanceV1::new(),
+        LOCAL_PROVIDER,
+        test_network_id(),
+        1,
+        Arc::clone(&ledger),
+    )
+    .unwrap();
+    assert!(matches!(
+        scanner.next_page().await,
+        Err(ProviderIngestRuntimeErrorV1::FinalizedLedgerUnavailable)
+    ));
+    assert_eq!(scanner.request_generation, 2);
+    assert_eq!(scanner.scan_cursor, None);
+    ledger.set_fault(CaptureScannerLedgerFaultV1::None);
+    ledger.set_finalized_height(9);
+    let page = scanner.next_page().await.unwrap();
+    assert_eq!(page.finalized_cursor(), cursor(9));
+    assert_eq!(ledger.requested_generations(), [1, 2]);
+    assert_eq!(ledger.anchor_leases.load(Ordering::SeqCst), 1);
+    drop(page);
+    assert_eq!(ledger.anchor_leases.load(Ordering::SeqCst), 0);
 }

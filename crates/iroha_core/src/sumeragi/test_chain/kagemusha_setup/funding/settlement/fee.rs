@@ -120,13 +120,66 @@ fn retain_execution(
         );
         assert!(!called.get());
     }
+    // Exercise the same production read-only original owner used by offline replay export.
+    // These engineering-chain assertions confer no shipping genesis/root qualification.
+    use crate::sumeragi::certified_chain::{CurrentCutSourceLimits, read_current_certified_cut};
+    use iroha_data_model::sumeragi::finality::{
+        NATIVE_FINALITY_MAX_BLOCK_BYTES, NATIVE_FINALITY_MAX_BLOCK_COUNT,
+        NATIVE_FINALITY_MAX_JOURNAL_BYTES,
+    };
+    let frames = iroha_allocation::AllocationBudget::new(128 * 1024 * 1024);
+    let graphs = iroha_allocation::AllocationBudget::new(256 * 1024 * 1024);
+    let current = read_current_certified_cut(
+        &state.view(),
+        tip.height(),
+        setup.chain.root_scope(),
+        CurrentCutSourceLimits::new(
+            NATIVE_FINALITY_MAX_BLOCK_BYTES,
+            NATIVE_FINALITY_MAX_JOURNAL_BYTES,
+            NATIVE_FINALITY_MAX_BLOCK_COUNT,
+        )
+        .unwrap(),
+        &frames,
+        &graphs,
+    )
+    .unwrap();
+    let KagemushaWalletPayoutKeyV1::Fee(credit) = fee.key else {
+        panic!("actual Fee row required")
+    };
+    let scheme = pin("KAGEMUSHA_WALLET_SCHEME_ID");
+    for (selected_scheme, selected_credit, pool) in [
+        ([0; 32], credit, &budget),
+        (scheme, [0; 32], &budget),
+        (scheme, credit, &empty_budget),
+    ] {
+        assert!(
+            state
+                .with_native_kagemusha_fee_snapshot_v1(
+                    &current,
+                    selected_scheme,
+                    selected_credit,
+                    pool,
+                    |_, _| {
+                        called.set(true);
+                        Ok(())
+                    },
+                )
+                .is_err()
+        );
+        assert!(!called.get());
+    }
     let snapshot_record = state
-        .with_native_kagemusha_fee_snapshot_for_testing(
-            &tip,
-            pin("KAGEMUSHA_WALLET_SCHEME_ID"),
-            &fee,
+        .with_native_kagemusha_fee_snapshot_v1(
+            &current,
+            scheme,
+            credit,
             &budget,
-            |snapshot| {
+            |snapshot, original_payout| {
+                assert_eq!(
+                    original_payout,
+                    norito::encode_canonical(&fee).unwrap().as_slice()
+                );
+                assert_eq!(current.world_state_root(), snapshot.root().unwrap());
                 // Retain an explicit finite charge across the authenticated copy and output.
                 let _authenticated_copy = budget
                     .try_reserve_bytes(

@@ -53,14 +53,21 @@ impl Circuit<Fq> for QSignatureStep {
     }
 
     fn without_witnesses(&self) -> Self {
-        Self { leaf: self.leaf.without_witnesses(), frame: None, ..self.clone() }
+        Self {
+            leaf: self.leaf.without_witnesses(),
+            frame: None,
+            ..self.clone()
+        }
     }
 
     fn configure(_meta: &mut ConstraintSystem<Fq>) -> QSignatureStepConfig {
         unreachable!("configured with the leaf's parameters")
     }
 
-    fn configure_with_params(meta: &mut ConstraintSystem<Fq>, params: Self::Params) -> QSignatureStepConfig {
+    fn configure_with_params(
+        meta: &mut ConstraintSystem<Fq>,
+        params: Self::Params,
+    ) -> QSignatureStepConfig {
         let frame = meta.instance_column(Q_FRAME);
         meta.enable_equality(frame);
         let fold = FoldVerifierConfig::configure(meta);
@@ -68,7 +75,11 @@ impl Circuit<Fq> for QSignatureStep {
         QSignatureStepConfig { frame, fold, leaf }
     }
 
-    fn synthesize(&self, config: QSignatureStepConfig, mut layouter: impl Layouter<Fq>) -> Result<(), Error> {
+    fn synthesize(
+        &self,
+        config: QSignatureStepConfig,
+        mut layouter: impl Layouter<Fq>,
+    ) -> Result<(), Error> {
         let mut chips = FoldVerifierChips::new(&config.fold);
         chips.load_tables(&mut layouter)?;
         let chain = QKind::Signature.chain(AKind::Receive3);
@@ -86,12 +97,21 @@ impl Circuit<Fq> for QSignatureStep {
                     Q_STATE,
                     self.frame.as_ref(),
                 )?;
-                frame_outputs(&mut lanes, &mut region, &chain, &frame, &[], &frame.digests, &[])
+                frame_outputs(
+                    &mut lanes,
+                    &mut region,
+                    &chain,
+                    &frame,
+                    &[],
+                    &frame.digests,
+                    &[],
+                )
             },
         )?;
         for (row, word) in outputs.iter().enumerate() {
             layouter.constrain_instance(word.cell(), config.frame, row)?;
         }
-        self.leaf.synthesize(config.leaf, layouter.namespace(|| "merged signature leaf"))
+        self.leaf
+            .synthesize(config.leaf, layouter.namespace(|| "merged signature leaf"))
     }
 }

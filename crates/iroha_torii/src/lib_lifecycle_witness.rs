@@ -309,6 +309,97 @@ mod lifecycle_witness_tests {
         }
     }
 
+    fn published_required_members(schema: &str) -> std::collections::BTreeSet<String> {
+        let document = crate::openapi::generate_spec();
+        document["components"]["schemas"][schema]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|field| field.as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    async fn read_json(router: axum::Router, uri: &str) -> (StatusCode, norito::json::Value) {
+        use tower::ServiceExt as _;
+        let mut request = axum::http::Request::builder()
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(crate::loopback_connect_info());
+        let response = router.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 32 * 1024 * 1024)
+            .await
+            .unwrap();
+        (status, norito::json::from_slice(&bytes).unwrap())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn lifecycle_reads_return_exactly_their_published_members() {
+        use iroha_core::{
+            state::World,
+            sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+        };
+        let members = |value: &norito::json::Value| {
+            value
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        let chain = selected_chain();
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+        let fixture = Arc::get_mut(&mut app).unwrap();
+        fixture.state = Arc::clone(chain.state());
+        fixture.kura = Arc::clone(chain.kura());
+        let witness = axum::Router::new()
+            .route(
+                route_catalog::core::TRIGGER_LIFECYCLE_WITNESS.path(),
+                axum::routing::get(handler_trigger_lifecycle_witness),
+            )
+            .layer(axum::middleware::from_fn(enforce_route_timeout))
+            .with_state(app);
+        let (status, value) = read_json(
+            witness,
+            "/v1/triggers/lifecycle-witness?start_height=3&end_height=4",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            members(&value),
+            published_required_members("TriggerLifecycleWitnessV1")
+        );
+
+        let chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1000)).unwrap();
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+        let fixture = Arc::get_mut(&mut app).unwrap();
+        fixture.state = Arc::clone(chain.state());
+        fixture.kura = Arc::clone(chain.kura());
+        let activation = axum::Router::new()
+            .route(
+                route_catalog::core::TRIGGER_LIFECYCLE_ACTIVATION.path(),
+                axum::routing::get(handler_trigger_lifecycle_activation),
+            )
+            .with_state(app);
+        let (status, value) = read_json(activation, "/v1/triggers/lifecycle-activation").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            members(&value),
+            published_required_members("TriggerLifecycleActivationV1")
+        );
+        assert_eq!(value["active"].as_bool(), Some(false));
+        assert!(value["v2_activation_height"].is_null());
+        assert!(value["committed_height"].as_u64().is_some());
+        // Both published as the canonical Norito hash literal.
+        for member in ["network_id", "consensus_config_fingerprint"] {
+            let literal = value[member].as_str().unwrap();
+            assert!(literal.starts_with("hash:"), "{member}: {literal}");
+        }
+    }
+
     #[test]
     fn lifecycle_witness_activation_policy_route_is_public_and_read_only() {
         let route = route_catalog::core::TRIGGER_LIFECYCLE_ACTIVATION;

@@ -134,6 +134,24 @@ fn ffi_rejects_certified_failure_extra_execution_and_independent_target_substitu
 }
 
 #[test]
+fn ffi_refuses_a_transfer_request_although_it_normalizes() {
+    let (capsule, original, checkpoint, trust) = ffi_fixture(false, false);
+    let transfer = crate::fi_context_verification::tests::transfer_request_from(&original);
+    // The request parses, so each refusal below is the bridge's own closure.
+    assert!(matches!(
+        super::normalize_asset_fi_context_request_v1(&transfer)
+            .unwrap()
+            .target,
+        super::AssetFiContextTargetV1::Transfer { .. }
+    ));
+    assert_eq!(
+        super::with_fi_context_trust(&transfer, &trust, |_, _| Ok(())).unwrap_err(),
+        "unsupported FI request kind"
+    );
+    assert!(invoke(&capsule, &transfer, &checkpoint, &trust).is_err());
+}
+
+#[test]
 fn ffi_closes_trust_schema_and_refuses_missing_duplicate_or_noncanonical_pins() {
     let (capsule, original, checkpoint, trust) = ffi_fixture(false, false);
     let text = String::from_utf8(trust.clone()).unwrap();

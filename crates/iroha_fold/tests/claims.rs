@@ -4,8 +4,8 @@
 use ff::Field;
 use group::CurveAffine;
 use iroha_fold::claims::{
-    Claim, ClaimAccumulator, claim_for, decide_claims, fold_claim, restructure_prove, restructure_verify,
-    restructured_weight_at, restructured_weights, verify_claim_fold,
+    Claim, ClaimAccumulator, claim_for, decide_claims, fold_claim, restructure_prove,
+    restructure_verify, restructured_weight_at, restructured_weights, verify_claim_fold,
 };
 use iroha_pasta::{Ep, Eq, Fp, Fq, PastaCurve};
 use iroha_plonk::pcs::{ipa::PinnedParams, mle};
@@ -19,7 +19,13 @@ fn run<C: PastaCurve>(seed: u64) {
     let g = params.params().g();
     let mut rng = ChaCha20Rng::seed_from_u64(seed);
     let mut challenges = |prefix_zeros: usize| -> [C::ScalarExt; 16] {
-        core::array::from_fn(|i| if i < prefix_zeros { C::ScalarExt::ZERO } else { C::ScalarExt::random(&mut rng) })
+        core::array::from_fn(|i| {
+            if i < prefix_zeros {
+                C::ScalarExt::ZERO
+            } else {
+                C::ScalarExt::random(&mut rng)
+            }
+        })
     };
     // Three full claims and one k12 source with four leading zero challenges.
     let claims: Vec<Claim<C>> = [0, 0, 4, 0]
@@ -52,12 +58,22 @@ fn run<C: PastaCurve>(seed: u64) {
 /// The restructuring sumcheck of a deciding accumulator: `e + 1 = <s, B>`,
 /// `B~(rho)` in `O(16)` equals the extension of `B`, the sumcheck ends in
 /// `s~(rho) = v`, and another `e`, round or value is rejected.
-fn restructures<C: PastaCurve>(acc: &ClaimAccumulator<C>, s: &[C::ScalarExt], rng: &mut ChaCha20Rng) {
+fn restructures<C: PastaCurve>(
+    acc: &ClaimAccumulator<C>,
+    s: &[C::ScalarExt],
+    rng: &mut ChaCha20Rng,
+) {
     let weights = restructured_weights(acc);
-    let inner = s.iter().zip(&weights).fold(C::ScalarExt::ZERO, |sum, (a, b)| sum + *a * b);
+    let inner = s
+        .iter()
+        .zip(&weights)
+        .fold(C::ScalarExt::ZERO, |sum, (a, b)| sum + *a * b);
     assert_eq!(inner, acc.e + C::ScalarExt::ONE);
     let rho: [C::ScalarExt; 16] = core::array::from_fn(|_| C::ScalarExt::random(&mut *rng));
-    assert_eq!(Some(restructured_weight_at(acc, &rho)), mle::evaluate(&weights, &rho));
+    assert_eq!(
+        Some(restructured_weight_at(acc, &rho)),
+        mle::evaluate(&weights, &rho)
+    );
     let (proof, statement) = restructure_prove(&DOMAIN, acc, s).expect("restructure");
     assert_eq!(restructure_verify(&DOMAIN, acc, &proof), Ok(statement));
     assert_eq!(statement.commitment, acc.g);

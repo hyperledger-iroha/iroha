@@ -8,9 +8,9 @@ use ff::{Field, PrimeField};
 
 /// `eq(x, y) = prod_j (x_j y_j + (1 - x_j)(1 - y_j))`.
 pub(crate) fn eq<F: Field>(x: &[F], y: &[F]) -> F {
-    x.iter()
-        .zip(y)
-        .fold(F::ONE, |acc, (a, b)| acc * (*a * b + (F::ONE - a) * (F::ONE - b)))
+    x.iter().zip(y).fold(F::ONE, |acc, (a, b)| {
+        acc * (*a * b + (F::ONE - a) * (F::ONE - b))
+    })
 }
 
 /// Binds the lowest variable of `table` to `r`: `T'[i] = T[2i] + r (T[2i+1] - T[2i])`.
@@ -26,7 +26,9 @@ pub(crate) fn fold<F: Field>(table: &mut Vec<F>, r: F) {
 /// `pow(x) = prod_j (1 - x_j + x_j beta_j)`, on the hypercube the `pow` weight
 /// `prod_j beta_j^{i_j}` of row `i`.
 pub(crate) fn pow<F: Field>(beta: &[F], x: &[F]) -> F {
-    beta.iter().zip(x).fold(F::ONE, |acc, (b, v)| acc * (F::ONE - v + *v * b))
+    beta.iter()
+        .zip(x)
+        .fold(F::ONE, |acc, (b, v)| acc * (F::ONE - v + *v * b))
 }
 
 /// `sum_{i < u} eq(x, i)`, the multilinear extension of the indicator of the

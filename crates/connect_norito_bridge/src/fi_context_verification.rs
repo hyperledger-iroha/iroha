@@ -138,10 +138,11 @@ pub(crate) fn bind_assertion(
                 .into(),
         );
     }
-    // Existing platform V1 schemas describe LinkApproval only. Do not infer a
-    // transfer or invent capability fields absent from a retained transfer consent.
+    // A retained Transfer request now normalizes, but this verifier binds only
+    // LinkApproval snapshots. Refuse rather than infer capability fields absent from
+    // a transfer consent. TODO: bind the Transfer FI and reference when it is qualified.
     let AssetFiContextTargetV1::LinkApproval(target) = &request.target else {
-        return Err("FI transfer requires its own explicit retained request schema".into());
+        return Err("FI transfer assertion verification is not qualified".into());
     };
     if snapshot.fi_account_id != target.link.fi_account_id
         || snapshot.reference_digest != target.link.reference_digest

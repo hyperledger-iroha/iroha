@@ -28,8 +28,8 @@ use iroha_plonk::{
     frontend::{Error, Layouter, Region, Value},
 };
 use iroha_plonk_gadgets::{
-    GlueChip, GlueConfig, LimbBits, Pow5Columns, RoundConstantColumns, RunningSumChip, RunningSumConfig,
-    UintChip, Word,
+    GlueChip, GlueConfig, LimbBits, Pow5Columns, RoundConstantColumns, RunningSumChip,
+    RunningSumConfig, UintChip, Word,
     ecc::{AssignedPoint, EccChip, EccConfig},
     ff::{CanonicalS6, FfChip, FfConfig, FfValue, ForeignModulus, Nat},
     pow5_fq::{DuplexChip, DuplexConfig},
@@ -74,7 +74,13 @@ impl<C: PastaCurve> FoldVerifierConfig<C> {
         let lane = Pow5Columns::allocate(meta);
         let round_constants = RoundConstantColumns::allocate(meta);
         let duplex = DuplexConfig::configure(meta, lane, round_constants, &[]);
-        Self { glue, range, ff, ecc, duplex }
+        Self {
+            glue,
+            range,
+            ff,
+            ecc,
+            duplex,
+        }
     }
 }
 
@@ -180,7 +186,11 @@ impl<C: PastaCurve> FoldLanes<'_, C> {
     ///
     /// # Errors
     /// Layout errors or limbs of another modulus.
-    pub fn import(&mut self, region: &mut Region<'_, C::Base>, s6: CanonicalS6<C::Base>) -> Result<ScalarCell<C>, Error> {
+    pub fn import(
+        &mut self,
+        region: &mut Region<'_, C::Base>,
+        s6: CanonicalS6<C::Base>,
+    ) -> Result<ScalarCell<C>, Error> {
         if s6.modulus() != scalar_modulus::<C>() {
             return Err(Error::Synthesis);
         }
@@ -193,7 +203,11 @@ impl<C: PastaCurve> FoldLanes<'_, C> {
     ///
     /// # Errors
     /// Layout errors.
-    pub fn export(&mut self, region: &mut Region<'_, C::Base>, ff: FfValue<C::Base>) -> Result<ScalarCell<C>, Error> {
+    pub fn export(
+        &mut self,
+        region: &mut Region<'_, C::Base>,
+        ff: FfValue<C::Base>,
+    ) -> Result<ScalarCell<C>, Error> {
         let mut uint = UintChip::new(self.glue, self.range);
         let s6 = self.ff.export_s6(&mut uint, region, &ff)?;
         Ok(ScalarCell { s6, ff })
@@ -203,7 +217,11 @@ impl<C: PastaCurve> FoldLanes<'_, C> {
     ///
     /// # Errors
     /// Layout errors.
-    pub fn constant(&mut self, region: &mut Region<'_, C::Base>, value: C::ScalarExt) -> Result<FfValue<C::Base>, Error> {
+    pub fn constant(
+        &mut self,
+        region: &mut Region<'_, C::Base>,
+        value: C::ScalarExt,
+    ) -> Result<FfValue<C::Base>, Error> {
         self.ff.constant(
             self.glue,
             region,
@@ -216,7 +234,12 @@ impl<C: PastaCurve> FoldLanes<'_, C> {
     ///
     /// # Errors
     /// Layout errors.
-    pub fn add(&mut self, region: &mut Region<'_, C::Base>, a: &FfValue<C::Base>, b: &FfValue<C::Base>) -> Result<FfValue<C::Base>, Error> {
+    pub fn add(
+        &mut self,
+        region: &mut Region<'_, C::Base>,
+        a: &FfValue<C::Base>,
+        b: &FfValue<C::Base>,
+    ) -> Result<FfValue<C::Base>, Error> {
         self.ff.add(self.glue, region, a, b)
     }
 
@@ -224,7 +247,12 @@ impl<C: PastaCurve> FoldLanes<'_, C> {
     ///
     /// # Errors
     /// Layout errors.
-    pub fn sub(&mut self, region: &mut Region<'_, C::Base>, a: &FfValue<C::Base>, b: &FfValue<C::Base>) -> Result<FfValue<C::Base>, Error> {
+    pub fn sub(
+        &mut self,
+        region: &mut Region<'_, C::Base>,
+        a: &FfValue<C::Base>,
+        b: &FfValue<C::Base>,
+    ) -> Result<FfValue<C::Base>, Error> {
         self.ff.sub(self.glue, region, a, b)
     }
 
@@ -232,7 +260,12 @@ impl<C: PastaCurve> FoldLanes<'_, C> {
     ///
     /// # Errors
     /// Layout errors.
-    pub fn mul(&mut self, region: &mut Region<'_, C::Base>, a: &FfValue<C::Base>, b: &FfValue<C::Base>) -> Result<FfValue<C::Base>, Error> {
+    pub fn mul(
+        &mut self,
+        region: &mut Region<'_, C::Base>,
+        a: &FfValue<C::Base>,
+        b: &FfValue<C::Base>,
+    ) -> Result<FfValue<C::Base>, Error> {
         self.ff.mul(region, a, b)
     }
 
@@ -257,11 +290,19 @@ impl<C: PastaCurve> FoldLanes<'_, C> {
     ///
     /// # Errors
     /// Layout errors.
-    pub fn scalar_words(&mut self, region: &mut Region<'_, C::Base>, scalar: &ScalarCell<C>) -> Result<Vec<Word<C::Base>>, Error> {
+    pub fn scalar_words(
+        &mut self,
+        region: &mut Region<'_, C::Base>,
+        scalar: &ScalarCell<C>,
+    ) -> Result<Vec<Word<C::Base>>, Error> {
         let (lo, hi) = (scalar.s6.lo().word(), scalar.s6.hi().word());
         if scalar_is_one_word::<C>() {
             let two128 = C::Base::from_u128(1 << 64).square();
-            Ok(vec![self.glue.linear(region, &[(C::Base::ONE, lo), (two128, hi)], C::Base::ZERO)?])
+            Ok(vec![self.glue.linear(
+                region,
+                &[(C::Base::ONE, lo), (two128, hi)],
+                C::Base::ZERO,
+            )?])
         } else {
             Ok(vec![lo.clone(), hi.clone()])
         }
@@ -271,7 +312,11 @@ impl<C: PastaCurve> FoldLanes<'_, C> {
     ///
     /// # Errors
     /// Layout errors.
-    pub fn assign_point(&mut self, region: &mut Region<'_, C::Base>, value: Value<C>) -> Result<AssignedPoint<C::Base>, Error> {
+    pub fn assign_point(
+        &mut self,
+        region: &mut Region<'_, C::Base>,
+        value: Value<C>,
+    ) -> Result<AssignedPoint<C::Base>, Error> {
         self.ecc.witness_point(region, value)
     }
 }

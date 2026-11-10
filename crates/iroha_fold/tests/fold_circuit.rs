@@ -7,12 +7,15 @@
 use ff::Field;
 use iroha_fold::{
     Accumulator, CommitKey, FoldedRelation, Instance, Witness,
-    relation::FoldShape,
     circuit::{
         FoldVerifierChips, FoldVerifierConfig,
-        verify::{accumulator_digest, assign_accumulator, assign_instance, assign_proof, fresh_transcript, verify_fold},
+        verify::{
+            accumulator_digest, assign_accumulator, assign_instance, assign_proof,
+            fresh_transcript, verify_fold,
+        },
     },
     fold::{self, FoldProof, fresh_instance},
+    relation::FoldShape,
 };
 use iroha_pasta::{Ep, Eq, PastaCurve};
 use iroha_plonk::{
@@ -39,7 +42,11 @@ struct Inputs<C: PastaCurve> {
 
 impl<C: PastaCurve> Clone for Inputs<C> {
     fn clone(&self) -> Self {
-        Self { acc: self.acc.clone(), fresh: self.fresh.clone(), proof: self.proof.clone() }
+        Self {
+            acc: self.acc.clone(),
+            fresh: self.fresh.clone(),
+            proof: self.proof.clone(),
+        }
     }
 }
 
@@ -62,7 +69,10 @@ impl<C: PastaCurve> Circuit<C::Base> for FoldCircuit<C> {
     type Params = ();
 
     fn without_witnesses(&self) -> Self {
-        Self { shape: self.shape.clone(), inputs: None }
+        Self {
+            shape: self.shape.clone(),
+            inputs: None,
+        }
     }
 
     fn configure(meta: &mut ConstraintSystem<C::Base>) -> Config<C> {
@@ -72,7 +82,11 @@ impl<C: PastaCurve> Circuit<C::Base> for FoldCircuit<C> {
         Config { fold, instance }
     }
 
-    fn synthesize(&self, config: Config<C>, mut layouter: impl Layouter<C::Base>) -> Result<(), Error> {
+    fn synthesize(
+        &self,
+        config: Config<C>,
+        mut layouter: impl Layouter<C::Base>,
+    ) -> Result<(), Error> {
         let mut chips = FoldVerifierChips::new(&config.fold);
         chips.load_tables(&mut layouter)?;
         let inputs = self.inputs.as_ref();
@@ -80,11 +94,35 @@ impl<C: PastaCurve> Circuit<C::Base> for FoldCircuit<C> {
             || "fold",
             |mut region| {
                 let mut lanes = chips.lanes();
-                let acc = assign_accumulator(&mut lanes, &mut region, &self.shape, inputs.map(|i| &i.acc))?;
-                let fresh = assign_instance(&mut lanes, &mut region, &self.shape, inputs.map(|i| &i.fresh))?;
-                let proof = assign_proof(&mut lanes, &mut region, &self.shape, inputs.map(|i| &i.proof))?;
-                let fresh_digest = fresh_transcript(&mut lanes, &mut region, &self.shape, &DOMAIN, &fresh)?.digest;
-                let folded = verify_fold(&mut lanes, &mut region, &self.shape, &DOMAIN, &acc, &fresh, &proof)?;
+                let acc = assign_accumulator(
+                    &mut lanes,
+                    &mut region,
+                    &self.shape,
+                    inputs.map(|i| &i.acc),
+                )?;
+                let fresh = assign_instance(
+                    &mut lanes,
+                    &mut region,
+                    &self.shape,
+                    inputs.map(|i| &i.fresh),
+                )?;
+                let proof = assign_proof(
+                    &mut lanes,
+                    &mut region,
+                    &self.shape,
+                    inputs.map(|i| &i.proof),
+                )?;
+                let fresh_digest =
+                    fresh_transcript(&mut lanes, &mut region, &self.shape, &DOMAIN, &fresh)?.digest;
+                let folded = verify_fold(
+                    &mut lanes,
+                    &mut region,
+                    &self.shape,
+                    &DOMAIN,
+                    &acc,
+                    &fresh,
+                    &proof,
+                )?;
                 let digest = accumulator_digest(&mut lanes, &mut region, &DOMAIN, &folded)?;
                 Ok((digest, fresh_digest))
             },
@@ -103,13 +141,23 @@ fn setup<C: PastaCurve>() -> Setup<C> {
     let synthesized = synthesize(&Toy { seed: 1 }, K, None).expect("layout");
     let relation = FoldedRelation::from_synthesized(&synthesized).expect("relation");
     let params = PinnedParams::<C>::derive(K).expect("params");
-    Setup { relation, key: CommitKey::lagrange(params.params()) }
+    Setup {
+        relation,
+        key: CommitKey::lagrange(params.params()),
+    }
 }
 
-fn fresh<C: PastaCurve>(s: &Setup<C>, seed: u64, rng: &mut ChaCha20Rng) -> (Instance<C>, Witness<C::ScalarExt>) {
+fn fresh<C: PastaCurve>(
+    s: &Setup<C>,
+    seed: u64,
+    rng: &mut ChaCha20Rng,
+) -> (Instance<C>, Witness<C::ScalarExt>) {
     let toy = Toy { seed };
     let synthesized = synthesize(&toy, K, Some(&toy.instances::<C::ScalarExt>())).expect("witness");
-    let (advice, public) = s.relation.stage_witness(&synthesized).expect("stage witness");
+    let (advice, public) = s
+        .relation
+        .stage_witness(&synthesized)
+        .expect("stage witness");
     fresh_instance(&s.relation, &s.key, &DOMAIN, advice, public, rng).expect("fresh instance")
 }
 
@@ -122,24 +170,50 @@ fn honest_fold<C: PastaCurve>(s: &Setup<C>) -> (Inputs<C>, Accumulator<C>) {
     let (acc, w, _) = fold::fold(&s.relation, &DOMAIN, &acc, &w1, &second, &w2).expect("fold");
     let (third, w3) = fresh(s, 3, &mut rng);
     let (next, _, proof) = fold::fold(&s.relation, &DOMAIN, &acc, &w, &third, &w3).expect("fold");
-    (Inputs { acc, fresh: third, proof }, next)
+    (
+        Inputs {
+            acc,
+            fresh: third,
+            proof,
+        },
+        next,
+    )
 }
 
-fn public_of<C: PastaCurve>(s: &Setup<C>, inputs: &Inputs<C>, folded: &Accumulator<C>) -> Vec<Vec<C::Base>> {
-    let fresh_digest = inputs.fresh.fresh_digest(&s.relation, &DOMAIN).expect("fresh");
+fn public_of<C: PastaCurve>(
+    s: &Setup<C>,
+    inputs: &Inputs<C>,
+    folded: &Accumulator<C>,
+) -> Vec<Vec<C::Base>> {
+    let fresh_digest = inputs
+        .fresh
+        .fresh_digest(&s.relation, &DOMAIN)
+        .expect("fresh");
     vec![vec![folded.digest(&DOMAIN), fresh_digest]]
 }
 
 fn satisfied<C: PastaCurve>(s: &Setup<C>, inputs: &Inputs<C>, public: &[Vec<C::Base>]) -> bool {
-    let circuit = FoldCircuit { shape: s.relation.shape(), inputs: Some(inputs.clone()) };
-    check_circuit(&circuit, CIRCUIT_K, public, CheckMode::Strict).expect("synthesis").is_satisfied()
+    let circuit = FoldCircuit {
+        shape: s.relation.shape(),
+        inputs: Some(inputs.clone()),
+    };
+    check_circuit(&circuit, CIRCUIT_K, public, CheckMode::Strict)
+        .expect("synthesis")
+        .is_satisfied()
 }
 
 fn folds_exactly_as_the_native_verifier<C: PastaCurve>() {
     let s = setup::<C>();
     let (inputs, folded) = honest_fold(&s);
     assert_eq!(
-        fold::verify_fold(&s.relation, &DOMAIN, &inputs.acc, &inputs.fresh, &inputs.proof).expect("native"),
+        fold::verify_fold(
+            &s.relation,
+            &DOMAIN,
+            &inputs.acc,
+            &inputs.fresh,
+            &inputs.proof
+        )
+        .expect("native"),
         folded
     );
     let public = public_of(&s, &inputs, &folded);
@@ -156,7 +230,8 @@ fn folds_exactly_as_the_native_verifier<C: PastaCurve>() {
             bad.proof.k[0] += <C::ScalarExt as Field>::ONE;
         }
         assert!(!satisfied(&s, &bad, &public));
-        let native = fold::verify_fold(&s.relation, &DOMAIN, &bad.acc, &bad.fresh, &bad.proof).expect("native");
+        let native = fold::verify_fold(&s.relation, &DOMAIN, &bad.acc, &bad.fresh, &bad.proof)
+            .expect("native");
         assert!(satisfied(&s, &bad, &public_of(&s, &bad, &native)));
     }
 

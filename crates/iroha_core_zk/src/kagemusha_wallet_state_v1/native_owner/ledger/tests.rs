@@ -2,6 +2,7 @@
 use super::*;
 use crate::kagemusha_wallet_state_v1::tests::{Wallet, fixture, synthetic_payout_wallet};
 use iroha_data_model::sumeragi_finality::{
+    MAX_WORLD_STATE_SNAPSHOT_BYTES_V1, MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1,
     WorldStateElementKindV1, WorldStateSnapshotEntryV1, test_fixtures::NativeFinalityFixture,
     world_state_value_hash_v1,
 };
@@ -340,4 +341,208 @@ fn payout_originals_require_selected_tip_exact_world_and_row_before_custody_rele
         w.acknowledge_payout_originals(&genesis, [9; 32], &world_bytes, &payout_bytes)
             .is_err()
     );
+}
+
+// These native-owner controls use genuine native finality and the existing explicit
+// synthetic wallet custody. They do not qualify a physical custody implementation.
+fn payout_boundary_world(
+    scheme_id: [u8; 32],
+    count: usize,
+    field_width: usize,
+) -> (WorldStateSnapshotV1, KagemushaWalletPayoutRecordV1) {
+    assert!((1..1_000_000).contains(&count));
+    assert!((21..=192).contains(&field_width));
+    let payout = KagemushaWalletPayoutRecordV1 {
+        key: KagemushaWalletPayoutKeyV1::Fee([2; 32]),
+        source: [3; 32],
+        amount: 17,
+        transaction: [5; 32],
+    };
+    let value_hash = world_state_value_hash_v1(&7_u64).unwrap();
+    let mut entries: Vec<_> = (0..count - 1)
+        .map(|index| {
+            // Fixed numeric prefixes preserve unique sorted identities when the
+            // byte-boundary test extends only their legal underscore suffixes.
+            let mut field_id = format!("world.boundary_{index:06}");
+            field_id.extend(std::iter::repeat_n('_', field_width - field_id.len()));
+            WorldStateSnapshotEntryV1 {
+                field_id,
+                kind: WorldStateElementKindV1::Cell,
+                key_hash: None,
+                value_hash,
+            }
+        })
+        .collect();
+    entries.push(WorldStateSnapshotEntryV1 {
+        field_id: "world.kagemusha_wallet_ledger".into(),
+        kind: WorldStateElementKindV1::Table,
+        key_hash: Some(world_state_value_hash_v1(&payout.key.ledger_key(scheme_id)).unwrap()),
+        value_hash: world_state_value_hash_v1(&norito::to_bytes(&payout).unwrap()).unwrap(),
+    });
+    (
+        WorldStateSnapshotV1 {
+            schema_hash: iroha_crypto::Hash::new(b"synthetic native payout boundary schema"),
+            entries,
+        },
+        payout,
+    )
+}
+
+fn refuse_payout_world_then_retry(
+    native: &mut NativeFinalityFixture,
+    mut wallet: Wallet,
+    world: WorldStateSnapshotV1,
+    payout: KagemushaWalletPayoutRecordV1,
+    refused_original: &[u8],
+) {
+    let genesis = native.verifier();
+    crate::kagemusha_wallet_state_v1::fee_claims::tests::seed_ledger_acknowledgement(&mut wallet);
+    let world_bytes = archive::encode(&world).unwrap();
+    let payout_bytes = archive::encode(&payout).unwrap();
+    let block = native.block_with_submitted_work(native.next_header());
+    let original =
+        archive::encode(&native.certify_with_world_root(block, world.root().unwrap())).unwrap();
+    let selected = wallet.ingest_ledger_original(&genesis, &original).unwrap();
+    assert_eq!(
+        wallet.ledger_progress_selected(&genesis).unwrap(),
+        Some(selected)
+    );
+    let custody_before = wallet.custody.archive_checkpoint().unwrap();
+    let (manifest_root_before, manifest_before) = wallet.manifest().unwrap();
+    let checkpoint_before = manifest_before.ledger_checkpoint;
+    assert!(checkpoint_before.is_some());
+    let manifest_bytes_before = archive::encode(&manifest_before).unwrap();
+    let claim_before = wallet
+        .archive
+        .get(ArchiveKey::FeeClaim([2; 32]), 128)
+        .unwrap();
+    assert!(claim_before.is_some());
+    let records_before = wallet.archive.records.lock().unwrap().clone();
+
+    // Exercise the same native-owner method called by acknowledge_fee_payout_originals.
+    // The exact error distinguishes a bounded World refusal from a later root mismatch.
+    assert!(matches!(
+        wallet.acknowledge_payout_originals(&genesis, [2; 32], refused_original, &payout_bytes),
+        Err(Error::Invalid("payout World original"))
+    ));
+    assert_eq!(wallet.custody.archive_checkpoint().unwrap(), custody_before);
+    let (manifest_root_after, manifest_after) = wallet.manifest().unwrap();
+    assert_eq!(manifest_root_after, manifest_root_before);
+    assert_eq!(
+        archive::encode(&manifest_after).unwrap(),
+        manifest_bytes_before
+    );
+    assert_eq!(
+        wallet
+            .archive
+            .get(ArchiveKey::FeeClaim([2; 32]), 128)
+            .unwrap(),
+        claim_before
+    );
+    assert_eq!(*wallet.archive.records.lock().unwrap(), records_before);
+    assert_eq!(
+        wallet.ledger_progress_selected(&genesis).unwrap(),
+        Some(selected)
+    );
+
+    wallet
+        .acknowledge_payout_originals(&genesis, [2; 32], &world_bytes, &payout_bytes)
+        .unwrap();
+    assert_eq!(
+        wallet
+            .archive
+            .get(ArchiveKey::FeeClaim([2; 32]), 128)
+            .unwrap(),
+        None
+    );
+    assert_eq!(wallet.fee_claim([2; 32]).unwrap(), None);
+    assert_eq!(
+        wallet.manifest().unwrap().1.ledger_checkpoint,
+        checkpoint_before
+    );
+    assert_eq!(
+        wallet.ledger_progress_selected(&genesis).unwrap(),
+        Some(selected)
+    );
+}
+
+#[test]
+fn payout_world_ingress_accepts_262144_entries_and_refuses_262145_without_releasing_custody() {
+    assert_eq!(MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1, 262_144);
+    let mut native = NativeFinalityFixture::start("wallet-world-entry-boundary");
+    let wallet = wallet(&native);
+    let (mut world, payout) = payout_boundary_world(wallet.scheme_id, 262_144, 21);
+    let mut extra = world.entries[0].clone();
+    extra.field_id = "world.boundary_262143_".into();
+    // The payout row remains last, and the new cell follows every prior numeric cell.
+    world.entries.insert(262_143, extra);
+    assert_eq!(world.entries.len(), 262_145);
+    let refused = archive::encode(&world).unwrap();
+    assert!(refused.len() < MAX_WORLD_STATE_SNAPSHOT_BYTES_V1);
+    // A complete native canonical read succeeds: framing or the byte cap cannot
+    // explain the actual wallet owner's subsequent over-count refusal.
+    let decoded: WorldStateSnapshotV1 = norito::decode_canonical(&refused).unwrap();
+    assert_eq!(decoded, world);
+    drop(decoded);
+    world.entries.remove(262_143);
+    assert_eq!(world.entries.len(), 262_144);
+    assert!(norito::canonical_frame_len(&world).unwrap() < MAX_WORLD_STATE_SNAPSHOT_BYTES_V1);
+    refuse_payout_world_then_retry(&mut native, wallet, world, payout, &refused);
+}
+
+#[test]
+fn payout_world_ingress_accepts_32_mib_and_refuses_one_extra_canonical_byte_without_releasing_custody()
+ {
+    assert_eq!(MAX_WORLD_STATE_SNAPSHOT_BYTES_V1, 32 * 1024 * 1024);
+    let maximum = MAX_WORLD_STATE_SNAPSHOT_BYTES_V1;
+    let mut native = NativeFinalityFixture::start("wallet-world-byte-boundary");
+    let wallet = wallet(&native);
+    // Measure the genuine native encoder with the payout row already included.
+    // Padding stays in legal field identities; no framing bytes or junk are invented.
+    let one =
+        norito::canonical_frame_len(&payout_boundary_world(wallet.scheme_id, 2, 128).0).unwrap();
+    let two =
+        norito::canonical_frame_len(&payout_boundary_world(wallet.scheme_id, 3, 128).0).unwrap();
+    let per_cell = two.checked_sub(one).unwrap();
+    assert!(per_cell > 0);
+    let count = (maximum - one) / per_cell + 2;
+    assert!(count < MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1);
+    let (mut world, payout) = payout_boundary_world(wallet.scheme_id, count, 128);
+    let mut length = norito::canonical_frame_len(&world).unwrap();
+    while length > maximum {
+        // Preserve the real payout table row while native sequence prefixes grow.
+        world.entries.remove(world.entries.len() - 2);
+        length = norito::canonical_frame_len(&world).unwrap();
+    }
+    let mut remaining = maximum - length;
+    for entry in world.entries.iter_mut().rev().skip(1) {
+        let added = remaining.min(192 - entry.field_id.len());
+        entry.field_id.extend(std::iter::repeat_n('_', added));
+        remaining -= added;
+        if remaining == 0 {
+            break;
+        }
+    }
+    assert_eq!(
+        remaining, 0,
+        "legal cell identities must span the byte boundary"
+    );
+    assert_eq!(norito::canonical_frame_len(&world).unwrap(), maximum);
+    let extended = world
+        .entries
+        .iter()
+        .position(|entry| entry.kind == WorldStateElementKindV1::Cell && entry.field_id.len() < 192)
+        .unwrap();
+    world.entries[extended].field_id.push('_');
+    let refused = archive::encode(&world).unwrap();
+    assert_eq!(refused.len(), maximum + 1);
+    assert!(world.entries.len() < MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1);
+    let decoded: WorldStateSnapshotV1 = norito::decode_canonical(&refused).unwrap();
+    assert_eq!(decoded, world);
+    // The over-byte-limit input is otherwise a well-formed complete snapshot.
+    decoded.root().unwrap();
+    drop(decoded);
+    assert_eq!(world.entries[extended].field_id.pop(), Some('_'));
+    assert_eq!(archive::encode(&world).unwrap().len(), maximum);
+    refuse_payout_world_then_retry(&mut native, wallet, world, payout, &refused);
 }

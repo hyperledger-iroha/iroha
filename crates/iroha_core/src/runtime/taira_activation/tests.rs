@@ -910,4 +910,339 @@ fn a_signed_schedule_passes_ordinary_admission_once_and_a_bad_one_stays_unbound(
         .state()
         .verify_world_state_accumulator()
         .expect("cold capture authenticates the bootstrapped World");
+
+    let verified_tip = {
+        let view = fixture.chain.state().view();
+        let checkpoint =
+            crate::sumeragi::finality::build_checkpoint(&view, fixture.chain.height()).unwrap();
+        iroha_data_model::sumeragi_finality::SumeragiFinalityVerifier::from_trusted_checkpoint_with_tip(
+            &checkpoint,
+            view.network_id(),
+            view.chain_id().as_ref(),
+        )
+        .unwrap()
+        .1
+    };
+    authenticated_bootstrap_world(&fixture, &verified_tip);
+}
+
+fn authenticated_bootstrap_world(
+    fixture: &Fixture,
+    verified_tip: &iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
+) -> Vec<u8> {
+    use iroha_core_privacy::privacy_state::PrivacyCommitmentKeyV1;
+    use iroha_data_model::sumeragi_finality::WorldStateSnapshotV1;
+
+    let tip = fixture.chain.committed(verified_tip.height());
+    // The activation selects LtHash. Its certified World authenticates the bootstrapped
+    // pool at this height; keyed State rows require a separate governed activation.
+    let bootstrap = pool();
+    let pool_key = PrivacyCommitmentKeyV1::orchard_pool_state(bootstrap.namespace()).unwrap();
+    fixture
+        .chain
+        .state()
+        .with_world_snapshot_for_testing(&tip, |snapshot, world| {
+            let wire = norito::encode_canonical(snapshot).unwrap();
+            let verified = WorldStateSnapshotV1::decode_bounded_canonical(&wire)
+                .unwrap()
+                .authenticate(verified_tip)
+                .unwrap();
+            assert_eq!(
+                verified.schema_hash(),
+                selection_schema(world.runtime_selection()).unwrap()
+            );
+            let record = world.privacy_commitments.get(&pool_key).unwrap();
+            verified
+                .verify_table_value("world.privacy_commitments", &pool_key, record)
+                .unwrap();
+            let state = record.orchard_pool_state_ref().unwrap();
+            assert_eq!(
+                state.bootstrap_digest().as_bytes(),
+                bootstrap.digest().unwrap().as_bytes()
+            );
+            wire
+        })
+        .unwrap()
+}
+
+/// Opt-in generation only: genuine certified synthetic history, never live Taira evidence.
+/// The test is ignored so ordinary unit-test runs cannot create keys, sign fixture blocks,
+/// or write shared originals as an incidental side effect. Run explicitly against the reviewed post-freeze source pin.
+#[test]
+#[ignore = "explicit synthetic fixture generation; signs test certificates and writes public originals"]
+fn export_time_ironwood_activation_originals_for_native_consumers() {
+    use crate::{
+        runtime::attestation::sign_support,
+        sumeragi::finality::{build_checkpoint, build_proof},
+    };
+    use iroha_data_model::{
+        isi::runtime_upgrade::AttestRuntimeSupportV1,
+        sumeragi_finality::{SumeragiFinalityVerifier, verify_checkpoint_page},
+    };
+    use std::{fs, io::Write as _, path::Path};
+
+    assert_eq!(
+        std::env::var("IROHA_EXPORT_TIME_IRONWOOD_FIXTURE").unwrap(),
+        "1"
+    );
+    let destination = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/sumeragi/time_ironwood_activation_v1");
+    assert!(
+        !destination.exists(),
+        "export requires a new fixture directory; never overwrite retained evidence"
+    );
+
+    let mut fixture = repaired_chain();
+    let network = fixture.chain.network_id();
+    let chain_id = fixture.chain.state().view().chain_id.clone();
+    fixture_deployment::allow(&chain_id, network);
+    let anchor_height = fixture.chain.height();
+    let anchor = build_checkpoint(&fixture.chain.state().view(), anchor_height).unwrap();
+    let (_, anchor_tip) = SumeragiFinalityVerifier::from_trusted_checkpoint_with_tip(
+        &anchor,
+        &network,
+        anchor.chain_id(),
+    )
+    .unwrap();
+    let certificate = sign(plan(&fixture));
+    let change = certificate.plan.change_set.clone();
+    let change_id = change.id().unwrap();
+    assert_eq!(
+        fixture
+            .chain
+            .state()
+            .view()
+            .world()
+            .runtime_selection()
+            .id()
+            .unwrap(),
+        change.predecessor
+    );
+    assert!(
+        !crate::runtime::trigger_lifecycle_enabled(
+            fixture.chain.state().view().world().runtime_selection()
+        )
+        .expect("the repaired predecessor has a supported services profile")
+    );
+
+    // The native signed schedule, not a fixture World overlay, establishes this change.
+    let (time, transaction) = schedule_transaction(&mut fixture, certificate.clone());
+    assert!(queue_admits(&fixture.chain.state().view(), &transaction));
+    assert_eq!(fixture.chain.commit_at(time, vec![transaction]), [true]);
+    let schedule_height = fixture.chain.height();
+    {
+        let view = fixture.chain.state().view();
+        assert_eq!(
+            view.world()
+                .runtime_change_sets()
+                .get(&change_id)
+                .unwrap()
+                .status,
+            ChangeSetStatusV1::Scheduled
+        );
+        assert_eq!(
+            retained_certificate(view.world()).unwrap().as_ref(),
+            Some(&certificate)
+        );
+        assert_eq!(
+            view.world().runtime_selection().id().unwrap(),
+            change.predecessor
+        );
+    }
+    assert!(
+        fixture
+            .chain
+            .committed(schedule_height)
+            .block()
+            .external_transactions()
+            .any(|transaction| sole_schedule(transaction.instructions())
+                .is_some_and(|instruction| instruction.certificate == certificate))
+    );
+
+    // Exercise ordinary validator attestation transactions, as in the existing admission test.
+    let committee: Vec<_> = fixture
+        .chain
+        .validators()
+        .iter()
+        .map(|(peer, _)| peer.public_key().clone())
+        .collect();
+    let tested_height = fixture.chain.height();
+    let time = fixture.next_time_ms();
+    let mut attestations = Vec::new();
+    for validator in fixture_keys() {
+        let attestation = {
+            let view = fixture.chain.state().view();
+            sign_support(
+                view.world(),
+                &committee,
+                tested_height,
+                change_id,
+                &validator,
+                [0x46; 32],
+            )
+            .unwrap()
+        };
+        attestations.push(fixture.chain.sign(
+            &key(6),
+            [AttestRuntimeSupportV1 { attestation }.into()],
+            time - 1,
+        ));
+    }
+    assert_eq!(
+        fixture.chain.commit_at(time, attestations),
+        [true, true, true, true]
+    );
+    while fixture.chain.height() < change.effective_height {
+        let time = fixture.next_time_ms();
+        fixture.chain.commit_at(time, Vec::new());
+    }
+    {
+        let view = fixture.chain.state().view();
+        assert_eq!(
+            view.world()
+                .runtime_change_sets()
+                .get(&change_id)
+                .unwrap()
+                .status,
+            ChangeSetStatusV1::Activated(change.effective_height)
+        );
+        assert_eq!(
+            view.world().runtime_selection().id().unwrap(),
+            change.successor
+        );
+        assert!(
+            crate::runtime::trigger_lifecycle_enabled(view.world().runtime_selection())
+                .expect("the activated successor has a supported services profile")
+        );
+        let policy =
+            lifecycle_activation::committed_policy(view.world(), network, fixture.chain.height())
+                .unwrap();
+        assert!(policy.active);
+        assert_eq!(
+            policy.activation.map(|(id, height)| (id, height.get())),
+            Some((change_id, change.effective_height))
+        );
+    }
+    let activation_block = fixture.chain.committed(change.effective_height);
+    assert!(!activation_block.block().execution_outputs().is_empty());
+    assert!(
+        activation_block
+            .block()
+            .execution_outputs()
+            .iter()
+            .all(|row| row.trigger_lifecycle().is_some())
+    );
+
+    let time = fixture.next_time_ms();
+    let bootstrap = fixture.chain.sign(
+        &key(6),
+        [BootstrapPrivacyIronwoodPoolV1::new(pool()).into()],
+        time - 1,
+    );
+    assert_eq!(fixture.chain.commit_at(time, vec![bootstrap]), [true]);
+    let final_height = fixture.chain.height();
+    assert_eq!(final_height, change.effective_height + 1);
+    fixture
+        .chain
+        .state()
+        .verify_world_state_accumulator()
+        .unwrap();
+
+    let proofs = {
+        let view = fixture.chain.state().view();
+        (anchor_height..=final_height)
+            .map(|height| build_proof(&view, height).unwrap())
+            .collect::<Vec<_>>()
+    };
+    let page = verify_checkpoint_page(network, &anchor, &proofs, 4096, 16 * 1024 * 1024).unwrap();
+    assert_eq!(page.tip().height(), final_height);
+    assert!(!page.tip().block().execution_outputs().is_empty());
+    assert!(
+        page.tip()
+            .block()
+            .execution_outputs()
+            .iter()
+            .all(|row| row.trigger_lifecycle().is_some())
+    );
+
+    let world_wire = authenticated_bootstrap_world(&fixture, page.tip());
+
+    // Every retained original is emitted by the maintained native codec after its native proof passes.
+    let mut files = Vec::<(String, Vec<u8>)>::new();
+    files.push((
+        "anchor-checkpoint.norito".into(),
+        anchor.encode_canonical().unwrap(),
+    ));
+    files.push((
+        "promoted-checkpoint.norito".into(),
+        page.checkpoint().encode_canonical().unwrap(),
+    ));
+    files.push(("world.norito".into(), world_wire));
+    for (index, proof) in proofs.iter().enumerate() {
+        files.push((
+            format!("proof-{index:04}.norito"),
+            norito::encode_canonical(proof).unwrap(),
+        ));
+    }
+    let reference = |index: usize| {
+        norito::json!({
+            "name": (files[index].0.as_str()),
+            "size": (files[index].1.len().to_string()),
+            "sha256": (hex::encode(iroha_crypto::sha256(&files[index].1))),
+        })
+    };
+    let proof_references: Vec<_> = (3..files.len()).map(reference).collect();
+    // patchBaseCommit identifies only the external patch base. Before consumer admission,
+    // an external producer receipt must bind the actual reviewed source, patch, build/run,
+    // this manifest and every original. This test never infers its producer source from149.
+    let manifest = norito::json!({
+        "schema": "iroha.time-ironwood-native-consumer-fixture.v1",
+        "fixtureKind": "certified-synthetic-activation-history",
+        "patchBaseCommit": "1492033f950cda9290ec0af1a96e2765b68a70e6",
+        "patchBaseCommitIsProducerSource": false,
+        "consumerAdmission": "requires-external-producer-receipt",
+        "networkId": (network.to_string()), "chainId": (chain_id.to_string()),
+        "anchorHeight": (anchor_height.to_string()), "finalHeight": (final_height.to_string()),
+        "scheduleHeight": (schedule_height.to_string()), "activationHeight": (change.effective_height.to_string()),
+        "bootstrapHeight": (final_height.to_string()),
+        "anchorContextId": (hex::encode(anchor_tip.context_id().as_ref())),
+        "finalContextId": (hex::encode(page.tip().context_id().as_ref())),
+        "predecessorSelection": (hex::encode(change.predecessor.0)),
+        "successorSelection": (hex::encode(change.successor.0)),
+        "checkpoint": (reference(0)), "promotedCheckpoint": (reference(1)),
+        "world": (reference(2)), "proofs": proof_references,
+    });
+    let manifest_wire = norito::json::to_json_bounded(&manifest, 65536)
+        .unwrap()
+        .into_bytes();
+    assert!(
+        files
+            .iter()
+            .skip(3)
+            .map(|(_, bytes)| bytes.len())
+            .sum::<usize>()
+            <= 16 * 1024 * 1024
+    );
+    // A final manifest is written last. A failed partial export must never qualify a consumer run.
+    fs::create_dir(&destination).expect("new public fixture directory");
+    for (name, bytes) in &files {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(destination.join(name))
+            .unwrap();
+        file.write_all(bytes).unwrap();
+        file.sync_all().unwrap();
+    }
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination.join("manifest.json"))
+        .unwrap();
+    file.write_all(&manifest_wire).unwrap();
+    file.sync_all().unwrap();
+    println!(
+        "public synthetic fixture manifest sha256={}",
+        hex::encode(iroha_crypto::sha256(&manifest_wire))
+    );
 }

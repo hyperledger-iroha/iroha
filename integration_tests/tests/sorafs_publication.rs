@@ -62,7 +62,7 @@ use std::{
     borrow::Cow,
     fs,
     io::{Read as _, Write as _},
-    os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
+    os::unix::fs::OpenOptionsExt as _,
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };

@@ -235,7 +235,9 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
         usage: Use::Name,
         reason: "Exact first-release iOS and Android FI request and binding schema names accepted by the closed request normalizer. They select unauthenticated input formats; neither a schema name nor normalization authenticates ledger state",
         literals: &[
+            r"boi.wallet-fi-context-evidence.android.transfer.v1",
             r"boi.wallet-fi-context-evidence.android.v1",
+            r"boi.wallet-fi-context-evidence.ios.transfer.v1",
             r"boi.wallet-fi-context-evidence.ios.v1",
             r"boi.wallet-fi-context.v1",
         ],
@@ -266,7 +268,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Record,
-        reason: "Anonymous Parliament ballot model digests bind one canonical account authority, proposal, envelope, sealed registration mapping, roster preimage or closure record. Current Core has no anonymous-ballot State integration; these supplied-record identities authenticate no State table or general State read",
+        reason: "Anonymous Parliament ballot model digests bind one canonical account authority, proposal, envelope, sealed registration mapping, roster preimage or closure record. Core has no anonymous-ballot State owner: its uncalled candidate registration preparation only verifies a direct signed original against a context read from Parliament attempts and writes no State; these supplied-record identities authenticate no State table or general State read",
         literals: &[
             r"PARL/AUTHORITY/v1",
             r"PARL/ENVELOPE/v1",

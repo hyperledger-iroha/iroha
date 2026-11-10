@@ -15,7 +15,9 @@ use iroha_plonk_gadgets::{Bit, GlueChip, U128, Uint, Word, ff::CanonicalS6};
 
 use super::{
     FoldLanes, ScalarCell, transcript as t,
-    verify::{accumulator_digest, assign_accumulator, assign_instance, assign_proof, verify_fold_or_start},
+    verify::{
+        accumulator_digest, assign_accumulator, assign_instance, assign_proof, verify_fold_or_start,
+    },
 };
 use crate::{
     ivc::{ChainSide, FrameWitness, HASH_BITS, TAG_IVC},
@@ -68,14 +70,19 @@ pub fn ivc_hash<C: PastaCurve>(
     let top = uint.assign::<5>(region, high.map(|h| h >> HIGH_BITS))?;
     let recomposed = uint.glue().linear(
         region,
-        &[(C::Base::ONE, hi.word()), (two_pow(HIGH_BITS as u32), top.word())],
+        &[
+            (C::Base::ONE, hi.word()),
+            (two_pow(HIGH_BITS as u32), top.word()),
+        ],
         C::Base::ZERO,
     )?;
     GlueChip::assert_equal(region, &recomposed, canonical.hi().word())?;
     let lo = canonical.lo().clone();
-    let word = uint
-        .glue()
-        .linear(region, &[(C::Base::ONE, lo.word()), (two_pow(128), hi.word())], C::Base::ZERO)?;
+    let word = uint.glue().linear(
+        region,
+        &[(C::Base::ONE, lo.word()), (two_pow(128), hi.word())],
+        C::Base::ZERO,
+    )?;
     Ok(HashCells { word, lo, hi })
 }
 
@@ -127,10 +134,15 @@ pub fn foreign_hash_word<C: PastaCurve>(
     region: &mut Region<'_, C::Base>,
     value: &ScalarCell<C>,
 ) -> Result<Word<C::Base>, Error> {
-    let hi = chips.uint().range_check::<HIGH_BITS>(region, value.s6.hi().word())?;
+    let hi = chips
+        .uint()
+        .range_check::<HIGH_BITS>(region, value.s6.hi().word())?;
     chips.glue.linear(
         region,
-        &[(C::Base::ONE, value.s6.lo().word()), (two_pow(128), hi.word())],
+        &[
+            (C::Base::ONE, value.s6.lo().word()),
+            (two_pow(128), hi.word()),
+        ],
         C::Base::ZERO,
     )
 }
@@ -144,7 +156,9 @@ pub fn foreign_bounded_word<C: PastaCurve>(
     region: &mut Region<'_, C::Base>,
     value: &ScalarCell<C>,
 ) -> Result<Word<C::Base>, Error> {
-    chips.glue.enforce_constant(region, value.s6.hi().word(), C::Base::ZERO)?;
+    chips
+        .glue
+        .enforce_constant(region, value.s6.hi().word(), C::Base::ZERO)?;
     Ok(value.s6.lo().word().clone())
 }
 
@@ -219,8 +233,12 @@ pub fn fold_frame<C: PastaCurve>(
     {
         return Err(Error::Synthesis);
     }
-    let known = |f: &dyn Fn(&FrameWitness<C>) -> C::Base| witness.map_or_else(Value::unknown, |w| Value::known(f(w)));
-    let step = chips.glue.witness(region, known(&|w| C::Base::from(w.step)))?;
+    let known = |f: &dyn Fn(&FrameWitness<C>) -> C::Base| {
+        witness.map_or_else(Value::unknown, |w| Value::known(f(w)))
+    };
+    let step = chips
+        .glue
+        .witness(region, known(&|w| C::Base::from(w.step)))?;
     let base = chips.glue.constant(region, base)?;
     let mut state = Vec::with_capacity(state_len);
     for i in 0..state_len {
@@ -234,7 +252,9 @@ pub fn fold_frame<C: PastaCurve>(
     let fresh = assign_instance(chips, region, shape, witness.map(|w| &w.fresh))?;
     let proof = assign_proof(chips, region, shape, witness.map(|w| &w.proof))?;
 
-    let shifted = chips.glue.add_constant(region, &step, -C::Base::from(side.first_step))?;
+    let shifted = chips
+        .glue
+        .add_constant(region, &step, -C::Base::from(side.first_step))?;
     let first = chips.glue.is_zero(region, &shifted)?;
     // The folded slot: fixed, or one-hot over the choices.
     let selection = if side.is_selected() {
@@ -249,28 +269,57 @@ pub fn fold_frame<C: PastaCurve>(
             stored = chips.glue.add(region, &stored, &part)?;
             bits.push((slot, bit));
         }
-        chips.glue.enforce_constant(region, &count, <C::Base as Field>::ONE)?;
+        chips
+            .glue
+            .enforce_constant(region, &count, <C::Base as Field>::ONE)?;
         Some((bits, stored))
     } else {
         None
     };
-    let stored = selection.as_ref().map_or_else(|| digests[side.slot].clone(), |(_, stored)| stored.clone());
+    let stored = selection
+        .as_ref()
+        .map_or_else(|| digests[side.slot].clone(), |(_, stored)| stored.clone());
     let absent = chips.glue.is_zero(region, &stored)?;
     let no_predecessor = (side.first_step == 1).then(|| first.clone());
 
     let previous = chips.glue.add_constant(region, &step, -C::Base::from(2))?;
-    let expected = ivc_hash(chips, region, &side.ivc_domain, &previous, &base, &state, &digests)?;
+    let expected = ivc_hash(
+        chips,
+        region,
+        &side.ivc_domain,
+        &previous,
+        &base,
+        &state,
+        &digests,
+    )?;
     let frame_column = &fresh.public[0];
-    assert_hash_unless(chips, region, &frame_column[0], &expected, no_predecessor.as_ref())?;
+    assert_hash_unless(
+        chips,
+        region,
+        &frame_column[0],
+        &expected,
+        no_predecessor.as_ref(),
+    )?;
     let digest = accumulator_digest(chips, region, &side.fold_domain, &acc)?;
     assert_equal_unless(chips, region, &digest, &stored, Some(&absent))?;
-    let folded = verify_fold_or_start(chips, region, shape, &side.fold_domain, &acc, &fresh, &proof, &absent)?;
+    let folded = verify_fold_or_start(
+        chips,
+        region,
+        shape,
+        &side.fold_domain,
+        &acc,
+        &fresh,
+        &proof,
+        &absent,
+    )?;
     let new_digest = accumulator_digest(chips, region, &side.fold_domain, &folded)?;
     match &selection {
         None => digests[side.slot] = new_digest,
         Some((bits, _)) => {
             for (slot, bit) in bits {
-                digests[*slot] = chips.glue.select(region, bit, &new_digest, &digests[*slot])?;
+                digests[*slot] = chips
+                    .glue
+                    .select(region, bit, &new_digest, &digests[*slot])?;
             }
         }
     }
@@ -290,7 +339,16 @@ pub fn fold_frame<C: PastaCurve>(
         }
         None => from_fresh,
     };
-    Ok(Frame { step, base, first, state, public: fresh.public, bridge, passthrough, digests })
+    Ok(Frame {
+        step,
+        base,
+        first,
+        state,
+        public: fresh.public,
+        bridge,
+        passthrough,
+        digests,
+    })
 }
 
 /// The frame column a step outputs: `[passthrough, h_out, bridge...]` with
@@ -312,7 +370,15 @@ pub fn frame_outputs<C: PastaCurve>(
     if digests.len() != side.digests {
         return Err(Error::Synthesis);
     }
-    let h = ivc_hash(chips, region, &side.ivc_domain, &frame.step, &frame.base, next, digests)?;
+    let h = ivc_hash(
+        chips,
+        region,
+        &side.ivc_domain,
+        &frame.step,
+        &frame.base,
+        next,
+        digests,
+    )?;
     let mut out = vec![frame.passthrough.clone(), h.word];
     out.extend(bridge.iter().cloned());
     Ok(out)

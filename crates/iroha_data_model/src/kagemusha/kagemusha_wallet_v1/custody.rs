@@ -988,7 +988,8 @@ impl KagemushaWalletFrozenRecoveryBodyV1 {
     /// public identifier. The complete wrapper must remain within the private cap.
     pub fn seal(self, opening: [u8; 32]) -> WalletResult<KagemushaWalletRecoveryCapsuleV1> {
         let opening = zeroize::Zeroizing::new(opening);
-        let receipt_commitment = kagemusha_wallet_capsule_commitment_for_body_v1(&self.body_digest, &opening)?;
+        let receipt_commitment =
+            kagemusha_wallet_capsule_commitment_for_body_v1(&self.body_digest, &opening)?;
         let wire = KagemushaWalletRecoveryCapsuleFrameV1 {
             body_frame: self.body_frame,
             opening: *opening,

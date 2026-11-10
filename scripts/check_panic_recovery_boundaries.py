@@ -55,6 +55,7 @@ NO_BARE_BLOCKING = (
     "crates/irohad/src/runtime_provider_broker/platform_provider_clients_01.rs",
     "crates/irohad/src/runtime_provider_broker/platform_provider_clients_03.rs",
     "crates/irohad/src/sorafs_provider_ingest_finalized_query.rs",
+    "crates/irohad/src/sorafs_provider_ingest_finalized_query/archive_retention.rs",
     "crates/irohad/src/sorafs_provider_ingest_runtime.rs",
     "crates/irohad/src/sorafs_provider_ingest_runtime/https_source.rs",
     "crates/irohad/src/external_software_signer/musubi_attestation.rs",
@@ -76,6 +77,11 @@ NO_BARE_STD_THREAD = (
 )
 
 REQUIRED_SNIPPETS = {
+    "crates/irohad/src/sorafs_provider_ingest_finalized_query/archive_retention.rs": (
+        "spawn_blocking_recoverable(move || worker.tick())",
+        "recover_joined(joined)",
+        "interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip)",
+    ),
     "crates/iroha_panic_hook/src/lib.rs": (
         "pub fn catch_unwind_suppressed",
         "with_hook_suppressed_async",

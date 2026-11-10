@@ -932,6 +932,14 @@ pub struct StartupArgs {
     /// `manifest.json` is published last; a package without it is incomplete.
     #[arg(long, value_name = "NEW_DIRECTORY", requires_all = ["check_replay", "runtime_addition_review_request"], conflicts_with = "rehearse_sorafs_repair")]
     pub runtime_addition_review_output: Option<PathBuf>,
+    /// After matched `--check-replay`, export an existing Fee row, complete native World and
+    /// contiguous original finality suffix selected by this closed public JSON request.
+    /// Never creates a payout, signs or publishes State. Normal config key parsing is unchanged.
+    #[arg(long, value_name = "REQUEST_JSON", requires_all = ["check_replay", "world_payout_export_output"], conflicts_with_all = ["rehearse_sorafs_repair", "rehearse_taira_activation", "runtime_addition_review_request"])]
+    pub world_payout_export_request: Option<PathBuf>,
+    /// Fresh private output directory outside node/config stores. Manifest is published last.
+    #[arg(long, value_name = "NEW_DIRECTORY", requires_all = ["check_replay", "world_payout_export_request"])]
+    pub world_payout_export_output: Option<PathBuf>,
     /// Require this registered account to retain `SoraCloud` deployment authority
     /// after executing the exact signed genesis during offline validation.
     #[arg(long, value_name = "ACCOUNT_ID", requires = "check_config")]
@@ -3287,6 +3295,32 @@ impl Iroha {
             iroha_torii::MaybeTelemetry::from_profile(Some(telemetry.clone()), telemetry_profile);
         #[cfg(not(feature = "telemetry"))]
         let torii_telemetry = iroha_torii::MaybeTelemetry::from_profile(None, telemetry_profile);
+        let sorafs_storage_config = if emergency_fast {
+            sorafs_node::config::StorageConfig::builder()
+                .enabled(false)
+                .build()
+        } else {
+            sorafs_node::config::StorageConfig::from(&config.torii.sorafs_storage)
+        };
+        let sorafs_provider_ingest_checkpoint_runtime = sorafs_provider_ingest_preflight
+            .as_ref()
+            .map(sorafs_provider_ingest_runtime::QualifiedProviderIngestRuntimeAdaptersV1::checkpoint_runtime);
+        let prepared_provider_ingest_outbox = sorafs_provider_ingest_checkpoint_runtime
+            .map(|runtime| {
+                sorafs_node::PreparedProviderIngestOutboxV1::open(&sorafs_storage_config, runtime)
+                    .map_err(|error| Report::new(StartError::StartTorii).attach(format!(
+                        "failed to authenticate provider-ingest outbox before archive reconciliation: {error}"
+                    )))
+            })
+            .transpose()?;
+        // The owner exposes no mutation and is not cloneable. These pins cannot
+        // change until the exact outbox moves into NodeHandle after reconciliation.
+        let provider_ingest_startup_pins = prepared_provider_ingest_outbox.as_ref()
+            .map(sorafs_node::PreparedProviderIngestOutboxV1::active_admission_cursors)
+            .transpose()
+            .map_err(|error| Report::new(StartError::StartTorii).attach(format!(
+                "failed to authenticate pending provider-ingest admission anchors: {error}"
+            )))?;
         let mut prepared_sorafs_provider_ingest_archive = if emergency_fast {
             None
         } else if let Some(provider_ingest_config) =
@@ -3309,6 +3343,11 @@ impl Iroha {
                         &config.kura.store_dir.resolve_relative_path(),
                         &state,
                         &kura,
+                        provider_ingest_startup_pins.as_deref().ok_or_else(|| {
+                            Report::new(StartError::StartP2p).attach(
+                                "enabled provider ingest requires its owned outbox before archive reconciliation",
+                            )
+                        })?,
                         runtime_deps
                             .sorafs_provider_ingest_retention_authority
                             .clone(),
@@ -3614,13 +3653,6 @@ impl Iroha {
                 ),
             );
         }
-        let sorafs_storage_config = if emergency_fast {
-            sorafs_node::config::StorageConfig::builder()
-                .enabled(false)
-                .build()
-        } else {
-            sorafs_node::config::StorageConfig::from(&config.torii.sorafs_storage)
-        };
         let sorafs_repair_config = if emergency_fast {
             sorafs_node::config::RepairConfig::default()
         } else {
@@ -3816,9 +3848,6 @@ impl Iroha {
         let sorafs_provider_ingest_config = (!emergency_fast)
             .then(|| config.torii.sorafs_storage.provider_ingest_runtime.clone())
             .flatten();
-        let sorafs_provider_ingest_checkpoint_runtime = sorafs_provider_ingest_preflight
-            .as_ref()
-            .map(sorafs_provider_ingest_runtime::QualifiedProviderIngestRuntimeAdaptersV1::checkpoint_runtime);
         let sorafs_por_finalized_replay_archive =
             runtime_deps.sorafs_por_finalized_replay_archive.clone();
         let mut sorafs_gateway_compliance_feed_transport = runtime_deps
@@ -3908,8 +3937,8 @@ impl Iroha {
             sorafs_runtime_deps
         };
         let sorafs_runtime_deps =
-            if let Some(runtime) = sorafs_provider_ingest_checkpoint_runtime.as_ref() {
-                sorafs_runtime_deps.with_provider_ingest_checkpoint_runtime(Arc::clone(runtime))
+            if let Some(outbox) = prepared_provider_ingest_outbox {
+                sorafs_runtime_deps.with_prepared_provider_ingest_outbox(outbox)
             } else {
                 sorafs_runtime_deps
             };
@@ -4126,6 +4155,22 @@ impl Iroha {
                 ))
             })?;
             supervisor.monitor(child);
+            let retention_worker = prepared_sorafs_provider_ingest_archive
+                .as_ref()
+                .ok_or_else(|| {
+                    Report::new(StartError::StartTorii).attach(
+                        "enabled SoraFS provider-ingest runtime has no archive to keep below its capacity bounds",
+                    )
+                })?
+                .start_retention_worker(
+                    sorafs_node::NodeHandle::clone(
+                        sorafs_node
+                            .as_ref()
+                            .expect("provider ingest is disabled during emergency Fast startup"),
+                    ),
+                    supervisor.shutdown_signal(),
+                );
+            supervisor.monitor(retention_worker);
             Some(handle)
         } else {
             None
@@ -8344,6 +8389,22 @@ fn run_main_with_config_guard(
         return compatibility_probe::run_check_storage(&config);
     }
     if args.startup.check_replay {
+        if let Some(request) = &args.startup.world_payout_export_request {
+            let output = args
+                .startup
+                .world_payout_export_output
+                .as_deref()
+                .ok_or_else(|| {
+                    Report::new(MainError::CheckReplay)
+                        .attach("World payout export output is required")
+                })?;
+            return replay_check::run_world_payout_export(
+                &config,
+                request,
+                output,
+                args.config.as_deref(),
+            );
+        }
         if let Some(request) = &args.startup.runtime_addition_review_request {
             let output = args
                 .startup
@@ -10171,8 +10232,12 @@ mod tests {
         let node_state_open = source
             .find("sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps")
             .expect("embedded SoraFS durable-state startup");
+        let outbox_open = source
+            .find("sorafs_node::PreparedProviderIngestOutboxV1::open")
+            .expect("early owned provider-ingest outbox");
+        assert!(adapter_preflight < outbox_open && outbox_open < preparation);
         let checkpoint_injection = source
-            .find("with_provider_ingest_checkpoint_runtime")
+            .find("with_prepared_provider_ingest_outbox")
             .expect("provider-ingest checkpoint injection");
         assert!(
             adapter_preflight < checkpoint_injection && checkpoint_injection < node_state_open,
@@ -12760,6 +12825,8 @@ mod tests {
                     repair_execution_time_ms: None,
                     runtime_addition_review_request: None,
                     runtime_addition_review_output: None,
+                    world_payout_export_request: None,
+                    world_payout_export_output: None,
                     require_genesis_inrou_deployment_authority: None,
                     trace_config: false,
                     config_blake3: None,
@@ -12849,6 +12916,8 @@ mod tests {
                     repair_execution_time_ms: None,
                     runtime_addition_review_request: None,
                     runtime_addition_review_output: None,
+                    world_payout_export_request: None,
+                    world_payout_export_output: None,
                     require_genesis_inrou_deployment_authority: None,
                     trace_config: false,
                     config_blake3: None,

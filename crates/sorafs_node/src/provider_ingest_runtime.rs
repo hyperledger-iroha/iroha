@@ -956,9 +956,49 @@ pub enum ProviderIngestFinalizedLedgerErrorV1 {
     Unavailable,
     /// The finalized query service rejected the bounded request.
     Rejected,
+    /// Archive retention passed this scan's anchor, so no retry can serve it. A fresh scan at a
+    /// newer head lists every current assignment, so nothing is lost by starting again.
+    ScanAnchorRetired,
+}
+/// Non-wire ownership of an exact finalized anchor while a page is admitted.
+///
+/// This lifetime guard carries no authorization evidence. Its trusted archive adapter
+/// registers the exact anchor against retention before returning it and releases that
+/// registration only when the guard is dropped. It must never expire by elapsed time.
+#[must_use]
+pub struct ProviderIngestFinalizedAnchorLeaseV1 {
+    _owner: Box<dyn Send + Sync>,
+}
+impl std::fmt::Debug for ProviderIngestFinalizedAnchorLeaseV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProviderIngestFinalizedAnchorLeaseV1")
+            .finish_non_exhaustive()
+    }
+}
+impl ProviderIngestFinalizedAnchorLeaseV1 {
+    /// Retain the archive adapter's owned registration until this guard is dropped.
+    /// This constructor does not authenticate a cursor or manufacture an authorization.
+    pub fn retain(owner: impl Send + Sync + 'static) -> Self {
+        Self {
+            _owner: Box::new(owner),
+        }
+    }
+}
+/// Required local retention boundary for finalized assignment and capture readers.
+pub trait ProviderIngestFinalizedAnchorRetainerV1: Send + Sync + 'static {
+    /// Resolve an exact cursor and register a nonexpiring lease atomically against pruning.
+    /// A retired cursor must be rejected so its scanner can restart before admitting a row.
+    fn retain_exact_cursor(
+        &self,
+        cursor: ProviderIngestFinalizedCursorV1,
+    ) -> ProviderIngestFutureV1<
+        '_,
+        Result<ProviderIngestFinalizedAnchorLeaseV1, ProviderIngestFinalizedLedgerErrorV1>,
+    >;
 }
 /// Reader for chain-authoritative assignments and provider completions.
-pub trait ProviderIngestFinalizedLedgerV1: Send + Sync + 'static {
+pub trait ProviderIngestFinalizedLedgerV1: ProviderIngestFinalizedAnchorRetainerV1 {
     /// Read one stable page after `after_order_id`.
     ///
     /// `at_finalized_cursor` is `None` only for the first page of a scan. Every
@@ -2507,7 +2547,7 @@ where
             {
                 return Ok(outcome);
             }
-            let page = self
+            let page = match self
                 .ledger
                 .read_assignment_page(
                     ProviderIngestFinalizedClaimFactoryV1::new(self.network_id, self.provider_id),
@@ -2516,7 +2556,15 @@ where
                     self.policy.max_page_rows,
                 )
                 .await
-                .map_err(|_| ProviderIngestRuntimeErrorV1::FinalizedLedgerUnavailable)?;
+            {
+                Ok(page) => page,
+                Err(ProviderIngestFinalizedLedgerErrorV1::ScanAnchorRetired) => {
+                    self.scan_after_order_id = None;
+                    self.scan_cursor = None;
+                    return Err(ProviderIngestRuntimeErrorV1::FinalizedLedgerUnavailable);
+                }
+                Err(_) => return Err(ProviderIngestRuntimeErrorV1::FinalizedLedgerUnavailable),
+            };
             if after.is_some()
                 && expected_cursor.is_some_and(|cursor| cursor != page.finalized_cursor)
             {
@@ -2525,6 +2573,17 @@ where
             let cursor = expected_cursor.unwrap_or(page.finalized_cursor);
             validate_page(&page, after, cursor, self.policy.max_page_rows)?;
             validate_monotonic_finalized_cursor(self.last_finalized_cursor, cursor)?;
+            // Page bytes alone do not pin history. Acquire before touching the outbox and
+            // hold through every row's durable boundary, including asynchronous source work.
+            let _anchor_lease = match self.ledger.retain_exact_cursor(cursor).await {
+                Ok(lease) => lease,
+                Err(ProviderIngestFinalizedLedgerErrorV1::ScanAnchorRetired) => {
+                    self.scan_after_order_id = None;
+                    self.scan_cursor = None;
+                    return Err(ProviderIngestRuntimeErrorV1::FinalizedLedgerUnavailable);
+                }
+                Err(_) => return Err(ProviderIngestRuntimeErrorV1::FinalizedLedgerUnavailable),
+            };
             self.outbox
                 .observe_finalized_snapshot(cursor, page.finalized_block_time_ms)?;
             self.last_finalized_cursor = Some(cursor);

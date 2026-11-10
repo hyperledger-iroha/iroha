@@ -472,8 +472,8 @@ def test_mintable_matches_native_string_codec(document, value):
 def test_snapshot_bounds_and_asset_field_set_match_current_sources(document):
     schemas = document['components']['schemas']
     snapshot = (ROOT / 'crates/iroha_data_model/src/sumeragi_finality/world_state.rs').read_text()
-    assert 'MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1: usize = 131_072' in snapshot
-    assert schemas['WorldStateSnapshotV1']['properties']['entries']['maxItems'] == 131_072
+    assert 'MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1: usize = 262_144' in snapshot
+    assert schemas['WorldStateSnapshotV1']['properties']['entries']['maxItems'] == 262_144
     source = (ROOT / 'crates/iroha_data_model/src/asset/definition.rs').read_text()
     struct = source.split('pub struct AssetDefinition {', 1)[1].split('\n    }', 1)[0]
     fields = set(re.findall(r'pub ([a-z_]+):', struct))

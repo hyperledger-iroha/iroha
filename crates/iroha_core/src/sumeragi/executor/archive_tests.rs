@@ -5,8 +5,14 @@ use super::*;
 use crate::{
     query::{
         provider_ingest_finalized::{
-            ProviderIngestFinalizedArchiveBoundsV1, ProviderIngestFinalizedArchiveInsertOutcomeV1,
-            ProviderIngestFinalizedArchiveV1,
+            ProviderIngestFinalizedArchiveBoundsV1, ProviderIngestFinalizedArchiveErrorV1,
+            ProviderIngestFinalizedArchiveInsertOutcomeV1,
+            ProviderIngestFinalizedArchiveRetentionApprovalRecordV1,
+            ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1,
+            ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1,
+            ProviderIngestFinalizedArchiveRetentionAuthorityQualificationV1,
+            ProviderIngestFinalizedArchiveRetentionAuthorityV1,
+            ProviderIngestFinalizedArchiveRetentionStepV1, ProviderIngestFinalizedArchiveV1,
         },
         reputation_finalized::{ReputationFinalizedArchive, ReputationFinalizedArchiveBounds},
     },
@@ -1000,6 +1006,276 @@ fn below_quorum_current_frame_cannot_finish_pending_archive_capture_case() {
         generation
     );
     assert!(events.try_recv().is_err());
+}
+
+/// One linearizable sealed authority, as a deployment supplies through the runtime broker.
+#[derive(Debug, Default)]
+struct SealedRetentionAuthority {
+    latest: std::sync::Mutex<Option<ProviderIngestFinalizedArchiveRetentionApprovalRecordV1>>,
+}
+
+impl SealedRetentionAuthority {
+    const REVISION: u64 = 7;
+    const POLICY_DIGEST: [u8; 32] = [0xA7; 32];
+    const HANDLE: &'static str = "sealed://sorafs/provider-ingest/archive-retention-primary";
+
+    fn binding(&self) -> ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1 {
+        ProviderIngestFinalizedArchiveRetentionAuthorityBindingV1::try_new(
+            Self::HANDLE.to_owned(),
+            Self::REVISION,
+            Self::POLICY_DIGEST,
+        )
+        .unwrap()
+    }
+}
+
+impl ProviderIngestFinalizedArchiveRetentionAuthorityV1 for SealedRetentionAuthority {
+    fn handle(&self) -> &str {
+        Self::HANDLE
+    }
+    fn qualification(
+        &self,
+    ) -> Result<
+        ProviderIngestFinalizedArchiveRetentionAuthorityQualificationV1,
+        ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1,
+    > {
+        Ok(
+            ProviderIngestFinalizedArchiveRetentionAuthorityQualificationV1::new(
+                Self::REVISION,
+                Self::POLICY_DIGEST,
+            ),
+        )
+    }
+    fn load_latest(
+        &self,
+        _network_id: &iroha_data_model::NetworkId,
+    ) -> Result<
+        Option<ProviderIngestFinalizedArchiveRetentionApprovalRecordV1>,
+        ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1,
+    > {
+        Ok(self.latest.lock().unwrap().clone())
+    }
+    fn compare_and_swap_latest(
+        &self,
+        _network_id: &iroha_data_model::NetworkId,
+        expected_revision: Option<[u8; 32]>,
+        next: &ProviderIngestFinalizedArchiveRetentionApprovalRecordV1,
+    ) -> Result<(), ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1> {
+        let mut latest = self.latest.lock().unwrap();
+        if latest
+            .as_ref()
+            .map(ProviderIngestFinalizedArchiveRetentionApprovalRecordV1::revision)
+            != expected_revision
+        {
+            return Err(ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1::Rejected);
+        }
+        *latest = Some(next.clone());
+        Ok(())
+    }
+}
+
+fn provider_only_archives(
+    max_archive_entries: usize,
+) -> (
+    tempfile::TempDir,
+    Arc<ProviderIngestFinalizedArchiveV1>,
+    FinalizedArchives,
+) {
+    #[cfg(not(windows))]
+    let directory = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    #[cfg(windows)]
+    let directory = tempfile::tempdir().unwrap();
+    let provider = Arc::new(
+        ProviderIngestFinalizedArchiveV1::try_open(
+            directory.path().join("provider"),
+            ProviderIngestFinalizedArchiveBoundsV1::try_new(
+                4 << 20,
+                max_archive_entries,
+                64 << 20,
+                32,
+                32,
+                128,
+                32,
+            )
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    let archives = FinalizedArchives {
+        provider_ingest: Some(Arc::clone(&provider)),
+        reputation: None,
+    };
+    (directory, provider, archives)
+}
+
+/// The full bound failure through the production commit path: at the bound the commit stays
+/// pending and this node cannot advance, until the retention worker's step frees capacity and the
+/// same retained commit completes without executing or notifying twice.
+#[test]
+fn provider_archive_bound_holds_the_commit_until_retention_frees_capacity() {
+    run(provider_archive_bound_holds_the_commit_until_retention_frees_capacity_case);
+}
+
+fn provider_archive_bound_holds_the_commit_until_retention_frees_capacity_case() {
+    let mut chain = chain();
+    let (_directory, provider, archives) = provider_only_archives(4);
+    archives.capture(&chain.state().view()).unwrap();
+    for _ in 0..3 {
+        chain.commit(Vec::new());
+        archives.capture(&chain.state().view()).unwrap();
+    }
+    assert_eq!(chain.height(), 4);
+    assert_eq!(provider.capacity().unwrap().retained_entries(), 4);
+
+    let (mut context, mut events) = context(&chain);
+    context.applied = (4, chain.committed(4).core_hash());
+    context.applied_watch = Arc::new(crate::sumeragi::lanes::global::AppliedWatch::new(4, None));
+    let mut worker = worker(&context, archives);
+    let (block, qc) = super::publication_tests::executed(&chain, &mut worker);
+    let original = prepare_and_append(&mut worker, &block, &qc);
+
+    for _ in 0..2 {
+        let PublicationError::Retryable(reason) = worker.commit(&block, &qc).unwrap_err() else {
+            panic!("a full archive is a retained commit refusal, not a resource deferral");
+        };
+        assert!(
+            reason.contains("provider-ingest archive capture failed"),
+            "{reason}"
+        );
+        assert_eq!(
+            worker.applied.0, 4,
+            "this node cannot advance past the bound"
+        );
+        assert_eq!(worker.state.view().height(), 5);
+        assert_eq!(
+            worker
+                .pending_commit
+                .as_ref()
+                .unwrap()
+                .native_contexts
+                .canonical_bytes()
+                .as_ptr() as usize,
+            original
+        );
+        assert!(events.try_recv().is_err());
+    }
+
+    // What the worker's reader does on every tick. The archive is one behind the held commit.
+    let _ = provider
+        .qualify_against_certified_tip(&chain.state().view(), chain.kura(), 1)
+        .unwrap();
+    let authority = SealedRetentionAuthority::default();
+    let step = provider
+        .reconcile_retention_once(
+            &chain.state().query_view(),
+            chain.kura(),
+            &authority.binding(),
+            &authority,
+            &[],
+        )
+        .unwrap();
+    assert!(
+        matches!(
+            step,
+            ProviderIngestFinalizedArchiveRetentionStepV1::Compacted(_)
+        ),
+        "the bound was reached, so the worker's step must free capacity: {step:?}"
+    );
+
+    let completed = worker.commit(&block, &qc).unwrap();
+    assert!(worker.pending_commit.is_none());
+    assert_eq!(worker.applied, (5, qc.block_hash));
+    let mut emitted = 0;
+    while events.try_recv().is_ok() {
+        emitted += 1;
+    }
+    assert!(emitted > 0, "the retained notifications are published");
+    assert_eq!(
+        worker.commit(&block, &qc).unwrap(),
+        completed,
+        "a repeat is the exact completed commit"
+    );
+    assert!(events.try_recv().is_err(), "and notifies nothing twice");
+    let qualification = provider
+        .qualify_against_certified_tip(&chain.state().view(), chain.kura(), 0)
+        .unwrap();
+    assert_eq!(qualification.archive_tip().height, 5);
+    assert!(qualification.activation_floor().height > 1);
+}
+
+/// A retention step and commit capture overlap at every height through several bound crossings,
+/// as they do in a node. Capture only ever sees a brief busy index, and no commit is lost.
+#[test]
+fn provider_archive_retention_runs_beside_commit_capture_across_many_bounds() {
+    run(provider_archive_retention_runs_beside_commit_capture_across_many_bounds_case);
+}
+
+fn provider_archive_retention_runs_beside_commit_capture_across_many_bounds_case() {
+    const HEIGHTS: u64 = 40;
+
+    let mut chain = chain();
+    let (_directory, provider, archives) = provider_only_archives(8);
+    archives.capture(&chain.state().view()).unwrap();
+    let authority = SealedRetentionAuthority::default();
+    let binding = authority.binding();
+    let state = Arc::clone(chain.state());
+    let _ = provider
+        .qualify_against_certified_tip(&state.view(), state.kura(), 0)
+        .unwrap();
+    let retention_step = || {
+        let view = state.query_view();
+        match provider.reconcile_retention_once(&view, state.kura(), &binding, &authority, &[]) {
+            Ok(step) => matches!(
+                step,
+                ProviderIngestFinalizedArchiveRetentionStepV1::Compacted(_)
+            ),
+            // A local history read that is busy is retried, as the worker's next tick does.
+            Err(ProviderIngestFinalizedArchiveErrorV1::Deferred(_)) => false,
+            Err(error) => panic!("overlapping a capture must not fail a step: {error}"),
+        }
+    };
+    let mut compactions = 0_u32;
+    for _ in 2..=HEIGHTS {
+        // The fixture's own execution is not built to retry a reader beside it, so only the step
+        // and the capture overlap here. The production executor retries that deferral.
+        chain.commit(Vec::new());
+        std::thread::scope(|scope| {
+            let retention = crate::sumeragi::threads::sumeragi_thread_builder("retention-test")
+                .spawn_scoped(scope, retention_step)
+                .unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+            let mut extra_steps = 0_u32;
+            loop {
+                match archives.capture(&state.view()) {
+                    Ok(()) => break,
+                    // The driver retries these with the same retained commit.
+                    Err(PublicationError::Deferred(_)) => {}
+                    Err(PublicationError::Retryable(reason))
+                        if reason.contains("provider-ingest archive capture failed") =>
+                    {
+                        // At the bound with this height's step already over, the next step frees it.
+                        if retention.is_finished() && retention_step() {
+                            extra_steps += 1;
+                        }
+                    }
+                    Err(error) => panic!("unexpected capture refusal: {error}"),
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "a retention step must free capacity for the retained commit"
+                );
+                std::thread::yield_now();
+            }
+            compactions += extra_steps + u32::from(retention.join().unwrap());
+        });
+    }
+    assert!(compactions > 0, "forty heights cross a bound of eight");
+    assert!(provider.capacity().unwrap().retained_entries() <= 8);
+    let qualification = provider
+        .qualify_against_certified_tip(&state.view(), state.kura(), 0)
+        .unwrap();
+    assert_eq!(qualification.archive_tip().height, HEIGHTS);
+    assert!(qualification.activation_floor().height > 1);
 }
 
 /// A node killed after Kura's durable append of a height and before that height's archive

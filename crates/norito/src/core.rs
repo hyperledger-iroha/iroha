@@ -636,6 +636,53 @@ impl DecodeBudgetContext {
             .total_allocated_bytes
             .load(Ordering::Relaxed)
     }
+
+    /// Charge this thread's active scopes with everything charged to this context.
+    ///
+    /// For work run on other threads under limits from [`active_decode_limits_remaining`].
+    /// It charges every active layer or none, unless another thread charges those layers
+    /// at the same moment, which can only charge too much.
+    ///
+    /// # Errors
+    /// An active layer cannot absorb the charges, so the caller can redo the work under
+    /// its own scopes and get their exact refusal.
+    #[doc(hidden)]
+    pub fn charge_to_active(&self) -> Result<(), Error> {
+        let counters = &self.layer.budget.counters;
+        let elements = counters.total_elements.load(Ordering::Relaxed);
+        let allocated = counters.total_allocated_bytes.load(Ordering::Relaxed);
+        budget_scope::with_active(|layers| {
+            for layer in layers.iter() {
+                let limits = layer.budget.limits;
+                let total = layer.budget.counters.total_elements.load(Ordering::Relaxed);
+                let attempted = total.saturating_add(elements);
+                let limit = limit_to_u64(limits.max_total_elements());
+                if attempted > limit {
+                    return Err(Error::TotalElementsExceeded { attempted, limit });
+                }
+                let total = layer
+                    .budget
+                    .counters
+                    .total_allocated_bytes
+                    .load(Ordering::Relaxed);
+                let attempted = total.saturating_add(allocated);
+                let limit = limit_to_u64(limits.max_total_allocated_bytes());
+                if attempted > limit {
+                    return Err(Error::TotalAllocationExceeded { attempted, limit });
+                }
+            }
+            for layer in layers.iter() {
+                let counters = &layer.budget.counters;
+                counters
+                    .total_elements
+                    .fetch_add(elements, Ordering::Relaxed);
+                counters
+                    .total_allocated_bytes
+                    .fetch_add(allocated, Ordering::Relaxed);
+            }
+            Ok(())
+        })
+    }
 }
 thread_local! {
     static DECODE_NESTING_DEPTH: Cell<usize> = const { Cell::new(0) };
@@ -661,6 +708,59 @@ pub(crate) fn with_optional_decode_budget<R>(
 #[doc(hidden)]
 pub fn decode_limits_active() -> bool {
     budget_scope::with_active(|layers| !layers.is_empty())
+}
+/// What this thread's active decode scopes still allow, as limits for one fresh budget.
+///
+/// Each member is the tightest across all active layers, and the cumulative members are
+/// what remains after each layer's charges so far. Work on other threads under a budget
+/// with these limits stays inside every layer; [`DecodeBudgetContext::charge_to_active`]
+/// then moves its charges to them. `None` when no scope is active.
+#[doc(hidden)]
+#[must_use]
+pub fn active_decode_limits_remaining() -> Option<DecodeLimits> {
+    let depth = DECODE_NESTING_DEPTH.with(Cell::get);
+    budget_scope::with_active(|layers| {
+        let mut remaining: Option<DecodeLimits> = None;
+        for layer in layers.iter() {
+            let limits = layer.budget.limits;
+            let counters = &layer.budget.counters;
+            let left = |limit: usize, charged: u64| {
+                limit.saturating_sub(usize::try_from(charged).unwrap_or(usize::MAX))
+            };
+            let elements = left(
+                limits.max_total_elements(),
+                counters.total_elements.load(Ordering::Relaxed),
+            );
+            let allocated = left(
+                limits.max_total_allocated_bytes(),
+                counters.total_allocated_bytes.load(Ordering::Relaxed),
+            );
+            let nesting = limits
+                .max_nesting_depth()
+                .saturating_sub(depth.saturating_sub(layer.base_depth));
+            remaining = Some(remaining.map_or(
+                DecodeLimits::new(
+                    limits.max_sequence_elements(),
+                    limits.max_field_bytes(),
+                    elements,
+                    allocated,
+                    nesting,
+                ),
+                |tightest| {
+                    DecodeLimits::new(
+                        tightest
+                            .max_sequence_elements()
+                            .min(limits.max_sequence_elements()),
+                        tightest.max_field_bytes().min(limits.max_field_bytes()),
+                        tightest.max_total_elements().min(elements),
+                        tightest.max_total_allocated_bytes().min(allocated),
+                        tightest.max_nesting_depth().min(nesting),
+                    )
+                },
+            ));
+        }
+        remaining
+    })
 }
 /// Check whether an original decoder error names a still-active resource ceiling.
 ///

@@ -386,8 +386,17 @@ struct Activation {
 
 /// Draft, sign and submit the activation through the tool real signing uses.
 fn schedule_activation(network: &Network, client: &Client) -> Result<Activation> {
-    let directory = tempfile::tempdir()?;
-    let directory = directory.path();
+    // Keep the exact public signing originals with the retained first peer. Private
+    // validator credentials remain in a separate TempDir and never enter this evidence.
+    let store = network.peers()[0].kura_store_dir();
+    let directory = store
+        .parent()
+        .ok_or_else(|| eyre!("the first peer has no private test directory"))?
+        .join("time-ironwood-signing-public");
+    fs::create_dir(&directory).wrap_err("create fresh public signing evidence directory")?;
+    let directory = directory.as_path();
+    eprintln!("campaign: public signing originals {}", directory.display());
+    let private_keys = tempfile::tempdir()?;
     let route = upgrades(&network.peers()[0])?;
     let roster = committee(network)?;
     let listed: Vec<String> = route["committee"]
@@ -487,7 +496,7 @@ fn schedule_activation(network: &Network, client: &Client) -> Result<Activation>
     .concat();
     let mut share_arguments = Vec::new();
     for (seat, peer) in roster.iter().enumerate() {
-        let key_path = directory.join(format!("{seat}.key"));
+        let key_path = private_keys.path().join(format!("{seat}.key"));
         let secret = ExposedPrivateKey(signer(network, peer)?.private_key().clone())
             .try_to_multihash_string()?;
         let mut options = fs::OpenOptions::new();

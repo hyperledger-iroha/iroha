@@ -20,6 +20,7 @@ use iroha_data_model::{
         QueryResponse,
     },
     sumeragi_finality::{SumeragiFinalityCheckpoint, SumeragiFinalityVerifier},
+    transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_primitives::numeric::NumericSpec;
 
@@ -65,6 +66,28 @@ pub(crate) fn ffi_fixture(
         f.checkpoint_bytes,
         trust,
     )
+}
+
+/// The same complete platform envelope, retargeted to a parseable Transfer operation.
+pub(crate) fn transfer_request_from(original_request: &[u8]) -> Vec<u8> {
+    let mut raw: norito::json::Value = norito::json::from_slice(original_request).unwrap();
+    let request = raw.as_object_mut().unwrap();
+    let link = request["target"].clone();
+    request.insert(
+        "schema".into(),
+        "boi.wallet-fi-context-evidence.ios.transfer.v1".into(),
+    );
+    request.insert(
+        "target".into(),
+        norito::json!({
+            "assetDefinitionId":(link["assetDefinitionId"].clone()),
+            "accountId":(link["accountId"].clone()),"amount":"10.00",
+            "expectedLinkRevision":1_u64,"expectedPolicyRevision":1_u64,
+            "fiAccountId":(link["fiAccountId"].clone()),
+            "referenceDigest":(link["referenceDigest"].clone()),
+            "expectedFiRevision":1_u64,"expectedAttestationRevision":1_u64}),
+    );
+    norito::json::to_vec(&raw).unwrap()
 }
 
 impl Fixture {
@@ -271,6 +294,46 @@ fn fi_capsule_authenticates_actual_assertion_execution_and_preserves_absence() {
             && verified.snapshot.controller.is_none()
     );
     // Authenticated absence never means the wallet has membership or an FI role.
+}
+
+#[test]
+fn transfer_assertion_stays_refused_although_its_request_normalizes() {
+    let fixture = Fixture::new(false, false);
+    let raw = transfer_request_from(&fixture.original_request);
+    let request = normalize_asset_fi_context_request_v1(&raw).unwrap();
+    assert!(matches!(
+        request.target,
+        AssetFiContextTargetV1::Transfer { .. }
+    ));
+    // Every earlier binding matches, so the refusal is the missing Transfer binding.
+    let snapshot = fixture.capsule.snapshot.clone();
+    let owner_key = KeyPair::from_seed(vec![0x73; 32], Algorithm::Ed25519);
+    let owner = AccountId::new(owner_key.public_key().clone());
+    let block_hash: [u8; 32] = *fixture.checkpoint.block_hash().as_ref();
+    let assertion = AssertAssetFiContextV1 {
+        target: request.target.clone(),
+        expected_incarnation: fixture.incarnation,
+        expected_uid: request.uid,
+        expected_context_hash: asset_fi_context_snapshot_hash_v1(&snapshot).unwrap(),
+        request_sha256: request.original_sha256,
+        challenge: request.challenge,
+        minimum_height: 2,
+        minimum_block_hash: block_hash,
+    };
+    let signed = TransactionBuilder::new(
+        fixture.checkpoint.network_id(),
+        owner.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([assertion])
+    .sign(owner_key.private_key());
+    let mut expected = fixture.expected();
+    expected.asset_owner = &owner;
+    expected.target = &request.target;
+    assert_eq!(
+        bind_assertion(&signed, &snapshot, &request, &expected, block_hash).unwrap_err(),
+        "FI transfer assertion verification is not qualified"
+    );
 }
 
 #[test]

@@ -9,6 +9,8 @@
 
 #[path = "world_state_snapshot/amx_approval.rs"]
 mod amx_approval;
+#[path = "world_state_snapshot/kagemusha_fee.rs"]
+mod kagemusha_fee;
 #[cfg(feature = "iroha-core-tests")]
 #[path = "world_state_snapshot/lifecycle_fixture.rs"]
 mod lifecycle_fixture;
@@ -283,10 +285,10 @@ impl<'a> NativeResourceNamesSnapshotV1<'a> {
         if tip.commitment().schedule.current.network_id != *self.view.network_id()
             || tip.commitment().execution.world_state_root
                 != self
-                .snapshot
-                .snapshot
-                .root()
-                .map_err(|error| error.to_string())?
+                    .snapshot
+                    .snapshot
+                    .root()
+                    .map_err(|error| error.to_string())?
         {
             return Err("World names retained snapshot differs from certified tip".into());
         }
@@ -1310,6 +1312,21 @@ impl State {
             )?;
             consume(snapshot).map_err(WorldStateSnapshotError::from)
         })
+    }
+
+    /// Inspect the complete original LtHash World at a certified fixture block.
+    #[cfg(test)]
+    pub(crate) fn with_world_snapshot_for_testing<T>(
+        &self,
+        tip: &CommittedBlock,
+        consume: impl FnOnce(&WorldStateSnapshotV1, &WorldBlock<'_>) -> T,
+    ) -> Result<T, WorldStateSnapshotError> {
+        self.with_native_world_state_snapshot_cut_v1(
+            tip,
+            None,
+            &self.ivm_execution_budget(),
+            |snapshot, world| Ok(consume(snapshot, world)),
+        )
     }
 
     fn with_native_world_state_snapshot_cut_v1<T>(

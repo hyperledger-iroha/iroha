@@ -1030,7 +1030,7 @@ impl VerifiedSumeragiBlock {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct Decision {
     block_hash: HashOf<BlockHeader>,
     core_hash: Hash32,
@@ -1076,7 +1076,7 @@ fn authenticated_genesis_instance(
 /// Independent current-certificate verifier retaining only authenticated prefix decisions.
 #[derive(Debug, Clone)]
 pub struct SumeragiFinalityVerifier {
-    genesis: SignedBlock,
+    genesis: std::sync::Arc<SignedBlock>,
     chain_id: String,
     genesis_committee: Vec<FinalityValidator>,
     instance: Hash32,
@@ -1122,7 +1122,7 @@ impl SumeragiFinalityVerifier {
             root_scope,
         )?;
         Ok(Self {
-            genesis: trusted_genesis.clone(),
+            genesis: std::sync::Arc::new(trusted_genesis.clone()),
             chain_id: chain_id.to_owned(),
             genesis_committee: validators,
             genesis_epoch,

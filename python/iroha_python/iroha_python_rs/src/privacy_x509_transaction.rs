@@ -45,8 +45,10 @@ fn decode_request(bytes: &[u8]) -> PyResult<SubmitPrivacyZkX509CertificateV1> {
 pub(crate) fn materialized_statement_wire(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> PyResult<Vec<u8>> {
-    norito::encode_canonical(&PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone()))
-        .map_err(invalid)
+    norito::encode_canonical(&PrivacyStatementV1::IrohaZkX509StarkP256V1(
+        statement.clone(),
+    ))
+    .map_err(invalid)
 }
 
 fn require_key(payload: &TransactionPayload, key: &PrivateKey) -> PyResult<()> {

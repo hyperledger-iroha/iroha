@@ -9,6 +9,9 @@ use super::*;
 #[cfg(test)]
 mod account_history_multisig_tests;
 
+#[cfg(test)]
+mod account_permissions_tests;
+
 mod account_aliases;
 #[cfg(test)]
 mod account_aliases_tests;
@@ -893,21 +896,16 @@ fn execute_prepared_collection_local(
             } else {
                 BTreeSet::new()
             };
-            let rows = permissions.iter().map(|permission| {
-                let payload = norito::json::from_str::<Value>(permission.payload().get()).map_err(
-                    |error| conversion_error(format!("invalid permission payload: {error}")),
-                )?;
-                Ok(Map::from_iter([
-                    ("name".to_owned(), Value::from(permission.name().to_owned())),
-                    ("payload".to_owned(), payload),
-                ]))
-            });
-            let mut failure = None;
-            let page = prepared.execute(until_error(rows, &mut failure), limits);
-            if let Some(error) = failure {
-                return Err(error);
-            }
-            page
+            prepared.execute_canonical(
+                specs::ACCOUNT_PERMISSION_FIELDS,
+                permissions
+                    .iter()
+                    .map(|permission| collections::CanonicalRow {
+                        text: permission.name(),
+                        json: permission.payload().get(),
+                    }),
+                limits,
+            )
         }
         CollectionTarget::SubscriptionPlans => {
             let world = state.world_view();

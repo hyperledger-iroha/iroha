@@ -174,7 +174,7 @@ pub(super) fn build_catalog(catalog: &mut ReleaseCatalog) -> Result<IronwoodCata
         ids.sort_unstable();
     }
     bundle.entrypoint = EntrypointV1::Instructions(interface_ids.clone());
-    bundle.invokes = interface_ids.clone();
+    bundle.invokes.clone_from(&interface_ids);
     bundle.events = events.values().copied().collect();
     bundle.events.sort_unstable();
     bundle.services_profile = services;

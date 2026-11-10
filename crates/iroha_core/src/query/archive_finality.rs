@@ -12,8 +12,16 @@
 //! proved, so background qualification does not repeat that work on every tick. History below
 //! the retained prefix is reread by a periodic audit: one bounded slice per qualification,
 //! outside the commit path, so neither captures nor readers wait on it or invalidate it.
+//!
+//! Retention needs no walk from signed genesis. It only prunes anchors this archive already
+//! proved, and reads the block id it binds with [`CertifiedArchiveView::committed_anchor`]. A fresh
+//! walk at the next open checks that binding again, and the periodic audit rereads the frames
+//! meanwhile.
 
-use std::time::{Duration, Instant};
+use std::{
+    num::NonZeroUsize,
+    time::{Duration, Instant},
+};
 
 use iroha_allocation::ChargedShared;
 use iroha_data_model::NetworkId;
@@ -24,6 +32,7 @@ use crate::{
     state::StateReadOnly,
     sumeragi::certified_chain::{
         ArchiveCapturePrefix, ArchivePrefixPoint, CertifiedBlock, CertifiedChain, ChainReadError,
+        CommittedBlock,
     },
 };
 
@@ -168,6 +177,18 @@ impl ArchiveAuthentication {
     /// contiguous capture run extends the result. Under steady traffic a walk therefore still
     /// establishes coverage even though the archive advanced beneath it.
     pub(crate) fn record_audit(&self, identity: ArchiveContentIdentity, through: u64) {
+        let retired = self.record_audit_retiring(identity, through);
+        drop(retired);
+    }
+
+    /// As [`Self::record_audit`], for a caller holding a lock that a refund must not run under.
+    /// The finished audit cycle's point refunds its pool, so the caller drops it after unlocking.
+    #[must_use]
+    pub(crate) fn record_audit_retiring(
+        &self,
+        identity: ArchiveContentIdentity,
+        through: u64,
+    ) -> Option<ChargedShared<ArchivePrefixPoint>> {
         {
             let mut anchors = self.anchors.lock();
             let coverage = match anchors.run {
@@ -188,8 +209,7 @@ impl ArchiveAuthentication {
             };
             anchors.coverage = Some(coverage);
         }
-        let retired = self.audit.lock().complete();
-        drop(retired);
+        self.audit.lock().complete()
     }
 
     /// Note one capture that authenticated and durably published the anchor at `height`.
@@ -226,8 +246,8 @@ impl ArchiveAuthentication {
         }
     }
 
-    /// Carry proved anchors across a compaction, which authenticated its own new base from
-    /// signed genesis and only removed records below it.
+    /// Carry proved anchors across a compaction. It only removed records at or below its new base,
+    /// and that base's anchor was authenticated before the compaction was approved.
     pub(crate) fn note_compaction(
         &self,
         before: &ArchiveContentIdentity,
@@ -285,6 +305,11 @@ impl ArchiveAuthentication {
     #[cfg(test)]
     pub(crate) fn retained_heights_for_testing(&self) -> Vec<u64> {
         self.prefix.heights()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn forget_retained_prefix_for_testing(&self) {
+        self.prefix.forget();
     }
 }
 
@@ -576,6 +601,61 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedArchiveView<'v, V> {
         Ok(Some((after, end)))
     }
 
+    /// Read an already proved anchor's committed receipt, from the nearest verified height above.
+    ///
+    /// This follows parent links down from an identity this node already authenticated and
+    /// checks no commit certificates, so its cost is the distance to that identity. The chain
+    /// leaves sparse checkpoints as it advances, and the walk leaves more behind it, so only the
+    /// first read in a stretch the cache no longer reaches pays for many frames. Use it only for a
+    /// height this archive already proved against certified history: the block id it yields binds
+    /// that same header and result.
+    ///
+    /// # Errors
+    /// The height is not committed in this view, a frame on the way is unreadable or does not
+    /// link to its child, or the frozen journal names another block there.
+    pub(crate) fn committed_anchor(
+        &self,
+        height: u64,
+    ) -> Result<CommittedBlock, ArchiveFinalityError> {
+        let index = usize::try_from(height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+            .filter(|index| index.get() <= self.view.block_hashes().len())
+            .ok_or(ChainReadError::NotCommitted { height })?;
+        let block = self
+            .view
+            .canonical_history()
+            .executed_receipt_from_checkpoints(index)
+            .map_err(|error| {
+                error.map_rejection(|error| ChainReadError::Malformed {
+                    height,
+                    reason: error.to_string(),
+                })
+            })?;
+        self.require_journal_anchor(height, block.block_hash().as_ref())?;
+        Ok(block)
+    }
+
+    /// Refuse only if the durable journal changed at or below `height`.
+    ///
+    /// A retention decision reads a finalized prefix far below the tip, so a commit landing
+    /// during it changes nothing the decision read. Requiring an unmoved tip instead would let
+    /// steady traffic starve retention until the bound stops that traffic.
+    pub(crate) fn verify_unchanged_through(&self, height: u64) -> Result<(), ArchiveFinalityError> {
+        let current = self
+            .kura
+            .exact_replay_boundary()
+            .map_err(|error| ArchiveFinalityError::Storage(error.to_string()))?;
+        let count = usize::try_from(height).map_err(|_| ArchiveFinalityError::BoundaryChanged)?;
+        match (
+            current.hashes.get(..count),
+            self.boundary.hashes.get(..count),
+        ) {
+            (Some(current), Some(frozen)) if current == frozen => Ok(()),
+            _ => Err(ArchiveFinalityError::BoundaryChanged),
+        }
+    }
+
     /// Require an already proved anchor to still name the frozen durable journal's hash.
     pub(crate) fn require_journal_anchor(
         &self,
@@ -630,15 +710,131 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedArchiveView<'v, V> {
 mod tests {
     use super::*;
     use crate::{
+        kura::history_checkpoints::{HISTORY_CHECKPOINT_INTERVAL, HistoryCheckpoint},
         query::store::LiveQueryStore,
         state::{State, World},
-        sumeragi::test_chain::{CertifiedTestChain, Signers, TestChainConfig},
+        sumeragi::{
+            certified_chain::relation_counts,
+            test_chain::{CertifiedTestChain, Signers, TestChainConfig},
+        },
     };
     use std::sync::Arc;
 
     fn chain() -> CertifiedTestChain {
         CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000))
             .expect("signed genesis")
+    }
+
+    /// Nothing near the target has been verified, so the first read pays for the walk down from
+    /// the tip. It leaves those heights behind, so later reads start right at their target.
+    #[test]
+    fn committed_anchor_starts_from_the_nearest_verified_height() {
+        let mut chain = chain();
+        for _ in 0..10 {
+            chain.commit(Vec::new());
+        }
+        let view = chain.state().query_view();
+        let certified = CertifiedArchiveView::new(&view, chain.kura()).unwrap();
+        let tip = u64::try_from(view.height()).unwrap();
+        chain.kura().history_checkpoints().clear();
+        let (first, counts) = relation_counts::measure(|| certified.committed_anchor(3));
+        let first = first.unwrap();
+        assert_eq!(counts.frames, (3..=tip).rev().collect::<Vec<_>>());
+        assert!(counts.qcs.is_empty(), "no commit certificate is checked");
+        let (later, counts) = relation_counts::measure(|| certified.committed_anchor(5));
+        let later = later.unwrap();
+        assert_eq!(counts.frames, [5], "however far below the tip it is");
+        assert_eq!(first.id(), chain.committed(3).id());
+        assert_eq!(later.id(), chain.committed(5).id());
+    }
+
+    /// The chain leaves a sparse checkpoint as its tip advances, so even a first read stops well
+    /// short of the tip. Committing here also leaves nearer entries behind, which only shortens
+    /// the read, so the cache is reduced to the one checkpoint the tip's advance records.
+    #[test]
+    fn committed_anchor_reads_down_from_the_sparse_checkpoint_above_it() {
+        let mut chain = chain();
+        for _ in 0..HISTORY_CHECKPOINT_INTERVAL + 4 {
+            chain.commit(Vec::new());
+        }
+        let view = chain.state().query_view();
+        let certified = CertifiedArchiveView::new(&view, chain.kura()).unwrap();
+        let target = HISTORY_CHECKPOINT_INTERVAL - 2;
+        let (read, counts) = relation_counts::measure(|| certified.committed_anchor(target));
+        assert_eq!(read.unwrap().id(), chain.committed(target).id());
+        assert!(
+            counts.frames.first() <= Some(&HISTORY_CHECKPOINT_INTERVAL)
+                && counts.frames.last() == Some(&target),
+            "{:?}",
+            counts.frames
+        );
+        let sparse = chain.committed(HISTORY_CHECKPOINT_INTERVAL);
+        let checkpoints = chain.kura().history_checkpoints();
+        checkpoints.clear();
+        checkpoints.record_sparse(
+            HISTORY_CHECKPOINT_INTERVAL,
+            HistoryCheckpoint {
+                iroha_hash: sparse.block_hash(),
+                core_hash: sparse.core_hash(),
+                result: sparse.result(),
+            },
+        );
+        let (read, counts) = relation_counts::measure(|| certified.committed_anchor(target));
+        assert_eq!(read.unwrap().id(), chain.committed(target).id());
+        assert_eq!(
+            counts.frames,
+            (target..=HISTORY_CHECKPOINT_INTERVAL)
+                .rev()
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn committed_anchor_needs_no_commit_certificate_below_it() {
+        let mut chain = chain();
+        for _ in 0..3 {
+            chain.commit(Vec::new());
+        }
+        // A walk from signed genesis cannot pass this frame, and a committed read never needs to.
+        chain
+            .kura()
+            .corrupt_commit_certificate_for_testing(std::num::NonZeroUsize::new(2).unwrap(), None)
+            .unwrap();
+        let view = chain.state().query_view();
+        let walking = CertifiedArchiveView::new(&view, chain.kura()).unwrap();
+        assert!(walking.block(4).is_err());
+        let reading = CertifiedArchiveView::new(&view, chain.kura()).unwrap();
+        assert_eq!(
+            reading.committed_anchor(4).unwrap().id(),
+            chain.committed(4).id(),
+            "both name the same header and result"
+        );
+        assert!(reading.committed_anchor(5).is_err(), "not committed");
+        assert!(reading.committed_anchor(0).is_err());
+    }
+
+    #[test]
+    fn a_moved_tip_refuses_the_exact_check_but_not_a_prefix_below_it() {
+        let mut chain = chain();
+        chain.commit(Vec::new());
+        let state = Arc::clone(chain.state());
+        let view = state.query_view();
+        let certified = CertifiedArchiveView::new(&view, state.kura()).unwrap();
+        certified.verify_unchanged().unwrap();
+        certified.verify_unchanged_through(2).unwrap();
+        chain.commit(Vec::new());
+        assert!(matches!(
+            certified.verify_unchanged(),
+            Err(ArchiveFinalityError::BoundaryChanged)
+        ));
+        certified.verify_unchanged_through(2).unwrap();
+        assert!(
+            matches!(
+                certified.verify_unchanged_through(3),
+                Err(ArchiveFinalityError::BoundaryChanged)
+            ),
+            "the frozen boundary never covered this height"
+        );
     }
 
     #[test]

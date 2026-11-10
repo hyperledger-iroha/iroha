@@ -374,7 +374,7 @@ mod tests {
         }
         assert!(source_cut(&missing.view(), 1, *chain.genesis().hash().as_ref()).is_err());
         for corrupt_height in [2, 3] {
-            let mut chain = native_chain(3);
+            let chain = native_chain(3);
             let hash = *chain.committed(2).block_hash().as_ref();
             chain.corrupt_local_quorum_for_test(corrupt_height, Signers::BelowQuorum);
             assert!(source_cut(&chain.state().view(), 2, hash).is_err());

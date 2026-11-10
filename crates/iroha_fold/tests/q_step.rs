@@ -46,11 +46,24 @@ fn relations() -> Relations {
         degree: 5,
     };
     let a_relation = |shape: FoldShape| {
-        let layout = synthesize(&Step::<Ep> { side: Side::A, shape, witness: None }, K, None).expect("A layout");
+        let layout = synthesize(
+            &Step::<Ep> {
+                side: Side::A,
+                shape,
+                witness: None,
+            },
+            K,
+            None,
+        )
+        .expect("A layout");
         FoldedRelation::<Fp>::from_synthesized(&layout).expect("A relation")
     };
     let first = a_relation(placeholder).shape();
-    let q_step = QStep { leaf: leaf(0).without_witnesses(), shape: first.clone(), witness: None };
+    let q_step = QStep {
+        leaf: leaf(0).without_witnesses(),
+        shape: first.clone(),
+        witness: None,
+    };
     let layout = synthesize(&q_step, K, None).expect("Q layout");
     let q = FoldedRelation::<Fq>::from_synthesized(&layout).expect("Q relation");
     let a = a_relation(q.shape());
@@ -82,36 +95,83 @@ fn q_steps_with_genuine_signature_leaves_fold_and_decide() {
     for j in 1..=4u64 {
         let started = std::time::Instant::now();
         if j % 2 == 1 {
-            let prepared =
-                prepare_step(&q_chain, j, &rel.a, q_kept.as_ref(), last_a.as_ref(), vec![q_state], q_digests.clone(), start)
-                    .expect("prepare");
+            let prepared = prepare_step(
+                &q_chain,
+                j,
+                &rel.a,
+                q_kept.as_ref(),
+                last_a.as_ref(),
+                vec![q_state],
+                q_digests.clone(),
+                start,
+            )
+            .expect("prepare");
             let next = business(Side::Q, q_state, prepared.bridge[0]);
             q_digests = business_digests(Side::Q, j == 1, prepared.digests.clone());
             let leaf = leaf(j);
-            let leaf_public = leaf.instances(&[true, true, true]).expect("leaf instances")[0].clone();
-            let frame = step_public(&q_chain, j, Fq::from(BASE), prepared.passthrough, &[next], &q_digests, &[Fq::from(j)]);
+            let leaf_public =
+                leaf.instances(&[true, true, true]).expect("leaf instances")[0].clone();
+            let frame = step_public(
+                &q_chain,
+                j,
+                Fq::from(BASE),
+                prepared.passthrough,
+                &[next],
+                &q_digests,
+                &[Fq::from(j)],
+            );
             let public = vec![frame, leaf_public];
-            let circuit = QStep { leaf, shape: rel.a.shape(), witness: Some(prepared.witness) };
+            let circuit = QStep {
+                leaf,
+                shape: rel.a.shape(),
+                witness: Some(prepared.witness),
+            };
             let report = check_circuit(&circuit, K, &public, CheckMode::Strict).expect("synthesis");
             assert!(report.is_satisfied(), "Q step {j}: {report}");
             let synthesized = synthesize(&circuit, K, Some(&public)).expect("witness");
             let (advice, public) = rel.q.stage_witness(&synthesized).expect("stage witness");
-            last_q = Some(fresh_instance(&rel.q, &rel.key_q, &DOMAIN_Q, advice, public, &mut rng).expect("fresh"));
+            last_q = Some(
+                fresh_instance(&rel.q, &rel.key_q, &DOMAIN_Q, advice, public, &mut rng)
+                    .expect("fresh"),
+            );
             q_kept = prepared.kept;
             q_state = next;
         } else {
-            let prepared =
-                prepare_step(&a_chain, j, &rel.q, a_kept.as_ref(), last_q.as_ref(), vec![a_state], a_digests.clone(), Fp::ZERO)
-                    .expect("prepare");
+            let prepared = prepare_step(
+                &a_chain,
+                j,
+                &rel.q,
+                a_kept.as_ref(),
+                last_q.as_ref(),
+                vec![a_state],
+                a_digests.clone(),
+                Fp::ZERO,
+            )
+            .expect("prepare");
             let next = business(Side::A, a_state, prepared.bridge[0]);
             a_digests = business_digests(Side::A, j == 2, prepared.digests.clone());
-            let public = vec![step_public(&a_chain, j, Fp::from(BASE), prepared.passthrough, &[next], &a_digests, &[Fp::from(j)])];
-            let circuit = Step::<Ep> { side: Side::A, shape: rel.q.shape(), witness: Some(prepared.witness) };
+            let public = vec![step_public(
+                &a_chain,
+                j,
+                Fp::from(BASE),
+                prepared.passthrough,
+                &[next],
+                &a_digests,
+                &[Fp::from(j)],
+            )];
+            let circuit = Step::<Ep> {
+                side: Side::A,
+                shape: rel.q.shape(),
+                witness: Some(prepared.witness),
+            };
             let report = check_circuit(&circuit, K, &public, CheckMode::Strict).expect("synthesis");
             assert!(report.is_satisfied(), "A step {j}: {report}");
             let synthesized = synthesize(&circuit, K, Some(&public)).expect("witness");
             let (advice, public) = rel.a.stage_witness(&synthesized).expect("stage witness");
-            last_a = Some(fresh_instance(&rel.a, &rel.key_a, &DOMAIN_A, advice, public, &mut rng).expect("fresh"));
+            last_a = Some(
+                fresh_instance(&rel.a, &rel.key_a, &DOMAIN_A, advice, public, &mut rng)
+                    .expect("fresh"),
+            );
             a_kept = prepared.kept;
             a_state = next;
         }

@@ -475,6 +475,7 @@ fn current_assignment_lookup_fails_closed_without_head_and_preserves_worker_curs
             max_page_rows: 2,
             max_kura_tip_lag_blocks: 0,
             activation_gate: ArchiveActivationGateV1::StrictLive,
+            anchor_leases: Arc::new(archive_retention::ArchiveAnchorLeaseRegistryV1::default()),
         });
     let key = ProviderIngestFinalizedArchiveKeyV1::try_new(network_id, 1, [0x74; 32], 1_000)
         .expect("cursor key");

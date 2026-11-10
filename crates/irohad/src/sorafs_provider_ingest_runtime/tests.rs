@@ -18,6 +18,7 @@ use sorafs_node::provider_ingest_runtime::{
     ProviderIngestSourceQualificationV1,
 };
 mod quarantine_restart;
+mod staged_publisher_authority;
 #[test]
 fn completed_musubi_capture_composer_has_one_concrete_inert_shape() {
     let composer: fn(
@@ -2965,28 +2966,4 @@ async fn governed_signer_keeps_dedicated_completion_key_separate_from_current_ow
 /// Configuration specimen for native custody tests; it is not native current-state evidence.
 pub(super) fn native_attestation_test_config() -> SorafsProviderIngestRuntime {
     state_free_preflight_fixture().0
-}
-
-#[test]
-fn a_staged_publisher_check_stands_only_for_its_head_and_age() {
-    let at = Instant::now();
-    let verified = (7_u64, at);
-    assert!(staged_publisher_check_stands_v1(Some(&verified), &7, at));
-    let just_inside = at + STAGED_PUBLISHER_AUTHORITY_MAX_AGE - Duration::from_secs(1);
-    assert!(staged_publisher_check_stands_v1(
-        Some(&verified),
-        &7,
-        just_inside
-    ));
-    let expired = at + STAGED_PUBLISHER_AUTHORITY_MAX_AGE;
-    assert!(!staged_publisher_check_stands_v1(
-        Some(&verified),
-        &7,
-        expired
-    ));
-    assert!(
-        !staged_publisher_check_stands_v1(Some(&verified), &8, at),
-        "a new block forces a full re-check"
-    );
-    assert!(!staged_publisher_check_stands_v1(None, &7, at));
 }

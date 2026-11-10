@@ -5,7 +5,7 @@
 //! review cell; cancellation and review destructors run after both locks are released.
 use std::sync::{Arc, Mutex, Weak};
 
-use super::{state, Failure, Result, CLOSED, INTERNAL, INVALID, RESOURCE};
+use super::{CLOSED, Failure, INTERNAL, INVALID, RESOURCE, Result, state};
 
 const MAX_REVIEWS: usize = 8;
 

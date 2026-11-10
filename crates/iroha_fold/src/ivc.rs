@@ -112,7 +112,11 @@ pub fn placeholder_instance<C: PastaCurve>(relation: &FoldedRelation<C::ScalarEx
     let zero = <C::ScalarExt as Field>::ZERO;
     Instance {
         commitments: vec![C::AffineExt::default(); relation.columns()],
-        public: relation.instance_lengths().iter().map(|len| vec![zero; *len]).collect(),
+        public: relation
+            .instance_lengths()
+            .iter()
+            .map(|len| vec![zero; *len])
+            .collect(),
         theta: vec![zero; relation.theta_len()],
         r: vec![zero; relation.groups()],
     }
@@ -120,7 +124,9 @@ pub fn placeholder_instance<C: PastaCurve>(relation: &FoldedRelation<C::ScalarEx
 
 /// An accumulator of `relation`'s shape with identity commitments and zero values.
 #[must_use]
-pub fn placeholder_accumulator<C: PastaCurve>(relation: &FoldedRelation<C::ScalarExt>) -> Accumulator<C> {
+pub fn placeholder_accumulator<C: PastaCurve>(
+    relation: &FoldedRelation<C::ScalarExt>,
+) -> Accumulator<C> {
     let zero = <C::ScalarExt as Field>::ZERO;
     Accumulator {
         instance: placeholder_instance(relation),
@@ -250,12 +256,25 @@ pub fn prepare_step<C: PastaCurve>(
     if digests[side.slot] != stored {
         return Err(Error::Shape("kept digest"));
     }
-    let acc = kept.map_or_else(|| placeholder_accumulator::<C>(other), |(acc, _)| acc.clone());
+    let acc = kept.map_or_else(
+        || placeholder_accumulator::<C>(other),
+        |(acc, _)| acc.clone(),
+    );
     let Some((fresh, fresh_witness)) = their_last else {
         let zero = <C::ScalarExt as Field>::ZERO;
-        let proof = FoldProof { f: vec![zero; other.index_bits()], k: vec![zero; other.degree() - 1] };
-        let witness =
-            FrameWitness { step, state, digests, slot: side.slot, acc, fresh: placeholder_instance::<C>(other), proof };
+        let proof = FoldProof {
+            f: vec![zero; other.index_bits()],
+            k: vec![zero; other.degree() - 1],
+        };
+        let witness = FrameWitness {
+            step,
+            state,
+            digests,
+            slot: side.slot,
+            acc,
+            fresh: placeholder_instance::<C>(other),
+            proof,
+        };
         return Ok(PreparedStep {
             witness,
             kept: kept.cloned(),
@@ -264,18 +283,40 @@ pub fn prepare_step<C: PastaCurve>(
             digests: vec![zero_base; side.digests],
         });
     };
-    let public = fresh.public.first().ok_or(Error::Shape("passthrough column"))?;
+    let public = fresh
+        .public
+        .first()
+        .ok_or(Error::Shape("passthrough column"))?;
     if public.len() < 2 {
         return Err(Error::Shape("passthrough column"));
     }
-    let (folded, folded_witness, proof) =
-        fold_or_start(other, &side.fold_domain, kept.map(|(a, w)| (a, w)), fresh, fresh_witness)?;
+    let (folded, folded_witness, proof) = fold_or_start(
+        other,
+        &side.fold_domain,
+        kept.map(|(a, w)| (a, w)),
+        fresh,
+        fresh_witness,
+    )?;
     let mut next = digests.clone();
     next[side.slot] = folded.digest(&side.fold_domain);
     let passthrough = embed(&public[1]);
     let bridge = public[2..].iter().map(embed).collect();
-    let witness = FrameWitness { step, state, digests, slot: side.slot, acc, fresh: fresh.clone(), proof };
-    Ok(PreparedStep { witness, kept: Some((folded, folded_witness)), bridge, passthrough, digests: next })
+    let witness = FrameWitness {
+        step,
+        state,
+        digests,
+        slot: side.slot,
+        acc,
+        fresh: fresh.clone(),
+        proof,
+    };
+    Ok(PreparedStep {
+        witness,
+        kept: Some((folded, folded_witness)),
+        bridge,
+        passthrough,
+        digests: next,
+    })
 }
 
 /// The public inputs a step outputs: `[passthrough, h_out, bridge...]` with
@@ -290,7 +331,10 @@ pub fn step_public<F: PastaField + iroha_pasta::poseidon::PoseidonField>(
     digests: &[F],
     bridge: &[F],
 ) -> Vec<F> {
-    let mut out = vec![passthrough, ivc_hash(&side.ivc_domain, step, base, next, digests)];
+    let mut out = vec![
+        passthrough,
+        ivc_hash(&side.ivc_domain, step, base, next, digests),
+    ];
     out.extend_from_slice(bridge);
     out
 }
@@ -307,12 +351,17 @@ mod tests {
         let in_fp: Fp = embed(&h);
         assert_eq!(in_fp.to_canonical_limbs(), h.to_canonical_limbs());
         assert_eq!(embed::<Fp, Fq>(&in_fp), h);
-        assert_ne!(h, ivc_hash::<Fq>(&[7; 32], 4, Fq::from(5u64), &[Fq::from(9u64)], &[Fq::ZERO]));
+        assert_ne!(
+            h,
+            ivc_hash::<Fq>(&[7; 32], 4, Fq::from(5u64), &[Fq::from(9u64)], &[Fq::ZERO])
+        );
     }
 
     #[test]
     fn every_digest_of_the_list_enters_the_hash_in_order() {
-        let hash = |digests: &[Fp]| ivc_hash::<Fp>(&[3; 32], 2, Fp::from(5u64), &[Fp::from(9u64)], digests);
+        let hash = |digests: &[Fp]| {
+            ivc_hash::<Fp>(&[3; 32], 2, Fp::from(5u64), &[Fp::from(9u64)], digests)
+        };
         let (a, b) = (Fp::from(11u64), Fp::from(13u64));
         assert_ne!(hash(&[a, b]), hash(&[b, a]));
         assert_ne!(hash(&[a, b]), hash(&[a, b + Fp::ONE]));

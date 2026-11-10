@@ -451,7 +451,7 @@ fn wait_for_repo_agreement(
             .and_then(|page| repo_agreement_from_page(page, agreement_id))
         {
             Ok(Some(agreement)) => return Ok(agreement),
-            Ok(None) => last_observed = "agreement not present".to_owned(),
+            Ok(None) => "agreement not present".clone_into(&mut last_observed),
             Err(err) => {
                 last_observed = format!("query failed: {err}");
             }

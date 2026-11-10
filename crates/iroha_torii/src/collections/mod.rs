@@ -6,14 +6,16 @@
 //! `routing::collection_sources`. Execution filters rows, skips everything up to
 //! the cursor's keyset position and keeps only the best `limit + 1` rows, so a
 //! page costs one pass over the candidates and `O(limit)` memory whatever its
-//! depth.
+//! depth. Rows a source holds as canonical text keep that text through the pass,
+//! so a document the text can settle spends the request's decode budget only if
+//! its row is on the page.
 mod cursor;
 mod engine;
 pub mod memory;
 pub mod specs;
 
 pub use engine::conjunctive_height_range;
-pub use engine::{Limits, Prepared, RowPage, prepare};
+pub use engine::{CanonicalRow, Limits, Prepared, RowPage, prepare};
 pub use specs::CollectionSpec;
 
 /// Collections whose reads accept `aggregate` (advertised by `/v1/node/capabilities`).

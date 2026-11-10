@@ -766,3 +766,61 @@ fn concurrent_scopes_keep_independent_budgets() {
         value
     );
 }
+
+#[test]
+fn remaining_limits_cover_every_active_scope_and_worker_charges_move_to_them() {
+    use norito::core::{
+        DecodeBudgetContext, DecodeLimits, active_decode_limits_remaining,
+        reserve_decode_allocation,
+    };
+
+    assert!(active_decode_limits_remaining().is_none());
+    let outer = DecodeBudgetContext::new(DecodeLimits::new(10, 20, 30, 40, 5));
+    let inner = DecodeBudgetContext::new(DecodeLimits::new(100, 8, 300, 400, 50));
+    outer.with(|| {
+        inner.with(|| {
+            reserve_decode_allocation(15).unwrap();
+            let remaining = active_decode_limits_remaining().unwrap();
+            assert_eq!(remaining.max_sequence_elements(), 10);
+            assert_eq!(remaining.max_field_bytes(), 8);
+            assert_eq!(remaining.max_total_elements(), 30);
+            assert_eq!(remaining.max_total_allocated_bytes(), 25);
+            assert_eq!(remaining.max_nesting_depth(), 5);
+
+            let worker = DecodeBudgetContext::new(remaining);
+            std::thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        worker.with(|| {
+                            reserve_decode_allocation(20).unwrap();
+                            // The worker's budget holds only what the caller's scopes had left.
+                            assert!(reserve_decode_allocation(6).is_err());
+                        });
+                    })
+                    .join()
+                    .unwrap();
+            });
+            // Nothing reaches the caller's scopes until the work is adopted.
+            assert_eq!(outer.consumed_allocated_bytes(), 15);
+            assert_eq!(inner.consumed_allocated_bytes(), 15);
+        });
+    });
+
+    let worker = DecodeBudgetContext::new(DecodeLimits::new(10, 20, 30, 40, 5));
+    worker.with(|| reserve_decode_allocation(20).unwrap());
+    outer.with(|| inner.with(|| worker.charge_to_active().unwrap()));
+    assert_eq!(outer.consumed_allocated_bytes(), 35);
+    assert_eq!(inner.consumed_allocated_bytes(), 35);
+
+    // A refusal charges no layer, even one that had room.
+    let refused = DecodeBudgetContext::new(DecodeLimits::new(10, 20, 30, 40, 5));
+    refused.with(|| reserve_decode_allocation(6).unwrap());
+    let narrow = DecodeBudgetContext::new(DecodeLimits::new(10, 20, 30, 5, 5));
+    assert!(
+        inner
+            .with(|| narrow.with(|| refused.charge_to_active()))
+            .is_err()
+    );
+    assert_eq!(inner.consumed_allocated_bytes(), 35);
+    assert_eq!(narrow.consumed_allocated_bytes(), 0);
+}

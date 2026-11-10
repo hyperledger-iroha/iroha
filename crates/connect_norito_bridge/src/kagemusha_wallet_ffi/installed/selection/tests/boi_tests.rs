@@ -717,7 +717,9 @@ fn boi_session_requires_the_bound_account_and_no_other_claim() {
     for (case, claims) in cases.iter().enumerate() {
         let token = boi_token(claims, &key);
         assert!(
-            selected.enrollment_session(true, [&token, b"", b""]).is_err(),
+            selected
+                .enrollment_session(true, [&token, b"", b""])
+                .is_err(),
             "case {case}"
         );
     }

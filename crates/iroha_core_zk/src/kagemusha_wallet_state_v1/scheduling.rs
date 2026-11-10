@@ -452,13 +452,15 @@ impl<T> Clone for SpeculationJob<T> {
 
 impl<T> SpeculationJob<T> {
     /// Request cancellation of exactly this ephemeral proof without joining its thread.
-    pub(super) fn cancel_proof(&self) {self.0.token.cancel();}
+    pub(super) fn cancel_proof(&self) {
+        self.0.token.cancel();
+    }
     /// End only an unadmitted job whose owning bridge call was dropped.
     pub(super) fn abandon_waiting(&self) {
-        let mut state=self.0.lock();
-        if matches!(*state,Speculated::Waiting) {
+        let mut state = self.0.lock();
+        if matches!(*state, Speculated::Waiting) {
             self.0.token.cancel();
-            *state=Speculated::Ended;
+            *state = Speculated::Ended;
         }
     }
 

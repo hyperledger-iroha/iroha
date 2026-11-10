@@ -1491,8 +1491,10 @@ const SHARED_PREFIXES_PER_CHAIN: usize = 4;
 /// Retained shared prefixes across every chain instance in this process.
 const SHARED_PREFIXES_TOTAL: usize = 16;
 // Test chains repeat their genesis, so sharing is opt-in per test thread: every other test keeps
-// counting its reads from signed genesis.
-#[cfg(test)]
+// counting its reads from signed genesis. Dependent crates' test builds reach these chains through
+// `iroha-core-tests` rather than `cfg(test)`, so the opt-in covers them too; otherwise one test's
+// fixture-selected runtime would leak into a later chain that repeats its genesis.
+#[cfg(any(test, feature = "iroha-core-tests"))]
 std::thread_local! {
     static SHARE_PREFIXES_IN_TEST: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
 }
@@ -3405,7 +3407,7 @@ impl<'v, V: StateReadOnly + ?Sized> CertifiedChain<'v, V> {
 
     // Shared prefixes apply only to ordinary readers of one immutable State view.
     fn shares_prefixes(&self) -> bool {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "iroha-core-tests"))]
         if !SHARE_PREFIXES_IN_TEST.get() {
             return false;
         }
