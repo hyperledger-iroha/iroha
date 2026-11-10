@@ -6996,6 +6996,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
     /// # Errors
     /// Returns an error for invalid frame/queue geometry, listener binding or
     /// transport setup failures, and incompatible handshake configuration.
+    /// TCP listener preparation errors include both configured endpoints and their origins.
     #[log(skip(identity_keys, shutdown_signal))]
     #[expect(
         clippy::large_types_passed_by_value,
@@ -7846,7 +7847,23 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             Arc::clone(&preauth_capacity),
             shutdown_signal.clone(),
         )
-        .await?;
+        .await
+        .map_err(|error| match error {
+            Error::BindListener { error, .. } => Error::BindListener {
+                listen_addr: format!(
+                    "{} ({})",
+                    listen_addr.value(),
+                    listen_addr.clone().into_attachment()
+                ),
+                public_address: format!(
+                    "{} ({})",
+                    public_address.value(),
+                    public_address.clone().into_attachment()
+                ),
+                error,
+            },
+            error => error,
+        })?;
         listener_tasks.push(task);
         let accept_params = AcceptThrottleParams::new(
             AcceptRate {
@@ -10963,31 +10980,45 @@ mod accept_stream_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn start_provides_bind_listener_context_on_failure() {
         use iroha_primitives::addr::socket_addr;
+
+        // Occupy an ephemeral port so the bind failure does not depend on privileges.
+        let blocker = match std::net::TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("TCP blocker bind failed: {error:?}"),
+        };
+        let blocked_addr: iroha_primitives::addr::SocketAddr =
+            blocker.local_addr().expect("blocked TCP address").into();
+        let endpoint = blocked_addr.to_string();
         let key_pair = test_node_key_pair();
         let mut cfg = base_cfg();
-        cfg.address = iroha_config_base::WithOrigin::inline(socket_addr!(127.0.0.1:1));
-        cfg.public_address = iroha_config_base::WithOrigin::inline(socket_addr!(127.0.0.1:1));
+        cfg.address = iroha_config_base::WithOrigin::new(
+            blocked_addr,
+            iroha_config_base::ParameterOrigin::custom("test listen configuration".to_owned()),
+        );
+        cfg.public_address = iroha_config_base::WithOrigin::new(
+            socket_addr!(192.0.2.1:1337),
+            iroha_config_base::ParameterOrigin::custom("test public configuration".to_owned()),
+        );
         let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
         let result = start_test_network(key_pair, cfg, shutdown).await;
         match result {
             Err(Error::BindListener {
                 listen_addr,
                 public_address,
-                ..
+                error,
             }) => {
-                assert!(
-                    listen_addr.contains("127.0.0.1:1"),
-                    "listen address should mention configured endpoint; got {listen_addr}"
+                assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+                assert_eq!(
+                    listen_addr,
+                    format!("{endpoint} (config origin: test listen configuration)")
                 );
-                assert!(
-                    public_address.contains("127.0.0.1:1"),
-                    "public address should mention configured endpoint; got {public_address}"
+                assert_eq!(
+                    public_address,
+                    "192.0.2.1:1337 (config origin: test public configuration)"
                 );
             }
-            Err(Error::Io(_)) => {
-                // Likely running in a sandbox that forbids sockets; skip.
-            }
-            Ok(_) => panic!("expected bind failure due to privileged port"),
+            Ok(_) => panic!("expected bind failure for occupied TCP port"),
             Err(e) => panic!("unexpected error: {e:?}"),
         }
     }
@@ -11996,7 +12027,13 @@ where
     .map_err(|e| std::io::Error::other(format!("tls config: {e}")))?;
     server_cfg.alpn_protocols = vec![crate::transport::P2P_ALPN.to_vec()];
     let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server_cfg));
-    let listener = prepare_tcp_listener(addr, prebound_listener).await?;
+    let listener = prepare_tcp_listener(addr, prebound_listener)
+        .await
+        .map_err(|error| Error::BindListener {
+            listen_addr: addr.to_string(),
+            public_address: public_address.to_string(),
+            error: Arc::new(error),
+        })?;
     let id_alloc = NEXT_TLS_CONN_ID.get_or_init(|| std::sync::atomic::AtomicU64::new(1 << 59));
     let task = tokio::spawn(async move {
         let mut children = tokio::task::JoinSet::new();
