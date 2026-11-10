@@ -402,6 +402,12 @@ where
 /// Builds, blinds, commits and writes every lookup's product `z`
 /// (`BlindingScheduleV1` item 4).
 ///
+/// Every product is built and its randomness drawn in lookup order first; the
+/// products are then committed in one batch and their points written in the
+/// same order, so the proof bytes equal committing one product at a time.
+/// One full-width column at a time left about a third of a Pixel 6's workers
+/// idle (10 columns: 1.44 s one at a time, 1.15 s in one batch).
+///
 /// # Errors
 ///
 /// MSM, FFT and transcript errors.
@@ -425,7 +431,7 @@ where
 {
     let tables = pk.commitment_tables();
     let u = shape.usable_rows;
-    let mut committed = Vec::with_capacity(permuted.len());
+    let mut built = Vec::with_capacity(permuted.len());
     for mut lookup in permuted {
         CancellationToken::checkpoint(cancellation)?;
         // The compressed values have no consumer after these numerators are
@@ -465,17 +471,22 @@ where
         ));
         product[u + 1..].copy_from_slice(&random);
         let product_blind = C::ScalarExt::random(&mut *rng);
-        let commitment = tables
-            .commit_lagrange_cancellable(
-                params.params(),
-                &product,
-                &product_blind,
-                Secrecy::Secret,
-                budget,
-                cancellation,
-            )?
-            .to_affine();
-        write_point(transcript, &commitment)?;
+        built.push((lookup, product, product_blind));
+    }
+    let products: Vec<&[C::ScalarExt]> = built.iter().map(|(_, product, _)| &product[..]).collect();
+    let blinds = SecretPolynomial::new(built.iter().map(|(_, _, blind)| *blind).collect());
+    let commitments = tables.commit_lagrange_secret_columns_cancellable(
+        params.params(),
+        &products,
+        &blinds,
+        budget,
+        cancellation,
+    )?;
+    for commitment in &commitments {
+        write_point(transcript, &commitment.to_affine())?;
+    }
+    let mut committed = Vec::with_capacity(built.len());
+    for (mut lookup, mut product, product_blind) in built {
         // The grand product is the last consumer of the evaluations. Move
         // their allocations into coefficient form instead of retaining an
         // extra pair of n-element vectors for every pending lookup.

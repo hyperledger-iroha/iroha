@@ -11,9 +11,11 @@
 //! ```
 //!
 //! With `N(t) = t^2 - 5`, over every row where `j` is the global equality index, then overwrites
-//! rows `n-b..n` with random values, draws its blind and writes its
-//! commitment. The values `v_j` are the advice columns with their blinding
-//! rows, the fixed columns and the zero-padded instance columns.
+//! rows `n-b..n` with random values and draws its blind. Once every set is
+//! built, the products are committed in one batch and their commitments
+//! written in set order (the same bytes as one commitment per set). The values
+//! `v_j` are the advice columns with their blinding rows, the fixed columns and
+//! the zero-padded instance columns.
 
 use crate::secret::SecretPolynomial;
 use ff::{Field, PrimeField};
@@ -24,10 +26,7 @@ use rayon::prelude::*;
 
 use super::{ProverError, batch::invert_column_cancellable, random_values, write_point};
 use crate::{
-    cs::descriptor::ColumnKindV1,
-    keys::ProvingKey,
-    pcs::ipa::{PinnedParams, commit::Secrecy},
-    protocol::Protocol,
+    cs::descriptor::ColumnKindV1, keys::ProvingKey, pcs::ipa::PinnedParams, protocol::Protocol,
     transcript::TranscriptWrite,
 };
 
@@ -95,7 +94,7 @@ where
     let tables = pk.commitment_tables();
     let sigma_values = pk.permutation_values();
     let columns = protocol.permutation_columns();
-    let mut sets = Vec::with_capacity(shape.permutation_sets);
+    let mut built = Vec::with_capacity(shape.permutation_sets);
     let mut last = C::ScalarExt::ONE;
     let mut delta_power = C::ScalarExt::ONE;
     for (set_columns, set_sigma) in columns
@@ -176,17 +175,22 @@ where
         product[first_blinding_row..].copy_from_slice(&random);
         last = product[shape.usable_rows];
         let blind = C::ScalarExt::random(&mut *rng);
-        let commitment = tables
-            .commit_lagrange_cancellable(
-                params.params(),
-                &product,
-                &blind,
-                Secrecy::Secret,
-                budget,
-                cancellation,
-            )?
-            .to_affine();
-        write_point(transcript, &commitment)?;
+        built.push((product, blind));
+    }
+    let products: Vec<&[C::ScalarExt]> = built.iter().map(|(product, _)| &product[..]).collect();
+    let blinds = SecretPolynomial::new(built.iter().map(|(_, blind)| *blind).collect());
+    let commitments = tables.commit_lagrange_secret_columns_cancellable(
+        params.params(),
+        &products,
+        &blinds,
+        budget,
+        cancellation,
+    )?;
+    for commitment in &commitments {
+        write_point(transcript, &commitment.to_affine())?;
+    }
+    let mut sets = Vec::with_capacity(built.len());
+    for (mut product, blind) in built {
         pk.domain().ifft_cancellable(&mut product, cancellation)?;
         sets.push(ProductSet {
             poly: product.into_vec(),
