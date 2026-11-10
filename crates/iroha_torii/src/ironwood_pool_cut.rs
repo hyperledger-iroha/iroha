@@ -264,6 +264,7 @@ mod tests {
     fn ironwood_pool_cut_requires_reader_permission_and_current_revocation() {
         use iroha_core::state::World;
         use iroha_data_model::{Account, Registrable};
+        use iroha_executor_data_model::permission::query::CanReadCertifiedOriginals;
         let owner = iroha_test_samples::ALICE_ID.clone();
         let world = World::with([], [Account::new(owner.clone()).build(&owner)], []);
         let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(world);
