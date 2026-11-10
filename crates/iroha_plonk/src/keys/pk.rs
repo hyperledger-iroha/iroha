@@ -235,14 +235,31 @@ impl<F: PastaField> QuotientDomain<F> {
         }
         let pieces = self.pieces();
         let mut coeffs = crate::secret::SecretPolynomial::new(vec![F::ZERO; pieces * self.n]);
-        for (t, row) in self.recombination.iter().enumerate() {
-            let out = &mut coeffs[t * self.n..(t + 1) * self.n];
-            for (weight, residue) in row.iter().zip(residues.iter()) {
-                for (target, value) in out.iter_mut().zip(residue) {
-                    *target += *weight * value;
-                }
-            }
-        }
+        // Every row range of every piece is its own task and adds its residues
+        // in coset order, so the sums are those of the serial loops. The
+        // proving thread alone took about 80 ms here for nine pieces of 2^16
+        // rows while the pool idled.
+        let residues: &[Vec<F>] = &residues;
+        coeffs
+            .par_chunks_mut(self.n)
+            .zip(self.recombination.par_iter())
+            .for_each(|(piece, row)| {
+                piece
+                    .par_chunks_mut(KEY_ROWS_PER_TASK)
+                    .enumerate()
+                    .for_each(|(task, out)| {
+                        if iroha_pasta::CancellationToken::checkpoint(cancellation).is_err() {
+                            return;
+                        }
+                        let start = task * KEY_ROWS_PER_TASK;
+                        for (weight, residue) in row.iter().zip(residues) {
+                            let residue = &residue[start..start + out.len()];
+                            for (target, value) in out.iter_mut().zip(residue) {
+                                *target += *weight * value;
+                            }
+                        }
+                    });
+            });
         iroha_pasta::CancellationToken::checkpoint(cancellation)?;
         Ok(coeffs.into_vec())
     }
@@ -253,6 +270,9 @@ impl<F: PastaField> QuotientDomain<F> {
         self.lambdas.get(coset).copied()
     }
 }
+
+/// Rows per pool task of the quotient recombination and of the coset masks.
+const KEY_ROWS_PER_TASK: usize = 1 << 10;
 
 /// Whether the proving key evaluates its fixed polynomials on the quotient
 /// cosets ahead of time.
@@ -529,8 +549,9 @@ impl<C: PastaCurve> ProvingKey<C> {
     }
 
     /// `(l_0, l_last, l_active)` on quotient coset `coset`, from their
-    /// closed forms (see the module documentation): one batch inversion and
-    /// a sliding sum, equal to the coset FFT of the mask polynomials.
+    /// closed forms (see the module documentation): a batch inversion and a
+    /// sliding sum per row range on the caller's Rayon pool, equal to the
+    /// coset FFT of the mask polynomials.
     ///
     /// # Errors
     ///
@@ -555,28 +576,49 @@ impl<C: PastaCurve> ProvingKey<C> {
         // l_0(x_i) = (lambda - 1) / (n (x_i - 1)); x_i != 1 since x_i^n =
         // lambda != 1.
         let omega = self.domain.omega();
-        let mut l0 = Vec::with_capacity(n);
-        let mut point = shift;
-        for _ in 0..n {
-            l0.push(point - C::ScalarExt::ONE);
-            point *= omega;
-        }
-        l0.iter_mut().batch_invert();
-        for value in &mut l0 {
-            *value *= factor;
-        }
+        // The three masks are public and every row range is its own pool task:
+        // the proving thread alone took about 5 ms per coset of 2^16 rows here
+        // while the pool idled. Each range inverts its own points, and exact
+        // field arithmetic gives the values of one inversion over all rows.
+        let one = C::ScalarExt::ONE;
+        let mut l0 = vec![C::ScalarExt::ZERO; n];
+        l0.par_chunks_mut(KEY_ROWS_PER_TASK)
+            .enumerate()
+            .for_each(|(task, values)| {
+                let mut point = shift * omega.pow_vartime([(task * KEY_ROWS_PER_TASK) as u64]);
+                for value in values.iter_mut() {
+                    *value = point - one;
+                    point *= omega;
+                }
+                values.iter_mut().batch_invert();
+                for value in values {
+                    *value *= factor;
+                }
+            });
         // l_r(x_i) = l_0(x_{i - r}).
         let rotated = |row: usize, rotation: usize| l0[(row + n - rotation) % n];
-        let l_last: Vec<C::ScalarExt> = (0..n).map(|row| rotated(row, last)).collect();
-        // sum_{r = last}^{n - 1} l_r(x_i) = sum_{t = 0}^{b} l_0(x_{i - last - t}),
-        // slid one row at a time.
-        let mut window: C::ScalarExt = (0..=blinding).map(|t| rotated(0, last + t)).sum();
-        let mut l_active = Vec::with_capacity(n);
-        for row in 0..n {
-            l_active.push(C::ScalarExt::ONE - window);
-            window += rotated(row + 1, last);
-            window -= rotated(row + 1, last + blinding + 1);
-        }
+        let mut l_last = vec![C::ScalarExt::ZERO; n];
+        let mut l_active = vec![C::ScalarExt::ZERO; n];
+        l_last
+            .par_chunks_mut(KEY_ROWS_PER_TASK)
+            .zip(l_active.par_chunks_mut(KEY_ROWS_PER_TASK))
+            .enumerate()
+            .for_each(|(task, (l_last, l_active))| {
+                let start = task * KEY_ROWS_PER_TASK;
+                // sum_{r = last}^{n - 1} l_r(x_i) = sum_{t = 0}^{b} l_0(x_{i - last - t}),
+                // summed for the first row of the range and slid one row at a time.
+                let mut window: C::ScalarExt =
+                    (0..=blinding).map(|t| rotated(start, last + t)).sum();
+                for (offset, (l_last, l_active)) in
+                    l_last.iter_mut().zip(l_active.iter_mut()).enumerate()
+                {
+                    let row = start + offset;
+                    *l_last = rotated(row, last);
+                    *l_active = one - window;
+                    window += rotated(row + 1, last);
+                    window -= rotated(row + 1, last + blinding + 1);
+                }
+            });
         Ok(CosetMasks {
             l0,
             l_last,
