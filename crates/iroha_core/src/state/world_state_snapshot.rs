@@ -9,6 +9,8 @@
 
 #[path = "world_state_snapshot/amx_approval.rs"]
 mod amx_approval;
+#[path = "world_state_snapshot/ironwood_replay.rs"]
+mod ironwood_replay;
 #[path = "world_state_snapshot/kagemusha_fee.rs"]
 mod kagemusha_fee;
 #[cfg(feature = "iroha-core-tests")]

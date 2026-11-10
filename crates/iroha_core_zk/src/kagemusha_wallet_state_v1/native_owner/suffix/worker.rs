@@ -509,7 +509,8 @@ impl SuffixPreparationJobV1 {
                 &installed.verifier().scheme().scheme_id(),
             )
         })?;
-        if header.request_id != binding.request
+        let expected_request_id = binding.request;
+        if header.request_id != expected_request_id
             || header.source_capsule != binding.source_capsule
             || header.tip_sequence != binding.source_sequence
             || header.anchor_sequence != binding.anchor_sequence

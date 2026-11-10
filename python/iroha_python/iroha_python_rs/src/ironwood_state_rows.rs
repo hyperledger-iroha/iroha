@@ -48,6 +48,10 @@ impl PyFinalityPage {
     }
 
     /// Finish a live read against this same verified page.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
+    )]
     fn verify_rows(
         &self,
         py: Python<'_>,
@@ -137,6 +141,10 @@ pub(crate) fn ironwood_pool_rows_request_v1_py(pool_id_hex: &str) -> PyResult<St
 /// Authenticate pool and head against the trusted checkpoint before exposing dependent selectors.
 #[pyfunction]
 #[pyo3(name = "ironwood_balance_rows_request_v1")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
+)]
 pub(crate) fn ironwood_balance_rows_request_v1_py(
     py: Python<'_>,
     pool_rows: &[u8],
@@ -290,6 +298,8 @@ fn subset(
     })
 }
 
+type PyWarmRead = (PyIronwoodReadPlan, String, Py<PyBytes>, Option<Py<PyBytes>>);
+
 struct WarmRead {
     plan: PyIronwoodReadPlan,
     missing: String,
@@ -301,6 +311,10 @@ struct WarmRead {
 /// The SDK also retains the original combined response and any supplementary response.
 #[pyfunction]
 #[pyo3(name="ironwood_warm_rows_v1", signature=(plan, primary, supplement, verified, network_id_hex, chain_discriminant, pool_id_hex, asset_definition_id, payer_account_id, expected_schema))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
+)]
 pub(crate) fn ironwood_warm_rows_v1_py(
     py: Python<'_>,
     plan: &PyIronwoodReadPlan,
@@ -313,7 +327,7 @@ pub(crate) fn ironwood_warm_rows_v1_py(
     asset_definition_id: &str,
     payer_account_id: &str,
     expected_schema: &PyIronwoodStateSchema,
-) -> PyResult<(PyIronwoodReadPlan, String, Py<PyBytes>, Option<Py<PyBytes>>)> {
+) -> PyResult<PyWarmRead> {
     let read = py
         .detach(move || {
             plan.check(
@@ -408,6 +422,10 @@ pub(crate) fn ironwood_warm_rows_v1_py(
 /// Verify the pool and balance row witnesses against an independently retained checkpoint and consecutive finality frames.
 #[pyfunction]
 #[pyo3(name = "verify_ironwood_state_rows_v1")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
+)]
 pub(crate) fn verify_ironwood_state_rows_v1_py(
     py: Python<'_>,
     pool_rows: &[u8],
@@ -442,6 +460,10 @@ pub(crate) fn verify_ironwood_state_rows_v1_py(
     })
     .map_err(NativeValidationError::into_py)
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
+)]
 fn verify_ironwood_state_rows_v1(
     pool_rows: &[u8],
     balance_rows: &[u8],
@@ -475,6 +497,10 @@ fn verify_ironwood_state_rows_v1(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
+)]
 fn verify_rows_at_page(
     page: &VerifiedFinalityPage,
     pool_rows: &[u8],
@@ -520,6 +546,10 @@ fn verify_rows_at_page(
 /// No live-tip balance subtraction is used: unrelated transactions may change either account.
 #[pyfunction]
 #[pyo3(name = "verify_ironwood_payment_effect_from_rows_v1")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
+)]
 pub(crate) fn verify_ironwood_payment_effect_from_rows_v1_py(
     py: Python<'_>,
     pool_rows: &[u8],
@@ -560,6 +590,10 @@ pub(crate) fn verify_ironwood_payment_effect_from_rows_v1_py(
     })
     .map_err(NativeValidationError::into_py)
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
+)]
 fn verify_ironwood_payment_effect_from_rows_v1(
     pool_rows: &[u8],
     balance_rows: &[u8],

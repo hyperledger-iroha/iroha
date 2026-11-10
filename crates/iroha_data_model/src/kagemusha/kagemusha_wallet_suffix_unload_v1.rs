@@ -407,7 +407,7 @@ impl KagemushaWalletSuffixHeaderV1 {
         {
             return Err(invalid("suffix_header.partition"));
         }
-        if self.chunk_digests.iter().any(|digest| *digest == [0; 32]) {
+        if self.chunk_digests.contains(&[0; 32]) {
             return Err(invalid("suffix_header.chunk_digests"));
         }
         let stream = count("suffix_header.stream_bytes", self.stream_bytes)?;

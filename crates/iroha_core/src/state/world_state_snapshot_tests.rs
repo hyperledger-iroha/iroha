@@ -2000,6 +2000,14 @@ fn native_schema_family_follows_exact_catalog_paths_and_keeps_foreign_anchors_ex
     let catalog = crate::runtime::release_catalog().unwrap();
     let selections = native_world_schema_selections_v1().unwrap();
     assert_eq!(
+        catalog.baseline.commitment_profile,
+        iroha_data_model::sumeragi_finality::lthash16_world_profile_v1()
+    );
+    assert_eq!(
+        selection_schema(&catalog.ironwood.as_ref().unwrap().selection).unwrap(),
+        iroha_data_model::sumeragi_finality::ironwood_world_schema_v1()
+    );
+    assert_eq!(
         selections.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
         ["B", "B+A", "B+G", "B+G+A", "B+G+K", "B+G+K+A", "Ironwood"]
     );

@@ -23,6 +23,7 @@ use iroha_data_model::{
 };
 use iroha_plonk::keys::{CosetCachePolicy, pk::artifact::ReadConfig};
 use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
+use std::fmt::Write as _;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -208,10 +209,16 @@ fn retained_merchant_activation_preserves_every_original_and_reopens_exactly() {
         original_hashes,
         "complete exact data copy before any Native open"
     );
-    let before = original_hashes
-        .iter()
-        .map(|(name, (bytes, hash))| format!("{} {bytes} {}\n", hex::encode(hash), name.display()))
-        .collect::<String>();
+    let mut before = String::new();
+    for (name, (bytes, hash)) in &original_hashes {
+        writeln!(
+            &mut before,
+            "{} {bytes} {}",
+            hex::encode(hash),
+            name.display()
+        )
+        .unwrap();
+    }
     fs::write(output.join("source.sha256"), before).unwrap();
 
     let credential = corpus.credential;

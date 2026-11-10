@@ -11,10 +11,16 @@ use iroha_data_model::{
 };
 #[path = "ironwood_state_rows.rs"]
 pub(crate) mod state_rows;
+#[path = "ironwood_world_replay.rs"]
+pub(crate) mod world_replay;
 
 const MAX: usize = 16 * 1024 * 1024;
 use crate::state_rows::{bytes, finality_page, fixed, invalid};
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
+)]
 fn verified_context_json(
     page: &VerifiedFinalityPage,
     pool_id_hex: &str,
@@ -57,6 +63,10 @@ fn verified_context_json(
     })).map_err(|_| invalid())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep independently selected evidence and trust pins explicit across this verifier boundary."
+)]
 fn verify_payment_from_context(
     cut_json: &str,
     payment_proof_frames_hex: Vec<String>,
@@ -71,7 +81,13 @@ fn verify_payment_from_context(
 ) -> Result<String, NativeValidationError> {
     let invalid =
         || NativeValidationError::Value("Ironwood payment effect authentication failed".into());
-    let cut: norito::json::Value = norito::json::from_str(cut_json).map_err(|_| invalid())?;
+    let cut: norito::json::Value = norito::core::classify_decode_attempt(|| {
+        norito::json::from_str(cut_json).map_err(norito::json::Error::into_core_error)
+    })
+    .map_err(|error| match error.kind() {
+        norito::core::DecodeAttemptErrorKind::Invalid => invalid(),
+        _ => NativeValidationError::Read("ironwood_context_decode", error.into()),
+    })?;
     let cut_height = cut["height"].as_u64().ok_or_else(invalid)?;
     let amount: u64 = expected_amount_decimal.parse().map_err(|_| invalid())?;
     if amount == 0 || amount.to_string() != expected_amount_decimal {
@@ -83,7 +99,7 @@ fn verify_payment_from_context(
         cut["checkpoint_hex"].as_str().ok_or_else(invalid)?,
         MAX,
     )?)
-    .map_err(|_| invalid())?;
+    .map_err(|error| NativeValidationError::Read("checkpoint_decode", error))?;
     if payment_proof_frames_hex.is_empty() || payment_proof_frames_hex.len() > 64 {
         return Err(invalid());
     }
@@ -100,11 +116,11 @@ fn verify_payment_from_context(
                 &frame,
                 norito::canonical_decode_limits(frame.len()),
             )
-            .map_err(|_| invalid())?,
+            .map_err(|error| NativeValidationError::Read("proof_decode", error.into()))?,
         );
     }
-    let page =
-        verify_checkpoint_page(network, &checkpoint, &frames, 64, MAX).map_err(|_| invalid())?;
+    let page = verify_checkpoint_page(network, &checkpoint, &frames, 64, MAX)
+        .map_err(|error| NativeValidationError::Read("finality_page", error))?;
     page.tip()
         .verify_global_scope(network, checkpoint.chain_id())
         .map_err(|_| invalid())?;

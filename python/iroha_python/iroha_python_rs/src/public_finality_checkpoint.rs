@@ -90,6 +90,15 @@ impl Failure {
         error
     }
 }
+/// Preserve native validity and resource refusals at other verified-read boundaries.
+pub(crate) fn native_read_error(
+    py: Python<'_>,
+    phase: &'static str,
+    error: FinalityReadError,
+) -> PyErr {
+    Failure::Native(phase, error).into_py(py)
+}
+
 #[derive(Debug)]
 struct Output {
     metadata_json: String,

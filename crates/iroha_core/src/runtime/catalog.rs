@@ -667,7 +667,10 @@ impl ReleaseCatalog {
         catalog.compile_lifecycle_compositions()?;
         super::sorafs_authority::compile(&mut catalog)?;
         let mut state_fields = Vec::new();
-        flatten(crate::state::authority_registry::STATE_FIELDS, &mut state_fields);
+        flatten(
+            crate::state::authority_registry::STATE_FIELDS,
+            &mut state_fields,
+        );
         for field in state_fields {
             if (field.id.starts_with("state.") || field.id.starts_with("runtime."))
                 && let Some(storage) = world_storage(field)?
@@ -677,7 +680,9 @@ impl ReleaseCatalog {
             }
         }
         catalog.keyed_storage.sort_unstable();
-        catalog.publish(iroha_data_model::runtime::keyed_state::adoption_kernel(&catalog.keyed_storage))?;
+        catalog.publish(iroha_data_model::runtime::keyed_state::adoption_kernel(
+            &catalog.keyed_storage,
+        ))?;
         catalog.publish(super::keyed_state::descriptor())?;
         catalog.publish(super::state_row_permission::descriptor())?;
 

@@ -587,15 +587,17 @@ pub fn check_replay(
             },
             components: vec![ResultComponent::WorldStateAccumulator],
         })),
-        Err(WorldStateVerificationError::KeyedMismatch { retained, captured }) => ReplayCheckOutcome::Diverged(Box::new(ReplayDivergence {
-            height: replayed_to,
-            first: ComponentDifference {
-                component: ResultComponent::WorldStateRoot,
-                expected: retained.to_string(),
-                actual: captured.to_string(),
-            },
-            components: vec![ResultComponent::WorldStateRoot],
-        })),
+        Err(WorldStateVerificationError::KeyedMismatch { retained, captured }) => {
+            ReplayCheckOutcome::Diverged(Box::new(ReplayDivergence {
+                height: replayed_to,
+                first: ComponentDifference {
+                    component: ResultComponent::WorldStateRoot,
+                    expected: retained.to_string(),
+                    actual: captured.to_string(),
+                },
+                components: vec![ResultComponent::WorldStateRoot],
+            }))
+        }
         Err(error) => return Err(ReplayCheckError::StateRoot(Box::new(error))),
     };
     Ok(ReplayCheckReport {

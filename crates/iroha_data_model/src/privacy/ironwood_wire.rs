@@ -232,8 +232,8 @@ impl<T: norito::SerializePayload> norito::SerializePayload for PrivacyWireBorrow
     }
 }
 struct PrivacySelectedFrame<Wire, Payload> {
-    payload: Payload,
     _wire_alignment: [Wire; 0],
+    payload: Payload,
 }
 impl<Wire: norito::NoritoSchema, Payload> norito::NoritoSchema
     for PrivacySelectedFrame<Wire, Payload>
@@ -265,8 +265,8 @@ impl<Wire, Payload: norito::SerializePayload> norito::SerializePayload
 }
 fn selected_privacy_frame<Wire, Payload>(payload: Payload) -> PrivacySelectedFrame<Wire, Payload> {
     PrivacySelectedFrame {
-        payload,
         _wire_alignment: [],
+        payload,
     }
 }
 

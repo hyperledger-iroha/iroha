@@ -1,5 +1,63 @@
 // Runtime storage-budget and fail-closed daemon configuration regressions.
 #[test]
+fn sponsor_stage_flags_require_the_discarded_activation_and_exclude_other_continuations() {
+    let accepted = crate::Args::try_parse_from([
+        "iroha3d",
+        "--check-replay",
+        "--rehearse-taira-activation",
+        "pool.json",
+        "--rehearse-taira-sponsor-stage",
+        "stage.json",
+    ])
+    .expect("explicit copied-State sponsor comparison");
+    assert_eq!(
+        accepted.startup.rehearse_taira_sponsor_stage.as_deref(),
+        Some(std::path::Path::new("stage.json"))
+    );
+    for invalid in [
+        vec!["--rehearse-taira-sponsor-stage", "stage.json"],
+        vec![
+            "--check-replay",
+            "--rehearse-taira-sponsor-stage",
+            "stage.json",
+        ],
+        vec![
+            "--check-replay",
+            "--rehearse-taira-activation",
+            "pool.json",
+            "--rehearse-taira-sponsor-stage",
+            "stage.json",
+            "--rehearse-sorafs-repair",
+            "repair.json",
+        ],
+        vec![
+            "--check-replay",
+            "--rehearse-taira-activation",
+            "pool.json",
+            "--rehearse-taira-sponsor-stage",
+            "stage.json",
+            "--world-payout-export-request",
+            "payout.json",
+            "--world-payout-export-output",
+            "out",
+        ],
+        vec![
+            "--check-replay",
+            "--rehearse-taira-activation",
+            "pool.json",
+            "--rehearse-taira-sponsor-stage",
+            "stage.json",
+            "--ironwood-context-export-request",
+            "context.json",
+            "--ironwood-context-export-output",
+            "out",
+        ],
+    ] {
+        assert!(crate::Args::try_parse_from(std::iter::once("iroha3d").chain(invalid)).is_err());
+    }
+}
+
+#[test]
 fn runtime_budget_rejects_zero_underflow_and_overflow() {
     for probe in [
         storage_budget_probe(1_000, 200, 0),
@@ -32,11 +90,14 @@ fn runtime_reconciliation_keeps_read_only_key_config_bytes_mode_and_inode() -> e
             check_replay: false,
             rehearse_sorafs_repair: None,
             rehearse_taira_activation: None,
+            rehearse_taira_sponsor_stage: None,
             repair_execution_time_ms: None,
             runtime_addition_review_request: None,
             runtime_addition_review_output: None,
             world_payout_export_request: None,
             world_payout_export_output: None,
+            ironwood_context_export_request: None,
+            ironwood_context_export_output: None,
             require_genesis_inrou_deployment_authority: None,
             trace_config: false,
             config_blake3: None,

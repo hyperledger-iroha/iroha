@@ -623,8 +623,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                 record.progress = Some(write_record(&mut self.archive, &progress)?);
                 self.save_request(&mut selected, &record)?;
                 let chunk_index = done / 8;
-                let mut stream_offset = 0;
-                if chunk_index > 0 {
+                let stream_offset = if chunk_index > 0 {
                     // Fixed-size progress lookup: each previous chunk commits its end offset.
                     let previous_key = address(
                         &progress
@@ -643,8 +642,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                             &self.scheme_id,
                         )
                     })?;
-                    stream_offset = previous.stream_offset + previous.data.len() as u128;
-                }
+                    previous.stream_offset + previous.data.len() as u128
+                } else {
+                    0
+                };
                 Phase::Chunk {
                     cursor,
                     chunk_index,

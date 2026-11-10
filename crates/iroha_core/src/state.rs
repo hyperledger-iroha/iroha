@@ -1512,6 +1512,7 @@ mod publication_lock_tests;
     )
 )]
 pub(crate) mod authority_registry;
+pub(crate) mod keyed_state;
 mod world_commit;
 #[cfg_attr(
     not(test),
@@ -1521,7 +1522,6 @@ mod world_commit;
     )
 )]
 mod world_journals;
-pub(crate) mod keyed_state;
 pub use keyed_state::FundedKeyedStateRows;
 pub(crate) mod world_projection;
 pub use world_projection::world_state_accumulator::{

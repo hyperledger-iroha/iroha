@@ -431,6 +431,10 @@ impl SuffixSegmentV1 {
     ///
     /// # Errors
     /// An encoding failure.
+    #[expect(
+        clippy::wrong_self_convention,
+        reason = "encoding borrows two complete wallet State openings"
+    )]
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, SuffixErrorV1> {
         norito::encode_canonical(self).map_err(|_| SuffixErrorV1::Rejected("segment encoding"))
     }

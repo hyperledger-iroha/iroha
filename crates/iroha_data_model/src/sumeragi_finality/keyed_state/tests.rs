@@ -227,9 +227,8 @@ fn long_adversarial_prefixes_use_the_funded_deep_path() {
 #[test]
 fn raw_blake3_golden_roots_pin_byte_order_and_the_unmarked_empty_root() {
     let mut tree = KeyedStateTreeV1::new([0x5a; 32], &AllocationBudget::new(32 << 10));
-    let hex = |root: [u8; 32]| root.iter().map(|b| format!("{b:02x}")).collect::<String>();
     assert_eq!(
-        hex(tree.root()),
+        hex::encode(tree.root()),
         "2c70240ea48b7696d0cd4d407fcf5cf12d2fbe4f7f55eba4895e90b74225097a"
     );
     // The prefix tree splits at bit 19 for 00 vs ff; bit 27 is the shorter
@@ -242,7 +241,7 @@ fn raw_blake3_golden_roots_pin_byte_order_and_the_unmarked_empty_root() {
         tree.replace(&k("t", key), Some(val)).unwrap();
     }
     assert_eq!(
-        hex(tree.root()),
+        hex::encode(tree.root()),
         "1c0fc81f5220f4a95a20e6b74ecade19cbf94e0d3f62a47a7f8be17cceb09b83"
     );
 }

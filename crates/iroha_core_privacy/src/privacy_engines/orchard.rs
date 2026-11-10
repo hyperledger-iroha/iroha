@@ -1210,7 +1210,8 @@ fn encode_authorized_bundle_for_profile_v1(
     consensus_binding: &PrivacyNativeConsensusBindingV1,
     profile: BundleProfileV1,
 ) -> Result<OrchardProvedBundleV1, OrchardProverErrorV1> {
-    if bundle.bundle_version() != profile.version() || *bundle.flags() != profile.flags() {
+    let expected_bundle_version = profile.version();
+    if bundle.bundle_version() != expected_bundle_version || *bundle.flags() != profile.flags() {
         return Err(OrchardProverErrorV1::OutputShape);
     }
     let draft = public_draft_from_bundle_v1(bundle);

@@ -36,5 +36,7 @@ pub(crate) mod json_macros {
 #[cfg_attr(test, deny(clippy::large_stack_arrays))]
 mod test_support;
 
+/// Operator-local Ironwood preparation authenticated by a certified World.
+pub mod ironwood_replay;
 /// Typed Ironwood payment context from generic keyed State lookups.
 pub mod ironwood_state_rows;

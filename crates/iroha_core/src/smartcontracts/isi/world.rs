@@ -17383,7 +17383,10 @@ pub mod isi {
             let mut role = new_role.build(authority);
             super::sorafs_authority::guard_role_mutation(&state_transaction.world, role.id())?;
             for token in role.permissions() {
-                crate::runtime::state_row_permission::guard_role_grant(&state_transaction.world, token)?;
+                crate::runtime::state_row_permission::guard_role_grant(
+                    &state_transaction.world,
+                    token,
+                )?;
                 super::sorafs_authority::guard_permission_mutation(
                     &state_transaction.world,
                     token,
@@ -17480,7 +17483,10 @@ pub mod isi {
         ) -> Result<(), Error> {
             let role_id = self.destination().clone();
             let permission = self.object().clone();
-            crate::runtime::state_row_permission::guard_role_grant(&state_transaction.world, &permission)?;
+            crate::runtime::state_row_permission::guard_role_grant(
+                &state_transaction.world,
+                &permission,
+            )?;
             super::sorafs_authority::guard_role_mutation(&state_transaction.world, &role_id)?;
             super::sorafs_authority::guard_permission_mutation(
                 &state_transaction.world,

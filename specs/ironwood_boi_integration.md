@@ -77,6 +77,49 @@ alternative pool-state source, but filtering only direct privacy submissions is
 insufficient when contracts, triggers or proposals can execute pool actions. The
 note scanner is not a frontier/root-history or spending-witness reconstruction API.
 
+For the selected LtHash16 World profile, the operator retains a private paired
+`world.nrt` and `originals.nrt` after complete matched Core replay at C. The native
+`verify_ironwood_world_replay_v1` SDK entry point authenticates these bounded
+originals against the independent Global checkpoint, C height and header hash,
+governed selection, compiled World schema and Ironwood proof profile. Its frozen
+`VerifiedIronwoodWorldReplayContextV1` retains the authenticated public preparation
+fields. `context_json()` exposes those fields and `verify_payment_effect()` verifies
+the exact signed payment using the consecutive C-to-H finality extension. Recovery
+reopens and verifies the retained pair against the same independent pins. World
+frames are bounded at 32 MiB, typed originals at 4 MiB, and each finality page at
+64 frames and 16 MiB. The full World stays in operator custody.
+
+The operator's one-shot native producer is:
+
+```sh
+iroha3d --sora --config /private/replay/candidate.toml --check-replay \
+  --ironwood-context-export-request /private/requests/context.json \
+  --ironwood-context-export-output "/private/evidence/cut-00000000000000012345-<block-hash>"
+```
+
+Use the independently qualified release and a fresh, privately copied Kura and
+snapshot cut. The replay must execute at least one block after its authenticated
+start and match the entire retained history through the requested C. A restored
+snapshot already at C cannot produce this evidence.
+
+The closed JSON request has schema
+`iroha.ironwood.replayed-context-request.v1` and fields `network_id`, `chain_id`,
+`genesis_hash`, `height`, `block_hash`, `world_schema_hash_hex`, `selection_id_hex`,
+`pool_id_hex`, `asset_definition`, `payer` and `reserve`. Supply native canonical
+identifier/Hash JSON and lowercase nonzero 32-byte hex selectors. Bind these to
+the independently authenticated C and reviewed runtime selection/schema. The
+producer derives the core hash, certified context ID and World root from the
+maintained native certified-cut reader and reports them with the original byte
+identities on stdout.
+
+The output name is `cut-<20-digit-height>-<lowercase-block-hash>`. Its existing
+parent must be owner-private and outside the copied node/configuration paths.
+The producer publishes both complete files together under a private directory
+with exclusive creation. Existing destinations are never replaced. An interrupted
+run or publication error requires reconciliation of the retained attempt before
+another invocation. Separate private payer directories can hold distinct typed
+originals for the same C. No full-World HTTP route or signing action is added.
+
 Before either registry transaction, deploy and authenticate the actual registry's
 contract address, expected code hash, manifest and invocation permissions. Initialize
 the scenario's namespace, participant roles, request state and counters under the

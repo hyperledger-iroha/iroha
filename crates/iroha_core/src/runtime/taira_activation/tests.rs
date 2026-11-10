@@ -1,5 +1,8 @@
 //! The certified activation stays exact, bounded and exclusive to its one predecessor.
 
+#[path = "tests/ironwood_replay_producer.rs"]
+mod ironwood_replay_producer;
+
 use std::collections::BTreeMap;
 
 use iroha_crypto::{Hash, HashOf, Signature};
@@ -930,6 +933,7 @@ fn authenticated_bootstrap_world(
     fixture: &Fixture,
     verified_tip: &iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
 ) -> Vec<u8> {
+    ironwood_replay_producer::assert_native_callback(fixture, verified_tip);
     use iroha_core_privacy::privacy_state::PrivacyCommitmentKeyV1;
     use iroha_data_model::sumeragi_finality::WorldStateSnapshotV1;
 
@@ -959,6 +963,129 @@ fn authenticated_bootstrap_world(
             assert_eq!(
                 state.bootstrap_digest().as_bytes(),
                 bootstrap.digest().unwrap().as_bytes()
+            );
+            use iroha_core_privacy::{
+                ironwood_replay::{IronwoodReplayOriginalsV1, verify_world_replay_context_v1},
+                privacy_state::PrivacyRootHeadKeyV1,
+            };
+            use iroha_data_model::{
+                asset::{AssetId, AssetValue},
+                privacy::PrivacyRootRoleV1,
+                sumeragi_finality::ironwood_world_schema_v1,
+            };
+            let payer = account(6);
+            let balance = |owner: &iroha_data_model::account::AccountId| {
+                world
+                    .assets
+                    .get(&AssetId::with_scope(
+                        bootstrap.asset_definition_id.clone(),
+                        owner.clone(),
+                        AssetBalanceScope::Global,
+                    ))
+                    .cloned()
+            };
+            let head_key = PrivacyRootHeadKeyV1::new(
+                bootstrap.namespace(),
+                PrivacyRootRoleV1::NoteCommitmentAnchor,
+            )
+            .unwrap();
+            let mut original = IronwoodReplayOriginalsV1 {
+                selection: world.runtime_selection().clone(),
+                state: record.clone(),
+                head: world.privacy_root_heads.get(&head_key).unwrap().clone(),
+                payer_balance: balance(&payer),
+                reserve_balance: balance(state.reserve_account()),
+            };
+            let network = fixture.chain.network_id();
+            let (predecessor, published) = repaired(crate::runtime::release_catalog().unwrap());
+            let chosen = change_set(&predecessor, &published).successor;
+            let schema = ironwood_world_schema_v1();
+            let verify = |world_frame: &[u8], original_frame: &[u8], selection, schema, pool| {
+                verify_world_replay_context_v1(
+                    verified_tip,
+                    world_frame,
+                    original_frame,
+                    network,
+                    selection,
+                    schema,
+                    pool,
+                    &bootstrap.asset_definition_id,
+                    &payer,
+                )
+            };
+            let typed = norito::encode_canonical(&original).unwrap();
+            let accepted = verify(&wire, &typed, chosen, schema, bootstrap.pool_id).unwrap();
+            assert_eq!(accepted.state(), state);
+            assert_eq!(accepted.payer_balance(), &original.payer_balance);
+            assert_eq!(accepted.reserve_balance(), &original.reserve_balance);
+            assert!(
+                verify(
+                    &wire,
+                    &typed,
+                    predecessor.id().unwrap(),
+                    schema,
+                    bootstrap.pool_id
+                )
+                .is_err()
+            );
+            assert!(
+                verify(
+                    &wire,
+                    &typed,
+                    chosen,
+                    selection_schema(&predecessor).unwrap(),
+                    bootstrap.pool_id
+                )
+                .is_err()
+            );
+            assert!(
+                verify(
+                    &wire,
+                    &typed,
+                    chosen,
+                    schema,
+                    PrivacyPoolIdV1::new([0xe1; 32])
+                )
+                .is_err()
+            );
+            assert!(
+                verify(
+                    &wire,
+                    &typed[..typed.len() - 1],
+                    chosen,
+                    schema,
+                    bootstrap.pool_id
+                )
+                .is_err()
+            );
+            let mut incomplete = snapshot.clone();
+            incomplete
+                .entries
+                .retain(|e| e.field_id != "world.privacy_roots");
+            assert!(
+                verify(
+                    &norito::encode_canonical(&incomplete).unwrap(),
+                    &typed,
+                    chosen,
+                    schema,
+                    bootstrap.pool_id
+                )
+                .is_err()
+            );
+            original.reserve_balance = if original.reserve_balance.is_some() {
+                None
+            } else {
+                Some(AssetValue::new(1u32.into()))
+            };
+            assert!(
+                verify(
+                    &wire,
+                    &norito::encode_canonical(&original).unwrap(),
+                    chosen,
+                    schema,
+                    bootstrap.pool_id
+                )
+                .is_err()
             );
             wire
         })

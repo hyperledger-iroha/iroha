@@ -573,7 +573,11 @@ mod tests {
         ));
         assert_eq!(delay, Duration::from_millis(2));
         assert_eq!(
-            next_busy_retry_delay(SOURCE_BUSY_RETRY_MAX_V1 - Duration::from_millis(1)),
+            next_busy_retry_delay(
+                SOURCE_BUSY_RETRY_MAX_V1
+                    .checked_sub(Duration::from_millis(1))
+                    .expect("retry maximum exceeds one millisecond")
+            ),
             SOURCE_BUSY_RETRY_MAX_V1
         );
         assert_eq!(

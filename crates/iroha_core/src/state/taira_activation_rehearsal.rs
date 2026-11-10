@@ -96,6 +96,9 @@ pub struct TairaActivationRehearsalReport {
     pub bootstrapped_world: String,
     /// Cold World commitment after the entire overlay was dropped.
     pub committed_world_after: String,
+    /// The two native fee-sponsor stage observations, when explicitly requested.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    sponsor_stage: Option<sponsor_stage::Comparison>,
     /// Always false: this overlay is never published.
     pub state_published: bool,
 }
@@ -105,6 +108,9 @@ fn throwaway_committee() -> [KeyPair; 4] {
         KeyPair::from_seed(vec![0xA0 + index as u8; 32], Algorithm::Ed25519)
     })
 }
+
+#[path = "sponsor_stage.rs"]
+mod sponsor_stage;
 
 impl State {
     /// Schedule, attest and activate the exact compiled change set in a discarded overlay on this
@@ -122,6 +128,21 @@ impl State {
         &self,
         pool: PrivacyIronwoodPoolBootstrapV1,
     ) -> Result<TairaActivationRehearsalReport, String> {
+        self.rehearse_taira_activation_with_sponsor_stage(pool, None)
+    }
+
+    /// Rehearse the transition and optionally exercise a public Stage instruction on each
+    /// selected State. Both sponsor transactions are discarded.
+    ///
+    /// # Errors
+    /// Returns the original activation refusals or an error when the two sponsor observations
+    /// differ from the supplied public case.
+    pub fn rehearse_taira_activation_with_sponsor_stage(
+        &self,
+        pool: PrivacyIronwoodPoolBootstrapV1,
+        sponsor_bytes: Option<&[u8]>,
+    ) -> Result<TairaActivationRehearsalReport, String> {
+        let sponsor = sponsor_bytes.map(sponsor_stage::Input::parse).transpose()?;
         if !self.kura.is_temporary_staging() {
             return Err("activation rehearsal requires the owned temporary replay store".into());
         }
@@ -250,6 +271,10 @@ impl State {
                     |_, captured| Ok(captured),
                 )
                 .map_err(|error| format!("activation overlay acquisition failed: {error:?}"))?;
+            let before_sponsor = sponsor
+                .as_ref()
+                .map(|case| case.observe(&mut block, false))
+                .transpose()?;
             let authority = AccountId::new(keys[0].public_key().clone());
             {
                 let mut tx = block
@@ -319,6 +344,16 @@ impl State {
                 ),
                 Err(error) => format!("refused: {error}"),
             };
+            let sponsor_stage = match (sponsor.as_ref(), before_sponsor) {
+                (Some(case), Some(predecessor)) if activated => Some(sponsor_stage::Comparison {
+                    predecessor,
+                    successor: case.observe(&mut block, true)?,
+                }),
+                (None, None) => None,
+                _ => {
+                    return Err("sponsor comparison requires a successful native activation".into());
+                }
+            };
             let activated_world = WorldStateAccumulator::capture(&block.world)?
                 .root(block.world.runtime_selection())?
                 .to_string();
@@ -358,6 +393,7 @@ impl State {
                 .to_string();
             drop(block);
             Ok(AttemptOutcome {
+                sponsor_stage,
                 activated,
                 status: format!("{status:?}"),
                 lifecycle_enabled,
@@ -415,6 +451,7 @@ impl State {
             pool_bootstrap: outcome.pool_bootstrap,
             bootstrapped_world: outcome.bootstrapped_world,
             committed_world_after: after.to_string(),
+            sponsor_stage: outcome.sponsor_stage,
             state_published: false,
         })
     }
@@ -422,6 +459,7 @@ impl State {
 
 /// What the discarded overlay produced, before it was dropped.
 struct AttemptOutcome {
+    sponsor_stage: Option<sponsor_stage::Comparison>,
     activated: bool,
     status: String,
     lifecycle_enabled: bool,

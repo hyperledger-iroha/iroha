@@ -920,6 +920,50 @@ impl VerifiedWorldStateSnapshotV1 {
 #[cfg(test)]
 mod tests;
 
+/// The frozen native World commitment definition used by the LtHash16 interpreter.
+/// Core derives the same identity from its scheme and parameters in the release catalog.
+#[must_use]
+pub fn lthash16_world_profile_v1() -> crate::runtime::definition::DefinitionId {
+    crate::runtime::definition::DefinitionId([
+        0xe7, 0x24, 0x62, 0xa8, 0x44, 0x69, 0xa7, 0xf4, 0x15, 0xd7, 0xbf, 0xe3, 0x09, 0x70, 0x9e,
+        0x33, 0xb0, 0xdb, 0x46, 0xa5, 0x11, 0x47, 0x0b, 0x81, 0x16, 0x8c, 0x1e, 0x80, 0xc2, 0xa7,
+        0x29, 0xaf,
+    ])
+}
+
+/// The exact World schema of the bound Ironwood storage owners.
+/// Its identity is unaffected by a services-only change such as Time.
+#[must_use]
+pub fn ironwood_world_schema_v1() -> Hash {
+    Hash::prehashed([
+        0x65, 0x4a, 0x65, 0xff, 0x2c, 0x6f, 0x9f, 0x58, 0x72, 0x3e, 0x81, 0xbd, 0xeb, 0x72, 0x63,
+        0x70, 0x03, 0x16, 0x3d, 0xc9, 0x3f, 0x81, 0x4b, 0x58, 0x3c, 0x82, 0xc5, 0x77, 0x69, 0xd8,
+        0xdc, 0x4b,
+    ])
+}
+
+/// Fold the commitment profile and every installed storage identity according to the
+/// complete World commitment. The caller selects the supported commitment definition.
+/// # Errors
+/// The storage count exceeds the wire's u64 bound.
+pub fn world_state_selection_schema_v1(
+    selection: &crate::runtime::definition::RootSelectionV1,
+) -> Result<Hash, FinalityError> {
+    const SELECTION: &[u8] = b"iroha:world-state:schema:selection:v1\0";
+    const FIELD: &[u8] = b"iroha:world-state:schema:field:v1\0";
+    let mut schema = Hash::new_from_chunks(&[SELECTION, &selection.commitment_profile.0]);
+    for storage in &selection.installed_storage {
+        schema = Hash::new_from_chunks(&[FIELD, schema.as_ref(), &storage.0]);
+    }
+    let count = u64::try_from(selection.installed_storage.len())
+        .map_err(|_| fail("installed storage count exceeds u64"))?;
+    Ok(Hash::new_from_chunks(&[
+        SELECTION,
+        schema.as_ref(),
+        &count.to_le_bytes(),
+    ]))
+}
+
 /// Release-qualified native typed World schemas. Core derives the exact B, B+G, B+G+K
 /// paths and their SoraFS authority successors, plus Ironwood, through native catalog changes.
 /// Every proof still authenticates its actual schema at its own certified height. This is not
@@ -939,11 +983,7 @@ pub fn native_world_schema_family_v1() -> Vec<Hash> {
             0xe3, 0x99, 0xe4, 0x37, 0x7f, 0x4d, 0xa4, 0x4e, 0xf5, 0x33, 0x3d, 0x58, 0x9e, 0x5a,
             0xd7, 0x6a, 0x61, 0xc5,
         ]),
-        Hash::prehashed([
-            0x65, 0x4a, 0x65, 0xff, 0x2c, 0x6f, 0x9f, 0x58, 0x72, 0x3e, 0x81, 0xbd, 0xeb, 0x72,
-            0x63, 0x70, 0x03, 0x16, 0x3d, 0xc9, 0x3f, 0x81, 0x4b, 0x58, 0x3c, 0x82, 0xc5, 0x77,
-            0x69, 0xd8, 0xdc, 0x4b,
-        ]),
+        ironwood_world_schema_v1(),
         Hash::prehashed([
             0x6d, 0x69, 0x89, 0x66, 0xec, 0xb7, 0x22, 0x4f, 0xd7, 0x53, 0x0e, 0x20, 0x07, 0x73,
             0xad, 0x1b, 0xb5, 0xcf, 0x9f, 0x30, 0x02, 0x95, 0x5a, 0x50, 0x75, 0xc4, 0xdc, 0x07,

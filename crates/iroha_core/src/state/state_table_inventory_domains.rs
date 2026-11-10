@@ -760,9 +760,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     OtherDomains {
         usage: Use::Name,
         reason: "Root domain of the keyed State contract's test-only reference oracle",
-        literals: &[
-            r"iroha:state-keyed-commitment:reference-oracle:root:v1\0",
-        ],
+        literals: &[r"iroha:state-keyed-commitment:reference-oracle:root:v1\0"],
     },
     OtherDomains {
         usage: Use::Name,

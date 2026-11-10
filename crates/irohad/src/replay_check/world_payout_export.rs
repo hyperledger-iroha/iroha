@@ -78,15 +78,15 @@ impl ExportRequest {
 }
 
 #[derive(Debug, JsonSerialize)]
-struct Descriptor {
-    name: String,
+pub(super) struct Descriptor {
+    pub(super) name: String,
     size: String,
     sha256: String,
 }
 
-struct Original {
-    descriptor: Descriptor,
-    bytes: Vec<u8>,
+pub(super) struct Original {
+    pub(super) descriptor: Descriptor,
+    pub(super) bytes: Vec<u8>,
     _charge: AllocationCharge,
 }
 
@@ -128,7 +128,7 @@ fn original(name: String, bytes: Vec<u8>, charge: AllocationCharge) -> Original 
     }
 }
 
-fn retain_native<T: norito::NoritoSerialize>(
+pub(super) fn retain_native<T: norito::NoritoSerialize>(
     name: String,
     value: &T,
     maximum: usize,
@@ -190,11 +190,11 @@ struct Bundle<'a> {
     limitations: &'static str,
 }
 
-struct Prepared {
-    originals: Vec<Original>,
-    manifest: Box<[u8]>,
+pub(super) struct Prepared {
+    pub(super) originals: Vec<Original>,
+    pub(super) manifest: Box<[u8]>,
     // Keep the complete original finite grant until the output and all originals retire.
-    _reservation: AllocationReservation,
+    pub(super) _reservation: AllocationReservation,
 }
 
 fn prepare(
@@ -377,7 +377,7 @@ fn prepare(
     })
 }
 
-fn read_request(path: &Path) -> Result<(ExportRequest, Vec<u8>), String> {
+pub(super) fn read_request_bytes(path: &Path) -> Result<Vec<u8>, String> {
     let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_JSON as u64 {
         return Err("request must be a nonempty regular non-symlink file up to 64 KiB".into());
@@ -387,7 +387,7 @@ fn read_request(path: &Path) -> Result<(ExportRequest, Vec<u8>), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
     }
     let mut file = options.open(path).map_err(|error| error.to_string())?;
     let opened = file.metadata().map_err(|error| error.to_string())?;
@@ -405,6 +405,11 @@ fn read_request(path: &Path) -> Result<(ExportRequest, Vec<u8>), String> {
     if bytes.len() != opened.len() as usize || bytes.len() > MAX_JSON {
         return Err("request changed or exceeded bound".into());
     }
+    Ok(bytes)
+}
+
+fn read_request(path: &Path) -> Result<(ExportRequest, Vec<u8>), String> {
+    let bytes = read_request_bytes(path)?;
     let request: ExportRequest =
         norito::json::from_slice(&bytes).map_err(|error| error.to_string())?;
     request.validate()?;

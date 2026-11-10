@@ -84,8 +84,10 @@ pub use world_state::{
     MAX_WORLD_STATE_SNAPSHOT_BYTES_V1, MAX_WORLD_STATE_SNAPSHOT_ENTRIES_V1,
     VerifiedWorldStateSnapshotV1, WORLD_STATE_ACCUMULATOR_LANES_V1, WorldStateElementKindV1,
     WorldStateSchemaPolicyV1, WorldStateSnapshotEntryV1, WorldStateSnapshotV1,
-    native_world_schema_family_v1, native_world_schemas_for_anchor_v1, world_state_element_v1,
-    world_state_path_hash_v1, world_state_root_from_accumulator_v1, world_state_value_hash_v1,
+    ironwood_world_schema_v1, lthash16_world_profile_v1, native_world_schema_family_v1,
+    native_world_schemas_for_anchor_v1, world_state_element_v1, world_state_path_hash_v1,
+    world_state_root_from_accumulator_v1, world_state_selection_schema_v1,
+    world_state_value_hash_v1,
 };
 
 use std::collections::BTreeMap;

@@ -2783,10 +2783,8 @@ impl ProviderIngestOutbox {
     /// A newly assigned order has no reachable source until its publisher finishes staging the
     /// payload on one assigned provider and that provider completes. Charging each poll against
     /// the bounded budget dead-letters every assigned provider within minutes of any multi-gigabyte
-    /// publication. Only the first deferral is recorded (persisted retry state requires a non-zero
-    /// count); later deferrals keep the count unchanged and poll at a fixed bounded interval. The
-    /// finalized order deadline still cancels the job, and every other failure class keeps its
-    /// bounded retry accounting.
+    /// publication. Each deferral preserves the number of actual failures, including zero for
+    /// a new job, and records the next bounded poll. The finalized order deadline still applies.
     pub fn defer_source_unavailable(
         &self,
         claim: &ProviderIngestSourceClaimV1,
@@ -2802,21 +2800,7 @@ impl ProviderIngestOutbox {
             observed_finalized_cursor,
         )?;
         validate_live_claim(&candidate.active[position], claim, now_ms)?;
-        let attempts = candidate.active[position].source_attempts.max(1);
-        candidate.active[position].source_attempts = attempts;
-        if attempts >= self.policy.max_attempts {
-            move_active_to_dead_letter(
-                &mut candidate,
-                position,
-                attempts,
-                ProviderIngestDeadLetterReasonV1::RetryExhausted,
-                ProviderIngestFailureClassV1::SourceUnavailable,
-                observed_finalized_cursor,
-                self.policy,
-            )?;
-            self.persist_candidate(&mut state, candidate)?;
-            return Ok(ProviderIngestRetryOutcomeV1::DeadLettered);
-        }
+        let attempts = candidate.active[position].source_attempts;
         let delay = PROVIDER_INGEST_SOURCE_UNAVAILABLE_DEFER_MS_V1
             .max(self.policy.retry_base_delay_ms)
             .min(self.policy.retry_max_delay_ms);
@@ -6066,7 +6050,9 @@ fn validate_active_state(
             next_attempt_at_ms,
             failure_class,
         } => {
-            if entry.source_attempts == 0
+            // A job can wait for its first admitted source before any fetch has failed.
+            if (entry.source_attempts == 0
+                && *failure_class != ProviderIngestFailureClassV1::SourceUnavailable)
                 || *next_attempt_at_ms == 0
                 || !failure_class.is_source_retryable()
             {
@@ -7765,6 +7751,73 @@ mod tests {
         outbox
             .mark_local_stored(&second, 111, manifest_id(&authorization))
             .unwrap();
+    }
+    #[test]
+    fn waiting_for_source_preserves_the_only_failure_attempt_across_restart() {
+        let directory = tempdir().unwrap();
+        let path = checkpoint_path(&directory);
+        let policy = ProviderIngestOutboxPolicyV1 {
+            max_attempts: 1,
+            ..policy()
+        };
+        let authorization = authorization(0x54, 7);
+        let job = authorization.job_id();
+        let next_poll = 101 + policy.retry_max_delay_ms;
+        {
+            let outbox = ProviderIngestOutbox::open(&path, policy).unwrap();
+            outbox.enqueue(authorization).unwrap();
+            let claim = outbox.claim_source(job, owner(1), 100, cursor(7)).unwrap();
+            assert_eq!(
+                outbox
+                    .defer_source_unavailable(&claim, 101, cursor(7))
+                    .unwrap(),
+                ProviderIngestRetryOutcomeV1::RetryScheduled {
+                    attempts: 0,
+                    next_attempt_at_ms: next_poll,
+                }
+            );
+            let mut invalid = outbox.lock_state().unwrap().checkpoint.clone();
+            invalid.active[0].state = StoredProviderIngestStateV1::RetryScheduled {
+                next_attempt_at_ms: next_poll,
+                failure_class: ProviderIngestFailureClassV1::SourceRejected,
+            };
+            assert_eq!(
+                validate_checkpoint(&invalid, policy),
+                Err(ProviderIngestOutboxError::InvalidCheckpoint)
+            );
+        }
+        let outbox = ProviderIngestOutbox::open(&path, policy).unwrap();
+        assert!(matches!(
+            outbox.status(job).unwrap().state,
+            ProviderIngestDeliveryStateV1::RetryScheduled {
+                attempts: 0,
+                next_attempt_at_ms,
+                failure_class: ProviderIngestFailureClassV1::SourceUnavailable,
+            } if next_attempt_at_ms == next_poll
+        ));
+        let claim = outbox
+            .claim_source(job, owner(2), next_poll, cursor(8))
+            .unwrap();
+        assert_eq!(
+            outbox
+                .schedule_source_retry(
+                    &claim,
+                    next_poll + 1,
+                    cursor(8),
+                    ProviderIngestFailureClassV1::SourceRejected,
+                )
+                .unwrap(),
+            ProviderIngestRetryOutcomeV1::DeadLettered
+        );
+        assert!(matches!(
+            outbox.status(job).unwrap().state,
+            ProviderIngestDeliveryStateV1::DeadLetter {
+                attempts: 1,
+                reason: ProviderIngestDeadLetterReasonV1::RetryExhausted,
+                last_failure_class: ProviderIngestFailureClassV1::SourceRejected,
+                ..
+            }
+        ));
     }
     #[test]
     fn claim_next_source_is_sequence_ordered_and_single_flight() {

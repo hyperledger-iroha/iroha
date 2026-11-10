@@ -15,12 +15,12 @@ pub mod ironwood;
 pub mod keyed_state;
 pub mod lifecycle_activation;
 pub mod lifecycle_preflight;
-pub mod state_row_permission;
 pub(crate) mod lifecycle_support;
 pub(crate) mod obligations;
 pub(crate) mod sorafs_authority;
 /// The owner-authorized, all-four-certified one-time Taira SoraFS transition.
 pub mod sorafs_repair;
+pub mod state_row_permission;
 pub mod taira_activation;
 
 use iroha_data_model::runtime::{
@@ -161,8 +161,17 @@ pub fn draft_addition(
 ) -> Result<iroha_data_model::runtime::lifecycle::ChangeSetV1, CatalogError> {
     let published = change_set::PublishedDefinitions(world.runtime_definitions());
     if module == iroha_data_model::runtime::keyed_state::PROFILE_NAME {
-        return keyed_state::next_change_set(network, world.runtime_selection(), &published, effective_height, qualification)
-            .map_err(|reason| CatalogError::Addition { module: module.to_owned(), reason });
+        return keyed_state::next_change_set(
+            network,
+            world.runtime_selection(),
+            &published,
+            effective_height,
+            qualification,
+        )
+        .map_err(|reason| CatalogError::Addition {
+            module: module.to_owned(),
+            reason,
+        });
     }
     release_catalog()?.activation(
         module,

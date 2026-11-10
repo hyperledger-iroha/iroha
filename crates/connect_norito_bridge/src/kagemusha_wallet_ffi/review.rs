@@ -13,7 +13,7 @@ const MAX_REVIEWS: usize = 8;
 /// In-memory only. The two capabilities share one token namespace and origin binding.
 /// A wrong named consumer takes and drops its token instead of reinterpreting its kind.
 pub(super) enum FinancialReview {
-    Ordinary(state::ReviewedOperationV1),
+    Ordinary(Box<state::ReviewedOperationV1>),
     Suffix(suffix::SuffixReviewCell),
 }
 const MAGIC: &[u8; 8] = b"KWORV1\0\0";
@@ -471,7 +471,7 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> NativeWa
         let bytes = projection(review.projection())?;
         let token = self.reviews.put(OriginBound::new(
             exchange_id,
-            FinancialReview::Ordinary(review),
+            FinancialReview::Ordinary(Box::new(review)),
         ))?;
         Ok(Response {
             kind: 18,
@@ -491,7 +491,7 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> NativeWa
         else {
             return Err(Failure::code(INVALID));
         };
-        match self.wallet.execute_reviewed(reviewed) {
+        match self.wallet.execute_reviewed(*reviewed) {
             Ok(state::ReviewedExecutionV1::Executed(value)) => completion(Some(value)),
             Ok(state::ReviewedExecutionV1::Existing(value)) => existing_response(value),
             Err(failure) => {
@@ -501,7 +501,10 @@ impl<P: advance::KagemushaWalletPlatformV1, S: OriginalSourceV1 + Send> NativeWa
                     (Some(wait), Some(reviewed)) => {
                         self.reviews.restore_exact(
                             token,
-                            OriginBound::new(exchange_id, FinancialReview::Ordinary(reviewed)),
+                            OriginBound::new(
+                                exchange_id,
+                                FinancialReview::Ordinary(Box::new(reviewed)),
+                            ),
                         )?;
                         retained_response(&self.reviews, exchange_id, token, wait_detail(wait))
                     }

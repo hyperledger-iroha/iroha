@@ -1209,9 +1209,12 @@ mod tests {
             7680 * 1024 * 1024
         );
         // The share holds a 4 GiB store beside the 1600 MiB guest and 512 MiB bundle ceilings.
-        assert!(
-            TAIRA_PROVIDER_SORAFS_STORAGE_CAP_BYTES_V1 >= (4096 + 1600 + 512 + 1024) * 1024 * 1024
-        );
+        const {
+            assert!(
+                TAIRA_PROVIDER_SORAFS_STORAGE_CAP_BYTES_V1
+                    >= (4096 + 1600 + 512 + 1024) * 1024 * 1024
+            );
+        }
         let provider = |budget, effective, cap, capacity| {
             validate_taira_storage_profile_v1(
                 Some(budget),

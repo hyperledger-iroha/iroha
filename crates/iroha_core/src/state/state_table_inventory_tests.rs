@@ -556,10 +556,22 @@ const ROOTS: &[Root] = &[
             r"iroha:state-keyed-commitment:schema:v1\0",
         ],
         evidence: &[
-            ("crates/iroha_data_model/src/sumeragi_finality/keyed_state.rs", "pub struct KeyedStateTreeV1 {"),
-            ("crates/iroha_core/src/state/keyed_state.rs", "world_state_root: self.tree.root().into(),"),
-            ("crates/iroha_core/src/state/publication.rs", ".install(keyed_cut.take())"),
-            ("crates/iroha_core/src/state/keyed_state/recovery.rs", "fn verify_replayed_state_commitment("),
+            (
+                "crates/iroha_data_model/src/sumeragi_finality/keyed_state.rs",
+                "pub struct KeyedStateTreeV1 {",
+            ),
+            (
+                "crates/iroha_core/src/state/keyed_state.rs",
+                "world_state_root: self.tree.root().into(),",
+            ),
+            (
+                "crates/iroha_core/src/state/publication.rs",
+                ".install(keyed_cut.take())",
+            ),
+            (
+                "crates/iroha_core/src/state/keyed_state/recovery.rs",
+                "fn verify_replayed_state_commitment(",
+            ),
         ],
     },
     Root {
@@ -6961,7 +6973,10 @@ fn field_line(
         Role::Local(_) => "local",
     };
     write!(line, ",\"role\":\"{role}\"").expect("write to a String");
-    if matches!(row.field.role, Role::Canonical(Canonical::Table { .. } | Canonical::Cell(_))) {
+    if matches!(
+        row.field.role,
+        Role::Canonical(Canonical::Table { .. } | Canonical::Cell(_))
+    ) {
         write!(line, ",\"keyed_profile_if_installed\":true").expect("write to a String");
     }
     if !matches!(row.commitment, Commitment::Owner) {
@@ -10744,7 +10759,8 @@ fn every_listed_commitment_has_one_owner_and_disposition() {
         // Superseded State roots track cutover defects. The selected profile
         // remains the root over all installed State entries.
         let retained_state_root = root.class == RootClass::CertifiedStateRoot
-            && root.id == "keyed_state_root" && root.keyed;
+            && root.id == "keyed_state_root"
+            && root.keyed;
         if root.class.kept() || retained_state_root {
             assert_eq!(root.defect, None, "{}", root.id);
             assert!(
@@ -12558,7 +12574,9 @@ fn contract_section_states_every_publication_and_binding_rule_once() {
         .split_once("\n## Appendix E. As-built reconciliation\n")
         .expect("section 16 precedes Appendix E");
     assert!(
-        section.contains("The governed profile `iroha.keyed-state.radix-blake3.v1` selects a path-compressed"),
+        section.contains(
+            "The governed profile `iroha.keyed-state.radix-blake3.v1` selects a path-compressed"
+        ),
         "the section identifies the governed profile and construction"
     );
     for number in 1..=8 {

@@ -130,7 +130,7 @@ mod tests {
         assert!(canonical.starts_with('"') && canonical.ends_with('"'));
         assert!(canonical.is_ascii());
         let mut escaped = String::from("\"");
-        for byte in canonical.as_bytes()[1..canonical.len() - 1].iter().copied() {
+        for byte in &canonical.as_bytes()[1..canonical.len() - 1] {
             write!(&mut escaped, "\\u{byte:04x}").unwrap();
         }
         escaped.push('"');

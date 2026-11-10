@@ -505,13 +505,13 @@ mod ironwood {
     #[cfg(unix)]
     #[test]
     fn ironwood_viewing_export_failure_is_atomic_and_retryable() {
-        use std::io::{Error, ErrorKind, Write};
+        use std::io::{Error, Write};
         let directory = TempDir::new().unwrap();
         let path = directory.path().join("viewing-key");
         assert!(
             write_ironwood_viewing_credential(&path, |file| {
                 file.write_all(b"partial secret")?;
-                Err(Error::new(ErrorKind::Other, "injected write failure"))
+                Err(Error::other("injected write failure"))
             })
             .is_err()
         );
@@ -873,8 +873,7 @@ mod ironwood {
         chain: &iroha_core::sumeragi::test_chain::CertifiedTestChain,
         height: u64,
         original: &WarmQuery,
-        checkpoint: &str,
-        frames: &[String],
+        finality: (&str, &[String]),
         schema: &crate::ironwood_payment::state_rows::PyIronwoodStateSchema,
         payer: &AccountId,
         expected_missing: usize,
@@ -883,6 +882,7 @@ mod ironwood {
             ironwood_warm_rows_v1_py, verify_ironwood_state_rows_v1_py,
         };
         use pyo3::types::PyBytesMethods;
+        let (checkpoint, frames) = finality;
         let budget = iroha_allocation::AllocationBudget::new(64 << 20);
         let fetch = |keys: &[(String, Vec<u8>)]| {
             let proof = chain
@@ -1078,8 +1078,7 @@ mod ironwood {
             &chain,
             start,
             &warm,
-            &checkpoint_hex,
-            &prepare_frames,
+            (&checkpoint_hex, &prepare_frames),
             &schema,
             &payer,
             0,
@@ -1106,8 +1105,7 @@ mod ironwood {
             &chain,
             start + 2,
             &warm,
-            &checkpoint_hex,
-            &retained,
+            (&checkpoint_hex, &retained),
             &schema,
             &payer,
             1,

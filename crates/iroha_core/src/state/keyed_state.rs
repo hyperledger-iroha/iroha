@@ -43,22 +43,21 @@ impl KeyedVersions {
     pub(super) fn install(&mut self, current: Option<KeyedCut>) -> Self {
         let mut retired = std::mem::take(self);
         if let Some(next) = current {
-            self.previous =
-                if retired
-                    .current
-                    .as_ref()
-                    .is_some_and(|cut| cut.tip.height().checked_add(1) == Some(next.tip.height()))
-                {
-                    retired.current.take()
-                } else {
-                    if retired.previous.as_ref().is_some_and(|cut| {
-                        cut.tip.height().checked_add(1) == Some(next.tip.height())
-                    }) {
-                        retired.previous.take()
-                    } else {
-                        None
-                    }
-                };
+            self.previous = if retired
+                .current
+                .as_ref()
+                .is_some_and(|cut| cut.tip.height().checked_add(1) == Some(next.tip.height()))
+            {
+                retired.current.take()
+            } else if retired
+                .previous
+                .as_ref()
+                .is_some_and(|cut| cut.tip.height().checked_add(1) == Some(next.tip.height()))
+            {
+                retired.previous.take()
+            } else {
+                None
+            };
             self.current = Some(next);
         }
         retired
@@ -125,11 +124,12 @@ impl State {
         let native = view
             .native_execution_tip()
             .ok_or("no native State publication")?;
+        let certified_block_hash = tip.block_hash();
         if native.height() != tip.height()
-            || native.iroha_hash() != tip.block_hash()
+            || native.iroha_hash() != certified_block_hash
             || native.core_hash() != tip.core_hash()
             || native.result() != tip.result()
-            || view.latest_block_hash() != Some(tip.block_hash())
+            || view.latest_block_hash() != Some(certified_block_hash)
             || *view.network_id() != tip.commitment().schedule.current.network_id
             || !runtime::keyed_state::selected(view.world().runtime_selection())
         {

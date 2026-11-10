@@ -2442,7 +2442,9 @@ impl<'s> Worker<'s> {
             .seal_state_transition()
         {
             Ok(transition) => transition,
-            Err(CutError::Deferred(reason)) => return Err(PublicationError::Deferred(reason.into())),
+            Err(CutError::Deferred(reason)) => {
+                return Err(PublicationError::Deferred(reason.into()));
+            }
             Err(error) => {
                 let reason = format!("original State commitment requires recovery: {error}");
                 self.recovery = Some(reason.clone());

@@ -87,8 +87,9 @@ impl SuffixRecoveryBodyV1 {
             &self.authority_header,
             &self.scheme_id,
         )?;
+        let predecessor_capsule = self.predecessor_capsule_digest;
         if header.wallet_id != self.wallet_id
-            || header.source_capsule != self.predecessor_capsule_digest
+            || header.source_capsule != predecessor_capsule
             || header.statement != self.statement
             || header.sigma != self.step_proof
             || self.statement.operation_id(&self.wallet_id)? != self.operation_id
