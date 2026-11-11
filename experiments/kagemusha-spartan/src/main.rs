@@ -2974,8 +2974,9 @@ fn q_bench<S: fs::Scalar>(
         })
         .collect();
     println!(
-        "  native q, {name}: {} points x 2 kinds, {rounds} interleaved rounds, medians ({} threads): one point at a time {:.1} ms; {}",
+        "  native q, {name}: {} points x {} kinds, {rounds} interleaved rounds, medians ({} threads): one point at a time {:.1} ms; {}",
         poly.degree() + 1,
+        poly.kinds.len(),
         rayon::current_num_threads(),
         mb * 1e3,
         parts.join("; ")
@@ -3323,27 +3324,102 @@ fn prove_linked_pair(
     }
 }
 
-/// The recursion's fixed point over both operations (`ZKS_HOPS`, default 4).
+/// One Bootstrap circuit's line: size, layout and the Pixel model (it has no
+/// fold).
+fn describe_boot_circuit<S: fs::Scalar>(
+    name: &str,
+    c: &uniform::UniformCircuit<S>,
+    wit: &Witness<S>,
+) {
+    let shape = c.shape;
+    let ((cells, rows), (terms, work)) = (c.sizes(), c.template_size());
+    let regions = c.regions();
+    let pl = c.link_phase_rows();
+    println!(
+        "  {name}: 2^{} constraints ({rows} rows), witness {} rows of {} ({} + {pl} + {} + {} used: first phase, link phase, second phase, fixed), {cells} cells; template terms {terms}, matrix-MLE products {work}; no fold (the empty claim as its accumulator)",
+        shape.sx,
+        shape.rows(),
+        shape.cols(),
+        regions.0,
+        regions.1,
+        regions.2,
+    );
+    println!(
+        "  Pixel model, kernels of 11-10: {name} {}",
+        pixel_kern(
+            &shape,
+            &c.width_classes(&wit.w),
+            rows,
+            regions.0 + pl + regions.1 + regions.2
+        )
+    );
+}
+
+/// A proved linked pair on its circuits as a uniform pair of kind `kind`.
+fn linked_uniform(
+    cp: &std::sync::Arc<uniform::UniformCircuit<iroha_pasta::Fp>>,
+    ip: Instance<iroha_pasta::Fp>,
+    cs: &std::sync::Arc<uniform::UniformCircuit<verifier::Fq>>,
+    is: Instance<verifier::Fq>,
+    l: LinkedPair,
+    kind: usize,
+) -> full::UniformPair {
+    full::UniformPair {
+        cp: cp.clone(),
+        ip,
+        pp: l.pp,
+        cs: cs.clone(),
+        is,
+        ps: l.ps,
+        d: l.d,
+        rho: l.rho,
+        r: l.r,
+        kind,
+    }
+}
+
+/// A linked pair's line: proving time, verification, sizes, and whether its
+/// accumulators hold natively on `gens`' polynomials (returned).
+fn report_pair(label: &str, l: &LinkedPair, gens: &full::PairGens) -> (bool, bool) {
+    let (ap, as_) = (
+        deferral::claim_of(&l.pp.late),
+        deferral::claim_of(&l.ps.late),
+    );
+    let (hp, hs) = (
+        gens.defer_p.eval(&ap.point) == ap.value,
+        gens.defer_s.eval(&as_.point) == as_.value,
+    );
+    println!(
+        "  {label} pair proved in {:.1} s (P twice, S once); linked verification {}; proofs {} + {} B; accumulators hold natively: P {hp}, S {hs}",
+        l.secs,
+        if l.ok { "accepted" } else { "FAILED" },
+        l.pp.to_bytes().len(),
+        l.ps.to_bytes().len()
+    );
+    assert!(l.ok, "the {label} pair verifies");
+    (hp, hs)
+}
+
+/// The recursion's fixed point over the three kinds (`ZKS_HOPS`, default 4).
 /// Each hop builds the uniform Receive pair (P-recv, S-recv) over the
 /// previous hop's Receive pair (the predecessor) and Send pair (the payer's),
-/// and the uniform Send pair (P-send, S-send) over the previous hop's Receive
-/// pair (the predecessor), at the Receive pair's layout; it proves and
-/// verifies both linked pairs, checks their accumulators natively, and
-/// compares each circuit's shape, sizes and matrices with the previous hop's.
-/// The accumulators' polynomials have two kinds, the previous hop's Receive
-/// and Send circuits. Hop 1 verifies toy pairs.
+/// the uniform Send pair (P-send, S-send) over the previous hop's Receive
+/// pair (the predecessor), and the uniform Bootstrap pair (P-boot, S-boot),
+/// which verifies no proof; Send and Bootstrap are built at the Receive
+/// pair's layout. It proves and verifies the three linked pairs, checks their
+/// accumulators natively, and compares each circuit's shape, sizes and
+/// matrices with the previous hop's. The accumulators' polynomials have three
+/// kinds, the previous hop's Receive, Send and Bootstrap circuits. Hop 1
+/// verifies toy pairs.
 ///
-/// From hop 2 on, the predecessor slot takes either kind (its kind bit read
-/// from the proof's io selects the key and the matrices), so the last hop
-/// also proves the two orders after a Send: Send after Send, and Receive
-/// after Send (the previous hop's Send pair as both the predecessor and the
-/// payer's), and checks that their circuits are the same circuits.
-///
-/// The base case (ZKS_GENESIS_HOP = G): a Receive folds the payer's Send
-/// accumulator from the previous hop, so Send's chain starts one hop before
-/// Receive's: Send is a base case at hops G - 1 and G, Receive at G. From
-/// hop G + 1 on, every pair verifies pairs whose accumulators hold.
-/// ZKS_DETERMINISM=1 builds each Send circuit twice and compares the builds.
+/// From hop 2 on, the predecessor slot takes any kind (its kind bits, read
+/// from the proof's io, select the key and the matrices). The hop chain
+/// starts from toy pairs, so its accumulators are claims on earlier hops'
+/// polynomials and do not hold, and no flag restarts it. At the last hop the
+/// runner starts two wallets' chains where production does, at Bootstrap
+/// pairs, and proves every order on the hop's circuits (`wallet_chains`).
+/// ZKS_DETERMINISM=1 builds each Send and Bootstrap circuit twice and
+/// compares the builds.
 fn run_fixed_point() {
     use std::sync::Arc;
     use verifier::Fq;
@@ -3367,117 +3443,122 @@ fn run_fixed_point() {
         "toy incoming pairs proved and traced in {:.1} s",
         clock.elapsed().as_secs_f64()
     );
-    let genesis_hop: usize = std::env::var("ZKS_GENESIS_HOP")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+    // The previous hop's circuits: Receive, Send, Bootstrap (P, S).
     #[allow(clippy::type_complexity)]
-    let mut prev: Option<(
-        Arc<uniform::UniformCircuit<iroha_pasta::Fp>>,
-        Arc<uniform::UniformCircuit<Fq>>,
-        Arc<uniform::UniformCircuit<iroha_pasta::Fp>>,
-        Arc<uniform::UniformCircuit<Fq>>,
-    )> = None;
-    // The previous hop's Send pair, to trace again as a predecessor.
-    let mut prev_send: Option<full::UniformPair> = None;
+    let mut prev: Option<
+        [(
+            Arc<uniform::UniformCircuit<iroha_pasta::Fp>>,
+            Arc<uniform::UniformCircuit<Fq>>,
+        ); 3],
+    > = None;
     for hop in 1..=hops {
-        let recv_base = genesis_hop > 0 && hop == genesis_hop;
-        let send_base = genesis_hop > 0 && (hop == genesis_hop || hop + 1 == genesis_hop);
         let clock = Instant::now();
-        gens.genesis = recv_base;
         let (w, idx) = full::p_recv(&gens, &pairs);
         let (cp, ip, wp) = uniform_of!("P-uniform", w, 14, 64, b"p-recv-uniform");
         let (w, sidx) = full::s_recv(&gens, &pairs);
         let (cs, is, ws) = uniform_of!("S-uniform", w, 13, 62, b"s-recv-uniform");
-        gens.genesis = send_base;
+        let (pl, sl) = (cp.layout(), cs.layout());
         let send_p = |gens: &full::PairGens, pred: &full::TracedPair| {
             let (w, idx) = full::p_send(gens, pred);
-            let (c, i, wt) = uniform_at!("P-uniform", w, 14, 64, b"p-send-uniform", cp.layout());
+            let (c, i, wt) = uniform_at!("P-uniform", w, 14, 64, b"p-send-uniform", pl);
             (c, i, wt, idx)
         };
         let send_s = |gens: &full::PairGens, pred: &full::TracedPair| {
             let (w, idx) = full::s_send(gens, pred);
-            let (c, i, wu) = uniform_at!("S-uniform", w, 13, 62, b"s-send-uniform", cs.layout());
+            let (c, i, wu) = uniform_at!("S-uniform", w, 13, 62, b"s-send-uniform", sl);
             (c, i, wu, idx)
+        };
+        let boot_p = |gens: &full::PairGens| {
+            let (w, idx) = full::p_boot(gens);
+            let (c, i, wb) = uniform_at!("P-uniform", w, 14, 64, b"p-boot-uniform", pl);
+            (c, i, wb, idx)
+        };
+        let boot_s = |gens: &full::PairGens| {
+            let (w, idx) = full::s_boot(gens);
+            let (c, i, wv) = uniform_at!("S-uniform", w, 13, 62, b"s-boot-uniform", sl);
+            (c, i, wv, idx)
         };
         let (ct, it, wt, idx_t) = send_p(&gens, &pairs[0]);
         let (cu, iu, wu, sidx_t) = send_s(&gens, &pairs[0]);
+        let (cb, ib, wb, bidx) = boot_p(&gens);
+        let (cv, iv, wv, sbidx) = boot_s(&gens);
         if determinism {
             let mut rng = SpikeRng::new(b"determinism");
-            let (ct2, _, _, _) = send_p(&gens, &pairs[0]);
-            let (cu2, _, _, _) = send_s(&gens, &pairs[0]);
+            let (ct2, ..) = send_p(&gens, &pairs[0]);
+            let (cu2, ..) = send_s(&gens, &pairs[0]);
+            let (cb2, ..) = boot_p(&gens);
+            let (cv2, ..) = boot_s(&gens);
             println!(
-                "  determinism: {}; {}",
+                "  determinism: {}; {}; {}; {}",
                 compare_hop_circuit("P-send rebuilt", &ct, &ct2, &mut rng),
-                compare_hop_circuit("S-send rebuilt", &cu, &cu2, &mut rng)
+                compare_hop_circuit("S-send rebuilt", &cu, &cu2, &mut rng),
+                compare_hop_circuit("P-boot rebuilt", &cb, &cb2, &mut rng),
+                compare_hop_circuit("S-boot rebuilt", &cv, &cv2, &mut rng)
             );
         }
-        gens.genesis = false;
         let incoming = if hop == 1 {
             "toy pairs"
         } else {
             "the previous hop's uniform Receive and Send pairs"
         };
-        let base = match (recv_base, send_base) {
-            (true, _) => {
-                "; base case: Receive and Send (the genesis claim replaces the predecessor's accumulator)"
-            }
-            (false, true) => "; base case: Send",
-            _ => "",
-        };
-        let either = if gens.keys_p.is_some() {
-            "; the predecessor slot takes either kind"
+        let any = if gens.keys_p.is_some() {
+            "; the predecessor slot takes any kind (Receive, Send, Bootstrap)"
         } else {
             ""
         };
         println!(
-            "hop {hop}: Receive verifies {incoming} (predecessor, payer), Send the predecessor{either}{base}; circuits built in {:.1} s",
+            "hop {hop}: Receive verifies {incoming} (predecessor, payer), Send the predecessor, Bootstrap nothing{any}; circuits built in {:.1} s",
             clock.elapsed().as_secs_f64()
         );
         describe_hop_circuit("P-recv", &cp, &wp, &idx.defer);
         describe_hop_circuit("S-recv", &cs, &ws, &sidx.defer);
         describe_hop_circuit("P-send", &ct, &wt, &idx_t.defer);
         describe_hop_circuit("S-send", &cu, &wu, &sidx_t.defer);
+        describe_boot_circuit("P-boot", &cb, &wb);
+        describe_boot_circuit("S-boot", &cv, &wv);
+        if hop == 1
+            && let Some(own) = &bidx.own
+        {
+            println!(
+                "  P-boot's own relation (Bootstrap at the census's counts, a stand-in): {} permutations in its pool, {} signatures, {} insertions",
+                own.pool.perms,
+                own.digest_perms.len(),
+                own.insertion_values.map_or(0, |a| cb.arrays[a].r_count)
+            );
+        }
         println!(
-            "  split families: P-recv [{}]; S-recv [{}]; P-send [{}]; S-send [{}]",
+            "  split families: P-recv [{}]; S-recv [{}]; P-send [{}]; S-send [{}]; P-boot [{}]; S-boot [{}]",
             split_families_note(&cp),
             split_families_note(&cs),
             split_families_note(&ct),
-            split_families_note(&cu)
+            split_families_note(&cu),
+            split_families_note(&cb),
+            split_families_note(&cv)
         );
-        if let Some((pr, sr, pt, st)) = &prev {
+        if let Some([(pr, sr), (pt, st), (pb, sb)]) = &prev {
             let mut rng = SpikeRng::new(b"fixed point compare");
             println!(
-                "  against hop {}: {}; {}; {}; {}",
+                "  against hop {}: {}; {}; {}; {}; {}; {}",
                 hop - 1,
                 compare_hop_circuit("P-recv", pr, &cp, &mut rng),
                 compare_hop_circuit("S-recv", sr, &cs, &mut rng),
                 compare_hop_circuit("P-send", pt, &ct, &mut rng),
-                compare_hop_circuit("S-send", st, &cu, &mut rng)
+                compare_hop_circuit("S-send", st, &cu, &mut rng),
+                compare_hop_circuit("P-boot", pb, &cb, &mut rng),
+                compare_hop_circuit("S-boot", sb, &cv, &mut rng)
             );
         }
         let recv = prove_linked_pair("fixed point", hop, &cp, &ip, &wp, &cs, &is, &ws);
         let send = prove_linked_pair("fixed point send", hop, &ct, &it, &wt, &cu, &iu, &wu);
-        let report = |label: &str, l: &LinkedPair, gens: &full::PairGens| {
-            let (ap, as_) = (
-                deferral::claim_of(&l.pp.late),
-                deferral::claim_of(&l.ps.late),
-            );
-            let (hp, hs) = (
-                gens.defer_p.eval(&ap.point) == ap.value,
-                gens.defer_s.eval(&as_.point) == as_.value,
-            );
-            println!(
-                "  {label} pair proved in {:.1} s (P twice, S once); linked verification {}; proofs {} + {} B; accumulators hold natively: P {hp}, S {hs}",
-                l.secs,
-                if l.ok { "accepted" } else { "FAILED" },
-                l.pp.to_bytes().len(),
-                l.ps.to_bytes().len()
-            );
-            assert!(l.ok, "the {label} pair verifies");
-        };
-        report("Receive", &recv, &gens);
-        report("Send", &send, &gens);
+        let boot = prove_linked_pair("fixed point boot", hop, &cb, &ib, &wb, &cv, &iv, &wv);
+        report_pair("Receive", &recv, &gens);
+        report_pair("Send", &send, &gens);
+        let boot_holds = report_pair("Bootstrap", &boot, &gens);
+        assert_eq!(
+            boot_holds,
+            (true, true),
+            "a Bootstrap pair's accumulators (the empty claim) hold on any hop's polynomials"
+        );
         if hop == hops {
             // The pair binding refuses swapped partners: P-recv linked with
             // S-send proves S-send's chain ending at its R, which P-recv's
@@ -3491,75 +3572,42 @@ fn run_fixed_point() {
                 swapped.sides == (true, false),
                 "P refuses a partner whose chain ends at another R"
             );
-            // The orders after a Send: the previous hop's Send pair as the
-            // predecessor (and, for Receive, as the payer's too). The
-            // circuits must be the ones just built.
-            if let (Some(su), true) = (&prev_send, gens.keys_p.is_some()) {
-                let clock = Instant::now();
-                let pred = full::trace_uniform(su.clone(), &gens);
-                let payer = full::trace_uniform(su.clone(), &gens);
-                let (ct2, it2, wt2, _) = send_p(&gens, &pred);
-                let (cu2, iu2, wu2, _) = send_s(&gens, &pred);
-                let after_send = [pred, payer];
-                let (w, _) = full::p_recv(&gens, &after_send);
-                let (cp2, ip2, wp2) = uniform_of!("P-uniform", w, 14, 64, b"p-recv-uniform");
-                let (w, _) = full::s_recv(&gens, &after_send);
-                let (cs2, is2, ws2) = uniform_of!("S-uniform", w, 13, 62, b"s-recv-uniform");
-                let mut rng = SpikeRng::new(b"after send compare");
-                println!(
-                    "  after a Send (circuits built in {:.1} s), against the hop's circuits: {}; {}; {}; {}",
-                    clock.elapsed().as_secs_f64(),
-                    compare_hop_circuit("P-send", &ct, &ct2, &mut rng),
-                    compare_hop_circuit("S-send", &cu, &cu2, &mut rng),
-                    compare_hop_circuit("P-recv", &cp, &cp2, &mut rng),
-                    compare_hop_circuit("S-recv", &cs, &cs2, &mut rng)
-                );
-                for (name, d) in [
-                    ("P-send", template_differences(&ct, &ct2, 6)),
-                    ("S-send", template_differences(&cu, &cu2, 6)),
-                    ("P-recv", template_differences(&cp, &cp2, 6)),
-                    ("S-recv", template_differences(&cs, &cs2, 6)),
-                ] {
-                    if !d.is_empty() {
-                        println!("    {name} templates differ in: {}", d.join("; "));
-                    }
-                }
-                let send2 =
-                    prove_linked_pair("after send", hop, &ct2, &it2, &wt2, &cu2, &iu2, &wu2);
-                report("Send after Send", &send2, &gens);
-                let recv2 =
-                    prove_linked_pair("after send recv", hop, &cp2, &ip2, &wp2, &cs2, &is2, &ws2);
-                report("Receive after Send", &recv2, &gens);
-                // The predecessor's kind bit is pinned: its shared copy (the
-                // key selection reads it) and the fresh claim's c each break
-                // a row when changed.
-                let p_breaks = row_breaks(
-                    &ct,
-                    &it,
-                    &wt,
-                    &[
-                        (idx_t.shared, 0, idx_t.kind_at),
-                        (idx_t.defer.fold.coords, deferral::C_P[1], 0),
-                    ],
-                );
-                let s_breaks = row_breaks(
-                    &cu,
-                    &iu,
-                    &wu,
-                    &[
-                        (sidx_t.shared, 0, sidx_t.kind_at),
-                        (sidx_t.defer.fold.coords, deferral::C_P[1], 0),
-                    ],
-                );
-                println!(
-                    "  the predecessor's kind bit, changed (shared copy, fresh claim's c) breaks a row: P-send {p_breaks:?}, S-send {s_breaks:?}"
-                );
-                assert!(
-                    p_breaks.iter().chain(&s_breaks).all(|b| *b),
-                    "the kind bit's copies are pinned"
-                );
-            }
-            if let Some((pr, sr, pt, st)) = &prev {
+            // Bootstrap's pins: its kind bits and its accumulator (the empty
+            // claim's c0, c1 and value) each break a row when changed.
+            let n_p = gens.defer_p.n();
+            let n_s = gens.defer_s.n();
+            let p_breaks = row_breaks(
+                &cb,
+                &ib,
+                &wb,
+                &[
+                    (bidx.kind_pin, 0, 0),
+                    (bidx.kind_pin, 0, 1),
+                    (bidx.empty, 0, 0),
+                    (bidx.empty, 0, n_p - 1),
+                    (bidx.empty, 0, n_p),
+                ],
+            );
+            let s_breaks = row_breaks(
+                &cv,
+                &iv,
+                &wv,
+                &[
+                    (sbidx.kind_pin, 0, 0),
+                    (sbidx.kind_pin, 0, 1),
+                    (sbidx.empty, 0, 0),
+                    (sbidx.empty, 0, n_s - 1),
+                    (sbidx.empty, 0, n_s),
+                ],
+            );
+            println!(
+                "  Bootstrap's kind bits (c0, c1) and empty claim (c0, c1, value), changed, break a row: P-boot {p_breaks:?}, S-boot {s_breaks:?}"
+            );
+            assert!(
+                p_breaks.iter().chain(&s_breaks).all(|b| *b),
+                "Bootstrap's kind and accumulator are pinned"
+            );
+            {
                 fn tape<S: fs::Scalar>(c: &uniform::UniformCircuit<S>) -> String {
                     let ((muls, scales, ops), (regs, slots)) = (c.plan_stats(), c.plan_registers());
                     format!(
@@ -3567,57 +3615,220 @@ fn run_fixed_point() {
                     )
                 }
                 println!(
-                    "  compiled matrix programs (the kinds' uniform circuits): P-recv {}; S-recv {}; P-send {}; S-send {}",
-                    tape(pr.as_ref()),
-                    tape(sr.as_ref()),
-                    tape(pt.as_ref()),
-                    tape(st.as_ref())
+                    "  compiled matrix programs (the kinds' uniform circuits): P-recv {}; S-recv {}; P-send {}; S-send {}; P-boot {}; S-boot {}",
+                    tape(&cp),
+                    tape(&cs),
+                    tape(&ct),
+                    tape(&cu),
+                    tape(&cb),
+                    tape(&cv)
                 );
             }
             q_bench("P-recv", &gens.defer_p, &idx.defer.claims);
             q_bench("S-recv", &gens.defer_s, &sidx.defer.claims);
             q_bench("P-send", &gens.defer_p, &idx_t.defer.claims);
             q_bench("S-send", &gens.defer_s, &sidx_t.defer.claims);
+            if gens.keys_p.is_some() {
+                let hop_c = [
+                    (Arc::new(cp), Arc::new(cs)),
+                    (Arc::new(ct), Arc::new(cu)),
+                    (Arc::new(cb), Arc::new(cv)),
+                ];
+                let boot_a =
+                    linked_uniform(&hop_c[2].0, ib, &hop_c[2].1, iv, boot, full::BOOTSTRAP);
+                wallet_chains(hop, &gens, &hop_c, boot_a);
+            }
             break;
         }
-        let (cp, cs, ct, cu) = (Arc::new(cp), Arc::new(cs), Arc::new(ct), Arc::new(cu));
-        prev = Some((cp.clone(), cs.clone(), ct.clone(), cu.clone()));
+        let (cp, cs, ct, cu, cb, cv) = (
+            Arc::new(cp),
+            Arc::new(cs),
+            Arc::new(ct),
+            Arc::new(cu),
+            Arc::new(cb),
+            Arc::new(cv),
+        );
         let clock = Instant::now();
-        let recv_u = full::UniformPair {
-            cp,
-            ip,
-            pp: recv.pp,
-            cs,
-            is,
-            ps: recv.ps,
-            d: recv.d,
-            rho: recv.rho,
-            r: recv.r,
-            kind: full::RECEIVE,
-        };
-        let send_u = full::UniformPair {
-            cp: ct,
-            ip: it,
-            pp: send.pp,
-            cs: cu,
-            is: iu,
-            ps: send.ps,
-            d: send.d,
-            rho: send.rho,
-            r: send.r,
-            kind: full::SEND,
-        };
-        gens = full::next_gens(&recv_u, Some(&send_u));
+        let recv_u = linked_uniform(&cp, ip, &cs, is, recv, full::RECEIVE);
+        let send_u = linked_uniform(&ct, it, &cu, iu, send, full::SEND);
+        let boot_u = linked_uniform(&cb, ib, &cv, iv, boot, full::BOOTSTRAP);
+        prev = Some([(cp, cs), (ct, cu), (cb, cv)]);
+        gens = full::next_gens(&recv_u, Some(&send_u), Some(&boot_u));
         pairs = vec![
             full::trace_uniform(recv_u, &gens),
-            full::trace_uniform(send_u.clone(), &gens),
+            full::trace_uniform(send_u, &gens),
         ];
-        prev_send = Some(send_u);
         println!(
             "  next hop's pairs traced in {:.1} s",
             clock.elapsed().as_secs_f64()
         );
     }
+}
+
+/// Two wallets' chains on the last hop's circuits, started where production
+/// starts them, at Bootstrap pairs: B's Send after Bootstrap (S1), A's
+/// Receive after Bootstrap paid by S1 (R1), A's Send after Receive (S2) and
+/// Send after Send (S3), B's Receive after Send paid by S2 (R2) and Receive
+/// after Receive paid by S3 (R3). Each operation's circuits are rebuilt over
+/// its inputs and must be the hop's (its slot takes any kind); every pair
+/// verifies and its accumulators hold natively. Over a Bootstrap
+/// predecessor, the predecessor's kind bits (their shared copies and the
+/// fresh claim's c0, c1) each break a row when changed.
+fn wallet_chains(
+    hop: usize,
+    gens: &full::PairGens,
+    hop_c: &[(
+        std::sync::Arc<uniform::UniformCircuit<iroha_pasta::Fp>>,
+        std::sync::Arc<uniform::UniformCircuit<verifier::Fq>>,
+    ); 3],
+    boot_a: full::UniformPair,
+) {
+    use std::sync::Arc;
+    let (pl, sl) = (hop_c[0].0.layout(), hop_c[0].1.layout());
+    let mut rng = SpikeRng::new(b"wallet chains compare");
+    let mut same = |name: &str,
+                    kind: usize,
+                    cp: &uniform::UniformCircuit<iroha_pasta::Fp>,
+                    cs: &uniform::UniformCircuit<verifier::Fq>| {
+        let (a, b) = (
+            compare_hop_circuit(&format!("P {name}"), &hop_c[kind].0, cp, &mut rng),
+            compare_hop_circuit(&format!("S {name}"), &hop_c[kind].1, cs, &mut rng),
+        );
+        if !(a.ends_with("EQUAL") && b.ends_with("EQUAL")) {
+            for (side, d) in [
+                ("P", template_differences(&hop_c[kind].0, cp, 6)),
+                ("S", template_differences(&hop_c[kind].1, cs, 6)),
+            ] {
+                if !d.is_empty() {
+                    println!("    {name}: {side} templates differ in: {}", d.join("; "));
+                }
+            }
+        }
+        assert!(
+            a.ends_with("EQUAL") && b.ends_with("EQUAL"),
+            "{name}: the hop's circuits ({a}; {b})"
+        );
+    };
+    println!("  wallet chains from Bootstrap pairs, on the hop's circuits:");
+    // Wallet B's Bootstrap: the hop's circuits, its own randomness.
+    let clock = Instant::now();
+    let (w, _) = full::p_boot(gens);
+    let (cb, ib, wb) = uniform_at!("P-uniform", w, 14, 64, b"p-boot-uniform", pl);
+    let (w, _) = full::s_boot(gens);
+    let (cv, iv, wv) = uniform_at!("S-uniform", w, 13, 62, b"s-boot-uniform", sl);
+    same("Bootstrap (B)", 2, &cb, &cv);
+    let l = prove_linked_pair("wallet B boot", hop, &cb, &ib, &wb, &cv, &iv, &wv);
+    println!(
+        "    Bootstrap (B): built and proved in {:.1} s",
+        clock.elapsed().as_secs_f64()
+    );
+    let boot_b = linked_uniform(&Arc::new(cb), ib, &Arc::new(cv), iv, l, full::BOOTSTRAP);
+    let tr = |u: &full::UniformPair| full::trace_uniform(u.clone(), gens);
+    // One operation over traced inputs (Receive: predecessor, payer; Send:
+    // predecessor): rebuilt, compared with the hop's, proved, checked.
+    #[allow(clippy::type_complexity)]
+    let mut op = |label: &str, kind: usize, inputs: &[full::TracedPair], seed: &str| {
+        let clock = Instant::now();
+        let ((cp, ip, wp), (cs, is, ws), kind_at, coords) = if kind == full::RECEIVE {
+            let (w, idx) = full::p_recv(gens, inputs);
+            let p = uniform_of!("P-uniform", w, 14, 64, b"p-recv-uniform");
+            let (w, sidx) = full::s_recv(gens, inputs);
+            let s = uniform_of!("S-uniform", w, 13, 62, b"s-recv-uniform");
+            (
+                p,
+                s,
+                (idx.shared, sidx.shared, idx.kind_at, sidx.kind_at),
+                (idx.defer.fold.coords, sidx.defer.fold.coords),
+            )
+        } else {
+            let (w, idx) = full::p_send(gens, &inputs[0]);
+            let p = uniform_at!("P-uniform", w, 14, 64, b"p-send-uniform", pl);
+            let (w, sidx) = full::s_send(gens, &inputs[0]);
+            let s = uniform_at!("S-uniform", w, 13, 62, b"s-send-uniform", sl);
+            (
+                p,
+                s,
+                (idx.shared, sidx.shared, idx.kind_at, sidx.kind_at),
+                (idx.defer.fold.coords, sidx.defer.fold.coords),
+            )
+        };
+        same(label, kind, &cp, &cs);
+        if inputs[0].kind == full::BOOTSTRAP {
+            // Over a Bootstrap predecessor: its kind bits' shared copies and
+            // the fresh claim's selector coordinates (c0 first, c1 last) are
+            // pinned.
+            let (n_p, n_s) = (gens.defer_p.n(), gens.defer_s.n());
+            let (sh_p, sh_s, at_p, at_s) = kind_at;
+            let p_breaks = row_breaks(
+                &cp,
+                &ip,
+                &wp,
+                &[
+                    (sh_p, 0, at_p),
+                    (sh_p, 0, at_p + 1),
+                    (coords.0, deferral::C_P[1], 0),
+                    (coords.0, deferral::C_P[1], n_p - 1),
+                ],
+            );
+            let s_breaks = row_breaks(
+                &cs,
+                &is,
+                &ws,
+                &[
+                    (sh_s, 0, at_s),
+                    (sh_s, 0, at_s + 1),
+                    (coords.1, deferral::C_P[1], 0),
+                    (coords.1, deferral::C_P[1], n_s - 1),
+                ],
+            );
+            println!(
+                "    {label}: the Bootstrap predecessor's kind bits, changed (shared c0, c1; fresh claim's c0, c1), break a row: P {p_breaks:?}, S {s_breaks:?}"
+            );
+            assert!(
+                p_breaks.iter().chain(&s_breaks).all(|b| *b),
+                "the predecessor's kind bits are pinned"
+            );
+        }
+        let l = prove_linked_pair(seed, hop, &cp, &ip, &wp, &cs, &is, &ws);
+        let holds = report_pair(&format!("    {label}:"), &l, gens);
+        assert_eq!(holds, (true, true), "{label}: the accumulators hold");
+        println!(
+            "      (built, checked and proved in {:.1} s)",
+            clock.elapsed().as_secs_f64()
+        );
+        linked_uniform(&Arc::new(cp), ip, &Arc::new(cs), is, l, kind)
+    };
+    let s1 = op(
+        "Send after Bootstrap (B)",
+        full::SEND,
+        &[tr(&boot_b)],
+        "chain S1",
+    );
+    drop(boot_b);
+    let r1 = op(
+        "Receive after Bootstrap (A, paid by S1)",
+        full::RECEIVE,
+        &[tr(&boot_a), tr(&s1)],
+        "chain R1",
+    );
+    drop(boot_a);
+    let s2 = op("Send after Receive (A)", full::SEND, &[tr(&r1)], "chain S2");
+    drop(r1);
+    let s3 = op("Send after Send (A)", full::SEND, &[tr(&s2)], "chain S3");
+    let r2 = op(
+        "Receive after Send (B, paid by S2)",
+        full::RECEIVE,
+        &[tr(&s1), tr(&s2)],
+        "chain R2",
+    );
+    drop((s1, s2));
+    let _r3 = op(
+        "Receive after Receive (B, paid by S3)",
+        full::RECEIVE,
+        &[tr(&r2), tr(&s3)],
+        "chain R3",
+    );
+    println!("  every order from a Bootstrap start verifies, and every accumulator holds");
 }
 
 /// The header line and compiled evaluation of an Fq uniform circuit.

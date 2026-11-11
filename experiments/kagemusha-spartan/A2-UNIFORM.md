@@ -1,7 +1,8 @@
-# Stage A2: uniform blocks — status 2026-11-10 (fixed point reached: the uniform pair verifies its own proofs)
+# Stage A2: uniform blocks — status 2026-11-11 (fixed point over Receive, Send and Bootstrap; every chain starts at a Bootstrap proof)
 
-This is an experimental Receive harness. The [README](README.md) lists the
-unfinished Send, binding, base-case admission and production integration work.
+This is an experimental harness for the Receive, Send and Bootstrap circuits. The [README](README.md) lists
+what is still unfinished: the wallet state carried between steps, Bootstrap's comb tables, and the production
+integration.
 
 Owner: "Start stage A2".
 
@@ -1599,7 +1600,7 @@ Owner: "Continue part 2". Mode: `ZKS_HOPS=6 ZKS_GENESIS_HOP=5 ZKS_SCHEDULE=lean 
 - **The iteration** (`full::next_pairs`): the hop's linked uniform pair becomes the next hop's predecessor Receive, traced
   as circuit proofs, with its late io as its accumulator. A fresh toy Send pair stands in for the payer, because no
   uniform Send circuit exists yet.
-- **A base case.**
+- **A base case** (replaced on 2026-11-11 by the Bootstrap kind; see "The Bootstrap kind").
   - The circuit's io carries a genesis flag g (io 62) and a value v0 (io 63).
   - The predecessor's accumulator node satisfies (P0 − io)(1 − g) = 0 and (P0 − g0)·g = 0, with g0 a fixed point of
     the template. The value is handled the same way, and g is boolean.
@@ -1736,8 +1737,10 @@ blocks could use the empty tails.
      over all four orders with one circuit per operation; model 2.21 s per Receive pair, 1.55 s per Send pair;
    - done: the pair binding inside the proven circuits ("The pair binding inside the circuits" below): a link
      phase between the first and second phases holds both chains; rho and R are the link's io; model unchanged;
-   - next: the base case's authorization (owner decision); a Pixel run of the fixed point with both operations;
-     the witness at 32 rows (about 65k fewer positions in P-recv; it would also bring S-recv back toward 2^18);
+   - done: the Bootstrap kind ("The Bootstrap kind" below; owner: "Bootstrap kind"): the genesis flag is gone,
+     every chain starts at a Bootstrap proof, and the predecessor slot takes Receive, Send or Bootstrap;
+   - next: a Pixel run of the fixed point with all three kinds; the witness at 32 rows (about 65k fewer positions
+     in P-recv; it would also bring S-recv back toward 2^18); Bootstrap's comb tables as uniform arrays;
    - then: general bit maps, 14-round partial blocks, one range table, constants in the first half of the rows.
 
 
@@ -1917,10 +1920,8 @@ Building a Send circuit twice gives identical matrices (`ZKS_DETERMINISM=1`, eve
 
 **Still open** (the binding: next section):
 
-- **The base case's authorization**, an owner decision. The spec starts every wallet with a Bootstrap step whose
-  package the ledger verifies at activation, so a Bootstrap circuit kind with no predecessor is the natural first
-  link; Send and Receive would then have no genesis flag. The alternative keeps the flag and has every Send and
-  Receive verify an issuer-signed initial state when it is set.
+- **The base case's authorization**: decided (owner: "Bootstrap kind") and built, see "The Bootstrap kind"
+  below. Send and Receive have no genesis flag; every chain starts at a Bootstrap proof.
 - **A Pixel run** of the fixed point with both operations.
 - **The witness at 32 rows** (an owner decision on rate-8 transcripts), which would also cut the row-fold work of
   every verified proof and could bring S-recv back toward 2^18.
@@ -2003,6 +2004,105 @@ placeholder rho and R and is discarded; a production prover would suspend after 
   first phase's range lookups into it would need their multiplicities in the link phase, which is allowed (the
   link phase precedes alpha and beta) and is a cleanup for later.
 
-**Still open:** the base case's authorization (an owner decision), a Pixel run, the witness at 32 rows (see
+**Still open:** a Pixel run, the witness at 32 rows (see
 "Uniform Send"); mu from a prover's randomness and a prover that suspends after the first phase belong to the
 production integration.
+
+## The Bootstrap kind: every chain starts at a Bootstrap proof (2026-11-11)
+
+Owner: "Bootstrap kind" (the base case's authorization, asked after the binding). Code: `deferral::kind_bits`,
+`MatPoly::selector_bits`, `c1_at` and `empty_claim`, `deferral::expose_constant`; `full::BOOTSTRAP`, `Op::BOOTSTRAP`,
+`full::p_boot` and `s_boot`, `full::kind_pin` (two bits), `full::kind_values`, `defer_into` (no flag) and
+`full::next_gens` (three kinds); `points::KeySelect` (three keys); `run_fixed_point` and `wallet_chains` in `main.rs`.
+Tests: `deferral::tests::three_kinds_select_corners_and_the_empty_claim`,
+`full::tests::bootstrap_pair_carries_the_empty_claim`. Logs: `../../output/kagemusha-100x-20261108/spike/runs/claude-bootstrap-fp-4.log`
+(the fixed point) and `claude-bootstrap-tests-4.log` (all tests); `claude-bootstrap-fp-3.log` is the same run before
+two cosmetic changes, and `-fp-1`, `-fp-2` stopped at the two gaps described below.
+
+**What was wrong.** Each Send and Receive circuit carried a public genesis flag (io 62) and value (io 63): with
+the flag set, the predecessor's accumulator gave way to a "genesis claim". Anyone proving could set it, so a
+wallet could drop its predecessor's deferred claims, and with them its history, at any hop. The runner used the
+flag only to start true accumulators once the matrices had settled.
+
+**What replaces it.** The spec's own base case (Λ/Ω §2.6: Bootstrap's step has no Ω slot, and its absent slots
+take a pinned trivial accumulator), as a third circuit kind:
+
+1. **No flag.** Send and Receive fold their predecessor's accumulator exactly as its late io says, always.
+2. **Bootstrap (kind 2) is the first link.** It has no predecessor slot: it verifies no proof, has no points or
+   scalar side and folds nothing. Its own relation is the spec's Bootstrap step at census size (`Op::BOOTSTRAP`, a
+   stand-in like Send's and Receive's): the zero state with no insertion (empty trees), the three signatures its
+   leaf verifies (its receipt, the credential, the scheme-root certificate; all three on the comb here, a stand-in
+   for the issuer's and root's keys), a 64-permutation statement sponge, 2 comparisons, 4 u128 values and about
+   1,000 logic rows.
+3. **Its accumulator is the empty claim**, pinned as constants in its circuit (`expose_constant`): the selector
+   corner (1, 1), where no kind is selected and the combined polynomial vanishes, with value 0. It holds on any
+   hop's polynomial, and a prover chooses nothing in it.
+4. **Three kinds, two selector bits.** The combined polynomial puts c0 first and c1 last: Receive (0, 0), Send
+   (1, 0), Bootstrap (0, 1); the corner (1, 1) is the empty claim's. Claims gain one coordinate (P 45 → 46, S 43
+   → 44), and q's degree grows by 3 (P 162 → 165, S 144 → 147).
+5. **Kind bits are public io** at 60 (c0) and 61 (c1). A predecessor slot of any kind reads both from the
+   verified proof's io, holds each boolean and c0 c1 = 0, ties them to two shared values per pair (both circuits
+   of the pair see one kind) and to the fresh claim's c0 and c1, and pins the proof's fixed rows to
+   `key_R + c0 (key_S - key_R) + c1 (key_B - key_R)`. The payer's slot stays a constant Send.
+6. **Bootstrap is built at Receive's layout**, like Send: padded first and link phases, padding fixed rows. S-boot
+   needs one LogUp table so that its transcript squeezes the second-phase challenges, which every verifier slot
+   replays: its kind bits are also looked up in a bit table {0, 1}. Without it (run `-fp-2`) the slot's kinds
+   disagreed on those challenges. The signature family's range now follows the signature count (`2^2` for
+   Bootstrap's three; still `2^1` for Send and Receive, whose circuits do not change); run `-fp-1` stopped there.
+
+**Why every chain starts at a Bootstrap.** A valid Send or Receive proof needs a valid predecessor proof of one of
+the three kinds under that kind's key, and the deferred claims about that proof fold into its accumulator, which
+is decided natively. Only a Bootstrap proof has no predecessor, so walking back along predecessors ends at one.
+Its own relation fixes the zero state and checks the credential and the certificate, and the ledger verifies and
+records the Bootstrap package at activation. So a wallet cannot drop its history: there is no flag, and a new
+Bootstrap starts from the zero state with its own activation.
+
+**Results** (`ZKS_SCHEDULE=lean ZKS_HOPS=8 zk-spartan fixed-point`). All 44 experiment tests pass.
+
+- **Convergence:** all six circuits' matrices are equal from hop 4 to 5 on, as before. The Bootstrap circuits
+  settle at hop 2 to 3: they verify nothing, so only the layout moves them.
+- **Bootstrap pairs** verify at every hop, and their accumulators hold at every hop.
+- **The hop chain** starts from toy pairs, so its accumulators are claims on an earlier hop's polynomial and do
+  not hold, at any hop. Before, the flag turned them true at hops 7 and 8; now nothing can.
+- **Wallet chains at hop 8**, on the hop's circuits, started where production starts them:
+  - wallet B: Bootstrap, then Send (S1), then Receive paid by A's S2 (R2), then Receive paid by S3 (R3);
+  - wallet A: Bootstrap, then Receive paid by S1 (R1), then Send (S2), then Send (S3).
+
+  That is every order: Send and Receive after a Bootstrap, after a Receive and after a Send. Each operation's
+  circuits, rebuilt over its inputs, are the hop's circuits; every pair verifies; every accumulator holds natively.
+- **Refused:** a changed kind bit (c0 or c1) or empty-claim coordinate (c0, c1) or value in P-boot and S-boot;
+  over a Bootstrap predecessor (S1, R1), a changed shared kind bit or fresh-claim c0 or c1 on both sides; P-recv
+  linked with S-send (S verifies, P refuses), as before.
+
+| At the fixed point (hop 8) | P-recv | S-recv | P-send | S-send | P-boot | S-boot |
+|---|---:|---:|---:|---:|---:|---:|
+| Constraint rows (all 2^19) | 478,318 | 272,188 | 263,139 | 137,994 | 127,095 | 101 |
+| Witness rows used, of 64: first, link, second phase, fixed | 35 + 5 + 11 + 3 | 46 + 1 + 3 + 2 | 35 + 5 + 6 + 3 | 46 + 1 + 2 + 2 | 35 + 5 + 9 + 3 | 46 + 1 + 1 + 2 |
+| Cells | 604,843 | 295,698 | 342,459 | 153,383 | 231,597 | 58 |
+| Pixel model, kernels of 11-10 | 1.35 s | 0.86 s | 0.96 s | 0.59 s | 0.72 s | 0.33 s |
+| Proof | 5,024 B | 4,928 B | 5,024 B | 4,928 B | 5,024 B | 4,928 B |
+
+- **Send and Receive cost the same at the model's resolution:** Receive 2.21 s, Send 1.55 s per pair. Their
+  circuits changed by a few hundred cells at most (P-recv +986, P-send +508): the second kind bit and its shared
+  copy, the bit checks, a second key term per verified fixed row, one more fold coordinate, and no flag.
+- **Proofs grow by 64 B per pair** (9,952 B): each accumulator has one more coordinate, c1, carried as late io.
+- **Bootstrap** costs 1.05 s per pair on the model, once, at activation (online). S-boot has almost nothing in it
+  (58 cells), but it still proves a 2^19 instance at S-recv's layout.
+- **Native q evaluates three kinds** at every point of the curve (a folded accumulator's c1 is generic). On the P
+  side the kinds' programs grow from 19,967 to 25,745 products and the points from 163 to 166: about +31% native
+  q work per proof; on the S side about +4%. This run's timings cannot show it: the Mac's load average was 350 to
+  550 during the run (other sessions' builds and tests), so they are not comparable with earlier runs.
+
+**Not in it.**
+
+- **The wallet's comb tables** (Lever 1): `operation::bootstrap_cost` derives them from the payment key in 34,939
+  rows and 216,205 range lookups at m = 16 (about 253k constraints), one time. No uniform gadget builds them yet.
+  An estimate of the fit: each range lookup is a first-phase chunk and a second-phase helper. The first phase has
+  room (35 rows, 573k positions, against about 250k more cells). The second phase is tight: P-boot uses 9 rows
+  now, the shared layout leaves Bootstrap 64 − 35 − 5 − 3 = 21, and the tables' helpers need about 13 more, so
+  about 22. Building the gadget would settle it; the fallbacks are a lookup-leaner derivation, or the tables as a
+  one-time proof of their own that Bootstrap verifies or the credential binds.
+- **The state from one step to the next** (`σ.predecessor = Ω.head`): the spike's own relations are synthetic, so
+  the io carries no head and nothing ties a step's input state to its predecessor's output yet. With that tie,
+  Bootstrap's zero state is every chain's first head.
+- The ledger's activation record, and the issuer's and the root's own keys for the credential and the certificate.

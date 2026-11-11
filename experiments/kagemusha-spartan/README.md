@@ -6,29 +6,34 @@ shipping proof backend. It depends on the checkout's `crates/iroha_pasta`; it do
 not vendor another Iroha checkout and is not a member of the production workspace.
 
 The experiment builds linked zero-knowledge Spartan proofs over the Pasta cycle
-for both offline operations, Receive and Send, using uniform circuit arrays,
-LogUp copy/lookups and deferred matrix claims. Send's circuits are built at
-Receive's layout, and the predecessor slot takes a proof of either kind (its
-kind bit, read from the proof's io, selects the key and the matrices), so the
-recursion's fixed point holds over all four orders with one circuit per
-operation. The fixed-point runner checks the final accumulated claims natively.
+for both offline operations, Receive and Send, and for Bootstrap, the first link
+of every wallet's chain, using uniform circuit arrays, LogUp copy/lookups and
+deferred matrix claims. Send's and Bootstrap's circuits are built at Receive's
+layout, and the predecessor slot takes a proof of any of the three kinds (its
+two kind bits, read from the proof's io, select the key and the matrices), so
+the recursion's fixed point holds over every order with one circuit per kind.
+Bootstrap verifies no proof; its accumulator is the empty claim. The
+fixed-point runner checks the final accumulated claims natively.
 Native claim-polynomial evaluation is batched over register-reusing groups of
 four points.
 
 ## Limits that remain
 
-- Send's and Receive's own relations have the census's gadgets and sizes over
-  synthetic values, not the monetary semantics.
+- Send's, Receive's and Bootstrap's own relations have the census's gadgets and
+  sizes over synthetic values, not the monetary semantics.
 - The pair binding runs inside both proven circuits, in a link phase between the
   first and second phases (A2-UNIFORM.md, "The pair binding inside the
   circuits"). Its mask `mu` is derived from the pair's shared values here; a
   prover samples it per pair.
-- The public base-case flag can discard predecessor claims. Authenticated
-  first-state admission and its binding to the real wallet protocol are not
-  implemented (an owner decision: the spec's Bootstrap step is the natural first
-  link). The fixed-point runner deliberately uses this flag only to bootstrap its
-  research template after the matrices converge, starting Send's chain one hop
-  before Receive's.
+- Every chain starts at a Bootstrap proof (A2-UNIFORM.md, "The Bootstrap
+  kind"; owner: "Bootstrap kind"). Send and Receive have no base-case flag, and
+  their predecessor slot takes a Receive, Send or Bootstrap proof by its two
+  public kind bits. Bootstrap's own relation is a census-sized stand-in: the
+  zero state, and its receipt, credential and certificate signatures, all on the
+  comb. Not modelled: the wallet's comb tables (one-time, about 253k
+  constraints), the issuer's and root's own keys, the ledger's activation record,
+  and the wallet state carried from one step to the next
+  (`σ.predecessor = Ω.head`).
 - Spartan proof acceptance alone does not establish deferred-claim validity.
   Both native accumulator checks must hold. Intermediate template-building
   hops deliberately contain false accumulators and are not valid payments.
@@ -50,7 +55,7 @@ following reuses the original research lane in this checkout:
 export CARGO_TARGET_DIR="$PWD/../../output/kagemusha-100x-20261108/spike/target-zks"
 cargo test --locked --offline --release
 cargo build --locked --offline --release
-ZKS_SCHEDULE=lean ZKS_HOPS=8 ZKS_GENESIS_HOP=7 \
+ZKS_SCHEDULE=lean ZKS_HOPS=8 \
   "$CARGO_TARGET_DIR/release/zk-spartan" fixed-point
 ```
 
@@ -58,14 +63,17 @@ A fresh checkout may need an initial dependency fetch before `--offline` works.
 `ZKS_*` variables select research benchmarks and comparison implementations in
 this executable only; no production application depends on them.
 
-At the current fixed point all four circuits (P-recv, S-recv, P-send, S-send)
-have `2^19` constraints and 64 rows; each linked pair's proofs occupy 4,992 and
-4,896 bytes before the full payment envelope. Hops 7 and 8 must report both
-operations' native accumulators as true (Send's already at hop 6); the repeated
-matrix evaluations must agree at the final hops; at the last hop the circuits
-rebuilt over a Send predecessor must equal the hop's, and Send after Send and
-Receive after Send must verify. The benchmark asserts exact native `q`
-coefficient equality between batched and pointwise evaluation.
+At the current fixed point all six circuits (P and S for Receive, Send and
+Bootstrap) have `2^19` constraints and 64 rows; each linked pair's proofs
+occupy 5,024 and 4,928 bytes before the full payment envelope. The matrices
+must agree from hop 5 on. The hop chain starts from toy pairs, so its
+accumulators stay false; every Bootstrap pair's accumulators (the empty claim)
+hold. At the last hop two wallets' chains start at Bootstrap pairs: every order
+(Send and Receive after a Bootstrap, a Receive and a Send) must run on the
+hop's circuits, verify, and have accumulators that hold natively, and changed
+kind bits or a changed empty claim must break a row. The benchmark asserts
+exact native `q` coefficient equality between batched and pointwise
+evaluation.
 
 ## Research records
 

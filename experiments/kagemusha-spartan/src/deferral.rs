@@ -6,12 +6,18 @@
 //! r^3 C(r_x, r_y)` with the proof's own challenge `r` (the lean schedule's
 //! `r_A, r_B, r_C`), so that value is the claim, and nothing else about the
 //! three matrices is. Claims about the circuit kinds a circuit verifies live
-//! on one polynomial,
+//! on one polynomial; with two kinds,
 //!
 //! `P(c, rho, x, y) = (1 - c) P_0(rho, x, y) + c P_1(rho, x, y)`,
 //! `P_k = pad_k(x, y) (rho A_k + rho^2 B_k + rho^3 C_k)`,
 //!
-//! where `pad_k` zeroes the variables kind `k` does not have. Every proof
+//! where `pad_k` zeroes the variables kind `k` does not have. With three
+//! kinds (Receive, Send, Bootstrap) the selector has two bits, `c0` (first
+//! coordinate) and `c1` (last): kind `k` sits at the corner
+//! `(k & 1, k >> 1)` and `P = sum_k eq((c0, c1), corner_k) P_k`. The fourth
+//! corner `(1, 1)` selects no kind, so `P` vanishes there whatever the other
+//! coordinates: that is the empty claim a chain starts from
+//! (`MatPoly::empty_claim`). Every proof
 //! carries one accumulated claim on it; a native verifier checks that claim
 //! with one matrix evaluation per kind (the compiled program, 0.2 ms on the
 //! Mac for a uniform circuit).
@@ -23,7 +29,8 @@
 //! `t = 0..3`, and the new claim `(gamma(beta), q(beta))` at the second-phase
 //! challenge `beta` (the LogUp challenge). If an input claim is false, the
 //! committed `q` differs from `P(gamma(t))`, and `q(beta)` is false except
-//! with probability `deg q / |F|`, `deg q = 3 (1 + X + Y) + 9`. The fresh
+//! with probability `deg q / |F|`, `deg q = 3 (b + X + Y) + 9` with `b`
+//! selector bits (plus the challenges' degrees for uniform kinds). The fresh
 //! claims' points are fixed by the verified proof's transcript before the
 //! first phase; so is `r`, which ties the claim to the value the check uses.
 
@@ -50,12 +57,20 @@ pub struct Kind<F> {
     pub eval_many: Option<Box<dyn Fn(&[(&[F], &[F], &[F])]) -> Vec<(F, F, F)> + Send + Sync>>,
 }
 
-/// The combined matrix polynomial of two circuit kinds, over
-/// `(c, rho, alpha, beta, x, y)`.
+/// The combined matrix polynomial of two or three circuit kinds, over
+/// `(c0, rho, alpha, beta, x, y)`, with a second selector bit `c1` after `y`
+/// when there are three kinds.
 pub struct MatPoly<F> {
-    pub kinds: [Kind<F>; 2],
+    pub kinds: Vec<Kind<F>>,
     pub x: usize,
     pub y: usize,
+}
+
+/// Kind `kind`'s selector corner `(c0, c1)`: Receive (0, 0), Send (1, 0),
+/// Bootstrap (0, 1). The corner (1, 1) is no kind's (the empty claim's).
+pub fn kind_bits(kind: usize) -> (u64, u64) {
+    assert!(kind < 3, "three kinds at most");
+    ((kind & 1) as u64, (kind >> 1) as u64)
 }
 
 /// A claim `P(point) = value`.
@@ -66,44 +81,72 @@ pub struct Claim<F> {
 }
 
 impl<F: PrimeField> MatPoly<F> {
-    pub fn new(kinds: [Kind<F>; 2]) -> Self {
+    pub fn new<const K: usize>(kinds: [Kind<F>; K]) -> Self {
         Self::with_min(kinds, 0, 0)
     }
     /// With at least `x_min` and `y_min` matrix variables (so that the
     /// accumulators of consecutive hops share one dimension).
-    pub fn with_min(kinds: [Kind<F>; 2], x_min: usize, y_min: usize) -> Self {
+    pub fn with_min<const K: usize>(kinds: [Kind<F>; K], x_min: usize, y_min: usize) -> Self {
+        assert!((2..=3).contains(&K), "two or three kinds");
         let x = kinds.iter().map(|k| k.sx).max().unwrap().max(x_min);
         let y = kinds.iter().map(|k| k.sz).max().unwrap().max(y_min);
-        MatPoly { kinds, x, y }
+        MatPoly {
+            kinds: kinds.into(),
+            x,
+            y,
+        }
     }
-    /// Variables: c, rho, alpha, beta, then x and y.
+    /// The selector's bits: `c0`, and `c1` with three kinds.
+    pub fn selector_bits(&self) -> usize {
+        if self.kinds.len() > 2 { 2 } else { 1 }
+    }
+    /// Variables: c0, rho, alpha, beta, then x and y, then c1 (three kinds).
     pub fn n(&self) -> usize {
-        4 + self.x + self.y
+        3 + self.selector_bits() + self.x + self.y
     }
-    /// The degree of `P` along a cubic curve: 3 per multilinear variable, 9
-    /// for rho (cubic), and 3 times the challenges' degrees.
+    /// The coordinate of the second selector bit `c1` (three kinds).
+    pub fn c1_at(&self) -> Option<usize> {
+        (self.kinds.len() > 2).then_some(4 + self.x + self.y)
+    }
+    /// The degree of `P` along a cubic curve: 3 per multilinear variable
+    /// (the selector's bits among them), 9 for rho (cubic), and 3 times the
+    /// challenges' degrees.
     pub fn degree(&self) -> usize {
         let da = self.kinds.iter().map(|k| k.deg.0).max().unwrap();
         let db = self.kinds.iter().map(|k| k.deg.1).max().unwrap();
-        3 * (1 + self.x + self.y) + 9 + 3 * da + 3 * db
+        3 * (self.selector_bits() + self.x + self.y) + 9 + 3 * da + 3 * db
+    }
+    /// The x and y coordinates of `point`.
+    fn xy<'p>(&self, point: &'p [F]) -> (&'p [F], &'p [F]) {
+        let xs = &point[4..4 + self.x];
+        let ys = &point[4 + self.x..4 + self.x + self.y];
+        (xs, ys)
     }
     /// Kind `k`'s inputs at `point`: its challenges, `r_x` and `r_y`.
     fn kind_inputs<'p>(&self, k: usize, point: &'p [F]) -> (&'p [F], &'p [F], &'p [F]) {
         assert_eq!(point.len(), self.n(), "a point of the combined space");
-        let (xs, ys) = point[4..].split_at(self.x);
+        let (xs, ys) = self.xy(point);
         (
             &point[2..4],
             &xs[..self.kinds[k].sx],
             &ys[..self.kinds[k].sz],
         )
     }
+    /// Kind `k`'s selector at `point`: `eq((c0, c1), corner_k)`, with
+    /// `c1 = 0` when there are two kinds.
+    fn selector(&self, k: usize, point: &[F]) -> F {
+        let (b0, b1) = kind_bits(k);
+        let c1 = self.c1_at().map_or(F::ZERO, |j| point[j]);
+        let at = |c: F, b: u64| if b == 1 { c } else { F::ONE - c };
+        at(point[0], b0) * at(c1, b1)
+    }
     /// Kind `k`'s term at `point` from its matrices' values there:
     /// `sel_k(c) pad_k (rho A + rho^2 B + rho^3 C)`.
     fn kind_term(&self, k: usize, point: &[F], (a, b, cc): (F, F, F)) -> F {
         let kind = &self.kinds[k];
-        let (c, rho) = (point[0], point[1]);
-        let (xs, ys) = point[4..].split_at(self.x);
-        let sel = if k == 0 { F::ONE - c } else { c };
+        let rho = point[1];
+        let (xs, ys) = self.xy(point);
+        let sel = self.selector(k, point);
         let pad = xs[kind.sx..]
             .iter()
             .chain(&ys[kind.sz..])
@@ -111,8 +154,23 @@ impl<F: PrimeField> MatPoly<F> {
         let rho2 = rho.square();
         sel * pad * (rho * a + rho2 * b + rho2 * rho * cc)
     }
+    /// The empty claim: the selector corner `(1, 1)`, where no kind is
+    /// selected, so `P` there is zero (every other coordinate zero). A
+    /// Bootstrap proof's accumulator: a chain starts with nothing deferred.
+    pub fn empty_claim(&self) -> Claim<F> {
+        let c1 = self
+            .c1_at()
+            .expect("the empty corner needs three kinds' two selector bits");
+        let mut point = vec![F::ZERO; self.n()];
+        point[0] = F::ONE;
+        point[c1] = F::ONE;
+        Claim {
+            point,
+            value: F::ZERO,
+        }
+    }
     pub fn eval(&self, point: &[F]) -> F {
-        (0..2)
+        (0..self.kinds.len())
             .map(|k| {
                 let (ch, rx, ry) = self.kind_inputs(k, point);
                 self.kind_term(k, point, (self.kinds[k].eval)(ch, rx, ry))
@@ -145,7 +203,7 @@ impl<F: PrimeField> MatPoly<F> {
     /// `eval` at many points: each kind's matrices over all of them at once.
     pub fn eval_many(&self, points: &[Vec<F>]) -> Vec<F> {
         let mut total = vec![F::ZERO; points.len()];
-        for k in 0..2 {
+        for k in 0..self.kinds.len() {
             for ((t, p), v) in total
                 .iter_mut()
                 .zip(points)
@@ -156,16 +214,19 @@ impl<F: PrimeField> MatPoly<F> {
         }
         total
     }
-    /// A verified proof's fresh point: kind, r, its second-phase challenges
-    /// (zeros for a proof without any), its r_x and r_y padded with zeros.
+    /// A verified proof's fresh point: the kind's selector bits (c0 first,
+    /// c1 last), r, its second-phase challenges (zeros for a proof without
+    /// any), its r_x and r_y padded with zeros.
     pub fn fresh_point(&self, kind: usize, r: F, ch: &[F], rx: &[F], ry: &[F]) -> Vec<F> {
+        assert!(kind < self.kinds.len(), "a kind of the polynomial");
         assert_eq!(
             (rx.len(), ry.len()),
             (self.kinds[kind].sx, self.kinds[kind].sz),
             "the kind's variables"
         );
+        let (b0, b1) = kind_bits(kind);
         let mut p = vec![
-            F::from(kind as u64),
+            F::from(b0),
             r,
             ch.first().copied().unwrap_or(F::ZERO),
             ch.get(1).copied().unwrap_or(F::ZERO),
@@ -173,19 +234,26 @@ impl<F: PrimeField> MatPoly<F> {
         p.extend_from_slice(rx);
         p.resize(4 + self.x, F::ZERO);
         p.extend_from_slice(ry);
-        p.resize(self.n(), F::ZERO);
+        p.resize(4 + self.x + self.y, F::ZERO);
+        if self.c1_at().is_some() {
+            p.push(F::from(b1));
+        }
+        assert_eq!(p.len(), self.n(), "a point of the combined space");
         p
     }
-    /// Which coordinates of kind `kind`'s fresh points are constants: `c`,
-    /// the challenges of a kind without them, and the padding (`Some(value)`),
-    /// against those its transcript sets.
+    /// Which coordinates of kind `kind`'s fresh points are constants: the
+    /// selector bits, the challenges of a kind without them, and the padding
+    /// (`Some(value)`), against those its transcript sets.
     pub fn fixed_coords(&self, kind: usize) -> Vec<Option<F>> {
         let k = &self.kinds[kind];
         let no_ch = k.deg == (0, 0);
+        let (b0, b1) = kind_bits(kind);
         (0..self.n())
             .map(|j| {
                 if j == 0 {
-                    Some(F::from(kind as u64))
+                    Some(F::from(b0))
+                } else if Some(j) == self.c1_at() {
+                    Some(F::from(b1))
                 } else if j == 1 {
                     None
                 } else if j < 4 {
@@ -324,7 +392,7 @@ pub fn restrict<F: PrimeField>(poly: &MatPoly<F>, claims: &[Claim<F>; 4]) -> Vec
         .collect();
     let inv = small_inverses::<F>(d + 1);
     let mut values = vec![F::ZERO; d + 1];
-    for k in 0..2 {
+    for k in 0..poly.kinds.len() {
         let m = (poly.kind_degree(k) + 1).min(d + 1);
         let abc = extend(&poly.kind_values(k, &points[..m]), d + 1, &inv);
         for ((v, p), e) in values.iter_mut().zip(&points).zip(abc) {
@@ -643,6 +711,72 @@ pub fn expose<F: Scalar>(w: &mut Wiring<F>, fam: usize, fold: &FoldArrays, offse
     late
 }
 
+/// Exposes a constant claim as late io where `expose` puts a folded one: a
+/// circuit that folds nothing (Bootstrap, which verifies no proof) still
+/// carries an accumulator where every verifier slot reads one. The io array
+/// is `expose`'s; a one-cell array of `n + 1` instances holds the claim's
+/// coordinates, then its value, each pinned to its constant and tied to its
+/// io slot. Returns (the io array, the pinned array).
+pub fn expose_constant<F: Scalar>(
+    w: &mut Wiring<F>,
+    fam: usize,
+    claim: &Claim<F>,
+    offset: usize,
+) -> (usize, usize) {
+    let n = claim.point.len();
+    let rl = bits_for(n + 1);
+    let nn = 1usize << rl;
+    assert_eq!(offset % nn, 0, "late io aligned");
+    let one = F::ONE;
+    let late = w.push(Array {
+        name: "constant late io",
+        family: fam,
+        rho: rl,
+        r_count: n + 1,
+        fixed: false,
+        lookups: Vec::new(),
+        widths: vec![255],
+        rows: Vec::new(),
+        values: vec![vec![F::ZERO; nn]],
+    });
+    let mut vals = claim.point.clone();
+    vals.push(claim.value);
+    vals.resize(nn, F::ZERO);
+    let on: Vec<F> = (0..nn)
+        .map(|j| if j <= n { one } else { F::ZERO })
+        .collect();
+    let own_on = vec![Term {
+        src: Src::Own(0),
+        coef: on,
+    }];
+    let pin = plus(&own_on, &constant(vals.iter().map(|v| -*v).collect()));
+    let tie = plus(
+        &own_on,
+        &link(
+            late,
+            0,
+            (0..nn).map(|j| (j <= n).then_some(j)).collect(),
+            -one,
+        ),
+    );
+    let held = w.push(Array {
+        name: "constant claim",
+        family: fam,
+        rho: rl,
+        r_count: n + 1,
+        fixed: false,
+        lookups: Vec::new(),
+        widths: vec![255],
+        rows: vec![row_zero(pin, nn), row_zero(tie, nn)],
+        values: vec![vals],
+    });
+    w.io_arrays.push((late, offset));
+    for j in 0..=n {
+        w.late_io.push((offset + j, held, 0, j));
+    }
+    (late, held)
+}
+
 /// A proof's late io as a claim (point, then value).
 pub fn claim_of<F: Clone>(late: &[F]) -> Claim<F> {
     let (point, value) = late.split_at(late.len() - 1);
@@ -793,6 +927,107 @@ mod tests {
             (1..40).all(|j| inv[j] * Fp::from(j as u64) == Fp::ONE),
             "small inverses"
         );
+    }
+
+    /// Three kinds: each kind's fresh point selects that kind alone (its
+    /// corner of the two selector bits), the fourth corner holds the empty
+    /// claim whatever the other coordinates, and a fold through the empty
+    /// claim, fresh claims of every kind and a random claim is P along the
+    /// curve.
+    #[test]
+    fn three_kinds_select_corners_and_the_empty_claim() {
+        let mut rng = SpikeRng::new(b"defer three kinds");
+        let kind = |sx: usize, row_bits: usize, col_bits: usize| {
+            let shape = Shape {
+                label: "toy",
+                sx,
+                row_bits,
+                col_bits,
+                k: 3,
+            };
+            Kind {
+                sx,
+                sz: shape.sz(),
+                deg: (0, 0),
+                eval: Box::new(move |_: &[Fp], rx: &[Fp], ry: &[Fp]| {
+                    crate::r1cs::matrix_evals(&shape, rx, ry)
+                }),
+                eval_many: None,
+            }
+        };
+        let poly = MatPoly::new([kind(9, 2, 6), kind(8, 2, 5), kind(7, 2, 5)]);
+        let c1 = poly.c1_at().expect("three kinds have c1");
+        assert_eq!(
+            (poly.selector_bits(), poly.n(), c1),
+            (2, 5 + poly.x + poly.y, poly.n() - 1),
+            "c0 first, c1 last"
+        );
+        let mut fresh = Vec::new();
+        for k in 0..3 {
+            let kk = &poly.kinds[k];
+            let rx: Vec<Fp> = (0..kk.sx).map(|_| rng.scalar()).collect();
+            let ry: Vec<Fp> = (0..kk.sz).map(|_| rng.scalar()).collect();
+            let r: Fp = rng.scalar();
+            let point = poly.fresh_point(k, r, &[], &rx, &ry);
+            let (a, b, c) = (kk.eval)(&[], &rx, &ry);
+            let own = r * a + r.square() * b + r.square() * r * c;
+            assert_eq!(poly.eval(&point), own, "kind {k}'s corner selects it alone");
+            let fixed = poly.fixed_coords(k);
+            let (b0, b1) = kind_bits(k);
+            assert_eq!(
+                (fixed[0], fixed[c1]),
+                (Some(Fp::from(b0)), Some(Fp::from(b1))),
+                "kind {k}'s selector bits are fixed coordinates"
+            );
+            assert!(
+                fixed
+                    .iter()
+                    .zip(&point)
+                    .all(|(f, v)| f.is_none_or(|f| f == *v)),
+                "kind {k}'s fresh point has its fixed coordinates"
+            );
+            fresh.push(Claim { point, value: own });
+        }
+        let empty = poly.empty_claim();
+        assert_eq!(
+            poly.eval(&empty.point),
+            empty.value,
+            "the empty claim holds"
+        );
+        let mut corner: Vec<Fp> = (0..poly.n()).map(|_| rng.scalar()).collect();
+        corner[0] = Fp::ONE;
+        corner[c1] = Fp::ONE;
+        assert_eq!(
+            poly.eval(&corner),
+            Fp::ZERO,
+            "P vanishes on the corner (1, 1)"
+        );
+        let random: Vec<Fp> = (0..poly.n()).map(|_| rng.scalar()).collect();
+        let cl = [
+            empty,
+            fresh[2].clone(),
+            Claim {
+                value: poly.eval(&random),
+                point: random,
+            },
+            fresh[1].clone(),
+        ];
+        let q = restrict(&poly, &cl);
+        assert_eq!(q.len(), poly.degree() + 1, "q has the degree bound");
+        for (t, c) in cl.iter().enumerate() {
+            assert_eq!(
+                horner(&q, Fp::from(t as u64)),
+                c.value,
+                "q passes claim {t}"
+            );
+        }
+        let tau: Fp = rng.scalar();
+        assert_eq!(
+            horner(&q, tau),
+            poly.eval(&curve(&cl, tau)),
+            "q is P along the curve"
+        );
+        assert_eq!(q, restrict_pointwise(&poly, &cl), "batched = pointwise");
     }
 
     /// A uniform kind's batched q: the fold circuit's own compiled program as
