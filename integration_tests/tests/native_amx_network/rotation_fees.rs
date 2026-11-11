@@ -147,9 +147,22 @@ pub(super) fn audit(
     );
     let (initial_supply, mut bank_balances) = genesis_funding(root)?;
     runtime.block_on(async {
-        let cut = amx::fees::world_cut(root).await?;
-        ensure!(cut.attestation.body.finality_proof.block_header.height().get() == height,
-            "rotation fee audit must retain its exact quiescent cut");
+        // Quiescence counts committed blocks; the cut is served from applied State,
+        // which a loaded node may still be finishing for the last block. Wait, within
+        // a finite bound, for the exact quiescent height; a newer cut is a failure.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        let cut = loop {
+            let cut = amx::fees::world_cut(root).await?;
+            let observed = cut.attestation.body.finality_proof.block_header.height().get();
+            ensure!(observed <= height,
+                "rotation fee audit must retain its exact quiescent cut: expected {height}, observed newer {observed}");
+            if observed == height {
+                break cut;
+            }
+            ensure!(tokio::time::Instant::now() < deadline,
+                "rotation fee audit cut stayed at {observed}, below its quiescent height {height}");
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        };
         let mut verifier = root.verifier()?;
         let mut burned = Quantity::zero();
         let mut charged_carriers = 0_u64;
