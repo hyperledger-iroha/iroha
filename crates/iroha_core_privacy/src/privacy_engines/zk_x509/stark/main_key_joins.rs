@@ -8,6 +8,11 @@
 //! SPKI slots, the serial length and padded serial, and the length and padded
 //! value of each disclosed attribute. Without it the bytes that the Projection
 //! segment frames and hashes are not tied to the parsed documents.
+//!
+//! Four signature-scalar blocks join the 32-byte `r` and `s` that the RFC
+//! adapter parses from each certificate's and the CRL's strict-DER
+//! `signatureValue` to the `r || s` real-input rows of P-256 binding sinks 0 to
+//! 3. Without them the verified signature need not be the document's.
 
 use super::super::super::p256_aggregate_adapter::p256_real_key_input_columns_v1;
 use super::super::super::projection_air::{
@@ -15,11 +20,18 @@ use super::super::super::projection_air::{
 };
 use super::super::super::rfc5280_stark::{
     zk_x509_rfc_key_join_rows_v1, zk_x509_rfc_projection_join_rows_v1,
+    zk_x509_rfc_signature_scalar_join_rows_v1,
 };
 use super::*;
 
-const KEY_BLOCKS_V1: usize = 13;
-const KEY_OPENINGS_V1: usize = 12;
+const KEY_BLOCKS_V1: usize = 17;
+const KEY_OPENINGS_V1: usize = 16;
+/// The signature-scalar blocks of sinks 0 to 3, after the I/O selector block.
+const SCALAR_BLOCK_V1: usize = 11;
+const SCALAR_BLOCKS_V1: usize = 4;
+/// Sink rows of `r || s`, after the 64 public-key bytes `Qx || Qy`.
+const SCALAR_SINK_OFFSET_V1: usize = 64;
+const SCALAR_ROWS_V1: usize = 64;
 /// The Projection input block. It is the last block with a derived opening.
 const PROJECTION_BLOCK_V1: usize = KEY_OPENINGS_V1 - 1;
 /// The certificate-slot activity pair. Both ends are native openings.
@@ -44,11 +56,12 @@ use main_public_crl_times::{MainPublicCrlTimePlanV1, PUBLIC_TIME_BLOCKS_V1};
 pub(super) const BLOCKS_V1: usize =
     KEY_BLOCKS_V1 + DIGEST_BLOCKS_V1 + PUBLIC_DIGEST_BLOCKS_V1 + PUBLIC_TIME_BLOCKS_V1;
 pub(in super::super) const OPENINGS_V1: usize = KEY_OPENINGS_V1 + DIGEST_OPENINGS_V1;
-// The current first-release profile fixes eleven key, one Projection and
-// twenty digest DEEP values.
-const _: () = assert!(OPENINGS_V1 == 32);
+// The current first-release profile fixes eleven key, four signature-scalar,
+// one Projection and twenty digest DEEP values.
+const _: () = assert!(OPENINGS_V1 == 36);
+const _: () = assert!(SCALAR_BLOCK_V1 + SCALAR_BLOCKS_V1 == PROJECTION_BLOCK_V1);
 const DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:main-key-byte-joins:v1";
-const DESCRIPTOR_V1: &[u8] = b"rfc-producer-to-io5x65+p256-real5x64:selector-io1+projection-inputs301+264-per-disclosure+activity1:13-key-blocks-of-at-most1357-equalities+5-sha-digest-blocks40-u32-equalities+2-authoritative-crl-digest-blocks16-u32-equalities+2-authoritative-crl-time-equalities:root-power2,8,16,32:original-masks:32-extra-deep-openings:no-private-byte-divisions";
+const DESCRIPTOR_V1: &[u8] = b"rfc-producer-to-io5x65+p256-real5x64:selector-io1+rfc-signature-scalars-to-p256-real-r-s4x64+projection-inputs301+264-per-disclosure+activity1:17-key-blocks-of-at-most1357-equalities+5-sha-digest-blocks40-u32-equalities+2-authoritative-crl-digest-blocks16-u32-equalities+2-authoritative-crl-time-equalities:root-power2,8,16,32:original-masks:36-extra-deep-openings:no-private-byte-divisions";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ColumnV1 {
@@ -250,6 +263,22 @@ impl MainKeyJoinPlanV1 {
                 blocks[10] = make(rows[index], io_value, io_start, 1)?;
             }
         }
+        // The `r || s` bytes parsed from each document's signatureValue equal
+        // the sink's real-input bytes that feed the ECDSA writers.
+        let (scalar_rows, scalar_value_column) =
+            zk_x509_rfc_signature_scalar_join_rows_v1(shape)
+                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
+        if scalar_value_column != value_column {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        for (signature, row) in scalar_rows.into_iter().enumerate() {
+            blocks[SCALAR_BLOCK_V1 + signature] = make(
+                row,
+                column(sink(signature)?, real_column)?,
+                real_start + SCALAR_SINK_OFFSET_V1,
+                SCALAR_ROWS_V1,
+            )?;
+        }
         // Every RFC `Projection`-role producer byte equals the Projection
         // segment's input byte at the same position of the same run.
         let (projection_source_row, projection_rows, projection_value_column) =
@@ -392,6 +421,18 @@ impl MainKeyJoinPlanV1 {
             );
         }
         Ok(values)
+    }
+
+    /// The signature-scalar block that shares sink `signature`'s real column.
+    const fn scalar_block_v1(signature: usize) -> Option<usize> {
+        if signature < SCALAR_BLOCKS_V1 {
+            Some(SCALAR_BLOCK_V1 + signature)
+        } else {
+            None
+        }
+    }
+    const fn is_scalar_block_v1(index: usize) -> bool {
+        index >= SCALAR_BLOCK_V1 && index < SCALAR_BLOCK_V1 + SCALAR_BLOCKS_V1
     }
 
     fn target_point_v1(block: BlockV1, z: E) -> E {
@@ -565,7 +606,8 @@ impl MainKeyJoinPlanV1 {
         Ok(result)
     }
     /// Replay the single I/O value column once for its six derived points,
-    /// while streaming each of the five distinct P256 real-byte columns once.
+    /// while streaming each of the five distinct P256 real-byte columns once
+    /// for its key, signature-scalar and digest points.
     /// The caller reserves all live coefficient owners before entering here.
     fn with_target_coefficients_v1(
         &self,
@@ -583,6 +625,9 @@ impl MainKeyJoinPlanV1 {
             } else if i == PROJECTION_BLOCK_V1 {
                 let target = Self::replay_v1(block.target, layout, polynomials, sources, policy)?;
                 visit(i, &target)?;
+            } else if Self::is_scalar_block_v1(i) {
+                // Visited below with the key block of the same sink column.
+                continue;
             } else {
                 let target = Self::replay_v1(block.target, layout, polynomials, sources, policy)?;
                 visit(i, &target)?;
@@ -595,6 +640,12 @@ impl MainKeyJoinPlanV1 {
                 }
                 for byte in 0..4 {
                     visit(KEY_OPENINGS_V1 + 4 * signature + byte, &target)?;
+                }
+                if let Some(scalar) = Self::scalar_block_v1(signature) {
+                    if self.blocks[scalar].target != block.target {
+                        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                    }
+                    visit(scalar, &target)?;
                 }
             }
         }
@@ -781,6 +832,9 @@ impl MainKeyJoinPlanV1 {
                     for (out, value) in deferred.0.iter_mut().zip(quotient.iter()) {
                         *out = out.add(alphas[i].mul_base(*value));
                     }
+                } else if Self::is_scalar_block_v1(i) {
+                    // Divided below while its sink column is replayed.
+                    continue;
                 } else {
                     let signature = i / 2;
                     if i % 2 != 1
@@ -795,6 +849,18 @@ impl MainKeyJoinPlanV1 {
                         let quotient = Self::quotient_v1(block, &source, &target)?;
                         for (out, value) in deferred.0.iter_mut().zip(quotient.iter()) {
                             *out = out.add(alphas[i].mul_base(*value));
+                        }
+                    }
+                    if let Some(scalar) = Self::scalar_block_v1(signature) {
+                        let scalar_block = self.blocks[scalar];
+                        if scalar_block.target != block.target
+                            || scalar_block.source != source_column
+                        {
+                            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                        }
+                        let quotient = Self::quotient_v1(scalar_block, &source, &target)?;
+                        for (out, value) in deferred.0.iter_mut().zip(quotient.iter()) {
+                            *out = out.add(alphas[scalar].mul_base(*value));
                         }
                     }
                     let sha_column = self.digest.source_v1(signature)?;
@@ -1051,12 +1117,12 @@ mod tests {
     fn canonical_public_plan_covers_every_byte_and_both_selectors() {
         for d in 0..=4 {
             let (_, plan) = plan_v1(d);
-            assert_eq!(plan.blocks.len(), 13);
+            assert_eq!(plan.blocks.len(), 17);
             let projection_rows = zk_x509_projection_rfc_input_rows_v1(d).unwrap();
             assert_eq!(projection_rows, 301 + 264 * d);
             assert_eq!(
                 plan.blocks.iter().map(|b| b.count).sum::<usize>(),
-                647 + projection_rows
+                647 + 4 * 64 + projection_rows
             );
             // The Projection block starts at the segment's first row and covers
             // exactly the RFC `Projection`-role run of this public shape.
@@ -1288,14 +1354,14 @@ mod tests {
             }
             assert_eq!(
                 census,
-                std::collections::BTreeMap::from([(2, 6), (8, 5), (16, 1), (32, 20)]),
+                std::collections::BTreeMap::from([(2, 6), (8, 9), (16, 1), (32, 20)]),
                 "{d} disclosures"
             );
             let summed_degree = 1 + census
                 .iter()
                 .map(|(power, count)| power * count)
                 .sum::<u32>();
-            assert_eq!(summed_degree, 709);
+            assert_eq!(summed_degree, 741);
         }
     }
 
@@ -1443,12 +1509,21 @@ mod tests {
         assert_eq!(io_count, 6);
         let streamed = plan.blocks[..KEY_OPENINGS_V1]
             .iter()
-            .filter(|b| b.target != io_column)
+            .enumerate()
+            .filter(|(i, b)| b.target != io_column && !MainKeyJoinPlanV1::is_scalar_block_v1(*i))
+            .map(|(_, b)| b)
             .collect::<Vec<_>>();
         // Five P256 real-byte columns and the Projection value column.
         assert_eq!(streamed.len(), 6);
         for (i, b) in streamed.iter().enumerate() {
             assert!(streamed[..i].iter().all(|other| other.target != b.target));
+        }
+        // Each signature-scalar block reuses its sink's replayed real column.
+        for signature in 0..SCALAR_BLOCKS_V1 {
+            assert_eq!(
+                plan.blocks[SCALAR_BLOCK_V1 + signature].target,
+                plan.blocks[2 * signature + 1].target
+            );
         }
         let replays_per_opening_phase = 1 + streamed.len();
         let public_replays = (0..PUBLIC_DIGEST_BLOCKS_V1)
@@ -1474,22 +1549,35 @@ mod tests {
         // factor per joined byte: 553,329 coefficients for 1,357 bytes.
         let projection_divisions = ((n(15) - 1) * 16 + 1) * MAX_BLOCK_ROWS_V1;
         assert_eq!(projection_divisions, 750_867_453);
-        assert_eq!(divisions, 345_046_578 + projection_divisions);
-        assert_eq!(divisions + 5 * 8 * (32 * (n(16) - 1) + 1), 1_182_123_351);
+        // Each signature-scalar block divides its power8 sink numerator by one
+        // linear factor per scalar byte.
+        let scalar_divisions = SCALAR_BLOCKS_V1 * ((n(16) - 1) * 8 + 1) * SCALAR_ROWS_V1;
+        assert_eq!(scalar_divisions, 137_935_104);
+        assert_eq!(
+            divisions,
+            345_046_578 + scalar_divisions + projection_divisions
+        );
+        assert_eq!(
+            divisions + 5 * 8 * (32 * (n(16) - 1) + 1),
+            1_182_123_351 + scalar_divisions
+        );
         assert_eq!(
             divisions + 5 * 8 * (32 * (n(16) - 1) + 1) + PUBLIC_DIGEST_BLOCKS_V1 * 8 * n(19),
-            1_190_541_015
+            1_190_541_015 + scalar_divisions
         );
         assert_eq!(1_190_541_015 + PUBLIC_TIME_BLOCKS_V1 * n(19), 1_191_593_223);
         let evaluation_steps: usize = plan.blocks[..KEY_OPENINGS_V1]
             .iter()
             .map(|b| n(b.target.log))
             .sum();
-        assert_eq!(evaluation_steps, 1_920_520 + n(15));
+        assert_eq!(
+            evaluation_steps,
+            1_920_520 + SCALAR_BLOCKS_V1 * n(16) + n(15)
+        );
         // Opening evaluation plus the DEEP synthetic-division recurrence. No
         // duplicate Horner evaluation is performed in the second phase.
-        assert_eq!(2 * evaluation_steps, 3_910_208);
-        assert_eq!(evaluation_steps + 20 * n(16), 3_302_144);
+        assert_eq!(2 * evaluation_steps, 4_449_024);
+        assert_eq!(evaluation_steps + 20 * n(16), 3_571_552);
         // The Projection value column is replayed once in each of the three phases.
         let native_butterflies = 2 * ((1 << 19) / 2 * 19)
             + 3 * ((1 << 18) / 2 * 18)
@@ -1519,17 +1607,13 @@ mod tests {
                     other.group == owner.group && other.column == owner.column
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(matching.len(), 5);
-            assert_eq!(matching[0], 2 * signature + 1);
-            assert_eq!(
-                &matching[1..],
-                &[
-                    KEY_OPENINGS_V1 + 4 * signature,
-                    KEY_OPENINGS_V1 + 4 * signature + 1,
-                    KEY_OPENINGS_V1 + 4 * signature + 2,
-                    KEY_OPENINGS_V1 + 4 * signature + 3
-                ]
-            );
+            // The key block, the signature-scalar block of sinks 0 to 3 and
+            // the four digest words share the sink's real-input column.
+            let mut expected = vec![2 * signature + 1];
+            expected.extend(MainKeyJoinPlanV1::scalar_block_v1(signature));
+            expected.extend((0..4).map(|byte| KEY_OPENINGS_V1 + 4 * signature + byte));
+            assert_eq!(matching, expected);
+            assert_eq!(matching.len(), if signature < 4 { 6 } else { 5 });
         }
         assert_eq!((2 + 5) * (QUERY_COUNT + 4), 980);
         assert_eq!((2 + 6) * (QUERY_COUNT + 4), 1120);
@@ -1690,7 +1774,7 @@ mod tests {
         // The Projection numerator also fits one chunk stride.
         assert_eq!(16 * ((1 << 15) + MASK_DEGREE) - 301, 553_027);
         const { assert!(16 * ((1 << 15) + MASK_DEGREE) + 1 < 589_687) };
-        assert_eq!(KEY_OPENINGS_V1 * core::mem::size_of::<E>(), 384);
-        assert_eq!(OPENINGS_V1 * core::mem::size_of::<E>(), 1_024);
+        assert_eq!(KEY_OPENINGS_V1 * core::mem::size_of::<E>(), 512);
+        assert_eq!(OPENINGS_V1 * core::mem::size_of::<E>(), 1_152);
     }
 }

@@ -61,9 +61,11 @@ const _: () = assert!(
 );
 
 // Independent current-profile payload pin: masks, cuts, maximum registration,
-// replay batch, CA coefficients/metadata, and two complete cache batches.
+// replay batch, CA coefficients/metadata, and two complete cache batches. The
+// signature-scalar family selector added one log19 public fixed column:
+// 4 MiB of payload and one vector header.
 #[cfg(test)]
-pub(super) const CURRENT_FULL_PROFILE_PEAK_V1: usize = 3_872_458_392
+pub(super) const CURRENT_FULL_PROFILE_PEAK_V1: usize = 3_876_652_720
     + MAIN_FIXED_OWNER_METADATA_BYTES_V1
     + core::mem::size_of::<super::super::super::accumulator_stark::stages::CaAwaitingMainAuxiliaryV1>(
     );

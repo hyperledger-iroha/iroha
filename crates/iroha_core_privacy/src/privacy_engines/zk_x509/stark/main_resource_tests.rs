@@ -306,7 +306,7 @@ fn replay_buffer_plan_charges_live_owners_and_leaves_an_explicit_source_envelope
     );
     assert_eq!(
         plan.quotient_stage,
-        3_166_719_464 + MAIN_FIXED_OWNER_METADATA_BYTES_V1
+        3_170_913_792 + MAIN_FIXED_OWNER_METADATA_BYTES_V1
     );
     assert_eq!(
         plan.maximum_live_buffers,
@@ -792,15 +792,15 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
             2_803_630_080,
             95_420_416,
             3_732_930_560,
-            4_500_488_192, // RFC: 2,146 local residues across 2^21 quotient rows.
+            4_569_694_208, // RFC: 2,179 local residues across 2^21 quotient rows.
             9_965_666_304,
             4_771_020_800,
         ]
         .into_iter()
         .sum::<u64>(),
-        26_291_576_832
+        26_360_782_848
     );
-    assert_eq!(residues, 26_291_576_832);
+    assert_eq!(residues, 26_360_782_848);
     // The public prefix cache does not enlarge the admitted arithmetic envelope.
     assert_eq!(
         buffers.maximum_live_buffers,
@@ -816,12 +816,22 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
     assert_eq!(cached_columns, 3_443);
     assert_eq!(quotient_native_iffts, 7_451);
     assert_eq!(quotient_native_butterflies, 28_166_763_008);
-    assert_eq!(quotient_forward_butterflies, 143_013_781_504);
+    // The signature-scalar family selector is one more RFC fixed column,
+    // transformed forward on each of the four quotient stripes.
+    assert_eq!(
+        quotient_forward_butterflies,
+        143_013_781_504 + 4 * ((1 << 19) / 2 * 19)
+    );
     assert_eq!(quotient_fp4_inverse_butterflies, 561_381_376);
     assert_eq!(other_native_butterflies, 80_391_882_752);
-    assert_eq!(fixed_native_butterflies, 8_827_312_576);
-    assert_eq!(fixed_recovery_iffts, 1_896);
-    assert_eq!(fixed_recovery_butterflies, 9_443_475_456);
+    assert_eq!(fixed_native_butterflies, 8_827_312_576 + (1 << 19) / 2 * 19);
+    // Three more RFC fixed recoveries for the signature-scalar selector, and
+    // fifteen fewer P-256 arithmetic ones for its retained prefix column.
+    assert_eq!(fixed_recovery_iffts, 1_896 + 3 - 15);
+    assert_eq!(
+        fixed_recovery_butterflies,
+        9_443_475_456 - 12 * ((1 << 19) / 2 * 19)
+    );
     let commitment_forward_butterflies =
         2 * columns * (layout.common_lde_size() as u64 / 2) * u64::from(layout.common_lde_log2);
     assert_eq!(commitment_forward_butterflies, 538_053_705_728);
@@ -971,7 +981,7 @@ fn joint_public_fixed_prefix_uses_only_capacity_left_by_original_private_cache()
             SegmentAdapterIdV1::P256Arithmetic => {
                 assert_eq!(
                     (cache.base_columns, cache.aux_columns, fixed),
-                    (211, 72, 26)
+                    (211, 72, 27)
                 );
             }
             SegmentAdapterIdV1::Rfc5280 => {
@@ -980,9 +990,11 @@ fn joint_public_fixed_prefix_uses_only_capacity_left_by_original_private_cache()
             _ => (),
         }
     }
-    assert_eq!(original_recoveries, 7_202);
-    assert_eq!(retained_recoveries, 696);
-    assert_eq!(original_recoveries - retained_recoveries, 6_506);
+    // The RFC registration has one more fixed column to recover; its larger
+    // cache leaves room for one more retained P-256 arithmetic prefix column.
+    assert_eq!(original_recoveries, 7_205);
+    assert_eq!(retained_recoveries, 684);
+    assert_eq!(original_recoveries - retained_recoveries, 6_521);
 }
 
 #[test]

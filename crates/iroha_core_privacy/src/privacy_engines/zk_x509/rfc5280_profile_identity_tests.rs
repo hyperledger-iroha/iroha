@@ -198,5 +198,5 @@ fn identity_equations_are_fp4_generic_with_degree_at_most_three() {
     }
     assert_eq!(NODE_PREFIX_END, 144);
     assert_eq!(ZK_X509_RFC5280_STARK_BASE_WIDTH_V1, 285);
-    assert_eq!(ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1, 147);
+    assert_eq!(ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1, 148);
 }

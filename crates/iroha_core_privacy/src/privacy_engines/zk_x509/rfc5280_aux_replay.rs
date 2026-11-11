@@ -261,6 +261,7 @@ impl ColumnStateV1 {
                 .add(output_source_node_query_gate_v1(row, fixed))
                 .add(path_len::node_query_gate(row, fixed))
                 .add(copy_census::node_query_gate(row, fixed))
+                .add(signature_scalars::node_query_gate(row, fixed))
         } else {
             row[BASE_SERIAL_BYTE_QUERY_ACTIVE]
         };

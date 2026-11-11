@@ -1375,12 +1375,15 @@ different nullifiers. A minimal-padding residue closes that gap (profile
 `dd803a10`, whose ordinary and maximum diagnostic proofs verified with
 replay and negative controls in 492 s and 441 s on one loaded host). An
 address anchor on every `FixedByte` row then closes the profile-pattern
-gap and masks the BIT STRING unused-bit gap; the compiled profile is now
-`a7d5eaa2`, with `dd803a10` and `cbf1bd12` as rejection fixtures, and its
-diagnostic proofs verify likewise in 340 s and 456 s. A fix
-proposal for signature-scalar provenance awaits approval; unconstrained
-sibling ordinals, the fixed-schedule evaluators and forged-proof controls
-remain open.
+gap and masks the BIT STRING unused-bit gap (profile `a7d5eaa2`, whose
+diagnostic proofs verified likewise in 340 s and 456 s). Four key-plan blocks
+then join each certificate's and the CRL's `r` and `s`, parsed in the RFC
+adapter from the document's strict-DER `signatureValue`, to their P-256
+binding sinks; the compiled profile is now `82e3b93f`, with `a7d5eaa2`,
+`dd803a10` and `cbf1bd12` as rejection fixtures, and its maximum proof is
+9,436,144 bytes; its diagnostic proofs verify likewise in 336 s and 330 s.
+Unconstrained sibling ordinals, the fixed-schedule evaluators and
+forged-proof controls remain open.
 
 The public presentation window has one definition, recorded in the
 [interval contract](zk_x509_presentation_interval.md): it starts at or after the

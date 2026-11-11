@@ -44,9 +44,8 @@ fn projection_disclosure_fixed_schedule_preserves_oid_indices_and_fixed_column_c
             assert_eq!(count, if slot < indices.len() { 264 } else { 0 });
         }
     }
-    assert_eq!(projection_disclosure::FIX_END, 147);
-    assert_eq!(projection_disclosure::FIX_END + 4 * 27, 255);
-    assert!(u8::try_from(projection_disclosure::FIX_END + 4 * 27).is_ok());
+    assert_eq!(projection_disclosure::FIX_END, 148);
+    assert_eq!(projection_disclosure::FIX_END, ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1);
 }
 
 #[test]

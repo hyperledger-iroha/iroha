@@ -90,7 +90,7 @@ fn name_policy_actual_complete_census_binds_original_instances_and_unique_keys()
         assert!(seen > 0);
     }
     assert_eq!(name_policy::NODE_PREFIX_END, 134);
-    assert_eq!(ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1, 147);
+    assert_eq!(ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1, 148);
     assert_eq!(ZK_X509_RFC5280_STARK_COMPRESSED_RELATIONS_V1, 39);
 }
 

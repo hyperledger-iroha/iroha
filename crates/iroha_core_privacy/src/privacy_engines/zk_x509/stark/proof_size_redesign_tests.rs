@@ -131,8 +131,9 @@ fn paired_fri_and_complete_relation_wire_bounds_are_source_derived() {
     let framing = super::super::profile::ZK_X509_MAIN_FRAME_BYTES_V1 as usize
         + super::super::profile::ZK_X509_CA_FRAME_BYTES_V1 as usize
         + super::super::credential_stark::ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1;
-    // The MAIN frame carries one more original opening for the Projection join.
-    assert_eq!(framing, 5_360 + 32);
+    // The MAIN frame carries one more original opening for the Projection join
+    // and four for the signature-scalar joins.
+    assert_eq!(framing, 5_360 + 32 + 4 * 32);
     assert_eq!(
         implemented_total + framing,
         super::super::profile::ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize
@@ -140,15 +141,15 @@ fn paired_fri_and_complete_relation_wire_bounds_are_source_derived() {
     assert_eq!(complete_oods_bytes(&main), 7_931_808);
     assert_eq!(complete_oods_bytes(&ca), 1_498_816);
     let candidate = complete_oods_bytes(&main) + complete_oods_bytes(&ca) + framing;
-    assert_eq!(candidate, 9_435_984 + 32);
+    assert_eq!(candidate, 9_435_984 + 32 + 4 * 32);
     // Four projection columns and four columns in each of four SHA slices
     // add current query values and current/next original-polynomial DEEP values.
     let linked_columns = 4 + 4 * 4;
     assert_eq!(linked_columns, 20);
     assert_eq!(136 * linked_columns * 8, 21_760);
     assert_eq!(2 * linked_columns * 32, 1_280);
-    assert_eq!(candidate, 9_412_944 + 21_760 + 1_280 + 32);
-    assert_eq!(ZK_X509_MAX_PROOF_BYTES_V1 as usize - candidate, 1_168);
+    assert_eq!(candidate, 9_412_944 + 21_760 + 1_280 + 32 + 4 * 32);
+    assert_eq!(ZK_X509_MAX_PROOF_BYTES_V1 as usize - candidate, 1_040);
     assert_eq!(super::super::profile::validate_profile_v1(), Ok(()));
     // Fitting bytes is not independent crypto/resource qualification.
     assert!(!super::super::profile::zk_x509_release_evidence_v1().is_complete());
@@ -183,7 +184,7 @@ fn sha_polynomial_selector_degree_fits_the_unchanged_profile() {
     }
     assert_eq!(
         super::super::profile::ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1,
-        9_436_016
+        9_436_144
     );
     assert_eq!(ZK_X509_MAX_PROOF_BYTES_V1, 9_437_184);
 }
@@ -258,7 +259,7 @@ fn private_terminal_frame_removal_is_exact_without_changing_proof_limits() {
     assert_eq!(4 + 13 * 4 * 4 + 13 * 4 * 2 + 4, 320);
     assert_eq!(
         super::super::profile::ZK_X509_MAIN_FRAME_BYTES_V1,
-        4 + 2 + 32 * 32 + 4
+        4 + 2 + 36 * 32 + 4
     );
     assert_eq!(super::super::profile::ZK_X509_CA_FRAME_BYTES_V1, 4 + 2 + 4);
     assert_eq!(

@@ -1142,16 +1142,24 @@ mod tests {
             assert!(adjusted.reserve_additional_v1(remaining + 1).is_err());
             assert!(policy.reserve_additional_v1(usize::MAX).is_err());
             if assembly == 215_244_730 {
-                // The measured maximum fixture admits four native columns with
-                // the actual single-staging Metal forecast on every host. The
-                // larger synthetic assembly may deterministically use the CPU.
+                // The measured maximum fixture admitted four native columns with
+                // the actual single-staging Metal forecast on every host until
+                // the signature-scalar family selector took one more 4 MiB
+                // log19 public fixed column: four now need 102,318,204 bytes
+                // against 102,142,158 remaining. The device batch is the widest
+                // that fits, so it admits three; the larger synthetic assembly
+                // may deterministically use the CPU.
                 let rows = 1 << 19;
-                let columns = 4;
-                let staging = fastpq_prover::goldilocks_transform::metal_goldilocks_transform_extra_payload_v1(rows, columns).unwrap()
-                    + rows * columns * core::mem::size_of::<u64>()
-                    + columns * core::mem::size_of::<Vec<u64>>()
-                    + core::mem::size_of::<PrivateTableV1<Vec<u64>>>();
-                adjusted.reserve_additional_v1(staging).unwrap();
+                let staging = |columns: usize| {
+                    fastpq_prover::goldilocks_transform::metal_goldilocks_transform_extra_payload_v1(rows, columns).unwrap()
+                        + rows * columns * core::mem::size_of::<u64>()
+                        + columns * core::mem::size_of::<Vec<u64>>()
+                        + core::mem::size_of::<PrivateTableV1<Vec<u64>>>()
+                };
+                let admitted = (1..=4)
+                    .rev()
+                    .find(|&columns| adjusted.reserve_additional_v1(staging(columns)).is_ok());
+                assert_eq!(admitted, Some(3));
             }
         }
     }

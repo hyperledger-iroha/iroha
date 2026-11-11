@@ -3993,14 +3993,14 @@
       "group": "x509",
       "what": "Exact largest encoding of the current X5S1 proof geometry.",
       "unit": "bytes",
-      "value": 9436016,
+      "value": 9436144,
       "source": "constant",
       "class": "consensus",
       "owner": {
         "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/profile.rs",
         "symbol": "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1",
         "kind": "const",
-        "expr": "9_436_016"
+        "expr": "9_436_144"
       },
       "inclusive": true,
       "enforcement": [

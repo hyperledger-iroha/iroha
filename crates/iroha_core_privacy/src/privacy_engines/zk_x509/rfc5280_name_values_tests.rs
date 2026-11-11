@@ -200,7 +200,7 @@ fn name_values_actual_complete_census_binds_bytes_nodes_oid_and_profile_at_both_
         original.clear();
         assert!(original.is_empty());
     }
-    assert_eq!(ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1, 147);
+    assert_eq!(ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1, 148);
     assert_eq!(ZK_X509_RFC5280_STARK_COMPRESSED_RELATIONS_V1, 39);
 }
 

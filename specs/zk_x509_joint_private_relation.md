@@ -39,7 +39,7 @@ The consuming protocol stages enforce this order:
 3. Bind both transcript checkpoints, both composition roots and both independent
    FRI-mask roots before deriving one point admissible for every original
    polynomial, native translation and key/digest power map.
-4. Bind both current/next local DEEP records and MAIN's 32 key, Projection and digest values.
+4. Bind both current/next local DEEP records and MAIN's 36 key, signature-scalar, Projection and digest values.
    Bind the canonical ordered 24 MAIN and 108 CA original auxiliary values into
    both local transcripts before sampling either local DEEP mix.
 5. Include the 24 and 108 supplemental divided differences in each respective
@@ -48,13 +48,13 @@ The consuming protocol stages enforce this order:
 
 The canonical version-one envelope remains exact and rejects trailing bytes,
 truncations, noncanonical Fp4 coordinates and retired terminal frames. X5M1 is
-4 magic bytes, 2 version bytes, 32 Fp4 values and one 4-byte inner length: 1,034
+4 magic bytes, 2 version bytes, 36 Fp4 values and one 4-byte inner length: 1,162
 framing bytes. X5C1 has 4 magic bytes, 2 version bytes and one 4-byte inner
 length: 10 framing bytes. X5S1 has 108 public-header bytes, 132 Fp4 values
 (4,224 bytes) and two 8-byte section headers: 4,348 framing bytes. The header is
 `X5S1 || version:u16be || count:u16be || nonce[32] || consensus_context[32] ||
 governed_ca_root[32] || channel:u32be`. The source-derived MAIN and CA inner maxima are 7,931,808
-and 1,498,816 bytes, yielding 9,436,016 bytes overall with 1,168 bytes remaining
+and 1,498,816 bytes, yielding 9,436,144 bytes overall with 1,040 bytes remaining
 under the unchanged 9,437,184-byte cap. This is a source-derived bound; the actual maximum canonical encoding still requires native validation. The partitioned MAIN section cap is
 7,934,010 bytes; CA keeps its original independent cap. No legacy decoder is
 retained.
@@ -113,15 +113,15 @@ prevent malicious nonce reuse or a failed RNG, and does not establish a general
 quantum random-oracle privacy theorem. Earlier transcript and zero-knowledge
 arguments require review against this changed source and framing.
 
-Both base roots precede the shared bus challenges. Both original auxiliary roots precede all active local/link alphas. Both local checkpoints and both composition/FRI-mask roots precede the shared z. Both complete local DEEP records, MAIN31 key/digest values and all canonical MAIN24/CA108 values precede either local batching vector. Engine acceptance requires both original FRI verifiers to finish.
+Both base roots precede the shared bus challenges. Both original auxiliary roots precede all active local/link alphas. Both local checkpoints and both composition/FRI-mask roots precede the shared z. Both complete local DEEP records, MAIN36 key/digest values and all canonical MAIN24/CA108 values precede either local batching vector. Engine acceptance requires both original FRI verifiers to finish.
 
 Every Fp4 alpha/mix uses four canonical big-endian u64 coefficients from a uniform 384-bit ideal-oracle response, with rejection instead of reduction; zero is allowed. Attempt identifiers distinguish each of at most sixteen draws. For z the predicate is deterministic and public at the sampling stage. Conditional on success the accepted value is uniform on the admitted set. Exhaustion rejects. This local distribution statement does not treat adaptive Fiat–Shamir calls as fresh interactive coins.
 
-The rejected z count is at most E=1+709*(2^19+2^22)+110*(2^12+2^16)=3,353,141,249. MAIN native subgroups and all 24 translated MAIN multipliers lie in H19, preserving both H19 and generator·H22. The original point and six power2, five power8, one power16 and twenty power32 maps have summed degree709. A nonzero scale times X^k has at most k preimages of any forbidden point. CA has two local and 108 translated linear maps. Collisions only reduce the union. SDK independent review confirmed the census before the power16 map was added. `deep_point_census_counts_the_actual_opening_maps` derives the changed map multiset from the actual plan, and `profile_descriptor_records_the_joint_ledger_values` checks that the profile descriptor records this E; the changed census has had no independent review. Therefore the sampling support has size at least |Fp4|−E.
+The rejected z count is at most E=1+741*(2^19+2^22)+110*(2^12+2^16)=3,504,136,193. MAIN native subgroups and all 24 translated MAIN multipliers lie in H19, preserving both H19 and generator·H22. The original point and six power2, nine power8 (five keys and four signature-scalar pairs), one power16 and twenty power32 maps have summed degree741. A nonzero scale times X^k has at most k preimages of any forbidden point. CA has two local and 108 translated linear maps. Collisions only reduce the union. SDK independent review confirmed the census before the power16 map and the four signature-scalar power8 maps were added. `deep_point_census_counts_the_actual_opening_maps` derives the changed map multiset from the actual plan, and `profile_descriptor_records_the_joint_ledger_values` checks that the profile descriptor records this E; the changed census has had no independent review. Therefore the sampling support has size at least |Fp4|−E.
 
 ## Restored degree and paired configurations
 
-The original local affine batch contains each current and next divided difference, every composition divided difference, and every supplemental divided difference; the independent mask oracle is its affine offset. MAIN has 5,831 original columns, six composition chunks and 56 extra values (32+24), yielding 11,724 independently weighted functions. CA has 823 original columns, four composition chunks and 108 extras, yielding 1,758 independently weighted functions. The mask is one affine offset per batch. These are independent weights, not powers of one batching scalar. The affine FRI commitment term accounts for this batch without a width-dependent scalar-power factor; adding a separate 1/|F| per extra opening would double-count that batching step.
+The original local affine batch contains each current and next divided difference, every composition divided difference, and every supplemental divided difference; the independent mask oracle is its affine offset. MAIN has 5,831 original columns, six composition chunks and 60 extra values (36+24), yielding 11,728 independently weighted functions. CA has 823 original columns, four composition chunks and 108 extras, yielding 1,758 independently weighted functions. The mask is one affine offset per batch. These are independent weights, not powers of one batching scalar. The affine FRI commitment term accounts for this batch without a width-dependent scalar-power factor; adding a separate 1/|F| per extra opening would double-count that batching step.
 
 The accepted FRI coefficient caps are K_MAIN=144*2^12=589,824 and K_CA=144*2^6=9,216. A candidate divided-difference polynomial has degree at most K−1; multiplying its linear denominator and adding its claim restores a polynomial of degree at most K. This is the adversarial recovered degree, not the smaller honest masked-column degree. The actual query evaluator uses the same original f(x) value for both (f(x)−v_current)/(x−z) and (f(x)−v_next)/(x−omega*z), and for every supplemental denominator. It does not query an independently shifted f(omega*x) codeword. On the single common correlated-agreement set, all restored representatives of a given original column therefore coincide; no intersection of shifted agreement sets is assumed. Since that set has more than K points, their differences vanish identically, including repeated or coinciding supplemental points. All fields of each original trace/composition configuration are thus consistent. An original trace codeword is Fp-valued; its recovered polynomial is also over Fp because coefficientwise Frobenius difference vanishes on more than K base-field points.
 
@@ -137,7 +137,7 @@ Let D=589,824 and C=9,216 be the restored degree bounds. All public fixed polyno
 |---|---|---:|---|
 |49 MAIN local AIR registrations|fixed-aware degree at most7, only X and native-root*X|7D|native subgroup in H19|
 |192 terminal links|f(X)−g(X), or f(X)−1|D|one point in H19|
-|13 key blocks|f(X)−g(scale*X^k), k=1,2,8,16|16D|at most1,357 distinct points in H19|
+|17 key blocks|f(X)−g(scale*X^k), k=1,2,8,16|16D|at most1,357 distinct points in H19|
 |5 digest blocks|f(X)−sum of four public weights*g(scale_j*X^32)|32D|eight distinct points in H19|
 |2 authoritative CRL digest blocks|f(X)−P7(X), public interpolation of retained-record digest words|D|eight distinct points in H19|
 |2 authoritative CRL timestamp blocks|f(X)−public_timestamp|D|one point in H19|
@@ -271,7 +271,7 @@ new opening, witness publication, private inverse, auxiliary challenge, or wire
 field. All 16 endpoint equalities are unconditional.
 
 The plan coordinates and public interpolation coefficients precede its alphas in
-the transcript. MAIN's key/digest alpha group has 22 members: the 13 key
+the transcript. MAIN's key/digest alpha group has 26 members: the 17 key
 and five private SHA/P256 joins, then two public digest joins and two public
 CRL timestamp joins. Each
 new quotient has degree at most `2^19 + 1815 - 8 = 526095`, below the existing
@@ -472,6 +472,69 @@ over the 300 s target. Still required: a forged-proof control, and the
 remaining checks listed for the earlier revisions.
 `JointSecurityReductionIncomplete` remains the production result.
 
+
+## Signature scalars joined to the documents
+
+Gap 4 of the [coverage ledger](zk_x509_relation_coverage.md) is closed by a
+relation change.
+
+Each P-256 binding sink takes `(Qx, Qy, r, s, digest)` in its real-input
+column, and the key and digest blocks joined only the key and digest rows.
+The rows 41,024 to 41,087 that feed the ECDSA writers were free, so the proof
+showed that some valid signature on the bound TBS digest exists under the
+bound issuer key, not that it is the document's, nor that the document's
+`signatureValue` is a strict-DER `ECDSA-Sig-Value`.
+
+The RFC relation has a new verifier-fixed family, `SignatureScalar`, of four
+74-row groups, one per certificate and CRL signature, with 33 residues of
+degree at most four. A group's first row authenticates the document's
+`signatureValue` BIT STRING node through the DER node lookup; every other row
+reads one byte at a verifier-fixed offset from the content start through the
+DER byte lookup. The header bytes are forced to `30 (4 + Lr + Ls) 02 Lr .. 02
+Ls ..`, the content to end exactly after `s`, and each INTEGER to be minimal
+and positive with `L = 1 + z + u`, `z` the zero flag of its first byte and
+`u` in [0, 31]; the byte after a zero first byte must have its top bit set.
+The last 32 content bytes of each INTEGER, live exactly when `L ≥ 32 − j` by
+a six-bit range check, form the big-endian scalar with zero padding. The
+queries join the existing DER byte and node lookups, so the RFC collision
+term keeps 39 relations. The family adds no committed column and one
+verifier-fixed column, its selector; RFC local constraints go from 2,146 to
+2,179.
+
+MAIN's key plan has four new blocks, 11 to 14, between the I/O selector block
+and the Projection block: RFC `BASE_VALUE` on each group's 64 output rows
+equals sink `t`'s real-input column on rows 41,024 to 41,087, through the
+native-root power map `X^8` from log 19 to log 16, for sinks 0 to 3. An
+absent third certificate leaves its group zero, which its dummy sink holds.
+Each block adds one original DEEP opening of the sink column at
+`scale · z^8`, so X5M1 carries 36 values (1,162 framing bytes), the key and
+digest alpha group has 26 members, and the maximum X5S1 is 9,436,144 bytes,
+1,040 under the cap. Four more power-8 maps raise the summed map degree to
+741 and E to 3,504,136,193; B_MAIN and B_CA and the 219-bit algebraic error
+are unchanged. Each of the four sink columns now carries six opening sets, a
+mask closure of `(2 + 6)(136 + 4) = 1,120 <= 1,816`.
+
+The change reaches the compiled profile through field 9, which records the
+opening count, frame, key-plan blocks, alpha count, point census, exclusion
+bound, proof bound and the RFC residue count and parsing rule; a test ties
+those values to the actual constants. The pin, captured from the actual
+compilers, is `82e3b93f`; its predecessor `a7d5eaa2`, identical except for
+field 9, is a rejection fixture. The controls build the group's rows from
+synthetic signature encodings for every choice of the zero flags and find
+each non-canonical encoding rejected, find the canonical ones accepted with
+the padded scalars as output, and check on the actual depth-two and
+depth-three traces that the joined rows equal the scalars the `p256` crate
+parses from each document while a sink holding the malleated `(r, n − s)`
+differs only on the rows the new block joins. The family selector adds one
+4 MiB public fixed column to the prover plan, and on the largest fixture the
+weighted terminal-link replay admits three device columns instead of four.
+Ordinary and maximum diagnostic proofs of 9,436,144 bytes verify on one
+loaded macOS host, with producer self-check, independent replay and the
+wrong-genesis, nonce and tamper controls; proving took 336 s and 330 s, still
+over the 300 s target, at peak RSS of 10,073,014,272 and 9,993,240,576 bytes.
+Still required: a forged-proof control, and the remaining checks listed for
+the earlier revisions. `JointSecurityReductionIncomplete` remains the
+production result.
 
 ## Round-by-round state function and Fiat–Shamir lift
 

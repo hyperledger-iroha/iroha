@@ -94,8 +94,8 @@ fn public_time_quotients_use_one_original_column_and_reject_each_mismatch() {
     }
     assert!(plan.quotient_v1(2, &source).is_err());
     assert_eq!((1usize << 19) + MASK_DEGREE - 1, 526_102);
-    assert_eq!(BLOCKS_V1, 22);
-    assert_eq!(OPENINGS_V1, 32);
+    assert_eq!(BLOCKS_V1, 26);
+    assert_eq!(OPENINGS_V1, 36);
 }
 #[test]
 fn public_time_values_and_native_locations_are_transcript_bound() {

@@ -480,12 +480,13 @@ const JOINT_CONFIGURATION_BOUND_V1: u16 = 8;
 const JOINT_PAIRED_CONFIGURATION_BOUND_V1: u16 =
     JOINT_CONFIGURATION_BOUND_V1 * JOINT_CONFIGURATION_BOUND_V1;
 /// Summed degree of the MAIN DEEP point maps: the original point, six power2,
-/// five power8, one power16 (Projection) and twenty power32 maps.
+/// nine power8 (five keys and four signature-scalar pairs), one power16
+/// (Projection) and twenty power32 maps.
 ///
 /// `deep_point_census_counts_the_actual_opening_maps` in the key-join plan
 /// derives the same multiset from the actual openings.
 #[cfg(test)]
-const JOINT_MAIN_POINT_MAP_DEGREE_V1: u64 = 1 + 6 * 2 + 5 * 8 + 16 + 20 * 32;
+const JOINT_MAIN_POINT_MAP_DEGREE_V1: u64 = 1 + 6 * 2 + 9 * 8 + 16 + 20 * 32;
 /// Two local and 108 translated CA linear point maps.
 #[cfg(test)]
 const JOINT_CA_POINT_MAPS_V1: u64 = 2 + 108;
@@ -546,7 +547,7 @@ fn joint_relation_error_bits_v1(certificate: ZkX509SoundnessCertificateV1) -> Op
     let exclusions = joint_point_exclusions_v1()?;
     let point_numerator = u64::from(JOINT_PAIRED_CONFIGURATION_BOUND_V1)
         .checked_mul(main_numerator.checked_add(ca_numerator)?)?;
-    if exclusions != 3_353_141_249 || point_numerator >= 1 << 31 {
+    if exclusions != 3_504_136_193 || point_numerator >= 1 << 31 {
         return None;
     }
     // |F|>2^252 and exclusions<2^64 imply admitted support>2^251.
@@ -1280,7 +1281,7 @@ mod tests {
         )
         .unwrap();
         let exclusions = joint_point_exclusions_v1().unwrap();
-        assert_eq!(exclusions, 3_353_141_249);
+        assert_eq!(exclusions, 3_504_136_193);
         let bits = joint_relation_error_bits_v1(certificate).unwrap();
         let descriptor = core::str::from_utf8(
             crate::privacy_engines::zk_x509::profile::ZK_X509_STARK_PROFILE_DESCRIPTOR_V1,

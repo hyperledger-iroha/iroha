@@ -96,6 +96,8 @@ mod profile_identity;
 mod projection_disclosure;
 #[path = "rfc5280_projection_serial.rs"]
 mod projection_serial;
+#[path = "rfc5280_signature_scalars.rs"]
+mod signature_scalars;
 #[path = "rfc5280_temporal.rs"]
 mod temporal;
 #[path = "rfc5280_variable_output.rs"]
@@ -103,12 +105,12 @@ mod variable_output;
 use binding::numeric_lookup_event_v1;
 /// Stable identity of the native RFC adapter integrated only through MAIN.
 #[cfg(test)]
-pub const ZK_X509_RFC5280_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-rfc5280-stark-v1-incompatible:native-log19:base285:aux280:fixed147:constraints2146:degree4:source-node-root-kind-active-gated-helper-fixed-eight-equality-and-fifteen-embedded-endpoint-slots-complete-nonempty-original-node-spans-live-prefix-count-typed-copy-domains103-104-affine-one-plus-tuple-for-shared-domains90-98-99-102-103-104-affine-one-plus-tuple-for-shared-profile-domains96-97-optional-slot-canonical-zero-exact-extension-oid-ordinal-ku-document-and-critical-cardinality-eku-canonical-profile-uuid-oids:output-metadata-six-verifier-fixed-equations-certificate-slot-output-producer-and-consumer-fixed-selector-equals-global-activity:five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-big-endian-length-pairs-live-prefix-count-node-continuity-source-start-helper:projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa:max-private-active-rows246673:fixed-public-nonpadding-rows292206:four-copy-lanes:zero-sized-public-shape:constant-registration-transcript:no-private-depth-length-count-or-family-boundary-disclosure:committed-family-active-prefixes-except-verifier-fixed-temporal-basic-constraints-and-complete-copy-slot-census:inactive-rows-canonical-zero:four-fixed-top-document-slots:top-document-max4096:optional-certificate-slot2-boolean-provenance-bound:depth2-slot2-zero-byte-zero-node-dummy:certificate-slot-active-output-channel:source-byte-and-node-private-joined-der-endpoints:canonical-parent-child-tag-ordinal-grammar:closed-leaf-five-ca-four-extension-cardinality-and-ordinal-bound-critical-positions:no-host-role-labels:extension-embedded-exact-copy:algorithm-and-profile-fixed-byte-rows-address-equals-start-plus-offset:decimal-calendar-to-unix-arithmetic:gregorian-euclidean-year-quotients-and-exact-leap-bit:utc1970-2049-generalized2050-9999-actual-der-tag-and-raw-year-bound:fixed72-authenticated-document-role-instance-time-slots:complete-der-time-node-census:fixed15-decimal-byte-rows-including-z-and-zero-utc-padding:fixed73-two-phase-relations-with-verifier-public-operands-and-only-next-update-strict:entry-count-equals64-boolean-entry-census-and-weighted-serial-comparison-census:38-bit-nonwrapping-timestamp-and-slack:range-byte-before-after-transition-bound:four-lane-affine-one-plus-tuple-logarithmic-lookup-domains100-101:singular-inverse-zero-and-exact-singular-count:bounded-public-presentation-window:private-certificate-validity-covers-window:private-crl-interval-covers-window:basic-constraints-fixed-three-slots-twelve-rows-original-signed-extension-ordinal3-complete-bytes-eight-canonical-u32-integer-variants-32bit-pathlen-and-nonwrapping-slack-at-least-subordinate-count:ku-eku-bc:serial-positive-max20:complete-crl-max64:fixed-two-phase-serial-comparator-layout:fixed-seven-phase-calendar-copy-layout:max-serial-comparisons127:max-serial-comparator-logical-rows2667:max-serial-comparator-physical-rows5334:max-serial-source-rows5334:leaf-vs-every-entry-nonmembership-forced-by-entry-census:adjacent-revoked-serial-strict-increasing-unsigned-magnitude:length-then-byte-lexicographic:active-prefix-count-and-zero-padding:first-magnitude-byte-nonzero:first-difference-range-checked:der-integer-optional-sign-octet-bound:serial-source-node-and-byte-zero-safe-log-lookups-with-singular-count-equality:serial-decimal-relation-to-comparator-calendar-range-four-lane-grand-product:one-compressed-factor-per-physical-row:zero-product-factors-total-no-prover-abort:full-input-affine-degree-audit:issuer-name-and-aki-ski-byte-equality:fixed-five-document-sha-call-sources:fixed-three-certificate-signature-key-slots:depth2-third-tbs-signature-key-canonical-dummy:full-signed-crl-commitment-and-tbs-p256-message-distinct:producer-and-consumer-terminals-enumerated:thirty-nine-relation-four-lane-union-bound-at-least170-bits:canonical-base-fixed-aux-column-provider:eighteen-verifier-fixed-output-role-endpoint-selectors:nine-independent-normalized-producer-and-nine-actual-consumer-four-lane-products:governed-root-spki-and-certificate-slot-active-products-air-bound:four-private-governed-root-consumer-to-original-CA-polynomial-links:private-normalized-producer-to-consumer36-final-equalities:16-native-constant-private-sha-bridge-columns:16-sha-quartic-endpoint-plus4-rfc-quartic-union-main-joins:endpoint-map6,2,2,2,3,3,2,4,3:direction0:instance0:typed-family-role-endpoint-lane-addresses:no-der-public-claim-slots:der-rfc8-private-linear-quotients:verifier-original-polynomial-private-link-replay:no-public-terminal-products:sha-terminal-ca-call-family-lane-addresses-fixed:compact-ca-call-role-and-order-fixed:verifier-committed-sha-terminal-replay:five-p256-witnesses-native-rust-fixed-certificate-crl-wallet-order:p256348-private-products-no-public-codec:p256184-private-linear-links:four-certificate-or-crl-then-wallet-role-order:p256-bus-cross-start-terminal-and-sink-addresses-fixed:canonical-goldilocks-big-endian:verifier-authenticated-p256-private-oods-link-equations:compact-ca-subproof-dedicated-x5c1-x5c2-complete:ca-claim-free-frame10bytes-main-frame1034-joint132-Fp4-openings4224:ca-single-log12-trace4096-base695-aux128-fixed80-constraints1363-degree3-4chunks:ca-local-lde-log16-mask2100-deep52800-fri136-rounds6-terminal1024-degree143-grinding20:shared-x5b1-single-joined-main-base-root-plus-ca-base-root-challenge-schedule:ca-public-profile-and-root-bound:ca-prover-self-verifies-independent-verifier-and-resource-gates:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
+pub const ZK_X509_RFC5280_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-rfc5280-stark-v1-incompatible:native-log19:base285:aux280:fixed148:constraints2179:degree4:source-node-root-kind-active-gated-helper-fixed-eight-equality-and-fifteen-embedded-endpoint-slots-complete-nonempty-original-node-spans-live-prefix-count-typed-copy-domains103-104-affine-one-plus-tuple-for-shared-domains90-98-99-102-103-104-affine-one-plus-tuple-for-shared-profile-domains96-97-optional-slot-canonical-zero-exact-extension-oid-ordinal-ku-document-and-critical-cardinality-eku-canonical-profile-uuid-oids:output-metadata-six-verifier-fixed-equations-certificate-slot-output-producer-and-consumer-fixed-selector-equals-global-activity:five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-big-endian-length-pairs-live-prefix-count-node-continuity-source-start-helper:projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa:max-private-active-rows246969:fixed-public-nonpadding-rows292502:four-copy-lanes:zero-sized-public-shape:constant-registration-transcript:no-private-depth-length-count-or-family-boundary-disclosure:committed-family-active-prefixes-except-verifier-fixed-temporal-basic-constraints-and-complete-copy-slot-census:inactive-rows-canonical-zero:four-fixed-top-document-slots:top-document-max4096:optional-certificate-slot2-boolean-provenance-bound:depth2-slot2-zero-byte-zero-node-dummy:certificate-slot-active-output-channel:source-byte-and-node-private-joined-der-endpoints:canonical-parent-child-tag-ordinal-grammar:closed-leaf-five-ca-four-extension-cardinality-and-ordinal-bound-critical-positions:no-host-role-labels:extension-embedded-exact-copy:algorithm-and-profile-fixed-byte-rows-address-equals-start-plus-offset:strict-der-signature-value-four-fixed74-row-groups-node-anchored-header-bytes-minimal-positive-integers-length-one-plus-zero-flag-plus-u5-32-byte-left-padded-r-s-windows-joined-to-p256-sinks:decimal-calendar-to-unix-arithmetic:gregorian-euclidean-year-quotients-and-exact-leap-bit:utc1970-2049-generalized2050-9999-actual-der-tag-and-raw-year-bound:fixed72-authenticated-document-role-instance-time-slots:complete-der-time-node-census:fixed15-decimal-byte-rows-including-z-and-zero-utc-padding:fixed73-two-phase-relations-with-verifier-public-operands-and-only-next-update-strict:entry-count-equals64-boolean-entry-census-and-weighted-serial-comparison-census:38-bit-nonwrapping-timestamp-and-slack:range-byte-before-after-transition-bound:four-lane-affine-one-plus-tuple-logarithmic-lookup-domains100-101:singular-inverse-zero-and-exact-singular-count:bounded-public-presentation-window:private-certificate-validity-covers-window:private-crl-interval-covers-window:basic-constraints-fixed-three-slots-twelve-rows-original-signed-extension-ordinal3-complete-bytes-eight-canonical-u32-integer-variants-32bit-pathlen-and-nonwrapping-slack-at-least-subordinate-count:ku-eku-bc:serial-positive-max20:complete-crl-max64:fixed-two-phase-serial-comparator-layout:fixed-seven-phase-calendar-copy-layout:max-serial-comparisons127:max-serial-comparator-logical-rows2667:max-serial-comparator-physical-rows5334:max-serial-source-rows5334:leaf-vs-every-entry-nonmembership-forced-by-entry-census:adjacent-revoked-serial-strict-increasing-unsigned-magnitude:length-then-byte-lexicographic:active-prefix-count-and-zero-padding:first-magnitude-byte-nonzero:first-difference-range-checked:der-integer-optional-sign-octet-bound:serial-source-node-and-byte-zero-safe-log-lookups-with-singular-count-equality:serial-decimal-relation-to-comparator-calendar-range-four-lane-grand-product:one-compressed-factor-per-physical-row:zero-product-factors-total-no-prover-abort:full-input-affine-degree-audit:issuer-name-and-aki-ski-byte-equality:fixed-five-document-sha-call-sources:fixed-three-certificate-signature-key-slots:depth2-third-tbs-signature-key-canonical-dummy:full-signed-crl-commitment-and-tbs-p256-message-distinct:producer-and-consumer-terminals-enumerated:thirty-nine-relation-four-lane-union-bound-at-least170-bits:canonical-base-fixed-aux-column-provider:eighteen-verifier-fixed-output-role-endpoint-selectors:nine-independent-normalized-producer-and-nine-actual-consumer-four-lane-products:governed-root-spki-and-certificate-slot-active-products-air-bound:four-private-governed-root-consumer-to-original-CA-polynomial-links:private-normalized-producer-to-consumer36-final-equalities:16-native-constant-private-sha-bridge-columns:16-sha-quartic-endpoint-plus4-rfc-quartic-union-main-joins:endpoint-map6,2,2,2,3,3,2,4,3:direction0:instance0:typed-family-role-endpoint-lane-addresses:no-der-public-claim-slots:der-rfc8-private-linear-quotients:verifier-original-polynomial-private-link-replay:no-public-terminal-products:sha-terminal-ca-call-family-lane-addresses-fixed:compact-ca-call-role-and-order-fixed:verifier-committed-sha-terminal-replay:five-p256-witnesses-native-rust-fixed-certificate-crl-wallet-order:p256348-private-products-no-public-codec:p256184-private-linear-links:four-certificate-or-crl-then-wallet-role-order:p256-bus-cross-start-terminal-and-sink-addresses-fixed:canonical-goldilocks-big-endian:verifier-authenticated-p256-private-oods-link-equations:compact-ca-subproof-dedicated-x5c1-x5c2-complete:ca-claim-free-frame10bytes-main-frame1162-joint132-Fp4-openings4224:ca-single-log12-trace4096-base695-aux128-fixed80-constraints1363-degree3-4chunks:ca-local-lde-log16-mask2100-deep52800-fri136-rounds6-terminal1024-degree143-grinding20:shared-x5b1-single-joined-main-base-root-plus-ca-base-root-challenge-schedule:ca-public-profile-and-root-bound:ca-prover-self-verifies-independent-verifier-and-resource-gates:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
 /// SHA-256 of [`ZK_X509_RFC5280_STARK_DESCRIPTOR_V1`].
 #[cfg(test)]
 pub const ZK_X509_RFC5280_STARK_DESCRIPTOR_SHA256_V1: [u8; 32] = [
-    0x70, 0xbe, 0x60, 0xb1, 0x60, 0x8d, 0xbf, 0x01, 0x53, 0x1c, 0xb7, 0x83, 0x62, 0x97, 0x27, 0x11,
-    0xda, 0xfc, 0xc6, 0x9a, 0xc5, 0xca, 0xbb, 0xb8, 0x0b, 0x00, 0x7f, 0x77, 0x87, 0x35, 0x1f, 0xe3,
+    0x0d, 0x74, 0x77, 0x8e, 0xa4, 0x88, 0xd6, 0xb6, 0xea, 0x20, 0x32, 0x15, 0xc4, 0xb3, 0x96, 0x67,
+    0x0f, 0x41, 0xa4, 0x82, 0x22, 0xf6, 0x54, 0xeb, 0x8b, 0xfd, 0xf3, 0xaa, 0x6d, 0x48, 0x83, 0xad,
 ];
 /// Native trace logarithm after the 4 KiB X.509 admission cap.
 pub const ZK_X509_RFC5280_STARK_TRACE_LOG2_V1: u8 = 19;
@@ -121,7 +123,7 @@ pub const ZK_X509_RFC5280_STARK_BASE_WIDTH_V1: usize = 285;
 /// shared by serial, semantic and fixed public-key output queries.
 pub const ZK_X509_RFC5280_STARK_AUX_WIDTH_V1: usize = 280;
 /// Verifier-preprocessed family, boundary, address, and output-role columns.
-pub const ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1: usize = 147;
+pub const ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1: usize = 148;
 /// Exact opened-row residue inventory.
 pub const ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1: usize = {
     let mut total = 51;
@@ -148,7 +150,10 @@ const RFC5280_RESIDUE_SECTIONS_V1: [(&str, usize); 20] = [
         "calendar",
         11 + calendar::RESIDUES_V1 + binding::RESIDUES_V1,
     ),
-    ("relation-basic-constraints", 3 + path_len::RESIDUES),
+    (
+        "relation-basic-constraints-and-signature-scalars",
+        3 + path_len::RESIDUES + signature_scalars::RESIDUES,
+    ),
     ("serial-source", 29),
     ("serial-compare", 82),
     ("range-profile", 12),
@@ -239,7 +244,8 @@ const MAX_ACTIVE_ROWS_V1: usize = name_values::ROWS
     + MAX_SERIAL_SOURCE_ROWS_V1
     + MAX_SERIAL_COMPARISON_PHYSICAL_ROWS_V1
     + MAX_SEMANTIC_ROWS_V1
-    + MAX_OUTPUT_EVENT_ROWS_V1;
+    + MAX_OUTPUT_EVENT_ROWS_V1
+    + signature_scalars::ROWS;
 // Fixed public registration geometry.  These capacities are independent of
 // every private length/count and still fit the native log19 domain.
 const FIXED_SOURCE_BYTE_ROWS_V1: usize = MAX_SOURCE_BYTES_V1;
@@ -274,7 +280,8 @@ const FIXED_NON_PADDING_ROWS_V1: usize = FIXED_SOURCE_BYTE_ROWS_V1
     + FIXED_SEMANTIC_SOURCE_ROWS_V1
     + FIXED_SEMANTIC_CONSUMER_ROWS_V1
     + FIXED_OUTPUT_ROWS_PER_SIDE_V1
-    + FIXED_OUTPUT_ROWS_PER_SIDE_V1;
+    + FIXED_OUTPUT_ROWS_PER_SIDE_V1
+    + signature_scalars::ROWS;
 const FIXED_PADDING_ROWS_V1: usize =
     ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 - FIXED_NON_PADDING_ROWS_V1;
 const _: () = assert!(ZK_X509_RFC5280_STARK_BUS_LANES_V1 == ZK_X509_DER_STARK_BUS_LANES_V1);
@@ -413,7 +420,8 @@ pub enum ZkX509Rfc5280StarkFamilyV1 {
     OutputProducer = 15,
     OutputConsumer = 16,
     NameValue = 17,
-    Padding = 18,
+    SignatureScalar = 18,
+    Padding = 19,
 }
 const FAMILY_COUNT_V1: usize = ZkX509Rfc5280StarkFamilyV1::Padding as usize + 1;
 /// Topology-neutral purpose of a producer/consumer output event.
@@ -554,6 +562,8 @@ impl ZkX509Rfc5280StarkPrivateShapeV1 {
         counts[ZkX509Rfc5280StarkFamilyV1::OutputConsumer as usize] =
             usize::try_from(self.output_consumer_rows)
                 .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+        counts[ZkX509Rfc5280StarkFamilyV1::SignatureScalar as usize] =
+            signature_scalars::active_rows(self.chain_depth == 3);
         let active = Self::checked_sum(
             counts[..ZkX509Rfc5280StarkFamilyV1::Padding as usize]
                 .iter()
@@ -793,6 +803,7 @@ impl ZkX509Rfc5280StarkShapeV1 {
             FIXED_OUTPUT_ROWS_PER_SIDE_V1,
             FIXED_OUTPUT_ROWS_PER_SIDE_V1,
             name_values::ROWS,
+            signature_scalars::ROWS,
             FIXED_PADDING_ROWS_V1,
         ]
     }
@@ -3778,6 +3789,35 @@ pub fn zk_x509_rfc_projection_join_rows_v1(
     Ok((producer_start, count, BASE_VALUE))
 }
 
+/// First RFC row of the 64 `r || s` scalar bytes parsed from the signature of
+/// P-256 binding sinks 0 to 3 (certificates 0, 1, 2 and the CRL), and the
+/// value column.
+///
+/// The rows are fixed by the public family layout alone. An absent third
+/// certificate leaves its rows inactive and zero, matching its dummy sink.
+pub fn zk_x509_rfc_signature_scalar_join_rows_v1(
+    shape: ZkX509Rfc5280StarkShapeV1,
+) -> Result<([usize; 4], usize), ZkX509Rfc5280StarkErrorV1> {
+    shape.validate()?;
+    let family = ZkX509Rfc5280StarkFamilyV1::SignatureScalar as usize;
+    let counts = ZkX509Rfc5280StarkShapeV1::family_counts();
+    if counts[family] != signature_scalars::ROWS {
+        return Err(ZkX509Rfc5280StarkErrorV1::Shape);
+    }
+    let start = counts[..family]
+        .iter()
+        .try_fold(0_usize, |sum, count| sum.checked_add(*count))
+        .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)?;
+    let mut rows = [0_usize; 4];
+    for (sink, row) in rows.iter_mut().enumerate() {
+        *row = signature_scalars::output_ordinal(sink)
+            .and_then(|ordinal| start.checked_add(ordinal))
+            .filter(|row| row + 2 * signature_scalars::SCALAR_BYTES <= start + counts[family])
+            .ok_or(ZkX509Rfc5280StarkErrorV1::Shape)?;
+    }
+    Ok((rows, BASE_VALUE))
+}
+
 /// Exact required CRL calendar timestamps in the original RFC base polynomial.
 /// Rows are the final phase of fixed temporal slots six and seven, independent
 /// of private certificate depth, entry counts, or selected date encoding.
@@ -3866,6 +3906,7 @@ impl ZkX509Rfc5280StarkFixedScheduleV1 {
             ZkX509Rfc5280StarkFamilyV1::OutputProducer,
             ZkX509Rfc5280StarkFamilyV1::OutputConsumer,
             ZkX509Rfc5280StarkFamilyV1::NameValue,
+            ZkX509Rfc5280StarkFamilyV1::SignatureScalar,
             ZkX509Rfc5280StarkFamilyV1::Padding,
         ];
         if row >= ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 {
@@ -3949,6 +3990,9 @@ impl ZkX509Rfc5280StarkFixedScheduleV1 {
         copy_census::populate_fixed(&mut fixed, family, ordinal);
         if family == ZkX509Rfc5280StarkFamilyV1::BasicConstraints {
             path_len::populate_fixed(&mut fixed, ordinal);
+        }
+        if family == ZkX509Rfc5280StarkFamilyV1::SignatureScalar {
+            signature_scalars::populate_fixed(&mut fixed, ordinal);
         }
         if family == ZkX509Rfc5280StarkFamilyV1::FixedByte {
             fixed[FIX_EXPECTED] = F(u64::from(ordinal == 0));
@@ -6179,6 +6223,7 @@ pub fn build_zk_x509_rfc5280_stark_base_material_v1(
     let variable_nodes = variable_output::nodes(trace)?;
     let projection_serial_source = projection_serial::source(trace)?;
     let basic_constraints_sources = path_len::sources(trace)?;
+    let signature_scalar_sources = signature_scalars::sources(trace)?;
     let copy_sources = copy_census::Sources::new(trace)?;
     let projection_disclosure_sources = projection_disclosure::sources(trace)?;
     let byte_lookup_count = serial_byte_multiplicities
@@ -6251,6 +6296,11 @@ pub fn build_zk_x509_rfc5280_stark_base_material_v1(
                 .count()
                 + name_values::byte_multiplicity(trace, document, address)
                 + path_len::byte_multiplicity(&basic_constraints_sources, document, address)
+                + signature_scalars::byte_multiplicity(
+                    &signature_scalar_sources,
+                    document,
+                    address,
+                )
                 + key_nodes
                     .iter()
                     .flatten()
@@ -6326,6 +6376,13 @@ pub fn build_zk_x509_rfc5280_stark_base_material_v1(
                 node,
             ))
             .and_then(|value| value.checked_add(copy_sources.node_multiplicity(document, node)))
+            .and_then(|value| {
+                value.checked_add(signature_scalars::node_multiplicity(
+                    &signature_scalar_sources,
+                    document,
+                    node,
+                ))
+            })
             .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)
     };
     let source_byte_family = ZkX509Rfc5280StarkFamilyV1::SourceByte as usize;
@@ -6623,6 +6680,11 @@ pub fn build_zk_x509_rfc5280_stark_base_material_v1(
         &basic_constraints_sources,
         &mut family_rows[ZkX509Rfc5280StarkFamilyV1::BasicConstraints as usize],
     )?;
+    signature_scalars::append_rows(
+        trace,
+        &signature_scalar_sources,
+        &mut family_rows[ZkX509Rfc5280StarkFamilyV1::SignatureScalar as usize],
+    )?;
     let serial_source_family = ZkX509Rfc5280StarkFamilyV1::SerialSource as usize;
     for source in &semantic.serial_sources {
         for row in build_zk_x509_rfc5280_serial_source_rows_v1(source)?
@@ -6839,8 +6901,10 @@ fn populate_degree_normalization_helpers_v1<A: PolynomialAirFieldV1>(
         .mul(active);
     let key_query = output_source_query_gate_v1(row, fixed);
     let basic_constraints_query = path_len::byte_query_gate(row, fixed);
+    let signature_scalar_query = signature_scalars::byte_query_gate(row, fixed);
     row[BASE_SERIAL_BYTE_QUERY_ACTIVE] = key_query
         .add(basic_constraints_query)
+        .add(signature_scalar_query)
         .add(serial_query)
         .add(direct_query)
         .add(
@@ -6850,6 +6914,7 @@ fn populate_degree_normalization_helpers_v1<A: PolynomialAirFieldV1>(
         );
     row[BASE_SERIAL_BYTE_QUERY_VALUE] = key_query
         .add(basic_constraints_query)
+        .add(signature_scalar_query)
         .mul(row[BASE_VALUE])
         .add(fixed[projection_disclosure::FIX_OID_VALUE])
         .sub(fixed[projection_disclosure::FIX_OID_QUERY].mul(row[BASE_VALUE]))
@@ -8310,6 +8375,7 @@ fn evaluate_rfc5280_relation_with_context_v1<A: PolynomialAirFieldV1>(
             .mul(current[BASE_INVERSE]),
     );
     path_len::append_residues(current, next, fixed, &mut residues);
+    signature_scalars::append_residues(current, next, fixed, &mut residues);
     assert_residue_section_v1(
         residues.len(),
         &mut residue_section_start,
@@ -9008,7 +9074,8 @@ fn evaluate_rfc5280_relation_with_context_v1<A: PolynomialAirFieldV1>(
                 serial_source
                     .add(output_source_node_query_gate_v1(current, fixed))
                     .add(path_len::node_query_gate(current, fixed))
-                    .add(copy_census::node_query_gate(current, fixed)),
+                    .add(copy_census::node_query_gate(current, fixed))
+                    .add(signature_scalars::node_query_gate(current, fixed)),
                 serial_node_lookup_factor_v1(current, lane, challenges),
                 node_query_factor_v1(current, fixed, lane, challenges),
                 current[SERIAL_NODE_TABLE_MULTIPLICITY],
@@ -9943,8 +10010,8 @@ mod tests {
         let shape = maximum_private_shape_v1();
         shape.validate().expect("exact conservative maximum");
         assert_eq!(MAX_OUTPUT_EVENT_ROWS_V1, 45_410);
-        assert_eq!(MAX_ACTIVE_ROWS_V1, 246_673);
-        assert_eq!(FIXED_NON_PADDING_ROWS_V1, 292_206);
+        assert_eq!(MAX_ACTIVE_ROWS_V1, 246_969);
+        assert_eq!(FIXED_NON_PADDING_ROWS_V1, 292_502);
         assert_eq!(
             shape.active_rows().expect("active rows")
                 + (FIXED_EMBEDDED_COPY_ROWS_V1 - copy_census::EMBEDDED_ROWS)
@@ -11097,7 +11164,7 @@ mod tests {
     }
     #[test]
     fn full_opened_input_affine_degree_inventory_is_exactly_four() {
-        const EXPECTED_AFFINE_DEGREE_INVENTORY_V1: [usize; 5] = [0, 1, 916, 578, 655];
+        const EXPECTED_AFFINE_DEGREE_INVENTORY_V1: [usize; 5] = [0, 1, 921, 600, 661];
         const SAMPLE_POINTS: u64 = 9;
         let mut maximum_degrees = vec![0_usize; ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1];
         for seed in [3_u64, 5, 11] {
@@ -11155,8 +11222,9 @@ mod tests {
         // Native finite differences vary every opened base, auxiliary and fixed
         // input at nine points for each of the three seeds above. The expected
         // inventory includes BasicConstraints126 plus copy40 and identity43,
-        // replacing five old cubic equations, and the cubic FixedByte address
-        // anchor. Native execution must confirm it.
+        // replacing five old cubic equations, the cubic FixedByte address
+        // anchor, and the signature-scalar family's five quadratic, 22 cubic
+        // and six quartic equations. Native execution must confirm it.
 
         assert_eq!(
             inventory, EXPECTED_AFFINE_DEGREE_INVENTORY_V1,
@@ -12677,7 +12745,7 @@ mod tests {
                 3
             );
         }
-        assert_eq!(ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1, 2_150);
+        assert_eq!(ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1, 2_183);
         assert_eq!(
             (
                 ZK_X509_RFC5280_STARK_BASE_WIDTH_V1,
@@ -12686,7 +12754,7 @@ mod tests {
                 ZK_X509_RFC5280_STARK_TRACE_LOG2_V1,
                 ZK_X509_RFC5280_STARK_CONSTRAINT_DEGREE_V1
             ),
-            (285, 280, 147, 19, 4)
+            (285, 280, 148, 19, 4)
         );
     }
 

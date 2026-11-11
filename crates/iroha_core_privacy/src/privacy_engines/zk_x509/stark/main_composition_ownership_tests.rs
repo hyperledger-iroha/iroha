@@ -258,7 +258,7 @@ fn reusable_residue_scratch_is_bounded_by_public_tasks_within_original_runtime_r
     }
     assert_eq!(
         main_resources::MAIN_COMPOSITION_RESIDUE_SCRATCH_BYTES_V1,
-        2_200_576
+        2_234_368
     );
     assert_eq!(
         main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1,

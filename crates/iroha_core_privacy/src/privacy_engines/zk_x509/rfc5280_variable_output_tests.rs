@@ -49,8 +49,8 @@ fn variable_output_public_pair_geometry_covers_every_disclosure_shape() {
         }
         assert_eq!(variable_output::slot(shape, u32::MAX), None);
     }
-    assert_eq!(variable_output::FIX_END, 119);
-    assert_eq!(ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1, 147);
+    assert_eq!(variable_output::FIX_END, 120);
+    assert_eq!(ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1, 148);
 }
 
 #[test]
@@ -248,9 +248,10 @@ fn variable_output_constructors_and_multiplicities_read_original_der_at_both_dep
                     [ZkX509Rfc5280StarkFamilyV1::SourceNode as usize]
                     + document * 2048
                     + ordinal;
+                // The signature-scalar family queries each signature node once more.
                 assert_eq!(
                     material.base_row(row_index).unwrap()[SERIAL_NODE_TABLE_MULTIPLICITY],
-                    F(length as u64)
+                    F(length as u64 + u64::from(signature))
                 );
                 for address in [start, usize::from(node.content_end) - 1] {
                     let expected = nodes

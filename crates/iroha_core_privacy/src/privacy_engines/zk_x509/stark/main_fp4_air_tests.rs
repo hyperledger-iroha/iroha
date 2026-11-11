@@ -90,13 +90,13 @@ fn main_descriptors_match_enforced_join_inventory_and_alpha_order() {
     let segmented = core::str::from_utf8(ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1).unwrap();
     let main = core::str::from_utf8(ZK_X509_MAIN_PROOF_DESCRIPTOR_V1).unwrap();
     // Key bytes, SHA digests, authoritative CRL digests and CRL timestamps.
-    assert_eq!(main_key_joins::BLOCKS_V1, 13 + 5 + 2 + 2);
-    assert_eq!(main_key_joins::OPENINGS_V1, 12 + 20);
+    assert_eq!(main_key_joins::BLOCKS_V1, 17 + 5 + 2 + 2);
+    assert_eq!(main_key_joins::OPENINGS_V1, 16 + 20);
     // Segment links, RFC role links and projection-to-SHA links at point one.
     assert_eq!(main_sha_union::UNION_QUOTIENTS_V1, 16 + 4 + 4);
     for descriptor in [profile, segmented, main] {
         for inventory in [
-            "main-key-byte-joins=13-blocks",
+            "main-key-byte-joins=17-blocks",
             "main-sha-digest-joins=5-blocks40-u32-equalities",
             "main-public-crl-digest-joins=calls4,12-authoritative-retained-record-two-eight-root-quotients16-u32-no-extra-openings",
             "main-public-crl-time-joins=required-rfc-calendar-slots6,7-phase6-authoritative-this-and-next-update-two-single-root-quotients-no-extra-openings",
@@ -125,7 +125,7 @@ fn main_descriptors_match_enforced_join_inventory_and_alpha_order() {
     assert!(profile.contains("main-public-terminal-records=0|ca-public-terminal-records=0"));
     assert!(profile.contains("joint-openings=132-canonical-Fp4-values4224"));
     assert!(
-        profile.contains("main-frame-bytes=1034-includes1024-key-DEEP-values|ca-frame-bytes=10")
+        profile.contains("main-frame-bytes=1162-includes1152-key-DEEP-values|ca-frame-bytes=10")
     );
 }
 

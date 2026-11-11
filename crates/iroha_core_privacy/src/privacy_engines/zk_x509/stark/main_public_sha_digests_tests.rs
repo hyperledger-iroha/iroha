@@ -286,8 +286,8 @@ fn authoritative_public_digests_and_plan_coordinates_enter_transcript() {
         assert_ne!(state(&changed), expected);
     }
     assert_eq!((1usize << 19) + MASK_DEGREE - 8, 526_095);
-    assert_eq!(BLOCKS_V1, 22);
-    assert_eq!(OPENINGS_V1, 32);
+    assert_eq!(BLOCKS_V1, 26);
+    assert_eq!(OPENINGS_V1, 36);
 }
 
 #[test]

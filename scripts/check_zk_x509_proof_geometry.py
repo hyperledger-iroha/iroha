@@ -136,7 +136,7 @@ def screen(
     if (
         outer != 4348
         or proof_instance_bytes != 32
-        or (main_frame, ca_frame, public_header, joint_openings) != (1034, 10, 108, 4224)
+        or (main_frame, ca_frame, public_header, joint_openings) != (1162, 10, 108, 4224)
         or ca_inner != ca_pre_deep + (deep - (wide_main - main_pre_deep))
         or ca_section_cap != ca_inner + ca_frame
         or combined != main_pre_deep + ca_pre_deep + deep + main_frame + ca_frame + outer
