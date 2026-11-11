@@ -649,6 +649,13 @@ pub fn original_evaluate_zk_x509_sha_word_capacity_residues_over_field_v1<
             .mul(current[0].sub(message_count.mul(A::from_base(F(8))))),
     );
     residues.push(
+        input_word
+            .mul(fixed[SHA_WORD_CAPACITY_LENGTH_HIGH_WORD_V1])
+            .mul(row_active)
+            .mul(A::ONE.sub(final_block))
+            .mul(padding_phase),
+    );
+    residues.push(
         call_continue.mul(
             next_message_count
                 .sub(message_count.add(input_word.mul(row_active).mul(message_increment))),

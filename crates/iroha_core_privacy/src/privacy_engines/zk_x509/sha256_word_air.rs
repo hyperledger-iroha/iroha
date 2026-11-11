@@ -1392,6 +1392,14 @@ fn digest_from_words_v1(
     }
     Ok(digest)
 }
+#[cfg(test)]
+thread_local! {
+    /// Test-only count of all-zero 64-byte blocks inserted before the length
+    /// field. It builds the non-minimally padded traces that the SHA capacity
+    /// minimal-padding residue must reject; canonical padding never reads it.
+    pub(super) static NON_MINIMAL_PADDING_EXTRA_BLOCKS_V1: core::cell::Cell<usize> =
+        const { core::cell::Cell::new(0) };
+}
 fn sha256_padded_len_v1(message_len: usize) -> Result<usize, ZkX509Sha256WordAirErrorV1> {
     let with_marker = message_len
         .checked_add(1)
@@ -1402,10 +1410,17 @@ fn sha256_padded_len_v1(message_len: usize) -> Result<usize, ZkX509Sha256WordAir
     } else {
         64 + 56 - remainder
     };
-    with_marker
+    let padded_len = with_marker
         .checked_add(zero_padding)
         .and_then(|length| length.checked_add(8))
-        .ok_or(ZkX509Sha256WordAirErrorV1::InputTooLarge)
+        .ok_or(ZkX509Sha256WordAirErrorV1::InputTooLarge)?;
+    #[cfg(test)]
+    let padded_len = NON_MINIMAL_PADDING_EXTRA_BLOCKS_V1
+        .with(core::cell::Cell::get)
+        .checked_mul(64)
+        .and_then(|extra| padded_len.checked_add(extra))
+        .ok_or(ZkX509Sha256WordAirErrorV1::InputTooLarge)?;
+    Ok(padded_len)
 }
 fn sha256_padding_v1(message: &[u8]) -> Result<Zeroizing<Vec<u8>>, ZkX509Sha256WordAirErrorV1> {
     let bit_length = u64::try_from(message.len())

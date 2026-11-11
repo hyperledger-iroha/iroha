@@ -779,7 +779,8 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
     // reduction, low-S, scalar-bit, projection, window, value, byte-memory,
     // strict-DER, RFC5280, SHA-call and P-256 arithmetic, in that order.
     // SHA includes the prefix/frame constraints as well as the projection hash
-    // binding: the old work census preceded both additions (564, now593 local).
+    // binding: the old work census preceded both additions (564, then 593);
+    // minimal padding adds one capacity residue (594 local).
     // Joined endpoint work is pinned separately in main_sha_union_tests.rs.
     assert_eq!(
         [
@@ -792,14 +793,14 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
             95_420_416,
             3_732_930_560,
             4_498_391_040, // RFC: 2,145 local residues across 2^21 quotient rows.
-            9_948_889_088,
+            9_965_666_304,
             4_771_020_800,
         ]
         .into_iter()
         .sum::<u64>(),
-        26_272_702_464
+        26_289_479_680
     );
-    assert_eq!(residues, 26_272_702_464);
+    assert_eq!(residues, 26_289_479_680);
     // The public prefix cache does not enlarge the admitted arithmetic envelope.
     assert_eq!(
         buffers.maximum_live_buffers,
@@ -840,7 +841,7 @@ fn projection_sha_binding_geometry_keeps_the_existing_resource_ceilings() {
             89,
             82,
             137,
-            593,
+            594,
             19,
             22,
         ),

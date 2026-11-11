@@ -9,7 +9,7 @@ transcript and zero-knowledge qualification remain required; activation stays
 unavailable. Current evidence is recorded in [the goal tracker](zk_first_release_goals.md).
 
 The credential has no public intermediate terminal products. MAIN uses the local
-SHA relation with 593 constraints and the local RFC relation with 2,145
+SHA relation with 594 constraints and the local RFC relation with 2,145
 constraints. CA uses 1,363 local constraints. The full reference evaluators remain
 algebraic test oracles; they are not independent proof acceptance paths.
 The omitted terminal equations are replaced by 108 quotients in the original
@@ -210,7 +210,7 @@ link. For the one-field signed-CRL commitment, thirteen Boolean length bits are
 carried through every row of the call and agree with its final message count;
 all eight bytes of its framed field length are therefore constrained.
 
-The frame adds21 equations and the projection bus adds8 per registration (593 local, 801 with
+The frame adds21 equations and the projection bus adds8 per registration (594 local, 802 with
 reference CA boundary equations), without raising the maximum degree of six.
 The four verifier-derived fixed schedules have 137 columns each, 548 combined.
 Their descriptor digests and the compiled-profile pin must be regenerated from
@@ -238,7 +238,7 @@ factors. The collision inventory conservatively replaces the existing 10,088-eve
 the still-unproved joint-security reduction.
 
 Projection has17 base,36 auxiliary and31 fixed columns,306 constraints and degree4.
-SHA has89 base,82 auxiliary and137 fixed columns,593 local constraints and degree6.
+SHA has89 base,82 auxiliary and137 fixed columns,594 local constraints and degree6.
 The new twenty committed columns add21,760 query bytes and1,280 DEEP bytes. The
 six trace groups, joined roots,80 physical budget chunks and all proof/security
 limits are unchanged. The structural SHA compiler emits exactly18 new selector
@@ -288,7 +288,7 @@ concrete Fiat–Shamir/Merkle security, joint zero knowledge, or deadline readin
 The production `JointSecurityReductionIncomplete` refusal remains. Calls 13–15
 are public governance-record hash computations; their present redundancy is not
 used to justify these private endpoints. Other remaining cross-adapter obligations require their own source audit;
-the [coverage ledger](zk_x509_relation_coverage.md) records the first read and its open gaps.
+the [coverage ledger](zk_x509_relation_coverage.md) records both reads and the open gaps.
 
 
 ## Exact authoritative CRL timestamps
@@ -381,6 +381,54 @@ required: a proof forged by a prover that skips the host checks, independent
 review of the changed exclusion census, and qualification under the unchanged
 time and resource limits. `JointSecurityReductionIncomplete` remains the
 production result.
+
+
+## Minimal SHA-256 padding
+
+Gap 7 of the [coverage ledger](zk_x509_relation_coverage.md) is closed by a
+relation change, which changes the relation and the profile identity.
+
+The SHA capacity AIR set `final_block` by activity alone and checked the
+marker, the zero fill and the two length words only in the final block.
+Nothing tied the number of active blocks to the message length, so a prover
+could activate all-zero blocks before the length, up to the call's capacity,
+and the digest rows then read a non-SHA-256 hash of the message. Where the
+digest meets a signature, a governed digest or a CA hash, that needs a
+compression collision. Where it is a public output it did not: Projection
+pins call 6's digest to the published certificate nullifier, and with a
+33-block capacity against a five- or six-block frame one certificate could
+publish up to 29 nullifiers.
+
+The capacity AIR now has one more residue,
+`INPUT_WORD · LENGTH_HIGH_WORD · row_active · (1 − final_block) ·
+padding_phase`. `padding_phase` counts the markers before the row's word, so
+in an active block that is not final the marker must not occur before word
+14. With the final-block checks this is exactly minimal padding: the marker
+lies in bytes 0 to 55 of the final block or in bytes 56 to 63 of the block
+before it. The residue has degree five including its two fixed selectors,
+inside the capacity maximum of six. Capacity residues go from 335 to 336 and
+SHA local constraints from 593 to 594 (801 to 802 with the CA boundary
+equations). It reuses existing fixed columns, so the four fixed schedules and
+their digests are unchanged, and it adds no column, opening, wire field or
+proof byte. No point map or lookup event is added, so the ledger above is
+unchanged.
+
+The change reaches the compiled profile through the SHA call-bus descriptor,
+which records the constraint count and the minimal-padding rule; a test ties
+that count to the actual constant. The pin, captured from the actual
+compilers, is `dd803a10`; its predecessor `cbf1bd12`, identical except for
+that field, is a rejection fixture. The control builds whole non-minimal
+capacity traces under the canonical fixed schedule, for capacities of 127,
+2,048 and 4,096 bytes and up to 28 extra blocks, including a marker in word
+14 or 15 followed by an extra all-zero block: every other residue vanishes
+and the new one rejects word 14 of each block that is not final after the
+marker, while the honest traces of the same messages keep every residue
+zero. Ordinary and maximum diagnostic proofs of 9,436,016 bytes verify on one
+loaded macOS host, with producer self-check, independent replay and the
+wrong-genesis, nonce and tamper controls; proving took 492 s and 441 s, still
+over the 300 s target. Still required: a forged-proof control, and the
+remaining checks listed for the previous revision.
+`JointSecurityReductionIncomplete` remains the production result.
 
 
 ## Round-by-round state function and Fiat–Shamir lift

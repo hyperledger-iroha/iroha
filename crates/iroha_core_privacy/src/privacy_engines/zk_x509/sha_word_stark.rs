@@ -76,9 +76,15 @@ pub const SHA_WORD_CAPACITY_AUX_WIDTH_V1: usize = 54;
 /// call identity and physical-segment columns are appended.
 pub const SHA_WORD_CAPACITY_FIXED_WIDTH_V1: usize = 72;
 /// Capacity controls beyond the 155 raw word-AIR residues: selectors/masks (40), inactive-row folds
-/// (8), block controls (6), count/padding/digest controls (28), inactive local products (20),
-/// memory controls (47), and zeroed continuation cells (31).
-const SHA_WORD_CAPACITY_CONTROL_CONSTRAINT_COUNT_V1: usize = 180;
+/// (8), block controls (6), count/padding/digest controls including minimal padding (29),
+/// inactive local products (20), memory controls (47), and zeroed continuation cells (31).
+const SHA_WORD_CAPACITY_CONTROL_CONSTRAINT_COUNT_V1: usize = 181;
+/// Index of the minimal-padding residue in the capacity residue vector: after the raw word-AIR
+/// residues, the selector/mask (40), fold (8) and block (6) controls, and the first 25
+/// count/padding controls, which end with the two final-block length words.
+#[cfg(test)]
+const SHA_WORD_CAPACITY_MINIMAL_PADDING_RESIDUE_V1: usize =
+    SHA_WORD_STARK_CONSTRAINT_COUNT_V1 + 40 + 8 + 6 + 25;
 /// Exact residue width of the fixed-capacity word relation.
 pub const SHA_WORD_CAPACITY_CONSTRAINT_COUNT_V1: usize =
     SHA_WORD_STARK_CONSTRAINT_COUNT_V1 + SHA_WORD_CAPACITY_CONTROL_CONSTRAINT_COUNT_V1;
@@ -163,8 +169,8 @@ const _: () = {
     assert!(SHA_WORD_CAPACITY_DYNAMIC_ADDRESS_V1 + 1 == SHA_WORD_CAPACITY_BASE_WIDTH_V1);
     assert!(SHA_WORD_CAPACITY_ACTIVE_BLOCKS_V1 + 1 == SHA_WORD_CAPACITY_AUX_WIDTH_V1);
     assert!(SHA_WORD_CAPACITY_EXACT_LENGTH_V1 + 1 == SHA_WORD_CAPACITY_FIXED_WIDTH_V1);
-    assert!(SHA_WORD_CAPACITY_CONTROL_CONSTRAINT_COUNT_V1 == 180);
-    assert!(SHA_WORD_CAPACITY_CONSTRAINT_COUNT_V1 == 335);
+    assert!(SHA_WORD_CAPACITY_CONTROL_CONSTRAINT_COUNT_V1 == 181);
+    assert!(SHA_WORD_CAPACITY_CONSTRAINT_COUNT_V1 == 336);
 };
 const FIX_WORD: usize = 0;
 const FIX_SIGMA_SMALL_ZERO: usize = 1;
@@ -1240,6 +1246,20 @@ fn capacity_blocks_v1(message_len: usize) -> Result<usize, ZkX509ShaWordStarkErr
         .filter(|blocks| *blocks != 0)
         .ok_or(ZkX509ShaWordStarkErrorV1::Resource)
 }
+/// Active blocks of a capacity trace: the canonical padded block count.
+///
+/// Tests may add the all-zero blocks of a non-minimally padded trace, which
+/// the minimal-padding residue must reject. The fixed schedule and resource
+/// forecasts take capacity from `capacity_blocks_v1` and never read this.
+fn capacity_active_blocks_v1(message_len: usize) -> Result<usize, ZkX509ShaWordStarkErrorV1> {
+    let blocks = capacity_blocks_v1(message_len)?;
+    #[cfg(test)]
+    let blocks = super::sha256_word_air::NON_MINIMAL_PADDING_EXTRA_BLOCKS_V1
+        .with(core::cell::Cell::get)
+        .checked_add(blocks)
+        .ok_or(ZkX509ShaWordStarkErrorV1::Resource)?;
+    Ok(blocks)
+}
 fn capacity_local_rows_v1(blocks: usize) -> Result<usize, ZkX509ShaWordStarkErrorV1> {
     blocks
         .checked_mul(SHA_WORD_CAPACITY_LOCAL_ROWS_PER_BLOCK_V1)
@@ -1352,7 +1372,7 @@ pub fn build_sha_word_capacity_base_with_fixed_v1(
     {
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
     }
-    let active_blocks = capacity_blocks_v1(message.len())?;
+    let active_blocks = capacity_active_blocks_v1(message.len())?;
     let maximum_blocks = fixed_schedule.maximum_blocks();
     let maximum_local_rows = fixed_schedule.maximum_local_rows();
     let maximum_memory_rows = fixed_schedule.maximum_memory_rows();
@@ -1974,7 +1994,7 @@ fn build_sha_word_stark_base_from_circuit_v1(
     {
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
     }
-    let expected_blocks = capacity_blocks_v1(statement.message_len)?;
+    let expected_blocks = capacity_active_blocks_v1(statement.message_len)?;
     let expected_rows = capacity_local_rows_v1(expected_blocks)?
         .checked_add(capacity_memory_rows_v1(expected_blocks)?)
         .ok_or(ZkX509ShaWordStarkErrorV1::Resource)?;
@@ -3245,7 +3265,7 @@ pub fn evaluate_zk_x509_sha_word_capacity_residues_v1(
         challenges,
     )
 }
-/// Evaluate all 335 capacity residues over the base or extension field.
+/// Evaluate all 336 capacity residues over the base or extension field.
 ///
 /// This shares the complete polynomial implementation with the scalar API. It
 /// does not implement the enclosing SHA call-bus AIR or enable a MAIN Fp4 proof.
@@ -3547,6 +3567,18 @@ pub(super) fn evaluate_sha_word_capacity_residues_with_context_v1<A: PolynomialA
             .mul(final_block)
             .mul(fixed[SHA_WORD_CAPACITY_LENGTH_LOW_WORD_V1])
             .mul(current[0].sub(message_count.mul(A::from_base(F(8))))),
+    );
+    // Minimal padding. `padding_phase` counts the markers before this row's
+    // word, so in an active block that is not final the marker must not have
+    // occurred before word 14. With the final-block checks above, the marker
+    // then lies in bytes 0..=55 of the final block or in bytes 56..=63 of the
+    // block before it, and no all-zero block can be appended before the length.
+    residues.push(
+        input_word
+            .mul(fixed[SHA_WORD_CAPACITY_LENGTH_HIGH_WORD_V1])
+            .mul(row_active)
+            .mul(A::ONE.sub(final_block))
+            .mul(padding_phase),
     );
     residues.push(
         call_continue.mul(
@@ -4592,6 +4624,114 @@ mod tests {
             }
         }
     }
+    /// Run `build` with `extra` all-zero padding blocks inserted before the
+    /// length field, restoring canonical padding afterwards, also on panic.
+    fn with_extra_padding_blocks_v1<T>(extra: usize, build: impl FnOnce() -> T) -> T {
+        use super::super::sha256_word_air::NON_MINIMAL_PADDING_EXTRA_BLOCKS_V1 as EXTRA;
+        struct Restore(usize);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                EXTRA.with(|extra| extra.set(self.0));
+            }
+        }
+        let _restore = Restore(EXTRA.with(|cell| cell.replace(extra)));
+        build()
+    }
+    #[test]
+    fn non_minimal_sha_padding_is_rejected_only_by_the_minimal_padding_residue() {
+        // (capacity, length, extra blocks). A 127-byte capacity is three blocks:
+        // lengths up to 55 pad canonically into one block, with the marker in
+        // bytes 0..=55 of the final block; 56 and 63 pad into two, with the
+        // marker in word 14 or 15 of the first, so their extra block is a second
+        // all-zero block before the final one. 2,048 bytes is a Projection call
+        // (33 blocks): a 300-byte nullifier frame pads into five blocks and
+        // accepts up to 28 more. 4,096 bytes is a certificate TBS call.
+        for (capacity, length, extra) in [
+            (127_usize, 0_usize, 1_usize),
+            (127, 1, 1),
+            (127, 55, 1),
+            (127, 55, 2),
+            (127, 56, 1),
+            (127, 63, 1),
+            (2_048, 120, 1),
+            (2_048, 300, 1),
+            (2_048, 300, 28),
+            (4_096, 1_000, 1),
+            (4_096, 1_016, 1),
+        ] {
+            let message = (0..length)
+                .map(|index| u8::try_from(index % 251).expect("byte"))
+                .collect::<Vec<_>>();
+            let canonical = build_sha256_word_circuit_v1(&message).expect("canonical circuit");
+            assert_eq!(
+                canonical.digest(),
+                <[u8; 32]>::from(<Sha256 as sha2::Digest>::digest(&message))
+            );
+            let padded = with_extra_padding_blocks_v1(extra, || {
+                build_sha256_word_circuit_v1(&message).expect("non-minimal circuit")
+            });
+            assert_ne!(
+                padded.digest(),
+                canonical.digest(),
+                "length {length}, extra {extra}: extra blocks change the digest"
+            );
+            // The verifier's fixed schedule is the canonical one; only the
+            // prover's private trace carries the extra blocks. The honest trace
+            // of the same message, a marker in word 14 or 15 included, keeps
+            // every residue zero.
+            let schedule =
+                compile_sha_word_capacity_fixed_schedule_v1(capacity, false).expect("schedule");
+            let honest =
+                build_sha_word_capacity_base_with_fixed_v1(&message, capacity, false, &schedule)
+                    .and_then(|source| source.bind_memory_challenges_v1(challenges()))
+                    .expect("honest trace");
+            for index in 0..honest.logical_rows() {
+                assert!(
+                    capacity_row_residues(&honest, index)
+                        .iter()
+                        .all(|residue| *residue == F::ZERO),
+                    "honest length {length} at capacity {capacity}, row {index}"
+                );
+            }
+            let forged = with_extra_padding_blocks_v1(extra, || {
+                build_sha_word_capacity_base_with_fixed_v1(&message, capacity, false, &schedule)
+                    .and_then(|source| source.bind_memory_challenges_v1(challenges()))
+                    .expect("the builder accepts non-minimal padding")
+            });
+            let canonical_blocks = capacity_blocks_v1(length).expect("blocks");
+            assert_eq!(forged.active_blocks, canonical_blocks + extra);
+            let mut rejecting_blocks = Vec::new();
+            for index in 0..forged.logical_rows() {
+                let residues = capacity_row_residues(&forged, index);
+                assert_eq!(residues.len(), SHA_WORD_CAPACITY_CONSTRAINT_COUNT_V1);
+                for (position, residue) in residues.iter().enumerate() {
+                    if position != SHA_WORD_CAPACITY_MINIMAL_PADDING_RESIDUE_V1 {
+                        assert_eq!(
+                            *residue,
+                            F::ZERO,
+                            "length {length}, extra {extra}: residue {position} at row {index}"
+                        );
+                    } else if *residue != F::ZERO {
+                        let fixed = &forged.fixed_rows[index];
+                        assert_eq!(fixed[SHA_WORD_CAPACITY_INPUT_WORD_V1], F::ONE);
+                        assert_eq!(fixed[SHA_WORD_CAPACITY_LENGTH_HIGH_WORD_V1], F::ONE);
+                        rejecting_blocks.push(
+                            (index - SHA_WORD_CAPACITY_LOCAL_INITIAL_ROWS_PER_CALL_V1)
+                                / SHA_WORD_CAPACITY_LOCAL_ROWS_PER_BLOCK_V1,
+                        );
+                    }
+                }
+            }
+            // Word 14 of each block that is not final and follows the marker,
+            // one per extra block: the last canonical block onwards, since a
+            // marker in word 14 or 15 of its own block leaves that word clear.
+            assert_eq!(
+                rejecting_blocks,
+                (canonical_blocks - 1..canonical_blocks - 1 + extra).collect::<Vec<_>>(),
+                "length {length}, extra {extra}"
+            );
+        }
+    }
     #[test]
     fn fixed_capacity_stride_matches_the_rows_emitted_by_the_stark_builder() {
         for (length, blocks) in [(0_usize, 1_usize), (64, 2), (313, 6)] {
@@ -5483,7 +5623,7 @@ pub(super) fn original_build_sha_word_capacity_base_source_v1(
     if exact_length && message.len() != maximum_message_len {
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
     }
-    let active_blocks = capacity_blocks_v1(message.len())?;
+    let active_blocks = capacity_active_blocks_v1(message.len())?;
     let fixed_schedule =
         compile_sha_word_capacity_fixed_schedule_v1(maximum_message_len, exact_length)?;
     let maximum_blocks = fixed_schedule.maximum_blocks();

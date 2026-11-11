@@ -132,7 +132,7 @@ fn compare_residue_outputs<A: PolynomialAirFieldV1 + PartialEq>(embed: impl Fn(u
             actual.values() == expected,
             "capacity public residue order differs"
         );
-        assert_eq!(actual.count, 335);
+        assert_eq!(actual.count, 336);
         assert_eq!(actual.reserves, [155]);
 
         let boundaries = neutral_ca_call_boundaries();
@@ -165,7 +165,7 @@ fn compare_residue_outputs<A: PolynomialAirFieldV1 + PartialEq>(embed: impl Fn(u
                     actual.values() == expected,
                     "batch public residue order differs"
                 );
-                assert_eq!(actual.count, if complete { 801 } else { 593 });
+                assert_eq!(actual.count, if complete { 802 } else { 594 });
                 assert_eq!(actual.reserves, [155]);
                 let collecting = evaluate_sha_batch_relation_v1(
                     &current,

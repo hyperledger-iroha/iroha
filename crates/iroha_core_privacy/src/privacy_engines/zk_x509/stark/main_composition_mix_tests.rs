@@ -189,7 +189,7 @@ fn composition_mix_cost_diagnostic() {
         !std::hint::black_box(cfg!(debug_assertions)),
         "use an optimized build"
     );
-    for width in [90, 593, 1024, 2145] {
+    for width in [90, 594, 1024, 2145] {
         let (residues, alphas) = fixture(width, 73);
         let iterations = (1 << 24) / width;
         let mut timings = [std::time::Duration::ZERO; 2];

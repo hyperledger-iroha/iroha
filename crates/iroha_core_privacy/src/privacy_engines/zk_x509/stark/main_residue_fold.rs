@@ -62,7 +62,7 @@ mod tests {
 
     #[test]
     fn streamed_fold_matches_the_exact_ordered_vector_fold() {
-        for count in [1, 155, 335, 593, 801, 1024, 1025, 2145] {
+        for count in [1, 155, 336, 594, 802, 1024, 1025, 2145] {
             let alphas = (0..count).map(|i| alpha(i as u64)).collect::<Vec<_>>();
             let values = (0..count)
                 .map(|i| F((i * i + 3) as u64))

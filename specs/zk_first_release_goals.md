@@ -1369,8 +1369,15 @@ over the comparison slots. The changed compiled profile is `cbf1bd12`; proofs,
 pins and measurements of its predecessor `f5d2b994` are not evidence for it.
 Its ordinary and maximum diagnostic proofs verify on one macOS host with
 replay and negative controls; that host was loaded, so no time is recorded.
-`FixedByte` address anchoring, signature-scalar provenance, forged-proof
-controls and the segments not yet read remain open.
+A second read covered the remaining segments and found that non-minimal
+SHA-256 padding was accepted, so one certificate could publish up to 29
+different nullifiers. A minimal-padding residue closes that gap in source;
+the compiled profile is now `dd803a10`, and `cbf1bd12` is a rejection
+fixture. Its ordinary and maximum diagnostic proofs verify with replay and
+negative controls on one loaded host, in 492 s and 441 s. Fix proposals for `FixedByte` address anchoring and signature-scalar
+provenance await approval; unconstrained sibling ordinals, the BIT STRING
+unused-bit count, the fixed-schedule evaluators and forged-proof controls
+remain open.
 
 The public presentation window has one definition, recorded in the
 [interval contract](zk_x509_presentation_interval.md): it starts at or after the
