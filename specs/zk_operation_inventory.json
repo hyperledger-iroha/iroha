@@ -5727,7 +5727,13 @@
     "symbol": "impl Execute for iroha_data_model::isi::privacy::BootstrapPrivacyIronwoodPoolV1"
    },
    "authority": [
-    {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "ensure_privacy_governance"}
+    {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "symbol": "ensure_privacy_governance"},
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
+     "symbol": "if !crate::runtime::taira_activation::certified_pool_bootstrap(",
+     "scope": "file",
+     "what": "The privacy-governance check is skipped when the retained Taira activation certificate names exactly this pool, its change set has activated and its successor is still selected (crates/iroha_core/src/runtime/taira_activation.rs); a second bootstrap of the pool refuses as already initialized."
+    }
    ],
    "kotodama": {"binding": "none"},
    "routes": [],

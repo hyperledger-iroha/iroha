@@ -228,6 +228,48 @@ class Registry(Base):
                         f"the handler of {module}::{name} calls verify_native_proof",
                     )
 
+    def test_sorafs_authority_repair_and_taira_activation_carry_no_proof(self) -> None:
+        modules = INVENTORY["registry"]["modules"]
+        self.assertEqual(
+            [modules[name]["scope"] for name in ("sorafs_authority", "sorafs_repair", "taira_activation")],
+            ["out", "out", "out"],
+        )
+
+        def call_a_verifier(path: str, name: str) -> dict:
+            text = source(path)
+            head = f"impl Execute for {name} {{"
+            self.assertIn(head, text)
+            body_start = text.index("{", text.index("fn execute", text.index(head)))
+            return {path: text[: body_start + 1] + "\n        verify_native_proof(&self)?;" + text[body_start + 1 :]}
+
+        host = "crates/iroha_core/src/smartcontracts/isi/world_authority_host.rs"
+        # Handlers classed as carrying no proof cannot start verifying one unseen.
+        for path, name, type_path in (
+            (host, "iroha_data_model::isi::sorafs_authority::ProposeSorafsAuthorityGovernanceV1",
+             "sorafs_authority::ProposeSorafsAuthorityGovernanceV1"),
+            (host, "iroha_data_model::isi::sorafs_authority::CreateSorafsAuthorityParliamentAttemptV1",
+             "sorafs_authority::CreateSorafsAuthorityParliamentAttemptV1"),
+            ("crates/iroha_core/src/smartcontracts/isi/sorafs_bootstrap.rs", "ApplySorafsRepairV1",
+             "sorafs_repair::ApplySorafsRepairV1"),
+            ("crates/iroha_core/src/runtime/taira_activation.rs", "ScheduleTairaTimeIronwoodV1",
+             "taira_activation::ScheduleTairaTimeIronwoodV1"),
+        ):
+            with self.subTest(instruction=type_path):
+                self.assert_fails(run("check_registry", overrides=call_a_verifier(path, name)),
+                                  f"the handler of {type_path} calls verify_native_proof")
+        # The activation certificate's one reach into this plan is anchored on the Ironwood bootstrap.
+        privacy = "crates/iroha_core/src/smartcontracts/isi/privacy.rs"
+        (anchor,) = [check for check in operation(INVENTORY, "privacy::BootstrapPrivacyIronwoodPoolV1")["authority"]
+                     if "certified_pool_bootstrap" in check["symbol"]]
+        self.assertEqual((anchor["path"], anchor["scope"]), (privacy, "file"))
+        lone = {"inventories": copy.deepcopy(INVENTORY["inventories"]), "routes": {"list": []}, "operations": [],
+                "relations": [], "x": anchor}
+        self.assert_clean(run("check_anchors", lone))
+        text = source(privacy)
+        self.assertEqual(text.count("crate::runtime::taira_activation::certified_pool_bootstrap("), 1)
+        moved = text.replace("crate::runtime::taira_activation::certified_pool_bootstrap(", "certified_elsewhere(")
+        self.assert_fails(run("check_anchors", lone, overrides={privacy: moved}), "certified_pool_bootstrap(` is not in")
+
     def test_family_name_in_an_out_of_scope_module_fails(self) -> None:
         overrides = appended_registry('built_in_wire_id!(sorafs::SubmitSorafsZkProofV2 => "iroha.sorafs.zk_proof.v2"),')
         self.assert_fails(run("check_registry", overrides=overrides), "sorafs::SubmitSorafsZkProofV2 has a family name")
@@ -1647,6 +1689,25 @@ class EntryPoints(Base):
         errors = run("check_admission_routes",
                      overrides=replaced(restore, "    verifying_key_index::validate_verifying_key_index(&world)?;\n", ""))
         self.assert_fails(errors, f"`validate_verifying_key_index` in {restore} no longer occurs")
+
+    def test_the_hosted_parliament_lineage_check_is_a_restore_site(self) -> None:
+        restore = "crates/iroha_core/src/state/deserialize_world.rs"
+        name = "validate_ordered_parliament_randomness_redraw_lineage_v1"
+        rows = [row for row in INVENTORY["admission_routes"]["entry_point_census"]["occurrences"] if row.get("name") == name]
+        self.assertEqual([(row["path"], row["count"], row["route"]) for row in rows], [(restore, 1, "restore")])
+
+        def unclassed(inventory: dict) -> None:
+            census = inventory["admission_routes"]["entry_point_census"]
+            census["occurrences"] = [row for row in census["occurrences"] if row.get("name") != name]
+        self.assert_fails(run("check_admission_routes", edited(unclassed)),
+                          f"`{name}` in {restore} occurs 1 times and is not classed")
+
+        # The site of the baseline lineage check does not name the hosted one.
+        def unsited(inventory: dict) -> None:
+            restore_class = inventory["admission_routes"]["restore"]
+            restore_class["sites"] = [site for site in restore_class["sites"] if name not in site["symbol"]]
+        self.assert_fails(run("check_admission_routes", edited(unsited)),
+                          f"admission_routes.restore: `{name}` in {restore} is classed here and no site of the class names it")
 
     def test_classes_sites_and_exclusions_are_checked(self) -> None:
         def edit(inventory: dict) -> None:
