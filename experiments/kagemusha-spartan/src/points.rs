@@ -99,6 +99,19 @@ struct SqueezeSpec<F> {
     out: [F; 3],
 }
 
+/// A verifier slot that takes a proof of either of two circuit kinds of one
+/// layout: the two kinds' fixed-row commitments (their keys' constants) and
+/// the binding index of the slot's kind bit c, a shared value. The fixed rows
+/// are pinned to `key0 + c (key1 - key0)`, linear in c.
+pub struct KeySelect<'a, C: PastaCurve> {
+    pub fixed: [&'a [Aff<C>]; 2],
+    pub kind_at: usize,
+}
+
+/// A constant input's alternative keys: the two kinds' coordinates and the
+/// kind bit's binding index.
+type KeyAlt<F> = ((F, F), (F, F), usize);
+
 /// Binding indices for one proof's shared values.
 #[derive(Clone, Copy, Debug)]
 pub struct SharedMap {
@@ -146,8 +159,9 @@ pub struct PointsBuilder<C: PastaCurve> {
     embeds: Vec<usize>,
     headers: Vec<[C::Base; 3]>,
     /// Inputs that are constants (a circuit proof's fixed rows: the key's
-    /// commitments).
-    consts: Vec<usize>,
+    /// commitments), each with its alternative keys when a kind bit selects
+    /// between two circuits' keys.
+    consts: Vec<(usize, Option<KeyAlt<C::Base>>)>,
     pub perms: usize,
 }
 
@@ -310,9 +324,12 @@ where
         self.squeezes.len() - 1
     }
 
-    /// Replays one proof's points side (as `verifier::points_side`).
+    /// Replays one proof's points side (as `verifier::points_side`). With
+    /// `keys` (a slot whose proof's kind a shared bit selects), its fixed
+    /// rows are pinned to the selected key's commitments; otherwise to its
+    /// own circuit's.
     #[allow(clippy::too_many_arguments)]
-    pub fn verify(
+    pub fn verify_keyed(
         &mut self,
         pool: &mut Pool<C::Base>,
         shape: &Shape,
@@ -321,6 +338,7 @@ where
         claims: &[Claim<C>],
         tr: &Trace<C>,
         sm: SharedMap,
+        keys: Option<&KeySelect<C>>,
     ) {
         let lean = lean_schedule();
         let embed = Transcript::<C>::scalars_embed();
@@ -441,11 +459,26 @@ where
                     absorb_words(self, pool, &mut sp, wd, None);
                 }
                 let first_fixed = all.len() - ct.fixed.len();
+                if let Some(ks) = keys {
+                    assert!(
+                        ks.fixed.iter().all(|f| f.len() == ct.fixed.len()),
+                        "both kinds' keys have the proof's fixed rows"
+                    );
+                    assert!(
+                        ks.fixed.iter().any(|f| *f == &ct.fixed[..]),
+                        "the proof's key is one of the slot's"
+                    );
+                }
                 for (k, r) in all.iter().enumerate().skip(ct.p1) {
                     let pt = self.input(pool, &mut sp, r);
                     if k >= first_fixed {
                         if let (PtRef::Input(i), _) = pt {
-                            self.consts.push(i);
+                            let alt = keys.map(|ks| {
+                                let at =
+                                    |kind: usize| coords(&C::from(ks.fixed[kind][k - first_fixed]));
+                                (at(0), at(1), ks.kind_at)
+                            });
+                            self.consts.push((i, alt));
                         }
                     }
                     out.push(pt);
@@ -803,29 +836,48 @@ where
             [o(2), o(0), o(3)],
             [o(1), o(1), plus(&o(3), &constant(vec![C::b(); n_p]))],
         ];
-        // Constant inputs (fixed rows' commitments): x and y equal the key's.
+        // Constant inputs (fixed rows' commitments): x and y equal the key's;
+        // in a slot that takes either kind, key0 + c (key1 - key0) with the
+        // slot's kind bit c (a shared value).
         if !self.consts.is_empty() {
             for cell in [0usize, 1] {
+                let pick = |p: (Fb<C>, Fb<C>)| if cell == 0 { p.0 } else { p.1 };
                 let mut mask = vec![Fb::<C>::ZERO; n_p];
                 let mut val = vec![Fb::<C>::ZERO; n_p];
-                for &i in &self.consts {
+                let mut kind_map = vec![None; n_p];
+                let mut kind_coef = vec![Fb::<C>::ZERO; n_p];
+                for &(i, alt) in &self.consts {
                     mask[i] = one;
-                    val[i] = -if cell == 0 {
-                        self.inputs[i].0
-                    } else {
-                        self.inputs[i].1
-                    };
+                    match alt {
+                        None => val[i] = -pick((self.inputs[i].0, self.inputs[i].1)),
+                        Some((k0, k1, at)) => {
+                            val[i] = -pick(k0);
+                            kind_map[i] = Some(at);
+                            kind_coef[i] = pick(k0) - pick(k1);
+                        }
+                    }
                 }
-                prow.push(lin_row(
-                    plus(
+                let mut row = plus(
+                    &vec![Term {
+                        src: Src::Own(cell),
+                        coef: mask,
+                    }],
+                    &constant(val),
+                );
+                if kind_map.iter().any(Option::is_some) {
+                    row = plus(
+                        &row,
                         &vec![Term {
-                            src: Src::Own(cell),
-                            coef: mask,
+                            src: Src::Link {
+                                array: shared_a,
+                                cell: 0,
+                                map: kind_map,
+                            },
+                            coef: kind_coef,
                         }],
-                        &constant(val),
-                    ),
-                    n_p,
-                ));
+                    );
+                }
+                prow.push(lin_row(row, n_p));
             }
         }
         if !self.claim_limbs.is_empty() {
@@ -1365,7 +1417,7 @@ mod tests {
         let e_zero = constant_entries(&mut w, gfam, "zero word", &[vec![Fp::ZERO]]);
         let mut pool = Pool::new(Fp::from(NODE_DOMAIN));
         let mut pb = PointsBuilder::<Pallas>::new(&mut w, e_out, e_v, e_zero);
-        pb.verify(
+        pb.verify_keyed(
             &mut pool,
             &shape,
             &gens,
@@ -1377,6 +1429,7 @@ mod tests {
                 other: None,
                 r: None,
             },
+            None,
         );
         let (rho, mu, _) = crate::nonnative::sample_binding(0);
         let first = w.arrays.len();

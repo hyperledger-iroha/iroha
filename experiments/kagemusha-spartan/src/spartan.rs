@@ -29,6 +29,7 @@ use crate::grid::{
 use crate::ipa::{self, Aff, Claim, F, Gens, IpaProof};
 use crate::r1cs::{self, Circuit, Instance, Rel, Shape, ToyCircuit, Witness};
 
+#[derive(Clone)]
 pub struct Proof<C: PastaCurve> {
     pub rows: Vec<Aff<C>>,
     /// Late io values (the circuit's `late_slots`, in order).

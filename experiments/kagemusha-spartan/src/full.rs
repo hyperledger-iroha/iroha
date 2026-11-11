@@ -406,6 +406,64 @@ pub const DEPTH: usize = 32;
 /// Receive's statement sponge: permutations, as stage A (`operations()`).
 pub const STATEMENT_PERMS: usize = 102;
 
+/// An operation's own relation, by its census counts (`operation::operations`):
+/// the statement sponge's permutations, the indexed-tree insertions, the
+/// signatures under the payment key (each over a statement digest, SHA-256
+/// and the comb), and the small blocks.
+#[derive(Clone, Copy, Debug)]
+pub struct Op {
+    pub label: &'static str,
+    /// The circuit kind its proofs carry in their io (`KIND_IO`).
+    pub kind: usize,
+    pub statement_perms: usize,
+    pub insertions: usize,
+    pub signatures: usize,
+    pub comparisons: usize,
+    pub u128s: usize,
+    pub bytes: usize,
+    /// Logic triples (a, b boolean, ab = a b): three rows each.
+    pub logic: usize,
+}
+
+impl Op {
+    /// Receive (proposal §3.2): the census's `common + 4 + 4` permutations,
+    /// the consumed-credit and credit-digest insertions, tau_recv and the
+    /// receiver's Request signature, 4 comparisons, 10 u128 values, 5 byte
+    /// encodings (the Payment digest's elements), 3,000 logic rows.
+    pub const RECEIVE: Op = Op {
+        label: "Receive",
+        kind: RECEIVE,
+        statement_perms: STATEMENT_PERMS,
+        insertions: 2,
+        signatures: 2,
+        comparisons: 4,
+        u128s: 10,
+        bytes: 5,
+        logic: 1000,
+    };
+    /// Send (proposal §3.1): `common + 20 + 5` permutations (the rest-digest
+    /// opening for the fee policy and the fee schedule object), the
+    /// pending-outgoing descriptor's insertion, tau_send under the payment
+    /// key, 2 comparisons, 12 u128 values, no byte encodings, 2,000 logic
+    /// rows.
+    pub const SEND: Op = Op {
+        label: "Send",
+        kind: SEND,
+        statement_perms: 94 + 20 + 5,
+        insertions: 1,
+        signatures: 1,
+        comparisons: 2,
+        u128s: 12,
+        bytes: 0,
+        logic: 667,
+    };
+}
+
+/// The smallest `rho` with `count <= 2^rho` (at least one variable).
+fn rho_for(count: usize) -> usize {
+    (count.max(2).next_power_of_two().trailing_zeros() as usize).max(1)
+}
+
 fn lane0(a: Fp, b: Fp, c: Fp) -> Fp {
     let mut st = [a, b, c];
     permute(&mut st);
@@ -473,7 +531,8 @@ pub struct OwnIdx {
     pub comb: usize,
     pub comparisons: usize,
     pub u128s: usize,
-    pub bytes: usize,
+    /// The byte encodings (none in Send).
+    pub bytes: Option<usize>,
     pub logic: usize,
     pub gfam: usize,
 }
@@ -485,16 +544,27 @@ const IV_NL: usize = 2;
 const IV_K: usize = 3;
 const IV_V: usize = 4;
 
-/// The own relation into `w`. Its permutations go into `pool`, which the
-/// caller builds once every permutation of the circuit is known (`e_out` is
-/// the pool's output export, reserved by the caller).
+/// The own relation of `op` into `w`. Its permutations go into `pool`, which
+/// the caller builds once every permutation of the circuit is known (`e_out`
+/// is the pool's output export, reserved by the caller).
 pub fn own_relation(
     w: &mut Wiring<Fp>,
     pool: &mut Pool<Fp>,
     e_out: usize,
     e_zero: usize,
     gfam: usize,
+    op: &Op,
 ) -> OwnIdx {
+    assert!(
+        op.signatures >= 1 && op.signatures <= op.statement_perms,
+        "{}: each signature signs a statement digest",
+        op.label
+    );
+    assert!(
+        (1..=2).contains(&op.insertions),
+        "{}: one or two insertions",
+        op.label
+    );
     let e_start = constant_entries(
         w,
         gfam,
@@ -502,8 +572,8 @@ pub fn own_relation(
         &[vec![Fp::ZERO, Fp::ZERO, Fp::from(7u64)], vec![Fp::ZERO; 3]],
     );
     // The statement sponge: (0, 0, 7), two values absorbed per permutation.
-    let mut statement = Vec::with_capacity(STATEMENT_PERMS);
-    for i in 0..STATEMENT_PERMS {
+    let mut statement = Vec::with_capacity(op.statement_perms);
+    for i in 0..op.statement_perms {
         let ab = [
             Fp::from(1000 + i as u64).square(),
             Fp::from(2000 + i as u64).square(),
@@ -519,8 +589,8 @@ pub fn own_relation(
         };
         statement.push(q);
     }
-    // Two indexed-tree insertions, as stage A's `insertion`.
-    let insertions = 2;
+    // The indexed-tree insertions, as stage A's `insertion`.
+    let insertions = op.insertions;
     let e_leaf = w.reserve();
     let mut ins_vals = vec![vec![Fp::ZERO; 2]; 5];
     let mut root_pairs = Vec::new();
@@ -712,11 +782,9 @@ pub fn own_relation(
             .map(|t| root_pairs.get(t).map(|p| (e_out, p.1)))
             .collect(),
     );
-    // Signed messages: two statement digests, SHA-256, the comb.
-    let digest_perms = vec![
-        statement[STATEMENT_PERMS - 2],
-        statement[STATEMENT_PERMS - 1],
-    ];
+    // Signed messages: the last statement digests (one per signature),
+    // SHA-256, the comb.
+    let digest_perms = statement[op.statement_perms - op.signatures..].to_vec();
     let messages: Vec<Fp> = digest_perms.iter().map(|p| pool.out(*p)[0]).collect();
     let sigs = messages.len();
     let sfam = w.family(1, sigs);
@@ -784,10 +852,10 @@ pub fn own_relation(
         from,
     );
     // The small blocks.
-    let comparisons = comparisons(w, gfam);
-    let u128s = u128_checks(w, gfam);
-    let bytes = byte_encodings(w, gfam);
-    let logic = logic_rows(w, gfam);
+    let comparisons = comparisons(w, gfam, op.comparisons);
+    let u128s = u128_checks(w, gfam, op.u128s);
+    let bytes = (op.bytes > 0).then(|| byte_encodings(w, gfam, op.bytes));
+    let logic = logic_rows(w, gfam, op.logic);
     OwnIdx {
         pool: PoolIdx {
             input: 0,
@@ -815,7 +883,7 @@ fn field_modulus() -> BigUint {
     BigUint::from_bytes_le((-Fp::ONE).to_repr().as_ref()) + 1u32
 }
 
-/// 4 comparisons a < b of canonical field elements, sound over the integers:
+/// `count` comparisons a < b of canonical field elements, sound over the integers:
 /// a, b, d = b - a - 1 and c = p - 1 - b as three limbs each (88, 88, 79 bits)
 /// of range-checked 11-bit chunks; a and b equal their limbs (mod p); and the
 /// identities a + d + 1 = b and b + c = p - 1 limb by limb with boolean
@@ -823,9 +891,8 @@ fn field_modulus() -> BigUint {
 /// integers). Then b <= p - 1 is canonical and a < b. (Stage A's gadget checks
 /// b - a - 1 = d only mod p with d < 2^255, which every field element meets:
 /// a = p - 1, b = 0 passes.)
-fn comparisons(w: &mut Wiring<Fp>, gfam: usize) -> usize {
-    let count = 4;
-    let rho = 2;
+fn comparisons(w: &mut Wiring<Fp>, gfam: usize, count: usize) -> usize {
+    let rho = rho_for(count);
     let n = 1usize << rho;
     let lw = [88usize, 88, 79];
     let cw: Vec<Vec<usize>> = lw.iter().map(|x| chunk_widths(*x)).collect();
@@ -939,10 +1006,9 @@ fn comparisons(w: &mut Wiring<Fp>, gfam: usize) -> usize {
     })
 }
 
-/// 10 u128 values, each recomposed from 128-bit range chunks.
-fn u128_checks(w: &mut Wiring<Fp>, gfam: usize) -> usize {
-    let count = 10;
-    let rho = 4;
+/// `count` u128 values, each recomposed from 128-bit range chunks.
+fn u128_checks(w: &mut Wiring<Fp>, gfam: usize, count: usize) -> usize {
+    let rho = rho_for(count);
     let n = 1usize << rho;
     let wd = chunk_widths(128);
     let mut v = vec![vec![Fp::ZERO; n]; 1 + wd.len()];
@@ -977,16 +1043,15 @@ fn u128_checks(w: &mut Wiring<Fp>, gfam: usize) -> usize {
     })
 }
 
-/// 5 field elements re-encoded as their 32 canonical bytes: x equals the
+/// `count` field elements re-encoded as their 32 canonical bytes: x equals the
 /// bytes' sum (mod p), and the bytes as an integer X stay at most p - 1:
 /// c = p - 1 - X in three range-checked limbs (88, 88, 79 bits) with
 /// X + c = p - 1 limb by limb over boolean carries (every limb sum is far
 /// below p, so the identities hold over the integers). Without it a value
 /// below 2^256 - p has a second encoding, x + p (stage A's recorded circuit
 /// leaves this out; its cost model counts it).
-fn byte_encodings(w: &mut Wiring<Fp>, gfam: usize) -> usize {
-    let count = 5;
-    let rho = 3;
+fn byte_encodings(w: &mut Wiring<Fp>, gfam: usize, count: usize) -> usize {
+    let rho = rho_for(count);
     let n = 1usize << rho;
     let lw = [88usize, 88, 79];
     let cw: Vec<Vec<usize>> = lw.iter().map(|x| chunk_widths(*x)).collect();
@@ -1071,10 +1136,9 @@ fn byte_encodings(w: &mut Wiring<Fp>, gfam: usize) -> usize {
     })
 }
 
-/// 1,000 logic triples: a, b boolean, ab = a b.
-fn logic_rows(w: &mut Wiring<Fp>, gfam: usize) -> usize {
-    let count = 1000;
-    let rho = 10;
+/// `count` logic triples: a, b boolean, ab = a b.
+fn logic_rows(w: &mut Wiring<Fp>, gfam: usize, count: usize) -> usize {
+    let rho = rho_for(count);
     let n = 1usize << rho;
     let mut v = vec![vec![Fp::ZERO; n]; 3];
     for i in 0..count {
@@ -1101,14 +1165,19 @@ fn logic_rows(w: &mut Wiring<Fp>, gfam: usize) -> usize {
     })
 }
 
-/// The own relation as a circuit by itself (its pool built here).
+/// Receive's own relation as a circuit by itself (its pool built here).
 pub fn own_circuit() -> (Wiring<Fp>, OwnIdx) {
+    own_circuit_of(&Op::RECEIVE)
+}
+
+/// `op`'s own relation as a circuit by itself (its pool built here).
+pub fn own_circuit_of(op: &Op) -> (Wiring<Fp>, OwnIdx) {
     let mut w = Wiring::<Fp>::default();
     let gfam = w.family(0, 1);
     let e_out = w.reserve();
     let e_zero = constant_entries(&mut w, gfam, "zero word", &[vec![Fp::ZERO]]);
     let mut pool = Pool::new(Fp::from(NODE_DOMAIN));
-    let mut own = own_relation(&mut w, &mut pool, e_out, e_zero, gfam);
+    let mut own = own_relation(&mut w, &mut pool, e_out, e_zero, gfam, op);
     let mut rng = SpikeRng::new(b"own relation pool");
     own.pool = pool.build(&mut w, e_out, &mut rng);
     (w, own)
@@ -1221,13 +1290,62 @@ mod tests {
             "changed comparison operand refused"
         );
         // A byte encoding's carry, and one limb chunk of its p - 1 - X.
-        assert!(
-            !tamper(own.bytes, 33, 0),
-            "changed byte-encoding carry refused"
+        let bytes = own.bytes.expect("Receive re-encodes the Payment digest");
+        assert!(!tamper(bytes, 33, 0), "changed byte-encoding carry refused");
+        assert!(!tamper(bytes, 40, 3), "changed canonicity chunk refused");
+    }
+
+    /// Send's own relation at the census's counts, built at Receive's layout
+    /// (padded rows, and fixed rows padded when Send's constants need fewer):
+    /// it proves and verifies, and a changed absorbed value is refused.
+    #[test]
+    fn send_own_relation_proves_at_receives_layout() {
+        let (w, own) = own_circuit_of(&Op::SEND);
+        assert_eq!(
+            own.pool.perms,
+            Op::SEND.statement_perms + (6 + 4 * DEPTH),
+            "statement sponge and one insertion"
         );
+        assert!(own.bytes.is_none(), "Send re-encodes no bytes");
+        let (rw, _) = own_circuit();
+        let (arrays, pi, counts, tables, copies) = rw.finish();
+        let (rc, _, _) = UniformCircuit::build_with_copies(
+            "own-recv-layout",
+            arrays,
+            pi,
+            counts,
+            tables,
+            copies,
+            14,
+            4,
+            b"own recv layout",
+        );
+        let (arrays, pi, counts, tables, copies) = w.finish();
+        let (c, inst, wit) = UniformCircuit::build_with_copies_at(
+            "own-send",
+            arrays,
+            pi,
+            counts,
+            tables,
+            copies,
+            14,
+            4,
+            b"own send",
+            Some(rc.layout()),
+        );
+        assert_eq!(c.layout(), rc.layout(), "built at Receive's layout");
+        let gens = crate::ipa::Gens::<Vesta>::new(c.shape.cols());
+        let mut prng = SpikeRng::new(b"own send prove");
+        let (proof, _) = crate::spartan::prove_circuit(&c.shape, &gens, &inst, &wit, &mut prng, &c);
         assert!(
-            !tamper(own.bytes, 40, 3),
-            "changed canonicity chunk refused"
+            crate::spartan::verify_circuit(&c.shape, &gens, &inst, &proof.to_bytes(), &c).is_ok(),
+            "honest"
+        );
+        let mut bad = wit.w.clone();
+        bad[c.cell_index(own.pool.input, P_A, own.statement[40])] += Fp::ONE;
+        assert!(
+            !accepted(&c, &inst, &gens, bad),
+            "changed absorbed value refused"
         );
     }
 }
@@ -1666,7 +1784,14 @@ pub struct TracedPair {
     /// The proofs' accumulated matrix claims (their last io values).
     pub acc_p: crate::deferral::Claim<Fp>,
     pub acc_s: crate::deferral::Claim<crate::verifier::Fq>,
+    /// The pair's circuit kind: 0 Receive, 1 Send.
+    pub kind: usize,
 }
+
+/// The public io index of a circuit's kind bit (0 Receive, 1 Send).
+pub const KIND_IO: usize = 60;
+pub const RECEIVE: usize = 0;
+pub const SEND: usize = 1;
 
 /// Generators of the two proof shapes (P: Vesta 2^14, S: Pallas 2^13).
 pub struct PairGens {
@@ -1676,9 +1801,78 @@ pub struct PairGens {
     /// the S kinds (S-recv, S-send) the accumulators are claims on.
     pub defer_p: crate::deferral::MatPoly<Fp>,
     pub defer_s: crate::deferral::MatPoly<crate::verifier::Fq>,
+    /// Both kinds' keys (their circuits' fixed-row commitments), per side,
+    /// when both kinds are uniform circuits of one layout: then the
+    /// predecessor slot takes a proof of either kind, its kind bit read from
+    /// the proof's io (`KIND_IO`).
+    pub keys_p: Option<[Vec<crate::ipa::Aff<iroha_pasta::Eq>>; 2]>,
+    pub keys_s: Option<[Vec<crate::ipa::Aff<iroha_pasta::Ep>>; 2]>,
     /// The base case: the predecessor's accumulator replaced by the genesis
     /// claim (a public flag and value; see `defer_into`).
     pub genesis: bool,
+}
+
+/// How a verifier slot takes its proof's kind: (the proof's kind, whether
+/// the slot reads it from the proof's io and selects the key by it).
+type SlotKind = (usize, bool);
+
+/// The slots of a circuit over `pairs`: the predecessor (slot 0) takes either
+/// kind when `gens` has both kinds' keys; Receive's second slot is the
+/// payer's Send.
+fn slot_kinds(gens: &PairGens, pairs: &[TracedPair]) -> Vec<SlotKind> {
+    let either = gens.keys_p.is_some() && gens.keys_s.is_some();
+    pairs
+        .iter()
+        .enumerate()
+        .map(|(i, pr)| {
+            if i > 0 {
+                assert_eq!(pr.kind, SEND, "the payer's proof is a Send");
+            }
+            (pr.kind, i == 0 && either)
+        })
+        .collect()
+}
+
+/// The circuit's own kind as public io (`KIND_IO`), pinned to `kind`: a
+/// verifier reads it from the proof's io and takes the matching key and
+/// matrices. Returns the io array.
+fn kind_pin<S: Scalar>(w: &mut Wiring<S>, gfam: usize, kind: usize) -> usize {
+    let k = S::from(kind as u64);
+    let io = w.push(Array {
+        name: "kind io",
+        family: gfam,
+        rho: 1,
+        r_count: 1,
+        fixed: false,
+        lookups: Vec::new(),
+        widths: vec![1],
+        rows: Vec::new(),
+        values: vec![vec![k, S::ZERO]],
+    });
+    w.io_arrays.push((io, KIND_IO));
+    w.push(Array {
+        name: "kind pin",
+        family: gfam,
+        rho: 1,
+        r_count: 1,
+        fixed: false,
+        lookups: Vec::new(),
+        widths: vec![1],
+        rows: vec![
+            [
+                plus(&own(0, 2), &constant(vec![-k, S::ZERO])),
+                constant(vec![S::ONE, S::ZERO]),
+                Vec::new(),
+            ],
+            [
+                plus(&own(0, 2), &link(io, 0, vec![Some(0), None], -S::ONE)),
+                constant(vec![S::ONE, S::ZERO]),
+                Vec::new(),
+            ],
+        ],
+        values: vec![vec![k, S::ZERO]],
+    });
+    io
 }
 
 /// A toy circuit kind of the combined matrix polynomial.
@@ -1730,6 +1924,8 @@ pub fn receive_pairs() -> (PairGens, Vec<TracedPair>) {
         s: crate::ipa::Gens::<Pallas>::new(1 << 13),
         defer_p,
         defer_s,
+        keys_p: None,
+        keys_s: None,
         genesis: false,
     };
     let out = (0..2).map(|i| toy_pair(&gens, i)).collect();
@@ -1859,6 +2055,7 @@ fn toy_pair(gens: &PairGens, i: usize) -> TracedPair {
         tr_s,
         acc_p,
         acc_s,
+        kind: i,
     }
 }
 
@@ -1883,6 +2080,7 @@ pub fn uniform_kind<S: Scalar>(
 
 /// A proved uniform pair: the circuits, their instances (early io), the
 /// linked proofs and the link's words.
+#[derive(Clone)]
 pub struct UniformPair {
     pub cp: std::sync::Arc<crate::uniform::UniformCircuit<Fp>>,
     pub ip: crate::r1cs::Instance<Fp>,
@@ -1893,42 +2091,83 @@ pub struct UniformPair {
     pub d: [u8; 32],
     pub rho: [u8; 32],
     pub r: [u8; 32],
+    /// The circuits' kind (`RECEIVE` or `SEND`).
+    pub kind: usize,
 }
 
-/// The next hop's incoming pairs: the uniform pair (as the predecessor
-/// Receive, traced as circuit proofs, its accumulators its late io) and a
-/// fresh toy Send pair; the polynomials' kinds are the uniform circuits and
-/// the toy Send shapes.
-pub fn next_pairs(u: UniformPair) -> (PairGens, Vec<TracedPair>) {
-    // TODO: replace the toy Send predecessor with the complete uniform
-    // monetary Send circuit before any production integration.
-    use crate::spartan::Link;
-    use crate::verifier::trace_circuit;
+/// The next hop's generators and polynomials over a hop's uniform Receive
+/// pair and its uniform Send pair (with no Send pair, the toy Send kind): the
+/// polynomials' kinds are the pairs' circuits. With a Send pair of the
+/// Receive pair's layout, the gens carry both kinds' keys, and the
+/// predecessor slot takes either kind. Trace the incoming pairs with
+/// `trace_uniform` (the predecessor first, then the payer's Send).
+pub fn next_gens(recv: &UniformPair, send: Option<&UniformPair>) -> PairGens {
     use iroha_pasta::{Ep as Pallas, Eq as Vesta};
+    assert_eq!(recv.kind, RECEIVE, "the first pair is a Receive");
     let specs = toy_specs();
     let (dp, ds) = FP_DIMS;
-    let defer_p = crate::deferral::MatPoly::with_min(
-        [uniform_kind(u.cp.clone()), toy_kind(specs[1].0)],
-        dp.0,
-        dp.1,
-    );
-    let defer_s = crate::deferral::MatPoly::with_min(
-        [uniform_kind(u.cs.clone()), toy_kind(specs[1].1)],
-        ds.0,
-        ds.1,
-    );
+    let (send_p, send_s) = match send {
+        Some(s) => {
+            assert_eq!(s.kind, SEND, "the second pair is a Send");
+            assert_eq!(
+                (s.cp.shape.cols(), s.cs.shape.cols()),
+                (recv.cp.shape.cols(), recv.cs.shape.cols()),
+                "one generator set per side"
+            );
+            (uniform_kind(s.cp.clone()), uniform_kind(s.cs.clone()))
+        }
+        None => (toy_kind(specs[1].0), toy_kind(specs[1].1)),
+    };
+    let defer_p =
+        crate::deferral::MatPoly::with_min([uniform_kind(recv.cp.clone()), send_p], dp.0, dp.1);
+    let defer_s =
+        crate::deferral::MatPoly::with_min([uniform_kind(recv.cs.clone()), send_s], ds.0, ds.1);
     assert_eq!(
         (defer_p.x, defer_p.y, defer_s.x, defer_s.y),
         (dp.0, dp.1, ds.0, ds.1),
-        "the uniform pair has the accumulators' dimensions"
+        "the uniform pairs have the accumulators' dimensions"
     );
-    let gens = PairGens {
-        p: crate::ipa::Gens::<Vesta>::new(u.cp.shape.cols()),
-        s: crate::ipa::Gens::<Pallas>::new(u.cs.shape.cols()),
+    let (p, s) = (
+        crate::ipa::Gens::<Vesta>::new(recv.cp.shape.cols()),
+        crate::ipa::Gens::<Pallas>::new(recv.cs.shape.cols()),
+    );
+    // Both kinds' keys when the two circuits share a layout (and io length):
+    // the predecessor slot then takes either kind.
+    let (keys_p, keys_s) = match send {
+        Some(t)
+            if t.cp.layout() == recv.cp.layout()
+                && t.cs.layout() == recv.cs.layout()
+                && (t.cp.io_len, t.cs.io_len) == (recv.cp.io_len, recv.cs.io_len) =>
+        {
+            let key = |c: &crate::uniform::UniformCircuit<Fp>| {
+                crate::spartan::fixed_commitments(&c.shape, &p, c)
+            };
+            let key_s = |c: &crate::uniform::UniformCircuit<crate::verifier::Fq>| {
+                crate::spartan::fixed_commitments(&c.shape, &s, c)
+            };
+            (
+                Some([key(&recv.cp), key(&t.cp)]),
+                Some([key_s(&recv.cs), key_s(&t.cs)]),
+            )
+        }
+        _ => (None, None),
+    };
+    PairGens {
+        p,
+        s,
         defer_p,
         defer_s,
+        keys_p,
+        keys_s,
         genesis: false,
-    };
+    }
+}
+
+/// A proved uniform pair traced as circuit proofs on `gens`' generators (its
+/// accumulators are its late io).
+pub fn trace_uniform(u: UniformPair, gens: &PairGens) -> TracedPair {
+    use crate::spartan::Link;
+    use crate::verifier::trace_circuit;
     let fixed_p = crate::spartan::fixed_commitments(&u.cp.shape, &gens.p, u.cp.as_ref());
     let fixed_s = crate::spartan::fixed_commitments(&u.cs.shape, &gens.s, u.cs.as_ref());
     let r = u.r;
@@ -1957,7 +2196,7 @@ pub fn next_pairs(u: UniformPair) -> (PairGens, Vec<TracedPair>) {
         tr_p.accepts && tr_s.accepts,
         "the uniform pair's traces accept"
     );
-    let pred = TracedPair {
+    TracedPair {
         shape_p: u.cp.shape,
         acc_p: crate::deferral::claim_of(&u.pp.late),
         inst_p: u.ip,
@@ -1970,9 +2209,8 @@ pub fn next_pairs(u: UniformPair) -> (PairGens, Vec<TracedPair>) {
         claims_s: Vec::new(),
         proof_s: u.ps,
         tr_s,
-    };
-    let send = toy_pair(&gens, 1);
-    (gens, vec![pred, send])
+        kind: u.kind,
+    }
 }
 
 /// Where P-recv's parts sit.
@@ -1982,6 +2220,8 @@ pub struct PRecvIdx {
     pub scalars: Vec<ScalarIdx<Fp>>,
     pub shared: usize,
     pub values: usize,
+    /// The shared index of pair 0's kind bit (pair i's at `kind_at + i`).
+    pub kind_at: usize,
     pub io_digest: usize,
     pub defer: DeferIdx<Fp>,
 }
@@ -1992,27 +2232,54 @@ pub struct PRecvIdx {
 /// proofs' matrix claims. One permutation pool holds the statement sponge,
 /// the insertions, both S transcripts and both io digests.
 pub fn p_recv(gens: &PairGens, pairs: &[TracedPair]) -> (Wiring<Fp>, PRecvIdx) {
-    use crate::points::{PointsBuilder, SharedMap};
+    p_circuit(&Op::RECEIVE, gens, pairs)
+}
+
+/// P-send in the uniform layout: Send's own relation and the wallet's
+/// predecessor pair, otherwise as P-recv.
+pub fn p_send(gens: &PairGens, pred: &TracedPair) -> (Wiring<Fp>, PRecvIdx) {
+    p_circuit(&Op::SEND, gens, std::slice::from_ref(pred))
+}
+
+/// An operation's P circuit: `op`'s own relation over the incoming `pairs`
+/// on `gens`' polynomials (Receive: the predecessor and the payer's Send;
+/// Send: the predecessor). The circuit's own kind is public io.
+pub fn p_circuit(op: &Op, gens: &PairGens, pairs: &[TracedPair]) -> (Wiring<Fp>, PRecvIdx) {
+    use crate::points::{KeySelect, PointsBuilder, SharedMap};
     use iroha_pasta::Ep as Pallas;
+    let kinds = slot_kinds(gens, pairs);
     let mut w = Wiring::<Fp>::default();
     let gfam = w.family(0, 1);
     let e_out = w.reserve();
     let e_v = w.reserve();
     let e_zero = constant_entries(&mut w, gfam, "zero word", &[vec![Fp::ZERO]]);
     let mut pool = Pool::new(Fp::from(NODE_DOMAIN));
-    let own_idx = own_relation(&mut w, &mut pool, e_out, e_zero, gfam);
-    // Shared values: per pair, the P proof's then the S proof's.
-    let (values, offsets) = binding_values(pairs);
-    // The S proofs' points sides.
+    let _kind_io = kind_pin(&mut w, gfam, op.kind);
+    let own_idx = own_relation(&mut w, &mut pool, e_out, e_zero, gfam, op);
+    // Shared values: per pair, the P proof's then the S proof's; then each
+    // pair's kind bit (here the P proof's io kind, in S the S proof's: the
+    // binding makes them one).
+    let (mut values, offsets) = binding_values(pairs);
+    let kind_at = values.len();
+    values.extend(kinds.iter().map(|k| k.0 as u128));
+    // The S proofs' points sides; a slot taking either kind pins the S
+    // proof's fixed rows to the key its kind bit selects.
     let mut pb = PointsBuilder::<Pallas>::new(&mut w, e_out, e_v, e_zero);
-    for (pr, &(off_p, off_s, len_p)) in pairs.iter().zip(&offsets) {
+    for (i, (pr, &(off_p, off_s, len_p))) in pairs.iter().zip(&offsets).enumerate() {
         let w = off_p + link_word_at(&pr.tr_p);
         let sm = SharedMap {
             base: off_s,
             other: Some([w, w + 1]),
             r: Some([off_p + len_p - 2, off_p + len_p - 1]),
         };
-        pb.verify(
+        let keys = match (&gens.keys_s, kinds[i].1) {
+            (Some(k), true) => Some(KeySelect {
+                fixed: [&k[0][..], &k[1][..]],
+                kind_at: kind_at + i,
+            }),
+            _ => None,
+        };
+        pb.verify_keyed(
             &mut pool,
             &pr.shape_s,
             &gens.s,
@@ -2020,6 +2287,7 @@ pub fn p_recv(gens: &PairGens, pairs: &[TracedPair]) -> (Wiring<Fp>, PRecvIdx) {
             &pr.claims_s,
             &pr.tr_s,
             sm,
+            keys.as_ref(),
         );
     }
     // The binding chain (rho and mu stand-ins, as stage A).
@@ -2047,7 +2315,7 @@ pub fn p_recv(gens: &PairGens, pairs: &[TracedPair]) -> (Wiring<Fp>, PRecvIdx) {
             .circuit
             .as_ref()
             .map_or(vec![Fp::ZERO; 2], |c| c.phase2.clone());
-        let kind = &gens.defer_p.kinds[i];
+        let kind = &gens.defer_p.kinds[kinds[i].0];
         let evals = |rx: &[Fp], ry: &[Fp]| (kind.eval)(&ch2, rx, ry);
         scalars.push(scalar_into::<iroha_pasta::Eq>(
             &mut w,
@@ -2090,14 +2358,22 @@ pub fn p_recv(gens: &PairGens, pairs: &[TracedPair]) -> (Wiring<Fp>, PRecvIdx) {
         })
         .collect();
     let io_digest = io_digests(&mut w, &mut pool, gfam, e_out, e_zero, shared, &items);
-    // The verified P proofs' matrix claims, deferred: folded into P-recv's
-    // accumulator (no in-circuit matrix evaluation).
+    // The verified P proofs' matrix claims, deferred: folded into the
+    // circuit's accumulator (no in-circuit matrix evaluation).
     let proofs: Vec<_> = pairs
         .iter()
         .zip(&scalars)
         .map(|(pr, sc)| (&pr.shape_p, &pr.inst_p, &pr.tr_p, sc, &pr.acc_p))
         .collect();
-    let defer = defer_into::<iroha_pasta::Eq>(&mut w, gfam, &gens.defer_p, &proofs, gens.genesis);
+    let defer = defer_into::<iroha_pasta::Eq>(
+        &mut w,
+        gfam,
+        &gens.defer_p,
+        &proofs,
+        &kinds,
+        (shared, kind_at),
+        gens.genesis,
+    );
     let mut rng = SpikeRng::new(b"p-recv pool");
     let pidx = pool.build(&mut w, e_out, &mut rng);
     let points = pb.build(&mut w, gfam, shared, false);
@@ -2113,6 +2389,7 @@ pub fn p_recv(gens: &PairGens, pairs: &[TracedPair]) -> (Wiring<Fp>, PRecvIdx) {
             scalars,
             shared,
             values: values.len(),
+            kind_at,
             io_digest,
             defer,
         },
@@ -2134,12 +2411,27 @@ pub struct DeferIdx<S> {
     pub q_secs: f64,
 }
 
-/// Per verified proof (kind = its index): the incoming accumulator, read
-/// from the last `n + 1` leaves of its scalar side's io fold, and the fresh
-/// claim: kind, `r` (glue R1), `r_x` and `r_y` (the slot data's challenge
-/// digits) and `r A + r^2 B + r^3 C` (glue M1 + M2 + M3, the value its check
-/// uses). Links carry all of them: the scalar sides share the global family.
-#[allow(clippy::type_complexity)]
+/// Per verified proof (proof `i` of kind `kinds[i]`): the incoming
+/// accumulator, read from the last `n + 1` leaves of its scalar side's io
+/// fold, and the fresh claim: kind, `r` (glue R1), `r_x` and `r_y` (the slot
+/// data's challenge digits) and `r A + r^2 B + r^3 C` (glue M1 + M2 + M3, the
+/// value its check uses). Links carry all of them: the scalar sides share the
+/// global family.
+///
+/// The fold takes four claims, two slots of two. Receive verifies two proofs,
+/// one per slot. Send verifies one, whose two claims fill both slots: a
+/// repeated true claim folds into a true claim, and a false one still makes
+/// the folded claim false (except with probability `deg q / |F|`), so the
+/// repetition is sound; it only spends the second slot's fold work.
+///
+/// Kinds: a slot of `(kind, false)` takes kind `kind` (the fresh claim's c is
+/// that constant). A slot of `(kind, true)` takes either kind: c is the
+/// verified proof's io value at `KIND_IO`, held boolean, and the proof's
+/// kind bit in the shared values (`kind_shared` = the shared array and the
+/// pairs' first kind-bit index) equals it, so the other circuit of the pair
+/// sees the same kind (and selects the same key). A constant slot's kind bit
+/// equals its constant.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn defer_into<C: iroha_pasta::PastaCurve>(
     w: &mut Wiring<crate::ipa::F<C>>,
     gfam: usize,
@@ -2151,6 +2443,8 @@ pub fn defer_into<C: iroha_pasta::PastaCurve>(
         &ScalarIdx<crate::ipa::F<C>>,
         &crate::deferral::Claim<crate::ipa::F<C>>,
     )],
+    kinds: &[SlotKind],
+    kind_shared: (usize, usize),
     genesis: bool,
 ) -> DeferIdx<crate::ipa::F<C>>
 where
@@ -2163,7 +2457,16 @@ where
         crate::fs::lean_schedule(),
         "the claim P(r, r_x, r_y) needs r_A, r_B, r_C = r, r^2, r^3"
     );
-    assert_eq!(proofs.len(), 2, "two verified proofs, one per kind");
+    assert!(
+        (1..=2).contains(&proofs.len()) && kinds.len() == proofs.len(),
+        "one or two verified proofs, each with its kind"
+    );
+    assert!(
+        kinds.iter().all(|k| k.0 < poly.kinds.len()),
+        "kinds of the polynomial"
+    );
+    // Slot s holds proof s % proofs.len(): the predecessor is proof 0.
+    let slot_proof = |s: usize| s % proofs.len();
     let one = S::<C>::ONE;
     let n = poly.n();
     // TODO: bind this research-only flag to authenticated first-state
@@ -2191,12 +2494,15 @@ where
     });
     w.io_arrays.push((gen_a, 62));
     let mut claims: Vec<Claim<S<C>>> = Vec::new();
-    for (kind, (shape, inst, tr, _, acc)) in proofs.iter().enumerate() {
+    for s in 0..2 {
+        let i = slot_proof(s);
+        let kind = kinds[i].0;
+        let (shape, inst, tr, _, acc) = proofs[i];
         let io = tr.circuit.as_ref().map_or(&inst.io[..], |c| &c.io_full[..]);
         let tail = &io[io.len() - n - 1..];
         assert!(
             tail[..n] == acc.point[..] && tail[n] == acc.value,
-            "proof {kind}'s io ends with its accumulator"
+            "proof {i}'s io ends with its accumulator"
         );
         let r = tr.rabc[0];
         let ch2: Vec<S<C>> = tr.circuit.as_ref().map_or(Vec::new(), |c| c.phase2.clone());
@@ -2212,14 +2518,14 @@ where
         );
         let value = r * ma + r.square() * mb + r.square() * r * mc;
         let point = poly.fresh_point(kind, r, &ch2, &rx, &ry);
-        assert!(poly.eval(&point) == value, "fresh claim {kind} holds");
-        claims.push(if kind == 0 && genesis {
+        assert!(poly.eval(&point) == value, "fresh claim of proof {i} holds");
+        claims.push(if i == 0 && genesis {
             Claim {
                 point: g0.clone(),
                 value: v0,
             }
         } else {
-            (*acc).clone()
+            acc.clone()
         });
         claims.push(Claim { point, value });
     }
@@ -2248,7 +2554,10 @@ where
         .map(|j| if j < n { one } else { S::<C>::ZERO })
         .collect();
     let mut vrows: Vec<[Lin<S<C>>; 3]> = Vec::new();
-    for (kind, (shape, inst, tr, sc, _)) in proofs.iter().enumerate() {
+    for s in 0..2 {
+        let i = slot_proof(s);
+        let (kind, from_io) = kinds[i];
+        let (shape, inst, tr, sc, _) = proofs[i];
         // The accumulator: io leaves (a circuit proof's late io).
         let io_len = tr
             .circuit
@@ -2259,12 +2568,36 @@ where
         let io_map: Vec<Option<usize>> = (0..nc)
             .map(|j| (j < n).then(|| leaves + base + j))
             .collect();
-        let acc_row = plus(&own(C_P[2 * kind], nc), &link(sc.io, 0, io_map, -one));
+        // The proof's kind bit (once per proof): its io value at KIND_IO for
+        // a slot of either kind (held boolean), else the slot's constant;
+        // the pair's shared kind bit equals it.
+        let kind_io = link(sc.io, 0, vec![Some(leaves + KIND_IO)], one);
+        if s == i {
+            let shared_bit = link(kind_shared.0, 0, vec![Some(kind_shared.1 + i)], one);
+            let bit = if from_io {
+                kind_io.clone()
+            } else {
+                constant(vec![S::<C>::from(kind as u64)])
+            };
+            vrows.push([
+                plus(&shared_bit, &scaled(&bit, -one)),
+                constant(vec![one]),
+                Vec::new(),
+            ]);
+            if from_io {
+                vrows.push([
+                    kind_io.clone(),
+                    plus(&constant(vec![one]), &scaled(&kind_io, -one)),
+                    Vec::new(),
+                ]);
+            }
+        }
+        let acc_row = plus(&own(C_P[2 * s], nc), &link(sc.io, 0, io_map, -one));
         let val_row = plus(
-            &own(V_V[2 * kind], 1),
+            &own(V_V[2 * s], 1),
             &link(sc.io, 0, vec![Some(leaves + base + n)], -one),
         );
-        if kind == 0 {
+        if i == 0 {
             // (P0 - io) (1 - g) = 0 and (P0 - g0) g = 0; likewise the value.
             let g_at = |len: usize| {
                 link(
@@ -2282,17 +2615,20 @@ where
                 .rows
                 .push([acc_row, not_g(nc), Vec::new()]);
             w.arrays[fold.coords].rows.push([
-                plus(&own(C_P[0], nc), &constant(g0c)),
+                plus(&own(C_P[2 * s], nc), &constant(g0c)),
                 g_at(nc),
                 Vec::new(),
             ]);
             vrows.push([val_row, not_g(1), Vec::new()]);
             vrows.push([
-                plus(&own(V_V[0], 1), &link(gen_a, 0, vec![Some(1)], -one)),
+                plus(&own(V_V[2 * s], 1), &link(gen_a, 0, vec![Some(1)], -one)),
                 g_at(1),
                 Vec::new(),
             ]);
-            vrows.push([g_at(1), g_at(1), g_at(1)]);
+            if s == 0 {
+                // g is boolean.
+                vrows.push([g_at(1), g_at(1), g_at(1)]);
+            }
         } else {
             w.arrays[fold.coords]
                 .rows
@@ -2319,17 +2655,39 @@ where
         for g in 0..shape.sz() {
             place(false, g, 4 + poly.x + g);
         }
-        let fixed = poly.fixed_coords(kind);
+        let mut fixed = poly.fixed_coords(kind);
+        if from_io {
+            // c is the proof's kind bit, not a constant: the two kinds share
+            // a layout, so every other fixed coordinate is the same for both.
+            assert!(
+                poly.fixed_coords(1 - kind)[1..] == fixed[1..],
+                "a slot of either kind: the kinds' padding agrees"
+            );
+            fixed[0] = None;
+        }
         let consts: Vec<S<C>> = (0..nc)
             .map(|j| -fixed.get(j).copied().flatten().unwrap_or(S::<C>::ZERO))
             .collect();
         let mut row = plus(
             &vec![crate::uniform::Term {
-                src: crate::uniform::Src::Own(C_P[2 * kind + 1]),
+                src: crate::uniform::Src::Own(C_P[2 * s + 1]),
                 coef: on.clone(),
             }],
             &constant(consts),
         );
+        if from_io {
+            row = plus(
+                &row,
+                &link(
+                    sc.io,
+                    0,
+                    (0..nc)
+                        .map(|j| (j == 0).then_some(leaves + KIND_IO))
+                        .collect(),
+                    -one,
+                ),
+            );
+        }
         for (d, map) in digit_maps.into_iter().enumerate() {
             row = plus(&row, &link(slot_a, scalar::T[d], map, -one));
         }
@@ -2360,8 +2718,8 @@ where
         w.arrays[fold.coords]
             .rows
             .push([row, constant(vec![one; nc]), Vec::new()]);
-        let m_sum = (0..3).fold(own(V_V[2 * kind + 1], 1), |acc, i| {
-            plus(&acc, &link(glue, scalar::M1 + i, vec![Some(0)], -one))
+        let m_sum = (0..3).fold(own(V_V[2 * s + 1], 1), |acc, k| {
+            plus(&acc, &link(glue, scalar::M1 + k, vec![Some(0)], -one))
         });
         vrows.push([m_sum, constant(vec![one]), Vec::new()]);
     }
@@ -2602,6 +2960,8 @@ pub struct SRecvIdx {
     pub io_digest: usize,
     pub perms: usize,
     pub values: usize,
+    /// The shared index of pair 0's kind bit (pair i's at `kind_at + i`).
+    pub kind_at: usize,
     pub defer: DeferIdx<crate::verifier::Fq>,
 }
 
@@ -2610,25 +2970,51 @@ pub struct SRecvIdx {
 /// binding chain over every shared value, the fold of the verified S proofs'
 /// matrix claims.
 pub fn s_recv(gens: &PairGens, pairs: &[TracedPair]) -> (Wiring<crate::verifier::Fq>, SRecvIdx) {
-    use crate::points::{PointsBuilder, SharedMap};
+    s_circuit(RECEIVE, gens, pairs)
+}
+
+/// S-send: S-recv's construction over the wallet's predecessor pair alone.
+pub fn s_send(gens: &PairGens, pred: &TracedPair) -> (Wiring<crate::verifier::Fq>, SRecvIdx) {
+    s_circuit(SEND, gens, std::slice::from_ref(pred))
+}
+
+/// An operation's S circuit (its kind `own_kind` public io) over the
+/// incoming `pairs`; the S side has no own relation.
+pub fn s_circuit(
+    own_kind: usize,
+    gens: &PairGens,
+    pairs: &[TracedPair],
+) -> (Wiring<crate::verifier::Fq>, SRecvIdx) {
+    use crate::points::{KeySelect, PointsBuilder, SharedMap};
     use crate::verifier::Fq;
     use iroha_pasta::{Ep as Pallas, Eq as Vesta};
+    let kinds = slot_kinds(gens, pairs);
     let mut w = Wiring::<Fq>::default();
     let gfam = w.family(0, 1);
     let e_out = w.reserve();
     let e_v = w.reserve();
     let e_zero = constant_entries(&mut w, gfam, "zero word", &[vec![Fq::ZERO]]);
     let mut pool = Pool::new(Fq::from(NODE_DOMAIN));
-    let (values, offsets) = binding_values(pairs);
+    let _kind_io = kind_pin(&mut w, gfam, own_kind);
+    let (mut values, offsets) = binding_values(pairs);
+    let kind_at = values.len();
+    values.extend(kinds.iter().map(|k| k.0 as u128));
     let mut pb = PointsBuilder::<Vesta>::new(&mut w, e_out, e_v, e_zero);
-    for (pr, &(off_p, off_s, len_p)) in pairs.iter().zip(&offsets) {
+    for (i, (pr, &(off_p, off_s, len_p))) in pairs.iter().zip(&offsets).enumerate() {
         let w = off_s + link_word_at(&pr.tr_s);
         let sm = SharedMap {
             base: off_p,
             other: Some([w, w + 1]),
             r: Some([off_p + len_p - 2, off_p + len_p - 1]),
         };
-        pb.verify(
+        let keys = match (&gens.keys_p, kinds[i].1) {
+            (Some(k), true) => Some(KeySelect {
+                fixed: [&k[0][..], &k[1][..]],
+                kind_at: kind_at + i,
+            }),
+            _ => None,
+        };
+        pb.verify_keyed(
             &mut pool,
             &pr.shape_p,
             &gens.p,
@@ -2636,6 +3022,7 @@ pub fn s_recv(gens: &PairGens, pairs: &[TracedPair]) -> (Wiring<crate::verifier:
             &pr.claims_p,
             &pr.tr_p,
             sm,
+            keys.as_ref(),
         );
     }
     let (rho, mu) = binding_rho_mu();
@@ -2650,7 +3037,7 @@ pub fn s_recv(gens: &PairGens, pairs: &[TracedPair]) -> (Wiring<crate::verifier:
             .circuit
             .as_ref()
             .map_or(vec![Fq::ZERO; 2], |c| c.phase2.clone());
-        let kind = &gens.defer_s.kinds[i];
+        let kind = &gens.defer_s.kinds[kinds[i].0];
         let evals = |rx: &[Fq], ry: &[Fq]| (kind.eval)(&ch2, rx, ry);
         scalars.push(scalar_into::<Pallas>(
             &mut w,
@@ -2698,7 +3085,15 @@ pub fn s_recv(gens: &PairGens, pairs: &[TracedPair]) -> (Wiring<crate::verifier:
         .zip(&scalars)
         .map(|(pr, sc)| (&pr.shape_s, &pr.inst_s, &pr.tr_s, sc, &pr.acc_s))
         .collect();
-    let defer = defer_into::<Pallas>(&mut w, gfam, &gens.defer_s, &proofs, gens.genesis);
+    let defer = defer_into::<Pallas>(
+        &mut w,
+        gfam,
+        &gens.defer_s,
+        &proofs,
+        &kinds,
+        (shared, kind_at),
+        gens.genesis,
+    );
     let perms = pool.len();
     let mut rng = SpikeRng::new(b"s-recv pool");
     let _pidx = pool.build(&mut w, e_out, &mut rng);
@@ -2714,6 +3109,7 @@ pub fn s_recv(gens: &PairGens, pairs: &[TracedPair]) -> (Wiring<crate::verifier:
             io_digest,
             perms,
             values: values.len(),
+            kind_at,
             defer,
         },
     )

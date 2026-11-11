@@ -102,6 +102,7 @@ impl Shape {
     }
 }
 
+#[derive(Clone)]
 pub struct Instance<F> {
     pub io: Vec<F>,
 }

@@ -195,6 +195,20 @@ struct Reader {
     inverse: Vec<Vec<usize>>,
 }
 
+/// What a verifier of a circuit's proofs depends on besides its key: the
+/// constraint variables, the Hyrax rows, the first phase's rows (the
+/// transcript absorbs them before the second-phase challenges) and the
+/// trailing fixed rows (constants from the key). Two circuits with one layout
+/// (and one io length and column count) have verifiers of one structure, so a
+/// verifier slot can take a proof of either: Send and Receive share one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Layout {
+    pub sx: usize,
+    pub row_bits: usize,
+    pub p1: usize,
+    pub fixed: usize,
+}
+
 pub struct UniformCircuit<F> {
     pub label: &'static str,
     pub arrays: Vec<Array<F>>,
@@ -1218,6 +1232,38 @@ impl<F: Scalar> UniformCircuit<F> {
     #[allow(clippy::too_many_arguments)]
     pub fn build_with_copies(
         label: &'static str,
+        arrays: Vec<Array<F>>,
+        pi: Vec<usize>,
+        counts: Vec<usize>,
+        table_specs: Vec<(usize, u32)>,
+        copies: Copies<F>,
+        col_bits: usize,
+        io_len: usize,
+        seed: &[u8],
+    ) -> (Self, Instance<F>, Witness<F>) {
+        Self::build_with_copies_at(
+            label,
+            arrays,
+            pi,
+            counts,
+            table_specs,
+            copies,
+            col_bits,
+            io_len,
+            seed,
+            None,
+        )
+    }
+
+    /// [`Self::build_with_copies`] at another circuit's layout (`target`):
+    /// its constraint variables, rows and first-phase rows, the extra rows
+    /// left empty (each an empty row's blinding term in the proof), and its
+    /// fixed rows, which must match as they are (an all-zero fixed row would
+    /// commit to the identity, which no verifier takes as an input). Panics
+    /// when the circuit does not fit the target.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_with_copies_at(
+        label: &'static str,
         mut arrays: Vec<Array<F>>,
         mut pi: Vec<usize>,
         mut counts: Vec<usize>,
@@ -1226,6 +1272,7 @@ impl<F: Scalar> UniformCircuit<F> {
         col_bits: usize,
         io_len: usize,
         seed: &[u8],
+        target: Option<Layout>,
     ) -> (Self, Instance<F>, Witness<F>) {
         for (f, (&pf, &cf)) in pi.iter().zip(&counts).enumerate() {
             assert!(cf <= 1 << pf, "family {f}: count fits 2^pi");
@@ -1353,8 +1400,14 @@ impl<F: Scalar> UniformCircuit<F> {
                     }
                 }
             }
-            let mbits =
-                (64 - mult.iter().max().copied().unwrap_or(0).leading_zeros()).max(1) as u16;
+            // The multiplicities' width class from the lookup count, not from
+            // the largest multiplicity: which entries the values hit is data,
+            // and a width taken from it would move the column between width
+            // classes (so the placement and the matrices) from one witness to
+            // the next. A verifier slot taking either of two circuits relies
+            // on one layout per circuit.
+            let lookups_n: u64 = mult.iter().sum();
+            let mbits = (64 - lookups_n.leading_zeros()).max(1) as u16;
             let wa = arrays.len();
             arrays.push(Array {
                 name: "table helpers",
@@ -1670,10 +1723,21 @@ impl<F: Scalar> UniformCircuit<F> {
             })
             .collect();
         let sx = constraints.next_power_of_two().trailing_zeros() as usize;
+        if let Some(t) = target {
+            assert!(
+                sx <= t.sx,
+                "{label}: 2^{sx} constraints fit the target's 2^{}",
+                t.sx
+            );
+        }
+        let sx = target.map_or(sx, |t| t.sx);
+        let p1_min = target.map_or(0, |t| t.p1);
+        // The fixed rows the constants need (a target may ask for more).
+        let mut natural_fixed;
         let mut fixed_rows = 0;
         let mut p1_rows = 0;
         let mut p2_rows = 0;
-        let mut row_bits = 2;
+        let mut row_bits = target.map_or(2, |t| t.row_bits);
         let mut stripe_c = 0;
         let (shape, bounds) = 'shape: loop {
             let s = Shape {
@@ -1735,6 +1799,22 @@ impl<F: Scalar> UniformCircuit<F> {
                 .max()
                 .unwrap_or(1);
             let frows = ef.max(xf).div_ceil(tallest) * tallest;
+            natural_fixed = frows;
+            // At a target layout, more fixed rows than the constants need:
+            // the constants keep the first rows of the fixed region (moved
+            // by a multiple of their tallest block, so still aligned) and the
+            // rest get a padding constant below.
+            let frows = match target {
+                Some(t) => {
+                    assert!(
+                        frows <= t.fixed && t.fixed % tallest == 0,
+                        "{label}: {frows} fixed rows (blocks of {tallest}) fit the target's {}",
+                        t.fixed
+                    );
+                    t.fixed
+                }
+                None => frows,
+            };
             if frows < s.rows() {
                 // The fewest rows that hold both phases: a row budget for the
                 // marked rows (full blocks may run on to the end), by bisection.
@@ -1756,7 +1836,7 @@ impl<F: Scalar> UniformCircuit<F> {
                                 x1 = x1.max(x);
                             }
                         }
-                        let p1 = e1.max(1);
+                        let p1 = e1.max(1).max(p1_min);
                         let (e2, x2) = if p2_list.is_empty() {
                             (p1, p1)
                         } else {
@@ -1817,6 +1897,15 @@ impl<F: Scalar> UniformCircuit<F> {
             row_bits += 1;
         };
         let _ = (&mut fixed_rows, &mut p1_rows);
+        if let Some(t) = target {
+            let got = Layout {
+                sx: shape.sx,
+                row_bits: shape.row_bits,
+                p1: p1_rows,
+                fixed: fixed_rows,
+            };
+            assert_eq!(got, t, "{label}: built at the target layout");
+        }
         for &(a, off) in &io_arrays {
             let m = m_of(a);
             blocks[a][0] = Block {
@@ -1964,6 +2053,18 @@ impl<F: Scalar> UniformCircuit<F> {
             }
         }
         let cols_n = shape.cols();
+        // A fixed row past the constants' (a target layout's padding) holds
+        // a 1 in its first column, read by no constraint, so that its
+        // commitment is a generator, not the identity (which no verifier
+        // takes as an input point).
+        for r in shape.rows() - fixed_rows + natural_fixed..shape.rows() {
+            let row = &mut w[r * cols_n..(r + 1) * cols_n];
+            assert!(
+                row.iter().all(|v| bool::from(v.is_zero())),
+                "{label}: a padding fixed row holds no constant"
+            );
+            row[0] = F::ONE;
+        }
         let fixed_values = w[(shape.rows() - fixed_rows) * cols_n..].to_vec();
         let _ = n_user;
         let circuit = UniformCircuit {
@@ -2226,6 +2327,16 @@ impl<F: Scalar> UniformCircuit<F> {
             .sum();
         *out.entry(255).or_insert(0) += helpers;
         out
+    }
+
+    /// The layout a verifier of this circuit's proofs depends on.
+    pub fn layout(&self) -> Layout {
+        Layout {
+            sx: self.shape.sx,
+            row_bits: self.shape.row_bits,
+            p1: self.p1_rows,
+            fixed: self.fixed_rows,
+        }
     }
 
     /// Witness rows: first phase, second phase, constant columns.

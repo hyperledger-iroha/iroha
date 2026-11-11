@@ -1732,8 +1732,11 @@ blocks could use the empty tails.
    - done: family splitting (part 3): P-recv 2^20 → 2^19 and S-recv 2^19 → 2^18 constraints at the fixed point; model
      2.01 s per pair;
    - done: batched native q (part 4), with pointwise parity and degree-bound tests on both Pasta fields;
-   - next: a Pixel run of the fixed-point pair including batched native q; a uniform Send circuit;
-     the witness at 32 rows (about 65k fewer positions in P-recv);
+   - done: the uniform Send circuit and a predecessor of either kind ("Uniform Send" below): the fixed point holds
+     over all four orders with one circuit per operation; model 2.21 s per Receive pair, 1.55 s per Send pair;
+   - next: the binding chain's rho and mu inside the proven circuits (a third commit phase, see "Uniform Send");
+     the base case's authorization (owner decision); a Pixel run of the fixed point with both operations; the
+     witness at 32 rows (about 65k fewer positions in P-recv; it would also bring S-recv back toward 2^18);
    - then: general bit maps, 14-round partial blocks, one range table, constants in the first half of the rows.
 
 
@@ -1785,3 +1788,146 @@ medians 27.1 / 25.0 ms. Every variant retained coefficient equality. Lane-width
 timing is load-sensitive; the earlier four-lane default is retained without a
 claim that it wins on every machine or load. Logs remain ignored at
 `../../output/kagemusha-100x-20261108/spike/runs/codex-q-{full-tests,fixed-point}.log`.
+
+## Uniform Send: Send's own relation, a predecessor of either kind, the fixed point over both operations (2026-11-11)
+
+Owner: "Yes, keep building" (Claude, taking over Codex thread 01a1c5e5 after Codex's batched native q). Code:
+`full::Op` (`RECEIVE`, `SEND`), `full::p_circuit` and `s_circuit` (`p_send`, `s_send`), `full::kind_pin`,
+`full::slot_kinds`, `defer_into`'s slot kinds and kind bits, `points::KeySelect`, `uniform::Layout` and
+`build_with_copies_at`, and `run_fixed_point` in `main.rs`. Logs: `../../output/kagemusha-100x-20261108/spike/runs/claude-send-fp-1.log`
+(part 1) and `claude-send-fp-2.log` (parts 2 and 3).
+
+**Send's own relation.** At the census's Send counts (`operation::operations`): 119 statement permutations
+(`common + 20 + 5`, the rest-digest opening for the fee policy and the fee schedule object), one insertion (the
+pending-outgoing descriptor), one signature under the payment key (a statement digest, SHA-256, the comb), 2
+comparisons, 12 u128 values, no byte encodings and 667 logic triples (2,001 rows). Like Receive's, its values
+are synthetic: it has the census's gadgets and sizes, not the monetary semantics. Receive's own relation is
+unchanged (`Op::RECEIVE`), and so are its proofs at hop 1 apart from the kind bit below.
+
+**P-send and S-send** are P-recv's and S-recv's construction over one incoming pair, the wallet's predecessor.
+The fold still takes four claims: Send's two claims fill both slots. A repeated true claim folds into a true
+claim and a false one still makes the folded claim false (except with probability `deg q / |F|`), so the
+repetition is sound; it spends the second slot's fold work (native q evaluates both kinds at the same 163 + 145
+points as for Receive).
+
+### Part 1: the natural Send layout, the predecessor always a Receive
+
+Each hop builds P-send and S-send over the previous hop's Receive pair, proves and verifies the Send pair, and the
+next hop's Receive takes it as the payer's pair in place of the toy Send. The polynomials' second kind is the
+previous hop's Send circuit.
+
+| At hop 1 (verifying toy pairs) | P-send | S-send |
+|---|---:|---:|
+| Constraints | 2^18 (231,508 rows) | 2^17 (109,207) |
+| Witness rows used | 23 + 6 + 2 of 32 | 18 + 2 + 1 of 32 |
+| Cells | 305,061 | 122,948 |
+| Pixel model (kernels of 11-10) | 0.80 s | 0.44 s |
+| Proof | 4,000 B | 3,840 B |
+
+A Send pair in its own layout models at 1.24 s with 7.8 KB of proofs at hop 1, and at 1.41 s (P-send 0.89 s at
+2^19 and 32 rows, S-send 0.52 s at 2^18) once its matrices settle. P-recv, S-recv and S-send matrices are
+equal from hop 4 to 5; P-send settles one hop later (5 to 6 still differ, 6 to 7 equal). With the base case at hop
+7 (Send's at 6 and 7), the Receive accumulators were still false at hops 7 and 8: Send's hop-6 base case was a
+claim on hop 5's polynomial, whose P-send kind had not settled.
+
+**Why part 1 is not enough.** A wallet's predecessor is its own last operation, a Send or a Receive. Part 1's
+predecessor slot takes only a Receive, and its Send proofs have their own layout: no verifier slot could take
+both. The census's rule (CENSUS.md) applies: each circuit is sized for the larger predecessor.
+
+### Part 2: one layout for both kinds
+
+A verifier slot's structure depends on the verified circuit's layout besides its key: the constraint variables,
+the Hyrax rows, the first phase's rows (the transcript absorbs them before the second-phase challenges) and the
+trailing fixed rows (`uniform::Layout`); the column count and io length are fixed per side already.
+`build_with_copies_at` builds a circuit at another circuit's layout. P-send is built at P-recv's layout of the
+same hop and S-send at S-recv's:
+
+- the constraint variables and rows are raised to the target's; the first phase's rows are padded with empty rows
+  (an empty row costs its blinding term in the proof);
+- the fixed rows must cover the target's: the constants keep the first fixed rows, and each padding fixed row
+  holds a single 1 in its first column, read by no constraint, so that its commitment is a generator rather than
+  the identity (which no verifier takes as an input point). S-send needed one such row (1 natural against S-recv's
+  2).
+
+Building a Send circuit twice gives identical matrices (`ZKS_DETERMINISM=1`, every hop).
+
+### Part 3: a predecessor of either kind
+
+- **Each circuit pins its own kind** (0 Receive, 1 Send) as public io at `KIND_IO` = 60 (`full::kind_pin`), so
+  the io digest every verifier absorbs binds it.
+- **The predecessor slot reads the verified proof's kind bit c** from its io leaves (`defer_into`):
+  - c is held boolean;
+  - the fresh matrix claim's first coordinate (the kind selector of the combined polynomial) is c, not a constant;
+    the two kinds share a layout, so every other fixed coordinate agrees (asserted);
+  - c is a shared value of the pair (appended after the pair's other shared values), tied in each circuit to its
+    own side's proof (P's io in the P circuit, S's io in the S circuit), so the binding makes the two sides' kind
+    one.
+- **The key follows the kind** (`points::KeySelect`): the verified proof's fixed rows are pinned to
+  `key0 + c (key1 - key0)`, linear in c, with both kinds' fixed-row commitments as constants (`PairGens::keys_p`,
+  `keys_s`, from `next_gens`). A constant slot (Receive's payer slot, always a Send) keeps its constant kind and key.
+- **Changed copies are refused:** changing the predecessor's shared kind bit or the fresh claim's c breaks a row
+  in both P-send and S-send (`row_breaks`, last hop).
+
+### Results: the fixed point over all four orders
+
+`ZKS_SCHEDULE=lean ZKS_HOPS=8 ZKS_GENESIS_HOP=7 zk-spartan fixed-point` (log
+`../../output/kagemusha-100x-20261108/spike/runs/claude-send-fp-5.log`; the earlier runs `claude-send-fp-2.log` and the 2-hop
+`claude-send-fp-3-quick.log`, `-4-quick.log` found the two fixes below). All 41 experiment tests pass, including
+`send_own_relation_proves_at_receives_layout`.
+
+- **Convergence:** all four circuits' matrices are equal from hop 4 to 5 on (P-send no longer settles a hop later).
+- **Accumulators:** Send's are true at hop 6 (its base case), both operations' at hops 7 (base case) and 8.
+- **All four orders, one circuit per operation.** At hop 8: Receive after Receive and Send after Receive, then,
+  with the previous hop's Send pair as the predecessor (and as the payer's), Send after Send and Receive after Send.
+  The circuits rebuilt over a Send predecessor have the hop's matrices; every pair verifies and its accumulators
+  hold.
+- **Changed kind-bit copies** (the shared bit, the fresh claim's c) break a row in P-send and S-send.
+
+| At the fixed point (hop 8) | P-recv | S-recv | P-send | S-send |
+|---|---:|---:|---:|---:|
+| Constraints | 2^19 (475,192 rows) | 2^19 (271,939) | 2^19 (260,592) | 2^19 (137,928) |
+| Witness rows used, of 64 | 40 + 11 + 3 | 46 + 3 + 2 | 40 + 6 + 3 | 46 + 2 + 2 |
+| Cells | 597,666 | 295,673 | 335,760 | 153,365 |
+| Pixel model, kernels of 11-10 | 1.35 s | 0.86 s | 0.96 s | 0.59 s |
+| Proof | 4,992 B | 4,896 B | 4,992 B | 4,896 B |
+
+- **Receive 2.21 s per pair, Send 1.55 s** (model; on step 7's pair the model ran about 9% low on the Pixel).
+  Both pairs are 9.9 KB of proofs.
+- **The real payer costs Receive about 0.2 s.** Part 3 of the fixed point had a toy Send of 32 rows in the payer's
+  slot (P-recv 542,778 cells, S-recv 261,298 at 2^18, 2.01 s per pair). A real Send proof has the shared layout's 64
+  rows: verifying it takes about 32 more row-fold endoscalings and 32 more absorbed points per side, and S-recv's
+  permutation pool grows from 307 to 348. S-recv passes 2^18 by 9,795 rows and moves up a size class.
+- **What Send's own layout would have saved:** at its own fixed point part 1's Send pair was 1.41 s and 7.8 KB.
+  Sharing Receive's layout costs Send about 0.14 s and 2.0 KB; it is what lets one verifier slot take either kind.
+- **Native q** at the fixed point, four lanes on one thread of the loaded Mac (medians of seven): P-recv 129 ms,
+  S-recv 48 ms, P-send 114 ms, S-send 43 ms. Send evaluates both kinds at Receive's points (its fold repeats its
+  claims), so its q costs about as much.
+
+**Two fixes this needed;** each makes a build depend only on the circuit's structure:
+
+- **One transcript label per side.** A proof's transcript starts from a hash of its circuit's label, and a
+  verifier circuit pins that header state as a constant, so P-recv and P-send predecessors gave different
+  circuits. All P circuits now use `P-uniform` and all S circuits `S-uniform`. The kind stays bound: it is in the
+  io, which the transcript absorbs.
+- **Multiplicity widths from the lookup count.** A table's multiplicity column took its width class from the
+  largest multiplicity in the witness. A Send predecessor hits the range tables differently, which moved the column
+  into another width class and changed the placement and the matrices. The width now comes from the number of
+  lookups into the table. P-recv's first phase grew by one row (39 to 40).
+
+**Still open:**
+
+- **The binding chain's rho and mu.** The link's R is still computed from stand-in values. Gate 1f synthesized the R
+  chains beside a toy circuit; it did not put them inside the proven circuits (VERIFIER.md, "Not covered"). Inside
+  the uniform circuits rho must follow both proofs' first-phase commitments, and the chain's values follow rho. In
+  P the chain is non-native and range-checked by lookups, whose multiplicities must be committed before alpha and
+  beta. So the prover needs a third commit phase: the values (the shared values and the mask mu among them), the
+  link (d, then rho), the chain's values and every multiplicity, alpha and beta, then the helpers. R becomes late io
+  that the verifier checks against the absorbed R. That changes the prover, the native verifier, the in-circuit
+  transcript replay and the placement (a phase class between the two).
+- **The base case's authorization**, an owner decision. The spec starts every wallet with a Bootstrap step whose
+  package the ledger verifies at activation, so a Bootstrap circuit kind with no predecessor is the natural first
+  link; Send and Receive would then have no genesis flag. The alternative keeps the flag and has every Send and
+  Receive verify an issuer-signed initial state when it is set.
+- **A Pixel run** of the fixed point with both operations.
+- **The witness at 32 rows** (an owner decision on rate-8 transcripts), which would also cut the row-fold work of
+  every verified proof and could bring S-recv back toward 2^18.

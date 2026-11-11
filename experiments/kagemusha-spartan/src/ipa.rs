@@ -121,6 +121,7 @@ pub struct Claim<C: PastaCurve> {
     pub g: Aff<C>,
 }
 
+#[derive(Clone)]
 pub struct IpaProof<C: PastaCurve> {
     pub lr: Vec<(Aff<C>, Aff<C>)>,
     pub g_final: Aff<C>,
