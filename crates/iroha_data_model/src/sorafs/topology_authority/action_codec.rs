@@ -66,22 +66,22 @@ impl TopologyActionV1 {
 impl ncore::SerializePayload for TopologyActionV1 {
     fn serialize(&self, writer: &mut ncore::Encoder<'_>) -> Result<(), ncore::Error> {
         let (tag, payload) = self.tag_and_payload();
-        ncore::SerializePayload::serialize(&tag, writer)?;
+        ncore::write_enum_tag(writer, tag)?;
         ncore::write_len_prefixed(writer, payload)
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        let (_, payload) = self.tag_and_payload();
+        let (tag, payload) = self.tag_and_payload();
         let length = payload.encoded_len_hint()?;
-        4usize
+        ncore::enum_tag_len(tag)
             .checked_add(ncore::len_prefix_len(length))?
             .checked_add(length)
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        let (_, payload) = self.tag_and_payload();
+        let (tag, payload) = self.tag_and_payload();
         let length = payload.encoded_len_exact()?;
-        4usize
+        ncore::enum_tag_len(tag)
             .checked_add(ncore::len_prefix_len(length))?
             .checked_add(length)
     }
@@ -115,19 +115,15 @@ impl<'de> ncore::DecodeFromSlice<'de> for TopologyActionV1 {
             Ok(value)
         }
 
-        let tag_bytes = bytes.get(..4).ok_or(ncore::Error::LengthMismatch)?;
-        let tag = u32::from_le_bytes(
-            tag_bytes
-                .try_into()
-                .map_err(|_| ncore::Error::LengthMismatch)?,
-        );
+        // A `u32` word in minor-0 layouts, a varint in the dense layout.
+        let (tag, tag_len) = ncore::read_enum_tag_from_slice(bytes)?;
         if tag > 6 {
             return Err(ncore::Error::Message(format!(
                 "invalid topology action tag {tag}"
             )));
         }
-        let (length, prefix) = ncore::read_len_from_slice(&bytes[4..])?;
-        let start = 4usize
+        let (length, prefix) = ncore::read_len_from_slice(&bytes[tag_len..])?;
+        let start = tag_len
             .checked_add(prefix)
             .ok_or(ncore::Error::LengthMismatch)?;
         let end = start

@@ -825,13 +825,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for super::SetKeyValueBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
-        let tag = u32::from_le_bytes(
-            tag_bytes
-                .try_into()
-                .map_err(|_| norito::core::Error::LengthMismatch)?,
-        );
-        let mut offset = 4usize;
+        // A `u32` word in minor-0 layouts, a varint in the dense layout.
+        let (tag, mut offset) = norito::core::read_enum_tag_from_slice(bytes)?;
         let value = match tag {
             0 => Self::Domain(super::decode_aos_slice_field::<SetKeyValue<Domain>>(
                 super::read_aos_field(bytes, &mut offset, flags)?,
@@ -871,13 +866,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for super::RemoveKeyValueBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
-        let tag = u32::from_le_bytes(
-            tag_bytes
-                .try_into()
-                .map_err(|_| norito::core::Error::LengthMismatch)?,
-        );
-        let mut offset = 4usize;
+        // A `u32` word in minor-0 layouts, a varint in the dense layout.
+        let (tag, mut offset) = norito::core::read_enum_tag_from_slice(bytes)?;
         let value = match tag {
             0 => Self::Domain(super::decode_aos_slice_field::<RemoveKeyValue<Domain>>(
                 super::read_aos_field(bytes, &mut offset, flags)?,
@@ -981,13 +971,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for super::GrantBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
-        let tag = u32::from_le_bytes(
-            tag_bytes
-                .try_into()
-                .map_err(|_| norito::core::Error::LengthMismatch)?,
-        );
-        let mut offset = 4usize;
+        // A `u32` word in minor-0 layouts, a varint in the dense layout.
+        let (tag, mut offset) = norito::core::read_enum_tag_from_slice(bytes)?;
         let value = match tag {
             0 => Self::Permission(super::decode_aos_slice_field::<Grant<Permission, Account>>(
                 super::read_aos_field(bytes, &mut offset, flags)?,
@@ -1018,13 +1003,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for super::RevokeBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
-        let tag = u32::from_le_bytes(
-            tag_bytes
-                .try_into()
-                .map_err(|_| norito::core::Error::LengthMismatch)?,
-        );
-        let mut offset = 4usize;
+        // A `u32` word in minor-0 layouts, a varint in the dense layout.
+        let (tag, mut offset) = norito::core::read_enum_tag_from_slice(bytes)?;
         let value = match tag {
             0 => Self::Permission(
                 super::decode_aos_slice_field::<Revoke<Permission, Account>>(

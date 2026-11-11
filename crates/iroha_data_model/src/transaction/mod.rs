@@ -55,3 +55,6 @@ pub mod prelude {
 
 #[cfg(test)]
 mod captured_transaction_identity_tests;
+
+#[cfg(test)]
+mod dense_fixture_tests;

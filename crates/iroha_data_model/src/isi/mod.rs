@@ -827,6 +827,9 @@ where
         writer: &mut norito::core::Encoder<'_>,
         wire_id: &str,
     ) -> Result<(), norito::core::Error> {
+        if norito::core::dense_layout_active() {
+            return write_dense_instruction_pair(writer, wire_id, self);
+        }
         norito::core::write_frame_with_prefix(self, writer, |writer, frame_len| {
             write_instruction_pair_prefix(writer, wire_id, frame_len)
         })
@@ -870,7 +873,7 @@ fn write_instruction_pair_prefix<W: std::io::Write>(
         flags,
     )?;
     std::io::Write::write_all(&mut writer, name.as_bytes())?;
-    let payload_len = core::mem::size_of::<u64>()
+    let payload_len = norito::core::seq_len_prefix_len_with_flags(framed_payload_len, flags)
         .checked_add(framed_payload_len)
         .ok_or(norito::core::Error::LengthMismatch)?;
     norito::core::write_len_with_flags(
@@ -883,6 +886,41 @@ fn write_instruction_pair_prefix<W: std::io::Write>(
         u64::try_from(framed_payload_len).map_err(|_| norito::core::Error::LengthMismatch)?,
     )?;
     Ok(())
+}
+/// Write the dense instruction envelope: the pair `(wire_id, payload)` in the dense layout, where
+/// `payload` is the instruction's bare dense payload with no nested Norito header.
+///
+/// Each field keeps its dense length prefix, and the payload is a byte vector whose count is the
+/// payload length (`norito.md`, "Dense layout"). The type is identified by the wire ID alone.
+pub(crate) fn write_dense_instruction_pair(
+    writer: &mut norito::core::Encoder<'_>,
+    wire_id: &str,
+    payload: &dyn norito::core::SerializePayload,
+) -> Result<(), norito::core::Error> {
+    norito::core::write_len_prefixed(writer, &wire_id)?;
+    norito::core::write_len_prefixed(writer, &DensePairPayload(payload))
+}
+/// The payload field of a dense instruction pair: a byte vector holding the bare payload.
+///
+/// In the dense layout a byte vector's count and a per-value length prefix are the same varint,
+/// so this frames the payload once, in a single pass on buffers.
+struct DensePairPayload<'a>(&'a dyn norito::core::SerializePayload);
+impl norito::core::SerializePayload for DensePairPayload<'_> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        norito::core::write_len_prefixed(writer, self.0)
+    }
+}
+/// Decode the bare dense payload of a registered instruction: exactly `input`, canonically.
+fn decode_dense_instruction_payload<T>(input: &[u8]) -> Result<InstructionBox, norito::Error>
+where
+    T: Instruction + 'static + norito::NoritoSerialize,
+    for<'a> T: norito::NoritoDeserialize<'a>,
+{
+    let (instruction, used) = norito::core::decode_field_canonical::<T>(input)?;
+    if used != input.len() {
+        return Err(instruction_canonical_framing_error());
+    }
+    Ok(InstructionBox::from_boxed(Box::new(instruction)))
 }
 struct ExactInstructionFrameWriter<'a, W: std::io::Write + ?Sized> {
     inner: &'a mut W,
@@ -998,6 +1036,10 @@ fn encoded_instruction_pair_payload(instr: &InstructionBox) -> Option<(&'static 
     Some((wire_id, frame))
 }
 fn encoded_instruction_pair_len(instr: &InstructionBox) -> Option<usize> {
+    if norito::core::dense_layout_active() {
+        // A dense pair carries the bare payload; the writer measures it.
+        return None;
+    }
     if let Some(opaque) = instr.as_opaque() {
         return encoded_instruction_tuple_len(opaque.wire_id(), opaque.frame().len());
     }
@@ -1008,6 +1050,9 @@ fn encoded_instruction_pair_len(instr: &InstructionBox) -> Option<usize> {
     encoded_instruction_tuple_len(entry.wire_id, framed_payload_len)
 }
 fn encoded_instruction_pair_hint(instr: &InstructionBox) -> Option<usize> {
+    if norito::core::dense_layout_active() {
+        return None;
+    }
     if let Some(opaque) = instr.as_opaque() {
         return encoded_instruction_tuple_len(opaque.wire_id(), opaque.frame().len());
     }
@@ -1025,7 +1070,8 @@ fn encoded_instruction_tuple_len(name: &str, framed_payload_len: usize) -> Optio
     let flags = instruction_tuple_flags();
     let name_len =
         norito::core::len_prefix_len_with_flags(name.len(), flags).checked_add(name.len())?;
-    let payload_vec_len = core::mem::size_of::<u64>().checked_add(framed_payload_len)?;
+    let payload_vec_len = norito::core::seq_len_prefix_len_with_flags(framed_payload_len, flags)
+        .checked_add(framed_payload_len)?;
     tuple_field_len_with_flags(name_len, flags)?
         .checked_add(tuple_field_len_with_flags(payload_vec_len, flags)?)
 }
@@ -1471,10 +1517,15 @@ pub fn decode_instruction_envelope(
         let registry = instruction_registry();
         registry.entry_for_wire_id(wire_id).copied()
     };
+    let dense = norito::core::dense_layout_active();
     let Some(entry) = entry else {
-        return OpaqueInstructionV1::decode_owned(wire_id, frame).map(InstructionBox::from);
+        return OpaqueInstructionV1::decode_owned(wire_id, frame, dense).map(InstructionBox::from);
     };
     let decode = || {
+        if dense {
+            // A dense envelope carries the bare payload in the enclosing layout.
+            return (entry.dense_ctor)(frame);
+        }
         let header_flags = framed_instruction_payload_header_flags(frame)?;
         InstructionRegistry::decode_entry(&entry, header_flags, frame)
     };
@@ -1495,7 +1546,9 @@ pub fn decode_instruction_envelope(
         {
             Err(attempt.into_error())
         }
-        Err(_) => OpaqueInstructionV1::decode_owned(wire_id, frame).map(InstructionBox::from),
+        Err(_) => {
+            OpaqueInstructionV1::decode_owned(wire_id, frame, dense).map(InstructionBox::from)
+        }
     }
 }
 fn framed_instruction_payload_header_flags(payload: &[u8]) -> Result<u8, norito::Error> {
@@ -1630,6 +1683,8 @@ impl From<RegistryEntry> for InstructionEncodingEntry {
 struct RegistryEntry {
     type_name: &'static str,
     ctor: InstructionConstructor,
+    /// Decoder of the bare payload a dense envelope carries.
+    dense_ctor: fn(&[u8]) -> Result<InstructionBox, norito::Error>,
     wire_id: &'static str,
     frame: fn(&[u8], u8) -> Result<Vec<u8>, norito::core::Error>,
     frame_len: fn(usize) -> Option<usize>,
@@ -1730,7 +1785,8 @@ impl InstructionRegistry {
         tolerant: bool,
     ) -> Self
     where
-        T: norito::NoritoSerialize + 'static,
+        T: Instruction + norito::NoritoSerialize + 'static,
+        for<'a> T: norito::NoritoDeserialize<'a>,
     {
         fn frame<T: norito::NoritoSerialize>(
             payload: &[u8],
@@ -1741,6 +1797,7 @@ impl InstructionRegistry {
         let entry = RegistryEntry {
             type_name: std::any::type_name::<T>(),
             ctor,
+            dense_ctor: decode_dense_instruction_payload::<T>,
             wire_id,
             frame: frame::<T>,
             frame_len: framed_instruction_payload_len_for::<T>,

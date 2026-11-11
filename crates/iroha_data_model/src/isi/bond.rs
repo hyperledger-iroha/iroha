@@ -409,13 +409,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for BondInstructionBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
-        let tag = u32::from_le_bytes(
-            tag_bytes
-                .try_into()
-                .map_err(|_| norito::core::Error::LengthMismatch)?,
-        );
-        let mut offset = 4usize;
+        // A `u32` word in minor-0 layouts, a varint in the dense layout.
+        let (tag, mut offset) = norito::core::read_enum_tag_from_slice(bytes)?;
         macro_rules! variant {
             ($variant:ident, $ty:ty) => {
                 Self::$variant(super::decode_aos_slice_field::<$ty>(

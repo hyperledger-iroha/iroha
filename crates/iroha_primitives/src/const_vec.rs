@@ -119,6 +119,10 @@ impl<T: SerializePayload> SerializePayload for ConstVec<T> {
         let slice: &[T] = &self.0;
         let len = slice.len();
         let seq_hdr = ncore::seq_len_prefix_len(len);
+        if ncore::dense_layout_active() && T::__norito_byte_elements(&[]).is_some() {
+            // A dense byte sequence is raw after its count.
+            return seq_hdr.checked_add(len);
+        }
         let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
         let mut total = seq_hdr;
         for item in slice {
@@ -135,6 +139,9 @@ impl<T: SerializePayload> SerializePayload for ConstVec<T> {
         let slice: &[T] = &self.0;
         let len = slice.len();
         let seq_hdr = ncore::seq_len_prefix_len(len);
+        if ncore::dense_layout_active() && T::__norito_byte_elements(&[]).is_some() {
+            return seq_hdr.checked_add(len);
+        }
         let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
         let mut total = seq_hdr;
         for item in slice {

@@ -939,6 +939,15 @@ mod small_vector {
     {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             let count = u64::try_from(self.0.len()).map_err(|_| ncore::Error::LengthMismatch)?;
+            if ncore::dense_layout_active() {
+                // Dense: a varint count and varint element prefixes. A small
+                // vector keeps its per-element framing in every layout.
+                ncore::write_seq_len(writer, count)?;
+                for item in &self.0 {
+                    ncore::write_len_prefixed(writer, item)?;
+                }
+                return Ok(());
+            }
             writer.write_all(&count.to_le_bytes())?;
             for item in &self.0 {
                 ncore::write_fixed_len_prefixed(writer, item)?;
@@ -979,17 +988,34 @@ mod small_vector {
         A::Item: ncore::DecodeFromSlice<'a>,
     {
         fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-            let (len, mut offset) = <u64 as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
-            let len = usize::try_from(len).map_err(|_| ncore::Error::LengthMismatch)?;
+            // Dense counts and element prefixes are varints; minor-0 layouts
+            // keep this type's fixed-width `u64` count and element prefixes.
+            let dense = ncore::dense_layout_active();
+            let (len, mut offset) = if dense {
+                ncore::read_seq_len_slice(bytes)?
+            } else {
+                let (len, used) = <u64 as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
+                (
+                    usize::try_from(len).map_err(|_| ncore::Error::LengthMismatch)?,
+                    used,
+                )
+            };
             let mut out = smallvec::SmallVec::<A>::with_capacity(len);
             for _ in 0..len {
-                let (elem_len, used_len) =
-                    <u64 as ncore::DecodeFromSlice>::decode_from_slice(&bytes[offset..])?;
+                let tail = bytes.get(offset..).ok_or(ncore::Error::LengthMismatch)?;
+                let (elem_len, used_len) = if dense {
+                    ncore::read_len_from_slice(tail)?
+                } else {
+                    let (elem_len, used) =
+                        <u64 as ncore::DecodeFromSlice>::decode_from_slice(tail)?;
+                    (
+                        usize::try_from(elem_len).map_err(|_| ncore::Error::LengthMismatch)?,
+                        used,
+                    )
+                };
                 offset = offset
                     .checked_add(used_len)
                     .ok_or(ncore::Error::LengthMismatch)?;
-                let elem_len =
-                    usize::try_from(elem_len).map_err(|_| ncore::Error::LengthMismatch)?;
                 if elem_len == 0 {
                     if ncore::archived_payload_size::<A::Item>() != 0 {
                         return Err(ncore::Error::LengthMismatch);

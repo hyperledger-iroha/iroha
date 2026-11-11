@@ -998,13 +998,8 @@ impl_settlement_decode_from_slice!(SettleFxCorridor {
 impl<'a> norito::core::DecodeFromSlice<'a> for SettlementInstructionBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = settlement_decode_flags();
-        let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
-        let tag = u32::from_le_bytes(
-            tag_bytes
-                .try_into()
-                .map_err(|_| norito::core::Error::LengthMismatch)?,
-        );
-        let mut offset = 4usize;
+        // A `u32` word in minor-0 layouts, a varint in the dense layout.
+        let (tag, mut offset) = norito::core::read_enum_tag_from_slice(bytes)?;
         let value = match tag {
             0 => Self::Dvp(super::decode_aos_slice_field::<DvpIsi>(
                 super::read_aos_field(bytes, &mut offset, flags)?,

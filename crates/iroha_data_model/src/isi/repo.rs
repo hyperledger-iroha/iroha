@@ -235,19 +235,20 @@ impl RepoInstructionBox {
 impl norito::core::SerializePayload for RepoInstructionBox {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let (tag, payload) = self.tag_and_payload();
-        norito::core::SerializePayload::serialize(&tag, writer)?;
+        // A `u32` word in minor-0 layouts, a varint in the dense layout.
+        norito::core::write_enum_tag(writer, tag)?;
         norito::core::write_len_prefixed(writer, payload)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        let (_, payload) = self.tag_and_payload();
+        let (tag, payload) = self.tag_and_payload();
         payload
             .encoded_len_hint()
-            .map(|len| 4usize.saturating_add(8usize.saturating_add(len)))
+            .map(|len| norito::core::enum_tag_len(tag).saturating_add(8usize.saturating_add(len)))
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        let (_, payload) = self.tag_and_payload();
+        let (tag, payload) = self.tag_and_payload();
         let payload_len = payload.encoded_len_exact()?;
-        4usize
+        norito::core::enum_tag_len(tag)
             .checked_add(norito::core::len_prefix_len(payload_len))?
             .checked_add(payload_len)
     }
@@ -317,13 +318,8 @@ impl_repo_decode_from_slice!(RepoMarginCallIsi {
 impl<'a> norito::core::DecodeFromSlice<'a> for RepoInstructionBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = repo_decode_flags();
-        let tag_bytes = bytes.get(..4).ok_or(norito::core::Error::LengthMismatch)?;
-        let tag = u32::from_le_bytes(
-            tag_bytes
-                .try_into()
-                .map_err(|_| norito::core::Error::LengthMismatch)?,
-        );
-        let mut offset = 4usize;
+        // A `u32` word in minor-0 layouts, a varint in the dense layout.
+        let (tag, mut offset) = norito::core::read_enum_tag_from_slice(bytes)?;
         let value = match tag {
             0 => {
                 let value = super::decode_aos_slice_field::<RepoIsi>(

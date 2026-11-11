@@ -458,3 +458,74 @@ fn a_protocol_limit_inside_a_tolerant_decoder_is_a_verdict_about_the_bytes() {
     let decoded = decode_slice(&bare_pair(TOLERANT_WIRE_ID, &frame)).expect("tolerant decode");
     assert_opaque(&decoded, TOLERANT_WIRE_ID, &frame);
 }
+
+/// The bare pair of `wire_id` and `payload` in the dense layout.
+fn dense_pair(wire_id: &str, payload: &[u8]) -> Vec<u8> {
+    let _dense = norito::core::WireLayoutGuard::enter(norito::core::WireLayout::Dense);
+    bare_pair(wire_id, payload)
+}
+
+fn encode_dense(instruction: &InstructionBox) -> Result<Vec<u8>, norito::Error> {
+    norito::codec::encode_bare_with_layout(instruction, norito::core::WireLayout::Dense)
+}
+
+fn decode_dense(bytes: &[u8]) -> Result<InstructionBox, norito::Error> {
+    norito::codec::decode_bare_with_layout(bytes, norito::core::WireLayout::Dense)
+}
+
+#[test]
+fn dense_envelopes_are_the_plain_tuple_of_wire_id_and_bare_payload() {
+    let _registry = RegistryGuard::test_registry();
+    let instruction = InstructionBox::from(log("dense"));
+    let payload =
+        norito::codec::encode_bare_with_layout(&log("dense"), norito::core::WireLayout::Dense)
+            .unwrap();
+    let encoded = encode_dense(&instruction).unwrap();
+    // No nested Norito header: the type is named by the wire ID alone.
+    assert!(!encoded.windows(4).any(|window| window == b"NRT0"));
+    assert_eq!(encoded, dense_pair(TOLERANT_WIRE_ID, &payload));
+    assert_eq!(decode_dense(&encoded).unwrap(), instruction);
+    // The current layout keeps the framed pair.
+    let current = norito::codec::encode_adaptive(&instruction);
+    assert!(current.windows(4).any(|window| window == b"NRT0"));
+    assert!(encoded.len() + norito::core::Header::SIZE <= current.len());
+}
+
+#[test]
+fn opaque_dense_envelopes_keep_their_bytes_and_their_layout() {
+    let _registry = RegistryGuard::test_registry();
+    let pair = dense_pair(UNKNOWN_WIRE_ID, &[1, 2, 3]);
+    let decoded = decode_dense(&pair).unwrap();
+    let opaque = decoded
+        .as_opaque()
+        .expect("an unregistered wire ID stays opaque");
+    assert!(opaque.is_dense());
+    assert_eq!(opaque.frame(), [1, 2, 3]);
+    assert_eq!(encode_dense(&decoded).unwrap(), pair);
+    assert_eq!(decoded.dyn_encode(), pair);
+    // An uninterpreted payload cannot be transcoded into another layout.
+    assert!(
+        norito::codec::encode_bare_with_layout(&decoded, norito::core::WireLayout::Compact)
+            .is_err()
+    );
+    let framed =
+        InstructionBox::from(OpaqueInstructionV1::new(UNKNOWN_WIRE_ID, garbage_frame()).unwrap());
+    assert!(encode_dense(&framed).is_err());
+    let built = OpaqueInstructionV1::new_dense(UNKNOWN_WIRE_ID, [1_u8, 2, 3]).unwrap();
+    assert_eq!(encode_dense(&InstructionBox::from(built)).unwrap(), pair);
+}
+
+#[test]
+fn dense_tolerant_and_strict_registrations_keep_their_verdicts() {
+    let _registry = RegistryGuard::test_registry();
+    // A payload the tolerant registration's decoder refuses stays opaque, as in minor 0.
+    let refused = dense_pair(TOLERANT_WIRE_ID, &[0xff; 3]);
+    let decoded = decode_dense(&refused).unwrap();
+    let opaque = decoded
+        .as_opaque()
+        .expect("a refused tolerant payload stays opaque");
+    assert!(opaque.is_dense());
+    assert_eq!(encode_dense(&decoded).unwrap(), refused);
+    // A strict registration refuses it outright.
+    assert!(decode_dense(&dense_pair(STRICT_WIRE_ID, &[0xff; 3])).is_err());
+}

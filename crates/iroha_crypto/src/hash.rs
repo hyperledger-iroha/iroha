@@ -585,6 +585,26 @@ impl<T: norito::codec::Encode> HashOf<T> {
         norito::codec::encode_adaptive_into(value, &mut writer)?;
         Ok(Self(writer.finalize(), PhantomData))
     }
+    /// Construct the typed hash of `value`'s bare payload in an explicit layout.
+    ///
+    /// A payload's layout is part of its identity: the same value hashes differently in the
+    /// current compact layout and in the dense layout. [`norito::core::WireLayout::Compact`]
+    /// gives exactly [`Self::try_new`]. The owner of the hashed bytes names the layout, for
+    /// example from the transaction wire version or the block's selected kernel.
+    ///
+    /// # Errors
+    /// Returns the serializer's codec or local resource refusal without a partial hash.
+    pub fn try_new_with_layout(
+        value: &T,
+        layout: norito::core::WireLayout,
+    ) -> Result<Self, norito::Error> {
+        let mut writer = HashWriter::new();
+        {
+            let _layout = norito::core::WireLayoutGuard::enter(layout);
+            norito::core::serialize_to_writer(value, &mut writer)?;
+        }
+        Ok(Self(writer.finalize(), PhantomData))
+    }
 }
 impl<T> FromStr for HashOf<T> {
     type Err = ParseError;
@@ -666,6 +686,24 @@ impl<'a, T> norito::core::DecodeFromSlice<'a> for HashOf<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn typed_hashes_cover_the_named_layout() {
+        let value = (vec![[7_u8; 4]; 3], "label".to_owned());
+        let compact = HashOf::try_new(&value).unwrap();
+        assert_eq!(
+            HashOf::try_new_with_layout(&value, norito::core::WireLayout::Compact).unwrap(),
+            compact
+        );
+        let dense_bytes =
+            norito::codec::encode_bare_with_layout(&value, norito::core::WireLayout::Dense)
+                .unwrap();
+        let dense = HashOf::try_new_with_layout(&value, norito::core::WireLayout::Dense).unwrap();
+        assert_eq!(
+            dense,
+            HashOf::from_untyped_unchecked(Hash::new(&dense_bytes))
+        );
+        assert_ne!(dense, compact);
+    }
     #[test]
     fn blake2_32b() {
         let mut hasher = Blake2b256::new();

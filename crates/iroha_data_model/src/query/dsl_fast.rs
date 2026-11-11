@@ -514,8 +514,8 @@ enum CompoundPredicateWireRef<'a> {
     TxPredicate(&'a CommittedTxPredicate),
 }
 impl CompoundPredicateWireRef<'_> {
-    fn encoded_variant_len(payload: usize) -> Option<usize> {
-        4_usize
+    fn encoded_variant_len(tag: u32, payload: usize) -> Option<usize> {
+        norito::core::enum_tag_len(tag)
             .checked_add(norito::core::len_prefix_len(payload))?
             .checked_add(payload)
     }
@@ -524,40 +524,42 @@ impl CompoundPredicateWireRef<'_> {
 impl norito::core::SerializePayload for CompoundPredicateWireRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         match self {
-            Self::Pass => norito::core::SerializePayload::serialize(&0_u32, writer),
+            // The derived `CompoundPredicateWire` decoder reads these tags in
+            // the active layout: a `u32` word in minor 0, a varint in dense.
+            Self::Pass => norito::core::write_enum_tag(writer, 0),
             Self::Json(raw) => {
-                norito::core::SerializePayload::serialize(&1_u32, writer)?;
+                norito::core::write_enum_tag(writer, 1)?;
                 norito::core::write_len_prefixed(writer, raw)
             }
             Self::TxPredicate(tree) => {
-                norito::core::SerializePayload::serialize(&2_u32, writer)?;
+                norito::core::write_enum_tag(writer, 2)?;
                 norito::core::write_len_prefixed(writer, *tree)
             }
         }
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         match self {
-            Self::Pass => Some(4),
+            Self::Pass => Some(norito::core::enum_tag_len(0)),
             Self::Json(raw) => {
                 let payload = norito::core::SerializePayload::encoded_len_hint(raw)?;
-                Self::encoded_variant_len(payload)
+                Self::encoded_variant_len(1, payload)
             }
             Self::TxPredicate(tree) => {
                 let payload = norito::core::SerializePayload::encoded_len_hint(*tree)?;
-                Self::encoded_variant_len(payload)
+                Self::encoded_variant_len(2, payload)
             }
         }
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         match self {
-            Self::Pass => Some(4),
+            Self::Pass => Some(norito::core::enum_tag_len(0)),
             Self::Json(raw) => {
                 let payload = norito::core::SerializePayload::encoded_len_exact(raw)?;
-                Self::encoded_variant_len(payload)
+                Self::encoded_variant_len(1, payload)
             }
             Self::TxPredicate(tree) => {
                 let payload = norito::core::SerializePayload::encoded_len_exact(*tree)?;
-                Self::encoded_variant_len(payload)
+                Self::encoded_variant_len(2, payload)
             }
         }
     }

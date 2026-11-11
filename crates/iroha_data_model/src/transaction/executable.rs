@@ -361,24 +361,13 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Executable {
         const INSTRUCTIONS_TAG: u32 = 0;
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
-        let tag_bytes = bytes
-            .get(..core::mem::size_of::<u32>())
-            .ok_or(norito::core::Error::LengthMismatch)?;
-        let tag = u32::from_le_bytes(
-            tag_bytes
-                .try_into()
-                .expect("slice length checked for executable tag"),
-        );
+        // A `u32` word in minor-0 layouts, a varint in the dense layout.
+        let (tag, tag_len) = norito::core::read_enum_tag_from_slice(bytes)?;
         if tag != INSTRUCTIONS_TAG {
-            return norito::core::with_payload_ctx(bytes, || {
-                let mut cursor = std::io::Cursor::new(bytes);
-                let decoded = <Self as norito::codec::Decode>::decode(&mut cursor)?;
-                let used = usize::try_from(cursor.position())
-                    .map_err(|_| norito::core::Error::LengthMismatch)?;
-                Ok((decoded, used))
-            });
+            // The other variants use the derived payload decoder under the active layout.
+            return norito::core::decode_field_canonical::<Self>(bytes);
         }
-        let mut offset = core::mem::size_of::<u32>();
+        let mut offset = tag_len;
         let remaining = bytes
             .get(offset..)
             .ok_or(norito::core::Error::LengthMismatch)?;

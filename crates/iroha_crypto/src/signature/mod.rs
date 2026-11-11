@@ -613,6 +613,20 @@ fn visit_signature_payload_elements(
     count: usize,
     mut visit: impl FnMut(usize, u8),
 ) -> Result<(), ncore::Error> {
+    if ncore::dense_layout_active() {
+        // A dense signature is its raw bytes after the count.
+        let end = offset
+            .checked_add(count)
+            .ok_or(ncore::Error::LengthMismatch)?;
+        let raw = bytes.get(offset..end).ok_or(ncore::Error::LengthMismatch)?;
+        for (index, &byte) in raw.iter().enumerate() {
+            visit(index, byte);
+        }
+        if end != bytes.len() {
+            return Err(ncore::Error::LengthMismatch);
+        }
+        return Ok(());
+    }
     for index in 0..count {
         let (elem_len, header_len) = ncore::inspect_len_from_slice(
             bytes.get(offset..).ok_or(ncore::Error::LengthMismatch)?,
@@ -918,6 +932,35 @@ impl<T: norito::codec::Encode> SignatureOf<T> {
     /// Fails if verification fails
     pub fn verify(&self, public_key: &PublicKey, value: &T) -> Result<(), Error> {
         self.verify_hash(public_key, HashOf::new(value))
+    }
+    /// Sign `value`'s typed hash in an explicit Norito layout ([`HashOf::try_new_with_layout`]).
+    ///
+    /// [`norito::core::WireLayout::Compact`] signs exactly what [`Self::try_new`] signs.
+    ///
+    /// # Errors
+    /// Returns the payload's codec error or [`Error::Signing`] from the signing backend.
+    pub fn try_new_with_layout(
+        private_key: &PrivateKey,
+        value: &T,
+        layout: norito::core::WireLayout,
+    ) -> Result<Self, Error> {
+        let hash = HashOf::try_new_with_layout(value, layout)
+            .map_err(|error| Error::Signing(error.to_string()))?;
+        Self::try_from_hash(private_key, hash)
+    }
+    /// Verify this signature over `value`'s typed hash in an explicit Norito layout.
+    ///
+    /// # Errors
+    /// Fails if the payload cannot be encoded or the signature does not verify.
+    pub fn verify_with_layout(
+        &self,
+        public_key: &PublicKey,
+        value: &T,
+        layout: norito::core::WireLayout,
+    ) -> Result<(), Error> {
+        let hash = HashOf::try_new_with_layout(value, layout)
+            .map_err(|error| Error::Other(error.to_string()))?;
+        self.verify_hash(public_key, hash)
     }
 }
 // Provide slice-based decoding for Signature as well (used by hybrid decoders)

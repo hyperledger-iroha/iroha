@@ -672,6 +672,7 @@ outputs = [
   "fixtures/norito_rpc/set_parameter_next_mode.norito",
   "fixtures/norito_rpc/settlement_dvp_atomic.norito",
   "fixtures/norito_rpc/settlement_pvp_net.norito",
+  "fixtures/norito_rpc/transaction_fixtures.dense.json",
   "fixtures/norito_rpc/transaction_fixtures.manifest.json",
   "fixtures/norito_rpc/transaction_payloads.json",
   "fixtures/norito_rpc/transfer_asset.norito",

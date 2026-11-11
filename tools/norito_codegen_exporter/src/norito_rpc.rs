@@ -63,6 +63,8 @@ const PUBLICATION_SEAL_PENDING_SUFFIX: &str = ".norito-rpc-seal.pending";
 const SCHEMA_HASH_MANIFEST: &str = "fixtures/norito_rpc/schema_hashes.json";
 const SCHEMA_HASH_MANIFEST_BASENAME: &str = "schema_hashes.json";
 const MANIFEST_BASENAME: &str = "transaction_fixtures.manifest.json";
+/// The same transactions in the dense Norito layout (`norito.md`, "Dense layout").
+const DENSE_MANIFEST_BASENAME: &str = "transaction_fixtures.dense.json";
 const COMPACT_HASH_VECTOR_BASENAME: &str = "iroha_compact_hash_vector.properties";
 const COMPACT_HASH_VECTOR_SOURCE: &str = "transfer_asset";
 const SIGNED_TRANSACTION_V1: u8 = 1;
@@ -865,6 +867,19 @@ fn generate_fixture_artifacts(fixtures_json: &[u8], out_dir: &Path) -> Result<()
         format!("{manifest_json}\n"),
     )
     .context("failed to write generated fixture manifest")?;
+    let dense_manifest = DenseManifest {
+        layout: "dense".to_owned(),
+        fixtures: fixtures
+            .iter()
+            .map(|fixture| fixture.dense.clone())
+            .collect(),
+    };
+    let dense_json = json::to_json_pretty(&dense_manifest)?;
+    fs::write(
+        out_dir.join(DENSE_MANIFEST_BASENAME),
+        format!("{dense_json}\n"),
+    )
+    .context("failed to write generated dense fixture manifest")?;
     // Render refreshed generated hints into the private publication tree.
     let updated_payloads = build_payload_fixtures_json(&raw_fixtures, &fixtures)?;
     let payloads_json = json::to_json_pretty(&updated_payloads)?;
@@ -978,6 +993,23 @@ struct Fixture {
     payload_bytes: Vec<u8>,
     signed_bytes: Vec<u8>,
     summary: PayloadSummary,
+    dense: DenseFixtureEntry,
+}
+/// One transaction in the dense layout: its bare payload, the hash its signature
+/// covers, and the bare signed transaction signed with the same fixture key.
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct DenseFixtureEntry {
+    name: String,
+    payload_base64: String,
+    signing_hash: String,
+    signed_base64: String,
+}
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct DenseManifest {
+    layout: String,
+    fixtures: Vec<DenseFixtureEntry>,
 }
 struct PayloadSummary {
     network_id: String,
@@ -1088,10 +1120,12 @@ impl RawPayloadFixture {
         let payload_hash_hex = blake2b256_hex(&payload_bytes);
         let signed_hash_hex = signed_transaction_entrypoint_hash_hex(&signed_bytes)?;
         debug_assert_eq!(signed.payload().encode(), payload_bare);
+        let dense = self.dense_fixture(keypair, &payload_value)?;
         Ok(Fixture {
             name: self.name.clone(),
             payload_bytes,
             signed_bytes,
+            dense,
             summary: PayloadSummary {
                 network_id: self.payload.network_id.clone(),
                 authority: payload_value.authority().to_string(),
@@ -1103,6 +1137,47 @@ impl RawPayloadFixture {
                 payload_hash_hex,
                 signed_hash_hex,
             },
+        })
+    }
+}
+impl RawPayloadFixture {
+    /// The fixture in the dense layout, signed over the dense payload's hash.
+    fn dense_fixture(
+        &self,
+        keypair: &KeyPair,
+        payload: &iroha_data_model::transaction::TransactionPayload,
+    ) -> Result<DenseFixtureEntry> {
+        let layout = norito::core::WireLayout::Dense;
+        let signed = self
+            .payload
+            .to_builder(&self.name)?
+            .try_sign_with_layout(keypair.private_key(), layout)
+            .map_err(|err| eyre!("failed to sign dense fixture '{}': {err}", self.name))?;
+        if signed.payload() != payload {
+            bail!("dense fixture '{}' built a different payload", self.name);
+        }
+        let payload_bytes = norito::codec::encode_bare_with_layout(payload, layout)
+            .map_err(|err| eyre!("failed to encode dense payload '{}': {err}", self.name))?;
+        let signed_bytes = norito::codec::encode_bare_with_layout(&signed, layout)
+            .map_err(|err| eyre!("failed to encode dense transaction '{}': {err}", self.name))?;
+        let decoded: iroha_data_model::transaction::SignedTransaction =
+            norito::codec::decode_bare_with_layout(&signed_bytes, layout)
+                .map_err(|err| eyre!("dense transaction '{}' does not decode: {err}", self.name))?;
+        if decoded != signed {
+            bail!("dense transaction '{}' decodes to another value", self.name);
+        }
+        let signing_hash = iroha_crypto::HashOf::try_new_with_layout(payload, layout)
+            .map_err(|err| eyre!("failed to hash dense payload '{}': {err}", self.name))?;
+        signed
+            .signature()
+            .payload()
+            .verify(keypair.public_key(), signing_hash.as_ref())
+            .map_err(|err| eyre!("dense signature of '{}' does not verify: {err}", self.name))?;
+        Ok(DenseFixtureEntry {
+            name: self.name.clone(),
+            payload_base64: BASE64.encode(&payload_bytes),
+            signing_hash: hex_encode(signing_hash.as_ref()),
+            signed_base64: BASE64.encode(&signed_bytes),
         })
     }
 }
@@ -1890,6 +1965,7 @@ fn owned_publication_paths(fixtures: &[FixtureEntry]) -> Result<Vec<PathBuf>> {
         PathBuf::from(ALIAS_SETUP_FIXTURE_V1),
         canonical_dir.join(PAYLOADS_BASENAME),
         canonical_dir.join(MANIFEST_BASENAME),
+        canonical_dir.join(DENSE_MANIFEST_BASENAME),
         canonical_dir.join(SCHEMA_HASH_MANIFEST_BASENAME),
         canonical_dir.join(COMPACT_HASH_VECTOR_BASENAME),
     ];
@@ -3733,6 +3809,33 @@ mod tests {
         let error = validate_manifest_shape(&unknown_entry)
             .expect_err("unknown manifest entry fields must fail closed");
         assert!(error.to_string().contains("unknown field 'encoded'"));
+    }
+    /// The dense manifest is regenerated with the canonical fixtures: same
+    /// payload descriptor, same deterministic key, dense layout.
+    #[test]
+    fn dense_manifest_matches_the_committed_fixture() {
+        let root = workspace_root();
+        let source = fs::read(root.join(CANONICAL_PAYLOADS)).expect("canonical payload descriptor");
+        let out = tempdir().expect("temp dir");
+        generate_fixture_artifacts(&source, out.path()).expect("fixture artifacts");
+        // The current layout is unchanged by the dense outputs.
+        assert_eq!(
+            fs::read(out.path().join(MANIFEST_BASENAME)).expect("generated manifest"),
+            fs::read(root.join(CANONICAL_MANIFEST)).expect("committed manifest")
+        );
+        let generated = fs::read(out.path().join(DENSE_MANIFEST_BASENAME)).expect("dense manifest");
+        let committed = root
+            .join(CANONICAL_FIXTURE_DIRECTORY)
+            .join(DENSE_MANIFEST_BASENAME);
+        if std::env::var_os("NORITO_UPDATE_DENSE_FIXTURES").is_some() {
+            fs::write(&committed, &generated).expect("write dense manifest");
+            return;
+        }
+        assert_eq!(
+            fs::read(&committed).expect("committed dense manifest"),
+            generated,
+            "regenerate with NORITO_UPDATE_DENSE_FIXTURES=1"
+        );
     }
     fn canonical_descriptor_fixture(name: &str) -> Value {
         let source = fs::read_to_string(workspace_root().join(CANONICAL_PAYLOADS))

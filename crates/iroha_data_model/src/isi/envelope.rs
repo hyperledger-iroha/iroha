@@ -56,6 +56,8 @@ pub(super) fn malformed_wire_id_error() -> norito::Error {
 pub struct OpaqueInstructionV1 {
     wire_id: String,
     frame: Vec<u8>,
+    /// Whether `frame` is the bare payload of a dense envelope rather than a minor-0 frame.
+    dense: bool,
 }
 
 impl OpaqueInstructionV1 {
@@ -79,14 +81,34 @@ impl OpaqueInstructionV1 {
         Ok(Self {
             wire_id,
             frame: frame.into(),
+            dense: false,
         })
+    }
+
+    /// Construct the opaque dense envelope of `wire_id` carrying a bare dense `payload`.
+    ///
+    /// It encodes only inside a dense payload, as the same `(wire_id, payload)` pair.
+    ///
+    /// # Errors
+    /// The wire ID is not well formed ([`is_well_formed_wire_id`]).
+    pub fn new_dense(
+        wire_id: impl Into<String>,
+        payload: impl Into<Vec<u8>>,
+    ) -> Result<Self, norito::Error> {
+        let mut envelope = Self::new(wire_id, payload)?;
+        envelope.dense = true;
+        Ok(envelope)
     }
 
     /// Copy one decoded envelope, charging both copies to the active decode allocation budget.
     ///
     /// # Errors
     /// The wire ID is not well formed, or the decode budget refuses the copies.
-    pub(super) fn decode_owned(wire_id: &str, frame: &[u8]) -> Result<Self, norito::Error> {
+    pub(super) fn decode_owned(
+        wire_id: &str,
+        frame: &[u8],
+        dense: bool,
+    ) -> Result<Self, norito::Error> {
         if !is_well_formed_wire_id(wire_id) {
             return Err(malformed_wire_id_error());
         }
@@ -102,6 +124,7 @@ impl OpaqueInstructionV1 {
         Ok(Self {
             wire_id: wire_id.to_owned(),
             frame: owned,
+            dense,
         })
     }
 
@@ -111,10 +134,17 @@ impl OpaqueInstructionV1 {
         &self.wire_id
     }
 
-    /// The exact frame the envelope carries: the Norito header and payload.
+    /// The exact bytes the envelope carries: a minor-0 envelope's Norito header and payload, or a
+    /// dense envelope's bare payload ([`Self::is_dense`]).
     #[must_use]
     pub fn frame(&self) -> &[u8] {
         &self.frame
+    }
+
+    /// Whether the envelope came from, and encodes only into, a dense payload.
+    #[must_use]
+    pub fn is_dense(&self) -> bool {
+        self.dense
     }
 
     /// Take the wire ID and the frame.
@@ -126,6 +156,18 @@ impl OpaqueInstructionV1 {
     /// The canonical bare `(wire_id, frame)` pair: the bytes an [`InstructionBox`] holding this
     /// envelope encodes as under the canonical layout.
     fn canonical_pair(&self) -> Vec<u8> {
+        if self.dense {
+            let _dense = norito::core::WireLayoutGuard::enter(norito::core::WireLayout::Dense);
+            let mut out = Vec::new();
+            // A byte vector cannot exceed the Norito length prefix.
+            super::write_dense_instruction_pair(
+                &mut norito::core::Encoder::for_buffer(&mut out),
+                &self.wire_id,
+                &RawPayload(&self.frame),
+            )
+            .expect("in-memory envelope lengths fit the Norito length prefix");
+            return out;
+        }
         let _canonical =
             norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let mut out = Vec::new();
@@ -139,9 +181,21 @@ impl OpaqueInstructionV1 {
 
     /// Length of [`Self::canonical_pair`].
     fn canonical_pair_len(&self) -> Option<usize> {
+        if self.dense {
+            return Some(self.canonical_pair().len());
+        }
         let _canonical =
             norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         super::encoded_instruction_tuple_len(&self.wire_id, self.frame.len())
+    }
+}
+
+/// Bytes written verbatim as a payload: an opaque envelope's uninterpreted dense payload.
+struct RawPayload<'a>(&'a [u8]);
+impl norito::core::SerializePayload for RawPayload<'_> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        writer.write_all(self.0)?;
+        Ok(())
     }
 }
 
@@ -150,6 +204,7 @@ impl fmt::Debug for OpaqueInstructionV1 {
         f.debug_struct("OpaqueInstructionV1")
             .field("wire_id", &self.wire_id)
             .field("frame_len", &self.frame.len())
+            .field("dense", &self.dense)
             .finish()
     }
 }
@@ -168,6 +223,12 @@ impl Instruction for OpaqueInstructionV1 {
     }
 
     fn dyn_write_frame(&self, writer: &mut dyn std::io::Write) -> Result<(), norito::core::Error> {
+        if self.dense {
+            // A bare dense payload of an unknown type has no frame identity.
+            return Err(norito::core::Error::InvalidValue {
+                context: "opaque dense instruction payload has no standalone frame",
+            });
+        }
         writer.write_all(&self.frame)?;
         Ok(())
     }
@@ -182,6 +243,19 @@ impl Instruction for OpaqueInstructionV1 {
             return Err(norito::core::Error::InvalidValue {
                 context: "opaque instruction envelope written under another wire identifier",
             });
+        }
+        if self.dense != norito::core::dense_layout_active() {
+            // An uninterpreted payload cannot be transcoded into another layout.
+            return Err(norito::core::Error::InvalidValue {
+                context: "opaque instruction envelope written in another layout",
+            });
+        }
+        if self.dense {
+            return super::write_dense_instruction_pair(
+                writer,
+                &self.wire_id,
+                &RawPayload(&self.frame),
+            );
         }
         super::write_instruction_pair_prefix(&mut *writer, &self.wire_id, self.frame.len())?;
         writer.write_all(&self.frame)?;

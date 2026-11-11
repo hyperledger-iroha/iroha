@@ -653,12 +653,16 @@ where
     }
     Ok(value)
 }
+/// Decode one complete field with its type's payload decoder under the active layout.
 fn decode_codec_field<T>(field: &[u8]) -> Result<T, norito::core::Error>
 where
-    T: norito::codec::Decode,
+    T: for<'de> norito::core::DeserializePayload<'de> + norito::core::SerializePayload,
 {
-    let mut cursor = std::io::Cursor::new(field);
-    <T as norito::codec::Decode>::decode(&mut cursor)
+    let (value, used) = norito::core::decode_field_canonical::<T>(field)?;
+    if used != field.len() {
+        return Err(norito::core::Error::LengthMismatch);
+    }
+    Ok(value)
 }
 // The payload has one decoder. Archive-based decoding delegates to the slice
 // decoder below, so the binding of the attachment descriptor to the rest of the
@@ -767,13 +771,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::SignedTransaction {
 }
 impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionEntrypoint {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        norito::core::with_payload_ctx(bytes, || {
-            let mut cursor = std::io::Cursor::new(bytes);
-            let decoded: Self = <Self as norito::codec::Decode>::decode(&mut cursor)?;
-            let used = usize::try_from(cursor.position())
-                .map_err(|_| norito::core::Error::LengthMismatch)?;
-            Ok((decoded, used))
-        })
+        // The derived payload decoder under the active layout.
+        norito::core::decode_field_canonical::<Self>(bytes)
     }
 }
 impl<'a> norito::core::DecodeFromSlice<'a> for model::ExecutionStep {
@@ -2526,19 +2525,21 @@ struct ExternalEntrypointRef<'a>(&'a TransactionPayload);
 
 impl norito::core::SerializePayload for ExternalEntrypointRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        norito::core::SerializePayload::serialize(&0_u32, writer)?;
+        norito::core::write_enum_tag(writer, 0)?;
         norito::core::write_len_prefixed(writer, self.0)?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        self.0
-            .encoded_len_hint()
-            .map(|len| 4_usize.saturating_add(8).saturating_add(len))
+        self.0.encoded_len_hint().map(|len| {
+            norito::core::enum_tag_len(0)
+                .saturating_add(8)
+                .saturating_add(len)
+        })
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         let len = self.0.encoded_len_exact()?;
         Some(
-            4_usize
+            norito::core::enum_tag_len(0)
                 .saturating_add(norito::core::len_prefix_len(len))
                 .saturating_add(len),
         )
@@ -2782,6 +2783,39 @@ impl TransactionBuilder {
         self,
         private_key: &iroha_crypto::PrivateKey,
     ) -> Result<SignedTransaction, TransactionSignatureError> {
+        self.sign_single(private_key, |payload| {
+            SignatureOf::try_new(private_key, payload)
+        })
+    }
+    /// Try to sign the transaction's payload as encoded in an explicit Norito layout.
+    ///
+    /// The signature covers the payload's typed hash in `layout`
+    /// ([`iroha_crypto::HashOf::try_new_with_layout`]), so it verifies only against that
+    /// encoding. [`norito::core::WireLayout::Compact`] signs exactly what [`Self::try_sign`]
+    /// signs.
+    ///
+    /// TODO(dense-activation): nodes verify dense signatures only once a governed selection
+    /// activates the dense layout for transactions (`specs/live_runtime_upgrades.md`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::try_sign`].
+    pub fn try_sign_with_layout(
+        self,
+        private_key: &iroha_crypto::PrivateKey,
+        layout: norito::core::WireLayout,
+    ) -> Result<SignedTransaction, TransactionSignatureError> {
+        self.sign_single(private_key, |payload| {
+            SignatureOf::try_new_with_layout(private_key, payload, layout)
+        })
+    }
+    fn sign_single(
+        self,
+        private_key: &iroha_crypto::PrivateKey,
+        sign: impl FnOnce(
+            &TransactionPayload,
+        ) -> Result<SignatureOf<TransactionPayload>, iroha_crypto::Error>,
+    ) -> Result<SignedTransaction, TransactionSignatureError> {
         use iroha_crypto::PublicKey;
         self.validate_payload_state()?;
         let payload = self.payload;
@@ -2793,9 +2827,8 @@ impl TransactionBuilder {
         if expected != &derived {
             return Err(TransactionSignatureError::AuthorityKeyMismatch);
         }
-        let signature = TransactionSignature(
-            SignatureOf::try_new(private_key, &payload).map_err(TransactionSignatureError::from)?,
-        );
+        let signature =
+            TransactionSignature(sign(&payload).map_err(TransactionSignatureError::from)?);
         Ok(SignedTransaction {
             signature,
             payload,

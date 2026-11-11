@@ -200,14 +200,8 @@ impl ActionDestination {
         pool: &AllocationBudget,
         cached: Option<&NposPenaltyAction>,
     ) -> Result<Option<(NposPenaltyAction, ActionCustody)>, Error> {
-        let tag = u32::from_le_bytes(
-            bytes
-                .get(..4)
-                .ok_or(norito::Error::LengthMismatch)?
-                .try_into()
-                .map_err(|_| norito::Error::LengthMismatch)?,
-        );
-        let mut offset = 4;
+        // A `u32` word in minor-0 layouts, a varint in the dense layout.
+        let (tag, mut offset) = norito::core::read_enum_tag_from_slice(bytes)?;
         match tag {
             0 => {
                 let cached = match cached {
