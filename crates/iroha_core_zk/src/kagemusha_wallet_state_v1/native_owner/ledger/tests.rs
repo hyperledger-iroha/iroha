@@ -381,7 +381,7 @@ fn payout_boundary_world(
     });
     (
         WorldStateSnapshotV1 {
-            schema_hash: iroha_crypto::Hash::new(b"synthetic native payout boundary schema"),
+            schema_hash: iroha_data_model::sumeragi_finality::native_world_schema_family_v1()[0],
             entries,
         },
         payout,

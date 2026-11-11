@@ -68,7 +68,8 @@ fn run(
     limits: &Limits,
 ) -> Result<RowPage> {
     let prepared = collections::prepare(target.spec(), target.scope(), query, limits)?;
-    execute(
+    // Apply `select` exactly as the collection route does after source execution.
+    let page = execute(
         state,
         target,
         query,
@@ -76,7 +77,8 @@ fn run(
         visibility,
         &prepared,
         limits,
-    )
+    )?;
+    Ok(prepared.project(page)?)
 }
 #[test]
 fn roles_and_assignments_seek_both_directions_without_cross_account_rows() {

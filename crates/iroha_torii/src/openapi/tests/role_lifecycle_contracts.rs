@@ -114,7 +114,7 @@ fn role_aggregate_schemas_bound_aliases_and_preserve_metric_value_types() {
 
     let document = canonical_document();
     let schemas = component_schemas(&document);
-    let count = norito::json!({"type": "integer", "minimum": 0, "maximum": u64::MAX});
+    let count = norito::json!({"type": "integer", "minimum": 0, "maximum": (u64::MAX)});
     for (name, metric) in [
         ("AccountRoleAggregateRow", count.clone()),
         (
