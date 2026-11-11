@@ -324,7 +324,6 @@ baselines, pinned-runner scheduling and real candidate measurements remain open.
 See [the profiling guide](../docs/profile_build.md#measured-memory-acceptance).
 
 ### Featured checks
-- `check_rust_1_92_lints.sh` – runs `cargo check` with the Rust 1.92 lint set (including the new never-type fallback and macro-export checks) so stricter diagnostics surface before CI.
 - `check_swift_spm_validation.sh` – exercises `IrohaSwift/Package.swift` with the bridge present and with the bridge intentionally missing. The complete artifact must build and the missing-artifact case must fail with the mandatory-bridge diagnostic. Writes a summary + logs under `artifacts/swift_spm_validation`.
 - SwiftPM is the sole supported Swift packaging path. The mobile artifact
   workflow authenticates the final XCFramework ZIP, checksum inventory and
