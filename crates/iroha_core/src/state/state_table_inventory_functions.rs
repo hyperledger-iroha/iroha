@@ -181,6 +181,30 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         ),
     ),
     function(
+        "crates/iroha_core/src/runtime/checkpoint.rs",
+        "block_hash",
+        1,
+        UseOwner::Other(Use::Record, BLOCK_HASH),
+    ),
+    function(
+        "crates/iroha_core/src/runtime/checkpoint.rs",
+        "committed_chain",
+        1,
+        UseOwner::Other(Use::Record, BLOCK_HASH),
+    ),
+    function(
+        "crates/iroha_core/src/runtime/checkpoint.rs",
+        "parent_world_root",
+        1,
+        UseOwner::Other(Use::ResultBinding, CERTIFIED_IDENTITY),
+    ),
+    function(
+        "crates/iroha_core/src/runtime/checkpoint.rs",
+        "world_root",
+        1,
+        UseOwner::Other(Use::ResultBinding, CERTIFIED_IDENTITY),
+    ),
+    function(
         "crates/iroha_core/src/runtime/containment.rs",
         "holding",
         1,

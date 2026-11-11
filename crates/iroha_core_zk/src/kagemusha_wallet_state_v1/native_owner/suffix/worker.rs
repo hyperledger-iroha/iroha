@@ -486,6 +486,10 @@ impl SuffixPreparationJobV1 {
         })
     }
 
+    #[expect(
+        clippy::suspicious_operation_groupings,
+        reason = "the suffix header's `tip_sequence` is the bound `source_sequence` it extends, as checked for the tip above"
+    )]
     fn release(
         installed: &InstalledVerifierPackV1,
         verifier: &SuffixVerifierV1<'_>,

@@ -93,7 +93,7 @@ pub fn latest_floor(world: &impl WorldReadOnly) -> Option<RuntimeStartupFloorV1>
             RuntimeBoundaryV1::StartupFloor(floor) => Some(floor),
             RuntimeBoundaryV1::AdoptionAnchor(_) => None,
         })
-        .last()
+        .next_back()
         .cloned()
 }
 
