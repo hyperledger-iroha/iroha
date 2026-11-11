@@ -346,8 +346,7 @@ impl<'a> norito::core::DeserializePayload<'a> for Name {
     fn try_deserialize(
         archived: &'a norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let payload = norito::core::payload_slice_from_ptr(ptr)?;
+        let payload = norito::core::payload_slice(archived)?;
         #[cfg(debug_assertions)]
         if norito::debug_trace_enabled() {
             let preview_len = core::cmp::min(payload.len(), 32);
@@ -724,7 +723,7 @@ mod tests {
             // Use stable header-framed Norito over String, then parse back to Name
             let bytes = norito::to_bytes(&s.to_string()).expect("encode str");
             let archived = norito::from_bytes::<String>(&bytes).expect("archived str");
-            let decoded_s = norito::core::DeserializePayload::deserialize(archived);
+            let decoded_s = archived.deserialize();
             assert_eq!(decoded_s, s);
             let reparsed = Name::from_str(&decoded_s).expect("parse back");
             assert_eq!(reparsed, name);

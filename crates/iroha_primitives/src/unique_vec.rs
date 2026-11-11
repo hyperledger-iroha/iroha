@@ -361,14 +361,14 @@ mod tests {
         let malformed = UniqueVec(vec![1_u32, 2, 1]);
         let bytes = ncore::to_bytes(&malformed).expect("frame malformed vector");
         let archived = ncore::from_bytes::<UniqueVec<u32>>(&bytes).expect("decode frame header");
-        assert!(std::panic::catch_unwind(|| UniqueVec::<u32>::deserialize(archived)).is_err());
+        assert!(std::panic::catch_unwind(|| archived.deserialize()).is_err());
     }
     #[test]
     fn infallible_deserialize_preserves_unique_elements() {
         let value = unique_vec![3_u32, 1, 2];
         let bytes = ncore::to_bytes(&value).expect("frame unique vector");
         let archived = ncore::from_bytes::<UniqueVec<u32>>(&bytes).expect("decode frame header");
-        assert_eq!(UniqueVec::<u32>::deserialize(archived), value);
+        assert_eq!(archived.deserialize(), value);
     }
     // JSON serialization and deserialization should round-trip and detect
     // duplicates during deserialization.

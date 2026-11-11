@@ -1,6 +1,6 @@
 //! Sanity checks for schema hash helpers.
 use norito::{
-    DeserializePayload, NoritoSchema,
+    NoritoSchema,
     derive::{
         NoritoDeserialize as DeriveNoritoDeserialize, NoritoSerialize as DeriveNoritoSerialize,
     },
@@ -194,7 +194,7 @@ fn derived_enum_schema_agrees_across_all_frame_readers() {
         let archived = norito::core::from_bytes::<DeclaredSchemaEnum>(&frame)
             .expect("validate archived enum frame");
         assert_eq!(
-            DeclaredSchemaEnum::try_deserialize(archived).expect("archived enum decode"),
+            archived.try_deserialize().expect("archived enum decode"),
             value
         );
 

@@ -89,67 +89,25 @@ struct MetadataEntry {
 // Provide safe slice-based decoders for nested types used by derive expansions.
 impl<'a> norito::core::DecodeFromSlice<'a> for DomainId {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
-        use std::alloc::{Layout, alloc, dealloc};
-        let _g = norito::core::PayloadCtxGuard::enter(bytes);
-        let layout =
-            Layout::from_size_align(bytes.len(), norito::core::archived_payload_align::<Self>())
-                .map_err(|_| norito::Error::LengthMismatch)?;
-        let tmp = unsafe { alloc(layout) };
-        if tmp.is_null() {
-            return Err(norito::Error::LengthMismatch);
-        }
-        unsafe {
-            core::ptr::copy_nonoverlapping(bytes.as_ptr(), tmp, bytes.len());
-        }
-        let archived = unsafe { &*(tmp as *const norito::Archived<Self>) };
-        let v = <Self as DeserializePayload>::deserialize(archived);
-        unsafe {
-            dealloc(tmp, layout);
-        }
+        let v = norito::core::with_payload_ctx(bytes, || {
+            <Self as DeserializePayload>::try_deserialize(norito::core::Archived::start_of(bytes))
+        })?;
         Ok((v, bytes.len()))
     }
 }
 impl<'a> norito::core::DecodeFromSlice<'a> for AccountId {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
-        use std::alloc::{Layout, alloc, dealloc};
-        let _g = norito::core::PayloadCtxGuard::enter(bytes);
-        let layout =
-            Layout::from_size_align(bytes.len(), norito::core::archived_payload_align::<Self>())
-                .map_err(|_| norito::Error::LengthMismatch)?;
-        let tmp = unsafe { alloc(layout) };
-        if tmp.is_null() {
-            return Err(norito::Error::LengthMismatch);
-        }
-        unsafe {
-            core::ptr::copy_nonoverlapping(bytes.as_ptr(), tmp, bytes.len());
-        }
-        let archived = unsafe { &*(tmp as *const norito::Archived<Self>) };
-        let v = <Self as DeserializePayload>::deserialize(archived);
-        unsafe {
-            dealloc(tmp, layout);
-        }
+        let v = norito::core::with_payload_ctx(bytes, || {
+            <Self as DeserializePayload>::try_deserialize(norito::core::Archived::start_of(bytes))
+        })?;
         Ok((v, bytes.len()))
     }
 }
 impl<'a> norito::core::DecodeFromSlice<'a> for AssetDefinitionId {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
-        use std::alloc::{Layout, alloc, dealloc};
-        let _g = norito::core::PayloadCtxGuard::enter(bytes);
-        let layout =
-            Layout::from_size_align(bytes.len(), norito::core::archived_payload_align::<Self>())
-                .map_err(|_| norito::Error::LengthMismatch)?;
-        let tmp = unsafe { alloc(layout) };
-        if tmp.is_null() {
-            return Err(norito::Error::LengthMismatch);
-        }
-        unsafe {
-            core::ptr::copy_nonoverlapping(bytes.as_ptr(), tmp, bytes.len());
-        }
-        let archived = unsafe { &*(tmp as *const norito::Archived<Self>) };
-        let v = <Self as DeserializePayload>::deserialize(archived);
-        unsafe {
-            dealloc(tmp, layout);
-        }
+        let v = norito::core::with_payload_ctx(bytes, || {
+            <Self as DeserializePayload>::try_deserialize(norito::core::Archived::start_of(bytes))
+        })?;
         Ok((v, bytes.len()))
     }
 }
@@ -230,7 +188,7 @@ fn iroha_like_roundtrip() {
     let tx = sample();
     let bytes = to_bytes(&tx).expect("encode");
     let archived = from_bytes::<SignedTransaction>(&bytes).expect("from_bytes");
-    let got: SignedTransaction = <SignedTransaction as DeserializePayload>::deserialize(archived);
+    let got: SignedTransaction = archived.deserialize();
     assert_eq!(tx, got);
 }
 #[test]
@@ -247,6 +205,6 @@ fn signature_roundtrip() {
     };
     let bytes = to_bytes(&s).expect("encode");
     let archived = from_bytes::<Signature>(&bytes).expect("from_bytes");
-    let got: Signature = <Signature as DeserializePayload>::deserialize(archived);
+    let got: Signature = archived.deserialize();
     assert_eq!(s, got);
 }

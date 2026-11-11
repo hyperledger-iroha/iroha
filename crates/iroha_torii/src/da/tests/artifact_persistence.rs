@@ -190,7 +190,7 @@ fn persist_pdp_commitment_writes_and_is_idempotent() {
     );
     let bytes = fs::read(&first_path).expect("read commitment file");
     let archived = from_bytes::<PdpCommitmentV1>(&bytes).expect("decode commitment");
-    let decoded = PdpCommitmentV1::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(decoded, commitment);
     let second_path = persistence::persist_pdp_commitment(
         manifest_dir,
@@ -245,7 +245,7 @@ fn persist_da_commitment_record_writes_and_is_idempotent() {
     .expect("spool path");
     let bytes = fs::read(&first_path).expect("read record file");
     let archived = from_bytes::<DaCommitmentRecord>(&bytes).expect("decode record");
-    let decoded = DaCommitmentRecord::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(decoded, record);
     let second_path = persistence::persist_da_commitment_record(
         manifest_dir,
@@ -283,7 +283,7 @@ fn persist_da_commitment_schedule_entry_writes_bundle() {
     let bytes = fs::read(&schedule_path).expect("read schedule entry");
     let archived = from_bytes::<persistence::DaCommitmentScheduleEntry>(&bytes)
         .expect("decode schedule entry");
-    let decoded = persistence::DaCommitmentScheduleEntry::deserialize(archived);
+    let decoded = archived.deserialize();
     crate::frame_test_support::assert_current_frame(
         &decoded,
         "iroha_torii::da::persistence::DaCommitmentScheduleEntry",
@@ -326,8 +326,7 @@ fn persist_da_pin_intent_writes_file() {
     .expect("path");
     let bytes = fs::read(&path).expect("read pin intent");
     let archived = from_bytes::<DaPinIntent>(&bytes).expect("decode pin intent");
-    let decoded: DaPinIntent =
-        DeserializePayload::try_deserialize(archived).expect("deserialize pin intent");
+    let decoded: DaPinIntent = archived.try_deserialize().expect("deserialize pin intent");
     assert_eq!(decoded, intent);
     assert_eq!(decoded.alias, Some("sora/docs".to_owned()));
     assert_eq!(decoded.authorization.owner, *ALICE_ID);

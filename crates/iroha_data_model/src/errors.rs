@@ -418,7 +418,6 @@ pub enum SettlementRouterOutage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use norito::core::DeserializePayload;
     #[test]
     fn reason_codes_are_stable() {
         let ds = DataSpaceId::new(7);
@@ -448,8 +447,9 @@ mod tests {
         let bytes = norito::to_bytes(&error).expect("encode canonical error");
         let archived =
             norito::from_bytes::<CanonicalError>(&bytes).expect("decode canonical error");
-        let decoded: CanonicalError =
-            DeserializePayload::try_deserialize(archived).expect("deserialize canonical error");
+        let decoded: CanonicalError = archived
+            .try_deserialize()
+            .expect("deserialize canonical error");
         assert_eq!(
             decoded.reason_code,
             CanonicalErrorKind::PVO_MISSING_OR_EXPIRED_CODE

@@ -175,28 +175,30 @@ fn parse_layout(raw: &[u8]) -> Result<Layout, norito::Error> {
         .ok_or(norito::Error::LengthMismatch)?;
     let (header, availability, payload) =
         ncore::with_decode_limits(norito::canonical_decode_limits(raw.len()), || {
-            let _context = ncore::PayloadCtxGuard::enter_with_schema_and_flags(
+            ncore::with_payload_ctx_schema_and_flags(
                 bytes,
                 view.schema(),
                 view.flags(),
-            );
-            let mut offset = 0;
-            let header_field = field_range(bytes, &mut offset)?;
-            let header = decode_header(&bytes[header_field])?;
-            let table_field = field_range(bytes, &mut offset)?;
-            let payload_field = field_range(bytes, &mut offset)?;
-            if offset != bytes.len() {
-                return Err(norito::Error::LengthMismatch);
-            }
-            let table = byte_range(bytes, table_field, 0, MAX_AVAILABILITY_FRAME_BYTES)?;
-            let payload = byte_range(
-                bytes,
-                payload_field,
-                1,
-                usize::try_from(MAX_DA_PAYLOAD_SIZE_BYTES)
-                    .map_err(|_| norito::Error::LengthMismatch)?,
-            )?;
-            Ok((header, table, payload))
+                || -> Result<_, norito::Error> {
+                    let mut offset = 0;
+                    let header_field = field_range(bytes, &mut offset)?;
+                    let header = decode_header(&bytes[header_field])?;
+                    let table_field = field_range(bytes, &mut offset)?;
+                    let payload_field = field_range(bytes, &mut offset)?;
+                    if offset != bytes.len() {
+                        return Err(norito::Error::LengthMismatch);
+                    }
+                    let table = byte_range(bytes, table_field, 0, MAX_AVAILABILITY_FRAME_BYTES)?;
+                    let payload = byte_range(
+                        bytes,
+                        payload_field,
+                        1,
+                        usize::try_from(MAX_DA_PAYLOAD_SIZE_BYTES)
+                            .map_err(|_| norito::Error::LengthMismatch)?,
+                    )?;
+                    Ok((header, table, payload))
+                },
+            )
         })?;
     // This checks the complete canonical schema, flags, padding, lengths and exact field bytes
     // using borrowed slices. No alternate frame or guessed layout is accepted.

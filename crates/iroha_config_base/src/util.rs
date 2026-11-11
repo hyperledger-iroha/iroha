@@ -307,7 +307,7 @@ mod tests {
     #[test]
     fn manual_decode_duration_returns_missing_context_and_retries_same_payload() {
         use norito::core::{
-            DecodeFlagsGuard, PayloadCtxGuard, archived_from_slice, serialize_to_buffer,
+            DecodeFlagsGuard, archived_from_slice, serialize_to_buffer, with_payload_ctx,
         };
         let _layout = DecodeFlagsGuard::enter(0);
         let expected = DurationMs(Duration::from_millis(42));
@@ -322,17 +322,20 @@ mod tests {
             matches!(missing, Ok(Err(norito::Error::MissingPayloadContext))),
             "fallible DurationMs decoder must return the missing-context error, not panic"
         );
-        let decoded = {
-            let _payload = PayloadCtxGuard::enter(archived.bytes());
+        let decoded = with_payload_ctx(archived.bytes(), || {
             DurationMs::try_deserialize(archived.archived().cast()).unwrap()
-        };
+        });
         assert_eq!(decoded, expected);
         let mut repeated = Vec::new();
         serialize_to_buffer(&decoded, &mut repeated).unwrap();
         assert_eq!(repeated, bytes);
         let truncated = norito::core::archived_from_slice::<u8>(&bytes[..7]).unwrap();
-        let _payload = PayloadCtxGuard::enter(truncated.bytes());
-        assert!(DurationMs::try_deserialize(truncated.archived().cast()).is_err());
+        assert!(
+            with_payload_ctx(truncated.bytes(), || {
+                DurationMs::try_deserialize(truncated.archived().cast())
+            })
+            .is_err()
+        );
     }
 
     fn check_scalar_frame<T>(owner: &str, value: &T)

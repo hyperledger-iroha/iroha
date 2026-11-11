@@ -558,10 +558,9 @@ impl<'a> norito::DeserializePayload<'a> for Coordinates<'a> {
         Self::try_deserialize(archived).expect("validated canonical intent payload")
     }
     fn try_deserialize(archived: &'a norito::Archived<Self>) -> Result<Self, norito::Error> {
-        let ptr = std::ptr::from_ref(archived).cast::<u8>();
-        let payload = ncore::payload_slice_from_ptr(ptr)?;
+        let payload = ncore::payload_slice(archived)?;
         let value = decode_coordinates(payload)?;
-        ncore::finish_context_fields(ptr, payload.len())?;
+        ncore::finish_context_fields(archived, payload.len())?;
         Ok(value)
     }
 }

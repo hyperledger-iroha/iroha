@@ -72,11 +72,11 @@ fn context_field_paths_delegate_copy_and_context_setup_to_core() {
     for expansion in [&struct_expansion, &tuple_expansion, &enum_expansion] {
         assert!(
             expansion
-                .contains("norito::core::decode_context_field_canonical::<Opaque>(ptr,&mutoffset)"),
+                .contains("norito::core::decode_context_field_canonical::<Opaque>(__archived,&mutoffset)"),
             "framed fields must use the shared canonical context-field helper"
         );
         assert!(
-            expansion.contains("finish_context_fields(ptr,offset)"),
+            expansion.contains("finish_context_fields(__archived,offset)"),
             "full-consumption validation must remain shared"
         );
         assert!(
@@ -92,7 +92,9 @@ fn context_field_paths_delegate_copy_and_context_setup_to_core() {
             "decode_context_field_archived::<",
             "decode_context_field_archived_compat",
             "decode_context_field_fixed_archived",
-            "payload_slice_from_ptr(ptr)",
+            "payload_slice_from_ptr",
+            "payload_range_from_ptr",
+            "as*const_as*constu8",
             "read_len_dyn_slice",
             "try_read_len_ptr_unchecked",
             "__fallback",
@@ -110,11 +112,11 @@ fn context_field_paths_delegate_copy_and_context_setup_to_core() {
         }
     }
     assert!(
-        enum_expansion.contains("decode_context_field_canonical::<u64>(ptr,&mutoffset)"),
+        enum_expansion.contains("decode_context_field_canonical::<u64>(__archived,&mutoffset)"),
         "fixed-size enum fields keep their length-prefixed frame"
     );
     assert!(
-        enum_expansion.contains("decode_context_field_canonical::<Vec<u32>>(ptr,&mutoffset)"),
+        enum_expansion.contains("decode_context_field_canonical::<Vec<u32>>(__archived,&mutoffset)"),
         "self-delimiting enum fields keep their length-prefixed frame"
     );
     assert!(
@@ -122,12 +124,12 @@ fn context_field_paths_delegate_copy_and_context_setup_to_core() {
         "enum fields must not consume bytes beyond their declared frame"
     );
     assert!(
-        enum_expansion.contains("payload_range_from_ptr(ptr,4)"),
-        "enum tags must use the bounded payload helper"
+        enum_expansion.contains("payload_range(__archived,4)"),
+        "enum tags must use the bounded, marker-bound payload helper"
     );
     assert!(
         struct_expansion.contains(
-            "ifnorito::debug_trace_enabled(){norito::trace_struct_decode(stringify!(Record),ptr);}"
+            "ifnorito::debug_trace_enabled(){norito::trace_struct_decode(stringify!(Record),__archived);}"
         ),
         "the named-struct trace must stay behind the debug toggle in the cold norito helper"
     );
@@ -502,11 +504,11 @@ fn enum_byte_array_fields_use_the_exact_raw_field_helper() {
         &input.attrs,
     ));
     assert_eq!(
-        expansion.matches("decode_context_framed_byte_array::<{2}>(ptr,&mutoffset)?").count(),
+        expansion.matches("decode_context_framed_byte_array::<{2}>(__archived,&mutoffset)?").count(),
         2,
         "both enum field forms must follow their raw-byte encoder"
     );
-    assert!(expansion.contains("finish_context_fields(ptr,offset)"));
+    assert!(expansion.contains("finish_context_fields(__archived,offset)"));
     assert!(!expansion.contains("decode_context_field_canonical::<[u8;2]>"));
-    assert!(expansion.contains("decode_context_field_canonical::<Vec<u16>>(ptr,&mutoffset)"));
+    assert!(expansion.contains("decode_context_field_canonical::<Vec<u16>>(__archived,&mutoffset)"));
 }

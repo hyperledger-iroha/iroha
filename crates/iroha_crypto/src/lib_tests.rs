@@ -1606,7 +1606,7 @@ mod tests {
             norito::core::frame_bare_with_header_flags::<PublicKeyCompact>(&payload, flags)
                 .expect("frame compact");
         let archived = norito::from_bytes::<PublicKeyCompact>(&framed).expect("archive");
-        let err = <PublicKeyCompact as norito::core::DeserializePayload>::try_deserialize(archived)
+        let err = archived.try_deserialize()
             .expect_err("invalid compact payload");
         assert!(matches!(
             &err,
@@ -1791,7 +1791,7 @@ mod tests {
         let framed = norito::core::frame_bare_with_header_flags::<PublicKey>(&payload, flags)
             .expect("frame");
         let archived = norito::from_bytes::<PublicKey>(&framed).expect("archive");
-        let err = <PublicKey as norito::core::DeserializePayload>::try_deserialize(archived)
+        let err = archived.try_deserialize()
             .expect_err("invalid key");
         assert!(matches!(
             &err,

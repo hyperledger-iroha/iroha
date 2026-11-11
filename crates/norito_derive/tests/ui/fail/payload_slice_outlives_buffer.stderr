@@ -1,0 +1,20 @@
+error[E0597]: `buffer` does not live long enough
+  --> tests/ui/fail/payload_slice_outlives_buffer.rs:8:69
+   |
+ 6 |         let buffer = vec![1_u8, 2, 3];
+   |             ------ binding `buffer` declared here
+ 7 |         norito::core::with_payload_ctx(&buffer, || {
+   |                                                 -- value captured here
+ 8 |             let archived = norito::core::archived_from_slice::<u8>(&buffer).unwrap();
+   |                                                                     ^^^^^^ borrowed value does not live long enough
+ 9 |             norito::core::payload_slice(archived.archived()).unwrap()
+   |             --------------------------------------------------------- returning this value requires that `buffer` is borrowed for `'static`
+10 |         })
+11 |     };
+   |     - `buffer` dropped here while still borrowed
+   |
+note: requirement that the value outlives `'static` introduced here
+  --> $WORKSPACE/crates/norito/src/core.rs
+   |
+   | pub fn with_payload_ctx<R>(bytes: &[u8], decode: impl FnOnce() -> R) -> R {
+   |                                                                   ^

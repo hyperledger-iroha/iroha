@@ -129,9 +129,8 @@ impl<'de> norito::core::DeserializePayload<'de> for FriValues {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> std::result::Result<Self, norito::Error> {
-        let pointer = std::ptr::from_ref(archived).cast::<u8>();
         let mut offset = 0;
-        let [arity] = norito::core::decode_context_byte_array::<1>(pointer, &mut offset)?;
+        let [arity] = norito::core::decode_context_byte_array::<1>(archived, &mut offset)?;
         if !matches!(arity, 4 | 8 | 16) {
             return Err(norito::Error::Message(
                 "invalid DEEP FRI fiber arity".into(),
@@ -140,12 +139,12 @@ impl<'de> norito::core::DeserializePayload<'de> for FriValues {
         let mut values = [Fp4::ZERO; 16];
         for value in values.iter_mut().take(usize::from(arity) - 1) {
             let bytes =
-                norito::core::decode_context_byte_array::<{ Fp4::BYTES }>(pointer, &mut offset)?;
+                norito::core::decode_context_byte_array::<{ Fp4::BYTES }>(archived, &mut offset)?;
             *value = Fp4::from_le_bytes(bytes).ok_or_else(|| {
                 norito::Error::Message("noncanonical DEEP FRI fiber scalar".into())
             })?;
         }
-        norito::core::finish_context_fields(pointer, offset)?;
+        norito::core::finish_context_fields(archived, offset)?;
         Ok(match arity {
             4 => Self::Four(values[..3].try_into().expect("four decoded values")),
             8 => Self::Eight(values[..7].try_into().expect("eight decoded values")),

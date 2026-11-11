@@ -101,24 +101,25 @@ mod tests {
         ));
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         let ambient_payload = b"unrelated outer payload context";
-        let _ambient_payload = norito::core::PayloadCtxGuard::enter(ambient_payload);
-        let ambient_payload_context = norito::core::payload_ctx();
-        let ambient_before = norito::to_bytes(&value).expect("encode ambient fixture");
-        assert_eq!(
-            (decode_canonical_norito::<Vec<String>>(&canonical))
-                .expect("expected successful fixture result"),
-            value.clone()
-        );
-        assert_eq!(
-            norito::core::payload_ctx(),
-            ambient_payload_context,
-            "canonical decoding must restore the caller's payload context"
-        );
-        assert_eq!(
-            norito::to_bytes(&value).expect("encode after canonical decode"),
-            ambient_before,
-            "canonical decoding must restore the caller's ambient layout"
-        );
+        norito::core::with_payload_ctx(ambient_payload, || {
+            let ambient_payload_context = norito::core::payload_ctx();
+            let ambient_before = norito::to_bytes(&value).expect("encode ambient fixture");
+            assert_eq!(
+                (decode_canonical_norito::<Vec<String>>(&canonical))
+                    .expect("expected successful fixture result"),
+                value.clone()
+            );
+            assert_eq!(
+                norito::core::payload_ctx(),
+                ambient_payload_context,
+                "canonical decoding must restore the caller's payload context"
+            );
+            assert_eq!(
+                norito::to_bytes(&value).expect("encode after canonical decode"),
+                ambient_before,
+                "canonical decoding must restore the caller's ambient layout"
+            );
+        });
     }
     #[test]
     fn generic_canonical_decode_rejects_forged_sequence_length_under_default_limits() {

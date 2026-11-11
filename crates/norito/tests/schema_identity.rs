@@ -11,9 +11,7 @@ use std::{
 };
 
 use norito::schema::identity::frame_hash;
-use norito::{
-    DeserializePayload, NoritoDeserialize, NoritoSchema, NoritoSerialize, core::Header, json,
-};
+use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, core::Header, json};
 
 mod original {
     use super::*;
@@ -228,7 +226,7 @@ fn relocation_preserves_nominal_composition_and_explicit_root_projection() {
     assert_eq!(old[Header::SIZE..], moved[Header::SIZE..]);
     let archived = norito::from_bytes::<Before>(&old).unwrap();
     assert_eq!(
-        Before::deserialize(archived),
+        archived.deserialize(),
         vec![Some(original::Leaf { value: 9 })]
     );
 
@@ -240,7 +238,7 @@ fn relocation_preserves_nominal_composition_and_explicit_root_projection() {
     let leaf = original::Leaf { value: 9 };
     let frame = norito::to_bytes(&leaf).unwrap();
     let archived = norito::from_bytes::<relocated::Leaf>(&frame).unwrap();
-    assert_eq!(relocated::Leaf::deserialize(archived).value, 9);
+    assert_eq!(archived.deserialize().value, 9);
     let mut wrong = frame;
     wrong[6] ^= 1;
     assert!(norito::from_bytes::<relocated::Leaf>(&wrong).is_err());

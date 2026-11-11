@@ -1201,8 +1201,7 @@ impl<'de> norito::DeserializePayload<'de> for KagemushaWalletRecoveryCapsuleV1 {
     }
 
     fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
-        let bytes =
-            norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let bytes = norito::core::payload_slice(archived)?;
         let (value, used) = <Self as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
         if used != bytes.len() {
             return Err(norito::Error::LengthMismatch);

@@ -464,10 +464,9 @@ mod tests {
             // isolates the string allocation from the framing/scratch allocation budget.
             let archived =
                 ncore::archived_from_slice::<SmallStr>(&payload).expect("archive storage");
-            let _payload = ncore::PayloadCtxGuard::enter(archived.bytes());
             let (decoded, usage) =
                 ncore::with_decode_limits_measured(smallstr_decode_limits(sample.len()), || {
-                    <SmallStr as DeserializePayload>::try_deserialize(archived.archived())
+                    archived.try_deserialize()
                 });
             assert_eq!(
                 decoded.expect("exact retained-byte budget").as_ref(),
@@ -476,7 +475,7 @@ mod tests {
             assert_eq!(usage.total_allocated_bytes(), sample.len());
             let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 ncore::with_decode_limits(smallstr_decode_limits(sample.len() - 1), || {
-                    <SmallStr as DeserializePayload>::try_deserialize(archived.archived())
+                    archived.try_deserialize()
                 })
             }));
             assert!(matches!(
@@ -684,9 +683,10 @@ mod tests {
         let value: SmallVec<[u32; 4]> = SmallVec(smallvec![1, 2, 3]);
         let bytes = to_bytes(&value).expect("encode SmallVec");
         let archived = norito::core::from_bytes::<SmallVec<[u32; 4]>>(&bytes).expect("archive");
-        let _payload_ctx = ncore::PayloadCtxGuard::enter_with_len(&[], 0);
-        let decoded =
-            <SmallVec<[u32; 4]> as DeserializePayload>::try_deserialize(archived).expect("decode");
+        let decoded = ncore::with_payload_ctx(&[], || {
+            <SmallVec<[u32; 4]> as DeserializePayload>::try_deserialize(archived.archived())
+        })
+        .expect("decode");
         assert!(decoded.is_empty());
     }
     #[test]
@@ -965,9 +965,8 @@ mod small_vector {
             {
                 return Ok(Self::new());
             }
-            let ptr = core::ptr::from_ref(archived).cast::<u8>();
             let ctx_len = ncore::payload_ctx().map(|(_, len)| len);
-            let bytes_full = ncore::payload_slice_from_ptr(ptr)?;
+            let bytes_full = ncore::payload_slice(archived)?;
             let bytes = ctx_len
                 .and_then(|len| bytes_full.get(..len))
                 .unwrap_or(bytes_full);

@@ -176,7 +176,7 @@ mod tests {
             // Use stable header-framed Norito over String, then parse back to IpfsPath
             let bytes = norito::to_bytes(&s.to_string()).expect("encode str");
             let archived = norito::from_bytes::<String>(&bytes).expect("archived str");
-            let decoded_s = norito::core::DeserializePayload::deserialize(archived);
+            let decoded_s = archived.deserialize();
             assert_eq!(decoded_s, s);
             let reparsed = decoded_s.parse::<IpfsPath>().expect("parse back");
             assert_eq!(reparsed.as_ref(), path.as_ref());

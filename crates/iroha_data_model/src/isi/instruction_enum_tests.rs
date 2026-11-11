@@ -273,8 +273,7 @@ fn norito_serialize_trait_object() {
     let boxed = InstructionBox::from(log.clone());
     let bytes = norito::core::to_bytes(&boxed).expect("serialize");
     let archived = norito::core::from_bytes::<(String, Vec<u8>)>(&bytes).expect("from_bytes");
-    let (name, payload) =
-        norito::core::DeserializePayload::try_deserialize(archived).expect("deserialize");
+    let (name, payload) = archived.try_deserialize().expect("deserialize");
     assert_eq!(name, Log::WIRE_ID);
     let bare = Instruction::dyn_encode(&log);
     let payload_slice = payload.as_slice();
@@ -353,7 +352,7 @@ fn norito_roundtrip_trait_object_deserialize() {
     let boxed = InstructionBox::from(log.clone());
     let bytes = norito::core::to_bytes(&boxed).expect("serialize");
     let archived = norito::core::from_bytes::<InstructionBox>(&bytes).expect("from_bytes");
-    let decoded = norito::core::DeserializePayload::try_deserialize(archived).expect("deserialize");
+    let decoded = archived.try_deserialize().expect("deserialize");
     // Validate via type id and payload equality rather than downcast
     assert_eq!(Instruction::id(&*decoded), Instruction::id(&log));
     assert_eq!(
@@ -368,7 +367,7 @@ fn instruction_pair_canonical_decode_covers_payload_body() {
         norito::core::to_bytes(&expected).expect("serialize instruction tuple with Norito");
     let archived =
         norito::core::from_bytes::<(String, Vec<u8>)>(&framed).expect("decode framed tuple");
-    let decoded = norito::core::DeserializePayload::try_deserialize(archived).expect("decode");
+    let decoded = archived.try_deserialize().expect("decode");
     assert_eq!(decoded, expected);
 }
 #[test]
@@ -449,10 +448,10 @@ fn instruction_box_lossy_deserialize_maps_malformed_pair_payload_to_invalid_inst
     let archived =
         norito::core::from_bytes::<InstructionBox>(&framed).expect("instruction-box frame");
     assert!(
-        norito::core::DeserializePayload::try_deserialize(archived).is_err(),
+        archived.try_deserialize().is_err(),
         "strict decode must reject malformed pair payloads"
     );
-    let decoded: InstructionBox = norito::core::DeserializePayload::deserialize(archived);
+    let decoded: InstructionBox = archived.deserialize();
     let invalid = decoded
         .as_any()
         .downcast_ref::<transparent::InvalidInstruction>()
@@ -474,7 +473,7 @@ fn instruction_box_decoders_reject_registered_wire_id_with_unframed_payload() {
     let archived =
         norito::core::from_bytes::<InstructionBox>(&framed_pair).expect("instruction pair");
     assert!(
-        norito::core::DeserializePayload::try_deserialize(archived).is_err(),
+        archived.try_deserialize().is_err(),
         "strict decode must reject unframed payload bytes for registered wire ids"
     );
     let bare_pair = bare_instruction_pair(Log::WIRE_ID, malformed_payload.clone());
@@ -482,7 +481,7 @@ fn instruction_box_decoders_reject_registered_wire_id_with_unframed_payload() {
         InstructionBox::decode_from_slice(&bare_pair).is_err(),
         "borrowed-pair decode must reject unframed payload bytes for registered wire ids"
     );
-    let decoded: InstructionBox = norito::core::DeserializePayload::deserialize(archived);
+    let decoded: InstructionBox = archived.deserialize();
     let invalid = decoded
         .as_any()
         .downcast_ref::<transparent::InvalidInstruction>()
@@ -508,7 +507,7 @@ fn instruction_box_strict_decoders_reject_removed_direct_instruction_pairs() {
     let archived =
         norito::core::from_bytes::<InstructionBox>(&framed_pair).expect("instruction pair bytes");
     assert!(
-        norito::core::DeserializePayload::try_deserialize(archived).is_err(),
+        archived.try_deserialize().is_err(),
         "{removed_name} must be rejected by strict InstructionBox deserialization"
     );
     let bare_pair = bare_instruction_pair(removed_name, framed_payload);
@@ -524,7 +523,8 @@ fn instruction_box_strict_decoders_reject_removed_direct_instruction_pairs() {
     let framed_pair = framed_instruction_pair(removed_name, framed_payload.clone());
     let archived =
         norito::core::from_bytes::<InstructionBox>(&framed_pair).expect("instruction pair bytes");
-    let decoded = norito::core::DeserializePayload::try_deserialize(archived)
+    let decoded = archived
+        .try_deserialize()
         .expect("an unknown wire ID decodes as an opaque envelope");
     let opaque = decoded.as_opaque().expect("opaque envelope");
     assert_eq!(opaque.wire_id(), removed_name);
@@ -554,7 +554,7 @@ fn instruction_box_lossy_deserialize_maps_removed_direct_pair_to_invalid_instruc
     let framed_pair = framed_instruction_pair(removed_name, framed_payload.clone());
     let archived =
         norito::core::from_bytes::<InstructionBox>(&framed_pair).expect("instruction pair");
-    let decoded: InstructionBox = norito::core::DeserializePayload::deserialize(archived);
+    let decoded: InstructionBox = archived.deserialize();
     let invalid = decoded
         .as_any()
         .downcast_ref::<transparent::InvalidInstruction>()
@@ -588,7 +588,7 @@ fn instruction_box_strict_decoders_reject_cross_family_instruction_pairs() {
         let archived = norito::core::from_bytes::<InstructionBox>(&framed_pair)
             .expect("instruction pair bytes");
         assert!(
-            norito::core::DeserializePayload::try_deserialize(archived).is_err(),
+            archived.try_deserialize().is_err(),
             "{spoofed_name} must reject a payload from another boxed family"
         );
         let bare_pair = bare_instruction_pair(spoofed_name, mismatched_payload);
@@ -607,7 +607,7 @@ fn instruction_box_lossy_deserialize_maps_cross_family_pair_to_invalid_instructi
     let framed_pair = framed_instruction_pair(MintBox::WIRE_ID, framed_payload.clone());
     let archived =
         norito::core::from_bytes::<InstructionBox>(&framed_pair).expect("instruction pair");
-    let decoded: InstructionBox = norito::core::DeserializePayload::deserialize(archived);
+    let decoded: InstructionBox = archived.deserialize();
     let invalid = decoded
         .as_any()
         .downcast_ref::<transparent::InvalidInstruction>()
@@ -623,7 +623,7 @@ fn instruction_box_lossy_deserialize_bounds_unknown_wire_error_message() {
     let framed_pair = framed_instruction_pair(&hostile_name, Vec::new());
     let archived =
         norito::core::from_bytes::<InstructionBox>(&framed_pair).expect("instruction pair");
-    let decoded: InstructionBox = norito::core::DeserializePayload::deserialize(archived);
+    let decoded: InstructionBox = archived.deserialize();
     let invalid = decoded
         .as_any()
         .downcast_ref::<transparent::InvalidInstruction>()
@@ -677,7 +677,8 @@ fn instruction_box_try_deserialize_rejects_trailing_bytes_inside_framed_pair() {
     .expect("frame tailed instruction pair");
     let archived =
         norito::core::from_bytes::<InstructionBox>(&framed).expect("instruction box frame");
-    let err = norito::core::DeserializePayload::try_deserialize(archived)
+    let err = archived
+        .try_deserialize()
         .expect_err("framed instruction pairs with trailing bytes must be rejected");
     match err {
         norito::core::Error::Message(msg) => assert!(
@@ -705,7 +706,7 @@ fn instruction_box_lossy_deserialize_maps_trailing_pair_bytes_to_invalid_instruc
     .expect("frame tailed instruction pair");
     let archived =
         norito::core::from_bytes::<InstructionBox>(&framed).expect("instruction box frame");
-    let decoded: InstructionBox = norito::core::DeserializePayload::deserialize(archived);
+    let decoded: InstructionBox = archived.deserialize();
     let invalid = decoded
         .as_any()
         .downcast_ref::<transparent::InvalidInstruction>()

@@ -12,7 +12,7 @@ fn rename_roundtrip() {
     let r = Rename { x: 42 };
     let bytes = to_bytes(&r).expect("serialize");
     let archived = from_bytes::<Rename>(&bytes).expect("deserialize");
-    let decoded = <Rename as DeserializePayload>::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(decoded.x, 42);
 }
 #[derive(IntoSchema, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
@@ -132,7 +132,7 @@ fn skip_and_default() {
     let s = SkipDefault { a: 5, b: 7, c: 9 };
     let bytes = to_bytes(&s).unwrap();
     let archived = from_bytes::<SkipDefault>(&bytes).unwrap();
-    let decoded = <SkipDefault as DeserializePayload>::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(decoded.a, 5);
     assert_eq!(decoded.b, 0);
     assert_eq!(decoded.c, 9);

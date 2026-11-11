@@ -29,7 +29,7 @@ where
                 Ok(guard) => guard,
                 Err(error) => return Some(Err(error)),
             };
-            let ak = unsafe { &*(self.kbuf.as_ptr() as *const Archived<K>) };
+            let ak = core::borrowed_archived_marker::<K>(&self.kbuf);
             let key = match guarded_try_deserialize(|| K::try_deserialize(ak)) {
                 Ok(k) => k,
                 Err(e) => return Some(Err(e)),
@@ -54,7 +54,7 @@ where
                 Ok(guard) => guard,
                 Err(error) => return Some(Err(error)),
             };
-            let av = unsafe { &*(self.vbuf.as_ptr() as *const Archived<V>) };
+            let av = core::borrowed_archived_marker::<V>(&self.vbuf);
             let val = match guarded_try_deserialize(|| V::try_deserialize(av)) {
                 Ok(v) => v,
                 Err(e) => return Some(Err(e)),

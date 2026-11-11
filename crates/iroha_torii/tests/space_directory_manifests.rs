@@ -102,15 +102,16 @@ async fn decode_unsigned_transaction_draft(
         encoded,
         "transaction draft must use canonical padded base64",
     );
-    let _guard = norito::core::PayloadCtxGuard::enter(&bytes);
-    let mut cursor = std::io::Cursor::new(bytes.as_slice());
-    let payload = TransactionPayload::decode(&mut cursor).expect("decode transaction payload");
-    assert_eq!(
-        usize::try_from(cursor.position()).unwrap(),
-        bytes.len(),
-        "transaction payload must not contain trailing bytes",
-    );
-    payload
+    norito::core::with_payload_ctx(&bytes, || {
+        let mut cursor = std::io::Cursor::new(bytes.as_slice());
+        let payload = TransactionPayload::decode(&mut cursor).expect("decode transaction payload");
+        assert_eq!(
+            usize::try_from(cursor.position()).unwrap(),
+            bytes.len(),
+            "transaction payload must not contain trailing bytes",
+        );
+        payload
+    })
 }
 struct ManifestMutationState {
     queue: Arc<Queue>,

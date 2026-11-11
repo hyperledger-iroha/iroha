@@ -272,9 +272,8 @@ where
             .is_err()
     );
     let _flags = ncore::DecodeFlagsGuard::enter(flags);
-    let _payload = ncore::PayloadCtxGuard::enter_with_schema_and_flags(bytes, view.schema(), flags);
     let archived = ncore::from_bytes::<T>(&frame).unwrap();
-    assert!(<T as ncore::DeserializePayload<'_>>::try_deserialize(archived).is_err());
+    assert!(archived.try_deserialize().is_err());
 }
 fn cursor_payload(value: &ForwardCursor, position: u64) -> Vec<u8> {
     let mut bytes = Vec::new();

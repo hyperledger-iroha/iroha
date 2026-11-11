@@ -1713,38 +1713,39 @@ fn canonical_bundle_file_decoders_restore_ambient_norito_state() {
     assert_ne!(alternate_semantic, semantic_bytes);
     let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
     let ambient_payload = b"ambient Musubi bundle payload";
-    let _ambient_payload = norito::core::PayloadCtxGuard::enter(ambient_payload);
-    let flags_before = norito::core::effective_decode_flags();
-    let payload_context_before = norito::core::payload_ctx();
-    let ambient_probe = vec!["first".to_owned(), "second".to_owned()];
-    let mut encoding_before = Vec::new();
-    norito::core::serialize_to_buffer(&ambient_probe, &mut encoding_before)
-        .expect("encode bare ambient probe");
-    assert_eq!(
-        MusubiArtifactDescriptorV1::decode_canonical_bundle_file(&descriptor_bytes)
-            .expect("decode canonical descriptor under alternate ambient state"),
-        descriptor
-    );
-    assert_eq!(
-        MusubiSemanticReleaseManifestV1::decode_canonical_bundle_file(&semantic_bytes)
-            .expect("decode canonical semantic release under alternate ambient state"),
-        semantic
-    );
-    assert_eq!(
-        MusubiVerificationLockV1::decode_canonical_bundle_file(&lock_bytes)
-            .expect("decode canonical verification lock under alternate ambient state"),
-        lock
-    );
-    assert!(
-        MusubiSemanticReleaseManifestV1::decode_canonical_bundle_file(&alternate_semantic).is_err(),
-        "the caller's alternate flags must not make alternate-layout bytes canonical"
-    );
-    assert_eq!(norito::core::effective_decode_flags(), flags_before);
-    assert_eq!(norito::core::payload_ctx(), payload_context_before);
-    let mut encoding_after = Vec::new();
-    norito::core::serialize_to_buffer(&ambient_probe, &mut encoding_after)
-        .expect("re-encode bare ambient probe");
-    assert_eq!(encoding_after, encoding_before);
+    norito::core::with_payload_ctx(ambient_payload, || {
+        let flags_before = norito::core::effective_decode_flags();
+        let payload_context_before = norito::core::payload_ctx();
+        let ambient_probe = vec!["first".to_owned(), "second".to_owned()];
+        let mut encoding_before = Vec::new();
+        norito::core::serialize_to_buffer(&ambient_probe, &mut encoding_before)
+            .expect("encode bare ambient probe");
+        assert_eq!(
+            MusubiArtifactDescriptorV1::decode_canonical_bundle_file(&descriptor_bytes)
+                .expect("decode canonical descriptor under alternate ambient state"),
+            descriptor
+        );
+        assert_eq!(
+            MusubiSemanticReleaseManifestV1::decode_canonical_bundle_file(&semantic_bytes)
+                .expect("decode canonical semantic release under alternate ambient state"),
+            semantic
+        );
+        assert_eq!(
+            MusubiVerificationLockV1::decode_canonical_bundle_file(&lock_bytes)
+                .expect("decode canonical verification lock under alternate ambient state"),
+            lock
+        );
+        assert!(
+            MusubiSemanticReleaseManifestV1::decode_canonical_bundle_file(&alternate_semantic).is_err(),
+            "the caller's alternate flags must not make alternate-layout bytes canonical"
+        );
+        assert_eq!(norito::core::effective_decode_flags(), flags_before);
+        assert_eq!(norito::core::payload_ctx(), payload_context_before);
+        let mut encoding_after = Vec::new();
+        norito::core::serialize_to_buffer(&ambient_probe, &mut encoding_after)
+            .expect("re-encode bare ambient probe");
+        assert_eq!(encoding_after, encoding_before);
+    });
 }
 #[test]
 fn canonical_bundle_file_decoders_reject_empty_trailing_and_oversized_inputs() {

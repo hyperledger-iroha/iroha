@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use norito::core::{DecodeFromSlice, DeserializePayload, SerializePayload};
+use norito::core::{DecodeFromSlice, SerializePayload};
 
 use super::*;
 use crate::prelude::Log;
@@ -103,12 +103,12 @@ fn decode_slice(bytes: &[u8]) -> Result<InstructionBox, norito::Error> {
 
 fn decode_archived_strict(framed: &[u8]) -> Result<InstructionBox, norito::Error> {
     let archived = norito::core::from_bytes::<InstructionBox>(framed).expect("pair frame");
-    InstructionBox::try_deserialize(archived)
+    archived.try_deserialize()
 }
 
 fn decode_archived_lossy(framed: &[u8]) -> InstructionBox {
     let archived = norito::core::from_bytes::<InstructionBox>(framed).expect("pair frame");
-    InstructionBox::deserialize(archived)
+    archived.deserialize()
 }
 
 fn decode_json(bytes: &[u8]) -> Result<InstructionBox, norito::json::Error> {

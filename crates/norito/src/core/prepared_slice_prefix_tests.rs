@@ -15,9 +15,8 @@ impl<'de> DeserializePayload<'de> for BytePrefix {
     }
 
     fn try_deserialize(archived: &'de Archived<Self>) -> Result<Self, Error> {
-        let ptr = archived as *const _ as *const u8;
         // One unprefixed byte, canonically decoded so field and nesting budgets apply.
-        let (field, offset) = take_context_field(ptr, 0, 1)?;
+        let (field, offset) = take_context_field(archived.cast(), 0, 1)?;
         let (value, used) = decode_field_canonical::<u8>(field)?;
         if used != field.len() {
             return Err(Error::LengthMismatch);
@@ -25,7 +24,7 @@ impl<'de> DeserializePayload<'de> for BytePrefix {
         if value == 0 {
             return Err(Error::NonCanonicalEncoding);
         }
-        finish_context_fields(ptr, offset)?;
+        finish_context_fields(archived, offset)?;
         Ok(Self {
             value,
             flags: effective_decode_flags(),
@@ -81,7 +80,7 @@ fn prepared_prefix_preserves_used_flags_errors_and_caller_boundary() {
                 payload_ctx(),
                 Some((caller.as_ptr() as usize, caller.len()))
             );
-            let finish = finish_context_fields(caller.as_ptr(), 1);
+            let finish = finish_context_fields(Archived::<()>::start_of(&caller), 1);
             match boundary {
                 FieldDecodeBoundary::Canonical => {
                     assert!(matches!(finish, Err(Error::LengthMismatch)))
@@ -166,8 +165,10 @@ fn prepared_slice_borrows_the_caller_payload_without_padding_or_copies() {
     ));
     let empty = prepare::<EmptyPrefix>(&storage[3..]);
     assert!(empty.bytes().is_empty());
+    // An empty payload gets the shared empty marker, never the address one
+    // past `storage`'s end.
     assert_eq!(
         core::ptr::from_ref(empty.archived::<EmptyPrefix>()).cast::<u8>(),
-        empty.bytes().as_ptr()
+        empty_marker_ptr()
     );
 }

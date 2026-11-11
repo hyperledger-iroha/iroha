@@ -362,8 +362,7 @@ impl<'de, T> norito::core::DeserializePayload<'de> for MerkleTree<T> {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let payload =
-            norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let payload = norito::core::payload_slice(archived)?;
         let (tree, used) = <Self as norito::core::DecodeFromSlice>::decode_from_slice(payload)?;
         if used != payload.len() {
             return Err(norito::core::Error::LengthMismatch);
@@ -606,8 +605,7 @@ impl<'de, T> norito::core::DeserializePayload<'de> for MerkleProof<T> {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let payload =
-            norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let payload = norito::core::payload_slice(archived)?;
         let (proof, used) = <Self as norito::core::DecodeFromSlice>::decode_from_slice(payload)?;
         if used != payload.len() {
             return Err(norito::core::Error::LengthMismatch);
@@ -2797,7 +2795,7 @@ mod tests {
         let tree: MerkleTree<_> = test_hashes(3).into_iter().collect();
         let bytes = norito::to_bytes(&tree).expect("encode");
         let archived = norito::from_bytes::<MerkleTree<()>>(&bytes).expect("failed to decode");
-        let decoded = norito::core::DeserializePayload::deserialize(archived);
+        let decoded = archived.deserialize();
         assert_eq!(tree, decoded);
     }
     #[test]
@@ -2807,7 +2805,7 @@ mod tests {
         let proof = tree.get_proof(1).unwrap();
         let bytes = norito::to_bytes(&proof).expect("encode");
         let archived = norito::from_bytes::<MerkleProof<()>>(&bytes).expect("failed to decode");
-        let decoded = norito::core::DeserializePayload::deserialize(archived);
+        let decoded = archived.deserialize();
         assert_eq!(proof, decoded);
     }
     #[test]
@@ -2837,9 +2835,8 @@ mod tests {
         let bytes = norito::to_bytes(&MalformedMerkleProof).expect("encode malformed fixture");
         let archived =
             norito::from_bytes::<MerkleProof<()>>(&bytes).expect("validate outer archive");
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            <MerkleProof<()> as norito::core::DeserializePayload>::try_deserialize(archived)
-        }));
+        let outcome =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| archived.try_deserialize()));
         let error = outcome
             .expect("fallible Merkle proof decoding must not unwind")
             .expect_err("malformed Merkle proof must be rejected");

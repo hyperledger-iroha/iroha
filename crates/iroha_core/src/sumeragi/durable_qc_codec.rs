@@ -138,11 +138,10 @@ pub(super) fn parse_frame(raw: &[u8]) -> Result<QcMetadata, norito::Error> {
         return Err(norito::Error::SchemaMismatch);
     }
     let bytes = view.as_bytes();
-    let metadata = {
-        let _context =
-            ncore::PayloadCtxGuard::enter_with_schema_and_flags(bytes, view.schema(), view.flags());
-        parse(bytes)?
-    };
+    let metadata =
+        ncore::with_payload_ctx_schema_and_flags(bytes, view.schema(), view.flags(), || {
+            parse(bytes)
+        })?;
     norito::verify_exact_canonical_frame(&metadata.borrowed(), raw)?;
     Ok(metadata)
 }

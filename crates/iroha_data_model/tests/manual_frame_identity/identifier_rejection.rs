@@ -25,12 +25,11 @@ fn try_decode_authenticated_payload(bytes: &[u8], flags: u8) -> Result<IdBox, nc
     assert_eq!(view.as_bytes(), bytes);
     assert_eq!(view.flags(), flags);
     let _flags = ncore::DecodeFlagsGuard::enter(flags);
-    let _payload = ncore::PayloadCtxGuard::enter_with_schema_and_flags(bytes, view.schema(), flags);
     let archived = ncore::from_bytes::<IdBox>(&frame)
         .expect("header, schema, checksum, length and alignment must be valid");
     // Deliberately call the owner's fallible method directly. A panic is a test
     // failure; a higher-level decoder must not mask an infallible delegation.
-    <IdBox as ncore::DeserializePayload<'_>>::try_deserialize(archived)
+    archived.try_deserialize()
 }
 
 #[test]

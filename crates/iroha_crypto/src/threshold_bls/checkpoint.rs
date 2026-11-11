@@ -124,39 +124,53 @@ where
         bytes: &[u8],
         destination: &mut D,
     ) -> Result<(Self, usize), DecodeIntoError<D::Error>> {
-        let _context = norito::core::PayloadCtxGuard::enter(bytes);
-        let mut tag = [0; 4];
-        tag.copy_from_slice(norito::core::payload_range_from_ptr(bytes.as_ptr(), 4)?);
-        let mut offset = 4;
-        let value = match u32::from_le_bytes(tag) {
-            0 => Self::SignedGenesisAuthorization {
-                genesis_hash: <D as DecodeField<0, [u8; 32]>>::decode_field(
-                    destination,
-                    norito::core::framed_byte_array_field::<32>(bytes, &mut offset)?,
-                )?,
+        norito::core::with_payload_ctx(
+            bytes,
+            || -> Result<(Self, usize), DecodeIntoError<D::Error>> {
+                let mut tag = [0; 4];
+                tag.copy_from_slice(norito::core::payload_range(
+                    norito::core::Archived::<()>::start_of(bytes),
+                    4,
+                )?);
+                let mut offset = 4;
+                let value = match u32::from_le_bytes(tag) {
+                    0 => Self::SignedGenesisAuthorization {
+                        genesis_hash: <D as DecodeField<0, [u8; 32]>>::decode_field(
+                            destination,
+                            norito::core::framed_byte_array_field::<32>(bytes, &mut offset)?,
+                        )?,
+                    },
+                    1 => Self::ExecutedNativeTip {
+                        height: <D as DecodeField<1, u64>>::decode_field(
+                            destination,
+                            norito::core::framed_field(bytes, &mut offset)?,
+                        )?,
+                        block_hash: <D as DecodeField<2, [u8; 32]>>::decode_field(
+                            destination,
+                            norito::core::framed_byte_array_field::<32>(bytes, &mut offset)?,
+                        )?,
+                        core_hash: <D as DecodeField<3, [u8; 32]>>::decode_field(
+                            destination,
+                            norito::core::framed_byte_array_field::<32>(bytes, &mut offset)?,
+                        )?,
+                        result_hash: <D as DecodeField<4, [u8; 32]>>::decode_field(
+                            destination,
+                            norito::core::framed_byte_array_field::<32>(bytes, &mut offset)?,
+                        )?,
+                    },
+                    _ => {
+                        return Err(
+                            norito::Error::Message("invalid enum discriminant".into()).into()
+                        );
+                    }
+                };
+                norito::core::finish_context_fields(
+                    norito::core::Archived::<()>::start_of(bytes),
+                    offset,
+                )?;
+                Ok((value, offset))
             },
-            1 => Self::ExecutedNativeTip {
-                height: <D as DecodeField<1, u64>>::decode_field(
-                    destination,
-                    norito::core::framed_field(bytes, &mut offset)?,
-                )?,
-                block_hash: <D as DecodeField<2, [u8; 32]>>::decode_field(
-                    destination,
-                    norito::core::framed_byte_array_field::<32>(bytes, &mut offset)?,
-                )?,
-                core_hash: <D as DecodeField<3, [u8; 32]>>::decode_field(
-                    destination,
-                    norito::core::framed_byte_array_field::<32>(bytes, &mut offset)?,
-                )?,
-                result_hash: <D as DecodeField<4, [u8; 32]>>::decode_field(
-                    destination,
-                    norito::core::framed_byte_array_field::<32>(bytes, &mut offset)?,
-                )?,
-            },
-            _ => return Err(norito::Error::Message("invalid enum discriminant".into()).into()),
-        };
-        norito::core::finish_context_fields(bytes.as_ptr(), offset)?;
-        Ok((value, offset))
+        )
     }
 }
 impl<'de> norito::core::DeserializePayload<'de> for DkgCheckpointSourceV1 {
@@ -166,7 +180,7 @@ impl<'de> norito::core::DeserializePayload<'de> for DkgCheckpointSourceV1 {
         })
     }
     fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
-        norito::core::with_context_fields(std::ptr::from_ref(archived).cast::<u8>(), |bytes| {
+        norito::core::with_context_fields(archived, |bytes| {
             let (value, _) = Self::decode_fields(bytes, &mut norito::core::OwnedFields)
                 .map_err(DecodeIntoError::into_codec)?;
             Ok(value)

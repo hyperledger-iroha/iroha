@@ -181,8 +181,7 @@ where
     }
 
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let bytes = ncore::payload_slice_from_ptr(ptr)?;
+        let bytes = ncore::payload_slice(archived)?;
         decode_const_vec_exact::<T>(bytes)
     }
 }
@@ -415,7 +414,7 @@ mod tests {
         let value = ConstVec::new(bytes.clone());
         let framed = norito::core::to_bytes(&value).expect("frame ConstVec");
         let archived = norito::core::from_bytes::<ConstVec<u8>>(&framed).expect("decode header");
-        let decoded = ConstVec::<u8>::deserialize(archived);
+        let decoded = archived.deserialize();
         assert_eq!(decoded.into_vec(), bytes);
     }
     #[test]
@@ -423,9 +422,10 @@ mod tests {
         let value = ConstVec::from(vec![1_u8, 2, 3]);
         let framed = norito::core::to_bytes(&value).expect("frame const vec");
         let archived = norito::core::from_bytes::<ConstVec<u8>>(&framed).expect("decode header");
-        let _payload_ctx = ncore::PayloadCtxGuard::enter_with_len(framed.as_slice(), 0);
-        let error = <ConstVec<u8> as DeserializePayload>::try_deserialize(archived)
-            .expect_err("an empty logical payload cannot contain a sequence count");
+        let error = ncore::with_payload_ctx(&archived.bytes()[..0], || {
+            <ConstVec<u8> as DeserializePayload>::try_deserialize(archived.archived())
+        })
+        .expect_err("an empty logical payload cannot contain a sequence count");
         assert!(matches!(error, ncore::Error::LengthMismatch));
     }
     #[test]
@@ -494,9 +494,9 @@ mod tests {
         }
         let archived =
             ncore::archived_from_slice::<ConstVec<u8>>(&payload).expect("archived const vec");
-        let _payload_ctx = ncore::PayloadCtxGuard::enter(&payload);
         let _flags = ncore::DecodeFlagsGuard::enter(ncore::header_flags::COMPACT_LEN);
-        let decoded = <ConstVec<u8> as DeserializePayload>::try_deserialize(archived.as_ref())
+        let decoded = archived
+            .try_deserialize()
             .expect("compact unpacked byte const vec should decode");
         assert_eq!(decoded.as_ref(), bytes.as_slice());
     }

@@ -53,7 +53,7 @@ use norito_derive::{NoritoDeserialize, NoritoSerialize};
 /// assert_eq!(body, EXPECTED_BODY);
 ///
 /// let archived = from_bytes::<SamplePayload>(&encoded).expect("decode sample payload");
-/// let decoded = <SamplePayload as DeserializePayload>::deserialize(archived);
+/// let decoded = archived.deserialize();
 /// assert_eq!(decoded, payload);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, crate::NoritoSchema, NoritoSerialize, NoritoDeserialize)]

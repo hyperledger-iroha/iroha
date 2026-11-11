@@ -3,7 +3,7 @@
 use super::*;
 use norito::core::{
     DecodeAttemptErrorKind, DecodeBudgetContext, DecodeFromSlice, DecodeResourceError,
-    DeserializePayload, classify_decode_attempt,
+    classify_decode_attempt,
 };
 
 fn allocation_limits(bytes: usize) -> norito::DecodeLimits {
@@ -81,9 +81,9 @@ fn archived_instruction_refusal_stops_without_allocating_an_owned_pair_retry() {
     let expected = fixture();
     let framed = norito::core::to_bytes(&expected).unwrap();
     let archived = norito::core::from_bytes::<InstructionBox>(&framed).unwrap();
-    let bytes = norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast()).unwrap();
+    let bytes = archived.bytes();
     let borrowed = || decode_instruction_from_borrowed_pair(bytes).map(|(value, _)| value);
-    let archived_decode = || InstructionBox::try_deserialize(archived);
+    let archived_decode = || archived.try_deserialize();
     let (_, usage) =
         norito::core::with_decode_limits_measured(allocation_limits(usize::MAX), borrowed);
     let demand = usage.total_allocated_bytes();

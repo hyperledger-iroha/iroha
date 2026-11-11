@@ -331,7 +331,7 @@ impl<'de> norito::core::DeserializePayload<'de> for BlockSignatures {
         Self::try_deserialize(archive).expect("canonical ordered block signatures")
     }
     fn try_deserialize(archive: &'de norito::Archived<Self>) -> Result<Self, norito::Error> {
-        norito::core::with_context_fields(std::ptr::from_ref(archive).cast::<u8>(), |bytes| {
+        norito::core::with_context_fields(archive, |bytes| {
             Self::decode_from_slice(bytes).map(|(value, _)| value)
         })?
     }

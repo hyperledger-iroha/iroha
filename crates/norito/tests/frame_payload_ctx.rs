@@ -1,10 +1,10 @@
 //! Tests covering payload framing helpers tied to the decode context.
 use iroha_schema::IntoSchema;
 use norito::{
-    DeserializePayload, NoritoDeserialize, NoritoSerialize,
+    NoritoDeserialize, NoritoSerialize,
     core::{
-        Error as CoreError, PayloadCtxGuard, frame_current_payload_with_default_header,
-        reset_decode_state,
+        Error as CoreError, default_encode_flags, frame_current_payload_with_default_header,
+        reset_decode_state, with_payload_ctx_schema_and_flags,
     },
     from_bytes, to_bytes,
 };
@@ -40,10 +40,20 @@ fn frame_current_payload_roundtrips_bytes() {
     };
     let bytes = to_bytes(&sample).expect("encode sample");
     let archived = from_bytes::<FrameSample>(&bytes).expect("decode view");
-    let decoded = <FrameSample as DeserializePayload>::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(decoded, sample);
-    let reframed = frame_current_payload_with_default_header::<FrameSample>()
-        .expect("reframe payload using context");
+    // The frame's context exists only while it is installed for a decode.
+    assert!(matches!(
+        frame_current_payload_with_default_header::<FrameSample>(),
+        Err(CoreError::MissingPayloadContext)
+    ));
+    let reframed = with_payload_ctx_schema_and_flags(
+        archived.bytes(),
+        archived.schema(),
+        archived.flags(),
+        frame_current_payload_with_default_header::<FrameSample>,
+    )
+    .expect("reframe payload using context");
     assert_eq!(reframed, bytes);
     reset_decode_state();
 }
@@ -64,12 +74,13 @@ fn frame_current_payload_rejects_schema_mismatch() {
     };
     let bytes = to_bytes(&sample).expect("encode sample");
     let (_, body) = bytes.split_at(norito::core::Header::SIZE);
-    let _ctx = PayloadCtxGuard::enter_with_schema(
+    let err = with_payload_ctx_schema_and_flags(
         body,
         norito::schema::identity::frame_hash::<OtherSample>(),
-    );
-    let err = frame_current_payload_with_default_header::<FrameSample>()
-        .expect_err("schema mismatch should error");
+        default_encode_flags(),
+        frame_current_payload_with_default_header::<FrameSample>,
+    )
+    .expect_err("schema mismatch should error");
     assert!(matches!(err, CoreError::SchemaMismatch));
     reset_decode_state();
 }

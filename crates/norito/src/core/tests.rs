@@ -163,8 +163,8 @@ fn fixed_byte_array_decode_reports_prefix_used() {
     let decode_raw = |bytes: &[u8]| {
         let _context = PayloadCtxGuard::enter(bytes);
         let mut used = 0;
-        let decoded = decode_context_byte_array::<4>(bytes.as_ptr(), &mut used)?;
-        finish_context_fields(bytes.as_ptr(), used)?;
+        let decoded = decode_context_byte_array::<4>(Archived::<()>::start_of(bytes), &mut used)?;
+        finish_context_fields(Archived::<()>::start_of(bytes), used)?;
         Ok::<_, Error>((decoded, used))
     };
     assert_eq!(
@@ -319,7 +319,7 @@ fn decode_field_canonical_honors_payload_context_flags() {
         let _flags = DecodeFlagsGuard::enter(0);
         serialize_to_buffer(&expected, &mut bytes).expect("encode fixed-width field frames");
     }
-    set_payload_ctx_state(&bytes, None, Some(0));
+    let _context = PayloadCtxGuard::enter_with_flags(&bytes, 0);
 
     let (decoded, used) =
         decode_field_canonical::<CanonicalStruct>(&bytes).expect("decode advertised layout");
@@ -486,7 +486,7 @@ impl<'de> DeserializePayload<'de> for OveralignedField {
             archived as *const Archived<Self> as usize,
             Ordering::Relaxed,
         );
-        let bytes = payload_range_from_ptr(core::ptr::from_ref(archived).cast::<u8>(), 64)?;
+        let bytes = payload_range(archived, 64)?;
         let mut field = [0_u8; 64];
         field.copy_from_slice(bytes);
         Ok(Self(field))
@@ -992,17 +992,18 @@ fn context_field_helpers_decode_framed_fields_and_require_full_consumption() {
     let _guard = PayloadCtxGuard::enter(&payload);
     let mut offset = 0;
     assert_eq!(
-        decode_context_field_canonical::<u32>(payload.as_ptr(), &mut offset).expect("decode first"),
+        decode_context_field_canonical::<u32>(Archived::<()>::start_of(&payload), &mut offset)
+            .expect("decode first"),
         first
     );
     assert_eq!(
-        decode_context_field_canonical::<u32>(payload.as_ptr(), &mut offset)
+        decode_context_field_canonical::<u32>(Archived::<()>::start_of(&payload), &mut offset)
             .expect("decode second"),
         second
     );
-    finish_context_fields(payload.as_ptr(), offset).expect("consume payload");
+    finish_context_fields(Archived::<()>::start_of(&payload), offset).expect("consume payload");
     assert!(matches!(
-        finish_context_fields(payload.as_ptr(), offset - 1),
+        finish_context_fields(Archived::<()>::start_of(&payload), offset - 1),
         Err(Error::LengthMismatch)
     ));
 }
@@ -1015,7 +1016,7 @@ fn context_field_helpers_bound_declared_lengths_before_decoding() {
     let _guard = PayloadCtxGuard::enter(&payload);
     let mut offset = 0;
     assert!(matches!(
-        decode_context_field_canonical::<u32>(payload.as_ptr(), &mut offset),
+        decode_context_field_canonical::<u32>(Archived::<()>::start_of(&payload), &mut offset),
         Err(Error::LengthMismatch)
     ));
     assert_eq!(offset, 0, "a rejected frame must not consume input");
@@ -1025,7 +1026,7 @@ fn context_field_helpers_bound_declared_lengths_before_decoding() {
     malformed.push(0xAA);
     let _guard = PayloadCtxGuard::enter(&malformed);
     assert!(matches!(
-        decode_context_field_canonical::<u32>(malformed.as_ptr(), &mut offset),
+        decode_context_field_canonical::<u32>(Archived::<()>::start_of(&malformed), &mut offset),
         Err(Error::LengthMismatch)
     ));
     assert_eq!(
@@ -1045,7 +1046,7 @@ fn canonical_context_field_rejects_trailing_bytes_inside_declared_frame() {
     let _guard = PayloadCtxGuard::enter(&payload);
     let mut offset = 0;
     assert!(matches!(
-        decode_context_field_canonical::<u32>(payload.as_ptr(), &mut offset),
+        decode_context_field_canonical::<u32>(Archived::<()>::start_of(&payload), &mut offset),
         Err(Error::LengthMismatch)
     ));
     assert_eq!(offset, 0, "a non-canonical frame must not consume input");
@@ -1069,12 +1070,12 @@ fn context_field_fixed_arrays_fit_a_bounded_stack_without_allocating() {
                     let _context = PayloadCtxGuard::enter(&payload);
                     let mut offset = 0;
                     let decoded = decode_context_field_canonical::<[[u64; 32]; 32]>(
-                        payload.as_ptr(),
+                        Archived::<()>::start_of(&payload),
                         &mut offset,
                     )?;
                     assert!(decoded.iter().flatten().all(|value| *value == 7));
                     assert_eq!(offset, payload.len());
-                    finish_context_fields(payload.as_ptr(), offset)
+                    finish_context_fields(Archived::<()>::start_of(&payload), offset)
                 });
                 result.expect("decode fixed arrays on bounded stack");
                 assert_eq!(usage.total_elements(), 0);
@@ -1115,7 +1116,10 @@ fn context_field_failure_drops_initialized_value_without_advancing() {
             let _context = PayloadCtxGuard::enter(&payload);
             let before = DROPS.load(Ordering::Relaxed);
             let mut offset = 0;
-            let result = decode_context_field_canonical::<Probe>(payload.as_ptr(), &mut offset);
+            let result = decode_context_field_canonical::<Probe>(
+                Archived::<()>::start_of(&payload),
+                &mut offset,
+            );
             assert_eq!(result.is_ok(), accepted);
             assert_eq!(offset, if accepted { payload.len() } else { 0 });
             if !accepted {
@@ -1142,20 +1146,21 @@ fn context_field_and_fixed_array_helpers_advance_exactly() {
     let _guard = PayloadCtxGuard::enter(&payload);
     let mut offset = 0;
     assert_eq!(
-        decode_context_field_canonical::<String>(payload.as_ptr(), &mut offset)
+        decode_context_field_canonical::<String>(Archived::<()>::start_of(&payload), &mut offset)
             .expect("decode first field"),
         first
     );
     assert_eq!(
-        decode_context_field_canonical::<String>(payload.as_ptr(), &mut offset)
+        decode_context_field_canonical::<String>(Archived::<()>::start_of(&payload), &mut offset)
             .expect("decode second field"),
         second
     );
     assert_eq!(
-        decode_context_byte_array::<4>(payload.as_ptr(), &mut offset).expect("decode fixed bytes"),
+        decode_context_byte_array::<4>(Archived::<()>::start_of(&payload), &mut offset)
+            .expect("decode fixed bytes"),
         [1, 2, 3, 4]
     );
-    finish_context_fields(payload.as_ptr(), offset).expect("consume payload");
+    finish_context_fields(Archived::<()>::start_of(&payload), offset).expect("consume payload");
 }
 #[test]
 fn note_payload_access_updates_max_access() {
@@ -1230,8 +1235,7 @@ impl<'de> crate::DeserializePayload<'de> for BadExactLen {
         Self::try_deserialize(archived).expect("BadExactLen decode must succeed")
     }
     fn try_deserialize(archived: &'de Archived<Self>) -> Result<Self, Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let payload = payload_slice_from_ptr(ptr)?;
+        let payload = payload_slice(archived)?;
         let (value, _) = decode_field_canonical::<u32>(payload)?;
         Ok(BadExactLen(value))
     }
@@ -1520,7 +1524,7 @@ fn derived_struct_ignores_untrusted_exact_field_length() {
     };
     let frame = to_bytes(&value).expect("counted encoding ignores the untrusted length oracle");
     let archived = from_bytes::<BadExactWrapper>(&frame).expect("validate counted struct frame");
-    let decoded = BadExactWrapper::try_deserialize(archived).expect("decode counted struct");
+    let decoded = archived.try_deserialize().expect("decode counted struct");
     assert_eq!(decoded, value);
 }
 #[test]
@@ -1528,7 +1532,7 @@ fn derived_enum_ignores_untrusted_exact_field_length() {
     let value = BadExactEnum::One(BadExactLen(0x11223344));
     let frame = to_bytes(&value).expect("counted encoding ignores the untrusted length oracle");
     let archived = from_bytes::<BadExactEnum>(&frame).expect("validate counted enum frame");
-    let decoded = BadExactEnum::try_deserialize(archived).expect("decode counted enum");
+    let decoded = archived.try_deserialize().expect("decode counted enum");
     assert_eq!(decoded, value);
 }
 
@@ -1600,8 +1604,7 @@ impl<'de> crate::DeserializePayload<'de> for RootAware {
         Self::try_deserialize(archived).expect("RootAware decode must succeed")
     }
     fn try_deserialize(archived: &'de Archived<Self>) -> Result<Self, Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let payload = payload_slice_from_ptr(ptr)?;
+        let payload = payload_slice(archived)?;
         let (value, _) = decode_field_canonical::<u32>(payload)?;
         Ok(RootAware(value))
     }
@@ -1778,21 +1781,81 @@ fn sequence_decoders_reject_zero_length_header_for_nonempty_element() {
     reset_decode_state();
 }
 #[test]
-fn payload_slice_from_ptr_cannot_escape_the_active_field() {
+fn payload_slice_cannot_escape_the_active_field() {
     reset_decode_state();
     let payload: Vec<u8> = (0..64).collect();
-    set_decode_root(&payload);
     let ctx = &payload[8..24];
-    let guard = PayloadCtxGuard::enter(ctx);
-    let ptr = payload[48..].as_ptr();
+    with_payload_ctx(ctx, || {
+        let outside = Archived::<u8>::start_of(&payload[48..]);
+        assert!(matches!(payload_slice(outside), Err(Error::LengthMismatch)));
+        assert!(matches!(
+            payload_range(outside, 1),
+            Err(Error::LengthMismatch)
+        ));
+        let before = Archived::<u8>::start_of(&payload[..8]);
+        assert!(matches!(payload_slice(before), Err(Error::LengthMismatch)));
+        assert_eq!(payload_ctx_max_access().unwrap(), 0);
+        let inside = Archived::<u8>::start_of(&payload[10..]);
+        assert_eq!(payload_slice(inside).unwrap(), &payload[10..24]);
+        assert_eq!(payload_range(inside, 4).unwrap(), &payload[10..14]);
+        assert!(matches!(
+            payload_range(inside, 15),
+            Err(Error::LengthMismatch)
+        ));
+        assert_eq!(payload_ctx_max_access().unwrap(), 6);
+    });
     assert!(matches!(
-        payload_slice_from_ptr(ptr),
-        Err(Error::LengthMismatch)
+        payload_slice(Archived::<u8>::start_of(&payload)),
+        Err(Error::MissingPayloadContext)
     ));
-    assert_eq!(payload_ctx_max_access().unwrap(), 0);
-    drop(guard);
-    clear_decode_root();
     reset_decode_state();
+}
+#[test]
+fn empty_source_markers_never_reach_an_adjacent_payload() {
+    reset_decode_state();
+    let buffer: Vec<u8> = (0..16).collect();
+    let (front, back) = buffer.split_at(8);
+    // `front[8..]` is empty and ends where `back` begins: its own address is
+    // `back`'s first byte, but the marker borrows none of `back`.
+    let empty = Archived::<u8>::start_of(&front[front.len()..]);
+    let start_of_back = Archived::<u8>::start_of(back);
+    assert_ne!(
+        core::ptr::from_ref(empty).addr(),
+        core::ptr::from_ref(start_of_back).addr()
+    );
+    with_payload_ctx(back, || {
+        assert_eq!(payload_slice(empty).unwrap(), &[] as &[u8]);
+        assert_eq!(payload_range(empty, 0).unwrap(), &[] as &[u8]);
+        assert!(matches!(
+            payload_range(empty, 1),
+            Err(Error::LengthMismatch)
+        ));
+        assert_eq!(payload_ctx_max_access().unwrap(), 0);
+        assert_eq!(payload_slice(start_of_back).unwrap(), back);
+    });
+    // A marker at the end of the context locates no bytes either.
+    let end = Archived::<u8>::start_of(&buffer[8..]);
+    with_payload_ctx(front, || {
+        assert_eq!(payload_slice(end).unwrap(), &[] as &[u8]);
+        assert!(matches!(payload_range(end, 1), Err(Error::LengthMismatch)));
+    });
+}
+#[test]
+fn closure_scoped_contexts_restore_the_outer_context_on_unwind() {
+    reset_decode_state();
+    let outer = [1_u8, 2, 3];
+    let inner = [4_u8, 5];
+    with_payload_ctx(&outer, || {
+        let unwound = std::panic::catch_unwind(|| {
+            with_payload_ctx(&inner, || {
+                assert_eq!(payload_ctx(), Some((inner.as_ptr().addr(), inner.len())));
+                panic!("decoder panic");
+            })
+        });
+        assert!(unwound.is_err());
+        assert_eq!(payload_ctx(), Some((outer.as_ptr().addr(), outer.len())));
+    });
+    assert_eq!(payload_ctx(), None);
 }
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
@@ -1951,7 +2014,7 @@ fn from_compressed_bytes_accepts_aligned_padding() {
     let value: u64 = 0xDEAD_BEEF_DEAD_BEEFu64;
     let bytes = to_compressed_bytes(&value, None).expect("encode compressed payload");
     let archived = from_compressed_bytes::<u64>(&bytes).expect("decode compressed payload");
-    let decoded = u64::deserialize(&archived);
+    let decoded = archived.deserialize();
     assert_eq!(decoded, value);
 }
 #[cfg(feature = "compression")]
@@ -1976,15 +2039,16 @@ struct Align64(u8);
 fn archived_box_owns_payload_without_realignment() {
     let payload = vec![0xAA];
     let address = payload.as_ptr() as usize;
-    let archived = ArchivedBox::<Align64>::from_payload(payload);
+    let archived = ArchivedBox::<Align64>::from_payload(payload, [0; 16], 0);
     let ptr = archived.archived() as *const Archived<Align64> as usize;
     assert_eq!(ptr, address, "the owned payload is used in place");
     assert_eq!(archived.bytes(), &[0xAA]);
-    let empty = ArchivedBox::<Align64>::from_payload(Vec::new());
+    let empty = ArchivedBox::<Align64>::from_payload(Vec::new(), [0; 16], 0);
     assert!(empty.bytes().is_empty());
     assert_eq!(
         empty.archived() as *const Archived<Align64> as usize,
-        empty.bytes().as_ptr() as usize
+        empty_marker_ptr().addr(),
+        "an empty payload has the shared empty marker"
     );
 }
 #[test]
@@ -2006,9 +2070,18 @@ fn frame_current_payload_preserves_active_flags() {
     let bytes = to_bytes(&value).expect("encode value");
     let original_flags = bytes[Header::SIZE - 1];
     let archived = from_bytes::<Vec<u64>>(&bytes).expect("decode header-framed payload");
-    let _ = archived;
-    let reframed =
-        frame_current_payload_with_default_header::<Vec<u64>>().expect("reframe current payload");
+    // Validating a frame installs no context; decoding it does, for its duration.
+    assert!(matches!(
+        frame_current_payload_with_default_header::<Vec<u64>>(),
+        Err(Error::MissingPayloadContext)
+    ));
+    let reframed = with_payload_ctx_schema_and_flags(
+        archived.bytes(),
+        archived.schema(),
+        archived.flags(),
+        frame_current_payload_with_default_header::<Vec<u64>>,
+    )
+    .expect("reframe current payload");
     let mut cursor = std::io::Cursor::new(&reframed);
     let header = Header::read(&mut cursor).expect("read reframed header");
     assert_eq!(header.flags, original_flags);
@@ -2057,11 +2130,6 @@ fn read_len_readers_honor_compact_flags() {
         let (len_slice, hdr_slice) = read_len_dyn_slice(&bytes).expect("slice length header");
         assert_eq!(len_slice, 3);
         assert_eq!(hdr_slice, 1, "varint header should consume one byte");
-        let _payload_guard = PayloadCtxGuard::enter(&bytes);
-        let (len_ptr, hdr_ptr) =
-            read_len_dyn_at_ptr(bytes.as_ptr()).expect("pointer length header");
-        assert_eq!(len_ptr, 3);
-        assert_eq!(hdr_ptr, 1);
     }
     // Sequence headers are fixed-width in v1.
     let mut seq_fixed = Vec::new();
@@ -2074,10 +2142,10 @@ fn read_len_readers_honor_compact_flags() {
         assert_eq!(seq_len_slice, 3);
         assert_eq!(seq_hdr_slice, 8);
         let _seq_payload = PayloadCtxGuard::enter(&seq_fixed);
-        let (seq_len_ptr, seq_hdr_ptr) =
-            unsafe { read_seq_len_ptr(seq_fixed.as_ptr()) }.expect("sequence len ptr");
-        assert_eq!(seq_len_ptr, 3);
-        assert_eq!(seq_hdr_ptr, 8);
+        let (seq_len_marker, seq_hdr_marker) =
+            read_seq_len_at(Archived::<()>::start_of(&seq_fixed)).expect("sequence len marker");
+        assert_eq!(seq_len_marker, 3);
+        assert_eq!(seq_hdr_marker, 8);
     }
 }
 #[test]
@@ -2146,7 +2214,7 @@ fn canonical_string_field_preserves_following_values() {
     };
     let bytes = crate::to_bytes(&input).expect("encode struct");
     let archived = crate::from_bytes::<StringAndNumber>(&bytes).expect("decode struct");
-    let decoded = StringAndNumber::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(decoded, input);
 }
 #[test]
@@ -2154,7 +2222,9 @@ fn archive_marker_accepts_short_valid_variable_payload() {
     let input = String::from("ok");
     let bytes = to_bytes(&input).expect("encode short string");
     let archived = from_bytes::<String>(&bytes).expect("validate short string frame");
-    let decoded = String::try_deserialize(archived).expect("decode bounded short string payload");
+    let decoded = archived
+        .try_deserialize()
+        .expect("decode bounded short string payload");
     assert_eq!(decoded, input);
 }
 #[test]
@@ -2164,7 +2234,7 @@ fn archive_marker_defers_fixed_payload_bounds_to_fallible_decode() {
     let archived =
         from_bytes::<u64>(&bytes).expect("frame validation must not reinterpret payload bytes");
     assert!(matches!(
-        u64::try_deserialize(archived),
+        archived.try_deserialize(),
         Err(Error::LengthMismatch)
     ));
 }
@@ -2345,7 +2415,8 @@ fn tuple_serialization_preserves_explicit_flags_in_nested_containers() {
             .expect("frame nested tuple with its explicit flags");
         let archived = from_bytes::<NestedTuple>(&frame)
             .expect("validate nested tuple frame with its explicit flags");
-        let decoded = NestedTuple::try_deserialize(archived)
+        let decoded = archived
+            .try_deserialize()
             .expect("decode nested tuple with its explicit flags");
         assert_eq!(decoded, value, "roundtrip changed flags 0x{flags:02x}");
     }
@@ -2446,12 +2517,12 @@ fn box_roundtrip() {
     let value: Box<u32> = Box::new(41);
     let bytes = to_bytes(&value).unwrap();
     let archived = from_bytes::<Box<u32>>(&bytes).unwrap();
-    let decoded = <Box<u32> as DeserializePayload>::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(value, decoded);
     let str_box: Box<String> = Box::new("boxed".into());
     let bytes = to_bytes(&str_box).unwrap();
     let archived = from_bytes::<Box<String>>(&bytes).unwrap();
-    let decoded = <Box<String> as DeserializePayload>::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(str_box, decoded);
 }
 #[test]
@@ -2459,12 +2530,12 @@ fn rc_roundtrip() {
     let value: Rc<u32> = Rc::new(7);
     let bytes = to_bytes(&value).unwrap();
     let archived = from_bytes::<Rc<u32>>(&bytes).unwrap();
-    let decoded = <Rc<u32> as DeserializePayload>::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(value, decoded);
     let str_rc: Rc<String> = Rc::new(String::from("shared"));
     let bytes = to_bytes(&str_rc).unwrap();
     let archived = from_bytes::<Rc<String>>(&bytes).unwrap();
-    let decoded = <Rc<String> as DeserializePayload>::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(str_rc, decoded);
 }
 #[test]
@@ -2472,12 +2543,12 @@ fn arc_roundtrip() {
     let value: Arc<u32> = Arc::new(99);
     let bytes = to_bytes(&value).unwrap();
     let archived = from_bytes::<Arc<u32>>(&bytes).unwrap();
-    let decoded = <Arc<u32> as DeserializePayload>::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(value, decoded);
     let str_arc: Arc<String> = Arc::new(String::from("threads"));
     let bytes = to_bytes(&str_arc).unwrap();
     let archived = from_bytes::<Arc<String>>(&bytes).unwrap();
-    let decoded = <Arc<String> as DeserializePayload>::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(str_arc, decoded);
 }
 #[test]
@@ -2600,9 +2671,14 @@ fn archived_cast_roundtrip() {
     let value = vec![1u32, 2, 3];
     let bytes = to_bytes(&value).unwrap();
     let archived_vec = from_bytes::<Vec<u32>>(&bytes).unwrap();
-    let archived_wrapper: &Archived<Wrapper> = archived_vec.cast::<Wrapper>();
+    let archived_wrapper: &Archived<Wrapper> = archived_vec.archived().cast::<Wrapper>();
     let archived_vec_again: &Archived<Vec<u32>> = archived_wrapper.cast::<Vec<u32>>();
-    let decoded = <Vec<u32> as DeserializePayload>::deserialize(archived_vec_again);
+    let decoded = with_payload_ctx_schema_and_flags(
+        archived_vec.bytes(),
+        archived_vec.schema(),
+        archived_vec.flags(),
+        || <Vec<u32> as DeserializePayload>::deserialize(archived_vec_again),
+    );
     assert_eq!(value, decoded);
 }
 #[test]
@@ -2649,7 +2725,7 @@ fn decode_state_fingerprint() -> DecodeStateFingerprint {
         flags: get_decode_flags(),
         flags_active: decode_flags_active(),
         payload: payload_ctx_state().map(|state| PayloadContextFingerprint {
-            base: state.base,
+            base: state.base.addr(),
             len: state.len,
             schema: state.schema,
             max_access: state.max_access,

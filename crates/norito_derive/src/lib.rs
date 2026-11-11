@@ -14,7 +14,7 @@
 //!
 //! let bytes = to_bytes(&Point { x: 1, y: false }).unwrap();
 //! let archived = from_bytes::<Point>(&bytes).unwrap();
-//! let decoded = <Point as DeserializePayload>::deserialize(archived);
+//! let decoded = archived.deserialize();
 //! assert_eq!(decoded.x, 1);
 //! ```
 

@@ -7,7 +7,6 @@ use iroha_data_model::{
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
-use norito::core::DeserializePayload;
 use std::str::FromStr;
 #[test]
 fn join_kaigi_preserves_canonical_raw_commitment() {
@@ -31,7 +30,7 @@ fn join_kaigi_preserves_canonical_raw_commitment() {
         iroha_data_model::isi::Instruction::into_instruction_box(Box::new(join.clone()));
     let bytes = norito::core::to_bytes(&instruction).expect("serialize");
     let archived = norito::core::from_bytes::<InstructionBox>(&bytes).expect("from bytes");
-    let decoded = InstructionBox::try_deserialize(archived).expect("deserialize");
+    let decoded = archived.try_deserialize().expect("deserialize");
     assert_eq!(decoded.as_any().downcast_ref::<JoinKaigi>(), Some(&join));
 }
 

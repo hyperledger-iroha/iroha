@@ -2,8 +2,8 @@
 
 use super::decode_aos_byte_array_field;
 use norito::core::{
-    DecodeFlagsGuard, DecodeFromSlice, DecodeLimits, Error, PayloadCtxGuard, SerializePayload,
-    header_flags, serialize_to_buffer, with_decode_limits, with_decode_limits_measured,
+    DecodeFlagsGuard, DecodeFromSlice, DecodeLimits, Error, SerializePayload, header_flags,
+    serialize_to_buffer, with_decode_limits, with_decode_limits_measured,
 };
 
 #[derive(Debug, PartialEq, Eq, crate::Encode, crate::Decode)]
@@ -64,13 +64,14 @@ fn direct_raw_fields_preserve_literal_wire_zero_charge_and_original_context_at_e
             let input = &original[alignment..];
             let limits = DecodeLimits::new(0, usize::MAX, 0, 0, 0);
             let (result, usage) = with_decode_limits_measured(limits, || {
-                let _context = PayloadCtxGuard::enter(input);
-                let decoded = RawRecord::decode_from_slice(input);
-                assert_eq!(
-                    norito::core::payload_ctx(),
-                    Some((input.as_ptr() as usize, input.len()))
-                );
-                decoded
+                norito::core::with_payload_ctx(input, || {
+                    let decoded = RawRecord::decode_from_slice(input);
+                    assert_eq!(
+                        norito::core::payload_ctx(),
+                        Some((input.as_ptr() as usize, input.len()))
+                    );
+                    decoded
+                })
             });
             assert_eq!(
                 result.unwrap(),

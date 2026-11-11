@@ -27,7 +27,7 @@ mod attachments_tests {
         .sign(&private_key);
         let bytes = norito::to_bytes(&tx).expect("encode");
         let archived = norito::from_bytes::<SignedTransaction>(&bytes).expect("archived");
-        let decoded: SignedTransaction = norito::core::DeserializePayload::deserialize(archived);
+        let decoded: SignedTransaction = archived.deserialize();
         assert_eq!(decoded, tx);
         assert_eq!(
             decoded.proof_attachments_v1().expect("canonical carrier"),

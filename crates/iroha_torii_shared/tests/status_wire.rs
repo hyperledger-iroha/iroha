@@ -47,7 +47,7 @@ where
         )
     );
     let decoded = norito::from_bytes::<T>(&bytes).expect("decode golden frame");
-    let decoded = T::deserialize(decoded);
+    let decoded = decoded.deserialize();
     assert_eq!(
         json::to_value(&decoded).expect("roundtrip JSON"),
         *expected_json,

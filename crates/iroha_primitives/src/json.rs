@@ -100,8 +100,7 @@ impl<'a> norito::core::DeserializePayload<'a> for Json {
     fn try_deserialize(
         archived: &'a norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        if let Ok(payload) = norito::core::payload_slice_from_ptr(ptr) {
+        if let Ok(payload) = norito::core::payload_slice(archived) {
             let (value, _) = Self::decode_wire_text(payload)?;
             return Self::try_from_canonical_string(value);
         }

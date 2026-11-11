@@ -1077,8 +1077,7 @@ impl<'a> norito::core::DeserializePayload<'a> for InstructionBox {
             let hash = payload.map_or([0; 32], |bytes| iroha_crypto::Hash::new(bytes).into());
             InstructionBox::from(transparent::InvalidInstruction::new(name, hash, message))
         };
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let bytes = match norito::core::payload_slice_from_ptr(ptr) {
+        let bytes = match norito::core::payload_slice(archived) {
             Ok(bytes) => bytes,
             Err(error) => return invalid("<norito>", None, error),
         };
@@ -1095,8 +1094,7 @@ impl<'a> norito::core::DeserializePayload<'a> for InstructionBox {
     fn try_deserialize(
         archived: &'a norito::core::Archived<InstructionBox>,
     ) -> Result<Self, norito::core::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let bytes = norito::core::payload_slice_from_ptr(ptr)?;
+        let bytes = norito::core::payload_slice(archived)?;
         // This is the sole canonical pair decoder. A refusal terminates this
         // attempt; retrying would spend the caller's remaining admission twice.
         let (instruction, used) =

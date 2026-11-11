@@ -2,7 +2,7 @@
 
 use iroha_crypto::{Hash, HashOf, Signature, SignatureOf};
 use norito::schema::identity::frame_hash;
-use norito::{DeserializePayload, NoritoDeserialize, NoritoSchema, NoritoSerialize, json};
+use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, json};
 
 #[derive(NoritoSchema)]
 #[norito_schema(name = "iroha_crypto_group_01::schema_identity::OriginalMarker")]
@@ -68,7 +68,7 @@ fn relocated_markers_preserve_identity_and_payload_without_codec_implementations
     assert_eq!(original, relocated);
     assert_eq!(original[6..22], frame_hash::<HashOf<RelocatedMarker>>());
     let archived = norito::from_bytes::<HashOf<OriginalMarker>>(&original).unwrap();
-    let decoded = HashOf::<OriginalMarker>::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(norito::to_bytes(&decoded).unwrap(), original);
     let decoded: HashOf<RelocatedMarker> = norito::decode_from_bytes(&original).unwrap();
     assert_eq!(norito::to_bytes(&decoded).unwrap(), original);
@@ -85,7 +85,7 @@ fn relocated_markers_preserve_identity_and_payload_without_codec_implementations
         frame_hash::<SignatureOf<RelocatedMarker>>()
     );
     let archived = norito::from_bytes::<SignatureOf<OriginalMarker>>(&original).unwrap();
-    let decoded = SignatureOf::<OriginalMarker>::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(norito::to_bytes(&decoded).unwrap(), original);
     let decoded: SignatureOf<RelocatedMarker> = norito::decode_from_bytes(&original).unwrap();
     assert_eq!(norito::to_bytes(&decoded).unwrap(), original);

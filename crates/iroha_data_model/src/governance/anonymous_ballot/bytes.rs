@@ -183,11 +183,10 @@ macro_rules! fixed_bytes {
             fn try_deserialize(
                 archived: &'de norito::core::Archived<Self>,
             ) -> Result<Self, norito::core::Error> {
-                let ptr = core::ptr::from_ref(archived).cast::<u8>();
                 let mut offset = 0;
-                let bytes = norito::core::decode_context_byte_array::<$len>(ptr, &mut offset)?;
+                let bytes = norito::core::decode_context_byte_array::<$len>(archived, &mut offset)?;
                 // A canonical field holds exactly the raw bytes and nothing after them.
-                norito::core::finish_context_fields(ptr, offset)?;
+                norito::core::finish_context_fields(archived, offset)?;
                 Ok(Self(bytes))
             }
         }
@@ -439,10 +438,9 @@ macro_rules! exact_proof_bytes {
             fn try_deserialize(
                 archived: &'de norito::core::Archived<Self>,
             ) -> Result<Self, norito::core::Error> {
-                let ptr = core::ptr::from_ref(archived).cast::<u8>();
                 // Reject any other length before the copy is charged or allocated.
-                norito::core::finish_context_fields(ptr, $len)?;
-                let bytes = norito::core::payload_range_from_ptr(ptr, $len)?;
+                norito::core::finish_context_fields(archived, $len)?;
+                let bytes = norito::core::payload_range(archived, $len)?;
                 norito::core::reserve_decode_allocation($len)?;
                 Ok(Self(bytes.into()))
             }

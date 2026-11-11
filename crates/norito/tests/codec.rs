@@ -33,10 +33,9 @@ impl<'a> norito::DeserializePayload<'a> for AccessTrackedByte {
     }
 
     fn try_deserialize(archived: &'a norito::Archived<Self>) -> Result<Self, norito::Error> {
-        let ptr = std::ptr::from_ref(archived).cast::<u8>();
         let mut offset = 0;
-        let [value] = norito::core::decode_context_byte_array::<1>(ptr, &mut offset)?;
-        norito::core::finish_context_fields(ptr, offset)?;
+        let [value] = norito::core::decode_context_byte_array::<1>(archived, &mut offset)?;
+        norito::core::finish_context_fields(archived, offset)?;
         Ok(Self(value))
     }
 }
@@ -58,9 +57,8 @@ impl<'a> norito::DeserializePayload<'a> for PartiallyReadPair {
     }
 
     fn try_deserialize(archived: &'a norito::Archived<Self>) -> Result<Self, norito::Error> {
-        let ptr = std::ptr::from_ref(archived).cast::<u8>();
         let mut offset = 0;
-        let [value] = norito::core::decode_context_byte_array::<1>(ptr, &mut offset)?;
+        let [value] = norito::core::decode_context_byte_array::<1>(archived, &mut offset)?;
         Ok(Self(value))
     }
 }

@@ -3413,13 +3413,14 @@ mod candidate {
     }
     impl<'a> norito::core::DecodeFromSlice<'a> for SignedQuery {
         fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-            let _guard = norito::core::PayloadCtxGuard::enter(bytes);
-            let mut cursor = std::io::Cursor::new(bytes);
-            let candidate: SignedQueryCandidate =
-                <SignedQueryCandidate as norito::codec::Decode>::decode(&mut cursor)?;
-            let used = usize::try_from(cursor.position())
-                .map_err(|_| norito::core::Error::LengthMismatch)?;
-            Ok((candidate.into_signed(), used))
+            norito::core::with_payload_ctx(bytes, || {
+                let mut cursor = std::io::Cursor::new(bytes);
+                let candidate: SignedQueryCandidate =
+                    <SignedQueryCandidate as norito::codec::Decode>::decode(&mut cursor)?;
+                let used = usize::try_from(cursor.position())
+                    .map_err(|_| norito::core::Error::LengthMismatch)?;
+                Ok((candidate.into_signed(), used))
+            })
         }
     }
 
@@ -3861,9 +3862,9 @@ mod json_roundtrip_tests {
         let encoded = norito::to_bytes(&invalid).expect("encode multisig query fixture");
         let archived =
             norito::from_bytes::<SignedQuery>(&encoded).expect("archive multisig query fixture");
-        let decoded =
-            <SignedQuery as norito::core::DeserializePayload<'_>>::try_deserialize(archived)
-                .expect("structural archived decode must not perform authorization");
+        let decoded = archived
+            .try_deserialize()
+            .expect("structural archived decode must not perform authorization");
         assert_eq!(
             decoded.verify_signature(),
             Err(SignedQueryValidationError::AuthorityNotSingleKey)
@@ -4029,9 +4030,7 @@ mod json_roundtrip_tests {
         let encoded = norito::to_bytes(&invalid).expect("encode invalid signed query fixture");
         let archived =
             norito::from_bytes::<SignedQuery>(&encoded).expect("archive invalid signed query");
-        let err = match <SignedQuery as norito::core::DeserializePayload<'_>>::try_deserialize(
-            archived,
-        ) {
+        let err = match archived.try_deserialize() {
             Ok(_) => panic!("empty signed query signature must fail closed"),
             Err(err) => err,
         };
@@ -4068,9 +4067,7 @@ mod json_roundtrip_tests {
         let encoded = norito::to_bytes(&invalid).expect("encode invalid signed query fixture");
         let archived =
             norito::from_bytes::<SignedQuery>(&encoded).expect("archive invalid signed query");
-        let err = match <SignedQuery as norito::core::DeserializePayload<'_>>::try_deserialize(
-            archived,
-        ) {
+        let err = match archived.try_deserialize() {
             Ok(_) => panic!("all-zero signed query signature must fail closed"),
             Err(err) => err,
         };

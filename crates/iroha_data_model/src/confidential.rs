@@ -798,8 +798,7 @@ impl<'de> norito::DeserializePayload<'de> for ConfidentialMemoEnvelopeV1 {
     }
 
     fn try_deserialize(archived: &'de norito_core::Archived<Self>) -> Result<Self, NoritoError> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let payload = norito_core::payload_slice_from_ptr(ptr)?;
+        let payload = norito_core::payload_slice(archived)?;
         let (value, _) = <Self as DecodeFromSlice>::decode_from_slice(payload)?;
         Ok(value)
     }

@@ -81,8 +81,7 @@ fn header_decode_accepts_payload_at_any_address() {
     // The wire padding is unchanged; only the buffer address differs.
     let shifted = &padded[1..padded.len()];
     let archived = core::from_bytes::<Vec<u64>>(shifted).expect("address-independent frame");
-    let decoded = <Vec<u64> as norito::DeserializePayload>::try_deserialize(archived)
-        .expect("decode shifted payload");
+    let decoded = archived.try_deserialize().expect("decode shifted payload");
     assert_eq!(decoded, value);
     core::reset_decode_state();
 }

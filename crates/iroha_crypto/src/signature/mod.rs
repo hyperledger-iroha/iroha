@@ -772,7 +772,7 @@ impl<'de> ncore::DeserializePayload<'de> for Signature {
         Self::try_deserialize(archived).expect("Signature decode")
     }
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let bytes = ncore::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let bytes = ncore::payload_slice(archived)?;
         let payload = decode_signature_payload_unpacked(bytes)?;
         ncore::note_payload_access(bytes, bytes.len());
         validate_signature_payload_for_decode(&payload)?;
@@ -1262,7 +1262,8 @@ mod tests {
         let framed = norito::core::to_bytes(&signature).expect("frame empty signature");
         let archived =
             norito::from_bytes::<Signature>(&framed).expect("archive empty signature fixture");
-        let err = <Signature as norito::core::DeserializePayload>::try_deserialize(archived)
+        let err = archived
+            .try_deserialize()
             .expect_err("empty Norito signature must fail closed");
         assert!(
             err.to_string().contains("empty"),
@@ -1275,7 +1276,8 @@ mod tests {
         let framed = norito::core::to_bytes(&signature).expect("frame all-zero signature");
         let archived =
             norito::from_bytes::<Signature>(&framed).expect("archive all-zero signature fixture");
-        let err = <Signature as norito::core::DeserializePayload>::try_deserialize(archived)
+        let err = archived
+            .try_deserialize()
             .expect_err("all-zero Norito signature must fail closed");
         assert!(
             err.to_string().contains("all zero"),
@@ -1378,11 +1380,11 @@ mod tests {
 
         let archived = norito::core::archived_from_slice::<Signature>(&bytes)
             .expect("sized canonical unpacked signature marker");
-        let context = norito::core::PayloadCtxGuard::enter(archived.bytes());
-        let error = norito::core::with_decode_limits(sequence_limited, || {
-            <Signature as norito::core::DeserializePayload<'_>>::try_deserialize(archived.as_ref())
-        })
-        .expect_err("canonical unpacked pointer decode must enforce the sequence-element ceiling");
+        let error =
+            norito::core::with_decode_limits(sequence_limited, || archived.try_deserialize())
+                .expect_err(
+                    "canonical unpacked pointer decode must enforce the sequence-element ceiling",
+                );
         assert!(matches!(
             error,
             norito::core::Error::SequenceLengthExceeded {
@@ -1391,7 +1393,6 @@ mod tests {
             }
         ));
 
-        drop(context);
         let mut raw = Vec::with_capacity(8 + payload.len());
         raw.extend_from_slice(&u64::try_from(payload.len()).unwrap().to_le_bytes());
         raw.extend_from_slice(&payload);
@@ -1401,10 +1402,8 @@ mod tests {
         );
         let archived = norito::core::archived_from_slice::<Signature>(&raw)
             .expect("sized raw signature marker");
-        let _context = norito::core::PayloadCtxGuard::enter(archived.bytes());
         assert!(
-            <Signature as norito::core::DeserializePayload<'_>>::try_deserialize(archived.as_ref())
-                .is_err(),
+            archived.try_deserialize().is_err(),
             "pointer decoding must reject raw length-plus-payload signature bytes"
         );
     }
@@ -1514,7 +1513,6 @@ mod tests {
     #[test]
     fn signature_norito_roundtrip_preserves_payload() {
         use norito::{
-            DeserializePayload,
             codec::{Decode, Encode},
             core::DecodeFromSlice as _,
         };
@@ -1526,7 +1524,7 @@ mod tests {
         assert_eq!(decoded_codec, signature);
         let framed = norito::core::to_bytes(&signature).expect("frame signature payload");
         let archived = norito::from_bytes::<Signature>(&framed).expect("archived signature");
-        let decoded = Signature::deserialize(archived);
+        let decoded = archived.deserialize();
         assert_eq!(decoded, signature);
         let inner_payload = &framed[std::mem::size_of::<norito::core::Header>()..];
         let (decoded_from_slice, used) =
@@ -1542,9 +1540,7 @@ mod tests {
         let framed = norito::core::to_bytes(&typed).expect("frame typed signature");
         let archived =
             norito::from_bytes::<SignatureOf<()>>(&framed).expect("archived typed signature");
-        let decoded =
-            <SignatureOf<()> as norito::core::DeserializePayload>::try_deserialize(archived)
-                .expect("typed signature decodes");
+        let decoded = archived.try_deserialize().expect("typed signature decodes");
         assert_eq!(decoded, typed);
         norito::core::reset_decode_state();
     }
@@ -1554,7 +1550,8 @@ mod tests {
         let framed = norito::core::to_bytes(&typed).expect("frame empty typed signature");
         let archived =
             norito::from_bytes::<SignatureOf<()>>(&framed).expect("archived typed signature");
-        let err = <SignatureOf<()> as norito::core::DeserializePayload>::try_deserialize(archived)
+        let err = archived
+            .try_deserialize()
             .expect_err("empty typed signature must fail closed");
         assert!(
             err.to_string().contains("empty"),
@@ -1568,7 +1565,8 @@ mod tests {
         let framed = norito::core::to_bytes(&typed).expect("frame all-zero typed signature");
         let archived =
             norito::from_bytes::<SignatureOf<()>>(&framed).expect("archived typed signature");
-        let err = <SignatureOf<()> as norito::core::DeserializePayload>::try_deserialize(archived)
+        let err = archived
+            .try_deserialize()
             .expect_err("all-zero typed signature must fail closed");
         assert!(
             err.to_string().contains("all zero"),
@@ -1609,7 +1607,6 @@ mod tests {
     }
     #[test]
     fn signature_vec_roundtrip_via_norito() {
-        use norito::DeserializePayload;
         let payload = (0u8..16).collect::<Vec<_>>();
         let signature = Signature::from_bytes(&payload);
         let values = vec![signature.clone()];
@@ -1617,7 +1614,7 @@ mod tests {
         println!("signature vec encoded bytes {bytes:02X?}");
         let archived = norito::core::from_bytes::<Vec<Signature>>(&bytes)
             .expect("decode signature vec header");
-        let decoded = Vec::<Signature>::deserialize(archived);
+        let decoded = archived.deserialize();
         let payload = decoded[0].payload();
         println!("decoded signature payload {payload:02X?}");
         assert_eq!(decoded, values);

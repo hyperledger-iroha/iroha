@@ -273,11 +273,10 @@ fn table_range(raw: &[u8]) -> Result<Range<usize>, norito::Error> {
         return Err(norito::Error::SchemaMismatch);
     }
     let bytes = view.as_bytes();
-    let range = {
-        let _context =
-            ncore::PayloadCtxGuard::enter_with_schema_and_flags(bytes, view.schema(), view.flags());
-        byte_range(bytes, 0..bytes.len(), 1, MAX_AVAILABILITY_FRAME_BYTES)?
-    };
+    let range =
+        ncore::with_payload_ctx_schema_and_flags(bytes, view.schema(), view.flags(), || {
+            byte_range(bytes, 0..bytes.len(), 1, MAX_AVAILABILITY_FRAME_BYTES)
+        })?;
     let table = &bytes[range.clone()];
     let count = table.get(..4).ok_or(norito::Error::LengthMismatch)?;
     let count = u32::from_be_bytes(count.try_into().expect("exact count")) as usize;

@@ -261,8 +261,7 @@ impl<'a> norito::core::DeserializePayload<'a> for RepoInstructionBox {
     fn try_deserialize(
         archived: &'a norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let payload = norito::core::payload_slice_from_ptr(ptr)?;
+        let payload = norito::core::payload_slice(archived)?;
         let (value, used) = <Self as norito::core::DecodeFromSlice>::decode_from_slice(payload)?;
         if used != payload.len() {
             return Err(norito::core::Error::LengthMismatch);

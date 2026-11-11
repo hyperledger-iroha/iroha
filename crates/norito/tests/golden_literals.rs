@@ -17,26 +17,12 @@ struct SamplePayload {
 }
 impl<'a> norito::core::DecodeFromSlice<'a> for SamplePayload {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        use std::{
-            alloc::{Layout, alloc, dealloc},
-            ptr, slice,
-        };
-        let align = norito::core::archived_payload_align::<SamplePayload>();
-        let layout = Layout::from_size_align(bytes.len(), align)
-            .map_err(|_| norito::core::Error::LengthMismatch)?;
-        unsafe {
-            let ptr = alloc(layout);
-            if ptr.is_null() {
-                return Err(norito::core::Error::Message("aligned alloc failed".into()));
-            }
-            ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
-            let slice = slice::from_raw_parts(ptr, bytes.len());
-            let _guard = norito::core::PayloadCtxGuard::enter(slice);
-            let archived = &*(ptr as *const norito::core::Archived<SamplePayload>);
-            let value = <SamplePayload as norito::DeserializePayload>::deserialize(archived);
-            dealloc(ptr, layout);
-            Ok((value, bytes.len()))
-        }
+        let value = norito::core::with_payload_ctx(bytes, || {
+            <SamplePayload as norito::DeserializePayload>::try_deserialize(
+                norito::core::Archived::start_of(bytes),
+            )
+        })?;
+        Ok((value, bytes.len()))
     }
 }
 #[derive(Debug, PartialEq, Eq, IntoSchema, NoritoSerialize, NoritoDeserialize)]

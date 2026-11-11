@@ -497,14 +497,13 @@ impl SerializePayload for BigInt {
 
 impl<'a> DeserializePayload<'a> for BigInt {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
-        let slice = ncore::payload_slice_from_ptr(core::ptr::from_ref(archived).cast())
-            .expect("payload slice");
+        let slice = ncore::payload_slice(archived).expect("payload slice");
         let (value, _) =
             <BigInt as DecodeFromSlice>::decode_from_slice(slice).expect("deserialize bigint");
         value
     }
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
-        let slice = ncore::payload_slice_from_ptr(core::ptr::from_ref(archived).cast())?;
+        let slice = ncore::payload_slice(archived)?;
         let (value, _) = <BigInt as DecodeFromSlice>::decode_from_slice(slice)?;
         Ok(value)
     }

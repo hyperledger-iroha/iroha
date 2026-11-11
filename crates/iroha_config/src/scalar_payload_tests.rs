@@ -146,11 +146,10 @@ where
         matches!(missing, Ok(Err(norito::Error::MissingPayloadContext))),
         "a fallible config decoder must return missing context instead of panicking"
     );
-    let decoded = {
-        let _payload = norito::core::PayloadCtxGuard::enter(archived.bytes());
+    let decoded = norito::core::with_payload_ctx(archived.bytes(), || {
         T::try_deserialize(archived.archived().cast())
             .unwrap_or_else(|error| panic!("original payload retry: {error}"))
-    };
+    });
     assert_eq!(decoded.to_string(), expected.to_string());
     assert_eq!(explicit_field_payload(&decoded), bytes);
 }
@@ -162,29 +161,32 @@ where
     let _layout = DecodeFlagsGuard::enter(0);
     let bytes = explicit_field_payload(expected);
     let archived = norito::core::archived_from_slice::<u8>(&bytes).unwrap();
-    let _payload = norito::core::PayloadCtxGuard::enter(archived.bytes());
-    let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
-    let producer = norito::with_decode_limits_scope(limits, || {
-        String::try_deserialize(archived.archived().cast()).unwrap_err()
+    norito::core::with_payload_ctx(archived.bytes(), || {
+        let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+        let producer = norito::with_decode_limits_scope(limits, || {
+            String::try_deserialize(archived.archived().cast()).unwrap_err()
+        });
+        assert!(matches!(
+            producer,
+            norito::Error::TotalAllocationExceeded { limit: 0, .. }
+        ));
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            norito::with_decode_limits_scope(limits, || {
+                T::try_deserialize(archived.archived().cast())
+            })
+        }));
+        let Ok(Err(error)) = refused else {
+            panic!("a fallible config decoder must return the original String allocation refusal")
+        };
+        assert_eq!(
+            error.decode_resource_error(),
+            producer.decode_resource_error()
+        );
+        let decoded = T::try_deserialize(archived.archived().cast())
+            .unwrap_or_else(|error| panic!("same-payload retry: {error}"));
+        assert_eq!(decoded.to_string(), expected.to_string());
+        assert_eq!(explicit_field_payload(&decoded), bytes);
     });
-    assert!(matches!(
-        producer,
-        norito::Error::TotalAllocationExceeded { limit: 0, .. }
-    ));
-    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        norito::with_decode_limits_scope(limits, || T::try_deserialize(archived.archived().cast()))
-    }));
-    let Ok(Err(error)) = refused else {
-        panic!("a fallible config decoder must return the original String allocation refusal")
-    };
-    assert_eq!(
-        error.decode_resource_error(),
-        producer.decode_resource_error()
-    );
-    let decoded = T::try_deserialize(archived.archived().cast())
-        .unwrap_or_else(|error| panic!("same-payload retry: {error}"));
-    assert_eq!(decoded.to_string(), expected.to_string());
-    assert_eq!(explicit_field_payload(&decoded), bytes);
 }
 
 #[test]

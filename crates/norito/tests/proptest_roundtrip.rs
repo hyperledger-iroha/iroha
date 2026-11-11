@@ -1,6 +1,6 @@
 //! Deterministic roundtrip tests for Norito payload shapes.
 use norito::{
-    DeserializePayload, NoritoDeserialize,
+    NoritoDeserialize,
     core::{NoritoSerialize, decode_from_bytes, to_bytes},
     from_bytes,
 };
@@ -82,7 +82,8 @@ fn roundtrip_enums() {
     for value in cases {
         let bytes = to_bytes(&value).unwrap();
         let archived = from_bytes::<TestEnum>(&bytes).unwrap();
-        let decoded = <TestEnum as DeserializePayload>::try_deserialize(archived)
+        let decoded = archived
+            .try_deserialize()
             .unwrap_or_else(|error| panic!("failed to decode {value:?}: {error:?}"));
         assert_eq!(value, decoded);
     }

@@ -821,10 +821,18 @@ pub fn decode_canonical_zk_batch(
     payload: &[u8],
     max_items: usize,
 ) -> Result<Vec<OpenVerifyEnvelope>, ZkDecodeError> {
-    type Batch = Vec<OpenVerifyEnvelope>;
     let _canonical_flags =
         norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let _payload_context = norito::core::PayloadCtxGuard::enter(payload);
+    norito::core::with_payload_ctx(payload, || {
+        decode_canonical_zk_batch_in_context(payload, max_items)
+    })
+}
+/// [`decode_canonical_zk_batch`] under its canonical flags and payload context.
+fn decode_canonical_zk_batch_in_context(
+    payload: &[u8],
+    max_items: usize,
+) -> Result<Vec<OpenVerifyEnvelope>, ZkDecodeError> {
+    type Batch = Vec<OpenVerifyEnvelope>;
     // Validate the complete frame without requiring the TLV payload address
     // itself to satisfy `Batch` payload-storage alignment. Inspect the bounded
     // top-level count before materializing any elements.

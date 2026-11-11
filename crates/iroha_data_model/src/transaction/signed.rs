@@ -671,8 +671,7 @@ impl<'de> norito::DeserializePayload<'de> for model::TransactionPayload {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let bytes = norito::core::payload_slice_from_ptr(ptr)?;
+        let bytes = norito::core::payload_slice(archived)?;
         let (value, used) = <Self as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
         if used != bytes.len() {
             return Err(norito::core::Error::LengthMismatch);
@@ -768,12 +767,13 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::SignedTransaction {
 }
 impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionEntrypoint {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let _guard = norito::core::PayloadCtxGuard::enter(bytes);
-        let mut cursor = std::io::Cursor::new(bytes);
-        let decoded: Self = <Self as norito::codec::Decode>::decode(&mut cursor)?;
-        let used =
-            usize::try_from(cursor.position()).map_err(|_| norito::core::Error::LengthMismatch)?;
-        Ok((decoded, used))
+        norito::core::with_payload_ctx(bytes, || {
+            let mut cursor = std::io::Cursor::new(bytes);
+            let decoded: Self = <Self as norito::codec::Decode>::decode(&mut cursor)?;
+            let used = usize::try_from(cursor.position())
+                .map_err(|_| norito::core::Error::LengthMismatch)?;
+            Ok((decoded, used))
+        })
     }
 }
 impl<'a> norito::core::DecodeFromSlice<'a> for model::ExecutionStep {

@@ -139,9 +139,8 @@ where
     );
     assert!(norito::decode_canonical::<T>(&frame).is_err());
     let _flags = ncore::DecodeFlagsGuard::enter(flags);
-    let _ctx = ncore::PayloadCtxGuard::enter_with_schema_and_flags(bytes, view.schema(), flags);
     let archived = ncore::from_bytes::<T>(&frame).expect("valid typed archive metadata");
-    assert!(<T as ncore::DeserializePayload<'_>>::try_deserialize(archived).is_err());
+    assert!(archived.try_deserialize().is_err());
 }
 
 fn reject_stream_payload<T>(bytes: &[u8])

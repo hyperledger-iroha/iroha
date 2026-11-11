@@ -954,8 +954,7 @@ impl<'a> DeserializePayload<'a> for StateValueSchemaV1 {
         Self::try_deserialize(archived).expect("StateValueSchemaV1 decode")
     }
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
-        let bytes =
-            norito::core::payload_slice_from_ptr(std::ptr::from_ref(archived).cast::<u8>())?;
+        let bytes = norito::core::payload_slice(archived)?;
         let (encoded, _) = decode_state_value_payload_wrapper::<Self>(
             bytes,
             MAX_STATE_VALUE_SCHEMA_BYTES,
@@ -2715,8 +2714,7 @@ impl<'a> DeserializePayload<'a> for StateValueRecordV1 {
         Self::try_deserialize(archived).expect("StateValueRecordV1 decode")
     }
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
-        let bytes =
-            norito::core::payload_slice_from_ptr(std::ptr::from_ref(archived).cast::<u8>())?;
+        let bytes = norito::core::payload_slice(archived)?;
         let (encoded, _) = decode_state_value_payload_wrapper::<Self>(
             bytes,
             MAX_STATE_VALUE_RECORD_BYTES,
@@ -2752,19 +2750,20 @@ pub fn decode_canonical_state_value_record_v1(
     norito::core::with_decode_limits(limits, || {
         let canonical_flags = STATE_VALUE_RECORD_FRAME_FLAGS_V1;
         let _canonical_flags = norito::core::DecodeFlagsGuard::enter(canonical_flags);
-        let _payload_context = norito::core::PayloadCtxGuard::enter(bytes);
-        let view = match norito::core::from_bytes_view(bytes) {
-            Ok(view) => view,
-            Err(
-                NoritoError::DecodeFlagsMismatch { .. }
-                | NoritoError::UnsupportedCompression { .. },
-            ) => return Err(NoritoError::NonCanonicalEncoding),
-            Err(error) => return Err(error),
-        };
-        if view.flags() != canonical_flags {
-            return Err(NoritoError::NonCanonicalEncoding);
-        }
-        view.decode_exact::<StateValueRecordV1>()
+        norito::core::with_payload_ctx(bytes, || {
+            let view = match norito::core::from_bytes_view(bytes) {
+                Ok(view) => view,
+                Err(
+                    NoritoError::DecodeFlagsMismatch { .. }
+                    | NoritoError::UnsupportedCompression { .. },
+                ) => return Err(NoritoError::NonCanonicalEncoding),
+                Err(error) => return Err(error),
+            };
+            if view.flags() != canonical_flags {
+                return Err(NoritoError::NonCanonicalEncoding);
+            }
+            view.decode_exact::<StateValueRecordV1>()
+        })
     })
 }
 #[cfg(test)]
@@ -3555,15 +3554,16 @@ mod tests {
             let ambient_flags = norito::core::header_flags::COMPACT_LEN;
             let _ambient = norito::core::DecodeFlagsGuard::enter(ambient_flags);
             let ambient_payload = b"ambient payload";
-            let _ambient_payload = norito::core::PayloadCtxGuard::enter(ambient_payload);
-            let payload_context_before = norito::core::payload_ctx();
-            assert_eq!(
-                decode_canonical_state_value_record_v1(&canonical)
-                    .expect("decode exact canonical KRV1 frame"),
-                record
-            );
-            assert_eq!(norito::core::get_decode_flags(), ambient_flags);
-            assert_eq!(norito::core::payload_ctx(), payload_context_before);
+            norito::core::with_payload_ctx(ambient_payload, || {
+                let payload_context_before = norito::core::payload_ctx();
+                assert_eq!(
+                    decode_canonical_state_value_record_v1(&canonical)
+                        .expect("decode exact canonical KRV1 frame"),
+                    record
+                );
+                assert_eq!(norito::core::get_decode_flags(), ambient_flags);
+                assert_eq!(norito::core::payload_ctx(), payload_context_before);
+            });
         }
         let mut padded = canonical.clone();
         padded.insert(norito::core::Header::SIZE, 0);
@@ -3577,14 +3577,15 @@ mod tests {
             let ambient_flags = norito::core::header_flags::COMPACT_LEN;
             let _ambient = norito::core::DecodeFlagsGuard::enter(ambient_flags);
             let ambient_payload = b"ambient checksum payload";
-            let _ambient_payload = norito::core::PayloadCtxGuard::enter(ambient_payload);
-            let payload_context_before = norito::core::payload_ctx();
-            assert!(matches!(
-                decode_canonical_state_value_record_v1(&corrupt),
-                Err(NoritoError::ChecksumMismatch)
-            ));
-            assert_eq!(norito::core::get_decode_flags(), ambient_flags);
-            assert_eq!(norito::core::payload_ctx(), payload_context_before);
+            norito::core::with_payload_ctx(ambient_payload, || {
+                let payload_context_before = norito::core::payload_ctx();
+                assert!(matches!(
+                    decode_canonical_state_value_record_v1(&corrupt),
+                    Err(NoritoError::ChecksumMismatch)
+                ));
+                assert_eq!(norito::core::get_decode_flags(), ambient_flags);
+                assert_eq!(norito::core::payload_ctx(), payload_context_before);
+            });
         }
         let mut wrong_schema = canonical.clone();
         wrong_schema[6] ^= 0x80;

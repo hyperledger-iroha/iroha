@@ -60,12 +60,11 @@ impl<'de> norito::core::DeserializePayload<'de> for RowValues {
         Self::try_deserialize(archived).expect("canonical retained DEEP row decode")
     }
     fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
-        let pointer = std::ptr::from_ref(archived).cast::<u8>();
         let mut offset = 0;
         let mut values = [0; COMMITTED_COLUMN_COUNT];
         for value in &mut values {
             *value = u64::from_le_bytes(norito::core::decode_context_byte_array::<8>(
-                pointer,
+                archived,
                 &mut offset,
             )?);
             if *value >= GOLDILOCKS_MODULUS {
@@ -74,7 +73,7 @@ impl<'de> norito::core::DeserializePayload<'de> for RowValues {
                 ));
             }
         }
-        norito::core::finish_context_fields(pointer, offset)?;
+        norito::core::finish_context_fields(archived, offset)?;
         Ok(Self(values))
     }
 }

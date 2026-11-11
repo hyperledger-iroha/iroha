@@ -93,7 +93,7 @@ impl<'de> ncore::DeserializePayload<'de> for TopologyActionV1 {
     }
 
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let bytes = ncore::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let bytes = ncore::payload_slice(archived)?;
         let (value, used) = <Self as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
         if used != bytes.len() {
             return Err(ncore::Error::LengthMismatch);

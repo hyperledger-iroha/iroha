@@ -717,9 +717,10 @@ mod tests {
         let encoded = norito::to_bytes(&block_signature).expect("encode block signature");
         let payload = &encoded[norito::core::Header::SIZE..];
         let archived_sig = norito::from_bytes::<BlockSignature>(&encoded).expect("archived sig");
-        let decoded_sig = norito::core::DeserializePayload::deserialize(archived_sig);
+        let decoded_sig = archived_sig.deserialize();
         assert_eq!(decoded_sig, block_signature);
-        let decoded_try = norito::core::DeserializePayload::try_deserialize(archived_sig)
+        let decoded_try = archived_sig
+            .try_deserialize()
             .expect("try_deserialize BlockSignature");
         assert_eq!(decoded_try, block_signature);
         let decoded_adaptive =
@@ -747,9 +748,9 @@ mod tests {
         let encoded = norito::to_bytes(&invalid).expect("encode invalid block signature fixture");
         let archived =
             norito::from_bytes::<BlockSignature>(&encoded).expect("archive block signature");
-        let err =
-            <BlockSignature as norito::core::DeserializePayload<'_>>::try_deserialize(archived)
-                .expect_err("all-zero block signature payload must fail closed");
+        let err = archived
+            .try_deserialize()
+            .expect_err("all-zero block signature payload must fail closed");
         match err {
             norito::core::Error::Message(message) => {
                 assert!(
@@ -862,9 +863,8 @@ mod tests {
         // Header-framed bytes and decode via the Norito archive for inspection
         let header_bytes = norito::to_bytes(&bs).expect("encode block signature");
         let archived_sig = norito::from_bytes::<BlockSignature>(&header_bytes).expect("from_bytes");
-        let decoded_hdr = norito::core::DeserializePayload::deserialize(archived_sig);
-        let decoded_try =
-            norito::core::DeserializePayload::try_deserialize(archived_sig).expect("fallible");
+        let decoded_hdr = archived_sig.deserialize();
+        let decoded_try = archived_sig.try_deserialize().expect("fallible");
         eprintln!("BS bare len={} hdr len={}", bare.len(), header_bytes.len());
         eprintln!("bare[0..32] = {}", hex_prefix(&bare, 32));
         eprintln!("hdr[0..32]  = {}", hex_prefix(&header_bytes, 32));
@@ -908,11 +908,8 @@ mod tests {
         let _flags_guard = norito::core::DecodeFlagsGuard::enter(flags);
         let archived = norito::core::archived_from_slice::<Vec<BlockSignature>>(&payload)
             .expect("archived signature vector");
-        let _payload_guard = norito::core::PayloadCtxGuard::enter(archived.bytes());
-        let decoded =
-            <Vec<BlockSignature> as norito::core::DeserializePayload<'_>>::try_deserialize(
-                archived.as_ref(),
-            )
+        let decoded = archived
+            .try_deserialize()
             .expect("decode packed Vec<BlockSignature>");
         assert_eq!(decoded, vec);
     }

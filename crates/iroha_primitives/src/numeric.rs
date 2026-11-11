@@ -3063,7 +3063,7 @@ impl<'a> DeserializePayload<'a> for Numeric {
             })?;
             Ok(value)
         } else {
-            let slice = norito::core::payload_slice_from_ptr(ptr)?;
+            let slice = norito::core::payload_slice(archived)?;
             let (value, _) = <Numeric as norito::core::DecodeFromSlice>::decode_from_slice(slice)?;
             Ok(value)
         }

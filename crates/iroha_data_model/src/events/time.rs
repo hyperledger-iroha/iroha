@@ -652,7 +652,8 @@ mod json_tests {
         };
         let bytes = norito::to_bytes(&interval).expect("encode public interval");
         let archived = norito::from_bytes::<TimeInterval>(&bytes).expect("archive public interval");
-        let decoded = <TimeInterval as norito::core::DeserializePayload>::try_deserialize(archived)
+        let decoded = archived
+            .try_deserialize()
             .expect("reconstruct the public interval");
         assert_eq!(decoded, interval);
     }

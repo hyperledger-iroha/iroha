@@ -259,90 +259,94 @@ fn funded_multisig_members_keep_actual_vector_capacity_key_ledger_and_existing_r
     let _flags = ncore::DecodeFlagsGuard::enter(ncore::default_encode_flags());
     let mut body = Vec::new();
     ncore::serialize_to_buffer(policy, &mut body).unwrap();
-    let _context = ncore::PayloadCtxGuard::enter(&body);
-    let mut offset = 0;
-    let _version = ncore::framed_field::<u8>(&body, &mut offset).unwrap();
-    let _threshold = ncore::framed_field::<u16>(&body, &mut offset).unwrap();
-    let field = ncore::framed_field::<Vec<MultisigMember>>(&body, &mut offset).unwrap();
-    let pool = AllocationBudget::new(4096);
-    let mut destination = MembersDestination::new(&pool);
-    field
-        .with_payload(|bytes| {
-            destination
-                .decode(bytes, &pool, None)
-                .map_err(|error| super::destination(error.into()))
-        })
-        .unwrap();
-    let parts = MemberParts::new(
-        destination.members.take().unwrap(),
-        destination.keys.take().unwrap(),
-    );
-    drop(destination);
-    let count = policy.members().len();
-    let values = parts.members.as_ref().unwrap();
-    assert_eq!(values.capacity(), count);
-    assert_eq!(values.len(), count);
-    let original = values.as_ptr();
-    assert_eq!(
-        parts.charge.layout(),
-        Layout::array::<MultisigMember>(values.capacity()).unwrap()
-    );
-    assert_eq!(parts.keys.capacity(), count);
-    assert_eq!(parts.keys.as_slice().len(), count);
-    for (member, charge) in values.iter().zip(parts.keys.as_slice()) {
-        assert_eq!(
-            charge.layout(),
-            member.public_key().retained_allocation_layout()
+    ncore::with_payload_ctx(&body, || {
+        let mut offset = 0;
+        let _version = ncore::framed_field::<u8>(&body, &mut offset).unwrap();
+        let _threshold = ncore::framed_field::<u16>(&body, &mut offset).unwrap();
+        let field = ncore::framed_field::<Vec<MultisigMember>>(&body, &mut offset).unwrap();
+        let pool = AllocationBudget::new(4096);
+        let mut destination = MembersDestination::new(&pool);
+        field
+            .with_payload(|bytes| {
+                destination
+                    .decode(bytes, &pool, None)
+                    .map_err(|error| super::destination(error.into()))
+            })
+            .unwrap();
+        let parts = MemberParts::new(
+            destination.members.take().unwrap(),
+            destination.keys.take().unwrap(),
         );
-        assert!(charge.belongs_to(&pool));
-    }
-    let exact = actual_controller_layouts(&account);
-    assert_eq!(
-        pool.reserved_bytes(),
-        exact,
-        "span scratch has already dropped"
-    );
-    let retained = parts.finish(policy.version(), policy.threshold()).unwrap();
-    assert_eq!(retained.value, *policy);
-    assert!(core::ptr::eq(retained.value.members().as_ptr(), original));
-    assert_eq!(pool.reserved_bytes(), exact);
-    pool.set_limit_bytes(0);
-    drop(retained);
-    assert_eq!(pool.reserved_bytes(), 0);
+        drop(destination);
+        let count = policy.members().len();
+        let values = parts.members.as_ref().unwrap();
+        assert_eq!(values.capacity(), count);
+        assert_eq!(values.len(), count);
+        let original = values.as_ptr();
+        assert_eq!(
+            parts.charge.layout(),
+            Layout::array::<MultisigMember>(values.capacity()).unwrap()
+        );
+        assert_eq!(parts.keys.capacity(), count);
+        assert_eq!(parts.keys.as_slice().len(), count);
+        for (member, charge) in values.iter().zip(parts.keys.as_slice()) {
+            assert_eq!(
+                charge.layout(),
+                member.public_key().retained_allocation_layout()
+            );
+            assert!(charge.belongs_to(&pool));
+        }
+        let exact = actual_controller_layouts(&account);
+        assert_eq!(
+            pool.reserved_bytes(),
+            exact,
+            "span scratch has already dropped"
+        );
+        let retained = parts.finish(policy.version(), policy.threshold()).unwrap();
+        assert_eq!(retained.value, *policy);
+        assert!(core::ptr::eq(retained.value.members().as_ptr(), original));
+        assert_eq!(pool.reserved_bytes(), exact);
+        pool.set_limit_bytes(0);
+        drop(retained);
+        assert_eq!(pool.reserved_bytes(), 0);
+    });
 }
 
 fn replace_amount(frame: &[u8], scale: u32) -> Vec<u8> {
     let view = ncore::from_bytes_view(frame).unwrap();
     let _flags = ncore::DecodeFlagsGuard::enter(view.flags());
-    let _context = ncore::PayloadCtxGuard::enter(view.as_bytes());
-    let mut offset = 0;
-    let _source = ncore::framed_field::<AssetId>(view.as_bytes(), &mut offset).unwrap();
-    let _destination = ncore::framed_field::<AccountId>(view.as_bytes(), &mut offset).unwrap();
-    let amount_start = offset;
-    let amount = ncore::framed_field::<Quantity>(view.as_bytes(), &mut offset).unwrap();
-    let mut amount_offset = 0;
-    // Quantity delegates directly to Numeric's positional mantissa/scale body,
-    // so replace only the exact scale field without decoding/altering mantissa.
-    let _mantissa =
-        ncore::framed_field::<iroha_primitives::bigint::BigInt>(amount.bytes(), &mut amount_offset)
-            .unwrap();
-    let mut amount_body = amount.bytes()[..amount_offset].to_vec();
-    let mut encoded_scale = Vec::new();
-    ncore::serialize_to_buffer(&scale, &mut encoded_scale).unwrap();
-    ncore::write_len_to_vec_with_flags(
-        &mut amount_body,
-        u64::try_from(encoded_scale.len()).unwrap(),
-        view.flags(),
-    );
-    amount_body.extend_from_slice(&encoded_scale);
-    let mut body = view.as_bytes()[..amount_start].to_vec();
-    ncore::write_len_to_vec_with_flags(
-        &mut body,
-        u64::try_from(amount_body.len()).unwrap(),
-        view.flags(),
-    );
-    body.extend_from_slice(&amount_body);
-    ncore::frame_bare_with_header_flags::<AmxTransferLegV1>(&body, view.flags()).unwrap()
+    ncore::with_payload_ctx(view.as_bytes(), || {
+        let mut offset = 0;
+        let _source = ncore::framed_field::<AssetId>(view.as_bytes(), &mut offset).unwrap();
+        let _destination = ncore::framed_field::<AccountId>(view.as_bytes(), &mut offset).unwrap();
+        let amount_start = offset;
+        let amount = ncore::framed_field::<Quantity>(view.as_bytes(), &mut offset).unwrap();
+        let mut amount_offset = 0;
+        // Quantity delegates directly to Numeric's positional mantissa/scale body,
+        // so replace only the exact scale field without decoding/altering mantissa.
+        let _mantissa = ncore::framed_field::<iroha_primitives::bigint::BigInt>(
+            amount.bytes(),
+            &mut amount_offset,
+        )
+        .unwrap();
+        let mut amount_body = amount.bytes()[..amount_offset].to_vec();
+        let mut encoded_scale = Vec::new();
+        ncore::serialize_to_buffer(&scale, &mut encoded_scale).unwrap();
+        ncore::write_len_to_vec_with_flags(
+            &mut amount_body,
+            u64::try_from(encoded_scale.len()).unwrap(),
+            view.flags(),
+        );
+        amount_body.extend_from_slice(&encoded_scale);
+        let mut body = view.as_bytes()[..amount_start].to_vec();
+        ncore::write_len_to_vec_with_flags(
+            &mut body,
+            u64::try_from(amount_body.len()).unwrap(),
+            view.flags(),
+        );
+        body.extend_from_slice(&amount_body);
+        ncore::frame_bare_with_header_flags::<AmxTransferLegV1>(&body, view.flags()).unwrap()
+    })
 }
 
 #[test]
@@ -531,52 +535,53 @@ fn funded_native_leg_preserves_original_root_depth_field_and_source_context() {
     let pool = AllocationBudget::new(4096);
     let pending = OneShotLegDecode::new(&frame, &pool);
     let sentinel = [9_u8, 7, 5];
-    let _source = ncore::PayloadCtxGuard::enter(&sentinel);
-    let _flags = ncore::DecodeFlagsGuard::enter(ncore::default_encode_flags());
-    let context = ncore::payload_ctx();
-    let flags = ncore::get_decode_flags();
-    for ceiling in [
-        DecodeLimits::new(usize::MAX, 1, usize::MAX, usize::MAX, 0),
-        DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0),
-    ] {
-        let ordinary = ncore::with_decode_limits_scope(ceiling, || {
-            norito::decode_canonical_for_admission::<AmxTransferLegV1>(
-                &frame,
-                norito::canonical_decode_limits(frame.len()),
-            )
-        })
-        .unwrap_err();
-        let failure =
-            ncore::with_decode_limits_scope(ceiling, || pending.try_decode()).unwrap_err();
-        let Error::Decode(actual) = failure else {
-            panic!("original root refusal")
-        };
-        assert_eq!(actual.kind(), ordinary.kind());
-        assert_eq!(actual.kind(), ncore::DecodeAttemptErrorKind::EnclosingLimit);
-        assert_eq!(
-            pool.reserved_bytes(),
-            PreparedDecodeWorkspace::allocation_layouts()[0].size()
-        );
-        let actual = actual.into_error();
-        assert_eq!(
-            actual.decode_resource_error(),
-            ordinary.into_error().decode_resource_error()
-        );
+    ncore::with_payload_ctx(&sentinel, || {
+        let _flags = ncore::DecodeFlagsGuard::enter(ncore::default_encode_flags());
+        let context = ncore::payload_ctx();
+        let flags = ncore::get_decode_flags();
+        for ceiling in [
+            DecodeLimits::new(usize::MAX, 1, usize::MAX, usize::MAX, 0),
+            DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0),
+        ] {
+            let ordinary = ncore::with_decode_limits_scope(ceiling, || {
+                norito::decode_canonical_for_admission::<AmxTransferLegV1>(
+                    &frame,
+                    norito::canonical_decode_limits(frame.len()),
+                )
+            })
+            .unwrap_err();
+            let failure =
+                ncore::with_decode_limits_scope(ceiling, || pending.try_decode()).unwrap_err();
+            let Error::Decode(actual) = failure else {
+                panic!("original root refusal")
+            };
+            assert_eq!(actual.kind(), ordinary.kind());
+            assert_eq!(actual.kind(), ncore::DecodeAttemptErrorKind::EnclosingLimit);
+            assert_eq!(
+                pool.reserved_bytes(),
+                PreparedDecodeWorkspace::allocation_layouts()[0].size()
+            );
+            let actual = actual.into_error();
+            assert_eq!(
+                actual.decode_resource_error(),
+                ordinary.into_error().decode_resource_error()
+            );
+            assert_eq!(ncore::payload_ctx(), context);
+            assert_eq!(ncore::get_decode_flags(), flags);
+            assert!(core::ptr::eq(
+                pending.original_source().as_ptr(),
+                frame.as_ptr()
+            ));
+            drop(actual);
+            assert_eq!(pool.reserved_bytes(), 0);
+        }
+        let owner = pending.try_decode().unwrap();
+        assert_eq!(owner.canonical(), &original);
         assert_eq!(ncore::payload_ctx(), context);
         assert_eq!(ncore::get_decode_flags(), flags);
-        assert!(core::ptr::eq(
-            pending.original_source().as_ptr(),
-            frame.as_ptr()
-        ));
-        drop(actual);
+        drop(owner);
         assert_eq!(pool.reserved_bytes(), 0);
-    }
-    let owner = pending.try_decode().unwrap();
-    assert_eq!(owner.canonical(), &original);
-    assert_eq!(ncore::payload_ctx(), context);
-    assert_eq!(ncore::get_decode_flags(), flags);
-    drop(owner);
-    assert_eq!(pool.reserved_bytes(), 0);
+    });
 }
 
 #[test]
@@ -984,50 +989,51 @@ fn partial_native_retry_rechecks_cached_field_and_depth_limits_without_retiring_
 fn invalid_multisig_scalar_frame(frame: &[u8], member_weight: bool, value: u16) -> Vec<u8> {
     let view = ncore::from_bytes_view(frame).unwrap();
     let _flags = ncore::DecodeFlagsGuard::enter(view.flags());
-    let _context = ncore::PayloadCtxGuard::enter(view.as_bytes());
-    let mut offset = 0;
-    let start = view.as_bytes().as_ptr() as usize;
-    let position = ncore::framed_field::<AssetId>(view.as_bytes(), &mut offset).unwrap()
-        .with_payload(|asset| {
-            let mut offset = 0;
-            let position = ncore::framed_field::<AccountId>(asset, &mut offset).unwrap()
-                .with_payload(|account| {
-                    assert_eq!(tag(account).unwrap(), 1);
-                    let mut offset = 4;
-                    let position = ncore::framed_field::<MultisigPolicy>(account, &mut offset).unwrap()
-                        .with_payload(|policy| {
-                            let mut offset = 0;
-                            let _version = ncore::framed_field::<u8>(policy, &mut offset).unwrap();
-                            let threshold = ncore::framed_field::<u16>(policy, &mut offset).unwrap();
-                            let position = if member_weight {
-                                ncore::framed_field::<Vec<MultisigMember>>(policy, &mut offset).unwrap()
-                                    .with_payload(|members| {
-                                        let mut spans = [SequenceSpan { start: 0, end: 0 }; 2];
-                                        let prepared = ncore::prepare_element_sequence(members, &mut spans).unwrap();
-                                        let mut position = None;
-                                        prepared.decode_elements::<MultisigMember, std::convert::Infallible>(|index, field| {
-                                            field.with_payload(|member| {
-                                                let mut offset = 0;
-                                                let _key = ncore::framed_field::<PublicKey>(member, &mut offset).unwrap();
-                                                let weight = ncore::framed_field::<u16>(member, &mut offset).unwrap();
-                                                if index == 0 { position = Some(weight.bytes().as_ptr() as usize - start); }
-                                                Ok(())
-                                            })
-                                        }).unwrap();
-                                        Ok::<_, DecodeIntoError<std::convert::Infallible>>(position.unwrap())
-                                    }).unwrap()
-                            } else {
-                                threshold.bytes().as_ptr() as usize - start
-                            };
-                            Ok::<_, DecodeIntoError<std::convert::Infallible>>(position)
-                        }).unwrap();
-                    Ok::<_, DecodeIntoError<std::convert::Infallible>>(position)
-                }).unwrap();
-            Ok::<_, DecodeIntoError<std::convert::Infallible>>(position)
-        }).unwrap();
-    let mut body = view.as_bytes().to_vec();
-    body[position..position + 2].copy_from_slice(&value.to_le_bytes());
-    ncore::frame_bare_with_header_flags::<AmxTransferLegV1>(&body, view.flags()).unwrap()
+    ncore::with_payload_ctx(view.as_bytes(), || {
+        let mut offset = 0;
+        let start = view.as_bytes().as_ptr() as usize;
+        let position = ncore::framed_field::<AssetId>(view.as_bytes(), &mut offset).unwrap()
+            .with_payload(|asset| {
+                let mut offset = 0;
+                let position = ncore::framed_field::<AccountId>(asset, &mut offset).unwrap()
+                    .with_payload(|account| {
+                        assert_eq!(tag(account).unwrap(), 1);
+                        let mut offset = 4;
+                        let position = ncore::framed_field::<MultisigPolicy>(account, &mut offset).unwrap()
+                            .with_payload(|policy| {
+                                let mut offset = 0;
+                                let _version = ncore::framed_field::<u8>(policy, &mut offset).unwrap();
+                                let threshold = ncore::framed_field::<u16>(policy, &mut offset).unwrap();
+                                let position = if member_weight {
+                                    ncore::framed_field::<Vec<MultisigMember>>(policy, &mut offset).unwrap()
+                                        .with_payload(|members| {
+                                            let mut spans = [SequenceSpan { start: 0, end: 0 }; 2];
+                                            let prepared = ncore::prepare_element_sequence(members, &mut spans).unwrap();
+                                            let mut position = None;
+                                            prepared.decode_elements::<MultisigMember, std::convert::Infallible>(|index, field| {
+                                                field.with_payload(|member| {
+                                                    let mut offset = 0;
+                                                    let _key = ncore::framed_field::<PublicKey>(member, &mut offset).unwrap();
+                                                    let weight = ncore::framed_field::<u16>(member, &mut offset).unwrap();
+                                                    if index == 0 { position = Some(weight.bytes().as_ptr() as usize - start); }
+                                                    Ok(())
+                                                })
+                                            }).unwrap();
+                                            Ok::<_, DecodeIntoError<std::convert::Infallible>>(position.unwrap())
+                                        }).unwrap()
+                                } else {
+                                    threshold.bytes().as_ptr() as usize - start
+                                };
+                                Ok::<_, DecodeIntoError<std::convert::Infallible>>(position)
+                            }).unwrap();
+                        Ok::<_, DecodeIntoError<std::convert::Infallible>>(position)
+                    }).unwrap();
+                Ok::<_, DecodeIntoError<std::convert::Infallible>>(position)
+            }).unwrap();
+        let mut body = view.as_bytes().to_vec();
+        body[position..position + 2].copy_from_slice(&value.to_le_bytes());
+        ncore::frame_bare_with_header_flags::<AmxTransferLegV1>(&body, view.flags()).unwrap()
+    })
 }
 
 #[test]

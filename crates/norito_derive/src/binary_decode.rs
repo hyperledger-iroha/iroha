@@ -32,7 +32,7 @@ fn sequential_deserialize_value(
             (|| -> ::core::result::Result<#ty, norito::core::Error> {
                 // The codec bounds this record's bytes against the active
                 // payload; no pointer arithmetic or `unsafe` is generated.
-                let field_data = match norito::core::payload_slice_from_ptr(ptr)?.get(offset..) {
+                let field_data = match norito::core::payload_slice(__archived)?.get(offset..) {
                     ::core::option::Option::Some(field_data) => field_data,
                     ::core::option::Option::None => {
                         return ::core::result::Result::Err(norito::core::Error::LengthMismatch);
@@ -46,7 +46,7 @@ fn sequential_deserialize_value(
         }
     } else if let Some(length) = u8_array_len(ty) {
         quote! {
-            norito::core::decode_context_framed_byte_array::<{ #length }>(ptr, &mut offset)
+            norito::core::decode_context_framed_byte_array::<{ #length }>(__archived, &mut offset)
         }
     } else {
         add_bound(
@@ -56,7 +56,7 @@ fn sequential_deserialize_value(
         );
         add_bound(generics, ty, quote!(norito::core::SerializePayload));
         quote! {
-            norito::core::decode_context_field_canonical::<#ty>(ptr, &mut offset)
+            norito::core::decode_context_field_canonical::<#ty>(__archived, &mut offset)
         }
     };
     Some(quote! { (#decode)? })
@@ -66,7 +66,7 @@ fn sequential_deserialize_value(
 fn enum_field_decode(generics: &mut Generics, ty: &syn::Type) -> TokenStream2 {
     if let Some(length) = u8_array_len(ty) {
         return quote! {
-            norito::core::decode_context_framed_byte_array::<{ #length }>(ptr, &mut offset)?
+            norito::core::decode_context_framed_byte_array::<{ #length }>(__archived, &mut offset)?
         };
     }
     add_bound(
@@ -76,7 +76,7 @@ fn enum_field_decode(generics: &mut Generics, ty: &syn::Type) -> TokenStream2 {
     );
     add_bound(generics, ty, quote!(norito::core::SerializePayload));
     quote! {
-        norito::core::decode_context_field_canonical::<#ty>(ptr, &mut offset)?
+        norito::core::decode_context_field_canonical::<#ty>(__archived, &mut offset)?
     }
 }
 
@@ -153,13 +153,14 @@ pub(super) fn derive_struct_deserialize(
                         }
                     }
                     fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> ::core::result::Result<Self, norito::core::Error> {
-                        let ptr = archived as *const _ as *const u8;
+                        // Fields may shadow `archived`; the codec reads through this name.
+                        let __archived = archived;
                         if norito::debug_trace_enabled() {
-                            norito::trace_struct_decode(stringify!(#ident), ptr);
+                            norito::trace_struct_decode(stringify!(#ident), __archived);
                         }
                         let mut offset = 0usize;
                         let __value = Self { #(#deserialize_fields),* };
-                        norito::core::finish_context_fields(ptr, offset)?;
+                        norito::core::finish_context_fields(__archived, offset)?;
                         #validated_value
                     }
                 }
@@ -192,11 +193,11 @@ pub(super) fn derive_struct_deserialize(
                         }
                     }
                     fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> ::core::result::Result<Self, norito::core::Error> {
-                        let ptr = archived as *const _ as *const u8;
+                        let __archived = archived;
                         let mut offset = 0usize;
                         #(#deserialize_fields)*
                         let __value = Self( #(#vars),* );
-                        norito::core::finish_context_fields(ptr, offset)?;
+                        norito::core::finish_context_fields(__archived, offset)?;
                         #validated_value
                     }
                 }
@@ -249,7 +250,7 @@ pub(super) fn derive_enum_deserialize(
             Fields::Unit => arms.push(quote! {
                 #disc => {
                     let offset = 4usize;
-                    norito::core::finish_context_fields(ptr, offset)?;
+                    norito::core::finish_context_fields(__archived, offset)?;
                     Self::#v_ident
                 }
             }),
@@ -283,7 +284,7 @@ pub(super) fn derive_enum_deserialize(
                         let mut offset = 4usize;
                         #(#deser_stmts)*
                         let __value = Self::#v_ident(#(#vars),*);
-                        norito::core::finish_context_fields(ptr, offset)?;
+                        norito::core::finish_context_fields(__archived, offset)?;
                         __value
                     }
                 });
@@ -321,7 +322,7 @@ pub(super) fn derive_enum_deserialize(
                         #(#deser_stmts)*
 
                         let __value = Self::#v_ident { #(#names),* };
-                        norito::core::finish_context_fields(ptr, offset)?;
+                        norito::core::finish_context_fields(__archived, offset)?;
                         __value
                     }
                 });
@@ -358,12 +359,13 @@ pub(super) fn derive_enum_deserialize(
             }
 
             fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> ::core::result::Result<Self, norito::core::Error> {
-                let ptr = archived as *const _ as *const u8;
+                // Variant fields may shadow `archived`; the codec reads through this name.
+                let __archived = archived;
                 // Read the tag through the active, length-bounded payload
                 // context. Constructing a raw slice here would read beyond a
                 // truncated archive before the decoder could return an error.
                 let mut __tag_bytes = [0u8; 4];
-                __tag_bytes.copy_from_slice(norito::core::payload_range_from_ptr(ptr, 4)?);
+                __tag_bytes.copy_from_slice(norito::core::payload_range(__archived, 4)?);
                 let tag = u32::from_le_bytes(__tag_bytes);
                 let value = match tag {
                     #(#arms,)*

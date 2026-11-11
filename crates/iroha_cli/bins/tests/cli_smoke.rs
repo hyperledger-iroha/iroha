@@ -3052,10 +3052,7 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
         BlobDigest, DaIngestReceipt, DaRentQuote, DaStripeLayout, StorageTicketId,
     };
     use iroha_model_base::topology::LaneId;
-    use norito::{
-        DeserializePayload,
-        json::{Map as JsonMap, Value},
-    };
+    use norito::json::{Map as JsonMap, Value};
     use sorafs_manifest::{
         BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1, ProfileId,
         pdp::{PdpCommitmentV1, PdpMerkleTreeV1},
@@ -3186,7 +3183,7 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
     let receipt_norito_path = artifact_dir.join("da_receipt.norito");
     let receipt_bytes = fs::read(&receipt_norito_path).expect("read da_receipt.norito contents");
     let archived = norito::from_bytes::<DaIngestReceipt>(&receipt_bytes).expect("decode receipt");
-    let decoded = DaIngestReceipt::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(
         decoded.pdp_commitment.as_deref(),
         Some(pdp_bytes.as_slice())

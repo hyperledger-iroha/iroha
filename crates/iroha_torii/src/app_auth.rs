@@ -625,8 +625,7 @@ impl<'de> norito::core::DeserializePayload<'de> for BoundedCanonicalRequestSigna
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let bytes =
-            norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let bytes = norito::core::payload_slice(archived)?;
         let (signature, used) = <Self as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
         if used != bytes.len() {
             return Err(norito::core::Error::LengthMismatch);
@@ -687,8 +686,7 @@ impl<'de> norito::core::DeserializePayload<'de> for BoundedCanonicalRequestWitne
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let bytes =
-            norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let bytes = norito::core::payload_slice(archived)?;
         let (signatures, used) = <Self as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
         if used != bytes.len() {
             return Err(norito::core::Error::LengthMismatch);
@@ -750,8 +748,7 @@ mod bounded_nonce_wire {
         fn try_deserialize(
             archived: &'de norito::core::Archived<Self>,
         ) -> Result<Self, norito::core::Error> {
-            let bytes =
-                norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+            let bytes = norito::core::payload_slice(archived)?;
             let (nonce, _) = <Self as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
             // This self-delimiting field is decoded from the remaining packed
             // witness suffix. `DecodeFromSlice` records the exact prefix it

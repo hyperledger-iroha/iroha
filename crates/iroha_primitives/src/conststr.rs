@@ -303,7 +303,6 @@ impl SerializePayload for ConstString {
 
 impl<'a> DeserializePayload<'a> for ConstString {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
         if let Ok(value) = <&str as DeserializePayload>::try_deserialize(archived.cast::<&str>()) {
             return value.into();
         }
@@ -312,7 +311,7 @@ impl<'a> DeserializePayload<'a> for ConstString {
         {
             return value.as_str().into();
         }
-        if let Ok(payload) = ncore::payload_slice_from_ptr(ptr)
+        if let Ok(payload) = ncore::payload_slice(archived)
             && let Ok((value, _used)) = ncore::decode_field_canonical::<String>(payload)
         {
             return value.as_str().into();

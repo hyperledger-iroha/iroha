@@ -557,7 +557,7 @@ fn finish_fixed(payload: &[u8], offset: usize) -> Result<(), norito::Error> {
     if offset != payload.len() {
         return Err(norito::Error::LengthMismatch);
     }
-    ncore::finish_context_fields(payload.as_ptr(), offset)
+    ncore::finish_context_fields(ncore::Archived::<()>::start_of(payload), offset)
 }
 fn record_tag(payload: &[u8]) -> Result<u32, norito::Error> {
     Ok(u32::from_le_bytes(

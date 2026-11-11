@@ -106,23 +106,25 @@ pub(crate) fn derive(
             fn decode_value_fields(__bytes:&[u8],__destination:&mut __Destination)
                 ->::core::result::Result<(Self,usize),norito::core::DecodeIntoError<__Destination::Error>>
             {
-                let _context=norito::core::PayloadCtxGuard::enter(__bytes);
-                let mut __tag_bytes=[0u8;4];
-                __tag_bytes.copy_from_slice(norito::core::payload_range_from_ptr(__bytes.as_ptr(),4)?);
-                let __tag=u32::from_le_bytes(__tag_bytes);
-                let mut __offset=4usize;
-                let __value=match __tag {
-                    #(#arms,)*
-                    _=>return Err(norito::core::DecodeIntoError::Codec(norito::core::Error::Message("invalid enum discriminant".into()))),
-                };
-                if let Err(error)=norito::core::finish_context_fields(__bytes.as_ptr(),__offset) {
-                    <__Destination as norito::core::DecodeValueDestination<Self>>::restore_value(
-                        __destination,__value
-                    );
-                    return Err(norito::core::DecodeIntoError::Codec(error));
-                }
-                let __value=(#validated).map_err(norito::core::DecodeIntoError::Codec)?;
-                Ok((__value,__offset))
+                norito::core::with_payload_ctx(__bytes,||->::core::result::Result<(Self,usize),norito::core::DecodeIntoError<__Destination::Error>> {
+                    let __archived=norito::core::Archived::<Self>::start_of(__bytes);
+                    let mut __tag_bytes=[0u8;4];
+                    __tag_bytes.copy_from_slice(norito::core::payload_range(__archived,4)?);
+                    let __tag=u32::from_le_bytes(__tag_bytes);
+                    let mut __offset=4usize;
+                    let __value=match __tag {
+                        #(#arms,)*
+                        _=>return Err(norito::core::DecodeIntoError::Codec(norito::core::Error::Message("invalid enum discriminant".into()))),
+                    };
+                    if let Err(error)=norito::core::finish_context_fields(__archived,__offset) {
+                        <__Destination as norito::core::DecodeValueDestination<Self>>::restore_value(
+                            __destination,__value
+                        );
+                        return Err(norito::core::DecodeIntoError::Codec(error));
+                    }
+                    let __value=(#validated).map_err(norito::core::DecodeIntoError::Codec)?;
+                    Ok((__value,__offset))
+                })
             }
         }
         impl<'de> norito::core::DeserializePayload<'de> for #ident {
@@ -131,7 +133,7 @@ pub(crate) fn derive(
                     .unwrap_or_else(|error|panic!("norito: fallible deserialize failed for {}: {:?}",stringify!(#ident),error))
             }
             fn try_deserialize(archived:&'de norito::core::Archived<Self>)->::core::result::Result<Self,norito::core::Error> {
-                norito::core::with_context_fields(archived as *const _ as *const u8,|__bytes| {
+                norito::core::with_context_fields(archived,|__bytes| {
                     <Self as norito::core::DecodeValueFields<norito::core::OwnedFields>>::decode_value_fields(__bytes,&mut norito::core::OwnedFields)
                         .map(|(value,_)|value).map_err(norito::core::DecodeIntoError::into_codec)
                 })?

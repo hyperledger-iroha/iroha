@@ -152,8 +152,7 @@ impl<'a> norito::core::DeserializePayload<'a> for ChainIdText {
     fn try_deserialize(
         archived: &'a norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let payload = norito::core::payload_slice_from_ptr(ptr)?;
+        let payload = norito::core::payload_slice(archived)?;
         let (chain_id, used) = ChainId::decode_text_wire(payload)?;
         if used != payload.len() {
             return Err(norito::core::Error::LengthMismatch);
@@ -175,8 +174,7 @@ impl<'a> norito::core::DeserializePayload<'a> for ChainId {
     fn try_deserialize(
         archived: &'a norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        if let Ok(payload) = norito::core::payload_slice_from_ptr(ptr) {
+        if let Ok(payload) = norito::core::payload_slice(archived) {
             return ChainId::decode_wire(payload).map(|(chain, _)| chain);
         }
         let string = norito::core::DeserializePayload::try_deserialize(archived.cast::<String>())?;

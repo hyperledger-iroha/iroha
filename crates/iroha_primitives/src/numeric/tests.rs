@@ -2147,9 +2147,7 @@ fn full_width_decimal_arithmetic_matches_independent_rational_reference() {
 
 #[test]
 fn manual_decode_numeric_spec_returns_missing_context_and_retries_same_payload() {
-    use norito::core::{
-        DecodeFlagsGuard, PayloadCtxGuard, archived_from_slice, serialize_to_buffer,
-    };
+    use norito::core::{DecodeFlagsGuard, archived_from_slice, serialize_to_buffer};
     let _layout = DecodeFlagsGuard::enter(0);
     for expected in [NumericSpec::unconstrained(), NumericSpec::fractional(5)] {
         let mut bytes = Vec::new();
@@ -2162,10 +2160,9 @@ fn manual_decode_numeric_spec_returns_missing_context_and_retries_same_payload()
             matches!(missing, Ok(Err(Error::MissingPayloadContext))),
             "fallible NumericSpec decoder must return the missing-context error, not panic"
         );
-        let decoded = {
-            let _payload = PayloadCtxGuard::enter(archived.bytes());
+        let decoded = norito::core::with_payload_ctx(archived.bytes(), || {
             NumericSpec::try_deserialize(archived.archived().cast()).unwrap()
-        };
+        });
         assert_eq!(decoded, expected);
         let mut repeated = Vec::new();
         serialize_to_buffer(&decoded, &mut repeated).unwrap();
@@ -2177,9 +2174,10 @@ fn manual_decode_numeric_spec_returns_missing_context_and_retries_same_payload()
     let mut bytes = Vec::new();
     serialize_to_buffer(&invalid, &mut bytes).unwrap();
     let archived = archived_from_slice::<u8>(&bytes).unwrap();
-    let _payload = PayloadCtxGuard::enter(archived.bytes());
     assert!(matches!(
-        NumericSpec::try_deserialize(archived.archived().cast()),
+        norito::core::with_payload_ctx(archived.bytes(), || {
+            NumericSpec::try_deserialize(archived.archived().cast())
+        }),
         Err(Error::Message(_))
     ));
 }

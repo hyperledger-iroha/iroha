@@ -165,7 +165,7 @@ fn counting_nested_frames_preserves_streamed_checksums_and_layout_flags() {
         // context.
         let _frame_flags = DecodeFlagsGuard::enter(header.flags);
         let archived = from_bytes::<Inner>(&frame).unwrap();
-        assert_eq!(Inner::try_deserialize(archived).unwrap(), value.0);
+        assert_eq!(archived.try_deserialize().unwrap(), value.0);
     }
 }
 

@@ -9,7 +9,6 @@ use iroha_data_model::{
 };
 use iroha_model_base::topology::LaneId;
 use norito::{
-    DeserializePayload,
     codec::{DecodeAll as _, Encode as _},
     from_bytes,
 };
@@ -184,7 +183,7 @@ fn da_ingest_request_norito_roundtrip() {
     let request = sample_ingest_request();
     let buf = norito::to_bytes(&request).expect("serialize ingest request");
     let archived = from_bytes::<DaIngestRequest>(&buf).expect("decode request");
-    let decoded = DaIngestRequest::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(decoded, request);
 }
 #[test]
@@ -357,7 +356,7 @@ fn da_manifest_roundtrip() {
     let manifest = sample_manifest();
     let buf = norito::to_bytes(&manifest).expect("serialize manifest");
     let archived = from_bytes::<DaManifestV1>(&buf).expect("decode manifest");
-    let decoded = DaManifestV1::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(decoded, manifest);
 }
 #[test]
@@ -667,7 +666,7 @@ fn da_ingest_receipt_roundtrip() {
     let receipt = sample_ingest_receipt();
     let buf = norito::to_bytes(&receipt).expect("serialize receipt");
     let archived = from_bytes::<DaIngestReceipt>(&buf).expect("decode receipt");
-    let decoded = DaIngestReceipt::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(decoded, receipt);
 }
 

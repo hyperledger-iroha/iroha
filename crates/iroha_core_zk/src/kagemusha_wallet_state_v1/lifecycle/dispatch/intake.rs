@@ -132,8 +132,7 @@ impl<'de> norito::DeserializePayload<'de> for BatchObjects {
         Self::try_deserialize(archived).expect("bounded intake objects")
     }
     fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
-        let bytes =
-            norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let bytes = norito::core::payload_slice(archived)?;
         <Self as norito::core::DecodeFromSlice>::decode_from_slice(bytes)
             .map(|(objects, _)| objects)
     }

@@ -629,8 +629,7 @@ pub mod action {
             .expect("scheduled time triggers accept retry policies");
             let bytes = norito::to_bytes(&action).expect("serialize action");
             let decoded = norito::from_bytes::<Action>(&bytes).expect("decode action bytes");
-            let restored = norito::core::DeserializePayload::try_deserialize(decoded)
-                .expect("deserialize action");
+            let restored = decoded.try_deserialize().expect("deserialize action");
             assert_eq!(restored, action);
         }
         #[test]
@@ -646,7 +645,8 @@ pub mod action {
             };
             let bytes = norito::to_bytes(&invalid_action).expect("serialize invalid action wire");
             let archived = norito::from_bytes::<Action>(&bytes).expect("decode action bytes");
-            let err = norito::core::DeserializePayload::try_deserialize(archived)
+            let err = archived
+                .try_deserialize()
                 .expect_err("invalid action must be rejected");
             assert!(
                 err.to_string()
@@ -670,7 +670,8 @@ pub mod action {
             };
             let bytes = norito::to_bytes(&invalid_action).expect("serialize invalid action wire");
             let archived = norito::from_bytes::<Action>(&bytes).expect("decode action bytes");
-            let err = norito::core::DeserializePayload::try_deserialize(archived)
+            let err = archived
+                .try_deserialize()
                 .expect_err("mismatched action authority must be rejected");
             assert!(
                 err.to_string()
@@ -698,7 +699,8 @@ pub mod action {
             };
             let bytes = norito::to_bytes(&invalid_action).expect("serialize invalid action wire");
             let archived = norito::from_bytes::<Action>(&bytes).expect("decode action bytes");
-            let err = norito::core::DeserializePayload::try_deserialize(archived)
+            let err = archived
+                .try_deserialize()
                 .expect_err("retry policy on non-scheduled action must be rejected");
             assert!(
                 err.to_string()

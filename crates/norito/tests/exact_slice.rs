@@ -115,8 +115,8 @@ fn unrestricted_limits() -> norito::DecodeLimits {
 }
 
 #[test]
-fn exact_slice_decoders_restore_outer_layout_payload_schema_and_root() {
-    use norito::core::{self, DecodeFlagsGuard, PayloadCtxGuard};
+fn exact_slice_decoders_restore_outer_layout_payload_and_schema() {
+    use norito::core::{self, DecodeFlagsGuard};
 
     let value = ExactPayload {
         label: "inner compact layout".to_owned(),
@@ -128,44 +128,42 @@ fn exact_slice_decoders_restore_outer_layout_payload_schema_and_root() {
     trailing.push(0);
     let outer_bytes = 17_u32.to_le_bytes();
     let _flags = DecodeFlagsGuard::enter(0);
-    let _payload = PayloadCtxGuard::enter_with_schema_and_flags(
+    core::with_payload_ctx_schema_and_flags(
         &outer_bytes,
         norito::schema::identity::frame_hash::<u32>(),
         0,
-    );
-    core::set_decode_root(&outer_bytes);
-    let expected_payload = core::payload_ctx();
-    let expected_root = core::payload_root_span();
-    let expected_frame = core::frame_current_payload_with_default_header::<u32>().unwrap();
-    for explicit_limits in [false, true] {
-        for input in [bytes.as_slice(), trailing.as_slice()] {
-            let decoded = if explicit_limits {
-                norito::codec::decode_exact_from_slice_with_limits::<ExactPayload>(
-                    input,
-                    unrestricted_limits(),
-                )
-            } else {
-                norito::codec::decode_exact_from_slice::<ExactPayload>(input)
-            };
-            if input.len() == bytes.len() {
-                assert_eq!(decoded.unwrap(), value);
-            } else {
-                assert!(matches!(decoded, Err(norito::Error::LengthMismatch)));
+        || {
+            let expected_payload = core::payload_ctx();
+            let expected_frame = core::frame_current_payload_with_default_header::<u32>().unwrap();
+            for explicit_limits in [false, true] {
+                for input in [bytes.as_slice(), trailing.as_slice()] {
+                    let decoded = if explicit_limits {
+                        norito::codec::decode_exact_from_slice_with_limits::<ExactPayload>(
+                            input,
+                            unrestricted_limits(),
+                        )
+                    } else {
+                        norito::codec::decode_exact_from_slice::<ExactPayload>(input)
+                    };
+                    if input.len() == bytes.len() {
+                        assert_eq!(decoded.unwrap(), value);
+                    } else {
+                        assert!(matches!(decoded, Err(norito::Error::LengthMismatch)));
+                    }
+                    assert_eq!(core::effective_decode_flags(), Some(0));
+                    assert_eq!(core::payload_ctx(), expected_payload);
+                    assert_eq!(
+                        core::frame_current_payload_with_default_header::<u32>().unwrap(),
+                        expected_frame,
+                    );
+                    assert!(matches!(
+                        core::frame_current_payload_with_default_header::<u64>(),
+                        Err(norito::Error::SchemaMismatch),
+                    ));
+                }
             }
-            assert_eq!(core::effective_decode_flags(), Some(0));
-            assert_eq!(core::payload_ctx(), expected_payload);
-            assert_eq!(core::payload_root_span(), expected_root);
-            assert_eq!(
-                core::frame_current_payload_with_default_header::<u32>().unwrap(),
-                expected_frame,
-            );
-            assert!(matches!(
-                core::frame_current_payload_with_default_header::<u64>(),
-                Err(norito::Error::SchemaMismatch),
-            ));
-        }
-    }
-    core::clear_decode_root();
+        },
+    );
 }
 
 #[test]

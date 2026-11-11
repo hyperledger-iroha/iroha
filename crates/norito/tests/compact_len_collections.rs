@@ -1,6 +1,6 @@
 //! Compact length coverage for core collection serializers.
 use norito::{
-    DeserializePayload, NoritoSerialize, SerializePayload,
+    NoritoSerialize, SerializePayload,
     core::{self, DecodeFlagsGuard, header_flags},
 };
 use std::{
@@ -96,6 +96,6 @@ fn binaryheap_compact_roundtrip() {
     let heap = BinaryHeap::from(vec![3u8, 1u8, 2u8]);
     let bytes = core::to_bytes(&heap).expect("encode binary heap");
     let archived = core::from_bytes::<BinaryHeap<u8>>(&bytes).expect("decode header");
-    let decoded = BinaryHeap::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(decoded.into_sorted_vec(), heap.into_sorted_vec());
 }

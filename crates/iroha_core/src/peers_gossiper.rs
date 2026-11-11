@@ -1174,8 +1174,7 @@ impl<'a> DeserializePayload<'a> for PeersGossip {
         Self::try_deserialize(archived).expect("PeersGossip decode")
     }
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let bytes = ncore::payload_slice_from_ptr(ptr)?;
+        let bytes = ncore::payload_slice(archived)?;
         if let Ok((wire, consumed)) = ncore::decode_field_canonical::<PeersGossipWire>(bytes)
             && consumed == bytes.len()
         {

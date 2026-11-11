@@ -15587,23 +15587,27 @@ fn decode_app_api_transaction_payload_b64(
                 .to_owned(),
         ));
     }
-    let _guard = norito::core::PayloadCtxGuard::enter(&bytes);
-    let mut cursor = std::io::Cursor::new(bytes.as_slice());
-    let payload =
-        <iroha_data_model::transaction::signed::TransactionPayload as Decode>::decode(&mut cursor)
+    let payload = norito::core::with_payload_ctx(&bytes, || -> Result<_> {
+        let mut cursor = std::io::Cursor::new(bytes.as_slice());
+        let payload =
+            <iroha_data_model::transaction::signed::TransactionPayload as Decode>::decode(
+                &mut cursor,
+            )
             .map_err(|error| {
                 conversion_error(format!(
                     "transaction_payload_b64 must contain one canonical TransactionPayload: {error}"
                 ))
             })?;
-    if usize::try_from(cursor.position()).ok() != Some(bytes.len())
-        || norito::codec::encode_adaptive(&payload) != bytes
-    {
-        return Err(conversion_error(
-            "transaction_payload_b64 must contain exactly one canonical TransactionPayload"
-                .to_owned(),
-        ));
-    }
+        if usize::try_from(cursor.position()).ok() != Some(bytes.len())
+            || norito::codec::encode_adaptive(&payload) != bytes
+        {
+            return Err(conversion_error(
+                "transaction_payload_b64 must contain exactly one canonical TransactionPayload"
+                    .to_owned(),
+            ));
+        }
+        Ok(payload)
+    })?;
     Ok((payload, bytes))
 }
 #[cfg(test)]

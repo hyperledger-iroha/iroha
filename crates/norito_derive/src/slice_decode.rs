@@ -63,13 +63,13 @@ pub(super) fn derive(
     let decode_body = match decode_body {
         DecodeBody::Archived(body) => quote! {
             let __logical_len = __prepared.logical_len();
-            let __archived_bytes = __prepared.bytes();
-            let _pg = norito::core::PayloadCtxGuard::enter_with_len(
-                __archived_bytes,
-                __logical_len,
-            );
-            let __archived = __prepared.archived::<Self>();
-            #body
+            norito::core::with_payload_ctx(
+                __prepared.bytes(),
+                || -> ::core::result::Result<(Self, usize), norito::core::Error> {
+                    let __archived = __prepared.archived::<Self>();
+                    #body
+                },
+            )
         },
         DecodeBody::Prefix => quote! {
             norito::core::decode_prepared_slice_prefix::<Self>(&__prepared)

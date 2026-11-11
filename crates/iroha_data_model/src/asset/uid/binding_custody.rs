@@ -239,7 +239,7 @@ impl DecodeField<0, AssetDefinitionId> for BindingDestination {
             if used != bytes.len() {
                 return Err(DecodeIntoError::Codec(norito::Error::LengthMismatch));
             }
-            ncore::finish_context_fields(bytes.as_ptr(), used)?;
+            ncore::finish_context_fields(ncore::Archived::<()>::start_of(bytes), used)?;
             Ok(value)
         })?;
         self.definition = Some(value);

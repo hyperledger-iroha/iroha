@@ -94,7 +94,7 @@ impl<'a> DeserializePayload<'a> for Framed {
         Self::try_deserialize(archived).expect("framed value")
     }
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, Error> {
-        let bytes = norito::core::payload_slice_from_ptr(std::ptr::from_ref(archived).cast())?;
+        let bytes = norito::core::payload_slice(archived)?;
         let (name_field, used) = norito::core::read_len_from_slice(bytes)?;
         let mut offset = used + name_field;
         let (frame_field, used) = norito::core::read_len_from_slice(&bytes[offset..])?;

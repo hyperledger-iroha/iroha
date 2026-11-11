@@ -8439,7 +8439,6 @@ mod tests {
     };
     use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy};
     use norito::{
-        DeserializePayload,
         codec::{Decode as NoritoDecode, Encode as NoritoEncode},
         from_bytes,
         json::{self, Value},
@@ -14183,7 +14182,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
         .expect("time trigger action");
         let bytes = STANDARD.decode(encoded).expect("base64");
         let archived = from_bytes::<Action>(&bytes).expect("decode action");
-        let action = Action::try_deserialize(archived).expect("action value");
+        let action = archived.try_deserialize().expect("action value");
         assert_eq!(action.authority(), &authority_id);
         assert!(matches!(action.repeats(), Repeats::Exactly(2)));
         match action.filter() {
@@ -14215,7 +14214,7 @@ seiyaku Privacy { permission CanCommitPrivateInput;
         .expect("pre-commit action");
         let bytes = STANDARD.decode(encoded).expect("base64");
         let archived = from_bytes::<Action>(&bytes).expect("decode action");
-        let action = Action::try_deserialize(archived).expect("action value");
+        let action = archived.try_deserialize().expect("action value");
         assert_eq!(action.authority(), &authority_id);
         assert!(matches!(action.repeats(), Repeats::Indefinitely));
         match action.filter() {

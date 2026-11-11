@@ -71,10 +71,10 @@ impl<'de> norito::core::DeserializePayload<'de> for FastpqCommitmentV1 {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let mut offset = 0;
-        let bytes = norito::core::decode_context_byte_array::<{ Self::BYTES }>(ptr, &mut offset)?;
-        norito::core::finish_context_fields(ptr, offset)?;
+        let bytes =
+            norito::core::decode_context_byte_array::<{ Self::BYTES }>(archived, &mut offset)?;
+        norito::core::finish_context_fields(archived, offset)?;
         Ok(Self(bytes))
     }
 }
@@ -177,13 +177,15 @@ mod fastpq_commitment_raw_wire_tests {
             let bytes = &aligned.0[..encoded.len()];
             let zero = norito::DecodeLimits::new(0, usize::MAX, 0, 0, 8);
             let (decoded, usage) = norito::core::with_decode_limits_measured(zero, || {
-                let _context = norito::core::PayloadCtxGuard::enter(bytes);
-                let decoded = norito::core::decode_field_canonical::<FastpqCommitmentV1>(bytes)?;
-                assert_eq!(
-                    norito::core::payload_ctx(),
-                    Some((bytes.as_ptr() as usize, bytes.len()))
-                );
-                Ok::<_, norito::Error>(decoded)
+                norito::core::with_payload_ctx(bytes, || {
+                    let decoded =
+                        norito::core::decode_field_canonical::<FastpqCommitmentV1>(bytes)?;
+                    assert_eq!(
+                        norito::core::payload_ctx(),
+                        Some((bytes.as_ptr() as usize, bytes.len()))
+                    );
+                    Ok::<_, norito::Error>(decoded)
+                })
             });
             assert_eq!(decoded.unwrap(), (value, bytes.len()));
             assert_eq!(usage.total_allocated_bytes(), 0);

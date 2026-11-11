@@ -1,6 +1,5 @@
 //! Reproduces the domain-id truncation observed in `SignedBlock` roundtrip tests.
 use iroha_data_model::account::AccountId;
-use norito::DeserializePayload;
 #[test]
 fn account_id_roundtrip_via_codec() {
     use iroha_crypto::{Algorithm, KeyPair};
@@ -9,7 +8,7 @@ fn account_id_roundtrip_via_codec() {
     let id = AccountId::new(key_pair.public_key().clone());
     let framed = norito::to_bytes(&id).expect("encode account id");
     let archived = norito::core::from_bytes::<AccountId>(&framed).expect("decode via header");
-    let header_decoded = AccountId::deserialize(archived);
+    let header_decoded = archived.deserialize();
     let decoded = norito::core::decode_from_bytes::<AccountId>(&framed).expect("decode payload");
     assert_eq!(header_decoded, id);
     assert_eq!(decoded, id);

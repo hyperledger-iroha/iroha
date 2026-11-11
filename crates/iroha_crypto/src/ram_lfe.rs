@@ -2341,8 +2341,7 @@ mod tests {
         .expect("RNS-backed programmed evaluation");
         let archived = norito::from_bytes::<BfvIdentifierCiphertext>(&response.output)
             .expect("decode encrypted output");
-        let output: BfvIdentifierCiphertext =
-            norito::core::DeserializePayload::deserialize(archived);
+        let output: BfvIdentifierCiphertext = archived.deserialize();
         let scalars = output
             .slots
             .iter()
@@ -3142,8 +3141,7 @@ mod tests {
             .expect("evaluate select program");
             let archived = norito::from_bytes::<BfvIdentifierCiphertext>(&response.output)
                 .expect("decode output envelope");
-            let output: BfvIdentifierCiphertext =
-                norito::core::DeserializePayload::deserialize(archived);
+            let output: BfvIdentifierCiphertext = archived.deserialize();
             assert_eq!(output.slots.len(), 1);
             let plaintext =
                 decrypt(&params, &secret_key, &output.slots[0]).expect("decrypt output");

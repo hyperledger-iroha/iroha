@@ -741,8 +741,7 @@ macro_rules! impl_payload_codec {
                 Self::try_deserialize(archived).expect("invalid canonical numeric frame")
             }
             fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
-                let bytes =
-                    norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast())?;
+                let bytes = norito::core::payload_slice(archived)?;
                 let (value, used) = $decode(bytes)
                     .map_err(|error: NumericAbiError| NoritoError::Message(error.to_string()))?;
                 if used != bytes.len() {

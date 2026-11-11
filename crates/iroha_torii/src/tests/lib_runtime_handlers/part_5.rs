@@ -4071,7 +4071,7 @@ async fn ledger_headers_respect_from_and_limit() {
     .expect("ok");
     let norito_bytes = torii_body_bytes(norito_resp, "norito body").await;
     let archived = norito::from_bytes::<Vec<BlockHeader>>(&norito_bytes).expect("archive");
-    let decoded: Vec<BlockHeader> = norito::core::DeserializePayload::deserialize(archived);
+    let decoded: Vec<BlockHeader> = archived.deserialize();
     assert_eq!(decoded.len(), 2);
     assert_eq!(decoded[0].height().get(), 2);
     assert_eq!(decoded[1].height().get(), 1);
@@ -4233,7 +4233,7 @@ async fn ledger_state_endpoints_return_exact_native_finality_in_json_and_norito(
     let norito_bytes = torii_body_bytes(norito_resp, "norito body").await;
     let archived =
         norito::from_bytes::<StateFinalityResponse>(&norito_bytes).expect("state root archive");
-    let decoded: StateFinalityResponse = norito::core::DeserializePayload::deserialize(archived);
+    let decoded: StateFinalityResponse = archived.deserialize();
     assert_eq!(decoded.witnessed_post_state_root, expected_root);
     assert_eq!(decoded.finality_proof, expected_proof);
     let resp =
@@ -4256,7 +4256,7 @@ async fn ledger_state_endpoints_return_exact_native_finality_in_json_and_norito(
     let norito_bytes = torii_body_bytes(norito_resp, "bytes").await;
     let archived =
         norito::from_bytes::<StateFinalityResponse>(&norito_bytes).expect("state proof archive");
-    let decoded: StateFinalityResponse = norito::core::DeserializePayload::deserialize(archived);
+    let decoded: StateFinalityResponse = archived.deserialize();
     assert_eq!(decoded.witnessed_post_state_root, expected_root);
     assert_eq!(decoded.finality_proof, expected_proof);
 }
@@ -4320,7 +4320,7 @@ async fn state_proof_http_roundtrip_supports_json_and_norito() {
     let bytes = torii_body_bytes(response, "body").await;
     let archived =
         norito::from_bytes::<StateFinalityResponse>(&bytes).expect("archived state proof");
-    let proof: StateFinalityResponse = norito::core::DeserializePayload::deserialize(archived);
+    let proof: StateFinalityResponse = archived.deserialize();
     let canonical = crate::frame_test_support::assert_current_frame(
         &proof,
         "iroha_torii::ledger_state_finality::StateFinalityResponse",

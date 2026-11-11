@@ -381,7 +381,7 @@ struct TaikaiAliasRotationSnapshotArgs<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use norito::{DeserializePayload, from_bytes, to_bytes};
+    use norito::{from_bytes, to_bytes};
     fn find_metric_line<'a>(dump: &'a str, prefix: &str) -> &'a str {
         dump.lines()
             .find(|line| line.starts_with(prefix))
@@ -412,8 +412,8 @@ mod tests {
         let mut status = sample_dataspace_teu_status();
         status.fault_tolerance = 2;
         let bytes = to_bytes(&status).expect("serialize status");
-        let archived = from_bytes(&bytes).expect("deserialize status");
-        let decoded = NexusDataspaceTeuStatus::deserialize(archived);
+        let archived = from_bytes::<NexusDataspaceTeuStatus>(&bytes).expect("deserialize status");
+        let decoded = archived.deserialize();
         assert_eq!(decoded.fault_tolerance, status.fault_tolerance);
     }
     #[test]
@@ -673,7 +673,7 @@ mod tests {
         let bytes = to_bytes(&buckets).expect("serialize buckets");
         let archived =
             from_bytes::<SchedulerLayerWidthBuckets>(&bytes).expect("archived buckets payload");
-        let decoded = norito::core::DeserializePayload::deserialize(archived);
+        let decoded = archived.deserialize();
         assert_eq!(decoded.as_slice(), &values);
         let json_bytes = norito::json::to_vec(&buckets).expect("JSON encode buckets");
         let parsed: SchedulerLayerWidthBuckets =
@@ -1027,8 +1027,7 @@ mod serde_tests {
         let bytes = to_bytes(&status).expect("encode sumeragi consensus status");
         let archived = from_bytes::<SumeragiConsensusStatus>(&bytes)
             .expect("archive sumeragi consensus status");
-        let decoded: SumeragiConsensusStatus =
-            norito::core::DeserializePayload::deserialize(archived);
+        let decoded: SumeragiConsensusStatus = archived.deserialize();
         assert_eq!(decoded.tx_queue_depth, 31);
         assert_eq!(decoded.tx_queue_capacity, 64);
         assert_eq!(decoded.tx_queue_retained_bytes, 98_304);

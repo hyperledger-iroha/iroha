@@ -50,7 +50,7 @@ use iroha_primitives::{json::Json, numeric::XorQuantity};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use norito::{
-    DeserializePayload, from_bytes,
+    from_bytes,
     json::{self, Value},
     to_bytes,
 };

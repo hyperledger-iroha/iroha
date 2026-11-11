@@ -45,9 +45,14 @@ fn unregistered_instruction_preserves_bytes_and_rejects_typed_decode() {
     let frame = vec![0xa5, 0x00, 0xff];
     let bytes = norito::core::to_bytes(&(name.clone(), frame.clone())).expect("serialize");
     let archived_tuple = norito::core::from_bytes::<(String, Vec<u8>)>(&bytes).expect("from_bytes");
-    let archived = archived_tuple.cast::<InstructionBox>();
-    let decoded: InstructionBox =
-        norito::core::DeserializePayload::try_deserialize(archived).expect("opaque envelope");
+    let archived = archived_tuple.archived().cast::<InstructionBox>();
+    let decoded: InstructionBox = norito::core::with_payload_ctx_schema_and_flags(
+        archived_tuple.bytes(),
+        archived_tuple.schema(),
+        archived_tuple.flags(),
+        || norito::core::DeserializePayload::try_deserialize(archived),
+    )
+    .expect("opaque envelope");
     let opaque = decoded
         .as_opaque()
         .expect("wire ID has no registered constructor");

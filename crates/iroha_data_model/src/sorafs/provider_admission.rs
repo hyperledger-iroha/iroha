@@ -158,7 +158,7 @@ mod bounded_council_signers {
         }
 
         fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-            let bytes = ncore::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+            let bytes = ncore::payload_slice(archived)?;
             let (value, used) = Self::decode_from_slice(bytes)?;
             // Packed self-delimiting fields may be followed by other fields in
             // this context. Report the exact prefix without requiring bytes.len().
@@ -218,7 +218,7 @@ impl<'de> DeserializePayload<'de> for ProviderAdmissionCouncilPolicyV1 {
     }
 
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let bytes = ncore::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let bytes = ncore::payload_slice(archived)?;
         let (value, used) = ProviderAdmissionCouncilPolicyDecodedV1::decode_from_slice(bytes)?;
         if used != bytes.len() {
             return Err(ncore::Error::LengthMismatch);

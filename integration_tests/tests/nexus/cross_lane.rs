@@ -10,7 +10,7 @@ use iroha_data_model::{
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::LaneId;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
-use norito::{core as norito_core, json};
+use norito::json;
 use std::{collections::BTreeMap, fs, num::NonZeroU32, path::Path, time::Duration};
 use tempfile::tempdir;
 #[test]
@@ -84,7 +84,7 @@ fn lane_privacy_proof_attachment_roundtrips() -> Result<()> {
         .expect("one attachment is a valid bounded proof list");
     let norito_bytes = norito::to_bytes(&list)?;
     let archived = norito::from_bytes::<ProofAttachmentList>(&norito_bytes)?;
-    let decoded: ProofAttachmentList = norito_core::DeserializePayload::deserialize(archived);
+    let decoded: ProofAttachmentList = archived.deserialize();
     assert_eq!(decoded, list);
     let decoded_privacy = decoded
         .as_slice()

@@ -174,14 +174,15 @@ fn framed_stack_byte_arrays_keep_original_source_and_errors_without_storage_char
                 original[prefix..].copy_from_slice(payload);
                 let bytes = &original[prefix..];
                 let pointer = bytes.as_ptr();
+                let marker = Archived::<()>::start_of(bytes);
                 let (decoded, usage) = with_decode_limits_measured(zero, || {
                     let _context = PayloadCtxGuard::enter(bytes);
                     let decoded = if raw_field {
                         // This test knows it supplied an explicit raw field; the generic
                         // array decoder never selects a layout from the input length.
                         let mut used = 0;
-                        let decoded = decode_context_byte_array::<32>(pointer, &mut used)?;
-                        finish_context_fields(pointer, used)?;
+                        let decoded = decode_context_byte_array::<32>(marker, &mut used)?;
+                        finish_context_fields(marker, used)?;
                         (decoded, used)
                     } else {
                         <[u8; 32] as DecodeFromSlice>::decode_from_slice(bytes)?
@@ -382,7 +383,7 @@ impl<'de> DeserializePayload<'de> for UntrackedArrayByte {
 
     fn try_deserialize(archived: &'de Archived<Self>) -> Result<Self, Error> {
         // Deliberately exercise the supported untracked custom-decoder contract.
-        let bytes = payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let bytes = payload_slice(archived)?;
         let byte = *bytes.first().ok_or(Error::LengthMismatch)?;
         if byte == 0xfe {
             return Err(Error::InvalidValue {
@@ -450,7 +451,7 @@ fn archived_fixed_array_canonical_refusal_drops_current_and_completed_elements()
             Self::try_deserialize(archived).unwrap()
         }
         fn try_deserialize(archived: &'de Archived<Self>) -> Result<Self, Error> {
-            let bytes = payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+            let bytes = payload_slice(archived)?;
             let byte = *bytes.first().ok_or(Error::LengthMismatch)?;
             Ok(Self(byte & 0x7f))
         }
@@ -520,17 +521,10 @@ fn archived_fixed_array_markers_outside_original_context_refuse_before_access_or
         let end = start + framed.len();
         backing[start..end].copy_from_slice(&framed);
         let payload = &backing[start..end];
-        let original_root = payload_root_span();
         for marker_offset in [0, end + 1] {
-            // SAFETY: this non-null address stays in the live backing buffer.
-            // Archived is a zero-sized byte-aligned marker; its payload bytes
+            // A marker in the live backing buffer whose payload bytes
             // deliberately lie outside the narrower active context.
-            let archived = unsafe {
-                &*backing
-                    .as_ptr()
-                    .add(marker_offset)
-                    .cast::<Archived<[u16; 1]>>()
-            };
+            let archived = Archived::<[u16; 1]>::start_of(&backing[marker_offset..]);
             let zero = DecodeLimits::new(0, usize::MAX, 0, 0, 8);
             let (decoded, usage) = with_decode_limits_measured(zero, || {
                 let _context = PayloadCtxGuard::enter(payload);
@@ -540,7 +534,6 @@ fn archived_fixed_array_markers_outside_original_context_refuse_before_access_or
                     Some((payload.as_ptr() as usize, payload.len()))
                 );
                 assert_eq!(payload_ctx_max_access(), Some(0));
-                assert_eq!(payload_root_span(), original_root);
                 decoded
             });
             assert!(matches!(decoded, Err(Error::LengthMismatch)));

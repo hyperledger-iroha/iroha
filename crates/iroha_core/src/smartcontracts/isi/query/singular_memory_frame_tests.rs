@@ -152,7 +152,7 @@ fn payload_only_owned_source_drops_before_the_result_decoder() {
                 SOURCE_DROPPED.get(),
                 "producer must be dropped before allocating output"
             );
-            let bytes = ncore::payload_slice_from_ptr(core::ptr::from_ref(archived).cast())?;
+            let bytes = ncore::payload_slice(archived)?;
             Ok(Self(ncore::decode_field_canonical::<u8>(bytes)?.0))
         }
     }

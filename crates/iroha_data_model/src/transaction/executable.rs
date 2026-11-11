@@ -251,8 +251,7 @@ impl<'de> DeserializePayload<'de> for ContractArgumentRecord {
             .expect("ContractArgumentRecord deserialization must enforce its wire bound")
     }
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let bytes = ncore::payload_slice_from_ptr(ptr)?;
+        let bytes = ncore::payload_slice(archived)?;
         let (value, used) = <Self as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
         if used > bytes.len() {
             return Err(ncore::Error::LengthMismatch);
@@ -371,12 +370,13 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Executable {
                 .expect("slice length checked for executable tag"),
         );
         if tag != INSTRUCTIONS_TAG {
-            let _guard = norito::core::PayloadCtxGuard::enter(bytes);
-            let mut cursor = std::io::Cursor::new(bytes);
-            let decoded = <Self as norito::codec::Decode>::decode(&mut cursor)?;
-            let used = usize::try_from(cursor.position())
-                .map_err(|_| norito::core::Error::LengthMismatch)?;
-            return Ok((decoded, used));
+            return norito::core::with_payload_ctx(bytes, || {
+                let mut cursor = std::io::Cursor::new(bytes);
+                let decoded = <Self as norito::codec::Decode>::decode(&mut cursor)?;
+                let used = usize::try_from(cursor.position())
+                    .map_err(|_| norito::core::Error::LengthMismatch)?;
+                Ok((decoded, used))
+            });
         }
         let mut offset = core::mem::size_of::<u32>();
         let remaining = bytes

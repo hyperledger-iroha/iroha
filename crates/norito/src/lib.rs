@@ -451,7 +451,7 @@ pub mod codec {
     /// in memory. The type's [`core::DecodeFromSlice`] implementation must prove that all bytes are
     /// consumed. Payload-derived resource limits are always active, so an encoded sequence length
     /// cannot request more elements or allocation than the complete input can justify.
-    /// The fixed-layout decode restores the caller's payload, root span and layout state;
+    /// The fixed-layout decode restores the caller's payload context and layout state;
     /// enclosing resource scopes remain active throughout the attempt.
     pub fn decode_exact_from_slice<T>(bytes: &[u8]) -> Result<T, Error>
     where
@@ -10489,7 +10489,7 @@ where
         read_exact_update(&mut digesting, &mut remaining, &mut key_buf)?;
         let _gk = core::PayloadCtxGuard::enter(&key_buf);
         let _key_depth = core::DecodeDepthGuard::enter()?;
-        let ak = unsafe { &*(key_buf.as_ptr() as *const Archived<K>) };
+        let ak = core::borrowed_archived_marker::<K>(&key_buf);
         let key = guarded_try_deserialize(|| K::try_deserialize(ak))?;
         drop(_key_depth);
         drop(_gk);
@@ -10509,7 +10509,7 @@ where
         read_exact_update(&mut digesting, &mut remaining, &mut val_buf)?;
         let _gv = core::PayloadCtxGuard::enter(&val_buf);
         let _value_depth = core::DecodeDepthGuard::enter()?;
-        let av = unsafe { &*(val_buf.as_ptr() as *const Archived<V>) };
+        let av = core::borrowed_archived_marker::<V>(&val_buf);
         let value = guarded_try_deserialize(|| V::try_deserialize(av))?;
         insert(&mut map, key, value)?;
     }
@@ -10813,7 +10813,7 @@ where
                             }
                             let tmp_slice = std::slice::from_raw_parts(ptr as *const u8, len);
                             let _pg = core::PayloadCtxGuard::enter(tmp_slice);
-                            let archived = &*(ptr as *const core::Archived<T>);
+                            let archived = core::borrowed_archived_marker::<T>(tmp_slice);
                             guarded_try_deserialize(|| T::try_deserialize(archived))
                         }
                     };

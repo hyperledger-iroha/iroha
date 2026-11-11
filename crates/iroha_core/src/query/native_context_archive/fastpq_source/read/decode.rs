@@ -210,7 +210,7 @@ macro_rules! scalar {
                     if used != bytes.len() {
                         return Err(norito::Error::LengthMismatch.into());
                     }
-                    ncore::finish_context_fields(bytes.as_ptr(), used)?;
+                    ncore::finish_context_fields(ncore::Archived::<()>::start_of(&bytes), used)?;
                     Ok(value)
                 })?);
                 Ok(())

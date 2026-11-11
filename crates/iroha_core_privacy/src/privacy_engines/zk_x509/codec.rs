@@ -321,7 +321,7 @@ impl<'a> norito::DeserializePayload<'a> for ZkX509WitnessV1 {
         Self::try_deserialize(archived).expect("invalid archived zk-X509 witness")
     }
     fn try_deserialize(archived: &'a norito::core::Archived<Self>) -> Result<Self, norito::Error> {
-        let payload = norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast())?;
+        let payload = norito::core::payload_slice(archived)?;
         Self::decode_from_slice(payload).map(|(witness, _)| witness)
     }
 }

@@ -4,7 +4,7 @@ use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 use iroha_primitives::const_vec::ConstVec;
 use norito::core::{
     DecodeFlagsGuard, DecodeFromSlice, DecodeLimits, DeserializePayload, Encoder, Error,
-    PayloadCtxGuard, SerializePayload, header_flags, with_decode_limits_measured,
+    SerializePayload, header_flags, with_decode_limits_measured, with_payload_ctx_flags,
 };
 use std::{
     alloc::{GlobalAlloc, Layout, System},
@@ -207,9 +207,10 @@ fn binary(bytes: &[u8], flags: u8) -> Vec<u8> {
     output
 }
 fn archived(bytes: &[u8], flags: u8) -> Result<PublicKey, Error> {
-    let _payload = PayloadCtxGuard::enter_with_flags(bytes, flags);
-    let view = norito::core::archived_from_slice::<u8>(bytes)?;
-    PublicKey::try_deserialize(view.archived().cast::<PublicKey>())
+    with_payload_ctx_flags(bytes, flags, || {
+        let view = norito::core::archived_from_slice::<u8>(bytes)?;
+        PublicKey::try_deserialize(view.archived().cast::<PublicKey>())
+    })
 }
 fn fixed_key_error(result: &Result<PublicKey, Error>) {
     assert!(matches!(

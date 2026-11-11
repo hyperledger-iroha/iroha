@@ -337,8 +337,7 @@ macro_rules! define_hash32_newtype {
             fn try_deserialize(
                 archived: &'de norito::core::Archived<Self>,
             ) -> Result<Self, norito::core::Error> {
-                let ptr = core::ptr::from_ref(archived).cast::<u8>();
-                let bytes = norito::core::payload_slice_from_ptr(ptr)?;
+                let bytes = norito::core::payload_slice(archived)?;
                 let (wire, _used) = norito::core::decode_field_canonical::<HashWire32>(bytes)?;
                 wire.try_into_bytes().map(Self)
             }
@@ -952,8 +951,7 @@ impl<'de> norito::core::DeserializePayload<'de> for ProposalId {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let bytes =
-            norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let bytes = norito::core::payload_slice(archived)?;
         let (wire, _used) = norito::core::decode_field_canonical::<HashWire32>(bytes)?;
         wire.try_into_bytes().map(Self)
     }

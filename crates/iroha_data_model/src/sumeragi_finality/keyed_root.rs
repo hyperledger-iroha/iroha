@@ -86,10 +86,10 @@ impl<'de> norito::core::DeserializePayload<'de> for KeyedStateRoot {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let mut offset = 0;
-        let bytes = norito::core::decode_context_byte_array::<{ Self::BYTES }>(ptr, &mut offset)?;
-        norito::core::finish_context_fields(ptr, offset)?;
+        let bytes =
+            norito::core::decode_context_byte_array::<{ Self::BYTES }>(archived, &mut offset)?;
+        norito::core::finish_context_fields(archived, offset)?;
         Ok(Self(bytes))
     }
 }

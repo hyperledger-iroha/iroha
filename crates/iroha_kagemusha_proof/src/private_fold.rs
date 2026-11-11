@@ -112,8 +112,7 @@ impl<'de> norito::DeserializePayload<'de> for PrivateFoldBytes {
         Self::try_deserialize(archived).expect("private fold byte field")
     }
     fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
-        let bytes =
-            norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let bytes = norito::core::payload_slice(archived)?;
         <Self as norito::core::DecodeFromSlice>::decode_from_slice(bytes).map(|(owned, _)| owned)
     }
 }

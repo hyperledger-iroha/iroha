@@ -93,17 +93,7 @@ impl SerializePayload for TimestampMs {
 }
 impl<'a> DeserializePayload<'a> for TimestampMs {
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, Error> {
-        let ptr = std::ptr::from_ref(archived).cast::<u8>();
-        let (base, total) = norito::core::payload_ctx().ok_or(Error::MissingPayloadContext)?;
-        let ptr_us = ptr as usize;
-        let base_end = base.checked_add(total).ok_or(Error::LengthMismatch)?;
-        let offset = ptr_us.checked_sub(base).ok_or(Error::LengthMismatch)?;
-        let end = offset.checked_add(8).ok_or(Error::LengthMismatch)?;
-        if ptr_us < base || ptr_us >= base_end || end > total {
-            return Err(Error::LengthMismatch);
-        }
-        let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-        let bytes = payload.get(offset..end).ok_or(Error::LengthMismatch)?;
+        let bytes = norito::core::payload_range(archived, 8)?;
         let mut buf = [0u8; 8];
         buf.copy_from_slice(bytes);
         let millis = u64::from_le_bytes(buf);

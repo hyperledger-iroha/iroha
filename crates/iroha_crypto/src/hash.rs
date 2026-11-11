@@ -72,10 +72,10 @@ impl Hash {
     fn decode_archived(
         archived: &norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let mut offset = 0;
-        let bytes = norito::core::decode_context_byte_array::<{ Self::LENGTH }>(ptr, &mut offset)?;
-        norito::core::finish_context_fields(ptr, offset)?;
+        let bytes =
+            norito::core::decode_context_byte_array::<{ Self::LENGTH }>(archived, &mut offset)?;
+        norito::core::finish_context_fields(archived, offset)?;
         Self::from_marked_bytes(bytes).ok_or_else(|| norito::core::Error::InvalidValue {
             context: "hash lsb",
         })
@@ -1005,8 +1005,7 @@ mod tests {
             let framed =
                 norito::core::frame_bare_with_header_flags::<Hash>(&bytes, 0).expect("frame");
             let archived = norito::from_bytes::<Hash>(&framed).expect("archive");
-            let err = <Hash as norito::core::DeserializePayload>::try_deserialize(archived)
-                .expect_err("invalid lsb");
+            let err = archived.try_deserialize().expect_err("invalid lsb");
             assert!(matches!(
                 err,
                 norito::core::Error::InvalidValue {
@@ -1025,7 +1024,7 @@ mod tests {
             let (slice, archived) = crate::test_allocations::without_allocations(|| {
                 (
                     <Hash as norito::core::DecodeFromSlice>::decode_from_slice(&bytes),
-                    <Hash as norito::core::DeserializePayload>::try_deserialize(archived),
+                    archived.try_deserialize(),
                 )
             });
             if final_byte & 1 == 1 {
@@ -1070,7 +1069,7 @@ mod tests {
             let (slice, archived) = crate::test_allocations::without_allocations(|| {
                 (
                     <HashOf<()> as norito::core::DecodeFromSlice>::decode_from_slice(&bytes),
-                    <HashOf<()> as norito::core::DeserializePayload>::try_deserialize(archived),
+                    archived.try_deserialize(),
                 )
             });
             if final_byte & 1 == 1 {
@@ -1103,7 +1102,7 @@ mod tests {
             let framed =
                 norito::core::frame_bare_with_header_flags::<Hash>(&bytes, 0).expect("frame");
             let archived = norito::from_bytes::<Hash>(&framed).expect("archive");
-            let result = <Hash as norito::core::DeserializePayload>::try_deserialize(archived);
+            let result = archived.try_deserialize();
             if final_byte & 1 == 1 {
                 assert_eq!(
                     <[u8; Hash::LENGTH]>::from(result.expect("marked hash")),
@@ -1143,8 +1142,7 @@ mod tests {
             let framed =
                 norito::core::frame_bare_with_header_flags::<HashOf<()>>(&bytes, 0).expect("frame");
             let archived = norito::from_bytes::<HashOf<()>>(&framed).expect("archive");
-            let err = <HashOf<()> as norito::core::DeserializePayload>::try_deserialize(archived)
-                .expect_err("invalid lsb");
+            let err = archived.try_deserialize().expect_err("invalid lsb");
             assert!(matches!(
                 err,
                 norito::core::Error::InvalidValue {
@@ -1452,13 +1450,14 @@ mod hash_raw_wire_tests {
             let bytes = &aligned.0[..encoded.len()];
             let zero = norito::DecodeLimits::new(0, usize::MAX, 0, 0, 8);
             let (decoded, usage) = norito::core::with_decode_limits_measured(zero, || {
-                let _context = norito::core::PayloadCtxGuard::enter(bytes);
-                let decoded = norito::core::decode_field_canonical::<Hash>(bytes)?;
-                assert_eq!(
-                    norito::core::payload_ctx(),
-                    Some((bytes.as_ptr() as usize, bytes.len()))
-                );
-                Ok::<_, norito::Error>(decoded)
+                norito::core::with_payload_ctx(bytes, || {
+                    let decoded = norito::core::decode_field_canonical::<Hash>(bytes)?;
+                    assert_eq!(
+                        norito::core::payload_ctx(),
+                        Some((bytes.as_ptr() as usize, bytes.len()))
+                    );
+                    Ok::<_, norito::Error>(decoded)
+                })
             });
             assert_eq!(decoded.unwrap(), (value, bytes.len()));
             assert_eq!(usage.total_allocated_bytes(), 0);

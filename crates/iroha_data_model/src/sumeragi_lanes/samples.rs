@@ -238,7 +238,7 @@ impl<'de> DeserializePayload<'de> for SumeragiLaneSamples {
         Self::try_deserialize(archived).expect("validated canonical lane sample archive")
     }
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let bytes = ncore::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let bytes = ncore::payload_slice(archived)?;
         let (value, used) = Self::decode_from_slice(bytes)?;
         if used != bytes.len() {
             return Err(ncore::Error::LengthMismatch);

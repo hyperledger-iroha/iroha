@@ -91,7 +91,8 @@ where
     parent.extend_from_slice(&[0xc3, 0x3c]);
     let _context = PayloadCtxGuard::enter(&parent);
     let mut offset = 1;
-    let result = decode_context_field_canonical::<T>(parent.as_ptr(), &mut offset);
+    let result =
+        decode_context_field_canonical::<T>(Archived::<()>::start_of(&parent), &mut offset);
     (result, offset, payload_ctx_max_access())
 }
 

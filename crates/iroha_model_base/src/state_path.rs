@@ -149,8 +149,7 @@ impl<'a> norito::core::DeserializePayload<'a> for StatePath {
     fn try_deserialize(
         archived: &'a norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let payload = norito::core::payload_slice_from_ptr(ptr)?;
+        let payload = norito::core::payload_slice(archived)?;
         Self::decode_wire(payload).map(|(path, _)| path)
     }
 }

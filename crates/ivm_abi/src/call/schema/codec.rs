@@ -212,8 +212,7 @@ impl<'de> DeserializePayload<'de> for CallSchemaV1 {
         Self::try_deserialize(archived).expect("canonical CS1 callable schema")
     }
     fn try_deserialize(archived: &'de Archived<Self>) -> Result<Self, Error> {
-        let bytes =
-            norito::core::payload_slice_from_ptr(std::ptr::from_ref(archived).cast::<u8>())?;
+        let bytes = norito::core::payload_slice(archived)?;
         let (schema, used) = decode(bytes)?;
         if used != bytes.len() {
             return Err(Error::LengthMismatch);

@@ -37,7 +37,7 @@ fn zstd_roundtrip() {
     let bytes = to_compressed_bytes(&d, Some(cfg)).unwrap();
     assert!(bytes.len() < to_bytes(&d).unwrap().len());
     let archived = from_compressed_bytes::<Data>(&bytes).unwrap();
-    let decoded = <Data as DeserializePayload>::deserialize(&archived);
+    let decoded = archived.deserialize();
     assert_eq!(decoded.a, 1);
 }
 #[test]
@@ -53,7 +53,7 @@ fn no_compression() {
     let d = Data::new(3);
     let bytes = to_compressed_bytes(&d, None).unwrap();
     let archived = from_compressed_bytes::<Data>(&bytes).unwrap();
-    let decoded = <Data as DeserializePayload>::deserialize(&archived);
+    let decoded = archived.deserialize();
     assert_eq!(decoded.d, 3);
 }
 #[test]
@@ -61,7 +61,7 @@ fn compressed_vec_roundtrip() {
     let payload: Vec<u32> = (0..128).collect();
     let bytes = to_compressed_bytes(&payload, Some(CompressionConfig { level: 1 })).unwrap();
     let archived = from_compressed_bytes::<Vec<u32>>(&bytes).unwrap();
-    let decoded = <Vec<u32> as DeserializePayload>::deserialize(&archived);
+    let decoded = archived.deserialize();
     assert_eq!(decoded, payload);
 }
 #[test]
@@ -83,6 +83,6 @@ fn gpu_zstd_roundtrip() {
     let cfg = CompressionConfig { level: 1 };
     let bytes = to_compressed_bytes(&d, Some(cfg)).unwrap();
     let archived = from_compressed_bytes::<Data>(&bytes).unwrap();
-    let decoded = <Data as DeserializePayload>::deserialize(&archived);
+    let decoded = archived.deserialize();
     assert_eq!(decoded.a, 5);
 }

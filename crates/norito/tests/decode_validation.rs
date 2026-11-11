@@ -269,10 +269,7 @@ fn unit_validation_preserves_empty_archives_and_rejects_trailing_bytes() {
     let empty = layout_frame(&Unit, 0);
     CALLS.set(0);
     let archived = norito::from_bytes::<Unit>(&empty).unwrap();
-    assert_eq!(
-        <Unit as norito::DeserializePayload>::try_deserialize(archived).unwrap(),
-        Unit
-    );
+    assert_eq!(archived.try_deserialize().unwrap(), Unit);
     assert_eq!(CALLS.get(), 1);
 
     for requested in [0, norito::core::header_flags::COMPACT_LEN] {

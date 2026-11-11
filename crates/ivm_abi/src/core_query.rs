@@ -88,8 +88,7 @@ impl<'de> DeserializePayload<'de> for CoreQueryEntityTagV1 {
         Self::try_deserialize(archived).expect("invalid V1 core-query entity tag")
     }
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let pointer = core::ptr::from_ref(archived).cast::<u8>();
-        let bytes = ncore::payload_slice_from_ptr(pointer)?;
+        let bytes = ncore::payload_slice(archived)?;
         let (value, _) = <Self as DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok(value)
     }
@@ -187,8 +186,7 @@ impl<'de> DeserializePayload<'de> for QuantityV1 {
         Self::try_deserialize(archived).expect("invalid V1 quantity payload")
     }
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let pointer = core::ptr::from_ref(archived).cast::<u8>();
-        let bytes = ncore::payload_slice_from_ptr(pointer)?;
+        let bytes = ncore::payload_slice(archived)?;
         let (value, _) = <Self as DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok(value)
     }
@@ -311,8 +309,7 @@ where
         Self::try_deserialize(archived).expect("invalid bounded V1 query-page items")
     }
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let pointer = core::ptr::from_ref(archived).cast::<u8>();
-        let bytes = ncore::payload_slice_from_ptr(pointer)?;
+        let bytes = ncore::payload_slice(archived)?;
         let (value, _) = <Self as DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok(value)
     }
@@ -358,8 +355,7 @@ impl<'de> DeserializePayload<'de> for NonNegativeOffsetV1 {
         Self::try_deserialize(archived).expect("negative V1 query-page offset")
     }
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let pointer = core::ptr::from_ref(archived).cast::<u8>();
-        let bytes = ncore::payload_slice_from_ptr(pointer)?;
+        let bytes = ncore::payload_slice(archived)?;
         let (value, _) = <Self as DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok(value)
     }
@@ -478,8 +474,7 @@ where
         Self::try_deserialize(archived).expect("invalid V1 query page")
     }
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let pointer = core::ptr::from_ref(archived).cast::<u8>();
-        let bytes = ncore::payload_slice_from_ptr(pointer)?;
+        let bytes = ncore::payload_slice(archived)?;
         let (value, _) = <Self as DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok(value)
     }

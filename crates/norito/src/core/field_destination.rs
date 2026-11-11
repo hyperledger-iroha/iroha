@@ -237,13 +237,14 @@ impl<T> CanonicalField<'_, T> {
     }
 }
 
-/// Borrow the active original record slice; used only by generated owned decoding.
+/// Borrow the active original record slice from `archived`; used only by
+/// generated owned decoding.
 #[doc(hidden)]
 pub fn with_context_fields<R>(
-    ptr: *const u8,
+    archived: &Archived<impl Sized>,
     body: impl for<'a> FnOnce(&'a [u8]) -> R,
 ) -> Result<R, Error> {
-    Ok(body(payload_slice_from_ptr(ptr)?))
+    Ok(body(payload_slice(archived)?))
 }
 /// Read a normal positional field using the sole canonical prefix kernel.
 #[doc(hidden)]

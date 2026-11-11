@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::status::NexusLaneTeuStatus;
-use norito::{DeserializePayload, from_bytes, to_bytes};
+use norito::{from_bytes, to_bytes};
 
 #[test]
 fn manifest_validator_binding_status_has_exact_json_schema() {
@@ -103,8 +103,8 @@ fn lane_teu_status_uses_one_complete_v1_binary_layout() {
 
     let expected_json = norito::json::to_json(&status).expect("serialize lane status JSON");
     let bytes = to_bytes(&status).expect("serialize lane status");
-    let archived = from_bytes(&bytes).expect("deserialize lane status");
-    let decoded = NexusLaneTeuStatus::deserialize(archived);
+    let archived = from_bytes::<NexusLaneTeuStatus>(&bytes).expect("deserialize lane status");
+    let decoded = archived.deserialize();
 
     assert_eq!(decoded.manifest_validator_bindings, vec![binding]);
     assert_eq!(

@@ -63,7 +63,7 @@ fn instruction_box_norito_roundtrip() {
     let boxed = InstructionBox::from(log.clone());
     let bytes = norito::core::to_bytes(&boxed).expect("serialize");
     let archived = norito::core::from_bytes::<InstructionBox>(&bytes).expect("from_bytes");
-    let decoded = norito::core::DeserializePayload::try_deserialize(archived).expect("deserialize");
+    let decoded = archived.try_deserialize().expect("deserialize");
     let decoded_log = decoded.as_any().downcast_ref::<Log>().unwrap();
     assert_eq!(decoded_log, &log);
 }

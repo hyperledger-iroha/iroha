@@ -36,7 +36,7 @@ fn query_signature_try_deserialize_rejects_empty_signature_material() {
     let encoded = norito::to_bytes(&query_signature).expect("encode invalid query signature");
     let archived =
         norito::from_bytes::<QuerySignature>(&encoded).expect("archive invalid query signature");
-    let err = <QuerySignature as norito::core::DeserializePayload<'_>>::try_deserialize(archived)
+    let err = archived.try_deserialize()
         .expect_err("empty query signature must fail closed");
     let message = err.to_string();
     assert!(
@@ -52,7 +52,7 @@ fn query_signature_try_deserialize_rejects_all_zero_signature_material() {
     let encoded = norito::to_bytes(&query_signature).expect("encode invalid query signature");
     let archived =
         norito::from_bytes::<QuerySignature>(&encoded).expect("archive invalid query signature");
-    let err = <QuerySignature as norito::core::DeserializePayload<'_>>::try_deserialize(archived)
+    let err = archived.try_deserialize()
         .expect_err("all-zero query signature must fail closed");
     let message = err.to_string();
     assert!(

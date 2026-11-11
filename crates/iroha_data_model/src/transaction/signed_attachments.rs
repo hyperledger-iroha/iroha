@@ -1874,8 +1874,7 @@ impl<'de> norito::DeserializePayload<'de> for ActionIntentV1 {
     }
 
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let bytes = ncore::payload_slice_from_ptr(ptr)?;
+        let bytes = ncore::payload_slice(archived)?;
         decode_exact_field::<Self>(bytes)
     }
 }
@@ -1919,8 +1918,7 @@ impl<'de> norito::DeserializePayload<'de> for SignedAttachmentOccurrenceV1 {
         )
     }
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let bytes = ncore::payload_slice_from_ptr(ptr)?;
+        let bytes = ncore::payload_slice(archived)?;
         decode_exact_field::<Self>(bytes)
     }
 }
@@ -1970,8 +1968,7 @@ impl<'de> norito::DeserializePayload<'de> for SignedAttachmentsV1 {
             .expect("SignedAttachmentsV1 deserialization requires a canonical bounded archive")
     }
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let bytes = ncore::payload_slice_from_ptr(ptr)?;
+        let bytes = ncore::payload_slice(archived)?;
         decode_exact_field::<Self>(bytes)
     }
 }

@@ -63,9 +63,8 @@ where
     );
     assert!(norito::decode_canonical::<T>(&frame).is_err());
     let _flags = ncore::DecodeFlagsGuard::enter(flags);
-    let _payload = ncore::PayloadCtxGuard::enter_with_schema_and_flags(bytes, view.schema(), flags);
     let archived = ncore::from_bytes::<T>(&frame).unwrap();
-    assert!(<T as ncore::DeserializePayload<'_>>::try_deserialize(archived).is_err());
+    assert!(archived.try_deserialize().is_err());
 }
 
 fn append_field<T: ncore::SerializePayload>(bytes: &mut Vec<u8>, value: &T) {

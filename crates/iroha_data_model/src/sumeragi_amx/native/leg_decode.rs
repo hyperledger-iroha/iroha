@@ -523,7 +523,7 @@ impl DecodeField<1, AssetDefinitionId> for AssetFields<'_, '_, '_> {
             if used != bytes.len() {
                 return Err(norito::Error::LengthMismatch.into());
             }
-            ncore::finish_context_fields(bytes.as_ptr(), used)?;
+            ncore::finish_context_fields(ncore::Archived::<()>::start_of(bytes), used)?;
             AssetDefinitionId::from_uuid_bytes(original)
                 .map_err(|error| DecodeIntoError::Codec(norito::Error::Message(error.to_string())))
         })?;
@@ -627,7 +627,7 @@ fn finish(bytes: &[u8], used: usize) -> Result<(), Error> {
     if used != bytes.len() {
         return Err(norito::Error::LengthMismatch.into());
     }
-    ncore::finish_context_fields(bytes.as_ptr(), used)?;
+    ncore::finish_context_fields(ncore::Archived::<()>::start_of(bytes), used)?;
     Ok(())
 }
 fn tag(bytes: &[u8]) -> Result<u32, Error> {

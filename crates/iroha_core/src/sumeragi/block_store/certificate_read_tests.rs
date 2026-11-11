@@ -328,14 +328,12 @@ fn durable_header(raw: &[u8]) -> Result<BlockHeader, norito::Error> {
     if view.schema() != norito::schema::identity::frame_hash::<BlockHeader>() {
         return Err(norito::Error::SchemaMismatch);
     }
-    let header = {
-        let _context = ncore::PayloadCtxGuard::enter_with_schema_and_flags(
-            view.as_bytes(),
-            view.schema(),
-            view.flags(),
-        );
-        decode_header(view.as_bytes())?
-    };
+    let header = ncore::with_payload_ctx_schema_and_flags(
+        view.as_bytes(),
+        view.schema(),
+        view.flags(),
+        || decode_header(view.as_bytes()),
+    )?;
     norito::verify_exact_canonical_frame(&header, raw)?;
     Ok(header)
 }

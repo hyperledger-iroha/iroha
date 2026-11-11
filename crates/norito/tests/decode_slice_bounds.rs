@@ -3,8 +3,8 @@
 use norito::{
     NoritoSerialize,
     core::{
-        DecodeFlagsGuard, DecodeFromSlice, Error, PayloadCtxGuard, header_flags, read_len_dyn,
-        read_seq_len_slice, reset_decode_state,
+        Archived, DecodeFlagsGuard, DecodeFromSlice, DeserializePayload, Error, header_flags,
+        payload_slice, read_seq_len_slice, reset_decode_state, with_payload_ctx,
     },
 };
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque};
@@ -18,9 +18,9 @@ where
 {
     assert!(!payload.is_empty(), "payload should contain data");
     let guard = DecodeFlagsGuard::enter(flags);
-    let ctx = PayloadCtxGuard::enter(payload);
-    let res = <T as DecodeFromSlice>::decode_from_slice(payload);
-    drop(ctx);
+    let res = with_payload_ctx(payload, || {
+        <T as DecodeFromSlice>::decode_from_slice(payload)
+    });
     drop(guard);
     reset_decode_state();
     assert!(matches!(res, Err(Error::LengthMismatch)));
@@ -141,35 +141,39 @@ fn hash_map_prefix_tampered_yields_length_mismatch() {
     expect_len_mismatch::<HashMap<u32, u32>>(flags, &payload);
 }
 #[test]
-fn pointer_truncated_varint_errors() {
+fn marker_truncated_varint_errors() {
     if (norito::core::default_encode_flags() & header_flags::COMPACT_LEN) == 0 {
         return;
     }
     let bytes = [0x81u8];
     let flags = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
-    let ctx = PayloadCtxGuard::enter(&bytes);
-    let res = unsafe { read_len_dyn(bytes.as_ptr()) };
-    drop(ctx);
+    let res = with_payload_ctx(&bytes, || {
+        <&str as DeserializePayload>::try_deserialize(Archived::start_of(&bytes))
+    });
     drop(flags);
     reset_decode_state();
     assert!(matches!(res, Err(Error::LengthMismatch)));
 }
 #[test]
-fn pointer_before_payload_is_rejected() {
+fn marker_before_payload_is_rejected() {
     if (norito::core::default_encode_flags() & header_flags::COMPACT_LEN) == 0 {
         return;
     }
     let mut backing = [0u8; 8];
     // Provide a valid payload context on a subslice near the end.
-    let payload = &mut backing[2..];
-    payload[0] = 0x01; // single-byte len for sanity
+    backing[2] = 0x01; // single-byte len for sanity
+    let payload = &backing[2..];
     let flags = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
-    let ctx = PayloadCtxGuard::enter(payload);
-    // Pointer references earlier address before payload base.
-    let misplaced = backing.as_ptr();
-    let res = unsafe { read_len_dyn(misplaced) };
-    drop(ctx);
+    // The marker sits at an earlier address, before the payload base.
+    let misplaced = Archived::<&str>::start_of(&backing);
+    let (tail, decoded) = with_payload_ctx(payload, || {
+        (
+            payload_slice(misplaced).map(<[u8]>::len),
+            <&str as DeserializePayload>::try_deserialize(misplaced),
+        )
+    });
     drop(flags);
     reset_decode_state();
-    assert!(matches!(res, Err(Error::LengthMismatch)));
+    assert!(matches!(tail, Err(Error::LengthMismatch)));
+    assert!(matches!(decoded, Err(Error::LengthMismatch)));
 }

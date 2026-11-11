@@ -101,7 +101,7 @@ impl<'de, S: ByteStorage> ncore::DeserializePayload<'de> for ByteSequence<S> {
         Self::try_deserialize(archived).expect("canonical bounded byte sequence")
     }
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let bytes = ncore::payload_slice_from_ptr(std::ptr::from_ref(archived).cast())?;
+        let bytes = ncore::payload_slice(archived)?;
         <Self as ncore::DecodeFromSlice>::decode_from_slice(bytes).map(|(value, _)| value)
     }
 }

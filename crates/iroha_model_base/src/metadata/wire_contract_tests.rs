@@ -1,7 +1,7 @@
 // Metadata's tuple-sequence wire and checked-decoder error contracts.
 mod wire_contract_tests {
     use super::*;
-    use ncore::{DecodeFlagsGuard, DeserializePayload, PayloadCtxGuard};
+    use ncore::{DecodeFlagsGuard, DeserializePayload, with_payload_ctx_flags};
 
     fn layouts() -> Vec<u8> {
         let flags = vec![0, ncore::header_flags::COMPACT_LEN];
@@ -33,12 +33,13 @@ mod wire_contract_tests {
         // the decoder. The owning archive safely handles any required alignment.
         view.decode_exact_with::<Metadata, Metadata, _>(|payload| {
             let archive = ncore::archived_from_slice::<Metadata>(payload)?;
-            let _payload = PayloadCtxGuard::enter_with_flags(archive.bytes(), view.flags());
-            let decoded = if infallible {
-                Metadata::deserialize(archive.archived())
-            } else {
-                Metadata::try_deserialize(archive.archived())?
-            };
+            let decoded = with_payload_ctx_flags(archive.bytes(), view.flags(), || {
+                if infallible {
+                    Ok(Metadata::deserialize(archive.archived()))
+                } else {
+                    Metadata::try_deserialize(archive.archived())
+                }
+            })?;
             Ok((decoded, payload.len()))
         })
     }

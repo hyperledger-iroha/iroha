@@ -2289,8 +2289,7 @@ impl<'a> DeserializePayload<'a> for TransactionGossip {
         Self::try_deserialize(archived).expect("decode transaction gossip")
     }
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let bytes = ncore::payload_slice_from_ptr(ptr)?;
+        let bytes = ncore::payload_slice(archived)?;
         let (message, consumed) = decode_transaction_gossip_payload(bytes)?;
         ncore::note_payload_access(bytes, consumed);
         Ok(message)
@@ -2563,8 +2562,7 @@ impl<'a> DeserializePayload<'a> for GossipTransaction {
         Self::try_deserialize(archived).expect("decode gossip transaction")
     }
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let bytes = ncore::payload_slice_from_ptr(ptr)?;
+        let bytes = ncore::payload_slice(archived)?;
         let (encoded, consumed) = decode_gossip_transaction_payload(bytes)?;
         ncore::note_payload_access(bytes, consumed);
         Ok(Self::undecoded_frame(encoded))

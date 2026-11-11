@@ -317,7 +317,7 @@ mod tests {
         let bytes = norito::to_bytes(&wire).expect("encode lane privacy proof");
         let archived =
             norito::from_bytes::<LanePrivacyProof>(&bytes).expect("decode lane privacy proof");
-        let decoded: LanePrivacyProof = norito::core::DeserializePayload::deserialize(archived);
+        let decoded: LanePrivacyProof = archived.deserialize();
         let commitment = LanePrivacyCommitment::merkle(
             LaneCommitmentId::new(3),
             MerkleCommitment::from_root_bytes([0xAA; 32], 8),

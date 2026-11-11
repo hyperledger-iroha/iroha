@@ -2057,10 +2057,7 @@ mod tests {
         let archived = norito::core::archived_from_slice::<AccountAddress>(&payload)
             .expect("sized archived marker");
         let _flags = norito::core::DecodeFlagsGuard::enter(0);
-        let _context = norito::core::PayloadCtxGuard::enter(archived.bytes());
-        let attempt = catch_unwind(AssertUnwindSafe(|| {
-            <AccountAddress as DeserializePayload<'_>>::try_deserialize(archived.as_ref())
-        }));
+        let attempt = catch_unwind(AssertUnwindSafe(|| archived.try_deserialize()));
         let result = attempt.expect("fallible AccountAddress decode must not panic");
         assert!(result.is_err(), "malformed Vec framing must fail closed");
     }

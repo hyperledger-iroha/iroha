@@ -3,7 +3,7 @@
 use crate::{chain::ChainId, name::Name, state_path::StatePath};
 use norito::{
     DeserializePayload, SerializePayload,
-    core::{DecodeFlagsGuard, PayloadCtxGuard},
+    core::{DecodeFlagsGuard, with_payload_ctx},
 };
 
 fn assert_context_error_and_wire_retry<T>(expected: &T)
@@ -21,17 +21,20 @@ where
         matches!(missing, Ok(Err(norito::Error::MissingPayloadContext))),
         "the context-error fallback must propagate its fallible String decoder, not panic"
     );
-    let decoded = {
-        let _payload = PayloadCtxGuard::enter(archived.bytes());
+    let decoded = with_payload_ctx(archived.bytes(), || {
         T::try_deserialize(archived.archived().cast()).unwrap()
-    };
+    });
     assert_eq!(&decoded, expected);
     let mut repeated = Vec::new();
     norito::core::serialize_to_buffer(&decoded, &mut repeated).unwrap();
     assert_eq!(repeated, bytes);
     let truncated = norito::core::archived_from_slice::<u8>(&bytes[..bytes.len() - 1]).unwrap();
-    let _payload = PayloadCtxGuard::enter(truncated.bytes());
-    assert!(T::try_deserialize(truncated.archived().cast()).is_err());
+    assert!(
+        with_payload_ctx(truncated.bytes(), || T::try_deserialize(
+            truncated.archived().cast()
+        ))
+        .is_err()
+    );
 }
 
 #[test]

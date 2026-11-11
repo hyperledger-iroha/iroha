@@ -195,13 +195,13 @@ where
     let mut payload = Vec::new();
     serialize_to_buffer(&"a".repeat(64), &mut payload).unwrap();
     let archived = norito::core::archived_from_slice::<T>(&payload).unwrap();
-    // The guard restores the caller's prior context after both error probes.
-    let _context = norito::core::PayloadCtxGuard::enter(&[]);
-    assert!(matches!(
-        T::try_deserialize(&archived),
-        Err(NoritoError::LengthMismatch)
-    ));
-    norito::core::clear_payload_ctx();
+    // A foreign (empty) context refuses the marker; without one it is missing.
+    norito::core::with_payload_ctx(&[], || {
+        assert!(matches!(
+            T::try_deserialize(&archived),
+            Err(NoritoError::LengthMismatch)
+        ));
+    });
     assert!(matches!(
         T::try_deserialize(&archived),
         Err(NoritoError::MissingPayloadContext)

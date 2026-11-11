@@ -157,21 +157,22 @@ fn binary_rejects_duplicate_reversed_and_mismatched_identity() {
         vec![(alpha.id.clone(), zeta.clone())],
     ] {
         let bytes = hostile_map(&entries);
-        let _context =
-            core::PayloadCtxGuard::enter_with_flags(&bytes, core::default_encode_flags());
-        assert!(matches!(
-            CustomParameters::decode_from_slice(&bytes),
-            Err(norito::Error::LengthMismatch)
-        ));
+        core::with_payload_ctx_flags(&bytes, core::default_encode_flags(), || {
+            assert!(matches!(
+                CustomParameters::decode_from_slice(&bytes),
+                Err(norito::Error::LengthMismatch)
+            ));
+        });
     }
     let bytes = hostile_map(&[
         (alpha.id.clone(), alpha.clone()),
         (zeta.id.clone(), zeta.clone()),
     ]);
-    let _context = core::PayloadCtxGuard::enter_with_flags(&bytes, core::default_encode_flags());
-    let (decoded, used) = CustomParameters::decode_from_slice(&bytes).unwrap();
-    assert_eq!(used, bytes.len());
-    assert_eq!(decoded, [alpha, zeta].into_iter().collect());
+    core::with_payload_ctx_flags(&bytes, core::default_encode_flags(), || {
+        let (decoded, used) = CustomParameters::decode_from_slice(&bytes).unwrap();
+        assert_eq!(used, bytes.len());
+        assert_eq!(decoded, [alpha, zeta].into_iter().collect());
+    });
 }
 
 #[test]

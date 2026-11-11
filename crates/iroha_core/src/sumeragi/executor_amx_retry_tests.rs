@@ -940,19 +940,20 @@ fn original_quantity_layout(frame: &[u8]) -> usize {
     use norito::core as codec;
     let view = codec::from_bytes_view(frame).unwrap();
     let _flags = codec::DecodeFlagsGuard::enter(view.flags());
-    let _context = codec::PayloadCtxGuard::enter(view.as_bytes());
-    let mut offset = 0;
-    let _source = codec::framed_field::<AssetId>(view.as_bytes(), &mut offset).unwrap();
-    let _receiver = codec::framed_field::<AccountId>(view.as_bytes(), &mut offset).unwrap();
-    codec::framed_field::<Quantity>(view.as_bytes(), &mut offset)
-        .unwrap()
-        .with_payload(|bytes| {
-            QuantityDecodePlan::decode_payload(bytes)
-                .map_err(codec::DecodeIntoError::<std::convert::Infallible>::Codec)
-        })
-        .unwrap()
-        .allocation_layout()
-        .size()
+    codec::with_payload_ctx(view.as_bytes(), || {
+        let mut offset = 0;
+        let _source = codec::framed_field::<AssetId>(view.as_bytes(), &mut offset).unwrap();
+        let _receiver = codec::framed_field::<AccountId>(view.as_bytes(), &mut offset).unwrap();
+        codec::framed_field::<Quantity>(view.as_bytes(), &mut offset)
+            .unwrap()
+            .with_payload(|bytes| {
+                QuantityDecodePlan::decode_payload(bytes)
+                    .map_err(codec::DecodeIntoError::<std::convert::Infallible>::Codec)
+            })
+            .unwrap()
+            .allocation_layout()
+            .size()
+    })
 }
 
 fn late_invalid_amx_leg_frame(frame: &[u8]) -> Vec<u8> {
@@ -961,29 +962,30 @@ fn late_invalid_amx_leg_frame(frame: &[u8]) -> Vec<u8> {
     use norito::core as codec;
     let view = codec::from_bytes_view(frame).unwrap();
     let _flags = codec::DecodeFlagsGuard::enter(view.flags());
-    let _context = codec::PayloadCtxGuard::enter(view.as_bytes());
-    let mut offset = 0;
-    let _source = codec::framed_field::<AssetId>(view.as_bytes(), &mut offset).unwrap();
-    let _receiver = codec::framed_field::<AccountId>(view.as_bytes(), &mut offset).unwrap();
-    let amount_start = offset;
-    let amount = codec::framed_field::<Quantity>(view.as_bytes(), &mut offset).unwrap();
-    let mut numeric_offset = 0;
-    let _mantissa = codec::framed_field::<BigInt>(amount.bytes(), &mut numeric_offset).unwrap();
-    let mut amount_body = amount.bytes()[..numeric_offset].to_vec();
-    let mut scale = Vec::new();
-    codec::serialize_to_buffer(&u32::MAX, &mut scale).unwrap();
-    codec::write_len_to_vec_with_flags(
-        &mut amount_body,
-        u64::try_from(scale.len()).unwrap(),
-        view.flags(),
-    );
-    amount_body.extend_from_slice(&scale);
-    let mut body = view.as_bytes()[..amount_start].to_vec();
-    codec::write_len_to_vec_with_flags(
-        &mut body,
-        u64::try_from(amount_body.len()).unwrap(),
-        view.flags(),
-    );
-    body.extend_from_slice(&amount_body);
-    codec::frame_bare_with_header_flags::<AmxTransferLegV1>(&body, view.flags()).unwrap()
+    codec::with_payload_ctx(view.as_bytes(), || {
+        let mut offset = 0;
+        let _source = codec::framed_field::<AssetId>(view.as_bytes(), &mut offset).unwrap();
+        let _receiver = codec::framed_field::<AccountId>(view.as_bytes(), &mut offset).unwrap();
+        let amount_start = offset;
+        let amount = codec::framed_field::<Quantity>(view.as_bytes(), &mut offset).unwrap();
+        let mut numeric_offset = 0;
+        let _mantissa = codec::framed_field::<BigInt>(amount.bytes(), &mut numeric_offset).unwrap();
+        let mut amount_body = amount.bytes()[..numeric_offset].to_vec();
+        let mut scale = Vec::new();
+        codec::serialize_to_buffer(&u32::MAX, &mut scale).unwrap();
+        codec::write_len_to_vec_with_flags(
+            &mut amount_body,
+            u64::try_from(scale.len()).unwrap(),
+            view.flags(),
+        );
+        amount_body.extend_from_slice(&scale);
+        let mut body = view.as_bytes()[..amount_start].to_vec();
+        codec::write_len_to_vec_with_flags(
+            &mut body,
+            u64::try_from(amount_body.len()).unwrap(),
+            view.flags(),
+        );
+        body.extend_from_slice(&amount_body);
+        codec::frame_bare_with_header_flags::<AmxTransferLegV1>(&body, view.flags()).unwrap()
+    })
 }

@@ -1155,9 +1155,10 @@ async fn protected_namespaces_set_returns_checked_signable_payload_for_authority
         .decode(signable_payload.as_bytes())
         .expect("decode signable payload");
     let payload: iroha_data_model::transaction::signed::TransactionPayload = {
-        let _guard = norito::core::PayloadCtxGuard::enter(&tx_bytes);
-        let mut cursor = std::io::Cursor::new(tx_bytes.as_slice());
-        norito::codec::Decode::decode(&mut cursor).expect("decode transaction payload")
+        norito::core::with_payload_ctx(&tx_bytes, || {
+            let mut cursor = std::io::Cursor::new(tx_bytes.as_slice());
+            norito::codec::Decode::decode(&mut cursor).expect("decode transaction payload")
+        })
     };
     assert_eq!(payload.authority, harness.authority);
     assert_eq!(payload.instructions.instruction_count(), 1);
@@ -1528,9 +1529,10 @@ async fn ministry_agenda_draft_returns_instruction_skeleton_and_signable_payload
         .decode(body.signable_transaction_b64.as_bytes())
         .expect("decode signable payload");
     let payload: iroha_data_model::transaction::signed::TransactionPayload = {
-        let _guard = norito::core::PayloadCtxGuard::enter(&tx_bytes);
-        let mut cursor = std::io::Cursor::new(tx_bytes.as_slice());
-        norito::codec::Decode::decode(&mut cursor).expect("decode transaction payload")
+        norito::core::with_payload_ctx(&tx_bytes, || {
+            let mut cursor = std::io::Cursor::new(tx_bytes.as_slice());
+            norito::codec::Decode::decode(&mut cursor).expect("decode transaction payload")
+        })
     };
     assert_eq!(payload.authority, harness.authority);
     assert_eq!(payload.instructions.instruction_count(), 1);

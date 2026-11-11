@@ -63,7 +63,7 @@ fn nonzero_u16_roundtrip() {
     let value = NonZeroU16::new(5u16).unwrap();
     let bytes = to_bytes(&value).unwrap();
     let archived = from_bytes::<NonZeroU16>(&bytes).unwrap();
-    let decoded = <NonZeroU16 as DeserializePayload>::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(value, decoded);
 }
 #[test]
@@ -201,8 +201,7 @@ impl<'a> DeserializePayload<'a> for B {
         Self::try_deserialize(archived).expect("decode B")
     }
     fn try_deserialize(archived: &'a Archived<B>) -> Result<Self, Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let payload = norito::core::payload_range_from_ptr(ptr, core::mem::size_of::<u64>())?;
+        let payload = norito::core::payload_range(archived, core::mem::size_of::<u64>())?;
         let bytes = payload.try_into().map_err(|_| Error::LengthMismatch)?;
         Ok(B(u64::from_le_bytes(bytes)))
     }
@@ -325,7 +324,7 @@ fn triple_roundtrip() {
     let value = (1u8, false, String::from("tri"));
     let bytes = to_bytes(&value).unwrap();
     let archived = from_bytes::<(u8, bool, String)>(&bytes).unwrap();
-    let decoded = <(u8, bool, String) as DeserializePayload>::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(value, decoded);
 }
 #[derive(
@@ -344,7 +343,7 @@ fn derive_struct_variable_roundtrip() {
     };
     let bytes = to_bytes(&value).unwrap();
     let archived = from_bytes::<Mixed>(&bytes).unwrap();
-    let decoded = Mixed::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(value, decoded);
 }
 #[derive(
@@ -363,7 +362,7 @@ fn derive_enum_custom_index_roundtrip() {
     for v in variants {
         let bytes = to_bytes(&v).unwrap();
         let archived = from_bytes::<Custom>(&bytes).unwrap();
-        let decoded = Custom::deserialize(archived);
+        let decoded = archived.deserialize();
         assert_eq!(v, decoded);
     }
 }
@@ -373,12 +372,12 @@ fn rc_arc_roundtrip() {
     let rc = Rc::new(String::from("rc"));
     let bytes = to_bytes(&rc).unwrap();
     let archived = from_bytes::<Rc<String>>(&bytes).unwrap();
-    let decoded = <Rc<String> as DeserializePayload>::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(rc, decoded);
     let arc = Arc::new(99u64);
     let bytes = to_bytes(&arc).unwrap();
     let archived = from_bytes::<Arc<u64>>(&bytes).unwrap();
-    let decoded = <Arc<u64> as DeserializePayload>::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(arc, decoded);
 }
 #[test]
@@ -387,12 +386,12 @@ fn cell_refcell_roundtrip() {
     let cell = Cell::new(5u32);
     let bytes = to_bytes(&cell).unwrap();
     let archived = from_bytes::<Cell<u32>>(&bytes).unwrap();
-    let decoded = <Cell<u32> as DeserializePayload>::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(cell.get(), decoded.get());
     let refcell = RefCell::new(String::from("inner"));
     let bytes = to_bytes(&refcell).unwrap();
     let archived = from_bytes::<RefCell<String>>(&bytes).unwrap();
-    let decoded = <RefCell<String> as DeserializePayload>::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(*refcell.borrow(), *decoded.borrow());
 }
 #[test]
@@ -401,6 +400,6 @@ fn phantomdata_roundtrip() {
     let phantom: PhantomData<u32> = PhantomData;
     let bytes = to_bytes(&phantom).unwrap();
     let archived = from_bytes::<PhantomData<u32>>(&bytes).unwrap();
-    let decoded = <PhantomData<u32> as DeserializePayload>::deserialize(archived);
+    let decoded = archived.deserialize();
     assert_eq!(phantom, decoded);
 }

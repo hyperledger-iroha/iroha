@@ -137,30 +137,33 @@ fn parse(raw: &[u8]) -> Result<Layout, norito::Error> {
         .ok_or(norito::Error::LengthMismatch)?;
     let (header, availability, payload, qc) =
         ncore::with_decode_limits(norito::canonical_decode_limits(raw.len()), || {
-            let _context = ncore::PayloadCtxGuard::enter_with_schema_and_flags(
+            ncore::with_payload_ctx_schema_and_flags(
                 bytes,
                 view.schema(),
                 view.flags(),
-            );
-            let mut offset = 0;
-            let header = decode_header(&bytes[field_range(bytes, &mut offset)?])?;
-            let table_field = field_range(bytes, &mut offset)?;
-            let payload_field = field_range(bytes, &mut offset)?;
-            let qc_field = field_range(bytes, &mut offset)?;
-            if offset != bytes.len() {
-                return Err(norito::Error::LengthMismatch);
-            }
-            // Lanes never persist the separately authenticated result-only global genesis form.
-            let availability = byte_range(bytes, table_field, 1, MAX_AVAILABILITY_FRAME_BYTES)?;
-            let payload = byte_range(
-                bytes,
-                payload_field,
-                1,
-                usize::try_from(MAX_DA_PAYLOAD_SIZE_BYTES)
-                    .map_err(|_| norito::Error::LengthMismatch)?,
-            )?;
-            let qc = qc::parse(&bytes[qc_field])?;
-            Ok((header, availability, payload, qc))
+                || -> Result<_, norito::Error> {
+                    let mut offset = 0;
+                    let header = decode_header(&bytes[field_range(bytes, &mut offset)?])?;
+                    let table_field = field_range(bytes, &mut offset)?;
+                    let payload_field = field_range(bytes, &mut offset)?;
+                    let qc_field = field_range(bytes, &mut offset)?;
+                    if offset != bytes.len() {
+                        return Err(norito::Error::LengthMismatch);
+                    }
+                    // Lanes never persist the separately authenticated result-only global genesis form.
+                    let availability =
+                        byte_range(bytes, table_field, 1, MAX_AVAILABILITY_FRAME_BYTES)?;
+                    let payload = byte_range(
+                        bytes,
+                        payload_field,
+                        1,
+                        usize::try_from(MAX_DA_PAYLOAD_SIZE_BYTES)
+                            .map_err(|_| norito::Error::LengthMismatch)?,
+                    )?;
+                    let qc = qc::parse(&bytes[qc_field])?;
+                    Ok((header, availability, payload, qc))
+                },
+            )
         })?;
     norito::verify_exact_canonical_frame(
         &LaneRecordRef {

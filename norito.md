@@ -159,17 +159,72 @@ In-memory archived handles:
   the v1 wire layout.
 - Retagging an archived marker changes only the decoder type at the same byte
   address. Every decoder must obtain bytes through an active payload context
-  and validate the requested range; a marker alone never authorizes a pointer
-  read. An outer/root decode span never widens a nested field's active context,
-  so a field pointer cannot consume sibling bytes. Missing context, truncated
-  scalar ranges, invalid Boolean tags, and invalid Unicode scalar values are
-  decode errors.
+  and validate the requested range; a marker alone never authorizes a read
+  (see "Payload context and borrowed bytes" below). An enclosing payload never
+  widens a nested field's active context, so a field cannot consume sibling
+  bytes. Missing context, truncated scalar ranges, invalid Boolean tags, and
+  invalid Unicode scalar values are decode errors.
 - Because markers are byte-aligned and every read is a bounds-checked byte
   copy, decoders borrow frames, fields, tuple/result/array/heap children and
   prepared slices in place at any address. No alignment copy or zero padding
   beyond the logical payload is made or charged, and acceptance of a frame never
   depends on the input buffer's address. The wire padding rules above are
   unchanged.
+
+### Payload context and borrowed bytes
+
+Decoders reach their bytes through the payload context: a per-thread record of
+the byte slice the running decoder may read, with the frame schema and layout
+flags. The Rust API keeps three rules, so that safe code can never obtain
+payload bytes that outlive their buffer:
+
+1. **Contexts are closure-scoped.** `core::with_payload_ctx(bytes, || ..)`,
+   `with_payload_ctx_flags` and `with_payload_ctx_schema_and_flags` install
+   `bytes` for exactly the duration of the closure and restore the previous
+   context when it returns or unwinds. The frame handles decode the same way:
+   `from_bytes` returns an `ArchivedFrame` (and `from_compressed_bytes` an
+   `ArchivedBox`) whose `try_deserialize()`/`deserialize()` install the frame's
+   payload, schema and flags only while the decoder runs, and
+   `ArchivedRef::try_deserialize()` installs its slice. Validating a frame
+   installs nothing, and the handles do not dereference to `Archived<T>`.
+   There is no public guard type: a guard value could be leaked with
+   `mem::forget` or dropped out of order, and either would leave a context
+   installed over freed bytes. The codec's own guard is crate-private, borrows
+   its slice for its lifetime and is always dropped in LIFO order.
+2. **Markers come only from borrowed bytes.** An `Archived<T>` exists only by
+   reference; it has no public constructor and is neither `Clone` nor `Copy`.
+   `Archived::start_of(bytes)`, `archived_from_slice` and the frame handles
+   place the marker at the first byte of a non-empty slice, borrowing it. Every
+   empty slice maps to one shared dangling marker that locates no bytes. Its own
+   address could be one past the end of a buffer, which may be the first byte
+   of an unrelated adjacent payload.
+3. **Bytes live as long as the marker.** `core::payload_slice(&'a Archived<T>)`
+   returns the active payload from the marker to its end, and
+   `core::payload_range(&'a Archived<T>, len)` exactly `len` bytes there
+   (recorded as read), both as `&'a [u8]`. Without a context they return
+   `Error::MissingPayloadContext`; for a marker outside the context,
+   `Error::LengthMismatch`. A marker at the context's end and the empty marker
+   yield only empty slices. A marker strictly inside the context lies strictly
+   inside its own source slice too. Two live allocations never overlap, so both
+   slices belong to one allocation, and the marker's borrow keeps that
+   allocation's owner frozen for `'a`: safe code can neither free nor mutate any
+   of its bytes, including the ones past the marker's own source slice that the
+   accessor returns.
+
+`core::payload_ctx()` reports the context's base address and length as plain
+integers for diagnostics and state checks; it carries no borrow, and code must
+not turn it back into a slice. Derive-generated and hand-written field decoders
+pass the marker itself to `decode_context_field_canonical`,
+`decode_context_byte_array`, `decode_context_framed_byte_array`,
+`finish_context_fields`, `with_context_fields` and `trace_struct_decode`; no
+generated decoder handles a raw pointer. The former raw-pointer accessors
+(`payload_slice_from_ptr`, `payload_range_from_ptr`, the unsafe `read_len_dyn`
+and `read_seq_len_ptr`), the unguarded setters (`set_payload_ctx`,
+`clear_payload_ctx`, `set_decode_root`) and the unused root-span record are
+removed. `crates/norito_derive/tests/ui/fail/payload_ctx_guard_dangling_slice.rs`
+and `payload_slice_outlives_buffer.rs` pin that the old dangling-slice program
+and its closure-based equivalent no longer compile. None of this changes wire
+bytes.
 
 Schema and resource enforcement:
 - Typed decoders must reject payloads whose header schema hash does not match
@@ -426,7 +481,7 @@ decompressing it, so a tiny frame cannot request an allocation up to the global
 archive ceiling.
 
 The exact-slice helpers isolate their fixed-layout decoder state and restore
-the caller's flags, payload context, schema and root span on both success and
+the caller's flags, payload context and schema on both success and
 failure. This isolation does not reset enclosing resource counters: nested or
 repeated decodes continue charging the original caller's budget, and a refusal
 retains its original scope identity.

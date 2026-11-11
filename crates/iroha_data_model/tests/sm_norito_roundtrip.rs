@@ -3,7 +3,6 @@
 mod tests {
     use iroha_crypto::{Algorithm, PublicKey, Signature, Sm3Digest};
     use iroha_data_model::account::AccountId;
-    use norito::DeserializePayload;
     const SM2_PUB: &str = "86265300103132333435363738313233343536373804361255A512347E76EA947EBB416C12D4C07E30B150C0EC2047ECC5E142907499B8D99C4C5CF69BFF6527E7B67396B55E42EF98625B339696DBEF9A3AABBFC06F";
     const SM2_SIG: &str = "1877845D5FFE0305946EEA3046D0279BE886B866EF620B7325413602CAD17C7FF72EBF26C29E77AAAB2226EDFBEE2D6D6ABC0D6C9B2C9A2248E2BD9324A12268";
     #[test]
@@ -48,7 +47,7 @@ mod tests {
         let framed = norito::core::frame_bare_with_header_flags::<Sm3Digest>(&bare, 0)
             .expect("frame sm3 digest with header");
         let archived = norito::core::from_bytes::<Sm3Digest>(&framed).expect("archived sm3 digest");
-        let decoded = Sm3Digest::deserialize(archived);
+        let decoded = archived.deserialize();
         assert_eq!(decoded.as_bytes(), digest.as_bytes());
     }
     #[test]

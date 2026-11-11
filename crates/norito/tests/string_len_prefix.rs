@@ -54,9 +54,7 @@ fn archived_string_requires_bounded_payload_context() {
     let error = <String as DeserializePayload>::try_deserialize(archived.archived())
         .expect_err("an archived address alone must not authorize pointer reads");
     assert!(matches!(error, core::Error::MissingPayloadContext));
-    let _payload = core::PayloadCtxGuard::enter(archived.bytes());
-    let decoded = <String as DeserializePayload>::try_deserialize(archived.archived())
-        .expect("decode string");
+    let decoded = archived.try_deserialize().expect("decode string");
     assert_eq!(decoded.as_bytes(), s.as_bytes());
     reset_decode_state();
 }

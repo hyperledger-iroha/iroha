@@ -106,12 +106,13 @@ pub(super) fn derive(
                 fn decode_value_fields(__bytes:&[u8],__destination:&mut __Destination)
                     -> ::core::result::Result<(Self,usize),norito::core::DecodeIntoError<__Destination::Error>>
                 {
-                    let _context=norito::core::PayloadCtxGuard::enter(__bytes);
-                    let mut __offset=0usize;
-                    #(let #bindings=<__Destination as norito::core::DecodeField<#indices,#types>>::decode_field(__destination,#reads)?;)*
-                    norito::core::finish_context_fields(__bytes.as_ptr(),__offset)?;
-                    let __value=#hook(#reconstruct).map_err(norito::core::DecodeIntoError::Codec)?;
-                    Ok((__value,__offset))
+                    norito::core::with_payload_ctx(__bytes,||->::core::result::Result<(Self,usize),norito::core::DecodeIntoError<__Destination::Error>> {
+                        let mut __offset=0usize;
+                        #(let #bindings=<__Destination as norito::core::DecodeField<#indices,#types>>::decode_field(__destination,#reads)?;)*
+                        norito::core::finish_context_fields(norito::core::Archived::<Self>::start_of(__bytes),__offset)?;
+                        let __value=#hook(#reconstruct).map_err(norito::core::DecodeIntoError::Codec)?;
+                        Ok((__value,__offset))
+                    })
                 }
             }
             impl<'de> norito::core::DeserializePayload<'de> for #ident {
@@ -120,7 +121,7 @@ pub(super) fn derive(
                         .unwrap_or_else(|error|panic!("norito: fallible deserialize failed for {}: {:?}",stringify!(#ident),error))
                 }
                 fn try_deserialize(archived:&'de norito::core::Archived<Self>)->::core::result::Result<Self,norito::core::Error> {
-                    norito::core::with_context_fields(archived as *const _ as *const u8,|__bytes| {
+                    norito::core::with_context_fields(archived,|__bytes| {
                         <Self as norito::core::DecodeValueFields<norito::core::OwnedFields>>::decode_value_fields(__bytes,&mut norito::core::OwnedFields)
                             .map(|(value,_)|value).map_err(norito::core::DecodeIntoError::into_codec)
                     })?
@@ -139,11 +140,12 @@ pub(super) fn derive(
             fn decode_fields(__bytes: &[u8], __destination: &mut __Destination)
                 -> ::core::result::Result<(Self::Values, usize), norito::core::DecodeIntoError<__Destination::Error>>
             {
-                let _context = norito::core::PayloadCtxGuard::enter(__bytes);
-                let mut __offset=0usize;
-                #(let #bindings = <__Destination as norito::core::DecodeField<#indices,#types>>::decode_field(__destination, #reads)?;)*
-                norito::core::finish_context_fields(__bytes.as_ptr(), __offset)?;
-                Ok(((#(#bindings,)*),__offset))
+                norito::core::with_payload_ctx(__bytes, || -> ::core::result::Result<(Self::Values, usize), norito::core::DecodeIntoError<__Destination::Error>> {
+                    let mut __offset=0usize;
+                    #(let #bindings = <__Destination as norito::core::DecodeField<#indices,#types>>::decode_field(__destination, #reads)?;)*
+                    norito::core::finish_context_fields(norito::core::Archived::<Self>::start_of(__bytes), __offset)?;
+                    Ok(((#(#bindings,)*),__offset))
+                })
             }
         }
         impl<'de> norito::core::DeserializePayload<'de> for #ident {
@@ -151,7 +153,7 @@ pub(super) fn derive(
                 <Self as norito::core::DeserializePayload<'de>>::try_deserialize(archived).unwrap_or_else(|error| panic!("norito: fallible deserialize failed for {}: {:?}", stringify!(#ident),error))
             }
             fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> ::core::result::Result<Self,norito::core::Error> {
-                let ((#(#bindings,)*),_) = norito::core::with_context_fields(archived as *const _ as *const u8, |__bytes| {
+                let ((#(#bindings,)*),_) = norito::core::with_context_fields(archived, |__bytes| {
                     <Self as norito::core::DecodeRecordFields<norito::core::OwnedFields>>::decode_fields(__bytes,&mut norito::core::OwnedFields)
                         .map_err(norito::core::DecodeIntoError::into_codec)
                 })??;

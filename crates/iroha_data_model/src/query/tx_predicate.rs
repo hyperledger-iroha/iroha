@@ -1809,8 +1809,8 @@ mod wire {
     }
     fn archived_sequence_bytes<T>(
         archived: &norito::core::Archived<Vec<T>>,
-    ) -> Result<&'static [u8], Error> {
-        norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())
+    ) -> Result<&[u8], Error> {
+        norito::core::payload_slice(archived)
     }
     fn ensure_sequence_len_at_most<T>(
         archived: &norito::core::Archived<Vec<T>>,

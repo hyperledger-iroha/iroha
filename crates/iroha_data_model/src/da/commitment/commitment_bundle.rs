@@ -318,16 +318,17 @@ impl<'a> ncore::DecodeFromSlice<'a> for DaCommitmentBundle {
             ncore::archived_payload_align::<CanonicalParts>(),
         )?;
         let logical_len = prepared.logical_len();
-        let _context = ncore::PayloadCtxGuard::enter_with_len(prepared.bytes(), logical_len);
-        let parts = <CanonicalParts as ncore::DeserializePayload>::try_deserialize(
-            prepared.archived::<CanonicalParts>(),
-        )?;
-        Ok((
-            Self {
-                storage: Storage::Untrusted(parts),
-            },
-            logical_len,
-        ))
+        ncore::with_payload_ctx(prepared.bytes(), || {
+            let parts = <CanonicalParts as ncore::DeserializePayload>::try_deserialize(
+                prepared.archived::<CanonicalParts>(),
+            )?;
+            Ok((
+                Self {
+                    storage: Storage::Untrusted(parts),
+                },
+                logical_len,
+            ))
+        })
     }
 }
 impl Default for DaCommitmentBundle {

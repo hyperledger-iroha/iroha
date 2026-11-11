@@ -480,19 +480,24 @@ impl<'pool> BoundedActionFrameScannerV1<'pool> {
         ncore::with_bounded_encode_work(limits, || {
             Ok(
                 decode_work.with(|| -> Result<(), ActionFrameScanFailureV1> {
-                    let _payload = ncore::PayloadCtxGuard::enter_with_flags(bytes, SCANNER_FLAGS);
-                    destination.decode(bytes, self.pool, None)?;
-                    if !destination.belongs_to(self.pool) {
-                        return Err(ScanError::InvalidValue.into());
-                    }
-                    let account = destination
-                        .complete
-                        .as_ref()
-                        .ok_or(ScanError::InvalidValue)?;
-                    // Exact stream comparison rejects normalization without a
-                    // second account or replacement output allocation.
-                    norito::codec::verify_exact_payload(&account.value, bytes)?;
-                    Ok(())
+                    ncore::with_payload_ctx_flags(
+                        bytes,
+                        SCANNER_FLAGS,
+                        || -> Result<(), ActionFrameScanFailureV1> {
+                            destination.decode(bytes, self.pool, None)?;
+                            if !destination.belongs_to(self.pool) {
+                                return Err(ScanError::InvalidValue.into());
+                            }
+                            let account = destination
+                                .complete
+                                .as_ref()
+                                .ok_or(ScanError::InvalidValue)?;
+                            // Exact stream comparison rejects normalization without a
+                            // second account or replacement output allocation.
+                            norito::codec::verify_exact_payload(&account.value, bytes)?;
+                            Ok(())
+                        },
+                    )
                 }),
             )
         })

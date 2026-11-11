@@ -374,7 +374,7 @@ fn proofbox_norito_roundtrip() {
     let p = ProofBox::new(backend, bytes.clone());
     let enc = norito::to_bytes(&p).expect("encode");
     let arch = norito::from_bytes::<ProofBox>(&enc).expect("archived");
-    let dec: ProofBox = norito::core::DeserializePayload::deserialize(arch);
+    let dec: ProofBox = arch.deserialize();
     assert_eq!(dec.backend, "pipa-r/pasta".to_owned());
     assert_eq!(dec.bytes, bytes);
 }
@@ -457,7 +457,7 @@ fn verifying_key_roundtrip() {
     let vk = VerifyingKeyBox::new(backend, vec![7, 7, 7]);
     let enc = norito::to_bytes(&vk).expect("encode");
     let arch = norito::from_bytes::<VerifyingKeyBox>(&enc).expect("archived");
-    let dec: VerifyingKeyBox = norito::core::DeserializePayload::deserialize(arch);
+    let dec: VerifyingKeyBox = arch.deserialize();
     assert_eq!(dec.backend, "pipa-r/pasta".to_owned());
     assert_eq!(dec.bytes, vec![7, 7, 7]);
 }
@@ -545,7 +545,7 @@ fn vk_record_roundtrip() {
     };
     let enc = norito::to_bytes(&rec).expect("encode");
     let arch = norito::from_bytes::<VerifyingKeyRecord>(&enc).expect("archived");
-    let dec: VerifyingKeyRecord = norito::core::DeserializePayload::deserialize(arch);
+    let dec: VerifyingKeyRecord = arch.deserialize();
     assert_eq!(dec.version, 1);
     assert_eq!(dec.commitment, [0x11; 32]);
     assert!(dec.key.is_some());
@@ -594,7 +594,7 @@ fn proof_attachment_roundtrip() {
     let a = ProofAttachment::new_ref("pipa-r/pasta".into(), p.clone(), id);
     let enc = norito::to_bytes(&a).expect("encode");
     let arch = norito::from_bytes::<ProofAttachment>(&enc).expect("archived");
-    let dec: ProofAttachment = norito::core::DeserializePayload::deserialize(arch);
+    let dec: ProofAttachment = arch.deserialize();
     assert_eq!(dec.backend, "pipa-r/pasta".to_owned());
     assert_eq!(dec.vk_ref.name.as_str(), "vk_1");
 }
@@ -2057,7 +2057,7 @@ fn proof_record_roundtrip() {
     };
     let enc = norito::to_bytes(&rec).expect("encode");
     let arch = norito::from_bytes::<ProofRecord>(&enc).expect("archived");
-    let dec: ProofRecord = norito::core::DeserializePayload::deserialize(arch);
+    let dec: ProofRecord = arch.deserialize();
     assert!(matches!(dec.status, ProofStatus::Verified));
     assert_eq!(dec.verified_at_height, Some(42));
 }

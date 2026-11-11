@@ -171,8 +171,7 @@ impl<'de> DeserializePayload<'de> for PublicKeyCompact {
         Self::try_deserialize(archived).expect("PublicKeyCompact decode")
     }
     fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, Error> {
-        let bytes =
-            norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let bytes = norito::core::payload_slice(archived)?;
         decode_compact(bytes, true).map(|(key, _)| key)
     }
 }

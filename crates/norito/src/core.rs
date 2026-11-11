@@ -219,18 +219,6 @@ fn serialize_owned<T: SerializePayload>(writer: &mut Encoder<'_>, value: &T) -> 
 mod serialize_owned_tests {
     include!("core/serialize_owned_tests.rs");
 }
-fn owned_bytes_from_ctx<A>(archived: &Archived<A>) -> Result<&[u8], Error> {
-    let ptr = archived as *const _ as *const u8;
-    let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
-    let offset = (ptr as usize)
-        .checked_sub(base)
-        .ok_or_else(|| Error::LengthMismatch)?;
-    if offset > total {
-        return Err(Error::LengthMismatch);
-    }
-    let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-    Ok(&payload[offset..])
-}
 fn parse_owned_payload(bytes: &[u8]) -> Result<(&[u8], usize), Error> {
     // The wrapper decoder borrows this field directly and charges only the
     // allocation it actually constructs (`Box`, `Rc`, or `Arc`) below.
@@ -471,9 +459,17 @@ fn sanitize_layout_flags(flags: u8) -> u8 {
 pub const fn default_encode_flags() -> u8 {
     header_flags::COMPACT_LEN
 }
+/// The payload installed for the current thread's decoders.
+///
+/// `base` and `len` describe a byte slice borrowed by the [`PayloadCtxGuard`]
+/// that installed this state. Guards are crate-private, never leaked and
+/// dropped in LIFO order, and the public installers ([`with_payload_ctx`] and
+/// its variants) are closure-scoped, so a state is never observable after the
+/// borrow of its slice ends. See [`PayloadCtxState::bytes_from`] for how a
+/// marker's lifetime bounds the bytes handed out of this state.
 #[derive(Clone, Copy)]
 struct PayloadCtxState {
-    base: usize,
+    base: *const u8,
     len: usize,
     schema: Option<[u8; 16]>,
     max_access: usize,
@@ -495,7 +491,6 @@ struct DecodeFlags {
 struct DecodeTls {
     flags: Cell<DecodeFlags>,
     payload: Cell<Option<PayloadCtxState>>,
-    root_span: Cell<Option<(usize, usize)>>,
     boundary: Cell<FieldDecodeBoundary>,
     nesting_depth: Cell<usize>,
     budget: Cell<*const budget_scope::ScopeNode<'static>>,
@@ -509,7 +504,6 @@ thread_local! {
                 active: false,
             }),
             payload: Cell::new(None),
-            root_span: Cell::new(None),
             boundary: Cell::new(FieldDecodeBoundary::Canonical),
             nesting_depth: Cell::new(0),
             budget: Cell::new(core::ptr::null()),
@@ -538,7 +532,6 @@ impl<T: 'static> DecodeCell<T> {
 }
 static DECODE_FLAGS: DecodeCell<DecodeFlags> = DecodeCell(|tls| &tls.flags);
 static DECODE_PAYLOAD_CTX: DecodeCell<Option<PayloadCtxState>> = DecodeCell(|tls| &tls.payload);
-static DECODE_ROOT_SPAN: DecodeCell<Option<(usize, usize)>> = DecodeCell(|tls| &tls.root_span);
 static FIELD_DECODE_BOUNDARY: DecodeCell<FieldDecodeBoundary> = DecodeCell(|tls| &tls.boundary);
 static DECODE_NESTING_DEPTH: DecodeCell<usize> = DecodeCell(|tls| &tls.nesting_depth);
 /// Depth of nested decodes whose panics are reported as decode errors.
@@ -547,20 +540,65 @@ pub(crate) static DECODE_PANIC_DEPTH: DecodeCell<u32> = DecodeCell(|tls| &tls.pa
 impl PayloadCtxState {
     /// Extend this payload's recorded access by what a nested payload read.
     #[inline]
-    fn absorb_nested_access(&mut self, base: usize, len: usize, accessed: usize) {
+    fn absorb_nested_access(&mut self, base: *const u8, len: usize, accessed: usize) {
         if accessed == 0 {
             return;
         }
-        if base == self.base && len == self.len {
+        let (nested, own) = (base.addr(), self.base.addr());
+        if nested == own && len == self.len {
             if accessed > self.max_access {
                 self.max_access = accessed;
             }
-        } else if base >= self.base && base < self.base + self.len {
-            let end = (base - self.base).saturating_add(accessed);
+        } else if nested >= own && nested - own < self.len {
+            let end = (nested - own).saturating_add(accessed);
             if end > self.max_access {
                 self.max_access = self.len.min(end);
             }
         }
+    }
+    /// Offset of `archived` in this payload.
+    ///
+    /// `None` means the marker came from an empty slice: such markers share one
+    /// dangling address that never locates bytes. A marker outside
+    /// `base..=base + len` is refused.
+    #[inline]
+    fn marker_offset<A: ?Sized>(&self, archived: &Archived<A>) -> Result<Option<usize>, Error> {
+        let address = core::ptr::from_ref(archived).addr();
+        if address == empty_marker_ptr().addr() {
+            return Ok(None);
+        }
+        match address.checked_sub(self.base.addr()) {
+            Some(offset) if offset <= self.len => Ok(Some(offset)),
+            _ => Err(Error::LengthMismatch),
+        }
+    }
+    /// Borrow this payload from `archived` to its end, for the marker's lifetime.
+    ///
+    /// Soundness rests on three invariants kept by this module:
+    /// - this state's slice is live and borrowed while the state is installed
+    ///   (see [`PayloadCtxState`]);
+    /// - a marker is created only from a borrowed byte slice: at the address of
+    ///   its first byte for a non-empty slice, at the shared empty-marker
+    ///   address otherwise ([`borrowed_archived_marker`]). Markers cannot be
+    ///   constructed, copied or moved by value;
+    /// - so a marker at offset `< len` lies strictly inside both its own source
+    ///   slice and this one. Two live allocations never overlap, so both slices
+    ///   belong to one allocation, and the marker's borrow freezes that
+    ///   allocation's owner for `'a`: safe code can neither free nor mutate any
+    ///   byte of it while the marker lives, including the bytes past the
+    ///   marker's own source slice that this function returns.
+    ///
+    /// A marker at offset `len` yields an empty slice, and so does an
+    /// empty-source marker, so neither can reach bytes of an adjacent buffer.
+    #[inline]
+    fn bytes_from<'a, A: ?Sized>(&self, archived: &'a Archived<A>) -> Result<&'a [u8], Error> {
+        let Some(offset) = self.marker_offset(archived)? else {
+            return Ok(&[]);
+        };
+        // SAFETY: `offset <= len` and `base..base + len` is the installed,
+        // live slice, so the range is in bounds; the method documentation
+        // explains why the bytes stay valid and immutable for `'a`.
+        Ok(unsafe { core::slice::from_raw_parts(self.base.add(offset), self.len - offset) })
     }
 }
 /// Payload context and layout flags displaced by one installed payload.
@@ -613,7 +651,7 @@ impl DecodeTls {
         flags: Option<u8>,
     ) -> PayloadFrame {
         let previous = self.payload.replace(Some(PayloadCtxState {
-            base: bytes.as_ptr() as usize,
+            base: bytes.as_ptr(),
             len: logical_len.min(bytes.len()),
             schema,
             max_access: 0,
@@ -653,7 +691,7 @@ impl DecodeTls {
     #[inline]
     fn absorb_nested_access(&self, base: *const u8, len: usize, accessed: usize) {
         if let Some(mut state) = self.payload.get() {
-            state.absorb_nested_access(base as usize, len, accessed);
+            state.absorb_nested_access(base, len, accessed);
             self.payload.set(Some(state));
         }
     }
@@ -666,11 +704,10 @@ impl DecodeTls {
         let Some(mut state) = self.payload.get() else {
             return;
         };
-        let address = ptr as usize;
-        if address < state.base {
+        let Some(offset) = ptr.addr().checked_sub(state.base.addr()) else {
             return;
-        }
-        let end = (address - state.base).saturating_add(len);
+        };
+        let end = offset.saturating_add(len);
         // A read past the payload end marks the whole payload as consumed.
         let reached = if end > state.len {
             state.len
@@ -682,23 +719,38 @@ impl DecodeTls {
         state.max_access = reached;
         self.payload.set(Some(state));
     }
-    /// The active payload from `ptr` to its end.
+    /// The active payload from `archived` to its end; see [`payload_slice`].
     #[inline]
-    fn payload_from(&self, ptr: *const u8) -> Result<&'static [u8], Error> {
+    fn payload_from<'a, A: ?Sized>(&self, archived: &'a Archived<A>) -> Result<&'a [u8], Error> {
         let Some(state) = self.payload.get() else {
             return Err(Error::MissingPayloadContext);
         };
-        let Some(base_end) = state.base.checked_add(state.len) else {
+        state.bytes_from(archived)
+    }
+    /// Exactly `len` bytes of the active payload at `archived`, recorded as
+    /// read; see [`payload_range`].
+    #[inline]
+    fn payload_range<'a, A: ?Sized>(
+        &self,
+        archived: &'a Archived<A>,
+        len: usize,
+    ) -> Result<&'a [u8], Error> {
+        let Some(mut state) = self.payload.get() else {
+            return Err(Error::MissingPayloadContext);
+        };
+        // An empty-source marker yields an empty tail, so it locates no bytes.
+        let tail = state.bytes_from(archived)?;
+        let Some(bytes) = tail.get(..len) else {
             return Err(Error::LengthMismatch);
         };
-        let address = ptr as usize;
-        if address < state.base || address > base_end {
-            return Err(Error::LengthMismatch);
+        if len != 0 {
+            let end = tail.as_ptr().addr() - state.base.addr() + len;
+            if end > state.max_access {
+                state.max_access = end;
+                self.payload.set(Some(state));
+            }
         }
-        // SAFETY: `base..base_end` is the installed payload, which stays live
-        // while its context is installed, and `address` lies inside it.
-        let payload = unsafe { core::slice::from_raw_parts(state.base as *const u8, state.len) };
-        Ok(&payload[address - state.base..])
+        Ok(bytes)
     }
     /// Tightest stateless budget limits of this thread's active scopes.
     #[inline]
@@ -1400,48 +1452,20 @@ impl Drop for OwnedValueDecodeDepthGuard {
         });
     }
 }
-/// Record the root payload span for the current thread.
-pub fn set_decode_root(bytes: &[u8]) {
-    DECODE_ROOT_SPAN.set(Some((bytes.as_ptr() as usize, bytes.len())));
-}
-/// Clear the root payload span for the current thread.
-pub fn clear_decode_root() {
-    DECODE_ROOT_SPAN.set(None);
-}
-/// Fetch the currently recorded root payload span, if any.
-pub fn payload_root_span() -> Option<(usize, usize)> {
-    DECODE_ROOT_SPAN.get()
-}
-// Per-thread payload context (base pointer, length, and optional schema hash).
-fn set_payload_ctx_state(bytes: &[u8], schema: Option<[u8; 16]>, flags: Option<u8>) {
-    set_payload_ctx_state_with_len(bytes, bytes.len(), schema, flags);
-}
-fn set_payload_ctx_state_with_len(
-    bytes: &[u8],
-    len: usize,
-    schema: Option<[u8; 16]>,
-    flags: Option<u8>,
-) {
-    let len = len.min(bytes.len());
-    DECODE_PAYLOAD_CTX.set(Some(PayloadCtxState {
-        base: bytes.as_ptr() as usize,
-        len,
-        schema,
-        max_access: 0,
-        flags: flags.unwrap_or(0),
-        flags_active: flags.is_some(),
-    }));
-}
-/// Set the current payload context for slice-based decoders.
-pub fn set_payload_ctx(bytes: &[u8]) {
-    set_payload_ctx_state(bytes, None, None);
-}
-/// Clear the payload context.
-pub fn clear_payload_ctx() {
+/// Remove the payload context without restoring an outer one.
+///
+/// Clearing never exposes freed bytes: it only makes accessors report
+/// [`Error::MissingPayloadContext`] until a guard restores its predecessor.
+pub(crate) fn clear_payload_ctx() {
     DECODE_PAYLOAD_CTX.set(None);
 }
+/// Base address and length of the current thread's payload context, if any.
+///
+/// These are plain integers for diagnostics and state-restoration checks; they
+/// carry no borrow. Read payload bytes only through [`payload_slice`] and
+/// [`payload_range`], whose results are bounded by a marker's lifetime.
 pub fn payload_ctx() -> Option<(usize, usize)> {
-    payload_ctx_state().map(|state| (state.base, state.len))
+    payload_ctx_state().map(|state| (state.base.addr(), state.len))
 }
 fn payload_ctx_flags() -> Option<u8> {
     payload_ctx_state().and_then(|state| {
@@ -1470,7 +1494,6 @@ struct DecodeStateSnapshot {
     flags_active: bool,
     field_boundary: FieldDecodeBoundary,
     payload_ctx: Option<PayloadCtxState>,
-    root_span: Option<(usize, usize)>,
 }
 impl DecodeStateSnapshot {
     fn capture() -> Self {
@@ -1479,17 +1502,21 @@ impl DecodeStateSnapshot {
             flags_active: decode_flags_active(),
             field_boundary: FIELD_DECODE_BOUNDARY.with(Cell::get),
             payload_ctx: payload_ctx_state(),
-            root_span: payload_root_span(),
         }
     }
     fn restore(self) {
         set_decode_flags_raw(self.flags);
         set_decode_flags_active(self.flags_active);
         FIELD_DECODE_BOUNDARY.with(|slot| slot.set(self.field_boundary));
+        // The captured context belongs to a guard that encloses this
+        // snapshot's scope, so its slice is still borrowed.
         DECODE_PAYLOAD_CTX.set(self.payload_ctx);
-        DECODE_ROOT_SPAN.set(self.root_span);
     }
 }
+/// Run with fresh decoder state, restoring the caller's state on drop.
+///
+/// The guard is crate-private and dropped in LIFO order, so the payload context
+/// it restores is still borrowed by the guard that installed it.
 pub(crate) struct IsolatedDecodeGuard {
     snapshot: Option<DecodeStateSnapshot>,
 }
@@ -1497,7 +1524,6 @@ impl IsolatedDecodeGuard {
     pub(crate) fn enter() -> Self {
         let snapshot = DecodeStateSnapshot::capture();
         reset_decode_state();
-        clear_decode_root();
         FIELD_DECODE_BOUNDARY.with(|slot| slot.set(FieldDecodeBoundary::Canonical));
         Self {
             snapshot: Some(snapshot),
@@ -1537,59 +1563,94 @@ fn record_slice_access(bytes: &[u8], len: usize) {
 pub fn note_payload_access(bytes: &[u8], len: usize) {
     record_slice_access(bytes, len);
 }
-#[inline]
-fn payload_bytes_with_offset(ptr: *const u8) -> Result<(&'static [u8], usize), Error> {
-    let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
-    let ptr_us = ptr as usize;
-    let base_end = base
-        .checked_add(total)
-        .ok_or_else(|| Error::LengthMismatch)?;
-    if ptr_us >= base && ptr_us <= base_end {
-        let offset = ptr_us - base;
-        let payload = unsafe { core::slice::from_raw_parts(base as *const u8, total) };
-        return Ok((payload, offset));
-    }
-    Err(Error::LengthMismatch)
-}
-#[inline]
-pub fn payload_slice_from_ptr(ptr: *const u8) -> Result<&'static [u8], Error> {
-    let (payload, offset) = payload_bytes_with_offset(ptr)?;
-    Ok(&payload[offset..])
-}
-/// Return an exact, bounds-checked range from the active decode payload.
+/// Run `decode` with `bytes` installed as the payload context.
 ///
-/// Generated decoders use this instead of constructing slices directly from
-/// pointers supplied by an archived value.
-#[doc(hidden)]
+/// The context keeps the schema and layout flags already in force. Markers
+/// created from `bytes`, for example by [`archived_from_slice`], read through
+/// [`payload_slice`] and [`payload_range`] while `decode` runs. The previous
+/// context is restored when `decode` returns or unwinds.
+///
+/// Installation is closure-scoped on purpose: a context then never outlives
+/// the borrow of `bytes`. A guard value could, by being leaked with
+/// [`core::mem::forget`] or dropped out of order, and a stale context would let
+/// a marker in a later allocation read past that allocation's end.
+///
+/// ```
+/// use norito::core::{archived_from_slice, payload_slice, with_payload_ctx};
+///
+/// let bytes = 7_u32.to_le_bytes();
+/// let archived = archived_from_slice::<u32>(&bytes).unwrap();
+/// let tail = with_payload_ctx(&bytes, || payload_slice(archived.archived()));
+/// assert_eq!(tail.unwrap(), &bytes);
+/// ```
 #[inline]
-pub fn payload_range_from_ptr(ptr: *const u8, len: usize) -> Result<&'static [u8], Error> {
-    // One context lookup bounds the range and records its access.
-    DECODE_PAYLOAD_CTX.with(|cell| {
-        let mut state = cell.get().ok_or_else(|| Error::MissingPayloadContext)?;
-        let base_end = state
-            .base
-            .checked_add(state.len)
-            .ok_or_else(|| Error::LengthMismatch)?;
-        let address = ptr as usize;
-        if address < state.base || address > base_end {
-            return Err(Error::LengthMismatch);
-        }
-        let offset = address - state.base;
-        let end = offset
-            .checked_add(len)
-            .ok_or_else(|| Error::LengthMismatch)?;
-        if end > state.len {
-            return Err(Error::LengthMismatch);
-        }
-        if len != 0 && end > state.max_access {
-            state.max_access = end;
-            cell.set(Some(state));
-        }
-        // SAFETY: `base..base + len` is the active payload, and
-        // `offset..end` was just checked to lie inside it.
-        let payload = unsafe { core::slice::from_raw_parts(state.base as *const u8, state.len) };
-        Ok(&payload[offset..end])
-    })
+pub fn with_payload_ctx<R>(bytes: &[u8], decode: impl FnOnce() -> R) -> R {
+    let _context = PayloadCtxGuard::enter(bytes);
+    decode()
+}
+/// [`with_payload_ctx`] with `flags` selected as the explicit layout while
+/// `decode` runs.
+#[inline]
+pub fn with_payload_ctx_flags<R>(bytes: &[u8], flags: u8, decode: impl FnOnce() -> R) -> R {
+    let _context = PayloadCtxGuard::enter_with_flags(bytes, flags);
+    decode()
+}
+/// [`with_payload_ctx`] carrying a typed header's frame `schema` and layout
+/// `flags`, as decoding a validated frame installs them.
+#[inline]
+pub fn with_payload_ctx_schema_and_flags<R>(
+    bytes: &[u8],
+    schema: [u8; 16],
+    flags: u8,
+    decode: impl FnOnce() -> R,
+) -> R {
+    let _context = PayloadCtxGuard::enter_with_schema_and_flags(bytes, schema, flags);
+    decode()
+}
+/// Borrow the active payload from `archived`'s position to its end.
+///
+/// The slice lives exactly as long as the marker. Markers are created only from
+/// borrowed bytes, and a marker inside the active context belongs to that
+/// context's allocation, so the bytes stay valid for the marker's lifetime
+/// (`norito.md`, "Payload context and borrowed bytes", states the full
+/// argument). A marker created
+/// from an empty slice yields an empty slice. The bytes are not recorded as
+/// read: decoders report consumption through [`note_payload_access`] or read
+/// through [`payload_range`].
+///
+/// # Errors
+///
+/// [`Error::MissingPayloadContext`] without an active context, and
+/// [`Error::LengthMismatch`] when the marker lies outside it.
+///
+/// A borrowed slice cannot outlive its buffer:
+///
+/// ```compile_fail
+/// let dangling: &'static [u8] = {
+///     let buffer = vec![1_u8, 2, 3];
+///     norito::core::with_payload_ctx(&buffer, || {
+///         let archived = norito::core::archived_from_slice::<u8>(&buffer).unwrap();
+///         norito::core::payload_slice(archived.archived()).unwrap()
+///     })
+/// };
+/// ```
+#[inline]
+pub fn payload_slice<T: ?Sized>(archived: &Archived<T>) -> Result<&[u8], Error> {
+    DECODE.with(|tls| tls.payload_from(archived))
+}
+/// Borrow exactly `len` bytes of the active payload at `archived` and record
+/// them as read.
+///
+/// The result has the marker's lifetime, as for [`payload_slice`]. A marker
+/// created from an empty slice yields only the empty range.
+///
+/// # Errors
+///
+/// [`Error::MissingPayloadContext`] without an active context, and
+/// [`Error::LengthMismatch`] when the range does not lie inside it.
+#[inline]
+pub fn payload_range<T: ?Sized>(archived: &Archived<T>, len: usize) -> Result<&[u8], Error> {
+    DECODE.with(|tls| tls.payload_range(archived, len))
 }
 #[inline]
 fn ensure_len_within_remaining(len: usize, remaining: usize) -> Result<(), Error> {
@@ -1636,31 +1697,6 @@ fn btreemap_entry_slices<'a>(
     record_slice_access(value_slice, value_slice.len());
     Ok((key_slice, value_slice))
 }
-/// Read a dynamic length header at a given pointer using the current payload context.
-/// Returns (value, bytes_consumed).
-fn read_len_dyn_at_ptr(ptr: *const u8) -> Result<(usize, usize), Error> {
-    let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
-    let ptr_us = ptr as usize;
-    let base_end = base
-        .checked_add(total)
-        .ok_or_else(|| Error::LengthMismatch)?;
-    if ptr_us < base || ptr_us >= base_end {
-        #[cfg(debug_assertions)]
-        if crate::debug_trace_enabled() {
-            eprintln!(
-                "read_len_dyn_at_ptr: ptr={ptr:?} base=0x{base:016x} total={total} base_end=0x{base_end:016x}"
-            );
-        }
-        return Err(Error::LengthMismatch);
-    }
-    let off = ptr_us - base;
-    debug_assert!(off <= total);
-    let head_slice = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-    let head = &head_slice[off..];
-    let (len, used) = read_len_dyn_slice(head)?;
-    record_payload_access(ptr, used);
-    Ok((len, used))
-}
 /// Allocate a raw buffer for `layout` without invoking the process-wide OOM handler.
 ///
 /// Returns a pair of `(ptr, needs_dealloc)` where `needs_dealloc` indicates whether
@@ -1701,50 +1737,49 @@ fn try_decode_vec_with_capacity<T>(capacity: usize) -> Result<Vec<T>, Error> {
         })?;
     Ok(values)
 }
-/// RAII guard to set and restore the current payload context.
-pub struct PayloadCtxGuard {
+/// Installs a payload context for as long as it lives; crate-private.
+///
+/// The guard borrows its slice for `'a`, so it cannot outlive the bytes, and
+/// every use in this crate drops it in LIFO order and never leaks it. That is
+/// what keeps installed contexts live (see [`PayloadCtxState`]). Code outside
+/// the crate installs contexts through the closure-scoped
+/// [`with_payload_ctx`] family instead: a public guard could be leaked with
+/// [`core::mem::forget`] or dropped out of order, either of which would leave
+/// a context installed after its bytes were freed.
+pub(crate) struct PayloadCtxGuard<'a> {
     frame: PayloadFrame,
+    _bytes: PhantomData<&'a [u8]>,
 }
-impl PayloadCtxGuard {
-    fn install(
-        bytes: &[u8],
-        logical_len: usize,
-        schema: Option<[u8; 16]>,
-        flags: Option<u8>,
-    ) -> Self {
-        let frame = DECODE.with(|tls| tls.enter_payload(bytes, logical_len, schema, flags));
-        PayloadCtxGuard { frame }
+impl<'a> PayloadCtxGuard<'a> {
+    fn install(bytes: &'a [u8], schema: Option<[u8; 16]>, flags: Option<u8>) -> Self {
+        let frame = DECODE.with(|tls| tls.enter_payload(bytes, bytes.len(), schema, flags));
+        PayloadCtxGuard {
+            frame,
+            _bytes: PhantomData,
+        }
     }
     /// Install `bytes` with the schema and layout flags already in force.
-    fn inherit(bytes: &[u8], logical_len: usize) -> Self {
-        let frame = DECODE.with(|tls| tls.enter_inherited_payload(bytes, logical_len));
-        PayloadCtxGuard { frame }
+    pub(crate) fn enter(bytes: &'a [u8]) -> Self {
+        let frame = DECODE.with(|tls| tls.enter_inherited_payload(bytes, bytes.len()));
+        PayloadCtxGuard {
+            frame,
+            _bytes: PhantomData,
+        }
     }
-
-    pub fn enter(bytes: &[u8]) -> Self {
-        Self::inherit(bytes, bytes.len())
+    /// Install `bytes` with `flags` as the explicit layout selection.
+    pub(crate) fn enter_with_flags(bytes: &'a [u8], flags: u8) -> Self {
+        Self::install(bytes, None, Some(flags))
     }
-    /// Install a payload context with an explicit logical length while preserving
-    /// any active schema/flag state from the current decode context.
-    pub fn enter_with_len(bytes: &[u8], logical_len: usize) -> Self {
-        Self::inherit(bytes, logical_len)
-    }
-    pub fn enter_with_schema(bytes: &[u8], schema: [u8; 16]) -> Self {
-        Self::install(bytes, bytes.len(), Some(schema), None)
-    }
-    pub fn enter_with_flags(bytes: &[u8], flags: u8) -> Self {
-        Self::install(bytes, bytes.len(), None, Some(flags))
-    }
-    pub fn enter_with_schema_and_flags(bytes: &[u8], schema: [u8; 16], flags: u8) -> Self {
-        Self::install(bytes, bytes.len(), Some(schema), Some(flags))
-    }
-    /// Install a payload context using `logical_len` bytes from `bytes` while tracking
-    /// decode flags.
-    pub fn enter_with_flags_len(bytes: &[u8], logical_len: usize, flags: u8) -> Self {
-        Self::install(bytes, logical_len, None, Some(flags))
+    /// Install `bytes` with a typed header's schema and layout flags.
+    pub(crate) fn enter_with_schema_and_flags(
+        bytes: &'a [u8],
+        schema: [u8; 16],
+        flags: u8,
+    ) -> Self {
+        Self::install(bytes, Some(schema), Some(flags))
     }
 }
-impl Drop for PayloadCtxGuard {
+impl Drop for PayloadCtxGuard<'_> {
     fn drop(&mut self) {
         DECODE.with(|tls| tls.leave_payload(&self.frame));
     }
@@ -1804,14 +1839,23 @@ pub fn reset_decode_state() {
     set_decode_flags_active(false);
     clear_payload_ctx();
 }
-pub(crate) fn prepare_header_decode(flags: u8, require_match: bool) -> Result<(), Error> {
+/// Refuse header `flags` that differ from an explicit layout selection in force.
+fn check_active_header_flags(flags: u8) -> Result<(), Error> {
     if decode_flags_active() {
         let active_flags = get_decode_flags();
-        if require_match && active_flags != flags {
+        if active_flags != flags {
             return Err(Error::DecodeFlagsMismatch {
                 header_flags: flags,
                 active_flags,
             });
+        }
+    }
+    Ok(())
+}
+pub(crate) fn prepare_header_decode(flags: u8, require_match: bool) -> Result<(), Error> {
+    if decode_flags_active() {
+        if require_match {
+            check_active_header_flags(flags)?;
         }
         clear_payload_ctx();
         return Ok(());
@@ -2655,32 +2699,14 @@ fn decode_varint_from_slice(bytes: &[u8]) -> Result<(u64, usize), Error> {
     }
     Err(Error::LengthMismatch)
 }
-/// Read a top-level sequence length header at a raw pointer (fixed u64).
-/// Returns (value, bytes consumed).
-///
-/// # Safety
-/// `ptr` must be valid for reading up to 10 bytes (varint) or 8 bytes (u64).
+/// Read the fixed `u64` sequence count at `archived` in the active payload and
+/// record it as read. Returns `(value, header_len)`.
 #[inline]
-pub unsafe fn read_seq_len_ptr(ptr: *const u8) -> Result<(usize, usize), Error> {
-    let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
-    let ptr_us = ptr as usize;
-    if ptr_us < base || ptr_us >= base + total {
-        return Err(Error::LengthMismatch);
-    }
-    let offset = ptr_us - base;
-    let payload = unsafe { core::slice::from_raw_parts(base as *const u8, total) };
-    let head = &payload[offset..];
+fn read_seq_len_at<A: ?Sized>(archived: &Archived<A>) -> Result<(usize, usize), Error> {
+    let head = payload_slice(archived)?;
     let (len, used) = read_seq_len_slice(head)?;
-    record_payload_access(ptr, used);
+    record_payload_access(head.as_ptr(), used);
     Ok((len, used))
-}
-/// Pointer-based helper for reading a length header within the current payload context.
-///
-/// # Safety
-/// `ptr` must point into the currently active payload (see [`set_payload_ctx`]).
-#[inline]
-pub unsafe fn read_len_dyn(ptr: *const u8) -> Result<(usize, usize), Error> {
-    read_len_dyn_at_ptr(ptr)
 }
 /// Safe decode-from-slice trait used by bounded decoders.
 pub trait DecodeFromSlice<'a>: Sized {
@@ -3268,16 +3294,7 @@ where
         Self::try_deserialize(archived).expect("BTreeMap decode")
     }
     fn try_deserialize(archived: &'a Archived<BTreeMap<K, V>>) -> Result<Self, Error> {
-        let ptr = archived as *const _ as *const u8;
-        let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
-        let offset = (ptr as usize)
-            .checked_sub(base)
-            .ok_or_else(|| Error::LengthMismatch)?;
-        if offset > total {
-            return Err(Error::LengthMismatch);
-        }
-        let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-        let bytes = &payload[offset..];
+        let bytes = payload_slice(archived)?;
         let (map, _used) = <BTreeMap<K, V> as DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok(map)
     }
@@ -3321,16 +3338,7 @@ where
         Self::try_deserialize(archived).expect("HashMap decode")
     }
     fn try_deserialize(archived: &'a Archived<HashMap<K, V>>) -> Result<Self, Error> {
-        let ptr = archived as *const _ as *const u8;
-        let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
-        let offset = (ptr as usize)
-            .checked_sub(base)
-            .ok_or_else(|| Error::LengthMismatch)?;
-        if offset > total {
-            return Err(Error::LengthMismatch);
-        }
-        let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-        let bytes = &payload[offset..];
+        let bytes = payload_slice(archived)?;
         let (map, _used) = <HashMap<K, V> as DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok(map)
     }
@@ -3359,16 +3367,7 @@ where
         Self::try_deserialize(archived).expect("BTreeSet decode")
     }
     fn try_deserialize(archived: &'a Archived<BTreeSet<T>>) -> Result<Self, Error> {
-        let ptr = archived as *const _ as *const u8;
-        let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
-        let offset = (ptr as usize)
-            .checked_sub(base)
-            .ok_or_else(|| Error::LengthMismatch)?;
-        if offset > total {
-            return Err(Error::LengthMismatch);
-        }
-        let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-        let bytes = &payload[offset..];
+        let bytes = payload_slice(archived)?;
         let (set, _used) = <BTreeSet<T> as DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok(set)
     }
@@ -3410,16 +3409,7 @@ where
         Self::try_deserialize(archived).expect("HashSet decode")
     }
     fn try_deserialize(archived: &'a Archived<HashSet<T>>) -> Result<Self, Error> {
-        let ptr = archived as *const _ as *const u8;
-        let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
-        let offset = (ptr as usize)
-            .checked_sub(base)
-            .ok_or_else(|| Error::LengthMismatch)?;
-        if offset > total {
-            return Err(Error::LengthMismatch);
-        }
-        let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-        let bytes = &payload[offset..];
+        let bytes = payload_slice(archived)?;
         let (set, _used) = <HashSet<T> as DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok(set)
     }
@@ -4358,31 +4348,47 @@ fn scalar_payload<const N: usize>(payload: &[u8]) -> Result<[u8; N], Error> {
 /// be a valid in-memory Rust value (for example, before a fallible decoder validates a niche or
 /// enum tag). Decoders use this marker's address together with the active payload context; they
 /// must not treat the marker itself as a reconstructed `T`.
+///
+/// A marker exists only by reference, and only for borrowed bytes:
+/// [`Archived::start_of`] (behind [`archived_from_slice`], [`ArchivedFrame`] and
+/// [`ArchivedBox`]) places it at the first byte of a non-empty slice, and every
+/// empty slice maps to one shared dangling address that locates no bytes. The
+/// type has no public constructor and is neither `Clone` nor `Copy`, so safe
+/// code cannot conjure a marker at another address. [`payload_slice`] and
+/// [`payload_range`] rely on this to bound what they return by the marker's
+/// lifetime.
 #[repr(C)]
 pub struct Archived<T: ?Sized> {
     _marker: PhantomData<T>,
 }
+/// The one address shared by every marker taken from an empty slice.
 #[inline]
-fn empty_archived_ptr<T: ?Sized>() -> *const Archived<T> {
-    core::ptr::NonNull::<Archived<T>>::dangling().as_ptr()
+fn empty_marker_ptr() -> *const u8 {
+    core::ptr::NonNull::<u8>::dangling().as_ptr()
 }
+/// The marker of an empty slice.
 #[inline]
 pub(crate) fn empty_archived_marker<'a, T: ?Sized>() -> &'a Archived<T> {
-    // SAFETY: every `Archived<_>` is the same zero-sized, byte-aligned marker,
-    // so the non-null aligned dangling pointer is a valid ZST reference. The
-    // unconstrained lifetime is sound because no borrowed `T` is stored.
-    unsafe { &*empty_archived_ptr::<T>() }
+    // SAFETY: every `Archived<_>` is a zero-sized, byte-aligned marker, so the
+    // non-null dangling pointer is a valid reference to one. The marker
+    // borrows nothing, and the accessors map its address to empty slices only.
+    unsafe { &*empty_marker_ptr().cast::<Archived<T>>() }
 }
 /// Return the archived marker at the start of a borrowed payload span.
 ///
-/// Every `Archived<_>` is a zero-sized, byte-aligned marker, so the span's own
-/// address is valid for any length (including zero) and any alignment. No `T`
-/// is read through the marker; decoders still use the active payload context.
+/// A non-empty span yields a marker at its first byte, which lies inside the
+/// span's allocation. An empty span yields the shared empty marker instead of
+/// its own address: that address may be one past the end of a buffer and
+/// coincide with the first byte of an adjacent payload, whose bytes the marker
+/// does not borrow.
 #[inline]
 pub(crate) fn borrowed_archived_marker<T: ?Sized>(bytes: &[u8]) -> &Archived<T> {
-    // SAFETY: slice pointers are non-null, and a zero-sized, byte-aligned
-    // marker is dereferenceable at every non-null address. The marker borrows
-    // the span, so it cannot outlive the payload bytes.
+    if bytes.is_empty() {
+        return empty_archived_marker();
+    }
+    // SAFETY: a non-empty slice's pointer is non-null and in bounds, and a
+    // zero-sized, byte-aligned marker is dereferenceable there. The marker
+    // borrows the span, so it cannot outlive the payload bytes.
     unsafe { &*bytes.as_ptr().cast::<Archived<T>>() }
 }
 /// Decode one declared child span of a composite payload in place.
@@ -4417,8 +4423,7 @@ pub const fn archived_payload_align<T>() -> usize {
 fn try_read_archived_bytes<T: ?Sized, const N: usize>(
     archived: &Archived<T>,
 ) -> Result<[u8; N], Error> {
-    let ptr = core::ptr::from_ref(archived).cast::<u8>();
-    let payload = payload_range_from_ptr(ptr, N)?;
+    let payload = payload_range(archived, N)?;
     let mut bytes = [0_u8; N];
     bytes.copy_from_slice(payload);
     Ok(bytes)
@@ -4428,6 +4433,15 @@ fn read_archived_bytes<T: ?Sized, const N: usize>(archived: &Archived<T>) -> [u8
     try_read_archived_bytes(archived).expect("archived scalar footprint")
 }
 impl<T: ?Sized> Archived<T> {
+    /// The marker at the start of `bytes`, borrowing them.
+    ///
+    /// This validates nothing: decoders still read through the active payload
+    /// context, which must cover `bytes` while they run (see
+    /// [`with_payload_ctx`]). A marker for an empty slice locates no bytes.
+    #[inline]
+    pub fn start_of(bytes: &[u8]) -> &Archived<T> {
+        borrowed_archived_marker(bytes)
+    }
     /// Retag this archived-byte address for another decoder.
     ///
     /// Every `Archived<_>` is the same opaque zero-sized address marker, so this
@@ -4451,21 +4465,18 @@ pub struct ArchivedRef<'a, T: ?Sized> {
     _marker: PhantomData<&'a Archived<T>>,
 }
 impl<'a, T: ?Sized> ArchivedRef<'a, T> {
-    #[inline]
-    fn as_ref_impl(&self) -> &Archived<T> {
-        borrowed_archived_marker(self.bytes)
-    }
     /// Return the typed marker at the start of the archived payload.
     ///
-    /// The marker does not contain a `T`. Callers of [`archived_from_slice`] must install a payload
-    /// context for [`Self::bytes`] before invoking a decoder.
+    /// The marker does not contain a `T` and borrows [`Self::bytes`]. Decoders
+    /// read through it only while a payload context covers those bytes:
+    /// [`Self::try_deserialize`] installs one, or see [`with_payload_ctx`].
     #[inline]
-    pub fn archived(&self) -> &Archived<T> {
-        self.as_ref_impl()
+    pub fn archived(&self) -> &'a Archived<T> {
+        borrowed_archived_marker(self.bytes)
     }
     /// Underlying byte slice backing the archived value.
     #[inline]
-    pub fn bytes(&self) -> &[u8] {
+    pub fn bytes(&self) -> &'a [u8] {
         self.bytes
     }
     /// Retag the payload-start marker for a different decoder.
@@ -4473,43 +4484,122 @@ impl<'a, T: ?Sized> ArchivedRef<'a, T> {
     /// This preserves only the marker address; it neither validates the bytes
     /// nor grants the target decoder access beyond [`Self::bytes`].
     #[inline]
-    pub fn cast<U>(&self) -> &Archived<U> {
+    pub fn cast<U>(&self) -> &'a Archived<U> {
         self.archived().cast::<U>()
     }
 }
-impl<'a, T: ?Sized> std::convert::AsRef<Archived<T>> for ArchivedRef<'a, T> {
+impl<'a, T: DeserializePayload<'a>> ArchivedRef<'a, T> {
+    /// Decode the value with [`Self::bytes`] installed as the payload context,
+    /// keeping the schema and layout flags already in force.
+    ///
+    /// # Errors
+    ///
+    /// Returns the decoder's validation or resource error.
     #[inline]
-    fn as_ref(&self) -> &Archived<T> {
-        self.as_ref_impl()
+    pub fn try_deserialize(&self) -> Result<T, Error> {
+        with_payload_ctx(self.bytes, || T::try_deserialize(self.archived()))
+    }
+    /// [`Self::try_deserialize`], panicking if the decoder rejects the bytes.
+    #[inline]
+    pub fn deserialize(&self) -> T {
+        with_payload_ctx(self.bytes, || T::deserialize(self.archived()))
     }
 }
-impl<'a, T: ?Sized> std::ops::Deref for ArchivedRef<'a, T> {
+impl<T: ?Sized> std::convert::AsRef<Archived<T>> for ArchivedRef<'_, T> {
+    #[inline]
+    fn as_ref(&self) -> &Archived<T> {
+        self.archived()
+    }
+}
+impl<T: ?Sized> std::ops::Deref for ArchivedRef<'_, T> {
     type Target = Archived<T>;
     #[inline]
     fn deref(&self) -> &Self::Target {
-        self.as_ref_impl()
+        self.archived()
     }
 }
-/// Owned archived payload.
+/// A validated typed frame borrowed from the input, returned by [`from_bytes`].
 ///
-/// This owns the payload bytes and keeps the archived marker valid for the
-/// lifetime of the wrapper. The byte-aligned marker needs no realignment copy.
+/// The header, checksum, schema and padding are checked; the payload is
+/// decoded by [`Self::try_deserialize`], which installs the frame's payload,
+/// schema and layout flags as the context only while the decoder runs. The
+/// handle deliberately does not dereference to [`Archived`]: decoding a marker
+/// outside such a context fails with [`Error::MissingPayloadContext`].
+pub struct ArchivedFrame<'a, T> {
+    payload: &'a [u8],
+    schema: [u8; 16],
+    flags: u8,
+    _marker: PhantomData<fn() -> T>,
+}
+impl<'a, T> ArchivedFrame<'a, T> {
+    /// The validated payload bytes after the header and its padding.
+    #[inline]
+    pub fn bytes(&self) -> &'a [u8] {
+        self.payload
+    }
+    /// The header's layout flags.
+    #[inline]
+    pub fn flags(&self) -> u8 {
+        self.flags
+    }
+    /// The header's frame schema hash.
+    #[inline]
+    pub fn schema(&self) -> [u8; 16] {
+        self.schema
+    }
+    /// The marker at the start of the payload, for decoding inside
+    /// [`with_payload_ctx_schema_and_flags`] with [`Self::schema`] and
+    /// [`Self::flags`].
+    #[inline]
+    pub fn archived(&self) -> &'a Archived<T> {
+        borrowed_archived_marker(self.payload)
+    }
+}
+impl<'a, T: DeserializePayload<'a> + 'a> ArchivedFrame<'a, T> {
+    /// Decode the payload under the frame's schema and layout flags.
+    ///
+    /// # Errors
+    ///
+    /// Returns the decoder's validation or resource error.
+    #[inline]
+    pub fn try_deserialize(&self) -> Result<T, Error> {
+        with_payload_ctx_schema_and_flags(self.payload, self.schema, self.flags, || {
+            T::try_deserialize(self.archived())
+        })
+    }
+    /// [`Self::try_deserialize`], panicking if the decoder rejects the payload.
+    #[inline]
+    pub fn deserialize(&self) -> T {
+        with_payload_ctx_schema_and_flags(self.payload, self.schema, self.flags, || {
+            T::deserialize(self.archived())
+        })
+    }
+}
+/// Owned archived payload, returned by [`from_compressed_bytes`].
+///
+/// This owns the decompressed payload bytes with their frame's schema and
+/// layout flags. Like [`ArchivedFrame`] it installs the payload context only
+/// while [`Self::try_deserialize`] runs and does not dereference to
+/// [`Archived`].
 pub struct ArchivedBox<T> {
     buffer: Vec<u8>,
-    _marker: PhantomData<Archived<T>>,
+    schema: [u8; 16],
+    flags: u8,
+    _marker: PhantomData<fn() -> T>,
 }
 impl<T> ArchivedBox<T> {
     #[inline]
-    pub(crate) fn from_payload(payload: Vec<u8>) -> Self {
+    pub(crate) fn from_payload(payload: Vec<u8>, schema: [u8; 16], flags: u8) -> Self {
         Self {
             buffer: payload,
+            schema,
+            flags,
             _marker: PhantomData,
         }
     }
-    /// Return the typed marker at the start of the owned archived payload.
-    ///
-    /// The marker does not contain a `T`. Decoding is valid only while a
-    /// payload context covering [`Self::bytes`] is active.
+    /// The marker at the start of the owned payload, for decoding inside
+    /// [`with_payload_ctx_schema_and_flags`] with [`Self::schema`] and
+    /// [`Self::flags`].
     #[inline]
     pub fn archived(&self) -> &Archived<T> {
         borrowed_archived_marker(&self.buffer)
@@ -4519,18 +4609,39 @@ impl<T> ArchivedBox<T> {
     pub fn bytes(&self) -> &[u8] {
         &self.buffer
     }
-}
-impl<T> std::convert::AsRef<Archived<T>> for ArchivedBox<T> {
+    /// The header's layout flags.
     #[inline]
-    fn as_ref(&self) -> &Archived<T> {
-        self.archived()
+    pub fn flags(&self) -> u8 {
+        self.flags
     }
-}
-impl<T> std::ops::Deref for ArchivedBox<T> {
-    type Target = Archived<T>;
+    /// The header's frame schema hash.
     #[inline]
-    fn deref(&self) -> &Self::Target {
-        self.archived()
+    pub fn schema(&self) -> [u8; 16] {
+        self.schema
+    }
+    /// Decode the payload under the frame's schema and layout flags.
+    ///
+    /// # Errors
+    ///
+    /// Returns the decoder's validation or resource error.
+    #[inline]
+    pub fn try_deserialize<'a>(&'a self) -> Result<T, Error>
+    where
+        T: DeserializePayload<'a>,
+    {
+        with_payload_ctx_schema_and_flags(&self.buffer, self.schema, self.flags, || {
+            T::try_deserialize(self.archived())
+        })
+    }
+    /// [`Self::try_deserialize`], panicking if the decoder rejects the payload.
+    #[inline]
+    pub fn deserialize<'a>(&'a self) -> T
+    where
+        T: DeserializePayload<'a>,
+    {
+        with_payload_ctx_schema_and_flags(&self.buffer, self.schema, self.flags, || {
+            T::deserialize(self.archived())
+        })
     }
 }
 /// Interpret `bytes` as an archived value and ensure the slice is large enough.
@@ -4621,7 +4732,7 @@ where
     T: DeserializePayload<'de> + 'de,
 {
     let _flags = enter_field_codec_flags();
-    let _payload = PayloadCtxGuard::enter_with_len(prepared.bytes(), prepared.logical_len());
+    let _payload = PayloadCtxGuard::enter(prepared.bytes());
     let _boundary = FieldDecodeBoundaryGuard::enter(FieldDecodeBoundary::Prefix);
     let value = T::try_deserialize(prepared.archived::<T>())?;
     let used = payload_ctx_max_access().ok_or_else(|| Error::MissingPayloadContext)?;
@@ -5250,19 +5361,8 @@ impl<'a> DeserializePayload<'a> for String {
             .unwrap_or_else(|err| panic!("norito: invalid archived String: {err:?}"))
     }
     fn try_deserialize(archived: &'a Archived<String>) -> Result<Self, Error> {
-        let ptr = std::ptr::from_ref(archived).cast::<u8>();
-        let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
-        let ptr_us = ptr as usize;
-        let base_end = base
-            .checked_add(total)
-            .ok_or_else(|| Error::LengthMismatch)?;
-        if ptr_us < base || ptr_us >= base_end {
-            return Err(Error::LengthMismatch);
-        }
-        // SAFETY: this is the original validated active payload. Its tail is
-        // borrowed only while constructing this owned String.
-        let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-        let (value, _) = prepared_string::string_payload(&payload[ptr_us - base..], |body| {
+        let payload = payload_slice(archived)?;
+        let (value, _) = prepared_string::string_payload(payload, |body| {
             record_payload_access(body.as_ptr(), body.len());
         })?;
         try_copy_string_for_decode(value)
@@ -5291,23 +5391,13 @@ impl<'a> DeserializePayload<'a> for &'a str {
             .unwrap_or_else(|err| panic!("norito: invalid archived &str: {err:?}"))
     }
     fn try_deserialize(archived: &'a Archived<&'a str>) -> Result<Self, Error> {
-        let ptr = archived as *const _ as *const u8;
-        let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
-        let ptr_us = ptr as usize;
-        if ptr_us < base || ptr_us >= base + total {
-            return Err(Error::LengthMismatch);
-        }
-        let (len, hdr) = read_len_dyn_at_ptr(ptr)?;
-        let off = (ptr_us - base) + hdr;
-        let end = off.checked_add(len).ok_or_else(|| Error::LengthMismatch)?;
-        if end > total {
-            return Err(Error::LengthMismatch);
-        }
-        let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-        unsafe {
-            record_payload_access(payload.as_ptr().add(off), len);
-        }
-        let bytes = &payload[off..end];
+        // The text borrows the payload for the marker's lifetime `'a`.
+        let payload = payload_slice(archived)?;
+        let (len, hdr) = read_len_dyn_slice(payload)?;
+        record_payload_access(payload.as_ptr(), hdr);
+        let end = hdr.checked_add(len).ok_or_else(|| Error::LengthMismatch)?;
+        let bytes = payload.get(hdr..end).ok_or_else(|| Error::LengthMismatch)?;
+        record_payload_access(bytes.as_ptr(), len);
         std::str::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)
     }
 }
@@ -5404,7 +5494,7 @@ where
         Self::try_deserialize(archived).expect("Box decode")
     }
     fn try_deserialize(archived: &'a Archived<Box<T>>) -> Result<Self, Error> {
-        let bytes = owned_bytes_from_ctx(archived)?;
+        let bytes = payload_slice(archived)?;
         let (value, _) = <Box<T> as DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok(value)
     }
@@ -5435,7 +5525,7 @@ where
         Self::try_deserialize(archived).expect("Rc decode")
     }
     fn try_deserialize(archived: &'a Archived<Rc<T>>) -> Result<Self, Error> {
-        let bytes = owned_bytes_from_ctx(archived)?;
+        let bytes = payload_slice(archived)?;
         let (value, _) = <Rc<T> as DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok(value)
     }
@@ -5466,7 +5556,7 @@ where
         Self::try_deserialize(archived).expect("Arc decode")
     }
     fn try_deserialize(archived: &'a Archived<Arc<T>>) -> Result<Self, Error> {
-        let bytes = owned_bytes_from_ctx(archived)?;
+        let bytes = payload_slice(archived)?;
         let (value, _) = <Arc<T> as DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok(value)
     }
@@ -5557,7 +5647,7 @@ where
         }
     }
     fn try_deserialize(archived: &'a Archived<Option<T>>) -> Result<Self, Error> {
-        let bytes = payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let bytes = payload_slice(archived)?;
         let (payload, used) = prepared_option::option_payload_prefix(bytes, |tag| {
             Error::invalid_tag("Option::try_deserialize", tag)
         })?;
@@ -5626,8 +5716,7 @@ where
         }
     }
     fn try_deserialize(archived: &'a Archived<Result<T, E>>) -> Result<Self, Error> {
-        let ptr = archived as *const _ as *const u8;
-        let payload = payload_slice_from_ptr(ptr)?;
+        let payload = payload_slice(archived)?;
         let tag = *payload.first().ok_or_else(|| Error::LengthMismatch)?;
         let (len, hdr) =
             read_len_dyn_slice(payload.get(1..).ok_or_else(|| Error::LengthMismatch)?)?;
@@ -5702,18 +5791,9 @@ impl<'a, T: DeserializePayload<'a> + SerializePayload + 'static, const N: usize>
     }
     fn try_deserialize(archived: &'a Archived<[T; N]>) -> Result<Self, Error> {
         if TypeId::of::<T>() == TypeId::of::<u8>() {
-            let ptr = archived as *const _ as *const u8;
-            let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
-            if ptr as usize > base + total {
-                return Err(Error::LengthMismatch);
-            }
-            let start = (ptr as usize)
-                .checked_sub(base)
-                .ok_or_else(|| Error::LengthMismatch)?;
-            let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-            let slice = &payload[start..];
+            let slice = payload_slice(archived)?;
             let (value_u8, used) = <[u8; N] as DecodeFromSlice>::decode_from_slice(slice)?;
-            record_payload_access(ptr, used);
+            record_payload_access(slice.as_ptr(), used);
             let mut arr = core::mem::MaybeUninit::<[T; N]>::uninit();
             unsafe {
                 core::ptr::copy_nonoverlapping(
@@ -5724,17 +5804,8 @@ impl<'a, T: DeserializePayload<'a> + SerializePayload + 'static, const N: usize>
                 return Ok(arr.assume_init());
             }
         }
-        let ptr = archived as *const _ as *const u8;
         let mut offset = 0usize;
-        let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
-        let start = (ptr as usize)
-            .checked_sub(base)
-            .ok_or_else(|| Error::LengthMismatch)?;
-        if start > total {
-            return Err(Error::LengthMismatch);
-        }
-        let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-        let bytes = &payload[start..];
+        let bytes = payload_slice(archived)?;
         let out = try_decode_array(|| {
             let remaining = bytes.get(offset..).ok_or_else(|| Error::LengthMismatch)?;
             // The prefix and element are borrowed in place; no copy is charged.
@@ -5774,9 +5845,9 @@ impl<'a, T: DeserializePayload<'a> + SerializePayload + 'static, const N: usize>
 }
 pub mod stream {
     use super::{
-        Archived, Compression, DecodeFlagsGuard, DeserializePayload, Error, Header,
-        PayloadCtxGuard, archived_payload_align, archived_payload_size, empty_archived_ptr,
-        header_flags,
+        Compression, DecodeFlagsGuard, DeserializePayload, Error, Header, PayloadCtxGuard,
+        archived_payload_align, archived_payload_size, borrowed_archived_marker,
+        empty_archived_marker, header_flags,
     };
     use crate::guarded_try_deserialize;
     #[cfg(feature = "compression")]
@@ -5866,7 +5937,7 @@ pub mod stream {
                     return Err(Error::LengthMismatch);
                 }
                 let _pg = PayloadCtxGuard::enter(&[]);
-                let archived = unsafe { &*empty_archived_ptr::<T>() };
+                let archived = empty_archived_marker::<T>();
                 let val = guarded_try_deserialize(|| {
                     <T as DeserializePayload>::try_deserialize(archived)
                 })?;
@@ -5878,7 +5949,7 @@ pub mod stream {
                     payload.read_exact_into(tmp_slice_mut)?;
                     let tmp_slice = std::slice::from_raw_parts(ptr as *const u8, elem_len);
                     let _pg = PayloadCtxGuard::enter(tmp_slice);
-                    let archived = &*(ptr as *const Archived<T>);
+                    let archived = borrowed_archived_marker::<T>(tmp_slice);
                     let val = guarded_try_deserialize(|| {
                         <T as DeserializePayload>::try_deserialize(archived)
                     })?;
@@ -6188,16 +6259,7 @@ where
         Self::try_deserialize(archived).expect("norito: VecDeque decode failed")
     }
     fn try_deserialize(archived: &'a Archived<VecDeque<T>>) -> Result<Self, Error> {
-        let ptr = archived as *const _ as *const u8;
-        let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
-        let offset = (ptr as usize)
-            .checked_sub(base)
-            .ok_or_else(|| Error::LengthMismatch)?;
-        if offset > total {
-            return Err(Error::LengthMismatch);
-        }
-        let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-        let bytes = &payload[offset..];
+        let bytes = payload_slice(archived)?;
         let (deque, _used) = <VecDeque<T> as DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok(deque)
     }
@@ -6223,16 +6285,7 @@ where
         Self::try_deserialize(archived).expect("norito: LinkedList decode failed")
     }
     fn try_deserialize(archived: &'a Archived<LinkedList<T>>) -> Result<Self, Error> {
-        let ptr = archived as *const _ as *const u8;
-        let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
-        let offset = (ptr as usize)
-            .checked_sub(base)
-            .ok_or_else(|| Error::LengthMismatch)?;
-        if offset > total {
-            return Err(Error::LengthMismatch);
-        }
-        let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-        let bytes = &payload[offset..];
+        let bytes = payload_slice(archived)?;
         let (list, _used) = <LinkedList<T> as DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok(list)
     }
@@ -6261,9 +6314,8 @@ where
         Self::try_deserialize(archived).expect("BinaryHeap decode")
     }
     fn try_deserialize(archived: &'a Archived<BinaryHeap<T>>) -> Result<Self, Error> {
-        let ptr = archived as *const _ as *const u8;
-        let payload = payload_slice_from_ptr(ptr)?;
-        let (len, hdr) = unsafe { read_seq_len_ptr(ptr) }?;
+        let payload = payload_slice(archived)?;
+        let (len, hdr) = read_seq_len_at(archived)?;
         ensure_len_within_remaining(len, payload.len().saturating_sub(hdr))?;
         validate_current_sequence_reservation(payload, len)?;
         let mut offset = hdr;
@@ -6346,7 +6398,7 @@ where
         Self::try_deserialize(archived).expect("Vec decode")
     }
     fn try_deserialize(archived: &'a Archived<Vec<T>>) -> Result<Self, Error> {
-        let bytes = payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let bytes = payload_slice(archived)?;
         let (vec, _used) = decode_vec_from_slice_with::<T, _>(bytes, |_, _, _| Ok(None))?;
         Ok(vec)
     }
@@ -6411,8 +6463,7 @@ impl<'a, $( $name: DeserializePayload<'a> ),+> DeserializePayload<'a> for ( $( $
                     .unwrap_or_else(|err| panic!("norito: tuple decode failed: {err:?}"))
             }
             fn try_deserialize(archived: &'a Archived<( $( $name, )+ )>) -> Result<Self, Error> {
-                let ptr = archived as *const _ as *const u8;
-                let payload = payload_slice_from_ptr(ptr)?;
+                let payload = payload_slice(archived)?;
                 let mut offset = 0usize;
                 $(
                     let remaining = payload.get(offset..).ok_or_else(|| Error::LengthMismatch)?;
@@ -7044,8 +7095,10 @@ pub fn frame_current_payload_with_default_header<T: NoritoSerialize>() -> Result
         {
             return Err(Error::SchemaMismatch);
         }
-        // SAFETY: payload_ctx provides a valid slice for the active decode buffer
-        let bytes = unsafe { core::slice::from_raw_parts(state.base as *const u8, state.len) };
+        // SAFETY: an installed state describes a live, borrowed slice (see
+        // `PayloadCtxState`), and the bytes are copied into the new frame
+        // before this function returns.
+        let bytes = unsafe { core::slice::from_raw_parts(state.base, state.len) };
         let header_flags = if state.flags_active {
             state.flags
         } else if let Some(flags) = current_decode_flags_effective() {
@@ -7401,14 +7454,15 @@ fn validate_zstd_stream(compressed: &[u8]) -> Result<(), Error> {
 /// If the `gpu-compression` feature is enabled, decompression runs on the GPU
 /// (CUDA or Metal depending on the target). Otherwise the CPU path is used.
 ///
-/// Returns an owning archive wrapper so the payload bytes remain valid for the
-/// lifetime of the returned value.
+/// Returns an owning archive wrapper whose [`ArchivedBox::try_deserialize`]
+/// decodes the payload under the frame's schema and layout flags. No payload
+/// context is installed until then.
 pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
     bytes: &[u8],
 ) -> Result<ArchivedBox<T>, Error> {
     let mut cursor = std::io::Cursor::new(bytes);
     let header = Header::read(&mut cursor)?;
-    prepare_header_decode(header.flags, true)?;
+    check_active_header_flags(header.flags)?;
     if header.schema != crate::schema::identity::frame_hash::<T>() {
         return Err(Error::SchemaMismatch);
     }
@@ -7448,22 +7502,32 @@ pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
     if crc64(&payload) != header.checksum {
         return Err(Error::ChecksumMismatch);
     }
-    let archived = ArchivedBox::from_payload(payload);
-    // Provide payload ctx so pointer-based decoders can read lengths/offsets.
-    set_payload_ctx_state(archived.bytes(), Some(header.schema), Some(header.flags));
-    Ok(archived)
+    Ok(ArchivedBox::from_payload(
+        payload,
+        header.schema,
+        header.flags,
+    ))
 }
-/// Obtain a reference to an archived value from bytes.
+/// Validate a typed frame borrowed from `bytes`.
 ///
 /// The function validates the frame header, checksum, schema hash, payload
-/// length, and exact alignment padding, then returns an opaque marker at the
-/// payload start without allocating. The input buffer's address does not affect
-/// acceptance. Type-specific payload bounds and structure are checked by the
-/// subsequent fallible [`DeserializePayload::try_deserialize`] call.
-pub fn from_bytes<'a, T: NoritoDeserialize<'a>>(bytes: &'a [u8]) -> Result<&'a Archived<T>, Error> {
+/// length, and exact alignment padding without allocating, and returns the
+/// borrowed payload as an [`ArchivedFrame`]. The input buffer's address does not
+/// affect acceptance. Type-specific payload bounds and structure are checked by
+/// [`ArchivedFrame::try_deserialize`], which installs the payload context only
+/// while it decodes.
+///
+/// # Errors
+///
+/// Returns a header, compression, schema, length, padding or checksum error,
+/// and [`Error::DecodeFlagsMismatch`] when an explicit layout selection in
+/// force differs from the header's flags.
+pub fn from_bytes<'a, T: NoritoDeserialize<'a>>(
+    bytes: &'a [u8],
+) -> Result<ArchivedFrame<'a, T>, Error> {
     let mut cursor = std::io::Cursor::new(bytes);
     let header = Header::read(&mut cursor)?;
-    prepare_header_decode(header.flags, true)?;
+    check_active_header_flags(header.flags)?;
     if header.compression != Compression::None {
         return Err(Error::unsupported_compression_with(
             header.compression as u8,
@@ -7481,10 +7545,12 @@ pub fn from_bytes<'a, T: NoritoDeserialize<'a>>(bytes: &'a [u8]) -> Result<&'a A
     if crc64(payload) != header.checksum {
         return Err(Error::ChecksumMismatch);
     }
-    // The marker is byte-aligned and decoders read through the bounded payload
-    // context, so the input buffer's address never affects acceptance.
-    set_payload_ctx_state(payload, Some(header.schema), Some(header.flags));
-    Ok(borrowed_archived_marker(payload))
+    Ok(ArchivedFrame {
+        payload,
+        schema: header.schema,
+        flags: header.flags,
+        _marker: PhantomData,
+    })
 }
 /// A validated view over an archived payload.
 ///
@@ -7694,9 +7760,9 @@ impl Drop for FieldDecodeBoundaryGuard {
 }
 trait ErasedFieldSlot {
     fn archived_size(&self) -> usize;
-    fn dangling_archived(&self) -> *const u8;
     fn type_name(&self) -> &'static str;
-    unsafe fn try_decode(&mut self, archived: *const u8) -> Result<(), Error>;
+    /// Decode the field payload `field`, under a context that covers it.
+    fn try_decode(&mut self, field: &[u8]) -> Result<(), Error>;
     fn canonical_match(&self, expected: &[u8], require_complete: bool) -> Result<usize, Error>;
 }
 /// Compare `value`'s payload, serialized under the active layout, with the
@@ -7756,15 +7822,11 @@ where
     fn archived_size(&self) -> usize {
         archived_payload_size::<T>()
     }
-    fn dangling_archived(&self) -> *const u8 {
-        empty_archived_ptr::<T>().cast::<u8>()
-    }
     fn type_name(&self) -> &'static str {
         core::any::type_name::<T>()
     }
-    unsafe fn try_decode(&mut self, archived: *const u8) -> Result<(), Error> {
-        let archived = unsafe { &*archived.cast::<Archived<T>>() };
-        let value = T::try_deserialize(archived)?;
+    fn try_decode(&mut self, field: &[u8]) -> Result<(), Error> {
+        let value = T::try_deserialize(borrowed_archived_marker::<T>(field))?;
         self.value = Some(value);
         Ok(())
     }
@@ -7813,7 +7875,6 @@ fn resolve_erased_field_used(
 struct FieldScope<'tls> {
     tls: &'tls DecodeTls,
     depth: usize,
-    root_installed: bool,
     flags: Option<DecodeFlags>,
     boundary: Option<FieldDecodeBoundary>,
 }
@@ -7825,13 +7886,13 @@ impl Drop for FieldScope<'_> {
         if let Some(flags) = self.flags {
             self.tls.flags.set(flags);
         }
-        if self.root_installed {
-            self.tls.root_span.set(None);
-        }
         self.tls.nesting_depth.set(self.depth);
     }
 }
 /// The field's payload context, left before its consumption is resolved.
+///
+/// Like [`PayloadCtxGuard`], it is dropped inside [`DecodeTls::decode_field`],
+/// before the borrow of the field bytes it installed ends.
 struct FieldPayload<'tls> {
     tls: &'tls DecodeTls,
     frame: PayloadFrame,
@@ -7855,29 +7916,27 @@ impl DecodeTls {
     fn invoke_field_decoder(
         &self,
         slot: &mut dyn ErasedFieldSlot,
-        archived: *const u8,
+        field: &[u8],
     ) -> Result<(), Error> {
         crate::install_decode_panic_hook();
         self.panic_depth
             .set(self.panic_depth.get().saturating_add(1));
         let _suppressed = SuppressedPanics(&self.panic_depth);
-        // SAFETY: the caller passes the marker address of the field it installed.
-        let decode = std::panic::AssertUnwindSafe(|| unsafe { slot.try_decode(archived) });
+        let decode = std::panic::AssertUnwindSafe(|| slot.try_decode(field));
         match std::panic::catch_unwind(decode) {
             Ok(result) => result,
             Err(panic) => Err(crate::suppressed_decode_panic(slot.type_name(), &*panic)),
         }
     }
-    /// Borrow the length-prefixed field at `offset` of the payload from `ptr`.
+    /// Borrow the length-prefixed field at `offset` of `payload`.
     ///
     /// Framing borrows the original payload; it owns no body or alignment
     /// buffer. Concrete child decoders charge the storage they construct.
-    fn take_length_prefixed_field(
+    fn take_length_prefixed_field<'a>(
         &self,
-        ptr: *const u8,
+        payload: &'a [u8],
         offset: usize,
-    ) -> Result<(&'static [u8], usize), Error> {
-        let payload = self.payload_from(ptr)?;
+    ) -> Result<(&'a [u8], usize), Error> {
         let Some(remaining) = payload.get(offset..) else {
             return Err(Error::LengthMismatch);
         };
@@ -7976,7 +8035,6 @@ impl DecodeTls {
         let mut scope = FieldScope {
             tls: self,
             depth: self.enter_depth()?,
-            root_installed: false,
             flags: None,
             boundary: None,
         };
@@ -7988,14 +8046,8 @@ impl DecodeTls {
                 tls: self,
                 frame: self.enter_inherited_payload(&[], 0),
             };
-            let dangling = slot.dangling_archived();
-            self.invoke_field_decoder(slot, dangling)?;
+            self.invoke_field_decoder(slot, &[])?;
             return Ok(0);
-        }
-        if self.root_span.get().is_none() {
-            self.root_span
-                .set(Some((bytes.as_ptr() as usize, bytes.len())));
-            scope.root_installed = true;
         }
         if !self.flags.get().active {
             let flags = self.effective_flags().unwrap_or_else(default_encode_flags);
@@ -8016,7 +8068,7 @@ impl DecodeTls {
             frame: self.enter_inherited_payload(bytes, bytes.len()),
         };
         scope.boundary = Some(self.boundary.replace(boundary));
-        self.invoke_field_decoder(slot, bytes.as_ptr())?;
+        self.invoke_field_decoder(slot, bytes)?;
         let used_ctx = self.payload.get().map(|state| state.max_access);
         drop(payload);
         let used = resolve_erased_field_used(boundary, slot, bytes, used_ctx)?;
@@ -8093,14 +8145,15 @@ where
     let used = decode_field_erased(bytes, FieldDecodeBoundary::Prefix, &mut slot)?;
     Ok((slot.into_value()?, used))
 }
-/// Borrow `len` bytes at `offset` from the active payload context and return the next offset.
-#[inline(never)]
+/// Borrow `len` bytes at `offset` of the active payload from `archived`, with
+/// the next offset.
+#[inline]
 fn take_context_field(
-    ptr: *const u8,
+    archived: &Archived<()>,
     offset: usize,
     len: usize,
-) -> Result<(&'static [u8], usize), Error> {
-    let payload = payload_slice_from_ptr(ptr)?;
+) -> Result<(&[u8], usize), Error> {
+    let payload = payload_slice(archived)?;
     let end = offset
         .checked_add(len)
         .ok_or_else(|| Error::LengthMismatch)?;
@@ -8109,12 +8162,15 @@ fn take_context_field(
         .ok_or_else(|| Error::LengthMismatch)?;
     Ok((field, end))
 }
-#[inline(never)]
+#[inline]
 fn take_length_prefixed_context_field(
-    ptr: *const u8,
+    archived: &Archived<()>,
     offset: usize,
-) -> Result<(&'static [u8], usize), Error> {
-    DECODE.with(|tls| tls.take_length_prefixed_field(ptr, offset))
+) -> Result<(&[u8], usize), Error> {
+    DECODE.with(|tls| {
+        let payload = tls.payload_from(archived)?;
+        tls.take_length_prefixed_field(payload, offset)
+    })
 }
 fn take_length_prefixed_field(payload: &[u8], offset: usize) -> Result<(&[u8], usize), Error> {
     let remaining = payload.get(offset..).ok_or_else(|| Error::LengthMismatch)?;
@@ -8132,20 +8188,36 @@ fn take_length_prefixed_field(payload: &[u8], offset: usize) -> Result<(&[u8], u
         .ok_or_else(|| Error::LengthMismatch)?;
     Ok((field, data_end))
 }
-/// Decode one length-prefixed field relative to an active payload context.
+/// Decode one length-prefixed field at `offset` of the active payload from
+/// `archived`.
 ///
 /// This is a shared implementation detail for derive-generated decoders. It
 /// advances `offset` past the framing header and the canonically consumed
-/// field, while keeping all pointer/range validation in one non-generic path.
+/// field, while keeping all range validation in one path that is generic only
+/// in the field type.
 #[doc(hidden)]
+#[inline]
+pub fn decode_context_field_canonical<T>(
+    archived: &Archived<impl Sized>,
+    offset: &mut usize,
+) -> Result<T, Error>
+where
+    T: for<'de> crate::DeserializePayload<'de> + crate::SerializePayload,
+{
+    decode_context_field_canonical_at(archived.cast(), offset)
+}
 #[inline(never)]
-pub fn decode_context_field_canonical<T>(ptr: *const u8, offset: &mut usize) -> Result<T, Error>
+fn decode_context_field_canonical_at<T>(
+    archived: &Archived<()>,
+    offset: &mut usize,
+) -> Result<T, Error>
 where
     T: for<'de> crate::DeserializePayload<'de> + crate::SerializePayload,
 {
     if let Some(width) = scalar_field_width::<T>() {
         return DECODE.with(|tls| {
-            let (field, next_offset) = tls.take_length_prefixed_field(ptr, *offset)?;
+            let payload = tls.payload_from(archived)?;
+            let (field, next_offset) = tls.take_length_prefixed_field(payload, *offset)?;
             // Framing admitted this exact length against the per-field ceilings.
             tls.admit_scalar_field(field, width, true)?;
             let value = <T as DeserializePayload<'static>>::__norito_scalar(&field[..width]);
@@ -8159,7 +8231,7 @@ where
     // another generic return frame. Fixed arrays can make each such temporary
     // several KiB, accumulated at every nested record field in debug builds.
     let mut slot = TypedFieldSlot::<T>::new();
-    decode_context_field_into(ptr, offset, &mut slot)?;
+    decode_context_field_into(archived, offset, &mut slot)?;
     slot.into_value()
 }
 /// Frame and canonically decode the field at `offset` into `slot`.
@@ -8169,12 +8241,13 @@ where
 /// non-generic body serves every field type.
 #[inline(never)]
 fn decode_context_field_into(
-    ptr: *const u8,
+    archived: &Archived<()>,
     offset: &mut usize,
     slot: &mut dyn ErasedFieldSlot,
 ) -> Result<(), Error> {
     DECODE.with(|tls| {
-        let (field, next_offset) = tls.take_length_prefixed_field(ptr, *offset)?;
+        let payload = tls.payload_from(archived)?;
+        let (field, next_offset) = tls.take_length_prefixed_field(payload, *offset)?;
         // Framing admitted this exact length against the per-field ceilings.
         let used = tls.decode_field(field, FieldDecodeBoundary::Canonical, slot, true)?;
         if used != field.len() {
@@ -8184,31 +8257,47 @@ fn decode_context_field_into(
         Ok(())
     })
 }
-/// Copy one fixed-width byte-array field relative to an active payload context.
+/// Copy one fixed-width byte-array field at `offset` of the active payload from
+/// `archived`.
 ///
 /// The field has no length prefix; hand-written decoders use this for raw `[u8; N]` members.
 #[doc(hidden)]
-#[inline(never)]
+#[inline]
 pub fn decode_context_byte_array<const N: usize>(
-    ptr: *const u8,
+    archived: &Archived<impl Sized>,
     offset: &mut usize,
 ) -> Result<[u8; N], Error> {
-    let (field, next_offset) = take_context_field(ptr, *offset, N)?;
+    decode_context_byte_array_at(archived.cast(), offset)
+}
+#[inline(never)]
+fn decode_context_byte_array_at<const N: usize>(
+    archived: &Archived<()>,
+    offset: &mut usize,
+) -> Result<[u8; N], Error> {
+    let (field, next_offset) = take_context_field(archived, *offset, N)?;
     let mut value = [0; N];
     value.copy_from_slice(field);
     *offset = next_offset;
     Ok(value)
 }
-/// Copy one length-prefixed byte-array field relative to an active payload context.
+/// Copy one length-prefixed byte-array field at `offset` of the active payload
+/// from `archived`.
 ///
 /// The prefix follows the active `COMPACT_LEN` layout and must declare exactly `N` bytes.
 #[doc(hidden)]
-#[inline(never)]
+#[inline]
 pub fn decode_context_framed_byte_array<const N: usize>(
-    ptr: *const u8,
+    archived: &Archived<impl Sized>,
     offset: &mut usize,
 ) -> Result<[u8; N], Error> {
-    let (field, next_offset) = take_length_prefixed_context_field(ptr, *offset)?;
+    decode_context_framed_byte_array_at(archived.cast(), offset)
+}
+#[inline(never)]
+fn decode_context_framed_byte_array_at<const N: usize>(
+    archived: &Archived<()>,
+    offset: &mut usize,
+) -> Result<[u8; N], Error> {
+    let (field, next_offset) = take_length_prefixed_context_field(archived, *offset)?;
     if field.len() != N {
         return Err(Error::LengthMismatch);
     }
@@ -8217,15 +8306,20 @@ pub fn decode_context_framed_byte_array<const N: usize>(
     *offset = next_offset;
     Ok(value)
 }
-/// Finish a derive-generated field sequence at the active decode boundary.
+/// Finish a derive-generated field sequence that starts at `archived`, at the
+/// active decode boundary.
 ///
 /// Canonical field decodes must consume the complete payload. Prefix decodes may leave trailing
 /// bytes for the caller and report their exact offset.
 #[doc(hidden)]
+#[inline]
+pub fn finish_context_fields(archived: &Archived<impl Sized>, offset: usize) -> Result<(), Error> {
+    finish_context_fields_at(archived.cast(), offset)
+}
 #[inline(never)]
-pub fn finish_context_fields(ptr: *const u8, offset: usize) -> Result<(), Error> {
+fn finish_context_fields_at(archived: &Archived<()>, offset: usize) -> Result<(), Error> {
     DECODE.with(|tls| {
-        let payload = tls.payload_from(ptr)?;
+        let payload = tls.payload_from(archived)?;
         if offset > payload.len()
             || (tls.boundary.get() == FieldDecodeBoundary::Canonical && offset != payload.len())
         {
@@ -8250,27 +8344,14 @@ where
     if bytes.is_empty() {
         if archived_payload_size::<T>() == 0 {
             let _guard = PayloadCtxGuard::enter(&[]);
-            let value = unsafe {
-                crate::guarded_try_deserialize(|| T::try_deserialize(&*empty_archived_ptr::<T>()))?
-            };
+            let value =
+                crate::guarded_try_deserialize(
+                    || T::try_deserialize(empty_archived_marker::<T>()),
+                )?;
             return Ok((value, 0));
         }
         return Err(Error::LengthMismatch);
     }
-    struct RootGuard(bool);
-    impl Drop for RootGuard {
-        fn drop(&mut self) {
-            if self.0 {
-                clear_decode_root();
-            }
-        }
-    }
-    let _root_guard = if payload_root_span().is_none() {
-        set_decode_root(bytes);
-        Some(RootGuard(true))
-    } else {
-        None
-    };
     let _flags_guard = enter_field_codec_flags();
     let payload_guard = PayloadCtxGuard::enter(bytes);
     let (value, used) = <T as DecodeFromSlice>::decode_from_slice(bytes)?;

@@ -514,7 +514,7 @@ impl<'a> DeserializePayload<'a> for CustomParameters {
         Self::try_deserialize(archived).expect("valid canonical custom parameters")
     }
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, norito::Error> {
-        let bytes = core::payload_slice_from_ptr(::core::ptr::from_ref(archived).cast::<u8>())?;
+        let bytes = core::payload_slice(archived)?;
         Self::decode_from_slice(bytes).map(|(parameters, _)| parameters)
     }
 }

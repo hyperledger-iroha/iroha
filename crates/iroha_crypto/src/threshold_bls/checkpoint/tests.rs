@@ -1148,14 +1148,13 @@ fn checkpoint_source_shared_walk_preserves_literal_v1_bytes_and_allocation_free_
         )
         .unwrap();
         {
-            let _payload = norito::core::PayloadCtxGuard::enter_with_len(
-                prepared.bytes(),
-                prepared.logical_len(),
-            );
+            assert_eq!(prepared.bytes().len(), prepared.logical_len());
             assert_eq!(
-                <DkgCheckpointSourceV1 as norito::core::DeserializePayload>::deserialize(
-                    prepared.archived::<DkgCheckpointSourceV1>(),
-                ),
+                norito::core::with_payload_ctx(prepared.bytes(), || {
+                    <DkgCheckpointSourceV1 as norito::core::DeserializePayload>::deserialize(
+                        prepared.archived::<DkgCheckpointSourceV1>(),
+                    )
+                }),
                 source,
             );
         }

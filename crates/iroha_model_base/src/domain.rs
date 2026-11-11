@@ -285,10 +285,9 @@ impl<'de> ncore::DeserializePayload<'de> for DomainId {
     }
 
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
-        let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        let bytes = ncore::payload_slice_from_ptr(ptr)?;
+        let bytes = ncore::payload_slice(archived)?;
         let (name, dataspace, used) = Self::decode_wire_labels(bytes)?;
-        ncore::finish_context_fields(ptr, used)?;
+        ncore::finish_context_fields(archived, used)?;
         Self::from_canonical_wire_labels(name, dataspace)
     }
 }

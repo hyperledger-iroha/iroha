@@ -94,9 +94,9 @@ where
         .expect_err("checked reconstruction must reject malformed fields");
     assert!(norito::decode_canonical::<T>(&frame).is_err());
     let _flags = ncore::DecodeFlagsGuard::enter(flags);
-    let _payload = ncore::PayloadCtxGuard::enter_with_schema_and_flags(bytes, view.schema(), flags);
     let archived = ncore::from_bytes::<T>(&frame).expect("authenticate typed archive metadata");
-    <T as ncore::DeserializePayload<'_>>::try_deserialize(archived)
+    archived
+        .try_deserialize()
         .expect_err("the owner's fallible decoder must reject without panicking");
 }
 

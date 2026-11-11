@@ -3,7 +3,7 @@ mod allocation_tests {
     use super::*;
     use ncore::{
         Archived, ArchivedRef, DecodeAllocationUsage, DecodeFlagsGuard, DecodeLimits,
-        DeserializePayload, PayloadCtxGuard, with_decode_limits_measured,
+        DeserializePayload, with_decode_limits_measured, with_payload_ctx,
     };
 
     const GENEROUS_ALLOCATION: usize = 16 * 1024 * 1024;
@@ -55,8 +55,10 @@ mod allocation_tests {
         decode: impl FnOnce(&Archived<Metadata>) -> T,
     ) -> (T, DecodeAllocationUsage) {
         let _layout = DecodeFlagsGuard::enter(flags);
-        let _payload = PayloadCtxGuard::enter_with_len(archived.bytes(), payload_len);
-        with_decode_limits_measured(limits(allocation), || decode(archived.archived()))
+        let bytes = archived.bytes();
+        with_payload_ctx(&bytes[..payload_len.min(bytes.len())], || {
+            with_decode_limits_measured(limits(allocation), || decode(archived.archived()))
+        })
     }
 
     fn measured_entries(

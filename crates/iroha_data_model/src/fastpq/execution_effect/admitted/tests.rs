@@ -305,16 +305,21 @@ fn source_leaf_field(
     )
     .unwrap();
     framed.extend_from_slice(payload);
-    let _context = ncore::PayloadCtxGuard::enter(&framed);
-    let mut offset = 0;
-    let field = ncore::framed_field::<crate::fastpq::FastpqOrdinarySourceStatementLeafV1>(
+    ncore::with_payload_ctx(
         &framed,
-        &mut offset,
-    )?;
-    let result = field
-        .with_payload(|bytes| decode_fastpq_source_leaf_payload_v1(bytes).map_err(destination));
-    assert_eq!(offset, framed.len());
-    result.map_err(Error::from)
+        || -> Result<crate::fastpq::FastpqOrdinarySourceStatementLeafV1, Error> {
+            let mut offset = 0;
+            let field = ncore::framed_field::<crate::fastpq::FastpqOrdinarySourceStatementLeafV1>(
+                &framed,
+                &mut offset,
+            )?;
+            let result = field.with_payload(|bytes| {
+                decode_fastpq_source_leaf_payload_v1(bytes).map_err(destination)
+            });
+            assert_eq!(offset, framed.len());
+            result.map_err(Error::from)
+        },
+    )
 }
 
 #[test]

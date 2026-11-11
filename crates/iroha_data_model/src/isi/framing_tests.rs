@@ -186,8 +186,9 @@ fn instruction_box_preserves_scalar_frame_and_tuple_bytes_in_every_layout() {
         let _frame_flags = DecodeFlagsGuard::enter(header.flags);
         let archived =
             from_bytes::<InstructionBox>(&frame).expect("validate instruction box frame");
-        let decoded =
-            InstructionBox::try_deserialize(archived).expect("decode registered instruction");
+        let decoded = archived
+            .try_deserialize()
+            .expect("decode registered instruction");
         assert_eq!(
             decoded.as_any().downcast_ref::<CountedInstruction>(),
             Some(&CountedInstruction(0xa5))

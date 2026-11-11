@@ -1,0 +1,28 @@
+error[E0425]: cannot find function `payload_slice_from_ptr` in module `norito::core`
+  --> tests/ui/fail/payload_ctx_guard_dangling_slice.rs:10:23
+   |
+10 |         norito::core::payload_slice_from_ptr(buffer.as_ptr()).unwrap()
+   |                       ^^^^^^^^^^^^^^^^^^^^^^ not found in `norito::core`
+
+error[E0603]: struct `PayloadCtxGuard` is private
+ --> tests/ui/fail/payload_ctx_guard_dangling_slice.rs:9:38
+  |
+9 |         let _context = norito::core::PayloadCtxGuard::enter(&buffer);
+  |                                      ^^^^^^^^^^^^^^^ private struct
+  |
+note: the struct `PayloadCtxGuard` is defined here
+ --> $WORKSPACE/crates/norito/src/core.rs
+  |
+  | pub(crate) struct PayloadCtxGuard<'a> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0624]: associated function `enter` is private
+ --> tests/ui/fail/payload_ctx_guard_dangling_slice.rs:9:55
+  |
+9 |         let _context = norito::core::PayloadCtxGuard::enter(&buffer);
+  |                                                       ^^^^^ private associated function
+  |
+ ::: $WORKSPACE/crates/norito/src/core.rs
+  |
+  |     pub(crate) fn enter(bytes: &'a [u8]) -> Self {
+  |     -------------------------------------------- private associated function defined here
