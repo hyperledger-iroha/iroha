@@ -326,9 +326,11 @@ where
     }
 
     /// Replays one proof's points side (as `verifier::points_side`). With
-    /// `keys` (a slot whose proof's kind a shared bit selects), its fixed
-    /// rows are pinned to the selected key's commitments; otherwise to its
-    /// own circuit's.
+    /// `keys` (a slot whose proof's kind a shared bit selects), its key's
+    /// fixed rows are pinned to the selected key's commitments; otherwise to
+    /// its own circuit's. Its wallet row (the first fixed row, when its
+    /// circuit has one) is pinned to the shared values from `wallet` on: the
+    /// table commitment its io names (x low, x high, y low, y high).
     #[allow(clippy::too_many_arguments)]
     pub fn verify_keyed(
         &mut self,
@@ -340,6 +342,7 @@ where
         tr: &Trace<C>,
         sm: SharedMap,
         keys: Option<&KeySelect<C>>,
+        wallet: Option<usize>,
     ) {
         let lean = lean_schedule();
         let embed = Transcript::<C>::scalars_embed();
@@ -492,26 +495,39 @@ where
                     absorb_words(self, pool, &mut sp, wd, None);
                 }
                 let first_fixed = all.len() - ct.fixed.len();
+                let nw = ct.wallet_rows;
+                assert!(nw <= 1, "one wallet row at most");
+                assert_eq!(
+                    wallet.is_some(),
+                    nw == 1,
+                    "a wallet row's commitment comes from shared limbs"
+                );
                 if let Some(ks) = keys {
                     assert!(
-                        ks.fixed.iter().all(|f| f.len() == ct.fixed.len()),
-                        "every kind's key has the proof's fixed rows"
+                        ks.fixed.iter().all(|f| f.len() == ct.fixed.len() - nw),
+                        "every kind's key has the proof's key rows"
                     );
                     assert!(
-                        ks.fixed.iter().any(|f| *f == &ct.fixed[..]),
+                        ks.fixed.iter().any(|f| *f == &ct.fixed[nw..]),
                         "the proof's key is one of the slot's"
                     );
                 }
                 for (k, r) in all.iter().enumerate().skip(ct.p1 + ct.pl) {
                     let pt = self.input(pool, &mut sp, r);
                     if k >= first_fixed {
-                        if let (PtRef::Input(i), _) = pt {
-                            let alt = keys.map(|ks| {
-                                let at =
-                                    |kind: usize| coords(&C::from(ks.fixed[kind][k - first_fixed]));
-                                ([at(0), at(1), at(2)], ks.kind_at)
-                            });
-                            self.consts.push((i, alt));
+                        let f = k - first_fixed;
+                        match (pt, wallet) {
+                            ((PtRef::Input(i), _), Some(b)) if f < nw => {
+                                self.claim_limbs.push((i, [b, b + 1, b + 2, b + 3]));
+                            }
+                            ((PtRef::Input(i), _), _) => {
+                                let alt = keys.map(|ks| {
+                                    let at = |kind: usize| coords(&C::from(ks.fixed[kind][f - nw]));
+                                    ([at(0), at(1), at(2)], ks.kind_at)
+                                });
+                                self.consts.push((i, alt));
+                            }
+                            _ => assert!(f >= nw, "a wallet row is an input"),
                         }
                     }
                     out.push(pt);
@@ -1453,6 +1469,7 @@ mod tests {
                 other: None,
                 r: None,
             },
+            None,
             None,
         );
         let (rho, mu, _) = crate::nonnative::sample_binding(0);

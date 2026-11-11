@@ -738,6 +738,9 @@ pub struct CircuitTrace<C: PastaCurve> {
     pub phase2: Vec<F<C>>,
     pub late_digest: Option<F<C>>,
     pub fixed: Vec<Aff<C>>,
+    /// The first fixed rows that are the wallet's (their commitments the
+    /// instance's, not the key's).
+    pub wallet_rows: usize,
     /// The io with the link's and the late values at their slots.
     pub io_full: Vec<F<C>>,
 }
@@ -909,6 +912,7 @@ fn trace_with<C: PastaCurve>(
                 phase2,
                 late_digest,
                 fixed: fixed.to_vec(),
+                wallet_rows: c.wallet_rows(),
                 io_full: io_full.clone(),
             });
             word

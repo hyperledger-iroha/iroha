@@ -1,4 +1,4 @@
-# Stage A2: uniform blocks — status 2026-11-11 (fixed point over Receive, Send and Bootstrap; every chain starts at a Bootstrap proof)
+# Stage A2: uniform blocks — status 2026-11-12 (fixed point over Receive, Send and Bootstrap; every chain starts at a Bootstrap proof; each wallet's key tables are its own issuer-certified wallet row)
 
 This is an experimental harness for the Receive, Send and Bootstrap circuits. The [README](README.md) lists
 what is still unfinished: the wallet state carried between steps, Bootstrap's comb tables, and the production
@@ -1740,9 +1740,10 @@ blocks could use the empty tails.
    - done: the Bootstrap kind ("The Bootstrap kind" below; owner: "Bootstrap kind"): the genesis flag is gone,
      every chain starts at a Bootstrap proof, and the predecessor slot takes Receive, Send or Bootstrap;
    - next: a Pixel run of the fixed point with all three kinds; the witness at 32 rows (about 65k fewer positions
-     in P-recv; it would also bring S-recv back toward 2^18); the wallet's table rows in Send and Receive, once the
-     owner picks how Bootstrap's tables are certified ("Bootstrap's key tables" below: built, and too large for one
-     proof at Receive's layout);
+     in P-recv; it would also bring S-recv back toward 2^18);
+   - done: Bootstrap's key tables derived in-circuit ("Bootstrap's key tables" below: too large for one proof at
+     Receive's layout), then issuer-certified key tables ("Issuer-certified key tables" below; owner: "Issuer
+     certifies them"): each wallet's tables are its own wallet row, one circuit for every wallet;
    - then: general bit maps, 14-round partial blocks, one range table, constants in the first half of the rows.
 
 
@@ -2150,8 +2151,9 @@ roughly 210k range lookups needs a helper cell in the second phase). The tables 
 program, which every Send and Receive evaluates natively: their fold evaluates all three kinds at every point of q,
 so the P side's native q work would grow by about half again.
 
-**What this leaves (an owner decision).** Every option needs the wallet's table rows in Send and Receive: today the
-experiment's circuits read one key's tables from constant columns, which a production circuit cannot do.
+**What this leaves (an owner decision).** Every option needs the wallet's table rows in Send and Receive: the
+experiment's circuits read one key's tables from constant columns, which a production circuit cannot do. (The owner
+chose option 1; both are done since, see "Issuer-certified key tables".)
 
 1. **The issuer certifies the tables' commitment in the credential** (recommended). At enrollment the issuer
    derives the tables from the payment key natively, as it already checks that key, and signs their commitment;
@@ -2165,3 +2167,68 @@ experiment's circuits read one key's tables from constant columns, which a produ
 3. **Verifiers derive the commitment from the public payment key.** Not enough on its own: a receiver can check
    its payer, but the recursion also relies on the tables of every earlier counterparty, whom later verifiers never
    see.
+
+## Issuer-certified key tables: each wallet's tables as its own wallet row (2026-11-12)
+
+Owner: "Issuer certifies them". Code: the comb's split tables (`nonnative::WALLET_TABLE`, `wallet_table_values`,
+`A_SELG`, `A_WTABLE`); the wallet row (`uniform::Copies::wallet`, the builder's placement, `r1cs::Circuit::wallet_rows`
+and `wallet_io`); `spartan::fixed_for`, `wallet_commitments`, `point_from_limbs`, `limbs_of_point`, `commit_public`;
+the wallet pin in `points::PointsBuilder::verify_keyed`; `full::WalletKey`, `TABLE_IO`, `wallet_table_commitment`
+(the issuer's computation), `table_io`, `table_values`, `table_ties`; Bootstrap's certified commitment in
+`full::p_boot`; two keys in `wallet_chains`. Tests: `full::tests::wallet_row_commits_to_the_certified_tables` and the
+existing ones. Logs: `../../output/kagemusha-100x-20261108/spike/runs/claude-walletrow-fp-1.log` (the fixed point) and
+`claude-walletrow-tests-2.log` (all 46 tests).
+
+**What was wrong.** The comb read the wallet key's comb tables from the circuit's constant columns, as if the key
+were part of the verification key: one key per circuit. A production circuit serves every wallet.
+
+**What changed.**
+
+- **The wallet row.** G's tables stay constant columns. The wallet key's two tables (512 points: the row `256 t +
+  i`, x's and y's limbs) are a witness table placed alone in the circuit's first fixed row, cell `k` of table row
+  `i` at column `512 k + i` in every circuit. Like the key's fixed rows it is committed with blind 0 and left out of
+  proofs, but its commitment comes from the instance: four io limbs at index 56, the wallet's table commitment,
+  which every verifier substitutes (`spartan::fixed_for`). A proof whose wallet row holds other tables does not
+  verify (the test proves B's tables under A's commitment: refused).
+- **The issuer certifies it.** At enrollment the issuer computes the commitment from the payment key
+  (`wallet_table_commitment`: the tables natively, then one MSM over the 3,584 values). Bootstrap's statement sponge
+  absorbs it (a copy of its io) before the signatures, so the credential's signature covers it.
+- **The recursion keeps it.** A P circuit ties each verified P proof's commitment limbs (its io) to four shared
+  values per pair; the S circuit pins that proof's wallet row (an input point of its points side) to the same
+  limbs; and a P circuit's predecessor has its own commitment, so one wallet keeps one table from Bootstrap on.
+- **One circuit for every wallet.** At the last hop the wallet chains run two wallets with different keys, and so
+  different tables and commitments, on the same circuits.
+
+**Results** (`ZKS_SCHEDULE=lean ZKS_HOPS=8 zk-spartan fixed-point`). All 46 experiment tests pass.
+
+- The fixed point holds as before: all six circuits' matrices are equal from hop 4 to 5 on, and every pair
+  verifies.
+- At the last hop, wallets A and B, with different keys (so different tables and commitments), run every order on
+  the same circuits: Bootstrap, then Send and Receive after a Bootstrap, a Receive and a Send. Every pair verifies
+  and every accumulator holds.
+- Refused: in every operation, a changed limb of the predecessor's table commitment (P ties it to the predecessor's
+  io and to its own; S pins the predecessor's wallet row to it); wallet A's Receive proof checked under wallet B's
+  commitment; and, in the test, a proof whose wallet row holds one wallet's tables under another's commitment.
+
+| At the fixed point (hop 8) | P-recv | S-recv | P-send | S-send | P-boot | S-boot |
+|---|---:|---:|---:|---:|---:|---:|
+| Constraint rows (all 2^19) | 479,209 (+891) | 272,656 (+468) | 263,582 (+443) | 138,228 (+234) | 127,231 (+136) | 101 |
+| Witness rows used, of 64 | 35 + 5 + 11 + 3 | 46 + 1 + 3 + 2 | 35 + 5 + 6 + 3 | 46 + 1 + 2 + 2 | 35 + 5 + 9 + 3 | 46 + 1 + 1 + 2 |
+| Cells | 605,359 (+516) | 295,754 (+56) | 342,199 (−260) | 153,411 (+28) | 230,973 (−624) | 58 |
+| Pixel model, kernels of 11-10 | 1.35 s | 0.86 s | 0.96 s | 0.59 s | 0.72 s | 0.33 s |
+
+- **Send and Receive cost the same**: Receive 2.21 s and Send 1.55 s per pair on the model, proofs 5,024 + 4,928 B
+  (the wallet row is a fixed row, so not in the proof). The P circuits still use three fixed rows: G's constant
+  table halved (512 rows instead of the merged 1,024) and the wallet row took the freed row. The four shared limbs
+  per verified P proof and their ties add a few hundred cells and rows (the changes in brackets are against "The
+  Bootstrap kind").
+- **The issuer's work** is the tables (about 780 point operations) and one MSM over 3,584 values per enrollment.
+
+**Still open.**
+
+- The credential's and the certificate's own keys: Bootstrap's three signatures still use the comb over the
+  wallet's own tables as a stand-in (the issuer's and the root's keys need tables of their own).
+- The spec: the credential would carry the payment key's table commitment (R10). That is a spec change, drafted only
+  on the owner's word.
+- The state carried from one step to the next (`σ.predecessor = Ω.head`), as before; the table commitment is the
+  one piece of it the circuits now carry.

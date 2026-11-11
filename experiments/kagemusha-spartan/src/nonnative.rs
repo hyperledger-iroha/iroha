@@ -16,8 +16,10 @@
 //! - The digits array holds both scalars' signed-digit bits (boolean, 16 per
 //!   scalar and step) and a Horner accumulator, giving `u = 2 B - (2^256 - 1)`
 //!   in three limbs; the four table selections per step are lookups whose
-//!   index is read from these bits, into one merged table of the wallet key's
-//!   and G's comb points (constant columns).
+//!   index is read from these bits: the two of the wallet key's tables into
+//!   the wallet table (a witness table of 512 rows, the circuit's wallet row,
+//!   whose commitment the instance names), G's two into G's table (constant
+//!   columns).
 //! - Instances are indexed slot-major, `r = slot * 16 + step`, so a check's
 //!   inputs are links whose maps factor into a slot table and a step relation
 //!   (the same step, or the previous step's final point).
@@ -42,7 +44,10 @@ const L: usize = 88;
 pub(crate) const CHUNK: usize = 11;
 pub const STEPS: usize = 16;
 pub const RANGE_TABLE: u32 = 0;
+/// G's comb tables (constant columns).
 pub const POINT_TABLE: u32 = 1;
+/// The wallet key's comb tables: a witness table, the wallet row.
+pub const WALLET_TABLE: u32 = 7;
 
 pub(crate) fn pow2(k: usize) -> BigUint {
     BigUint::one() << k
@@ -962,10 +967,11 @@ fn extra_checks(c: &Point) -> Vec<CheckSpec> {
     ]
 }
 
-/// The comb's arrays (family `fam`, one instance per signature): value,
-/// selection, one-product checks, four-product checks, digits and integer
-/// additions; then the range table and the merged point table (global family
-/// `gfam`).
+/// The comb's arrays (family `fam`, one instance per signature): value, the
+/// wallet key's selections, one-product checks, four-product checks, digits
+/// and integer additions; then the range table and G's point table (global
+/// family `gfam`), G's selections, and the wallet table (global, a witness
+/// table: the wallet row).
 pub struct Comb {
     pub arrays: Vec<Array<Fp>>,
     pub tables: Vec<(usize, u32)>,
@@ -987,6 +993,33 @@ pub const A_DIGITS: usize = 4;
 pub const A_ADD: usize = 5;
 pub const A_RANGE: usize = 6;
 pub const A_TABLE: usize = 7;
+pub const A_SELG: usize = 8;
+pub const A_WTABLE: usize = 9;
+
+/// The wallet table's cells per row: the row (`256 t + index`), then x's and
+/// y's limbs.
+pub const WALLET_CELLS: usize = 7;
+/// The wallet table's rows (two tables of 256 entries).
+pub const WALLET_ROWS: usize = 512;
+
+/// The wallet table's values, cell-major (`WALLET_CELLS` vectors of
+/// `WALLET_ROWS`): the wallet key's two comb tables (m = 16).
+pub fn wallet_table_values(q: &Point) -> Vec<Vec<Fp>> {
+    let qt = crate::operation::comb_tables(q, 16);
+    let mut vals = vec![vec![Fp::from(0u64); WALLET_ROWS]; WALLET_CELLS];
+    for (t, entries) in qt.iter().enumerate() {
+        for (idx, pt) in entries.iter().enumerate() {
+            let row = t * 256 + idx;
+            vals[0][row] = Fp::from(row as u64);
+            let (xl, yl) = (limbs(&pt.x), limbs(&pt.y));
+            for k in 0..3 {
+                vals[1 + k][row] = fp_u(&xl[k]);
+                vals[4 + k][row] = fp_u(&yl[k]);
+            }
+        }
+    }
+    vals
+}
 
 /// Digit bit `K` of a step sits in accumulator limb `ACC_LIMB[K]` with
 /// weight `2^(16 K - 88 ACC_LIMB[K])`.
@@ -1039,15 +1072,17 @@ pub fn comb(
         assert_eq!(q, &inputs[0].0, "one wallet key per comb family");
     }
     let tables: Vec<&Vec<Point>> = vec![&qt[0], &qt[1], &gt[0], &gt[1]];
+    let selg_a = at(A_SELG);
     // Selection j reads scalar u2 (digit slot 1) for the key's tables and u1
     // (slot 0) for G's; its index bits are the digits' K = 8 (j % 2) + k.
     let scalar_of = |j: usize| if j < 2 { 1usize } else { 0 };
     let (rho_v, rho_s, rho_1, rho_4, rho_d, rho_a) =
-        (8usize, 6usize, 8usize, 6usize, 5usize, 2usize);
+        (8usize, 5usize, 8usize, 6usize, 5usize, 2usize);
     let n1 = one_specs.len() * STEPS + extra_specs.len();
     let vcount = value_cells_count();
     let mut value = vec![vec![Fp::from(0u64); slots << rho_v]; vcount];
     let mut sel = vec![vec![Fp::from(0u64); slots << rho_s]; 6];
+    let mut selg = vec![vec![Fp::from(0u64); slots << rho_s]; 6];
     let mut chk1 = vec![vec![Fp::from(0u64); slots << rho_1]; s1.cells];
     let mut chk4 = vec![vec![Fp::from(0u64); slots << rho_4]; s4.cells];
     let mut digits = vec![vec![Fp::from(0u64); slots << rho_d]; 16 + 3];
@@ -1118,11 +1153,12 @@ pub fn comb(
             ];
             let e: Vec<Point> = (0..4).map(|j| tables[j][idx[j]].clone()).collect();
             for j in 0..4 {
-                let rr = (sig << rho_s) | (j << 4) | step;
+                let rr = (sig << rho_s) | ((j % 2) << 4) | step;
+                let store = if j < 2 { &mut sel } else { &mut selg };
                 let (xl, yl) = (limbs(&e[j].x), limbs(&e[j].y));
                 for k in 0..3 {
-                    sel[k][rr] = fp_u(&xl[k]);
-                    sel[3 + k][rr] = fp_u(&yl[k]);
+                    store[k][rr] = fp_u(&xl[k]);
+                    store[3 + k][rr] = fp_u(&yl[k]);
                 }
             }
             // double_add(acc, e0) = 2 acc + e0, then + e1, e2, e3.
@@ -1312,11 +1348,13 @@ pub fn comb(
             consts: [vec![zero; n], vec![zero; n], vec![zero; n]],
         };
         for q in 0..width {
-            for class in 0..7 {
+            for class in 0..9 {
                 let target = match class {
                     0 | 3 | 4 | 5 => (value_a, 0),
                     1 => (sel_a, 0),
                     2 => (sel_a, 3),
+                    7 => (selg_a, 0),
+                    8 => (selg_a, 3),
                     _ => (digits_a, 16),
                 };
                 let mut map = vec![None; n];
@@ -1326,8 +1364,13 @@ pub fn comb(
                     let Some(s) = list.get(q) else { continue };
                     let to = match (&s.kind, class, step) {
                         (Kind::Value, 0, Some(st)) => (s.slot << 4) | st,
-                        (Kind::Sel(0), 1, Some(st)) | (Kind::Sel(1), 2, Some(st)) => {
+                        (Kind::Sel(0), 1, Some(st)) | (Kind::Sel(1), 2, Some(st)) if s.slot < 2 => {
                             (s.slot << 4) | st
+                        }
+                        (Kind::Sel(0), 7, Some(st)) | (Kind::Sel(1), 8, Some(st))
+                            if s.slot >= 2 =>
+                        {
+                            ((s.slot - 2) << 4) | st
                         }
                         (Kind::Acc, 3, Some(st)) if *st > 0 => ((FINAL_X + s.slot) << 4) | (st - 1),
                         (Kind::Final, 4, None) => ((FINAL_X + s.slot) << 4) | (STEPS - 1),
@@ -1389,16 +1432,19 @@ pub fn comb(
     let (r1, l1) = build_checks(&s1, &instances(&one_specs, &extra_specs), rho_1);
     let (r4, l4) = build_checks(&s4, &instances(&four_specs, &[]), rho_4);
     let (vr, vl) = value_template(1 << rho_v);
-    // Selection: (table j, index from the digit bits, limbs) in the merged table.
-    let sel_lookup = {
+    // Selections: (the table's row 256 t + index from the digit bits, limbs),
+    // the wallet key's tables (j = 0, 1) in the wallet table, G's (j = 2, 3)
+    // in G's table; instance (t << 4) | step with t = j % 2.
+    let sel_lookup = |half: usize, table: u32| {
         let ns = 1usize << rho_s;
         let mut index: Lin<Fp> = Vec::new();
         for k in 0..16 {
             let mut map = vec![None; ns];
-            for j in 0..4 {
-                if k / 8 == j % 2 {
+            for tt in 0..2 {
+                let j = 2 * half + tt;
+                if k / 8 == tt {
                     for step in 0..STEPS {
-                        map[(j << 4) | step] = Some((scalar_of(j) << 4) | step);
+                        map[(tt << 4) | step] = Some((scalar_of(j) << 4) | step);
                     }
                 }
             }
@@ -1411,14 +1457,14 @@ pub fn comb(
                 coef: vec![Fp::from(1u64 << (k % 8)); ns],
             });
         }
-        let mut t = vec![
-            constant((0..ns).map(|r| Fp::from((r >> 4) as u64)).collect()),
-            compact(index),
-        ];
+        let mut t = vec![plus(
+            &constant((0..ns).map(|r| Fp::from(256 * (r >> 4) as u64)).collect()),
+            &compact(index),
+        )];
         for k in 0..6 {
             t.push(own(k, ns));
         }
-        (POINT_TABLE, t)
+        (table, t)
     };
     // Digits: booleanity and the Horner rows.
     let (dr, dwidths) = {
@@ -1516,16 +1562,16 @@ pub fn comb(
         }
         rows
     };
-    let mut table_vals = vec![vec![Fp::from(0u64); 1024]; 8];
-    for (t, entries) in tables.iter().enumerate() {
+    // G's table: rows 256 t + index for G's two tables.
+    let mut table_vals = vec![vec![Fp::from(0u64); WALLET_ROWS]; WALLET_CELLS];
+    for (t, entries) in tables[2..].iter().enumerate() {
         for (idx, pt) in entries.iter().enumerate() {
             let row = t * 256 + idx;
-            table_vals[0][row] = Fp::from(t as u64);
-            table_vals[1][row] = Fp::from(idx as u64);
+            table_vals[0][row] = Fp::from(row as u64);
             let (xl, yl) = (limbs(&pt.x), limbs(&pt.y));
             for k in 0..3 {
-                table_vals[2 + k][row] = fp_u(&xl[k]);
-                table_vals[5 + k][row] = fp_u(&yl[k]);
+                table_vals[1 + k][row] = fp_u(&xl[k]);
+                table_vals[4 + k][row] = fp_u(&yl[k]);
             }
         }
     }
@@ -1545,9 +1591,9 @@ pub fn comb(
             name: "comb selection",
             family: fam,
             rho: rho_s,
-            r_count: 4 * STEPS,
+            r_count: 2 * STEPS,
             fixed: false,
-            lookups: vec![sel_lookup],
+            lookups: vec![sel_lookup(0, WALLET_TABLE)],
             widths: vec![88, 88, 80, 88, 88, 80],
             rows: Vec::new(),
             values: sel,
@@ -1610,18 +1656,44 @@ pub fn comb(
         Array {
             name: "point table",
             family: gfam,
-            rho: 10,
-            r_count: 1024,
+            rho: 9,
+            r_count: WALLET_ROWS,
             fixed: true,
             lookups: Vec::new(),
-            widths: vec![2, 8, 88, 88, 80, 88, 88, 80],
+            widths: vec![9, 88, 88, 80, 88, 88, 80],
             rows: Vec::new(),
             values: table_vals,
+        },
+        Array {
+            name: "comb selection G",
+            family: fam,
+            rho: rho_s,
+            r_count: 2 * STEPS,
+            fixed: false,
+            lookups: vec![sel_lookup(1, POINT_TABLE)],
+            widths: vec![88, 88, 80, 88, 88, 80],
+            rows: Vec::new(),
+            values: selg,
+        },
+        Array {
+            name: "wallet table",
+            family: gfam,
+            rho: 9,
+            r_count: WALLET_ROWS,
+            fixed: false,
+            lookups: Vec::new(),
+            widths: vec![9, 88, 88, 80, 88, 88, 80],
+            rows: Vec::new(),
+            values: wallet_table_values(&inputs[0].0),
         },
     ];
     Comb {
         arrays,
-        tables: vec![(at(A_RANGE), RANGE_TABLE), (at(A_TABLE), POINT_TABLE)],
+        tables: vec![
+            (at(A_RANGE), RANGE_TABLE),
+            (at(A_TABLE), POINT_TABLE),
+            (at(A_WTABLE), WALLET_TABLE),
+        ],
         results,
         offset,
         check_counts: (one_specs.len(), four_specs.len(), extra_specs.len()),

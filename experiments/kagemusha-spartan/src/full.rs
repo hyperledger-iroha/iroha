@@ -56,6 +56,8 @@ pub struct Wiring<F> {
     pub late_io: Vec<(usize, usize, usize, usize)>,
     /// The link phase (see `Copies`).
     pub link: crate::uniform::LinkPhase<F>,
+    /// The wallet row (see `Copies`).
+    pub wallet: Option<(usize, usize)>,
 }
 
 impl<F: Scalar> Default for Wiring<F> {
@@ -71,6 +73,7 @@ impl<F: Scalar> Default for Wiring<F> {
             io_arrays: Vec::new(),
             late_io: Vec::new(),
             link: crate::uniform::LinkPhase::default(),
+            wallet: None,
         }
     }
 }
@@ -138,6 +141,7 @@ impl<F: Scalar> Wiring<F> {
                 io_arrays: self.io_arrays,
                 late_io: self.late_io,
                 link: self.link,
+                wallet: self.wallet,
             },
         )
     }
@@ -410,6 +414,73 @@ pub const DEPTH: usize = 32;
 /// Receive's statement sponge: permutations, as stage A (`operations()`).
 pub const STATEMENT_PERMS: usize = 102;
 
+/// A wallet's payment key: its secret scalar (the experiment signs with it;
+/// a phone's never leaves its secure hardware) and its point.
+#[derive(Clone, Debug)]
+pub struct WalletKey {
+    pub d: BigUint,
+    pub q: p256::Point,
+}
+
+impl WalletKey {
+    /// The key labelled `label`, a deterministic stand-in for a hardware key.
+    pub fn labelled(label: &str) -> Self {
+        let n = p256::n();
+        let d = p256::scalar_below(label, &n);
+        let q = p256::mul(&p256::generator(), &d).expect("a key");
+        WalletKey { d, q }
+    }
+    /// The experiment's usual key (the comb's since stage A).
+    pub fn stand_in() -> Self {
+        Self::labelled("receiver-d")
+    }
+}
+
+/// The io index of a P circuit's table commitment, the wallet's state: the
+/// commitment to its key's comb tables as its wallet row holds them, four
+/// 128-bit limbs (x low, x high, y low, y high).
+pub const TABLE_IO: usize = 56;
+
+/// The issuer's computation at enrollment, which the credential certifies:
+/// the commitment to a key's comb tables as a P circuit's wallet row holds
+/// them (unblinded; cell `k` of table row `i` at column `512 k + i`), on the
+/// P side's generators. Every P proof of the wallet commits to it.
+pub fn wallet_table_commitment(
+    q: &p256::Point,
+    gens: &crate::ipa::Gens<iroha_pasta::Eq>,
+) -> crate::ipa::Aff<iroha_pasta::Eq> {
+    let n = nonnative::WALLET_ROWS;
+    let vals = nonnative::wallet_table_values(q);
+    let mut row = vec![Fp::ZERO; vals.len() * n];
+    for (k, col) in vals.iter().enumerate() {
+        row[k * n..(k + 1) * n].copy_from_slice(col);
+    }
+    crate::spartan::commit_public::<iroha_pasta::Eq>(gens, &row)
+}
+
+/// A P circuit's table commitment as public io (`TABLE_IO`): an io array of
+/// its four limbs. Returns (the array, the limbs).
+fn table_io(
+    w: &mut Wiring<Fp>,
+    gfam: usize,
+    c_table: &crate::ipa::Aff<iroha_pasta::Eq>,
+) -> (usize, [Fp; 4]) {
+    let limbs = crate::spartan::limbs_of_point::<iroha_pasta::Eq>(c_table);
+    let io = w.push(Array {
+        name: "table commitment io",
+        family: gfam,
+        rho: 2,
+        r_count: 4,
+        fixed: false,
+        lookups: Vec::new(),
+        widths: vec![128],
+        rows: Vec::new(),
+        values: vec![limbs.to_vec()],
+    });
+    w.io_arrays.push((io, TABLE_IO));
+    (io, limbs)
+}
+
 /// An operation's own relation, by its census counts (`operation::operations`):
 /// the statement sponge's permutations, the indexed-tree insertions, the
 /// signatures under the payment key (each over a statement digest, SHA-256
@@ -577,6 +648,7 @@ const IV_V: usize = 4;
 /// The own relation of `op` into `w`. Its permutations go into `pool`, which
 /// the caller builds once every permutation of the circuit is known (`e_out`
 /// is the pool's output export, reserved by the caller).
+#[allow(clippy::too_many_arguments)]
 pub fn own_relation(
     w: &mut Wiring<Fp>,
     pool: &mut Pool<Fp>,
@@ -584,6 +656,8 @@ pub fn own_relation(
     e_zero: usize,
     gfam: usize,
     op: &Op,
+    key: &WalletKey,
+    absorb: Option<(usize, [Fp; 4])>,
 ) -> OwnIdx {
     assert!(
         op.signatures >= 1 && op.signatures <= op.statement_perms,
@@ -597,21 +671,33 @@ pub fn own_relation(
         "pool start states",
         &[vec![Fp::ZERO, Fp::ZERO, Fp::from(7u64)], vec![Fp::ZERO; 3]],
     );
-    // The statement sponge: (0, 0, 7), two values absorbed per permutation.
+    // The statement sponge: (0, 0, 7), two values absorbed per permutation;
+    // with `absorb`, its first two permutations take the four values read
+    // from that export (Bootstrap's table commitment, which the credential
+    // signs).
     let mut statement = Vec::with_capacity(op.statement_perms);
     for i in 0..op.statement_perms {
-        let ab = [
-            Fp::from(1000 + i as u64).square(),
-            Fp::from(2000 + i as u64).square(),
-        ];
+        let (ab, from) = match absorb {
+            Some((e, vals)) if i < 2 => (
+                [vals[2 * i], vals[2 * i + 1]],
+                [Some((e, 2 * i)), Some((e, 2 * i + 1))],
+            ),
+            _ => (
+                [
+                    Fp::from(1000 + i as u64).square(),
+                    Fp::from(2000 + i as u64).square(),
+                ],
+                [None, None],
+            ),
+        };
         let q = match statement.last() {
             None => pool.chain(
                 Src3::Entry(e_start, 0),
                 [Fp::ZERO, Fp::ZERO, Fp::from(7u64)],
                 ab,
-                [None, None],
+                from,
             ),
-            Some(&prev) => pool.chain(Src3::Out(prev), pool.out(prev), ab, [None, None]),
+            Some(&prev) => pool.chain(Src3::Out(prev), pool.out(prev), ab, from),
         };
         statement.push(q);
     }
@@ -724,7 +810,7 @@ pub fn own_relation(
             (Some(ins), Some(roots))
         }
     };
-    signed_and_small(w, pool, e_out, gfam, op, statement, ins, roots)
+    signed_and_small(w, pool, e_out, gfam, op, key, statement, ins, roots)
 }
 
 /// The insertions' value array, its leaf-input export and the root-equality
@@ -852,6 +938,7 @@ fn signed_and_small(
     e_out: usize,
     gfam: usize,
     op: &Op,
+    key: &WalletKey,
     statement: Vec<usize>,
     ins: Option<usize>,
     roots: Option<usize>,
@@ -872,15 +959,14 @@ fn signed_and_small(
     w.arrays.extend(sha_arrays);
     w.tables.extend(sha_tables);
     let n = p256::n();
-    let d = p256::scalar_below("receiver-d", &n);
-    let q = p256::mul(&p256::generator(), &d).unwrap();
+    let (d, q) = (&key.d, &key.q);
     let inputs: Vec<(p256::Point, BigUint, BigUint, BigUint)> = digests
         .iter()
         .enumerate()
         .map(|(k, dg)| {
             let z = BigUint::from_bytes_be(dg);
             let sig = p256::sign(
-                &d,
+                d,
                 &z,
                 &p256::scalar_below(&format!("receive-nonce-{k}"), &n),
             );
@@ -1252,7 +1338,16 @@ pub fn own_circuit_of(op: &Op) -> (Wiring<Fp>, OwnIdx) {
     let e_out = w.reserve();
     let e_zero = constant_entries(&mut w, gfam, "zero word", &[vec![Fp::ZERO]]);
     let mut pool = Pool::new(Fp::from(NODE_DOMAIN));
-    let mut own = own_relation(&mut w, &mut pool, e_out, e_zero, gfam, op);
+    let mut own = own_relation(
+        &mut w,
+        &mut pool,
+        e_out,
+        e_zero,
+        gfam,
+        op,
+        &WalletKey::stand_in(),
+        None,
+    );
     let mut rng = SpikeRng::new(b"own relation pool");
     own.pool = pool.build(&mut w, e_out, &mut rng);
     (w, own)
@@ -1578,7 +1673,7 @@ mod tests {
         let specs = toy_specs();
         let (dp, ds) = FP_DIMS;
         let gens = PairGens {
-            p: crate::ipa::Gens::<Vesta>::new(16),
+            p: crate::ipa::Gens::<Vesta>::new(1 << 14),
             s: crate::ipa::Gens::<Pallas>::new(16),
             defer_p: crate::deferral::MatPoly::with_min(
                 [
@@ -1601,7 +1696,7 @@ mod tests {
             keys_p: None,
             keys_s: None,
         };
-        let (w, bp) = p_boot(&gens, false);
+        let (w, bp) = p_boot(&gens, &WalletKey::stand_in(), false);
         assert!(
             bp.own
                 .as_ref()
@@ -1727,6 +1822,88 @@ mod tests {
         assert!(
             pb.iter().chain(&sb).all(|b| *b),
             "kind bits and the empty claim are pinned: P {pb:?}, S {sb:?}"
+        );
+    }
+
+    /// The wallet row: the key's comb tables in the first fixed row at their
+    /// canonical columns, its unblinded commitment the issuer's
+    /// (`wallet_table_commitment`), which the verifier takes from the
+    /// instance's io. A proof verifies under its own wallet's commitment and
+    /// is refused under another's.
+    #[test]
+    fn wallet_row_commits_to_the_certified_tables() {
+        let (key_a, key_b) = (
+            WalletKey::labelled("wallet-row-a"),
+            WalletKey::labelled("wallet-row-b"),
+        );
+        let gens = crate::ipa::Gens::<Vesta>::new(1 << 14);
+        // B signs and B's tables are the wallet row; the io names `named`'s
+        // commitment.
+        let build = |named: &WalletKey| {
+            let mut w = Wiring::<Fp>::default();
+            let gfam = w.family(0, 1);
+            let e_out = w.reserve();
+            let e_zero = constant_entries(&mut w, gfam, "zero word", &[vec![Fp::ZERO]]);
+            let mut pool = Pool::new(Fp::from(NODE_DOMAIN));
+            let mut own = own_relation(
+                &mut w,
+                &mut pool,
+                e_out,
+                e_zero,
+                gfam,
+                &Op::SEND,
+                &key_b,
+                None,
+            );
+            let _ = table_io(&mut w, gfam, &wallet_table_commitment(&named.q, &gens));
+            let table = own.comb + nonnative::A_WTABLE;
+            w.wallet = Some((table, TABLE_IO));
+            let mut rng = SpikeRng::new(b"wallet row pool");
+            own.pool = pool.build(&mut w, e_out, &mut rng);
+            let (arrays, pi, counts, tables, copies) = w.finish();
+            let (c, inst, wit) = UniformCircuit::build_with_copies(
+                "wallet-row",
+                arrays,
+                pi,
+                counts,
+                tables,
+                copies,
+                14,
+                64,
+                b"wallet row",
+            );
+            (c, inst, wit, table)
+        };
+        let (c, inst, wit, table) = build(&key_b);
+        assert_eq!(c.wallet_rows(), 1, "one wallet row");
+        let base = (c.shape.rows() - c.fixed_rows(&c.shape)) * c.shape.cols();
+        for (k, i) in [(0usize, 0usize), (3, 17), (6, 511)] {
+            assert_eq!(
+                c.cell_index(table, k, i),
+                base + k * nonnative::WALLET_ROWS + i,
+                "cell {k} of table row {i} at its canonical column"
+            );
+        }
+        let row = &wit.w[base..base + c.shape.cols()];
+        assert_eq!(
+            crate::spartan::row_commitment(&c.shape, &gens, row),
+            wallet_table_commitment(&key_b.q, &gens),
+            "the wallet row commits to the issuer's commitment"
+        );
+        let mut prng = SpikeRng::new(b"wallet row prove");
+        let (proof, _) = crate::spartan::prove_circuit(&c.shape, &gens, &inst, &wit, &mut prng, &c);
+        assert!(
+            crate::spartan::verify_circuit(&c.shape, &gens, &inst, &proof.to_bytes(), &c).is_ok(),
+            "verified under its own wallet's commitment"
+        );
+        let (c2, inst2, wit2, _) = build(&key_a);
+        let mut prng = SpikeRng::new(b"wallet row other");
+        let (proof, _) =
+            crate::spartan::prove_circuit(&c2.shape, &gens, &inst2, &wit2, &mut prng, &c2);
+        assert!(
+            crate::spartan::verify_circuit(&c2.shape, &gens, &inst2, &proof.to_bytes(), &c2)
+                .is_err(),
+            "refused under another wallet's commitment"
         );
     }
 
@@ -2642,8 +2819,8 @@ pub fn next_gens(
 pub fn trace_uniform(u: UniformPair, gens: &PairGens) -> TracedPair {
     use crate::spartan::Link;
     use crate::verifier::trace_circuit;
-    let fixed_p = crate::spartan::fixed_commitments(&u.cp.shape, &gens.p, u.cp.as_ref());
-    let fixed_s = crate::spartan::fixed_commitments(&u.cs.shape, &gens.s, u.cs.as_ref());
+    let fixed_p = crate::spartan::fixed_for(&u.cp.shape, &gens.p, u.cp.as_ref(), &u.ip.io);
+    let fixed_s = crate::spartan::fixed_for(&u.cs.shape, &gens.s, u.cs.as_ref(), &u.is.io);
     let r = u.r;
     let rlc = move |_: &[u8; 32]| r;
     let tr_p = trace_circuit(
@@ -2697,6 +2874,9 @@ pub struct PRecvIdx {
     /// The shared index of pair 0's kind bits (pair i's c0 at
     /// `kind_at + 2 i`, its c1 next).
     pub kind_at: usize,
+    /// Per pair, the shared index of its P proof's table commitment's four
+    /// limbs (when its circuit has a wallet row).
+    pub tables: Vec<Option<usize>>,
     pub io_digest: usize,
     pub defer: DeferIdx<Fp>,
 }
@@ -2706,20 +2886,88 @@ pub struct PRecvIdx {
 /// the binding chain over every shared value; the fold of the verified P
 /// proofs' matrix claims. One permutation pool holds the statement sponge,
 /// the insertions, both S transcripts and both io digests.
-pub fn p_recv(gens: &PairGens, pairs: &[TracedPair]) -> (Wiring<Fp>, PRecvIdx) {
-    p_circuit(&Op::RECEIVE, gens, pairs)
+pub fn p_recv(gens: &PairGens, pairs: &[TracedPair], key: &WalletKey) -> (Wiring<Fp>, PRecvIdx) {
+    p_circuit(&Op::RECEIVE, gens, pairs, key)
 }
 
 /// P-send in the uniform layout: Send's own relation and the wallet's
 /// predecessor pair, otherwise as P-recv.
-pub fn p_send(gens: &PairGens, pred: &TracedPair) -> (Wiring<Fp>, PRecvIdx) {
-    p_circuit(&Op::SEND, gens, std::slice::from_ref(pred))
+pub fn p_send(gens: &PairGens, pred: &TracedPair, key: &WalletKey) -> (Wiring<Fp>, PRecvIdx) {
+    p_circuit(&Op::SEND, gens, std::slice::from_ref(pred), key)
 }
 
-/// An operation's P circuit: `op`'s own relation over the incoming `pairs`
-/// on `gens`' polynomials (Receive: the predecessor and the payer's Send;
-/// Send: the predecessor). The circuit's own kind is public io.
-pub fn p_circuit(op: &Op, gens: &PairGens, pairs: &[TracedPair]) -> (Wiring<Fp>, PRecvIdx) {
+/// Whether a verified proof's circuit has a wallet row.
+fn has_wallet<C: iroha_pasta::PastaCurve>(tr: &crate::verifier::Trace<C>) -> bool {
+    tr.circuit.as_ref().is_some_and(|c| c.wallet_rows > 0)
+}
+
+/// The verified P proofs' table commitments as shared values (four limbs
+/// each, from their io), for the pairs whose P circuit has a wallet row:
+/// appended to `values`; returns each pair's first index.
+fn table_values(pairs: &[TracedPair], values: &mut Vec<u128>) -> Vec<Option<usize>> {
+    pairs
+        .iter()
+        .map(|pr| {
+            has_wallet(&pr.tr_p).then(|| {
+                let at = values.len();
+                for k in 0..4 {
+                    let r = pr.inst_p.io[TABLE_IO + k].to_repr();
+                    let r = r.as_ref();
+                    assert!(r[16..].iter().all(|b| *b == 0), "a 128-bit limb");
+                    values.push(u128::from_le_bytes(r[..16].try_into().unwrap()));
+                }
+                at
+            })
+        })
+        .collect()
+}
+
+/// Ties each verified P proof's table-commitment limbs (its scalar side's io
+/// fold leaves at `TABLE_IO`) to its shared values, which the S circuit pins
+/// its wallet row's commitment to; with `own`, the predecessor's (pair 0)
+/// also to this circuit's own table io: one wallet, one table.
+fn table_ties(
+    w: &mut Wiring<Fp>,
+    host: usize,
+    ios: &[usize],
+    offs: &[Option<usize>],
+    shared: usize,
+    own: Option<usize>,
+) {
+    let one = Fp::ONE;
+    for (i, (&io, off)) in ios.iter().zip(offs).enumerate() {
+        let Some(off) = *off else { continue };
+        let leaves = (1usize << w.arrays[io].rho) / 2;
+        for k in 0..4 {
+            let sh = link(shared, 0, vec![Some(off + k)], -one);
+            let rows = [
+                Some(plus(
+                    &link(io, 0, vec![Some(leaves + TABLE_IO + k)], one),
+                    &sh,
+                )),
+                own.filter(|_| i == 0)
+                    .map(|own| plus(&link(own, 0, vec![Some(k)], one), &sh)),
+            ];
+            for row in rows.into_iter().flatten() {
+                w.arrays[host]
+                    .rows
+                    .push([row, constant(vec![one]), Vec::new()]);
+            }
+        }
+    }
+}
+
+/// An operation's P circuit: `op`'s own relation, signed with the wallet's
+/// `key`, over the incoming `pairs` on `gens`' polynomials (Receive: the
+/// predecessor and the payer's Send; Send: the predecessor). Its kind and
+/// its table commitment (the wallet's, as the issuer certified it at
+/// Bootstrap) are public io; the key's comb tables are its wallet row.
+pub fn p_circuit(
+    op: &Op,
+    gens: &PairGens,
+    pairs: &[TracedPair],
+    key: &WalletKey,
+) -> (Wiring<Fp>, PRecvIdx) {
     use crate::points::{KeySelect, PointsBuilder, SharedMap};
     use iroha_pasta::Ep as Pallas;
     let kinds = slot_kinds(gens, pairs);
@@ -2730,13 +2978,16 @@ pub fn p_circuit(op: &Op, gens: &PairGens, pairs: &[TracedPair]) -> (Wiring<Fp>,
     let e_zero = constant_entries(&mut w, gfam, "zero word", &[vec![Fp::ZERO]]);
     let mut pool = Pool::new(Fp::from(NODE_DOMAIN));
     let _ = kind_pin(&mut w, gfam, op.kind);
-    let own_idx = own_relation(&mut w, &mut pool, e_out, e_zero, gfam, op);
+    let own_idx = own_relation(&mut w, &mut pool, e_out, e_zero, gfam, op, key, None);
+    let (own_table, _) = table_io(&mut w, gfam, &wallet_table_commitment(&key.q, &gens.p));
+    w.wallet = Some((own_idx.comb + nonnative::A_WTABLE, TABLE_IO));
     // Shared values: per pair, the P proof's then the S proof's; then each
     // pair's two kind bits (here the P proof's io bits, in S the S proof's:
-    // the binding makes them one).
+    // the binding makes them one); then the P proofs' table commitments.
     let (mut values, offsets) = binding_values(pairs);
     let kind_at = values.len();
     values.extend(kind_values(&kinds));
+    let table_offs = table_values(pairs, &mut values);
     // The S proofs' points sides; a slot taking any kind pins the S proof's
     // fixed rows to the key its kind bits select.
     let mut pb = PointsBuilder::<Pallas>::new(&mut w, e_out, e_v, e_zero);
@@ -2763,6 +3014,7 @@ pub fn p_circuit(op: &Op, gens: &PairGens, pairs: &[TracedPair]) -> (Wiring<Fp>,
             &pr.tr_s,
             sm,
             keys.as_ref(),
+            None,
         );
     }
     // The binding chain: the shared values and mu in the first phase, the
@@ -2843,6 +3095,15 @@ pub fn p_circuit(op: &Op, gens: &PairGens, pairs: &[TracedPair]) -> (Wiring<Fp>,
         .map(|(pr, sc)| (has_link_io(&pr.tr_p), sc.io))
         .collect();
     link_ties(&mut w, defer.fold.values, &linked, &offsets, shared, true);
+    let ios: Vec<usize> = scalars.iter().map(|sc| sc.io).collect();
+    table_ties(
+        &mut w,
+        defer.fold.values,
+        &ios,
+        &table_offs,
+        shared,
+        Some(own_table),
+    );
     let mut rng = SpikeRng::new(b"p-recv pool");
     let pidx = pool.build(&mut w, e_out, &mut rng);
     let points = pb.build(&mut w, gfam, shared, false);
@@ -2859,6 +3120,7 @@ pub fn p_circuit(op: &Op, gens: &PairGens, pairs: &[TracedPair]) -> (Wiring<Fp>,
             shared,
             values: values.len(),
             kind_at,
+            tables: table_offs,
             io_digest,
             defer,
         },
@@ -3594,6 +3856,8 @@ pub struct SRecvIdx {
     /// The shared index of pair 0's kind bits (pair i's c0 at
     /// `kind_at + 2 i`, its c1 next).
     pub kind_at: usize,
+    /// Per pair, the shared index of its P proof's table commitment's limbs.
+    pub tables: Vec<Option<usize>>,
     pub defer: DeferIdx<crate::verifier::Fq>,
 }
 
@@ -3631,6 +3895,9 @@ pub fn s_circuit(
     let (mut values, offsets) = binding_values(pairs);
     let kind_at = values.len();
     values.extend(kind_values(&kinds));
+    // The P proofs' table commitments (as in the P circuit): each P proof's
+    // wallet row is pinned to its own.
+    let table_offs = table_values(pairs, &mut values);
     let mut pb = PointsBuilder::<Vesta>::new(&mut w, e_out, e_v, e_zero);
     for (i, (pr, &(off_p, off_s, len_p))) in pairs.iter().zip(&offsets).enumerate() {
         let w = off_s + link_word_at(&pr.tr_s);
@@ -3655,6 +3922,7 @@ pub fn s_circuit(
             &pr.tr_p,
             sm,
             keys.as_ref(),
+            table_offs[i],
         );
     }
     let mu = Option::<crate::verifier::Fq>::from(crate::verifier::Fq::from_repr(
@@ -3750,6 +4018,7 @@ pub fn s_circuit(
             perms,
             values: values.len(),
             kind_at,
+            tables: table_offs,
             defer,
         },
     )
@@ -3775,26 +4044,59 @@ fn boot_values() -> Vec<u128> {
 }
 
 /// Bootstrap's P circuit, the chain's first link: its own relation
-/// (`Op::BOOTSTRAP`), with `tables` the wallet's comb tables derived from its
-/// key (`nonnative::key_tables`, the key its signatures use), its kind as
-/// public io, the pair binding, and as its accumulator the empty claim,
-/// pinned as late io. It has no predecessor slot: it verifies no proof, so
-/// it has no points or scalar side and no fold. Built at Receive's layout,
-/// so that the predecessor slot of a Send or a Receive takes it.
-pub fn p_boot(gens: &PairGens, tables: bool) -> (Wiring<Fp>, BootIdx) {
+/// (`Op::BOOTSTRAP`, signed with the wallet's `key`), its kind as public io,
+/// the pair binding, and as its accumulator the empty claim, pinned as late
+/// io. It has no predecessor slot: it verifies no proof, so it has no points
+/// or scalar side and no fold. Built at Receive's layout, so that the
+/// predecessor slot of a Send or a Receive takes it.
+///
+/// The wallet's table commitment, which the issuer computed from the key at
+/// enrollment (`wallet_table_commitment`), is public io, and the statement
+/// sponge absorbs it first, through a copy, so the credential's signature
+/// covers it (the issuer certifies it); the key's tables are the wallet row
+/// as in every P circuit. With `tables` the circuit also derives the tables
+/// from the key (`nonnative::key_tables`; too large for Receive's layout).
+pub fn p_boot(gens: &PairGens, key: &WalletKey, tables: bool) -> (Wiring<Fp>, BootIdx) {
     let mut w = Wiring::<Fp>::default();
     let gfam = w.family(0, 1);
     let e_out = w.reserve();
     let e_zero = constant_entries(&mut w, gfam, "zero word", &[vec![Fp::ZERO]]);
     let mut pool = Pool::new(Fp::from(NODE_DOMAIN));
     let (_, pin) = kind_pin(&mut w, gfam, BOOTSTRAP);
-    let own_idx = own_relation(&mut w, &mut pool, e_out, e_zero, gfam, &Op::BOOTSTRAP);
+    let (own_table, limbs) = table_io(&mut w, gfam, &wallet_table_commitment(&key.q, &gens.p));
+    let certified = w.push(Array {
+        name: "certified table commitment",
+        family: gfam,
+        rho: 2,
+        r_count: 4,
+        fixed: false,
+        lookups: Vec::new(),
+        widths: vec![128],
+        rows: vec![[
+            plus(
+                &own(0, 4),
+                &link(own_table, 0, (0..4).map(Some).collect(), -Fp::ONE),
+            ),
+            constant(vec![Fp::ONE; 4]),
+            Vec::new(),
+        ]],
+        values: vec![limbs.to_vec()],
+    });
+    let e_cert = w.export(certified, vec![own(0, 4)]);
+    let own_idx = own_relation(
+        &mut w,
+        &mut pool,
+        e_out,
+        e_zero,
+        gfam,
+        &Op::BOOTSTRAP,
+        key,
+        Some((e_cert, limbs)),
+    );
+    w.wallet = Some((own_idx.comb + nonnative::A_WTABLE, TABLE_IO));
     let key_tables = tables.then(|| {
-        let n = p256::n();
-        let q = p256::mul(&p256::generator(), &p256::scalar_below("receiver-d", &n))
-            .expect("the wallet key");
         let first = w.arrays.len();
-        let kt = nonnative::key_tables(first, gfam, &q);
+        let kt = nonnative::key_tables(first, gfam, &key.q);
         w.arrays.extend(kt.arrays);
         w.tables.extend(kt.tables);
         (first, kt.counts)

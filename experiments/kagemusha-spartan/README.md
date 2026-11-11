@@ -30,15 +30,16 @@ four points.
   their predecessor slot takes a Receive, Send or Bootstrap proof by its two
   public kind bits. Bootstrap's own relation is a census-sized stand-in: the
   zero state, and its receipt, credential and certificate signatures, all on the
-  comb. The wallet's comb tables are derived in-circuit by
-  `nonnative::key_tables` (tested against the native tables), but with them
-  Bootstrap needs 74 witness rows where Receive's layout leaves 64, so the
-  fixed point runs without them (`ZKS_BOOT_TABLES=on` tries them); how the
-  tables are certified is an owner decision (A2-UNIFORM.md, "Bootstrap's key
-  tables"). Not modelled: the wallet's table rows in Send and Receive (they
-  read one key's tables from constant columns), the issuer's and root's own
-  keys, the ledger's activation record, and the wallet state carried from one
-  step to the next (`σ.predecessor = Ω.head`).
+  comb. Each wallet's comb tables are its own "wallet row" in every P
+  circuit (A2-UNIFORM.md, "Issuer-certified key tables"): a fixed row whose
+  commitment the issuer computes from the payment key, Bootstrap's credential
+  signs, and every verifier takes from the proof's io, so one circuit serves
+  every wallet. (Deriving the tables in-circuit, `nonnative::key_tables`, does
+  not fit Bootstrap at Receive's layout; `ZKS_BOOT_TABLES=on` tries it.) Not
+  modelled: the issuer's and root's own keys (Bootstrap's three signatures use
+  the wallet's tables as a stand-in), the ledger's activation record, and the
+  rest of the wallet state carried from one step to the next
+  (`σ.predecessor = Ω.head`).
 - Spartan proof acceptance alone does not establish deferred-claim validity.
   Both native accumulator checks must hold. Intermediate template-building
   hops deliberately contain false accumulators and are not valid payments.
@@ -73,10 +74,12 @@ Bootstrap) have `2^19` constraints and 64 rows; each linked pair's proofs
 occupy 5,024 and 4,928 bytes before the full payment envelope. The matrices
 must agree from hop 5 on. The hop chain starts from toy pairs, so its
 accumulators stay false; every Bootstrap pair's accumulators (the empty claim)
-hold. At the last hop two wallets' chains start at Bootstrap pairs: every order
-(Send and Receive after a Bootstrap, a Receive and a Send) must run on the
-hop's circuits, verify, and have accumulators that hold natively, and changed
-kind bits or a changed empty claim must break a row. The benchmark asserts
+hold. At the last hop two wallets with different keys start at Bootstrap pairs:
+every order (Send and Receive after a Bootstrap, a Receive and a Send) must run
+on the hop's circuits, verify, and have accumulators that hold natively;
+changed kind bits, a changed empty claim or a changed table-commitment limb
+must break a row, and a proof checked under the other wallet's table
+commitment must be refused. The benchmark asserts
 exact native `q` coefficient equality between batched and pointwise
 evaluation.
 

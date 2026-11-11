@@ -1030,7 +1030,7 @@ pub fn prove_circuit<C: PastaCurve>(
     rng: &mut SpikeRng,
     circuit: &dyn Circuit<F<C>>,
 ) -> (Proof<C>, Timings) {
-    let fixed = fixed_commitments(shape, gens, circuit);
+    let fixed = fixed_for(shape, gens, circuit, &inst.io);
     let _ = crate::prof::take();
     let (proof, timings, _) = prove_inner(
         shape,
@@ -1056,13 +1056,15 @@ pub fn prove_circuit<C: PastaCurve>(
 }
 
 /// The verification key's part for constant columns: one unblinded
-/// commitment per trailing fixed row (computed once per circuit).
+/// commitment per trailing fixed row that holds the key's constants
+/// (computed once per circuit; the wallet rows, first of the fixed rows, are
+/// the instance's: `fixed_for`).
 pub fn fixed_commitments<C: PastaCurve>(
     shape: &Shape,
     gens: &Gens<C>,
     circuit: &dyn Circuit<F<C>>,
 ) -> Vec<Aff<C>> {
-    let nf = circuit.fixed_rows(shape);
+    let nf = circuit.fixed_rows(shape) - circuit.wallet_rows();
     if nf == 0 {
         return Vec::new();
     }
@@ -1089,7 +1091,7 @@ pub fn verify_circuit<C: PastaCurve>(
     bytes: &[u8],
     circuit: &dyn Circuit<F<C>>,
 ) -> Result<(), String> {
-    let fixed = fixed_commitments(shape, gens, circuit);
+    let fixed = fixed_for(shape, gens, circuit, &inst.io);
     verify_inner(
         shape,
         gens,
@@ -1102,6 +1104,91 @@ pub fn verify_circuit<C: PastaCurve>(
         &fixed,
     )
     .map(|_| ())
+}
+
+/// Every fixed row's commitment for one instance, in row order: the wallet
+/// rows' from the instance's io (`Circuit::wallet_io`), then the key's
+/// (`fixed_commitments`).
+pub fn fixed_for<C: PastaCurve>(
+    shape: &Shape,
+    gens: &Gens<C>,
+    circuit: &dyn Circuit<F<C>>,
+    io: &[F<C>],
+) -> Vec<Aff<C>> {
+    let mut fixed = wallet_commitments::<C>(circuit, io);
+    fixed.extend(fixed_commitments(shape, gens, circuit));
+    fixed
+}
+
+/// The wallet rows' commitments an instance names (four io limbs per row).
+/// Panics on limbs that are not a point's: the instance is malformed.
+pub fn wallet_commitments<C: PastaCurve>(circuit: &dyn Circuit<F<C>>, io: &[F<C>]) -> Vec<Aff<C>> {
+    let n = circuit.wallet_rows();
+    if n == 0 {
+        return Vec::new();
+    }
+    let at = circuit.wallet_io().expect("the wallet rows' io");
+    (0..n)
+        .map(|k| {
+            point_from_limbs::<C>(&io[at + 4 * k..at + 4 * k + 4])
+                .expect("the wallet row's commitment is a point")
+        })
+        .collect()
+}
+
+/// A point from its coordinates' 128-bit limbs (x low, x high, y low, y
+/// high), each a scalar below 2^128; `None` if they are not one.
+pub fn point_from_limbs<C: PastaCurve>(limbs: &[F<C>]) -> Option<Aff<C>> {
+    let base = |lo: &F<C>, hi: &F<C>| -> Option<C::Base> {
+        let mut bytes = [0u8; 32];
+        for (half, v) in [lo, hi].into_iter().enumerate() {
+            let r = v.to_repr();
+            let r = r.as_ref();
+            if r[16..].iter().any(|b| *b != 0) {
+                return None;
+            }
+            bytes[16 * half..16 * half + 16].copy_from_slice(&r[..16]);
+        }
+        let mut repr = <C::Base as ff::PrimeField>::Repr::default();
+        repr.as_mut().copy_from_slice(&bytes);
+        Option::from(<C::Base as ff::PrimeField>::from_repr(repr))
+    };
+    let x = base(&limbs[0], &limbs[1])?;
+    let y = base(&limbs[2], &limbs[3])?;
+    Option::from(<Aff<C> as iroha_pasta::PastaAffine>::from_xy(x, y))
+}
+
+/// A point's coordinates as four 128-bit limbs (x low, x high, y low, y
+/// high) in the scalar field.
+pub fn limbs_of_point<C: PastaCurve>(p: &Aff<C>) -> [F<C>; 4] {
+    let (x, y): (C::Base, C::Base) =
+        Option::from(iroha_pasta::PastaAffine::coordinates(p)).expect("a finite point");
+    let mut out = [F::<C>::ZERO; 4];
+    for (k, c) in [x, y].into_iter().enumerate() {
+        let r = ff::PrimeField::to_repr(&c);
+        let r = r.as_ref();
+        let lo = u128::from_le_bytes(r[..16].try_into().unwrap());
+        let hi = u128::from_le_bytes(r[16..32].try_into().unwrap());
+        out[2 * k] = F::<C>::from_u128(lo);
+        out[2 * k + 1] = F::<C>::from_u128(hi);
+    }
+    out
+}
+
+/// The unblinded commitment of `values` on the first generators (a row's
+/// leading columns; the rest zero).
+pub fn commit_public<C: PastaCurve>(gens: &Gens<C>, values: &[F<C>]) -> Aff<C> {
+    iroha_pasta::msm::msm_public::<C>(values, &gens.g[..values.len()], MemoryBudget::DEFAULT)
+        .expect("msm")
+        .to_affine()
+}
+
+/// One row's unblinded commitment, as the key's and the wallet rows' are.
+pub fn row_commitment<C: PastaCurve>(shape: &Shape, gens: &Gens<C>, row: &[F<C>]) -> Aff<C> {
+    let active = shape.active_cols();
+    iroha_pasta::msm::msm_public::<C>(&row[..active], &gens.g[..active], MemoryBudget::DEFAULT)
+        .expect("msm")
+        .to_affine()
 }
 
 /// Verification with a precomputed key part for the fixed rows.
@@ -1581,7 +1668,7 @@ pub fn prove_linked_circuit<C: PastaCurve>(
     link: &Link,
     circuit: &dyn Circuit<F<C>>,
 ) -> (Proof<C>, [u8; 32], [u8; 32]) {
-    let fixed = fixed_commitments(shape, gens, circuit);
+    let fixed = fixed_for(shape, gens, circuit, &inst.io);
     let (proof, _, out) = prove_inner(
         shape,
         gens,
@@ -1608,7 +1695,7 @@ pub fn verify_linked_circuit<C: PastaCurve>(
     link: &Link,
     circuit: &dyn Circuit<F<C>>,
 ) -> Result<[u8; 32], String> {
-    let fixed = fixed_commitments(shape, gens, circuit);
+    let fixed = fixed_for(shape, gens, circuit, &inst.io);
     verify_inner(shape, gens, inst, bytes, true, &[], link, circuit, &fixed)
         .map(|o| o.expect("linked").0)
 }
