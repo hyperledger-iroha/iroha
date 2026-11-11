@@ -25,6 +25,9 @@ import zk_rust_lexical_index as rust_index  # noqa: E402
 import zk_semantic_profile_reference as profile_reference  # noqa: E402
 
 SPEC_PATH = ROOT / checker.DEFAULT_SPEC
+# The statement identity of every privacy protocol is computed once, in the frozen Exact12 wire
+# grammar; runtime statements delegate to it.
+STATEMENT_DIGEST_PRODUCER = ("crates/iroha_data_model/src/privacy/exact12_wire.rs", "privacy_wire_statement_digest")
 
 
 def load_spec() -> dict:
@@ -820,27 +823,27 @@ class ProducerLedgerChecks(TreeFixture):
             self.assertEqual(fresh["producer_ledger"]["production"][path][name], ledger["production"][path][name])
 
     def test_an_unlisted_or_stale_producer_fails(self) -> None:
-        path = "crates/iroha_data_model/src/privacy/statements.rs"
+        path, name = STATEMENT_DIGEST_PRODUCER
         spec = self.mutated()
-        del spec["producer_ledger"]["production"][path]["PrivacyStatementV1::digest"]
-        self.assertReported(self.producer_errors(spec), f"producer {path} PrivacyStatementV1::digest: calls ['blake3'] and is not listed")
+        del spec["producer_ledger"]["production"][path][name]
+        self.assertReported(self.producer_errors(spec), f"producer {path} {name}: calls ['blake3'] and is not listed")
         spec = self.mutated()
         spec["producer_ledger"]["production"][path]["removed_digest"] = {"primitives": ["blake3"], "domains": [], "returns": "", "role": "privacy.record-digest-blake3"}
         self.assertReported(self.producer_errors(spec), "is listed but no longer calls a digest in production")
         spec = self.mutated()
-        spec["producer_ledger"]["production"][path]["PrivacyStatementV1::digest"]["domains"] = ["other"]
+        spec["producer_ledger"]["production"][path][name]["domains"] = ["other"]
         self.assertReported(self.producer_errors(spec), "recorded domains")
         spec = self.mutated()
         spec["producer_ledger"]["test_only_counts"] = {}
         self.assertReported(self.producer_errors(spec), "`test_only_counts` differs from the tree")
 
     def test_a_producer_needs_a_role_of_its_primitive(self) -> None:
-        path = "crates/iroha_data_model/src/privacy/statements.rs"
+        path, name = STATEMENT_DIGEST_PRODUCER
         spec = self.mutated()
-        spec["producer_ledger"]["production"][path]["PrivacyStatementV1::digest"]["role"] = ""
+        spec["producer_ledger"]["production"][path][name]["role"] = ""
         self.assertReported(self.producer_errors(spec), "role '' does not exist")
         spec = self.mutated()
-        spec["producer_ledger"]["production"][path]["PrivacyStatementV1::digest"]["role"] = "kaigi.relation-poseidon"
+        spec["producer_ledger"]["production"][path][name]["role"] = "kaigi.relation-poseidon"
         self.assertReported(self.producer_errors(spec), "which the function does not call")
         # Every named consumer keeps at least one assigned producer.
         spec = self.mutated()
@@ -851,14 +854,12 @@ class ProducerLedgerChecks(TreeFixture):
         self.assertReported(self.producer_errors(spec), "no production producer is assigned to a role of consumer confidential")
 
     def test_refresh_keeps_role_assignments_and_leaves_new_producers_unassigned(self) -> None:
-        path = "crates/iroha_data_model/src/privacy/statements.rs"
+        path, name = STATEMENT_DIGEST_PRODUCER
         spec = self.mutated()
-        del spec["producer_ledger"]["production"][path]["PrivacyStatementV1::digest"]
+        del spec["producer_ledger"]["production"][path][name]
         fresh = checker.refreshed(spec, self.derived)["producer_ledger"]["production"][path]
-        self.assertEqual(fresh["PrivacyStatementV1::digest"]["role"], "")
-        self.assertEqual(
-            fresh["BootleLanternIssuerPolicyV1::computed_record_digest"]["role"], "privacy.record-digest-sha256"
-        )
+        self.assertEqual(fresh[name]["role"], "")
+        self.assertEqual(fresh["PrivacyRootPublicationV1::digest"]["role"], "privacy.record-digest-blake3")
 
     def test_producers_are_derived_lexically(self) -> None:
         ledger = {
