@@ -80,6 +80,83 @@ fn guest_stack_top_is_an_exclusive_memory_boundary() {
         Err(VMError::MemoryAccessViolation { .. })
     ));
 }
+
+/// Keep the daemon source guard strict while allowing its fixed-policy telemetry.
+fn daemon_contains_retired_stack_setting(source: &str, setting: &str) -> bool {
+    let mut checked = source.to_owned();
+    if setting == "gas_to_stack_multiplier"
+        && let Some((before, function_and_tail)) =
+            source.split_once("fn ivm_stack_settings_snapshot(")
+        && let Some((body, after)) = function_and_tail.split_once("\n}")
+    {
+        let body = body.split_whitespace().collect::<String>();
+        // Accept only the field derived from this immutable local binding. A
+        // mutable/rebound policy or another occurrence of the field still fails.
+        if body.contains("letguest_policy=ivm::IvmStackPolicy::V1;")
+            && body.matches("guest_policy=").count() == 1
+        {
+            let body = body.replacen(
+                "gas_to_stack_multiplier:guest_policy.bytes_per_gas(),",
+                "",
+                1,
+            );
+            checked = format!("{before}fn ivm_stack_settings_snapshot({body}\n}}{after}");
+        }
+    }
+    let mut checked = checked.split_whitespace().collect::<String>();
+    // These exact read-only assertions exercise the telemetry snapshot. Do not
+    // exempt arbitrary field reads, assignments, configuration or setter calls.
+    for assertion in [
+        "assert_eq!(snapshot.gas_to_stack_multiplier,guest_policy.bytes_per_gas());",
+        "assert_eq!(published.gas_to_stack_multiplier,expected.gas_to_stack_multiplier);",
+    ] {
+        checked = checked.replace(assertion, "");
+    }
+    checked.contains(setting)
+}
+
+#[test]
+fn daemon_stack_setting_guard_accepts_only_fixed_policy_telemetry() {
+    let telemetry = "\
+fn ivm_stack_settings_snapshot(outcome: Outcome) -> Snapshot {
+    let guest_policy = ivm::IvmStackPolicy::V1;
+    Snapshot {
+        gas_to_stack_multiplier: guest_policy.bytes_per_gas(),
+    }
+}
+assert_eq!(snapshot.gas_to_stack_multiplier, guest_policy.bytes_per_gas());
+assert_eq!(published.gas_to_stack_multiplier, expected.gas_to_stack_multiplier);
+";
+    assert!(!daemon_contains_retired_stack_setting(
+        telemetry,
+        "gas_to_stack_multiplier"
+    ));
+    for changed in [
+        telemetry.replace("ivm::IvmStackPolicy::V1", "configured_policy()"),
+        telemetry.replace("let guest_policy", "let mut guest_policy"),
+        telemetry.replace(
+            "\n    Snapshot {",
+            "\n    let guest_policy = configured_policy();\n    Snapshot {",
+        ),
+        telemetry.replace("fn ivm_stack_settings_snapshot", "fn mutable_configuration"),
+        telemetry.replace("guest_policy.bytes_per_gas(),", "configured_multiplier(),"),
+        format!("{telemetry}\nlet multiplier = config.gas_to_stack_multiplier;"),
+        format!("{telemetry}\nsnapshot.gas_to_stack_multiplier = configured_multiplier();"),
+        format!("{telemetry}\nlet multiplier = std::env::var(\"gas_to_stack_multiplier\");"),
+    ] {
+        assert!(
+            daemon_contains_retired_stack_setting(&changed, "gas_to_stack_multiplier"),
+            "a mutable stack-policy reference escaped the daemon source guard: {changed}"
+        );
+    }
+    for setting in ["guest_stack_bytes", "memory_budget_profile"] {
+        assert!(daemon_contains_retired_stack_setting(
+            &format!("{telemetry}\nlet value = config.{setting};"),
+            setting,
+        ));
+    }
+}
+
 #[test]
 fn production_ivm_sources_have_no_mutable_guest_stack_policy() {
     const IVM_SOURCE: &str = include_str!("../src/ivm.rs");
@@ -120,8 +197,8 @@ fn production_ivm_sources_have_no_mutable_guest_stack_policy() {
         include_str!("../../iroha_config/src/parameters/actual.rs"),
         include_str!("../../iroha_config/src/parameters/defaults.rs"),
         include_str!("../../iroha_config/src/parameters/user.rs"),
-        include_str!("../../irohad/src/main.rs"),
     ];
+    let daemon_source = include_str!("../../irohad/src/main.rs");
     for retired_setting in [
         "guest_stack_bytes",
         "gas_to_stack_multiplier",
@@ -132,6 +209,10 @@ fn production_ivm_sources_have_no_mutable_guest_stack_policy() {
                 .iter()
                 .all(|source| !source.contains(retired_setting)),
             "node configuration contains retired guest-stack setting `{retired_setting}`",
+        );
+        assert!(
+            !daemon_contains_retired_stack_setting(daemon_source, retired_setting),
+            "node startup contains retired guest-stack setting `{retired_setting}` outside fixed-policy telemetry",
         );
     }
 }

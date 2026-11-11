@@ -23,9 +23,7 @@ pub(crate) mod transparent_stark;
 pub mod vega;
 pub mod verange;
 pub(crate) mod x25519_wallet;
-#[cfg(feature = "zk-stark")]
 pub mod zk_ace;
-#[cfg(feature = "zk-stark")]
 #[doc(hidden)]
 pub mod zk_ace_stark;
 pub mod zk_ams;

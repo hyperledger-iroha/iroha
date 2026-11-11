@@ -7,13 +7,12 @@ use crate::{
         StateReadOnly, StateTransaction, WorldReadOnly, public_lane_validator_record_matches_key,
     },
 };
-#[cfg(all(test, feature = "zk-stark"))]
+#[cfg(test)]
 use iroha_crypto::fhe_bfv::{
     BfvFullBootstrapExecutionProofInputMaterialV1,
     validate_bfv_full_bootstrap_arithmetic_air_evaluation_material_for_trace_v1,
     validate_bfv_full_bootstrap_arithmetic_trace_material_v1,
 };
-#[cfg(feature = "zk-stark")]
 #[cfg(test)]
 use iroha_crypto::fhe_bfv::{
     BfvFullBootstrapExecutionProverInputMaterialV1,
@@ -21,7 +20,6 @@ use iroha_crypto::fhe_bfv::{
     bfv_full_bootstrap_execution_prover_input_material_v1,
     validate_bfv_full_bootstrap_execution_prover_input_material_v1,
 };
-#[cfg(feature = "zk-stark")]
 use iroha_crypto::fhe_bfv::{
     bfv_full_bootstrap_arithmetic_air_evaluation_material_v1,
     bfv_full_bootstrap_arithmetic_trace_material_digest_v1,
@@ -834,10 +832,9 @@ const FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_ATTACHMENT_CONTEXT:
 const FHE_INPUT_ADMISSION_DEDICATED_WITNESS_AIR_REQUIRED: &str = "FHE input admission requires a dedicated BFV ciphertext witness AIR; binding-only STARK AIR does not prove ciphertext residual or noise bounds";
 const FHE_PUBLIC_KEY_DEDICATED_WITNESS_AIR_REQUIRED: &str = "FHE public-key proof requires a dedicated BFV key-generation witness AIR; binding-only STARK AIR does not prove secret-key/public-key consistency or residual/noise bounds";
 const FHE_BOOTSTRAP_KEY_DEDICATED_WITNESS_AIR_REQUIRED: &str = "FHE bootstrap-key proof requires a dedicated BFV zero-refresh witness AIR; binding-only STARK AIR does not prove zero-encryption refresh ciphertexts or round consistency";
-#[cfg(all(test, feature = "zk-stark"))]
+#[cfg(test)]
 const FHE_FULL_BOOTSTRAP_DEDICATED_PROVER_UNAVAILABLE: &str =
     "dedicated BFV full-bootstrap arithmetic STARK prover is not available";
-#[cfg(feature = "zk-stark")]
 const FHE_FULL_BOOTSTRAP_GENERIC_BINDING_AIR_REJECTED: &str =
     "generic binding AIR proofs are not accepted for BFV full-bootstrap production proofs";
 fn proof_attachment_envelope_with_context(
@@ -1310,13 +1307,11 @@ fn verify_soracloud_fhe_input_admission_backend(
             "FHE input admission verifying key backend mismatch".into(),
         ));
     }
-    #[cfg(feature = "zk-stark")]
     validate_soracloud_fhe_stark_verifier_key_payload(
         "FHE input admission",
         &vk_box,
         SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
     )?;
-    #[cfg(feature = "zk-stark")]
     validate_soracloud_fhe_stark_native_air_binding(
         "FHE input admission",
         attachment.backend.as_str(),
@@ -1429,7 +1424,6 @@ fn validate_soracloud_fhe_statement_open_verify_envelope(
     Ok(open)
 }
 #[cfg(test)]
-#[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_full_bootstrap_native_air_statement_binding_v1(
     label: &str,
     envelope_bytes: &[u8],
@@ -1497,7 +1491,6 @@ fn validate_soracloud_fhe_full_bootstrap_native_air_statement_binding_v1(
     }
     Ok(())
 }
-#[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_stark_verifier_key_payload(
     label: &str,
     verifier_key: &iroha_data_model::proof::VerifyingKeyBox,
@@ -1522,7 +1515,6 @@ fn validate_soracloud_fhe_stark_verifier_key_payload(
     .map_err(invalid_parameter)?;
     Ok(())
 }
-#[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_stark_native_air_binding(
     label: &str,
     backend: &str,
@@ -1632,22 +1624,16 @@ fn validate_soracloud_fhe_stark_native_air_binding(
 }
 #[derive(Clone)]
 struct BfvFullBootstrapNativeAirPublicPaddingContext {
-    #[cfg(feature = "zk-stark")]
     slot_index: u32,
-    #[cfg(feature = "zk-stark")]
     bound_mode: BfvFullBootstrapExecutionProofBoundModeV1,
-    #[cfg(feature = "zk-stark")]
     trace_material_digest: Hash,
-    #[cfg(feature = "zk-stark")]
     expected_trace_material_digest: Option<Hash>,
-    #[cfg(feature = "zk-stark")]
     expected_trace_rows: Option<Vec<Vec<u64>>>,
-    #[cfg(feature = "zk-stark")]
     expected_composition_values: Option<Vec<u64>>,
 }
-#[cfg(all(test, feature = "zk-stark"))]
+#[cfg(test)]
 const FHE_FULL_BOOTSTRAP_NATIVE_AIR_QUERY_NONCE_LIMIT: u32 = 1_024;
-#[cfg(all(test, feature = "zk-stark"))]
+#[cfg(test)]
 fn soracloud_fhe_full_bootstrap_native_air_transcript_label_v1(attempt: u32) -> String {
     if attempt == 0 {
         return iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1
@@ -1658,11 +1644,10 @@ fn soracloud_fhe_full_bootstrap_native_air_transcript_label_v1(attempt: u32) -> 
         iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1
     )
 }
-#[cfg(feature = "zk-stark")]
 fn soracloud_fhe_full_bootstrap_native_air_transcript_label_is_allowed_v1(label: &str) -> bool {
     label == iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1
 }
-#[cfg(all(test, feature = "zk-stark"))]
+#[cfg(test)]
 fn soracloud_fhe_full_bootstrap_native_air_stark_params_v1(
     statement_hash: Hash,
 ) -> crate::zk_stark::StarkFriParamsV1 {
@@ -1678,7 +1663,6 @@ fn soracloud_fhe_full_bootstrap_native_air_stark_params_v1(
         ),
     }
 }
-#[cfg(feature = "zk-stark")]
 fn soracloud_fhe_full_bootstrap_native_air_domain_tag_matches_v1(
     statement_hash: Hash,
     domain_tag: &str,
@@ -1686,7 +1670,6 @@ fn soracloud_fhe_full_bootstrap_native_air_domain_tag_matches_v1(
     domain_tag
         == iroha_crypto::fhe_bfv::bfv_full_bootstrap_native_stark_air_domain_tag_v1(statement_hash)
 }
-#[cfg(feature = "zk-stark")]
 #[cfg(test)]
 fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
     label: &str,
@@ -1702,7 +1685,6 @@ fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
         &crate::zk_stark::StarkVerifierLimits::default(),
     )
 }
-#[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary_with_limits(
     label: &str,
     statement_hash: Hash,
@@ -2125,11 +2107,9 @@ fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary_with_limits(
     }
     Ok(())
 }
-#[cfg(feature = "zk-stark")]
 fn is_zero_stark_digest(digest: &iroha_data_model::privacy::GoldilocksDigest384V1) -> bool {
     digest.words().iter().all(|&word| word == 0)
 }
-#[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_row(
     opening_label: &str,
     row_label: &str,
@@ -2149,7 +2129,6 @@ fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_row(
     }
     Ok(())
 }
-#[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_merkle_path(
     opening_label: &str,
     path_label: &str,
@@ -2191,7 +2170,6 @@ fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_merkle_path(
     }
     Ok(())
 }
-#[cfg(feature = "zk-stark")]
 fn verify_soracloud_fhe_full_bootstrap_arithmetic_stark_air(
     label: &str,
     backend: &str,
@@ -2642,13 +2620,11 @@ fn verify_soracloud_fhe_public_key_proof_backend(
             "FHE public-key verifying key backend mismatch".into(),
         ));
     }
-    #[cfg(feature = "zk-stark")]
     validate_soracloud_fhe_stark_verifier_key_payload(
         "FHE public-key",
         &vk_box,
         SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
     )?;
-    #[cfg(feature = "zk-stark")]
     validate_soracloud_fhe_stark_native_air_binding(
         "FHE public-key",
         attachment.backend.as_str(),
@@ -2842,13 +2818,11 @@ fn verify_soracloud_fhe_bootstrap_key_proof_backend(
             "FHE bootstrap-key verifying key backend mismatch".into(),
         ));
     }
-    #[cfg(feature = "zk-stark")]
     validate_soracloud_fhe_stark_verifier_key_payload(
         "FHE bootstrap-key",
         &vk_box,
         SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
     )?;
-    #[cfg(feature = "zk-stark")]
     validate_soracloud_fhe_stark_native_air_binding(
         "FHE bootstrap-key",
         attachment.backend.as_str(),
@@ -2883,7 +2857,6 @@ fn governed_full_bootstrap_execution_verifier_key(
     if let Err(err) =
         validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(params, material, artifacts)
     {
-        #[cfg(feature = "zk-stark")]
         if let Some(circuit_err) =
             governed_full_bootstrap_execution_verifier_key_circuit_error_from_artifact(artifacts)
         {
@@ -2926,7 +2899,6 @@ fn governed_full_bootstrap_execution_verifier_key(
         verifier_key.backend,
         native_verifier_key_material.native_payload,
     );
-    #[cfg(feature = "zk-stark")]
     {
         let mut verifier_key_box = verifier_key_box;
         validate_governed_full_bootstrap_execution_stark_verifier_key_payload(
@@ -2934,8 +2906,6 @@ fn governed_full_bootstrap_execution_verifier_key(
         )?;
         Ok(verifier_key_box)
     }
-    #[cfg(not(feature = "zk-stark"))]
-    Ok(verifier_key_box)
 }
 fn validate_governed_full_bootstrap_execution_verifier_key_artifact_canonical_layouts(
     artifact_bytes: &[u8],
@@ -2983,7 +2953,6 @@ fn validate_governed_full_bootstrap_execution_verifier_key_artifact_canonical_la
     })?;
     Ok(())
 }
-#[cfg(feature = "zk-stark")]
 fn governed_full_bootstrap_execution_verifier_key_circuit_error_from_artifact(
     artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
 ) -> Option<InstructionExecutionError> {
@@ -3047,7 +3016,6 @@ fn governed_full_bootstrap_execution_verifier_key_circuit_error_from_artifact(
         None
     }
 }
-#[cfg(feature = "zk-stark")]
 fn governed_full_bootstrap_execution_verifier_key_material_envelope_matches_key_for_circuit_diagnostic(
     key: &iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyV1,
     envelope: &iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyMaterialEnvelopeV1,
@@ -3187,7 +3155,6 @@ fn governed_full_bootstrap_execution_verifier_key_material_envelope_matches_key_
     );
     Ok(())
 }
-#[cfg(feature = "zk-stark")]
 fn validate_governed_full_bootstrap_execution_stark_verifier_key_payload(
     verifier_key: &mut iroha_data_model::proof::VerifyingKeyBox,
 ) -> Result<(), InstructionExecutionError> {
@@ -3291,7 +3258,7 @@ fn validate_governed_full_bootstrap_execution_stark_verifier_key_payload(
     .map_err(invalid_parameter)?;
     Ok(())
 }
-#[cfg(all(test, feature = "zk-stark"))]
+#[cfg(test)]
 fn validate_soracloud_fhe_full_bootstrap_prover_verifier_key(
     label: &str,
     verifier_key: &iroha_data_model::proof::VerifyingKeyBox,
@@ -3305,7 +3272,6 @@ fn validate_soracloud_fhe_full_bootstrap_prover_verifier_key(
     .map(|_| ())
 }
 #[cfg(test)]
-#[cfg(feature = "zk-stark")]
 fn canonical_soracloud_fhe_full_bootstrap_prover_verifier_key(
     label: &str,
     verifier_key: &iroha_data_model::proof::VerifyingKeyBox,
@@ -3331,7 +3297,6 @@ fn canonical_soracloud_fhe_full_bootstrap_prover_verifier_key(
     Ok(verifier_key.clone())
 }
 #[cfg(test)]
-#[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_full_bootstrap_prover_statement_hash(
     label: &str,
     statement_hash: Hash,
@@ -3350,8 +3315,6 @@ fn verify_soracloud_fhe_full_bootstrap_execution_proof_backend(
     governed_verifier_key: &iroha_data_model::proof::VerifyingKeyBox,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), InstructionExecutionError> {
-    #[cfg(not(feature = "zk-stark"))]
-    let _ = public_padding_context;
     let attachment_vk_commitment = attachment.vk_commitment.ok_or_else(|| {
         invalid_parameter("FHE full-bootstrap execution proof requires vk_commitment")
     })?;
@@ -3499,14 +3462,6 @@ fn verify_soracloud_fhe_full_bootstrap_execution_proof_backend(
             "FHE full-bootstrap execution verifying key backend mismatch".into(),
         ));
     }
-    #[cfg(not(feature = "zk-stark"))]
-    {
-        let _ = public_padding_context;
-        Err(invalid_parameter(
-            "FHE full-bootstrap execution proof requires the zk-stark feature for dedicated native AIR verification",
-        ))
-    }
-    #[cfg(feature = "zk-stark")]
     {
         verify_soracloud_fhe_full_bootstrap_arithmetic_stark_air(
             "FHE full-bootstrap execution",
@@ -3643,7 +3598,6 @@ fn full_bootstrap_execution_proof_bound_mode(
     }
 }
 #[cfg(test)]
-#[cfg(feature = "zk-stark")]
 fn refresh_transcript_mode_for_ciphertext_bound_mode(
     bound_mode: BfvCiphertextBoundModeV1,
 ) -> BfvRefreshTranscriptModeV1 {
@@ -3756,7 +3710,6 @@ fn verify_soracloud_fhe_full_bootstrap_execution_proofs(
                     "failed to derive FHE full-bootstrap execution proof statement for slot {slot_index}: {err}"
                 ))
             })?;
-        #[cfg(feature = "zk-stark")]
         let (trace_material_digest, expected_trace_rows, expected_composition_values) = {
             let witness_material = bfv_full_bootstrap_execution_witness_digest_material_v1(
                 params,
@@ -3829,17 +3782,11 @@ fn verify_soracloud_fhe_full_bootstrap_execution_proofs(
             &proof.proof,
             expected_statement_hash,
             BfvFullBootstrapNativeAirPublicPaddingContext {
-                #[cfg(feature = "zk-stark")]
                 slot_index: slot_index_u32,
-                #[cfg(feature = "zk-stark")]
                 bound_mode: proof_bound_mode,
-                #[cfg(feature = "zk-stark")]
                 trace_material_digest,
-                #[cfg(feature = "zk-stark")]
                 expected_trace_material_digest: Some(trace_material_digest),
-                #[cfg(feature = "zk-stark")]
                 expected_trace_rows,
-                #[cfg(feature = "zk-stark")]
                 expected_composition_values,
             },
             &governed_verifier_key,
@@ -16282,7 +16229,7 @@ impl Execute for isi::RecordSoracloudRuntimeReceipt {
         write_soracloud_runtime_receipt(state_transaction, self.receipt)
     }
 }
-#[cfg(all(test, feature = "zk-stark"))]
+#[cfg(test)]
 fn finalize_soracloud_fhe_full_bootstrap_stark_proof_attachment_v1(
     proof_box: iroha_data_model::proof::ProofBox,
     circuit_id: &str,
@@ -16308,7 +16255,6 @@ fn finalize_soracloud_fhe_full_bootstrap_stark_proof_attachment_v1(
     Ok(attachment)
 }
 #[cfg(test)]
-#[cfg(feature = "zk-stark")]
 fn soracloud_fhe_full_bootstrap_execution_proof_from_native_air_envelope_v1(
     statement_hash: Hash,
     verifier_key: &iroha_data_model::proof::VerifyingKeyBox,
@@ -16370,7 +16316,7 @@ fn soracloud_fhe_full_bootstrap_execution_proof_from_native_air_envelope_v1(
     })?;
     Ok(proof)
 }
-#[cfg(all(test, feature = "zk-stark"))]
+#[cfg(test)]
 pub(crate) fn prove_soracloud_fhe_full_bootstrap_execution_proof_v1(
     statement_hash: Hash,
     verifier_key: &iroha_data_model::proof::VerifyingKeyBox,
@@ -16401,7 +16347,6 @@ pub(crate) fn prove_soracloud_fhe_full_bootstrap_execution_proof_v1(
 /// AIR evaluation material does not bind the trace, the shared BFV STARK
 /// wrapper rejects the generated envelope, or the envelope cannot be built
 /// within production byte limits.
-#[cfg(feature = "zk-stark")]
 fn build_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_from_prover_input_material_v1(
     prover_input_material: &BfvFullBootstrapExecutionProverInputMaterialV1,
 ) -> Result<Vec<u8>, InstructionExecutionError> {
@@ -16437,7 +16382,7 @@ fn build_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_from_p
     }
     Ok(envelope_bytes)
 }
-#[cfg(all(test, feature = "zk-stark"))]
+#[cfg(test)]
 fn validate_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_for_trace_material_v1(
     envelope_bytes: &[u8],
     arithmetic_trace_material: &iroha_crypto::fhe_bfv::BfvFullBootstrapArithmeticTraceMaterialV1,
@@ -16564,7 +16509,6 @@ fn validate_soracloud_fhe_full_bootstrap_execution_native_air_envelope_bytes_for
     Ok(native_envelope)
 }
 #[cfg(test)]
-#[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_full_bootstrap_execution_prover_input_material_for_artifacts_v1(
     params: &BfvParameters,
     evaluation_keys: &BfvEvaluationKeyBundle,
@@ -16607,7 +16551,6 @@ fn validate_soracloud_fhe_full_bootstrap_execution_prover_input_material_for_art
 /// execution circuit, when the prover input material is stale or malformed, or
 /// when the native BFV STARK/FRI envelope cannot be built within production
 /// limits.
-#[cfg(feature = "zk-stark")]
 fn prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material_v1(
     params: &BfvParameters,
     evaluation_keys: &BfvEvaluationKeyBundle,
@@ -16648,7 +16591,6 @@ fn prove_soracloud_fhe_full_bootstrap_execution_proof_from_prover_input_material
     )
 }
 #[cfg(test)]
-#[cfg(feature = "zk-stark")]
 fn full_bootstrap_execution_prover_input_material_verifier_key(
     prover_input_material: &BfvFullBootstrapExecutionProverInputMaterialV1,
 ) -> Result<iroha_data_model::proof::VerifyingKeyBox, InstructionExecutionError> {
@@ -16678,7 +16620,6 @@ fn full_bootstrap_execution_prover_input_material_verifier_key(
     Ok(verifier_key_box)
 }
 #[cfg(test)]
-#[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_full_bootstrap_release_audit_package_for_evaluation_keys_v1(
     context: &str,
     params: &BfvParameters,
@@ -16756,7 +16697,6 @@ fn validate_soracloud_fhe_full_bootstrap_release_audit_package_for_evaluation_ke
     Ok(())
 }
 #[cfg(test)]
-#[cfg(feature = "zk-stark")]
 fn validate_soracloud_fhe_full_bootstrap_release_audit_refresh_transcript_v1(
     context: &str,
     params: &BfvParameters,
@@ -16789,7 +16729,6 @@ fn validate_soracloud_fhe_full_bootstrap_release_audit_refresh_transcript_v1(
 /// Returns an execution error when the evaluation keys do not carry governed `FullBootstrapV1`
 /// material, the artifact bundle does not match that material, statement derivation fails, or the
 /// dedicated full-bootstrap prover is unavailable.
-#[cfg(feature = "zk-stark")]
 fn prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
     params: &BfvParameters,
     evaluation_keys: &BfvEvaluationKeyBundle,
@@ -16928,7 +16867,6 @@ fn prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_v1(
         .collect()
 }
 #[cfg(test)]
-#[cfg(feature = "zk-stark")]
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn validate_soracloud_fhe_full_bootstrap_release_audited_execution_output_v1(
     params: &BfvParameters,
@@ -17066,7 +17004,6 @@ fn validate_soracloud_fhe_full_bootstrap_release_audited_execution_output_v1(
 /// `FullBootstrapV1` keys, the release audit package does not match the
 /// governed artifacts, trusted reviewer, or caller-pinned package digest, or
 /// the underlying native proof generation fails.
-#[cfg(feature = "zk-stark")]
 #[allow(clippy::too_many_arguments)]
 pub fn prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_release_audit_v1(
     params: &BfvParameters,

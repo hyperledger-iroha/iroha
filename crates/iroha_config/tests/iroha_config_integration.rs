@@ -3,6 +3,8 @@
 mod autoscale_config;
 #[path = "checked_in_profiles_parse.rs"]
 mod checked_in_profiles_parse;
+#[path = "committed_content_and_settlement_keys.rs"]
+mod committed_content_and_settlement_keys;
 #[path = "compute_economics.rs"]
 mod compute_economics;
 #[path = "connect_relay_strategy_hard_cut.rs"]

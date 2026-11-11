@@ -101,32 +101,43 @@ fn game_partition_snapshot_preserves_current_and_exact_predecessor() {
     assert_eq!(json::to_json(&restored.game_partitions).unwrap(), before);
 }
 
-#[test]
-fn game_partition_snapshot_member_follows_the_selection() {
-    // Installed by the addition: the member is authoritative and cannot be left out.
-    let encoded = json::to_json(&game_world()).unwrap();
-    let mut map = SnapshotJsonMap::parse_world_fixture(&encoded).unwrap();
-    map.omit_uninstalled_world_members().unwrap();
-    assert!(map.remove("game_partitions").is_some());
-    let error = restore_map(map)
-        .err()
-        .expect("missing authoritative field rejects");
-    assert!(error.to_string().contains("game_partitions"));
-
-    // On the baseline the member is uninstalled: snapshots leave it out and a restore reads it
-    // empty, exactly as on a release without the addition.
-    let baseline = World::default();
+/// `world` as a snapshot writes it: without the members its selection does not install.
+fn written(world: &World) -> String {
     let uninstalled =
-        crate::runtime::uninstalled_world_members(baseline.runtime_selection.view().get()).unwrap();
-    assert!(uninstalled.contains(&"game_partitions"));
-    let encoded = json::to_json(&baseline).unwrap();
+        crate::runtime::uninstalled_world_members(world.runtime_selection.view().get())
+            .unwrap()
+            .members;
+    let encoded = json::to_json(world).unwrap();
     let members = json_object_members(&encoded).unwrap();
     let written: Vec<String> = members
         .iter()
         .filter(|(key, _)| !uninstalled.iter().any(|member| member == key))
         .map(|(key, raw)| format!("\"{key}\":{raw}"))
         .collect();
-    let written = format!("{{{}}}", written.join(","));
+    format!("{{{}}}", written.join(","))
+}
+
+#[test]
+fn game_partition_snapshot_member_follows_the_selection() {
+    // Installed by the addition: the member is authoritative and cannot be left out.
+    let encoded = written(&game_world());
+    let mut map = SnapshotJsonMap::parse_world_fixture(&encoded).unwrap();
+    map.omit_uninstalled_world_members().unwrap();
+    assert!(map.remove("game_partitions").is_some());
+    let error = restore_map(map)
+        .err()
+        .expect("missing authoritative field rejects");
+    assert!(error.to_string().contains("game_partitions"), "{error}");
+
+    // On the baseline the member is uninstalled: snapshots leave it out and a restore reads it
+    // empty, exactly as on a release without the addition.
+    let baseline = World::default();
+    let uninstalled =
+        crate::runtime::uninstalled_world_members(baseline.runtime_selection.view().get())
+            .unwrap()
+            .members;
+    assert!(uninstalled.contains(&"game_partitions"));
+    let written = written(&baseline);
     let mut map = SnapshotJsonMap::parse_world_fixture(&written).unwrap();
     map.omit_uninstalled_world_members().unwrap();
     let restored = restore_map(map).expect("a baseline World restores without the member");

@@ -112,7 +112,7 @@ where
                     format!("scheduled change set {id} no longer applies: {error}").into(),
                 )
             })?;
-        check_transition_support(&record.change_set, &selection, &applied, &lookup)?;
+        check_transition_support(&record.change_set, current, &selection, &applied, &lookup)?;
         added.extend(applied.published);
         selection = applied.selection;
     }
@@ -207,7 +207,7 @@ where
     let applied = change_set
         .apply(&meets, &lookup)
         .map_err(|error| Error::InvariantViolation(format!("change set {id}: {error}").into()))?;
-    check_transition_support(change_set, &meets, &applied, &lookup)?;
+    check_transition_support(change_set, current, &meets, &applied, &lookup)?;
     // The predecessor's generic publication semantics stay unchanged. Once Ironwood has
     // activated, reject an incompatible successor during proposal/approval, before attestation.
     if super::ironwood::enabled_with_definitions(&meets, &lookup) {
@@ -225,64 +225,77 @@ where
     Ok(applied.selection)
 }
 
-/// Reject transitions whose effects this lifecycle engine cannot perform (§14.8).
+/// Reject transitions whose effects the lifecycle engine of this root cannot perform (§14.8).
 ///
 /// The engine installs storage: a table starts empty and a cell starts at the initial bytes its
-/// published definition declares ([`install_cells`]). Merely recognizing every successor
-/// definition does not implement a migration cutover, a storage retirement or a retained
-/// completion capability. The rule depends only on the change set, never on this release, so
-/// proposal, attestation and activation reject the same transitions on every node; whether a
-/// node's release implements the successor is decided separately, when it attests and at
-/// activation, where an unsupported node stops instead of executing.
+/// published definition declares ([`install_cells`]). It runs migrations and retires drained
+/// storage once the root has activated the kernel's lifecycle State
+/// ([`super::migration::lifecycle_installed`], judged on `committed`, the selection the root
+/// executes now), under the structural rules of [`super::migration::unsupported_transition`].
+/// It keeps no completion closure in the selection: the kernel's registry holds the closure of
+/// every registered obligation ([`super::obligations::registry`]), so retaining or releasing one
+/// by a transition stays refused.
+///
+/// The rule depends only on the change set, the selections and the published definitions, never
+/// on this release, so proposal, attestation and activation reject the same transitions on
+/// every node; whether a node's release implements the successor is decided separately, when it
+/// attests and at activation, where an unsupported node stops instead of executing.
 fn check_transition_support(
     change_set: &ChangeSetV1,
+    committed: &RootSelectionV1,
     previous: &RootSelectionV1,
     applied: &AppliedChangeSet,
     published: &impl DefinitionLookup,
 ) -> Result<(), Error> {
+    /// Published definitions with those the change set itself publishes.
+    struct WithPublished<'a, L> {
+        published: &'a L,
+        added: &'a BTreeMap<DefinitionId, DefinitionDescriptorV1>,
+    }
+    impl<L: DefinitionLookup> DefinitionLookup for WithPublished<'_, L> {
+        fn definition(&self, id: &DefinitionId) -> Option<&DefinitionDescriptorV1> {
+            self.added.get(id).or_else(|| self.published.definition(id))
+        }
+    }
     super::keyed_state::validate_transition(previous, &applied.selection)
         .map_err(|reason| Error::InvariantViolation(reason.into()))?;
-    let descriptor = |id: &DefinitionId| {
-        applied
-            .published
-            .get(id)
-            .or_else(|| published.definition(id))
-    };
-    // The fixed Ironwood migration preserves every original row and undo byte. It is
-    // the only implemented codec extension. A superficially identical codec does
-    // not prove another invariant or migration contract; all other retirements
-    // remain refused until their cutover is implemented.
+    if change_set.transitions.iter().any(|transition| {
+        matches!(
+            transition,
+            SelectionTransitionV1::RetainCompletion(_)
+                | SelectionTransitionV1::ReleaseCompletion(_)
+        )
+    }) {
+        return Err(Error::InvariantViolation(
+            "runtime transition requires unimplemented selection-level completion closures; the \
+             kernel registry holds every completion closure"
+                .into(),
+        ));
+    }
+    // The fixed Ironwood migration preserves every original row and undo byte: an identity
+    // cutover replaces storage definitions over the same physical fields and moves no row, so
+    // it needs no cursor. A superficially identical codec does not prove another invariant or
+    // migration contract; every other retirement is the retirement of a drained migration.
     let identity_cutover = super::ironwood::supports_identity_cutover(
         previous,
         &applied.selection,
         published,
         &applied.published,
     );
-    for transition in &change_set.transitions {
-        let unsupported = match transition {
-            SelectionTransitionV1::RetireStorage(_) if !identity_cutover => {
-                Some("storage migration cutover")
-            }
-            SelectionTransitionV1::RetainCompletion(_)
-            | SelectionTransitionV1::ReleaseCompletion(_) => {
-                Some("kernel-registered completion capabilities")
-            }
-            SelectionTransitionV1::Activate(id)
-                if matches!(descriptor(id), Some(DefinitionDescriptorV1::Migration(_))) =>
-            {
-                Some("migration execution")
-            }
-            _ => None,
-        };
-        if let Some(operation) = unsupported {
-            // TODO(§5.4): implement certified cursors, write barriers and atomic cutover before
-            // admitting transitions that require these effects.
-            return Err(Error::InvariantViolation(
-                format!("runtime transition requires unimplemented {operation}").into(),
-            ));
-        }
+    match super::migration::unsupported_transition(
+        change_set,
+        identity_cutover,
+        committed,
+        previous,
+        &applied.selection,
+        &WithPublished {
+            published,
+            added: &applied.published,
+        },
+    ) {
+        Some(reason) => Err(Error::InvariantViolation(reason.into())),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// Write the initial value of every cell `change_set` installs (§4, "Add storage"): the bytes
@@ -437,7 +450,7 @@ pub fn activate_due(
     let live = if due.is_empty() {
         super::obligations::LiveObligations::default()
     } else {
-        super::obligations::LiveObligations::of(wtx)
+        super::obligations::LiveObligations::of(wtx).with_registered(wtx, now_ms)
     };
     for (_, id) in due {
         let Some(mut record) = wtx.runtime_change_sets.get(&id).cloned() else {
@@ -453,8 +466,22 @@ pub fn activate_due(
                     if let Err(reason) = check_transition_support(
                         &record.change_set,
                         &current,
+                        &current,
                         applied,
                         &PublishedDefinitions(&wtx.runtime_definitions),
+                    ) {
+                        iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
+                        return false;
+                    }
+                    // A cutover waits for its staged copy and a retirement for its drain (§5.4).
+                    if let Some(reason) = super::migration::blocked(
+                        wtx,
+                        &record.change_set,
+                        &current,
+                        &Staged {
+                            published: &PublishedDefinitions(&wtx.runtime_definitions),
+                            added: &applied.published,
+                        },
                     ) {
                         iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
                         return false;
@@ -518,6 +545,7 @@ pub fn activate_due(
             }
             *wtx.runtime_selection.get_mut() = applied.selection;
             install_cells(wtx, &record.change_set, catalog, height)?;
+            super::migration::activated(wtx, &record.change_set, height);
             record.status = ChangeSetStatusV1::Activated(height);
             RuntimeUpgradeEvent::Activated(RuntimeUpgradeActivated {
                 id,
@@ -651,7 +679,7 @@ pub fn check_provenance(
 }
 
 /// Committed time of the executing block, in milliseconds.
-pub(super) fn block_ms(state_transaction: &crate::state::StateTransaction<'_, '_>) -> u64 {
+pub(crate) fn block_ms(state_transaction: &crate::state::StateTransaction<'_, '_>) -> u64 {
     u64::try_from(state_transaction._curr_block.creation_time().as_millis()).unwrap_or(u64::MAX)
 }
 

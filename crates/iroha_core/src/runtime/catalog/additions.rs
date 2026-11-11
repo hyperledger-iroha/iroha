@@ -81,8 +81,9 @@ pub type CellInstaller = fn(&mut WorldTransaction<'_, '_>, &[u8]) -> Result<(), 
 
 /// What this release adds after its frozen baseline, in activation order.
 ///
-/// A World field an addition adds must be a top-level World member: snapshots leave it out, and a
-/// restore reads it empty, until a change set installs its storage
+/// A World field an addition adds is a top-level World member or a member of a nested owner
+/// whose snapshot reader applies the selection: snapshots leave it out, and a restore reads it
+/// empty, until a change set installs its storage
 /// ([`crate::runtime::uninstalled_world_members`]).
 pub const ADDITIONS: &[Addition] = &[
     ENDORSED_RUNTIME_UPGRADE_PROPOSAL,
@@ -91,7 +92,59 @@ pub const ADDITIONS: &[Addition] = &[
     ACCOUNT_SIGNING_KEYS,
     SORAFS_REPAIR,
     SORAFS_AUTHORITY,
+    RESTRICTED_DATASPACE_READ,
+    // Independent of every addition before it, like the three above; it stays last so no
+    // ordered addition declares its tables.
+    RUNTIME_LIFECYCLE,
 ];
+
+/// The kernel's lifecycle State (`specs/live_runtime_upgrades.md` §5.4, §7.2, §7.3, §13):
+///
+/// - `world.runtime_obligations`, the registry of obligations
+///   (`crate::runtime::obligations::registry`): `RegisterRuntimeObligationV1` commits an owner's
+///   terminal effects with their captured completion closure, and `CompleteRuntimeObligationV1`
+///   ends the obligation;
+/// - `world.runtime_migrations`, the committed cursor of every migration
+///   (`crate::runtime::migration`);
+/// - `world.runtime_boundaries`, the boundaries of the root's history by height
+///   (`crate::runtime::checkpoint`): `RatifyRuntimeAdoptionAnchorV1` commits the adoption anchor
+///   and `RaiseRuntimeStartupFloorV1` a startup floor, each with every validator's statement.
+///
+/// A root that has activated it also admits what needs that State: a migration, the retirement
+/// of drained storage and the committed checkpoint policy. Until a change set activates the
+/// addition the tables stay empty and out of snapshots, the instructions stay inactive, and the
+/// root executes exactly what the frozen baseline executes. Its dependencies are exactly the
+/// frozen baseline.
+pub const RUNTIME_LIFECYCLE: Addition = Addition {
+    module: "iroha.runtime.lifecycle.v1",
+    instructions: &[
+        "iroha.runtime.obligation.register.v1",
+        "iroha.runtime.obligation.complete.v1",
+        "iroha.runtime.boundary.anchor.v1",
+        "iroha.runtime.boundary.floor.v1",
+    ],
+    rebinds: &[],
+    storage: &[
+        StorageAddition::Table("world.runtime_obligations"),
+        StorageAddition::Table("world.runtime_migrations"),
+        StorageAddition::Table("world.runtime_boundaries"),
+    ],
+};
+
+/// Exact restricted data space reads delegated by their active native SNS owner.
+/// This independent successor preserves the baseline's genesis-only grant policy until the
+/// four permission/role mutation interfaces are explicitly rebound by governance.
+pub const RESTRICTED_DATASPACE_READ: Addition = Addition {
+    module: "iroha.dataspace.restricted_read_delegation.v1",
+    instructions: &[],
+    rebinds: &[
+        "iroha.grant",
+        "iroha.revoke",
+        "iroha.register",
+        "iroha.unregister",
+    ],
+    storage: &[],
+};
 
 /// Parliament-owned nondelegable SoraFS authorities, independent of game partitions.
 pub const SORAFS_AUTHORITY: Addition = Addition {
@@ -186,7 +239,7 @@ pub mod test_additions {
     pub const LOG_WIRE_ID: &str = "iroha.log";
     /// The table [`LOG`] adds.
     pub const TABLE: &str = "world.viral_bonus_paid";
-    /// The cell [`LOG`] adds: a top-level World member, as every addition's field must be.
+    /// The cell [`LOG`] adds, a top-level World member.
     pub const CELL: &str = "world.soracloud_sequence_watermark";
     /// The value the cell [`LOG`] adds starts at.
     pub const CELL_INITIAL: u64 = 7;
@@ -207,6 +260,32 @@ pub mod test_additions {
                     Ok(())
                 },
             }),
+        ],
+    };
+
+    /// The table [`NESTED`] adds: a member of the trigger set, a nested World owner.
+    pub const NESTED_TABLE: &str = "triggers.contracts";
+    /// The member [`NESTED_TABLE`] is written as inside the World's `triggers` member.
+    pub const NESTED_MEMBER: &str = "contracts";
+
+    /// A release that adds the `Log` instruction and one table inside a nested World owner.
+    pub const NESTED: Addition = Addition {
+        module: "iroha.test.addition.nested",
+        instructions: &[LOG_WIRE_ID],
+        rebinds: &[],
+        storage: &[StorageAddition::Table(NESTED_TABLE)],
+    };
+
+    /// A release that adds the `Log` instruction and two tables a migration moves rows between
+    /// (`super::super::migrations::test_migrations`). No baseline definition declares either
+    /// table, so the old one can be retired without replacing the baseline bundle.
+    pub const MIGRATED: Addition = Addition {
+        module: "iroha.test.addition.migrated",
+        instructions: &[LOG_WIRE_ID],
+        rebinds: &[],
+        storage: &[
+            StorageAddition::Table("world.tx_sequences"),
+            StorageAddition::Table(TABLE),
         ],
     };
 

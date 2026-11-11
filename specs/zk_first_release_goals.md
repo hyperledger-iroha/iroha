@@ -314,9 +314,11 @@ test `feature_parity_record` prints a record of one fixed scenario (a certified
 history with an authorized policy change, policy identities, limit decisions
 and verification gas) and `python3 scripts/check_zk_feature_parity.py` builds
 `iroha_core` under several feature selections and compares the records. Every
-`must_equal` record has to agree; a `gated` record (today the real native STARK
-proof, which a build without `zk-stark` does not compile) may differ only while
-the census lists that feature as an open gate.
+`must_equal` record has to agree, the outcome of a real native STARK proof
+among them: STARK/FRI verification is compiled into every build and has no
+Cargo feature (`feature.zk_stark`). A `gated` record names an operation still
+compiled only under a feature and may differ only while the census lists that
+feature as an open gate; the test prints none today.
 
 Verification gas is metered with the schedule frozen in each block's settings.
 `iroha_core::gas::meter_instruction`, `meter_instructions` and
@@ -343,8 +345,7 @@ Open in this family, each a census entry with its owner:
 - `halo2.enabled` and `stark.enabled` are committed fields. The plan author
   decided they are deleted; that changes the consensus-policy hash preimage and
   needs the pinned first-release history regenerated in a declared cutover
-  (`switch.zk.backend_enabled`). `zk-stark` is still a Cargo feature
-  (`feature.zk_stark`).
+  (`switch.zk.backend_enabled`).
 - `confidential.enabled`, `assume_valid` and `verifier_backend` are still
   node-local and compared in the P2P handshake; the plan author decided they
   are deleted (`cfg.confidential.node_switches`).
@@ -510,7 +511,7 @@ Facts it records about the current tree:
   history; State construction rebuilds the proof-status index and validates
   standalone election state. The content of a verifying-key record is
   validated at use, not at restore.
-- Of 19 selection sites, a substituted Halo2 key, a generic STARK key under a
+- Of 17 selection sites, a substituted Halo2 key, a generic STARK key under a
   semantic name, an election key without a vote role, an uploaded RAM-LFE
   verifier description, a drifted SoraCloud role key, a changed envelope
   digest, a release manifest with another catalog commitment and a fee-sponsor

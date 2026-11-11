@@ -6863,9 +6863,9 @@
     },
     {
      "id": "feature_conditional_engine_refusal",
-     "what": "`PrivacyVerificationErrorV1::EngineUnavailable`, a variant that existed only in builds without the `zk-stark` feature and refused ZK-ACE there.",
+     "what": "`PrivacyVerificationErrorV1::EngineUnavailable`, a variant that existed only in builds without the then-optional `zk-stark` Cargo feature and refused ZK-ACE there.",
      "replaced_by": {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "symbol": "UnsupportedOperation(Box<PrivacyUnsupportedOperationV1>),"},
-     "equivalence": "The unconditional typed refusal is returned in every build; a build without the feature reports `NativeEngineNotCompiled`. Removing the feature gate itself is F.4 and P.5 work.",
+     "equivalence": "The unconditional typed refusal is returned in every build. F.4 has since removed the feature itself: the STARK verifier is compiled into every build, so no build refuses ZK-ACE because an engine is not compiled.",
      "absent": [
       {"path": "crates/iroha_core_privacy/src/privacy_verifier.rs", "pattern": "PrivacyEngineUnavailableFailureV1"},
       {"path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs", "pattern": "PrivacyVerificationErrorV1::EngineUnavailable"}
@@ -10188,20 +10188,6 @@
     {"path": "crates/iroha_core/src/smartcontracts/isi/world.rs", "symbol": "fn validate_soracloud_fhe_stark_verifying_key_record("},
     {"path": "crates/iroha_core/src/smartcontracts/isi/world.rs", "symbol": "fn ensure_open_verify_circuit_id_is_admitted_v1("}
    ],
-   "validity_inputs": [
-    {
-     "what": "The STARK key payload of a typed SoraCloud role is validated only when the `zk-stark` feature is compiled.",
-     "source": "cargo_feature",
-     "site": {
-      "path": "crates/iroha_core/src/smartcontracts/isi/world.rs",
-      "symbol": "#[cfg(feature = \"zk-stark\")] validate_soracloud_fhe_stark_verifying_key_payload(profile, vk, state_transaction)?;"
-     },
-     "owner_task": "F.4",
-     "references": [
-      {"inventory": "runtime_validity", "key": "entries/feature.zk_stark"}
-     ]
-    }
-   ],
    "tests": [
     {
      "path": "crates/iroha_core/src/smartcontracts/isi/world.rs",
@@ -12033,18 +12019,6 @@
      }
     ],
     "test_evidence": "default"
-   },
-   {
-    "id": "soracloud.typed_role_feature",
-    "selector": "cargo_feature",
-    "chooses_guarantee": true,
-    "what": "The STARK payload of a typed SoraCloud key is validated only in a build with the `zk-stark` feature; a build without it stores the record unchecked.",
-    "site": {"path": "crates/iroha_core/src/smartcontracts/isi/world.rs", "symbol": "#[cfg(not(feature = \"zk-stark\"))] let _ = vk;"},
-    "operations": ["verifying_keys::RegisterVerifyingKey"],
-    "open_defect": {"owner_task": "F.4", "what": "A Cargo feature changes which records registration accepts (REQ-061: no feature choice changes validity)."},
-    "references": [
-     {"inventory": "runtime_validity", "key": "entries/feature.zk_stark"}
-    ]
    },
    {
     "id": "confidential.asset_unshield_keys",

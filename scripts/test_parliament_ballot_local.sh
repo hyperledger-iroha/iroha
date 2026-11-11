@@ -9,8 +9,9 @@ case "${1:-}" in
     cat <<'USAGE'
 Usage: scripts/test_parliament_ballot_local.sh [--full]
 
-Runs real registration, wallet admission/execution/closure, independent replay,
-and canonical block input/output tests against public fixtures.
+Runs real registration, the node ballot board (registration ledger, seal and
+the opening-to-closure lifecycle), wallet admission/execution/closure,
+independent replay, and canonical block input/output tests against public fixtures.
 --full runs the entire typed ballot crate suite.
 Uses the parliament-development Cargo target slot and the local-release profile.
 This is an in-process protocol test; it does not start or enable a network.
@@ -33,6 +34,9 @@ if [[ "${1:-}" != --full ]]; then
   tests+=(
     registration::tests::an_honest_registration_verifies_through_the_typed_inputs
     wallet::prepare::tests::a_wallet_ballot_goes_through_admission_execution_corpus_and_closure
+    board::tests::the_ledger_verifies_registrations_and_keeps_seats_and_commitments_unique
+    board::tests::the_seal_lists_exactly_the_seated_credentials
+    board::tests::ballots_execute_against_the_board_from_opening_to_closure
     replay::tests::an_honest_interval_verifies_independently
     entrypoint_tests::genuine_ballot_entrypoint_roundtrips_proposal_and_each_permitted_output
     entrypoint_tests::identical_genuine_ballots_keep_verified_duplicate_results_in_canonical_block

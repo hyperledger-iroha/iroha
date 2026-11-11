@@ -229,33 +229,83 @@ def test_core_backend_switches_cannot_return_or_remove_no_default_symbols() -> N
     assert not (core / "kagemusha_v1_test_fixtures.rs").exists()
 
 
-def test_stark_owns_optional_fastpq_dependency_and_rejects_mutations() -> None:
-    """Native PIPA-R callers avoid FASTPQ while STARK retains its exact shared field codec."""
+def test_stark_field_dependency_is_mandatory_and_rejects_mutations() -> None:
+    """The native STARK/FRI verifier and its shared field codec are compiled into every build."""
 
     package = "iroha_core_zk"
     document = _guarded_document(package)
     assert _guarded_errors(package, document) == []
-    assert document["dependencies"]["fastpq_prover"]["optional"] is True
-    assert FEATURE_HYGIENE.EXPECTED_FEATURES[package]["zk-stark"] == ("dep:fastpq_prover",)
+    assert document["dependencies"]["fastpq_prover"].get("optional", False) is False
     assert "fastpq_prover" not in FEATURE_HYGIENE.cargo_visible_features(document)
-    for mutation in ("remove", "unconditional"):
+    for mutation in ("remove", "optional", "dev-only", "foreign-package"):
         changed = copy.deepcopy(document)
         if mutation == "remove":
             del changed["dependencies"]["fastpq_prover"]
+        elif mutation == "optional":
+            changed["dependencies"]["fastpq_prover"]["optional"] = True
+        elif mutation == "dev-only":
+            changed.setdefault("dev-dependencies", {})["fastpq_prover"] = changed[
+                "dependencies"
+            ].pop("fastpq_prover")
         else:
-            changed["dependencies"]["fastpq_prover"]["optional"] = False
+            changed["dependencies"]["fastpq_prover"]["package"] = "foreign_field"
+        assert changed != document
         assert any(
-            "STARK field dependency `fastpq_prover` must be an optional normal dependency"
+            "STARK field dependency `fastpq_prover` must be a non-optional normal dependency"
             in error
             for error in _guarded_errors(package, changed)
         ), mutation
-    for members in ([], ["fastpq_prover"], ["fastpq_prover?/default"]):
-        changed = copy.deepcopy(document)
-        changed["features"]["zk-stark"] = members
-        assert any(
-            "feature `zk-stark` must be ['dep:fastpq_prover']" in error
-            for error in _guarded_errors(package, changed)
-        ), members
+    changed = copy.deepcopy(document)
+    changed["dependencies"]["fastpq_prover"]["optional"] = True
+    changed["features"]["zk-stark"] = ["dep:fastpq_prover"]
+    errors = _guarded_errors(package, changed)
+    assert any("must be a non-optional normal dependency" in error for error in errors)
+    assert any("Cargo feature `zk-stark` is unclassified" in error for error in errors)
+
+
+RETIRED_STARK_FEATURES = (
+    ("iroha_core", "zk-stark"),
+    ("iroha_core", "proofs-stark"),
+    ("iroha_core", "proofs-full"),
+    ("iroha_core_zk", "zk-stark"),
+    ("iroha_core_zk", "proofs-stark"),
+    ("iroha_core_privacy", "zk-stark"),
+    ("iroha_torii", "zk-stark"),
+    ("iroha_torii", "proofs-stark"),
+    ("iroha_torii", "proofs-full"),
+    ("irohad_lib", "zk-stark"),
+    ("irohad", "zk-stark"),
+)
+
+
+@pytest.mark.parametrize("package,feature", RETIRED_STARK_FEATURES)
+def test_retired_stark_features_cannot_return(package: str, feature: str) -> None:
+    """A consensus verifier is never a build option: STARK has no Cargo feature."""
+    document = _guarded_document(package)
+    assert feature not in document["features"]
+    assert feature not in FEATURE_HYGIENE.EXPECTED_FEATURES[package]
+    assert feature not in FEATURE_HYGIENE.CONTEXTUAL_SHIPPING_FEATURES[package]
+    assert feature not in FEATURE_HYGIENE.EXPLICIT_OPT_IN_FEATURES[package]
+    for members in FEATURE_HYGIENE.EXPECTED_FEATURES[package].values():
+        assert not any(
+            member == feature or member.endswith(f"/{feature}") for member in members
+        ), (package, feature, members)
+    changed = copy.deepcopy(document)
+    changed["features"][feature] = []
+    assert any(
+        f"Cargo feature `{feature}` is unclassified" in error
+        for error in _guarded_errors(package, changed)
+    )
+
+
+def test_stark_sources_have_no_feature_opt_out() -> None:
+    """No Rust source in the STARK owners names a retired STARK feature."""
+    retired = sorted({feature for _package, feature in RETIRED_STARK_FEATURES})
+    for owner in ("iroha_core", "iroha_core_zk", "iroha_core_privacy", "iroha_torii", "irohad"):
+        for source in (ROOT / "crates" / owner).rglob("*.rs"):
+            text = source.read_text(encoding="utf-8")
+            for name in retired:
+                assert f'feature = "{name}"' not in text, (source, name)
 
 
 def test_rejects_unclassified_explicit_feature_omitted_from_default() -> None:
@@ -590,7 +640,7 @@ def test_rejects_privacy_workspace_default_feature_drift(
     ]
 
 
-@pytest.mark.parametrize("feature", ["simd", "zk-stark"])
+@pytest.mark.parametrize("feature", ["simd"])
 def test_rejects_privacy_workspace_feature_injection(
     tmp_path: Path, feature: str,
 ) -> None:

@@ -10,13 +10,13 @@ mod extra_functional;
 mod kaigi_privacy_network;
 #[path = "observer_sync.rs"]
 mod observer_sync;
-#[cfg(feature = "zk-stark")]
+#[cfg(feature = "stark-network-tests")]
 #[path = "privacy_exact12_activation_network.rs"]
 mod privacy_exact12_activation_network;
 #[cfg(feature = "privacy-release-evidence")]
 #[path = "privacy_exact12_jindo_network.rs"]
 mod privacy_exact12_jindo_network;
-#[cfg(any(feature = "privacy-release-evidence", feature = "zk-stark"))]
+#[cfg(any(feature = "privacy-release-evidence", feature = "stark-network-tests"))]
 #[path = "privacy_exact12_network_support.rs"]
 mod privacy_exact12_network_support;
 #[cfg(feature = "privacy-release-evidence")]
@@ -31,6 +31,6 @@ mod privacy_exact12_zk_ams_vega_network;
 #[cfg(feature = "privacy-release-evidence")]
 #[path = "privacy_exact12_zk_x509_network.rs"]
 mod privacy_exact12_zk_x509_network;
-#[cfg(feature = "zk-stark")]
+#[cfg(feature = "stark-network-tests")]
 #[path = "zk_ace_localnet.rs"]
 mod zk_ace_localnet;

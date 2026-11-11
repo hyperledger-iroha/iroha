@@ -1266,17 +1266,22 @@ fn apply_state_runtime_config_before_snapshot_auth(
     config: &Config,
 ) -> Result<(), StateRuntimeConfigurationError> {
     // These fields are process-local execution policy and do not touch Kura-owned geometry.
-    // Settlement must be installed before replay because historical
-    // transitions resolve their deterministic execution state through
-    // `State::settlement`. This ordering is replay correctness, not a
-    // node-readiness gate.
+    // The settlement router inputs are protocol constants: nothing is
+    // installed here.
     install_node_pipeline_config(state, config)?;
     state.set_crypto(config.crypto.clone());
     state.set_oracle(config.oracle.clone());
     state.install_node_fraud_monitoring(config.fraud_monitoring.clone());
     state.set_gov(config.gov.clone());
-    state.content = config.content.clone();
-    state.set_settlement(config.settlement);
+    let ignored = state.install_node_content(config.content.clone());
+    if !ignored.is_empty() {
+        // Unreachable from a configuration file; a settings value built by hand
+        // (a tool or a test) may still hold such values.
+        iroha_logger::warn!(
+            fields = ?ignored,
+            "ignoring content limits of a hand-built settings value: the protocol fixes them"
+        );
+    }
     Ok(())
 }
 /// Install the node's local pipeline resources; validity and fees are committed.
@@ -8624,11 +8629,8 @@ fn run_main_with_config_guard(
                 let beacon_signer = iroha_core::beacon::parliament_test_network_signer::
                 TestNetworkParliamentBeaconPartialSignerV1::try_new(
                     test_network_id,
-                    ordered_roster,
+                    &ordered_roster,
                     &config.common.peer.id,
-                    &iroha_allocation::AllocationBudget::new(
-                        config.runtime_provider_broker.credential_max_memory_bytes.get(),
-                    ),
                 )
                 .map_err(|_| Report::new(MainError::Config))
                 .attach(
@@ -11177,6 +11179,8 @@ mod tests {
                 std::num::NonZeroU32::new(7).expect("nonzero proof cap");
             config.zk.sccp.max_proof_bytes_per_proof =
                 std::num::NonZeroU64::new(11).expect("nonzero byte cap");
+            // A settings value built by hand may hold a router value; no node
+            // configuration key can.
             config.settlement.router.epsilon_bps = 17;
             config.pipeline.ivm_execution_max_bytes = 1024;
             let kura = Kura::blank_kura_for_testing();
@@ -11212,8 +11216,8 @@ mod tests {
             );
             assert_eq!(
                 state.settlement().router.epsilon_bps,
-                17,
-                "the exact settlement router policy must be installed before Kura replay",
+                iroha_config::parameters::defaults::settlement::router::EPSILON_BPS,
+                "a node-local settlement value must not replace the protocol router inputs",
             );
         }
     }

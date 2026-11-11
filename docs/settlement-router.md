@@ -3,7 +3,9 @@
 The [`settlement_router` crate](../crates/settlement_router/src/lib.rs) implements
 exact XOR pricing, receipt construction and buffer-policy evaluation. Core exposes
 these helpers through [`SettlementEngine`](../crates/iroha_core/src/settlement/mod.rs)
-and retains an engine derived from the State-owned router configuration.
+and retains an engine built from the router inputs, which are protocol
+constants of this release: a node configuration has no settlement router key
+and State has no settlement installer.
 
 `SettlementEngine::quote` accepts canonical `Quantity` and `Numeric` values,
 applies volatility margins and liquidity haircuts, and returns exact XOR
@@ -13,7 +15,7 @@ out-of-domain arithmetic fail explicitly. A quote is pricing data: it does not
 authorize a balance or reserve mutation.
 
 `SettlementEngine::evaluate_buffer` classifies exact remaining capacity using the
-configured thresholds. The optional typed lane `settlement_buffer` descriptor
+protocol thresholds. The optional typed lane `settlement_buffer` descriptor
 contains a canonical account, canonical asset-definition ID and positive exact
 XOR capacity. Configuration validates these fields together; aliases, partial
 descriptors and retired metadata fields are rejected. See the

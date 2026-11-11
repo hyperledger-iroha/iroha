@@ -15,23 +15,23 @@ SOURCE_PATH = REPO_ROOT / "crates/iroha_core/src/smartcontracts/isi/soracloud_te
 REGIONS = {
     "verifier_record": (
         '#[derive(Clone, Copy)]\nenum FullBootstrapVerifierRecordMetadataTamper',
-        '#[cfg(feature = "zk-stark")]\n#[test]\nfn soracloud_fhe_full_bootstrap_execution_proof_helper_rejects_empty_input_slots',
-        "814036fd2742bd5ca2df13c93f09006813ddf5469fa612f05e6876cf079ae284",
+        '#[test]\nfn soracloud_fhe_full_bootstrap_execution_proof_helper_rejects_empty_input_slots',
+        "c6bf0731d7d95802290a8b490a19afab8bbda15119224b7bedd3300ac36c92c3",
     ),
     "release_verifier": (
-        '#[cfg(feature = "zk-stark")]\n#[derive(Clone, Copy)]\nenum FullBootstrapReleaseVerifierCase',
-        '#[cfg(feature = "zk-stark")]\n#[test]\nfn soracloud_fhe_full_bootstrap_execution_release_prover_rejects_role_spliced_artifacts',
-        "1d162fb76912c7dff146fdb0e2756ea6c74dfe8f29e3685df7380f015d471f08",
+        '#[derive(Clone, Copy)]\nenum FullBootstrapReleaseVerifierCase',
+        '#[test]\nfn soracloud_fhe_full_bootstrap_execution_release_prover_rejects_role_spliced_artifacts',
+        "425d40912ac186eac2447a8157fb7c9d44ca7745fa8a18c6f47ddf9813eb5d24",
     ),
     "guarded_verifier": (
-        '#[cfg(all(feature = "zk-stark", feature = "zk-preverify"))]\n#[derive(Clone, Copy)]\nenum FullBootstrapGuardedVerifierCase',
+        '#[cfg(feature = "zk-preverify")]\n#[derive(Clone, Copy)]\nenum FullBootstrapGuardedVerifierCase',
         '#[cfg(feature = "zk-preverify")]\n#[test]\nfn soracloud_fhe_full_bootstrap_execution_guarded_verifier_rejects_invalid_native_air',
-        "1752e82a5cb96dd4ccd3b1b4b18ed6a69994bacb5c56b7904e046f2be4162ec7",
+        "8c45b1441cd780855431aea6b658273109d1f0f4a5ba16d38d4a80ca291ea081",
     ),
     "proof_quota": (
-        '#[cfg(feature = "zk-stark")]\nfn enable_full_bootstrap_proof_quotas<P>(',
+        'fn enable_full_bootstrap_proof_quotas<P>(',
         'fn sample_fhe_input_admission_proof(\n',
-        "8b92df900659acde31121bc880561db9facd826bed909341eec9170a7144c167",
+        "ee769153ca758a1bb5449bb67897a93d503f813ed0d6cd1940dc5108a449a212",
     ),
 }
 
@@ -51,36 +51,36 @@ DIRECT_TESTS = {
 
 NAMED_CASES = {
     "soracloud_fhe_full_bootstrap_execution_proof_rejects_generic_binding_air_active_verifier": (
-        ("cfg(feature = \"zk-stark\")", "test"),
+        ("test",),
         "GenericBindingAir",
     ),
     "soracloud_fhe_full_bootstrap_execution_proof_accepts_release_prover_native_air_active_verifier": (
-        ("cfg(feature = \"zk-stark\")", "test"),
+        ("test",),
         "AcceptNativeAir",
     ),
     "soracloud_fhe_full_bootstrap_execution_proof_rejects_release_prover_trace_root_drift": (
-        ("cfg(feature = \"zk-stark\")", "test"),
+        ("test",),
         "TraceRootDrift",
     ),
     "soracloud_fhe_full_bootstrap_execution_proof_rejects_release_prover_root_drift": (
-        ("cfg(feature = \"zk-stark\")", "test"),
+        ("test",),
         "RootDrift",
     ),
     "soracloud_fhe_full_bootstrap_execution_proof_rejects_release_prover_opened_air_drift": (
-        ("cfg(feature = \"zk-stark\")", "test"),
+        ("test",),
         "OpenedAirDrift",
     ),
     "soracloud_fhe_full_bootstrap_execution_proof_rejects_release_prover_opening_commitment_drift": (
-        ("cfg(feature = \"zk-stark\")", "test"),
+        ("test",),
         "OpeningCommitmentDrift",
     ),
     "soracloud_fhe_full_bootstrap_execution_proof_rejects_generic_air_drift": (
-        ("cfg(feature = \"zk-stark\")", "test"),
+        ("test",),
         "GenericAirDrift",
     ),
     "soracloud_fhe_full_bootstrap_execution_guarded_verifier_rejects_release_native_air_drift": (
         (
-            "cfg(all(feature = \"zk-stark\", feature = \"zk-preverify\"))",
+            "cfg(feature = \"zk-preverify\")",
             "test",
             "allow(clippy::too_many_lines)",
         ),
@@ -88,7 +88,7 @@ NAMED_CASES = {
     ),
     "soracloud_fhe_full_bootstrap_execution_guarded_verifier_rejects_release_native_air_root_drift": (
         (
-            "cfg(all(feature = \"zk-stark\", feature = \"zk-preverify\"))",
+            "cfg(feature = \"zk-preverify\")",
             "test",
             "allow(clippy::too_many_lines)",
         ),
@@ -96,7 +96,7 @@ NAMED_CASES = {
     ),
     "soracloud_fhe_full_bootstrap_execution_guarded_verifier_rejects_release_native_air_opening_commitment_drift": (
         (
-            "cfg(all(feature = \"zk-stark\", feature = \"zk-preverify\"))",
+            "cfg(feature = \"zk-preverify\")",
             "test",
             "allow(clippy::too_many_lines)",
         ),
@@ -104,7 +104,7 @@ NAMED_CASES = {
     ),
     "soracloud_fhe_full_bootstrap_execution_guarded_verifier_rejects_generic_air_drift": (
         (
-            "cfg(all(feature = \"zk-stark\", feature = \"zk-preverify\"))",
+            "cfg(feature = \"zk-preverify\")",
             "test",
             "allow(clippy::too_many_lines)",
         ),
@@ -150,7 +150,6 @@ REQUIRED_TOKENS = {
         'assert_invariant_contains(&(err), "verifying key is not active")',
         "assert_invalid_parameter_contains(&(err), expected_error)",
         'assert_invalid_parameter_contains(&(err), "native AIR envelope")',
-        'assert_invalid_parameter_contains(&(err), "requires the zk-stark feature")',
     ),
     "release_verifier": (
         "sample_full_bootstrap_execution_binding_air_proofs_for_claims",
@@ -360,8 +359,13 @@ class SoracloudFullBootstrapProofCaseMatrixSourceTests(unittest.TestCase):
 
     def test_ordered_attribute_mutation_is_rejected(self) -> None:
         name = next(iter(NAMED_CASES))
-        old = f'#[cfg(feature = "zk-stark")]\n    #[test]\n    {name}'
+        old = f'    #[test]\n    {name}'
         self.assert_rejected(_replace_once(self.source, old, old.replace("#[test]", "#[ignore]")))
+        # STARK verification is compiled into every build: a feature gate on a
+        # release-verifier case would remove it from the default test run.
+        for gate in ('#[cfg(feature = "zk-stark")]', '#[cfg(feature = "zk-preverify")]'):
+            with self.subTest(gate=gate):
+                self.assert_rejected(_replace_once(self.source, old, f"    {gate}\n{old}"))
 
     def test_case_wiring_mutation_is_rejected(self) -> None:
         name = next(iter(NAMED_CASES))

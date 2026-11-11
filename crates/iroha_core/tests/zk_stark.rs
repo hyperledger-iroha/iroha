@@ -2,7 +2,6 @@
 #![cfg(feature = "zk-tests")]
 //! End-to-end test for the native STARK (FRI single-fold) verifier.
 
-#![cfg(feature = "zk-stark")]
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use iroha_core_zk::stark::{
     StarkCompositionTermV1, StarkFriParamsV1, StarkFriVerifyingKeyV1, StarkVerifierLimits,

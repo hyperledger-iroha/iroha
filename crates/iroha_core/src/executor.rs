@@ -8883,13 +8883,23 @@ impl Executor {
                 .unwrap_or_else(|| state_transaction.derived_trigger_lifecycle_origin())
         };
         state_transaction.with_trigger_lifecycle_origin(origin, |state_transaction| {
-            self.execute_instruction_within_lifecycle_origin(
+            // A committed terminal effect of the obligation its authority holds completes that
+            // obligation (`specs/live_runtime_upgrades.md` §7.2). A contract's queued effects
+            // carry its subject account as their authority.
+            crate::runtime::obligations::registry::performing(
                 state_transaction,
                 authority,
                 instruction,
-                profile,
-                contract_runtime_context,
-                attachment_invocation,
+                |state_transaction| {
+                    self.execute_instruction_within_lifecycle_origin(
+                        state_transaction,
+                        authority,
+                        instruction,
+                        profile,
+                        contract_runtime_context,
+                        attachment_invocation,
+                    )
+                },
             )
         })
     }
@@ -8913,13 +8923,8 @@ impl Executor {
         // lock, linked-FI and multisig paths that bypass the native dispatch table
         // (`specs/live_runtime_upgrades.md` §5.2, §7.1).
         if !crate::runtime::taira_activation::admitted_by_boundary(state_transaction, instruction) {
-            crate::runtime::envelope::resolve_envelope(
-                state_transaction.world.runtime_selection.get(),
-                state_transaction.block_height(),
-                instruction,
-                || crate::runtime::obligations::step(instruction, &state_transaction.world),
-            )
-            .map_err(ValidationFail::InstructionFailed)?;
+            crate::runtime::resolve_executing(state_transaction, instruction)
+                .map_err(ValidationFail::InstructionFailed)?;
         }
         root_scope::ensure_instruction_scope(instruction, state_transaction)?;
         ensure_contract_deployment_permission_mutation_allowed(
@@ -9116,10 +9121,12 @@ impl Executor {
                 let normalized =
                     normalize_role_permission_for_initial_executor(state_transaction, permission)?;
                 if !is_genesis
-                    && !initial_permission_delegation_allowed(
+                    && !selected_permission_mutation_allowed(
                         state_transaction,
                         authority,
+                        instruction,
                         &normalized,
+                        false,
                     )
                     .map_err(|error| state_transaction.attempt_error_to_validation_fail(error))?
                 {
@@ -9488,11 +9495,15 @@ impl Executor {
         }
         // A replacement can deny the original completion instructions or delete their
         // permissions when its data model is installed. Even identical bytecode reruns
-        // migration and can change those permissions. Every live obligation (escrow, lock or
-        // AMX participation) keeps the authorization it was admitted under. TODO(§7.2): permit
-        // replacement only through captured completion executor authority or a certified
-        // obligation transfer.
-        if !crate::runtime::obligations::LiveObligations::of(&state_transaction.world).is_empty() {
+        // migration and can change those permissions. Every live obligation (escrow, lock, AMX
+        // participation or obligation registered through the kernel) keeps the authorization it
+        // was admitted under. TODO(§7.2): permit replacement only through captured completion
+        // executor authority or a certified obligation transfer.
+        let now_ms = crate::runtime::change_set::block_ms(state_transaction);
+        if !crate::runtime::obligations::LiveObligations::of(&state_transaction.world)
+            .with_registered(&state_transaction.world, now_ms)
+            .is_empty()
+        {
             return Err(ExecutorMigrationError::LiveCustody);
         }
         // Load new executor bytecode

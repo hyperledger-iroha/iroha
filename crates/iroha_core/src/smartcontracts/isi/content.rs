@@ -2,7 +2,7 @@ use super::*;
 use blake3::{Hasher, hash as blake3_hash};
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    content::{ContentBundleManifest, ContentCachePolicy},
+    content::{ContentAuthMode, ContentBundleManifest, ContentCachePolicy},
     da::types::{BlobClass, RetentionPolicy},
 };
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
@@ -15,17 +15,9 @@ impl Execute for iroha_data_model::isi::content::PublishContentBundle {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        // Who may publish is the executor's admission decision; this handler
+        // holds no publisher list.
         let config = &state_transaction.content;
-        if !config.publish_allow_accounts.is_empty()
-            && !config
-                .publish_allow_accounts
-                .iter()
-                .any(|id| id == authority)
-        {
-            return Err(Error::InvariantViolation(
-                "content publishing not permitted for this account".into(),
-            ));
-        }
         let tar_len = self.tarball.len() as u64;
         if tar_len == 0 {
             return Err(Error::InvariantViolation(
@@ -209,7 +201,8 @@ fn build_manifest(
             blob_class: BlobClass::GovernanceArtifact,
             retention: RetentionPolicy::default(),
             cache: default_cache,
-            auth: config.default_auth_mode.clone(),
+            // A publisher that wants gated reads states the mode in its manifest.
+            auth: ContentAuthMode::Public,
             stripe_layout: config.stripe_layout,
             mime_overrides: BTreeMap::new(),
         }

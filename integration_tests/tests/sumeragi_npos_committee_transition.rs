@@ -7,11 +7,16 @@
 //! current exact quorum must cancel that immutable attempt without losing finality.
 //! Retention scenarios restart every process, then authenticate a paid successor signed
 //! by the unchanged generation and a fresh, separately identified future attempt.
-//! The complete rotation withdraws a departing seat's full bond only after replacement and liability
-//! expiry, then restarts every process and proves paid progress and consumed-plan rejection.
-//! Every validator boot and its original required broker must close successfully. Its genuine
-//! Parliament pulse consumes current credentials while the next committee remains pending.
-//! Retail monthly policy and network slashing remain separate gates.
+//! In the complete rotation a departing seven-seat voter schedules its full bond for release and
+//! its operator then double-signs: the honest daemons admit the proof and slash one tenth of the
+//! pending principal to the signed sink. The remainder is withdrawn only after replacement and
+//! liability expiry; every process then restarts and proves paid progress and consumed-plan
+//! rejection. A focused five-process case qualifies the same double-sign on a voter that stays
+//! bonded. Every validator boot and its original required broker must close successfully. Its
+//! genuine Parliament pulse consumes current credentials while the next committee remains pending.
+//! No staking reward can exist on these fresh networks, and the scenarios assert that none can be
+//! claimed: funded conversion needs an enacted retail policy, thirty days of notice from its
+//! enactment block and a closed Honiara earning month, which is an aged-network gate.
 //!
 //! The live ceremony and broker scenarios require the existing Unix external software
 //! signer transport and inherited credential descriptors. Portable history, quorum,
@@ -104,8 +109,13 @@ struct NativeProviderManifest {
     policy_digest: [u8; 32],
 }
 
+#[cfg(unix)]
+#[path = "support/committee_equivocation.rs"]
+mod committee_equivocation;
 #[path = "support/committee_parliament.rs"]
 mod committee_parliament;
+#[path = "support/committee_slashing.rs"]
+mod committee_slashing;
 #[path = "support/committee_staking.rs"]
 mod committee_staking;
 #[path = "support/committee_staking_history.rs"]
@@ -126,6 +136,8 @@ const SELECTION: u64 = EPOCH;
 const CUTOFF: u64 = EPOCH * 2;
 const TARGET_FIRST: u64 = EPOCH * 2 + 1;
 const TARGET_LAST: u64 = EPOCH * 3;
+// Signed delay between the block admitting consensus evidence and its mandatory penalty.
+const SLASHING_DELAY: u64 = 1;
 const WAIT: Duration = Duration::from_secs(600);
 const POLL: Duration = Duration::from_millis(150);
 const TAIRA_XOR: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
@@ -2394,7 +2406,7 @@ async fn run_custody_or_activation_scenario(
         .difference(&return_target)
         .next()
         .ok_or_else(|| eyre!("seven-seat committee has no departing validator"))?;
-    let lifecycle = committee_staking::schedule_retained_withdrawal(
+    let mut lifecycle = committee_staking::schedule_retained_withdrawal(
         network,
         admin,
         operators
@@ -2405,6 +2417,15 @@ async fn run_custody_or_activation_scenario(
         signed_genesis_hash,
     )
     .await?;
+    // The departing voter's operator double-signs while its whole bond is pending release.
+    // The one candidate the election never seated lends its stopped process's transport.
+    let unseated = pool
+        .difference(&seven_set)
+        .next()
+        .ok_or_else(|| eyre!("candidate pool has no unseated process"))?;
+    lifecycle
+        .double_sign_while_unbonding(network, admin, &first.target, unseated, SLASHING_DELAY)
+        .await?;
     let seven_current = prepared_current_custody(&first.prepared)?;
     let second = execute_rotation_preparation(
         network,
@@ -2567,7 +2588,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
         max_validators: 7,
         min_self_bond: 1_000_u64.into(),
         evidence_horizon_blocks: EPOCH * 2,
-        slashing_delay_blocks: 1,
+        slashing_delay_blocks: SLASHING_DELAY,
         ..SumeragiNposParameters::default()
     };
     let xor: AssetDefinitionId = npos.xor_asset_definition_id.clone();
@@ -2582,6 +2603,9 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
         .with_auto_populated_trusted_peers()
         .with_npos_consensus()
         .with_npos_genesis_bootstrap(1_000_u64.into())
+        // A distinct signed sink and a partial fraction make a consensus slash an
+        // observable XOR transfer that leaves a withdrawable remainder.
+        .with_genesis_staking_policy(committee_slashing::signed_policy(&xor))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::EpochLengthBlocks(NonZeroU64::new(EPOCH).expect("nonzero epoch")),
         )))
@@ -2861,9 +2885,23 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
 #[cfg(unix)]
 fn run_network_qualification(scenario: QualificationScenario) -> Result<()> {
     let _descriptor_slots = iroha_test_network::reserve_disposable_ceremony_descriptors()?;
+    run_on_qualification_runtime(scenario.seed(), move || {
+        run_overfull_qualification(scenario)
+    })
+}
+
+/// Own one named, explicitly sized thread and runtime for a real-peer qualification.
+#[cfg(unix)]
+fn run_on_qualification_runtime<F>(
+    name: &'static str,
+    qualification: impl FnOnce() -> F + Send + 'static,
+) -> Result<()>
+where
+    F: Future<Output = Result<()>>,
+{
     const NETWORK_STACK_BYTES: usize = 32 * 1024 * 1024;
     let handle = std::thread::Builder::new()
-        .name(scenario.seed().to_owned())
+        .name(name.to_owned())
         .stack_size(NETWORK_STACK_BYTES)
         .spawn(move || {
             tokio::runtime::Builder::new_multi_thread()
@@ -2872,13 +2910,22 @@ fn run_network_qualification(scenario: QualificationScenario) -> Result<()> {
                 .enable_all()
                 .build()
                 .wrap_err("build the NPoS qualification test runtime")?
-                .block_on(run_overfull_qualification(scenario))
+                .block_on(qualification())
         })
         .wrap_err("start the NPoS qualification test thread")?;
     match handle.join() {
         Ok(result) => result,
         Err(panic) => std::panic::resume_unwind(panic),
     }
+}
+
+#[test]
+#[cfg(unix)]
+fn double_signing_voter_is_slashed_to_the_signed_sink_after_the_signed_delay() -> Result<()> {
+    run_on_qualification_runtime(
+        "npos-double-sign-slash",
+        committee_slashing::run_double_sign_qualification,
+    )
 }
 
 #[test]

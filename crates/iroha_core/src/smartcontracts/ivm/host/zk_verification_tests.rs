@@ -535,7 +535,6 @@ fn generic_verify_proof_revalidates_injected_native_material_at_dispatch() {
     assert_eq!(vm.register(10), 0);
     assert_eq!(vm.register(11), ivm::host::ERR_VERIFY);
 }
-#[cfg(feature = "zk-stark")]
 #[test]
 fn zk_verify_batch_accepts_stark_registry_bound_envelope() {
     let mut host = CoreHost::new(fixture_account("alice"));
@@ -609,7 +608,6 @@ fn zk_verify_batch_accepts_stark_registry_bound_envelope() {
     assert_eq!(vm.register(11), 0);
     assert_eq!(vm.register(12), u64::MAX);
 }
-#[cfg(feature = "zk-stark")]
 #[test]
 fn zk_verify_batch_returns_statuses_with_registry_binding() {
     let mut host = CoreHost::new(fixture_account("alice"));
@@ -642,7 +640,6 @@ fn zk_verify_batch_returns_statuses_with_registry_binding() {
     assert_eq!(vm.register(11), ivm::host::ERR_VK_MISMATCH);
     assert_eq!(vm.register(12), 1);
 }
-#[cfg(feature = "zk-stark")]
 #[test]
 fn zk_verify_batch_reports_backend_verifier_failure_after_prechecks() {
     let mut host = CoreHost::new(fixture_account("alice"));

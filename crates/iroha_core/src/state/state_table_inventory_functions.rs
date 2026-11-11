@@ -1249,7 +1249,7 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         "crates/iroha_core/src/state/native_execution_tip.rs",
         "restored_successor_world_root",
         1,
-        UseOwner::Roots(&["world_state_root"]),
+        UseOwner::Roots(&["keyed_state_root", "world_state_root"]),
     ),
     function(
         "crates/iroha_core/src/state/native_execution_tip.rs",

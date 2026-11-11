@@ -107,6 +107,24 @@ pub(super) fn adaptive_beacon_fixture_for_session_and_keys(
     signing_keys: &[iroha_crypto::KeyPair],
     budget: &iroha_allocation::AllocationBudget,
 ) -> AdaptiveBeaconFixture {
+    let mut rng = StdRng::from_seed([0x5A; 32]);
+    adaptive_beacon_fixture_with_rngs(dkg_session, signing_keys, budget, &mut rng, None)
+}
+
+/// Run one complete signed all-edge ceremony for an exact session and signing roster.
+///
+/// `recipient_rng` supplies the fresh hybrid recipient keys. The dealer polynomials come
+/// from `dealer_rng`, or continue the recipient stream when it is absent. A caller that
+/// must re-derive the dealers elsewhere passes a dedicated dealer stream: nothing but the
+/// in-order `DasRenDealerSecret::generate_with_rng` calls draws from it.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub(super) fn adaptive_beacon_fixture_with_rngs(
+    dkg_session: GlobalThresholdBeaconDkgSessionV1,
+    signing_keys: &[iroha_crypto::KeyPair],
+    budget: &iroha_allocation::AllocationBudget,
+    recipient_rng: &mut StdRng,
+    dealer_rng: Option<&mut StdRng>,
+) -> AdaptiveBeaconFixture {
     assert_eq!(signing_keys.len(), usize::from(dkg_session.committee_size));
     let roster = signing_keys
         .iter()
@@ -121,13 +139,13 @@ pub(super) fn adaptive_beacon_fixture_for_session_and_keys(
     let parameters = adaptive_beacon_parameters(&dkg_session).expect("adaptive parameters");
     let mut state = GlobalThresholdBeaconDkgStateV1::new(dkg_session, &crypto, budget)
         .expect("valid adaptive DKG state");
-    let mut rng = StdRng::from_seed([0x5A; 32]);
     let encryption_keys = (0..dkg_session.committee_size)
         .map(|_| {
-            iroha_crypto::hybrid::HybridKeyPair::generate(&mut rng)
+            iroha_crypto::hybrid::HybridKeyPair::generate(&mut *recipient_rng)
                 .expect("fixture hybrid recipient key")
         })
         .collect::<Vec<_>>();
+    let rng = dealer_rng.unwrap_or(recipient_rng);
     let recipient_keys = signing_keys
         .iter()
         .zip(&encryption_keys)
@@ -152,7 +170,7 @@ pub(super) fn adaptive_beacon_fixture_for_session_and_keys(
     let mut dealer_dtos = Vec::new();
     for dealer_index in 1_u16..=dkg_session.committee_size {
         let (secret, commitment) =
-            DasRenDealerSecret::generate_with_rng(&parameters, dealer_index, &mut rng)
+            DasRenDealerSecret::generate_with_rng(&parameters, dealer_index, &mut *rng)
                 .expect("generate adaptive dealer");
         let dto = sign_global_threshold_beacon_dkg_dealer_commitment_v1(
             &dkg_session,

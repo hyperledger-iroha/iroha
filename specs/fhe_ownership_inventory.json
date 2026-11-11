@@ -15808,14 +15808,9 @@
     {"path": "crates/iroha_core_zk/src/ram_lfe_word.rs", "patterns": ["bfv", "ram_lfe"], "cfg": ["test"], "test_only": true},
     {"path": "crates/iroha_core_zk/src/ram_lfe_word_tests.rs", "patterns": ["ram_lfe"], "cfg": ["test"], "test_only": true},
     {"path": "crates/iroha_core_zk/src/rns_native_source_v1.rs", "patterns": ["mkhe", "rns"]},
-    {"path": "crates/iroha_core_zk/src/stark.rs", "patterns": ["bfv", "fhe"], "cfg": ["feature = \"zk-stark\""]},
-    {
-     "path": "crates/iroha_core_zk/src/stark/bfv_full_bootstrap_tests.rs",
-     "patterns": ["bfv"],
-     "cfg": ["feature = \"zk-stark\"", "test"],
-     "test_only": true
-    },
-    {"path": "crates/iroha_core_zk/src/stark/tests.rs", "patterns": ["bfv", "fhe"], "cfg": ["feature = \"zk-stark\"", "test"], "test_only": true},
+    {"path": "crates/iroha_core_zk/src/stark.rs", "patterns": ["bfv", "fhe"]},
+    {"path": "crates/iroha_core_zk/src/stark/bfv_full_bootstrap_tests.rs", "patterns": ["bfv"], "cfg": ["test"], "test_only": true},
+    {"path": "crates/iroha_core_zk/src/stark/tests.rs", "patterns": ["bfv", "fhe"], "cfg": ["test"], "test_only": true},
     {"path": "crates/iroha_core_zk/src/verification.rs", "patterns": ["bfv", "fhe"]},
     {"path": "crates/iroha_core_zk/src/verification/tests.rs", "patterns": ["bfv", "fhe", "ram_lfe"], "cfg": ["test"], "test_only": true}
    ]
@@ -15986,7 +15981,7 @@
     {
      "path": "crates/iroha_core/src/smartcontracts/isi/soracloud_full_bootstrap_preflight_tests.rs",
      "patterns": ["bfv", "fhe", "ram_lfe"],
-     "cfg": ["feature = \"zk-stark\"", "test"],
+     "cfg": ["test"],
      "test_only": true
     },
     {"path": "crates/iroha_core/src/smartcontracts/isi/soracloud_initial_executor_tests.rs", "patterns": ["fhe"], "cfg": ["test"], "test_only": true},
@@ -15999,7 +15994,7 @@
     {
      "path": "crates/iroha_core/src/smartcontracts/isi/soracloud_required_refresh_mode_tests.rs",
      "patterns": ["bfv", "fhe", "ram_lfe"],
-     "cfg": ["feature = \"zk-stark\"", "test"],
+     "cfg": ["test"],
      "test_only": true
     },
     {

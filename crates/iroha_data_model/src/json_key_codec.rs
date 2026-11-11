@@ -236,6 +236,14 @@ impl JsonKeyCodec for crate::runtime::definition::DefinitionId {
         <[u8; 32] as JsonKeyCodec>::decode_json_key(encoded).map(Self)
     }
 }
+impl JsonKeyCodec for crate::runtime::obligation::ObligationId {
+    fn encode_json_key(&self, out: &mut String) {
+        <[u8; 32] as JsonKeyCodec>::encode_json_key(&self.0, out);
+    }
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        <[u8; 32] as JsonKeyCodec>::decode_json_key(encoded).map(Self)
+    }
+}
 impl JsonKeyCodec for crate::runtime::lifecycle::ChangeSetId {
     fn encode_json_key(&self, out: &mut String) {
         <[u8; 32] as JsonKeyCodec>::encode_json_key(&self.0, out);

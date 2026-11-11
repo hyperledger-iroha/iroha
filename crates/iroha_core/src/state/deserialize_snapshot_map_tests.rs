@@ -555,7 +555,8 @@ fn a_world_without_its_uninstalled_members_restores_them_empty() {
         let encoded = json::to_json(&world).unwrap();
         let mut uninstalled =
             crate::runtime::uninstalled_world_members(world.runtime_selection.view().get())
-                .expect("uninstalled members");
+                .expect("uninstalled members")
+                .members;
         uninstalled.sort_unstable();
         let mut added = [TABLE, CELL].map(|field| field.strip_prefix("world.").unwrap());
         added.sort_unstable();
@@ -612,6 +613,73 @@ fn a_world_without_its_uninstalled_members_restores_them_empty() {
 }
 
 #[test]
+fn a_world_without_an_uninstalled_nested_member_restores_it_empty() {
+    use crate::runtime::catalog::{
+        additions::test_additions::{NESTED, NESTED_MEMBER},
+        test_catalog,
+    };
+    test_catalog::with_additions(&[NESTED], || {
+        let world = World::default();
+        let encoded = json::to_json(&world).unwrap();
+        let uninstalled =
+            crate::runtime::uninstalled_world_members(world.runtime_selection.view().get())
+                .expect("uninstalled members");
+        assert!(uninstalled.members.is_empty());
+        assert_eq!(uninstalled.nested, [("triggers", vec![NESTED_MEMBER])]);
+        // What the writer leaves: the trigger set without the uninstalled member.
+        let members = json_object_members(&encoded).unwrap();
+        let written: Vec<String> = members
+            .iter()
+            .map(|(key, raw)| {
+                if *key != "triggers" {
+                    return format!("\"{key}\":{raw}");
+                }
+                let children: Vec<String> = json_object_members(raw)
+                    .unwrap()
+                    .into_iter()
+                    .filter(|(child, _)| *child != NESTED_MEMBER)
+                    .map(|(child, raw)| format!("\"{child}\":{raw}"))
+                    .collect();
+                format!("\"triggers\":{{{}}}", children.join(","))
+            })
+            .collect();
+        let written = format!("{{{}}}", written.join(","));
+        let ivm = IVM::new(0);
+        let seed = IvmSeed {
+            ivm: &ivm,
+            _marker: PhantomData,
+        };
+        let budget = AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        );
+
+        let mut map = SnapshotJsonMap::parse_world_fixture(&written).unwrap();
+        map.omit_uninstalled_world_members().unwrap();
+        assert_eq!(map.uninstalled_children("triggers"), [NESTED_MEMBER]);
+        assert!(map.uninstalled_children("accounts").is_empty());
+        let restored = match parse_world(&budget, map, &seed) {
+            Ok(restored) => restored,
+            Err(error) => {
+                panic!("a World without its uninstalled nested member restores: {error:?}")
+            }
+        };
+        assert_eq!(
+            json::to_json(&restored.triggers).unwrap(),
+            json::to_json(&world.triggers).unwrap(),
+            "the uninstalled nested member restores as the empty World holds it"
+        );
+
+        // The writer leaves the nested member out, so a snapshot carrying it is refused.
+        let mut map = SnapshotJsonMap::parse_world_fixture(&encoded).unwrap();
+        map.omit_uninstalled_world_members().unwrap();
+        let Err(error) = parse_world(&budget, map, &seed) else {
+            panic!("an uninstalled nested member in the snapshot is refused");
+        };
+        assert!(format!("{error:?}").contains("triggers"), "{error:?}");
+    });
+}
+
+#[test]
 fn a_baseline_world_installs_every_member_but_the_fields_additions_add() {
     let world = World::default();
     let catalog = crate::runtime::release_catalog().expect("release catalog");
@@ -633,6 +701,9 @@ fn a_baseline_world_installs_every_member_but_the_fields_additions_add() {
             "account_signing_key_reservations",
             "account_signing_keys",
             "game_partitions",
+            "runtime_boundaries",
+            "runtime_migrations",
+            "runtime_obligations",
             "sorafs_authority_heads",
             "sorafs_authority_leases",
             "sorafs_authority_proposals",
@@ -641,6 +712,7 @@ fn a_baseline_world_installs_every_member_but_the_fields_additions_add() {
     let mut uninstalled: Vec<String> =
         crate::runtime::uninstalled_world_members(world.runtime_selection.view().get())
             .expect("uninstalled members")
+            .members
             .into_iter()
             .map(str::to_owned)
             .collect();
@@ -657,10 +729,16 @@ fn a_serving_baseline_snapshot_restores_uninstalled_authority_tables_empty() {
     let encoded = json::to_json(&world).unwrap();
     let mut uninstalled =
         crate::runtime::uninstalled_world_members(world.runtime_selection.view().get())
-            .expect("uninstalled members");
+            .expect("uninstalled members")
+            .members;
     uninstalled.sort_unstable();
     let mut added = [
+        "account_signing_key_reservations",
+        "account_signing_keys",
         "game_partitions",
+        "runtime_boundaries",
+        "runtime_migrations",
+        "runtime_obligations",
         "sorafs_authority_heads",
         "sorafs_authority_leases",
         "sorafs_authority_proposals",

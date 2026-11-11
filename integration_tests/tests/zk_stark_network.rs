@@ -1,6 +1,6 @@
 //! Multi-peer STARK integration coverage for governance voting.
-#![cfg(feature = "zk-stark")]
-use eyre::{Result, WrapErr as _, ensure, eyre};
+#![cfg(feature = "stark-network-tests")]
+use eyre::{Result, WrapErr as _, eyre};
 use integration_tests::sandbox;
 use iroha::blocking::Client;
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
@@ -17,23 +17,6 @@ use iroha_model_base::metadata::Metadata;
 use iroha_primitives::json::Json;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::ALICE_ID;
-fn has_test_network_feature(feature: &str) -> bool {
-    std::env::var("TEST_NETWORK_IROHAD_FEATURES")
-        .ok()
-        .map(|value| {
-            value
-                .split([',', ' ', '\t', '\n'])
-                .any(|item| item.trim() == feature)
-        })
-        .unwrap_or(false)
-}
-fn require_test_network_feature(feature: &str, test_name: &str) -> Result<()> {
-    ensure!(
-        has_test_network_feature(feature),
-        "{test_name}: TEST_NETWORK_IROHAD_FEATURES must include `{feature}` to execute the runtime path"
-    );
-    Ok(())
-}
 fn sample_stark_vk_box(backend: &str, circuit_id: &str) -> VerifyingKeyBox {
     let vk_payload = iroha_core_zk::stark::StarkFriVerifyingKeyV1 {
         version: 1,
@@ -104,7 +87,6 @@ where
 #[tokio::test]
 #[ignore = "no audited semantic governance STARK AIR is registered; generic Binding role labels fail closed"]
 async fn stark_governance_paths() -> Result<()> {
-    require_test_network_feature("zk-stark", stringify!(stark_governance_paths))?;
     let backend = "stark/fri";
     let ballot_circuit_id = "vote-ballot";
     let tally_circuit_id = "vote-tally";

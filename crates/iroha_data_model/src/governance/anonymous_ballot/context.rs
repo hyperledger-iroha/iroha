@@ -517,10 +517,10 @@ pub struct AnonymousRosterBindingV1 {
 /// bodies. The roster root is `H(Frame("PARL/ROSTER/v1"; Enc(preimage)))`, 64 bytes
 /// ([`super::digests::anonymous_roster_root_v1`]).
 ///
-/// TODO: the Core integration replaces the 32-byte `ParliamentRosterRootPreimageV1` and
-/// `BodyInstanceId::derive_v1` with this preimage and the 64-byte root directly; this
-/// type keeps a distinct name until then, and the replacement must keep this nominal
-/// schema identity or recompute every roster root.
+/// Every body of an anonymous attempt is sealed under this preimage and identified through
+/// its 64-byte root ([`super::anonymous_body_instance_id_v1`]). The 32-byte
+/// `ParliamentRosterRootPreimageV1` and `BodyInstanceId::derive_v1` stay the frozen
+/// baseline's: an attempt of one family never uses the other's root (design §12.3).
 #[derive(
     Clone,
     Debug,

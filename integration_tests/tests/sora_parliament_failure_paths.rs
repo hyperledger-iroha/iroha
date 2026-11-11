@@ -31,7 +31,7 @@ pub(super) async fn install_threshold_sessions(
     let beacon_budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
     let beacon_record = deterministic_parliament_beacon_key_record_v1(
         network.network_id(),
-        &ordered_roster,
+        &ordered_validator_signing_keys(network, &ordered_roster)?,
         &beacon_budget,
     )
     .wrap_err("derive failure-corridor beacon fixture")?;

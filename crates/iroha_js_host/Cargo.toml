@@ -16,7 +16,7 @@ crate-type = ["cdylib"]
 workspace = true
 
 [dependencies]
-iroha_core_privacy = { workspace = true, default-features = false, features = ["zk-stark"] }
+iroha_core_privacy = { workspace = true, default-features = false }
 iroha_model_base = { workspace = true }
 iroha_js_codec = { workspace = true }
 iroha_service_model = { workspace = true }
@@ -25,7 +25,7 @@ napi-derive = { version = "3.3.2", default-features = false, features = ["type-d
 iroha_crypto = { workspace = true, features = ["node-crypto", "sm", "gost", "pqc"], default-features = false }
 ivm = { workspace = true }
 ivm_abi = { workspace = true }
-iroha_core_zk = { workspace = true, default-features = false, features = ["proofs-stark", "zk-preverify"] }
+iroha_core_zk = { workspace = true, default-features = false, features = ["zk-preverify"] }
 iroha_data_model = { workspace = true, features = ["application-model", "transparent_api", "gost", "sm", "bls"], default-features = false }
 iroha_primitives = { workspace = true }
 iroha_torii_shared = { workspace = true }

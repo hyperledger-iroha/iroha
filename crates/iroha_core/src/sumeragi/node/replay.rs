@@ -51,7 +51,6 @@ pub struct NativeReplaySeed {
     fraud: config::FraudMonitoring,
     governance: config::Governance,
     content: config::Content,
-    settlement: config::Settlement,
     manifests: crate::governance::manifest::LaneManifestRegistryHandle,
     compliance: Option<Arc<crate::compliance::LaneComplianceEngine>>,
 }
@@ -146,7 +145,6 @@ impl NativeReplaySeed {
             fraud: state.fraud_monitoring.clone(),
             governance: state.gov.clone(),
             content: state.content.clone(),
-            settlement: state.settlement,
             manifests,
             compliance,
         }
@@ -288,8 +286,8 @@ impl NativeReplaySeed {
         state.set_oracle(self.oracle.clone());
         state.install_node_fraud_monitoring(self.fraud.clone());
         state.set_gov(self.governance.clone());
-        state.content = self.content.clone();
-        state.set_settlement(self.settlement);
+        // The seed copied the installed slot: every limit of it is the protocol value.
+        let _ = state.install_node_content(self.content.clone());
         state.install_materialized_lane_manifests_for_catalog(
             &self.manifests,
             &self.nexus.lane_catalog,

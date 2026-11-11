@@ -15,11 +15,10 @@ categories.workspace = true
 workspace = true
 
 [features]
-default = ["zk-stark", "simd"]
-zk-stark = []
+default = ["simd"]
 # Enable runtime-admitted CPU arithmetic and SHA-3; scalar results are identical.
 simd = ["fastpq_prover/simd"]
-privacy-release-evidence = ["zk-stark", "iroha_data_model/privacy-exact12-conformance"]
+privacy-release-evidence = ["iroha_data_model/privacy-exact12-conformance"]
 test-utils = ["dep:rand_chacha"]
 # Opt-in diagnostic: measures the transparent FASTPQ replay prover, which
 # `fastpq_prover` exposes only under its `dev-tools` feature. It enables no

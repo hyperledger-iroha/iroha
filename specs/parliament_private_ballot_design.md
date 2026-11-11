@@ -11,10 +11,12 @@ Source baseline: `22b4689e6b`.
 
 [governance_pipeline.md](governance_pipeline.md) inventories the timed-OVN and
 Parliament TLE implementation still in source. This document specifies its
-replacement. The first release has one canonical V1 ballot: retire timed-OVN,
-the Parliament TLE and their schemas, workers, configuration and clients
-together. Do not introduce a V2, dual operation, compatibility decoders, an
-old-ballot fallback or a migration prerequisite.
+replacement. There is one canonical anonymous ballot: no second anonymous
+version, no compatibility decoder between the two ballots, no old-ballot
+fallback and no attempt that mixes them. How the replacement ships, and when
+the timed-OVN definitions are deleted, follows the live-upgrade foundation and
+is fixed in section 12.3, which supersedes every statement below that the two
+change in place in one candidate.
 
 ## 1. Decisions
 
@@ -1710,7 +1712,8 @@ Keep beacon machinery still required for consensus or sortition.
    - Torii, CLI and the canonical SDKs (Kotlin owns JVM and mobile);
    - the wallet disclosure.
 
-   Retire section 12.1 in the same candidate. Introduce no Wasm target.
+   Restrict section 12.1 by the change set that activates the ballot, and
+   delete it as section 12.3 allows. Introduce no Wasm target.
 5. **Model and qualify.** Revise the TLA+ model (section 13), then complete
    proof review, adversarial lifecycle and load tests, real-peer restart and
    rollback, SDK parity and release evidence. Update public documentation in
@@ -1718,6 +1721,81 @@ Keep beacon machinery still required for consensus or sortition.
 
 Hardware acceleration may speed up identical deterministic verification. It
 cannot choose a different relation, result, charge or acceptance rule.
+
+### 12.3 Shipping under the live-upgrade foundation
+
+Reconciliation of 2026-11-11, reviewed with Codex (`gpt-6-astra`, read-only)
+and confirmed by the owner the same day. Sections 12.1 and 12.2 predate the
+live-upgrade foundation ([live_runtime_upgrades.md](live_runtime_upgrades.md)),
+which Taira has adopted. Where they conflict, this section governs.
+
+**What is frozen.** The baseline catalog
+(`specs/runtime_baseline_catalog.json`) contains the timed-OVN Parliament:
+the interfaces `iroha.governance.parliament.attempt.create.v1` and
+`iroha.governance.parliament.transition.submit.v1`, and the storage
+`world.parliament_attempts`, `world.timed_ovn_evidence` and the four
+`world.tle_*` tables. Their instruction layouts are pinned
+(`runtime_baseline_instruction_layouts.tsv`), a release must restore the
+values a running network stored under them, and the threshold-key lifecycle
+keeps its three actions. A definition's encoding and semantics never change
+while a selection contains it, so none of this changes in place: not the
+transition enum, not the attempt State, not the 32-byte roster root or the
+`BodyInstanceId` derivation of a baseline attempt. Regenerating the pin
+migrates nothing.
+
+**What ships.** The anonymous ballot is its own definition family, published
+as release additions and activated by a governed change set:
+
+| Kind | Definition |
+| --- | --- |
+| Interface | `iroha.governance.parliament.anonymous.attempt.create.v1` |
+| Interface | `iroha.governance.parliament.anonymous.transition.submit.v1` |
+| Interface | `iroha.governance.parliament.credential.register.v1` (section 3.2) |
+| Storage | `world.parliament_anonymous_attempts`: the purpose-bound reducer State, policy snapshot and certificate of an attempt |
+| Storage | `world.parliament_anonymous_registrations`: the compact credential of each accepted assignment with the locator of the signed input that carried its proof |
+| Storage | `world.parliament_anonymous_boards`: seal, anchors, casting clock, corpus and closure record of each sealed binding body |
+| Services | The block-start items (seal publication, casting clock, closures, openings), the signerless ballot entrypoint and the committed outputs |
+
+- **No switch of a baseline attempt.** An attempt created through the baseline
+  interface keeps its reducer, with its timed ballots and TLE sessions. An
+  anonymous attempt has its own State from creation. The 64-byte roster root,
+  the changed `BodyInstanceId` derivation and the closure-record certificate
+  binding of sections 3.3 and 3.8 belong to the anonymous family only.
+- **Purpose.** Every anonymous attempt records why it may exist: candidate
+  testing under the network's original genesis policy, or production under the
+  owner's recorded qualification. The purpose travels into its certificate. A
+  candidate certificate is never enacted as a production effect and never makes
+  `parliament_binding_ballot_available()` true.
+- **Inactive means absent.** Until a change set activates the family, its
+  instructions resolve as inactive, its tables stay empty and out of snapshots,
+  no block-start item exists, and a block that carries an anonymous-ballot
+  input is invalid, exactly as on a release without it.
+- **Retirement is governed.** The activating change set closes admission of new
+  timed-OVN work. Timed-OVN and Parliament-TLE code, schemas, workers,
+  configuration and clients are deleted once no obligation needs them and the
+  checkpoint startup floor is above their last use
+  ([live_runtime_upgrades.md](live_runtime_upgrades.md) section 7). The two
+  Parliament-TLE actions of the threshold-key lifecycle go the same way, after a
+  beacon-only successor of that interface exists.
+- **Not interim.** Openings and closures run only in the positioned block-start
+  pass ([sccp.md](sccp.md) section 4.7). The existing permissionless transition
+  driver is never used for them: its positions cannot serve the lift rule of
+  section 11.
+
+**Order.** Each slice leaves the tree compiling and tested; the family is
+activatable only after the fourth.
+
+1. Successor contracts and purpose isolation: the family's instruction
+   payloads, persisted records, identities and certificate, and a separate
+   reducer; candidate certificates refused by production enactment.
+2. Registration, seal and restore as one slice: the three tables, the
+   registration adapter (section 3.2) and the credential-aware seal
+   (section 3.3), with the planner predicting what execution applies.
+3. The positioned pass: shared budget and positions, closures before openings,
+   the casting clock of `h_open + 1`, and the seams SCCP waits on.
+4. Signerless execution: admission, block validity, corpus and replay
+   (sections 3.6 and 3.7).
+5. Clients, certificate effects and governed retirement.
 
 ## 13. Required validation
 

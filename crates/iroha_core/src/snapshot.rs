@@ -292,10 +292,12 @@ fn serialize_runtime_predecessor(undo: &Option<SnapshotNexusRuntime>, out: &mut 
 }
 
 /// Write `world` as the snapshot's `world` member: every top-level member, less those whose
-/// storage `selection` does not install (`specs/live_runtime_upgrades.md` §5.5).
+/// storage `selection` does not install, and every member of a nested owner, less those whose
+/// storage it does not install (`specs/live_runtime_upgrades.md` §5.5).
 ///
 /// # Errors
-/// The uninstalled members cannot be resolved, or the written World is not one JSON object.
+/// The uninstalled members cannot be resolved, or the written World or a nested owner with an
+/// uninstalled member is not one JSON object.
 fn serialize_world_through_selection(
     world: &impl JsonSerialize,
     selection: &iroha_data_model::runtime::definition::RootSelectionV1,
@@ -309,7 +311,32 @@ fn serialize_world_through_selection(
     }
     let mut full = String::new();
     world.json_serialize(&mut full);
-    let members = crate::state::deserialize::json_object_members(&full)
+    write_object_without_members(&full, &omitted.members, out, &|key, raw, out| {
+        let nested = omitted.nested_in(key);
+        if nested.is_empty() {
+            out.push_str(raw);
+            Ok(())
+        } else {
+            write_object_without_members(raw, nested, out, &|_, raw, out| {
+                out.push_str(raw);
+                Ok(())
+            })
+        }
+    })
+}
+
+/// Write the JSON object `object` without its members named in `omitted`, each remaining value
+/// through `write_value`.
+///
+/// # Errors
+/// `object` is not exactly one JSON object, or `write_value` fails.
+fn write_object_without_members(
+    object: &str,
+    omitted: &[&'static str],
+    out: &mut String,
+    write_value: &dyn Fn(&str, &str, &mut String) -> Result<(), SnapshotCaptureError>,
+) -> Result<(), SnapshotCaptureError> {
+    let members = crate::state::deserialize::json_object_members(object)
         .map_err(|error| SnapshotCaptureError::Selection(error.to_string()))?;
     out.push('{');
     let mut first = true;
@@ -323,7 +350,7 @@ fn serialize_world_through_selection(
         first = false;
         json::write_json_string(key, out);
         out.push(':');
-        out.push_str(raw);
+        write_value(key, raw, out)?;
     }
     out.push('}');
     Ok(())
@@ -2968,9 +2995,14 @@ struct RestorableGenerations {
 /// reading any payload; the bundle reader then binds and authenticates a candidate in full.
 /// `None` means no snapshot was ever published. Unreadable, unsigned or foreign older
 /// generations are skipped, never repaired or removed.
+///
+/// A generation below `history_boundary` is not a candidate: blocks at or below the boundary
+/// are never re-executed, so no State below it can catch up
+/// (`specs/live_runtime_upgrades.md` §7.3, §13).
 fn restorable_snapshot_generations(
     store_dir: &Path,
     block_count: usize,
+    history_boundary: u64,
     verification_key: &PublicKey,
     expected_chain_id: &ChainId,
     expected_network_id: NetworkId,
@@ -3010,6 +3042,9 @@ fn restorable_snapshot_generations(
         let height = manifest.committed_height;
         let is_current = name == current;
         current_settled |= is_current;
+        if height < history_boundary {
+            continue;
+        }
         // An empty State needs no certificate; a positive height needs its successor in Kura.
         if height == 0 || u64::try_from(block_count).is_ok_and(|count| height < count) {
             eligible.push((height, is_current, name));
@@ -3490,6 +3525,8 @@ where
         let Some(restorable) = restorable_snapshot_generations(
             store_dir,
             block_count,
+            kura.upgrade_checkpoint()
+                .map_or(0, |checkpoint| checkpoint.height),
             verification_key,
             expected_chain_id,
             *expected_network_id,
@@ -5854,6 +5891,59 @@ mod world_through_selection_tests {
                 expected,
                 "every other member keeps its canonical order"
             );
+        });
+    }
+
+    #[test]
+    fn a_snapshot_leaves_out_the_nested_members_its_selection_does_not_install() {
+        use crate::runtime::catalog::additions::test_additions::{NESTED, NESTED_MEMBER};
+        let members = |json: &str| -> Vec<(String, String)> {
+            crate::state::deserialize::json_object_members(json)
+                .expect("one object")
+                .into_iter()
+                .map(|(key, raw)| (key.to_owned(), raw.to_owned()))
+                .collect()
+        };
+        test_catalog::with_additions(&[NESTED], || {
+            let world = crate::state::World::default();
+            let mut full = String::new();
+            world.json_serialize(&mut full);
+            let mut written = String::new();
+            serialize_world_through_selection(
+                &world,
+                world.runtime_selection.view().get(),
+                &mut written,
+            )
+            .expect("write a World before its nested addition activates");
+            let (full, written) = (members(&full), members(&written));
+            assert_eq!(
+                written.iter().map(|(key, _)| key).collect::<Vec<_>>(),
+                full.iter().map(|(key, _)| key).collect::<Vec<_>>(),
+                "every top-level member stays, in canonical order"
+            );
+            for ((key, before), (_, after)) in full.iter().zip(&written) {
+                if key != "triggers" {
+                    assert_eq!(before, after, "{key} is written unchanged");
+                    continue;
+                }
+                let expected: Vec<(String, String)> = members(before)
+                    .into_iter()
+                    .filter(|(child, _)| child != NESTED_MEMBER)
+                    .collect();
+                assert_eq!(
+                    members(after),
+                    expected,
+                    "the trigger set keeps every member but the uninstalled one, in order"
+                );
+                let mut typed = String::new();
+                world
+                    .triggers
+                    .write_json_through_selection(&[NESTED_MEMBER], &mut typed);
+                assert_eq!(
+                    &typed, after,
+                    "the reader's canonical form is what the writer leaves"
+                );
+            }
         });
     }
 

@@ -189,7 +189,6 @@ fn default_content_config() -> actual::Content {
         max_path_len: defaults::content::MAX_PATH_LEN,
         max_retention_blocks: defaults::content::MAX_RETENTION_BLOCKS,
         chunk_size_bytes: defaults::content::CHUNK_SIZE_BYTES,
-        publish_allow_accounts: Vec::new(),
         limits: actual::ContentLimits {
             max_requests_per_second: NonZeroU32::new(defaults::content::MAX_REQUESTS_PER_SECOND)
                 .unwrap_or_else(|| NonZeroU32::new(1).unwrap()),
@@ -205,7 +204,6 @@ fn default_content_config() -> actual::Content {
         default_cache_max_age_secs: defaults::content::DEFAULT_CACHE_MAX_AGE_SECS,
         max_cache_max_age_secs: defaults::content::MAX_CACHE_MAX_AGE_SECS,
         immutable_bundles: defaults::content::IMMUTABLE_BUNDLES,
-        default_auth_mode: ContentAuthMode::Public,
         slo: actual::ContentSlo {
             target_p50_latency_ms: NonZeroU32::new(defaults::content::TARGET_P50_LATENCY_MS)
                 .unwrap_or_else(|| NonZeroU32::new(1).unwrap()),

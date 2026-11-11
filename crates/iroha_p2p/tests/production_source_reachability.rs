@@ -29,6 +29,7 @@ const PRODUCTION_SOURCES: &[&str] = &[
 ];
 
 const TEST_ONLY_SOURCES: &[&str] = &[
+    "src/error_tests.rs",
     "src/frame_identity_tests.rs",
     "src/network/actor_admission_fixture.rs",
     "src/network/actor_window_tests.rs",

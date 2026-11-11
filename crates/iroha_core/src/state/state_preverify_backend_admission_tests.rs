@@ -414,7 +414,6 @@ fn native_state_payload_caps_commitments_and_metadata_precede_dedup_publication(
     );
 }
 
-#[cfg(feature = "zk-stark")]
 #[test]
 fn genuine_stark_originals_preserve_independent_admission_and_key_activity() {
     let fixture = crate::zk::test_utils::stark_public_binding_fixture_envelope();

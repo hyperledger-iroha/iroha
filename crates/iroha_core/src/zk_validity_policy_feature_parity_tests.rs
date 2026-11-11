@@ -182,7 +182,6 @@ fn gas_record() -> String {
 
 /// Whether the real native STARK fixture proof is accepted by this build, as
 /// its certified history records it.
-#[cfg(feature = "zk-stark")]
 fn stark_real_proof_record() -> String {
     use iroha_data_model::{
         confidential::ConfidentialStatus,
@@ -230,13 +229,6 @@ fn stark_real_proof_record() -> String {
     format!("registered={registered:?} verified={verified:?}")
 }
 
-/// Without the `zk-stark` feature the native STARK verifier and its fixture
-/// are not compiled, so the operation cannot run in this build.
-#[cfg(not(feature = "zk-stark"))]
-fn stark_real_proof_record() -> String {
-    "not-compiled".to_owned()
-}
-
 fn build_record() -> ParityRecord {
     let (history, identities, ballot_outcomes) = history_record();
     let mut record = ParityRecord::default();
@@ -247,9 +239,10 @@ fn build_record() -> ParityRecord {
         .insert("size_limit_outcomes", ballot_outcomes);
     record.must_equal.insert("work_limits", limit_record());
     record.must_equal.insert("verification_gas", gas_record());
-    record
-        .gated
-        .insert("zk-stark.real_proof", stark_real_proof_record());
+    record.must_equal.insert(
+        "stark_real_proof",
+        digest_of_text(&[stark_real_proof_record()]),
+    );
     record
 }
 
@@ -257,7 +250,6 @@ fn build_record() -> ParityRecord {
 fn compiled_features() -> String {
     let mut features = Vec::new();
     for (name, enabled) in [
-        ("zk-stark", cfg!(feature = "zk-stark")),
         ("zk-ipa-native", cfg!(feature = "zk-ipa-native")),
         ("zk-preverify", cfg!(feature = "zk-preverify")),
         ("sm", cfg!(feature = "sm")),
@@ -278,17 +270,16 @@ fn compiled_features() -> String {
 fn feature_parity_record() {
     let record = build_record();
     // Every record is a digest or a short outcome; none is empty.
-    assert_eq!(record.must_equal.len(), 5);
+    assert_eq!(record.must_equal.len(), 6);
     for value in record.must_equal.values() {
         assert_eq!(value.len(), 64, "a 32-byte digest in hexadecimal");
     }
-    assert!(record.gated.contains_key("zk-stark.real_proof"));
-    if cfg!(feature = "zk-stark") {
-        assert_eq!(
-            record.gated["zk-stark.real_proof"], "registered=[true] verified=[true]",
-            "the real proof is accepted where the verifier is compiled"
-        );
-    }
+    assert!(record.gated.is_empty(), "no operation is feature-gated");
+    assert_eq!(
+        stark_real_proof_record(),
+        "registered=[true] verified=[true]",
+        "every build verifies the real STARK proof"
+    );
     // The scenario is deterministic: a second run in this build reproduces it.
     assert_eq!(build_record(), record);
     // The digests separate their inputs.

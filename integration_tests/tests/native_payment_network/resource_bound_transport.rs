@@ -153,9 +153,8 @@ pub(super) fn verify_cold_stores(
             "maximum carrier recovery must preserve the final tip"
         );
         let mut trusted = verifier(genesis, pins)?;
-        for (offset, transaction_hash) in expected.iter().enumerate() {
+        let mut stored_proof = |height: u64| -> Result<SumeragiFinalityProof> {
             ensure!(Instant::now() < deadline);
-            let height = offset as u64 + 2;
             let mut indices = [BlockIndex::default()];
             store.read_block_indices(height - 1, &mut indices)?;
             let index = indices[0];
@@ -167,12 +166,18 @@ pub(super) fn verify_cold_stores(
             let wire = store.block_bytes(index.start, index.length)?.to_vec();
             let block = iroha_data_model::block::decode_framed_signed_block(&wire)?;
             ensure!(block.header().height().get() == height);
-            let proof = SumeragiFinalityProof {
+            Ok(SumeragiFinalityProof {
                 block_header: block.header(),
                 block_wire: wire,
                 committee: authenticated.validators().to_vec(),
-            };
-            let verified = trusted.verify(&proof)?;
+            })
+        };
+        // A fresh verifier admits only the height after its prefix: the stored genesis
+        // decision is authenticated before either payment frame.
+        trusted.verify(&stored_proof(1)?)?;
+        for (offset, transaction_hash) in expected.iter().enumerate() {
+            let height = offset as u64 + 2;
+            let verified = trusted.verify(&stored_proof(height)?)?;
             exact_payment(&verified, *transaction_hash)?;
             ensure!(
                 verified.context_id() == contexts[offset],

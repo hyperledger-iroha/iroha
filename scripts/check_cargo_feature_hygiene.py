@@ -119,9 +119,7 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "iroha_core": {"default": ("node", "simd"),
  "runtime": ("json", "bls", "zk-ipa-native"),
- "node": ("runtime", "proofs-stark", "app_api", "gost", "sm", "telemetry", "zk-preverify"),
- "proofs-stark": ("zk-stark",),
- "proofs-full": ("proofs-stark", "zk-ipa-native"),
+ "node": ("runtime", "app_api", "gost", "sm", "telemetry", "zk-preverify"),
  "app_api": (),
  "bls": ("iroha_crypto/bls", "iroha_data_model/bls"),
  "expensive-telemetry": ("telemetry", "iroha_telemetry/metric-instrumentation"),
@@ -131,13 +129,10 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
  "telemetry": (),
  "simd": ("iroha_primitives/simd-accel", "iroha_core_privacy/simd"),
  "zk-ipa-native": (),
- "zk-preverify": ("iroha_core_zk/zk-preverify",),
- "zk-stark": ("iroha_core_zk/zk-stark", "iroha_core_privacy/zk-stark")},
+ "zk-preverify": ("iroha_core_zk/zk-preverify",)},
     "iroha_core_zk": {
         "dev-tools": (),
-        "default": ("proofs-stark", "zk-preverify"),
-        "proofs-stark": ("zk-stark",),
-        "zk-stark": ("dep:fastpq_prover",),
+        "default": ("zk-preverify",),
         "zk-preverify": (),
         "test-utils": (),
         "zk-tests": ("test-utils",),
@@ -154,14 +149,11 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
             "push",
             "telemetry",
             "schema",
-            "proofs-full",
             "ipa-commitment",
             "zk-verify-batch",
             "gost",
             "sm",
         ),
-        "proofs-stark": ("zk-stark",),
-        "proofs-full": ("proofs-stark",),
         "app_api": ("dep:kotodama_lang",),
         "app_api_https": (),
         "app_api_wss": ("dep:tokio-tungstenite",),
@@ -193,7 +185,6 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "push": ("app_api", "reqwest/form"),
         "schema": ("iroha_schema", "iroha_schema_gen"),
         "transparent_api": ("iroha_data_model/transparent_api",),
-        "zk-stark": ("iroha_core/zk-stark",),
         "zk-verify-batch": ("dep:iroha_zkp_halo2", "app_api"),
     },
     "irohad_lib": {"default": ("daemon", "iroha_core/simd"),
@@ -333,14 +324,13 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
             "dag-recovery-verify",
             "expensive-telemetry"),
  "external-software-signer-bin": ("daemon",),
- "dev-tools": ("daemon", "zk-stark", "irohad_lib/dev-tools"),
+ "dev-tools": ("daemon", "irohad_lib/dev-tools"),
  "accel-metal": ("fastpq-gpu", "irohad_lib/accel-metal"),
  "accel-cuda": ("fastpq-gpu", "irohad_lib/accel-cuda"),
  "test-network-private-settlement-route-control": ("irohad_lib/test-network-private-settlement-route-control",),
  "test-network-parliament-signers": ("irohad_lib/test-network-parliament-signers",),
  "test-network-disposable-broker": ("daemon", "irohad_lib/test-network-disposable-broker"),
  "fastpq-gpu": ("irohad_lib/fastpq-gpu",),
- "zk-stark": ("irohad_lib/zk-stark",),
  "sm": ("irohad_lib/sm",),
  "gost": ("irohad_lib/gost",),
  "sm-ffi-openssl": ("sm", "irohad_lib/sm-ffi-openssl"),
@@ -358,12 +348,11 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
  "offline-visual-codecs": ("iroha_cli_lib/offline-visual-codecs",),
  "dev-tools": ("cli",),
  "cli_integration_harness": ("iroha_cli_lib/cli_integration_harness",)},
-    "iroha_core_privacy": {"default": ("zk-stark", "simd"),
- "zk-stark": (),
+    "iroha_core_privacy": {"default": ("simd",),
  # SHA3 0.12 dispatches hardware kernels automatically and retains software parity;
  # `simd` also selects FASTPQ's paired NEON/SSE2 Keccak lanes (scalar elsewhere).
  "simd": ("fastpq_prover/simd",),
- "privacy-release-evidence": ("zk-stark", "iroha_data_model/privacy-exact12-conformance"),
+ "privacy-release-evidence": ("iroha_data_model/privacy-exact12-conformance",),
  "test-utils": ("dep:rand_chacha",)},
     "iroha_core_timed_ovn": {"test-utils": ("dep:rand",), "default": ()},
 }
@@ -453,7 +442,6 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
  "mutation-testing",
  "privacy-release-evidence",
  "profiling",
- "proofs-full",
  "quic",
  "sm-ffi-openssl",
  "state-commitment-prototypes",
@@ -489,8 +477,7 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
  "telegram-alerts",
  "test-network-disposable-broker",
  "test-network-parliament-signers",
- "test-network-private-settlement-route-control",
- "zk-stark"),
+ "test-network-private-settlement-route-control"),
     "iroha_cli_lib": ("cli_integration_harness",),
     "iroha": (
         "mutation-testing",
@@ -519,7 +506,7 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
     "iroha_kagami": ("dev-tools",),
     "iroha_zkp_halo2": ("bench", "schema-structural"),
 
-    "irohad": ("accel-cuda", "accel-metal", "beep", "dev-telemetry", "dev-tools", "external-software-signer-bin", "fastpq-gpu", "profiling-endpoint", "sm-ffi-openssl", "telegram-alerts", "test-network-disposable-broker", "test-network-parliament-signers", "test-network-private-settlement-route-control", "zk-stark"),
+    "irohad": ("accel-cuda", "accel-metal", "beep", "dev-telemetry", "dev-tools", "external-software-signer-bin", "fastpq-gpu", "profiling-endpoint", "sm-ffi-openssl", "telegram-alerts", "test-network-disposable-broker", "test-network-parliament-signers", "test-network-private-settlement-route-control"),
     "iroha_cli": ("cli_integration_harness", "dev-tools"),
     "iroha_core_privacy": ("fastpq-replay-measurement", "privacy-release-evidence", "test-utils"),
     "iroha_core_timed_ovn": ("test-utils",),
@@ -876,6 +863,32 @@ def _check_mandatory_core_backends(
     return errors
 
 
+def _check_mandatory_stark_field_dependency(
+    document: dict[str, Any], manifest_path: Path
+) -> list[str]:
+    """Keep the native STARK/FRI verifier's field codec in every build.
+
+    STARK verification is a consensus verifier and has no Cargo feature, so
+    `fastpq_prover` is a mandatory normal dependency of `iroha_core_zk`: an
+    optional row would make the verifier a build option again.
+    """
+
+    dependencies = document.get("dependencies", {})
+    specification = (
+        dependencies.get("fastpq_prover") if isinstance(dependencies, dict) else None
+    )
+    if (
+        not isinstance(specification, dict)
+        or specification.get("optional", False) is not False
+        or specification.get("package", "fastpq_prover") != "fastpq_prover"
+    ):
+        return [
+            f"{manifest_path}: STARK field dependency `fastpq_prover` must be "
+            "a non-optional normal dependency"
+        ]
+    return []
+
+
 def _check_mandatory_daemon_cuda(document: dict[str, Any], manifest_path: Path) -> list[str]:
     """Keep daemon CUDA on the single mandatory Linux/Windows dependency row."""
     scope = 'cfg(any(target_os = "linux", target_os = "windows"))'
@@ -907,17 +920,7 @@ def _check_expected_features(
     if package_name == "iroha_cli_lib":
         errors.extend(_check_mandatory_cli_runtime_dependencies(document, manifest_path))
     if package_name == "iroha_core_zk":
-        dependencies = document.get("dependencies", {})
-        specification = (
-            dependencies.get("fastpq_prover")
-            if isinstance(dependencies, dict)
-            else None
-        )
-        if not isinstance(specification, dict) or specification.get("optional") is not True:
-            errors.append(
-                f"{manifest_path}: STARK field dependency `fastpq_prover` must be "
-                "an optional normal dependency enabled by `zk-stark`"
-            )
+        errors.extend(_check_mandatory_stark_field_dependency(document, manifest_path))
     try:
         actual_features = cargo_visible_features(document)
     except ValueError as error:

@@ -2,11 +2,11 @@
 #[cfg(test)]
 mod duration_clamp_tests {
     use super::{
-        AssetDefinitionId, BTreeSet, ConfidentialComputeMechanism, ContentAuthMode,
+        AssetDefinitionId, BTreeSet, ConfidentialComputeMechanism,
         DaManifestPolicy, DomainId, Emitter, NonZeroU64, RETIRED_LANE_FUNCTIONAL_METADATA_KEYS,
         SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1, SORA_INROU_MIN_CPU_MILLIS_V1,
         SORA_INROU_MIN_MEMORY_BYTES_V1, SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1,
-        SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1, UniversalAccountId, Url, parse_content_auth_mode,
+        SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1, Url,
     };
     use crate::parameters::{
         actual, defaults,
@@ -1057,8 +1057,9 @@ policy_digest_hex = "{policy_digest_hex}"
             );
             let error = actual::Root::from_toml_source(TomlSource::inline(table))
                 .expect_err("retired pre-release settlement keys must be rejected");
+            // The node schema has no `[settlement]` section, so the reader names its root.
             assert!(
-                format!("{error:?}").contains("`settlement.offline`"),
+                format!("{error:?}").contains("`settlement`"),
                 "unexpected error: {error:?}"
             );
         }
@@ -1111,8 +1112,14 @@ policy_digest_hex = "{policy_digest_hex}"
                 );
             let error = actual::Root::from_toml_source(TomlSource::inline(table))
                 .expect_err("removed KAGEMUSHA configuration must be rejected, not aliased");
+            // The node schema has no `[settlement]` section, so the reader names its root.
+            let unknown = if parent == "settlement" {
+                "`settlement`".to_owned()
+            } else {
+                format!("`{parent}.{child}`")
+            };
             assert!(
-                format!("{error:?}").contains(&format!("`{parent}.{child}`")),
+                format!("{error:?}").contains(&unknown),
                 "unexpected error: {error:?}"
             );
         }
@@ -1239,8 +1246,9 @@ policy_digest_hex = "{policy_digest_hex}"
             .with_toml_source(TomlSource::inline(table))
             .read_and_complete::<super::Root>()
             .expect_err("retired settlement.repo configuration must be unknown");
+        // The node schema has no `[settlement]` section, so the reader names its root.
         assert!(
-            format!("{error:?}").contains("repo"),
+            format!("{error:?}").contains("`settlement`"),
             "unexpected retired-config error: {error:?}"
         );
     }

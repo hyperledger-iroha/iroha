@@ -34,10 +34,13 @@ at the old public Core module paths. Source-bound compiled manifests name
 the current owner paths; historical table preimages retain their original
 source paths and hashes.
 
-Default features are `zk-stark` and `simd`. `zk-stark` supplies the ZK-ACE STARK
-backend and its compiled profile. SHA-3 selects supported CPU acceleration at
-runtime and preserves outputs across backends. Node and SDK consumers declare their required verifier
-features explicitly. `privacy-release-evidence` adds the native evidence
+The only default feature is `simd`. The ZK-ACE STARK backend and its compiled
+profile, like every native STARK/FRI verifier, are compiled into every build:
+verification is not a build option and has no Cargo feature. SHA-3 selects
+supported CPU acceleration at runtime and preserves outputs across backends.
+Node and SDK consumers therefore select no verifier feature; they depend on
+this crate with `default-features = false` and name `simd` where they want it.
+`privacy-release-evidence` adds the native evidence
 constructors and exact-twelve conformance model; `test-utils` exposes fixture
 material without node storage. Neither evidence nor fixture features belong
 in production shipping graphs. These features do not introduce runtime

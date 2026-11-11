@@ -1523,8 +1523,7 @@ fn validate_genesis_on_current_thread(
         state.set_oracle(config.oracle.clone());
         state.install_node_fraud_monitoring(config.fraud_monitoring.clone());
         state.set_gov(config.gov.clone());
-        state.content = config.content.clone();
-        state.set_settlement(config.settlement);
+        let _ = state.install_node_content(config.content.clone());
     }
     if let Some(zk_config) = runtime_config.map(|config| &config.zk).or(zk_config) {
         // As on a node: the configuration supplies local ZK resources only; validity

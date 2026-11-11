@@ -556,7 +556,6 @@ mod tests {
             verifying_key_bytes: b"ram-lfe-proof-vk".to_vec(),
         }
     }
-    #[cfg(feature = "zk-stark")]
     #[test]
     fn unavailable_execution_relation_rejects_a_valid_unrelated_native_proof() {
         let fixture = crate::zk::test_utils::stark_public_binding_fixture_envelope();

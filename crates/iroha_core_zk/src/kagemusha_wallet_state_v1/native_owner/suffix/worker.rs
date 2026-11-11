@@ -259,7 +259,7 @@ impl SuffixPreparationJobV1 {
         if input.source_capsule != binding.source_capsule
             || tip.point().0.core.sequence != binding.source_sequence
             || tip.anchor().0 != binding.anchor_sequence
-            || input.request.request_id != binding.request
+            || input.request.request_id != binding.request_id
             || input.chunk_digests.is_empty()
             || input.chunk_digests.len() > KAGEMUSHA_WALLET_SUFFIX_CHUNKS_MAX_V1
         {
@@ -509,8 +509,7 @@ impl SuffixPreparationJobV1 {
                 &installed.verifier().scheme().scheme_id(),
             )
         })?;
-        let expected_request_id = binding.request;
-        if header.request_id != expected_request_id
+        if header.request_id != binding.request_id
             || header.source_capsule != binding.source_capsule
             || header.tip_sequence != binding.source_sequence
             || header.anchor_sequence != binding.anchor_sequence

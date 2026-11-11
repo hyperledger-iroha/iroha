@@ -931,7 +931,13 @@ class GuaranteeSelection(Base):
         inventory = copy.deepcopy(self.small)
         sites = {site["id"]: site for site in inventory["guarantee_selection"]["sites"]}
         sites["generic.native_uploaded_key"]["rejection_tests"] = []
-        del sites["soracloud.typed_role_feature"]["open_defect"]
+        # No recorded site is selected by a Cargo feature any more (STARK verification is
+        # compiled into every build); a site that became one must still record its defect.
+        self.assertNotIn("soracloud.typed_role_feature", sites)
+        self.assertFalse([site["id"] for site in sites.values() if site["selector"] == "cargo_feature"])
+        sites["generic.stark_uploaded_key"]["selector"] = "cargo_feature"
+        sites["generic.stark_uploaded_key"]["chooses_guarantee"] = True
+        del sites["generic.stark_uploaded_key"]["open_defect"]
         sites["kaigi.policy_named_key"]["selector"] = "astrology"
         del sites["voting.election_keys"]["site"]
         sites["exact12.envelope_digests"]["open_defect"] = {"what": "x"}
@@ -940,7 +946,8 @@ class GuaranteeSelection(Base):
         inventory["guarantee_selection"]["source_inclusion_census"]["files"][1]["site"] = "no.such.site"
         errors = run("check_guarantee_selection", inventory)
         self.assert_fails(errors, "sites[generic.native_uploaded_key]: cite a rejection test or record an open defect")
-        self.assert_fails(errors, "sites[soracloud.typed_role_feature]: a selector that can choose a guarantee is an open defect")
+        self.assert_fails(errors, "sites[generic.stark_uploaded_key]: a selector that can choose a guarantee is an open defect")
+        self.assertFalse([error for error in errors if "sites[generic.stark_uploaded_key]: selector must be one of" in error])
         self.assert_fails(errors, "sites[kaigi.policy_named_key]: selector must be one of")
         self.assert_fails(errors, "sites[voting.election_keys]: site (path and symbol) is required")
         self.assert_fails(errors, "sites[exact12.envelope_digests]: open_defect needs owner_task and what")

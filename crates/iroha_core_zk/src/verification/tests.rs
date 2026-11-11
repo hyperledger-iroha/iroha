@@ -261,7 +261,6 @@ fn reserved_ivm_components_cannot_select_a_generic_relation() {
     }
 }
 
-#[cfg(feature = "zk-stark")]
 #[test]
 fn native_public_binding_verifies_only_its_relation_and_rejects_tampering() {
     use crate::stark::{

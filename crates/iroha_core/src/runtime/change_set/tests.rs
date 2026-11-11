@@ -148,7 +148,7 @@ fn completion_selection_edits_cannot_substitute_for_registered_custody() {
         assert!(
             error
                 .to_string()
-                .contains("kernel-registered completion capabilities"),
+                .contains("selection-level completion closures"),
             "{error}"
         );
     }

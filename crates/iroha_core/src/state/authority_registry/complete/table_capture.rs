@@ -261,6 +261,21 @@ capture_world_table_once!(
     "world.account_signing_key_reservations"
 );
 capture_world_table_once!(
+    capture_runtime_obligations_once,
+    runtime_obligations,
+    "world.runtime_obligations"
+);
+capture_world_table_once!(
+    capture_runtime_migrations_once,
+    runtime_migrations,
+    "world.runtime_migrations"
+);
+capture_world_table_once!(
+    capture_runtime_boundaries_once,
+    runtime_boundaries,
+    "world.runtime_boundaries"
+);
+capture_world_table_once!(
     capture_sorafs_authority_proposals_once,
     sorafs_authority_proposals,
     "world.sorafs_authority_proposals"
@@ -890,6 +905,9 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     capture_game_partitions_once::MATERIALIZER,
     capture_account_signing_keys_once::MATERIALIZER,
     capture_account_signing_key_reservations_once::MATERIALIZER,
+    capture_runtime_obligations_once::MATERIALIZER,
+    capture_runtime_migrations_once::MATERIALIZER,
+    capture_runtime_boundaries_once::MATERIALIZER,
     capture_sorafs_authority_proposals_once::MATERIALIZER,
     capture_sorafs_authority_heads_once::MATERIALIZER,
     capture_sorafs_authority_leases_once::MATERIALIZER,
@@ -1349,6 +1367,9 @@ mod tests {
             "world.game_partitions",
             "world.account_signing_keys",
             "world.account_signing_key_reservations",
+            "world.runtime_obligations",
+            "world.runtime_migrations",
+            "world.runtime_boundaries",
             "world.sorafs_authority_proposals",
             "world.sorafs_authority_heads",
             "world.sorafs_authority_leases",

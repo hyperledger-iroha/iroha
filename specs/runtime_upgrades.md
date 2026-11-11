@@ -116,6 +116,11 @@ World fields after it (design §4, "Add an instruction", "Add storage"):
   delegated account signing keys under the selected authority services.
   [Authority governance](sorafs_authority_governance.md) describes the
   paired term approvals and the outstanding current-governance activation prerequisites.
+  The independent `iroha.runtime.lifecycle.v1` addition is the kernel's lifecycle State: the
+  `world.runtime_obligations`, `world.runtime_migrations` and `world.runtime_boundaries` tables,
+  the two `iroha.runtime.obligation.*.v1` instructions and the two `iroha.runtime.boundary.*.v1`
+  instructions (Obligations, Migrations and Checkpoint records, below). Its dependencies are exactly the baseline, and it is declared last, so no ordered
+  addition declares its tables.
 - **Definitions.** Each addition publishes one native implementation, one interface per wire ID it
   adds and one storage definition per field; a cell's definition carries its initial bytes. Like
   the baseline bundle it declares a conservative superset of dependencies, every storage definition
@@ -140,7 +145,17 @@ World fields after it (design §4, "Add an instruction", "Add storage"):
   (`runtime::uninstalled_world_members`), and a restore reads it as its empty default and refuses a
   snapshot that carries it. Until a change set installs an addition's storage, a node of this
   release therefore writes the snapshots a node of the previous release writes, and a rollback
-  before activation is a binary swap. An addition adds only top-level World fields.
+  before activation is a binary swap. A field is installed when the selection installs a storage
+  definition of its namespace, whichever definition that is, so a field stays in snapshots when
+  an identity cutover replaces its definition.
+- **Nested fields.** An addition may also add a field inside a nested World owner. The field
+  registry names each field's snapshot member (`authority_registry::Field::member`), the writer
+  leaves an uninstalled nested member out of its owner's object, and the owner's reader refuses
+  a snapshot that carries it and reads it as empty. The trigger set (`world.triggers`) is the one
+  nested owner; it decodes and re-encodes through the selection, so the canonical-bytes check of
+  a restore still holds. `runtime::SELECTION_AWARE_OWNERS` lists the owners whose reader applies
+  the selection, a test requires every nested owner of the World to be listed, and the catalog
+  refuses an addition whose field has no such member.
 
 ## Envelopes
 
@@ -261,6 +276,47 @@ A restriction never removes their settlement authority:
   one: the native dispatch table and the controlled-lock, linked-FI and multisig paths that bypass
   it. A containment therefore holds whichever path runs an instruction.
 
+### Registered obligations
+
+An account registers an obligation with the kernel (design §7.2;
+`runtime::obligations::registry`, `iroha_data_model::runtime::obligation`). The registry is
+storage of the `iroha.runtime.lifecycle.v1` addition, so a root that has not activated it holds
+no record and executes exactly as before.
+
+- **Register.** `RegisterRuntimeObligationV1 { contract, kind, terminal_effects, expires_ms }`
+  commits to the exact instructions that complete the obligation: at most 16, each identified by
+  the hash of its canonical envelope, none one of the lifecycle's own. The kernel captures their
+  completion closure from the selection the root executes (`CompletionCaptureV1`): the binding of
+  each terminal effect, the binding of every interface those implementations invoke, the kernel,
+  both profiles and the active host profiles. The record in `world.runtime_obligations` is keyed
+  by its owner, who holds one obligation; registering again replaces it. It expires at most 30
+  days later. Registering is new work: it is refused while the interface or implementation of a
+  terminal effect is restricted.
+- **Contracts.** The first-release ABI gives a contract no kernel call: its descriptor fixes
+  every syscall and operation tag, and the host profile commits that descriptor. The account that
+  controls a contract's lifecycle therefore registers for it (`contract: Some(address)`), and the
+  contract's subject account owns the obligation.
+- **Complete.** When the owner issues one of the committed instructions, the kernel marks it
+  performed and executes it as a completion: admission closure and completion-only on the
+  definitions behind it, or behind what it invokes, do not stop it. Each committed instruction
+  lends that capability once, to its owner alone, so a capability creates no new work. The
+  instructions a contract queues carry its subject account as their authority and complete its
+  obligation in the same way. `CompleteRuntimeObligationV1 { owner }` ends the obligation: its
+  owner, the account that controls the owning contract's lifecycle, or anyone once it has
+  expired or performed every committed instruction.
+- **Activation.** While a registered obligation is live, a change set that stops executing a
+  definition of its captured closure, or binds an interface the closure reaches to another
+  implementation, lapses. Executor replacement waits for registered obligations as it does for
+  escrows.
+
+A release answers a wire ID from the selection it executes: handlers, authorization and services
+switch on the root's current selection. A completion therefore runs the code the root binds now,
+and keeping it as it was registered means keeping its bindings. Running a captured implementation
+beside its replacement, which would let a change set rebind what a live obligation reaches, needs
+one handler per implementation and wire ID and an execution context that every such switch
+reads; it is not built. Selection-level `RetainCompletion` and `ReleaseCompletion` stay refused:
+the registry holds every completion closure, and no engine reads one from the selection.
+
 ## Deferred consent
 
 Not implemented. Multisig proposals and triggers execute with the frozen baseline's semantics:
@@ -275,20 +331,110 @@ addition that rebinds those interfaces, activated by a change set; its activatio
 certify or drain the deferred work already registered without a capture, because no fallback
 manufactures consent from the current selection.
 
-Migration cursors and contract-created obligations still need kernel registration. Escrows and AMX
-participations do not yet retain a captured completion capability that dispatch honors after a
+Escrows and AMX participations register no closure: their committed records are their
+registration, and rebinding what their completions reach still requires draining them first. No
+live obligation of any kind retains a completion capability that dispatch honors after a
 rebinding. These protections do not close the whole obligation lifecycle of design §7.2.
 
-## Unsupported transition effects
+## Migrations and storage retirement
 
-The shared successor resolver rejects storage retirement, activation of migration definitions and
-manual retention/release of completion capabilities: the cursor, write-barrier, cutover and kernel
-capability engines are not implemented. Proposal/enactment and node support attestation use this
-resolver; block start also checks it and lapses an already scheduled unsupported transition
-without changing the selection. The rule depends only on the change set, so every node rejects the
-same transitions. Installing tables and cells is supported (release additions, above); an
-executing release still has to implement the resulting selection. Recognizing every definition in
-a successor is not evidence that a release can perform a storage transition.
+The kernel moves the rows of old storage into successor storage in bounded, certified stages
+(design §5.4; `runtime::migration`). A root admits a migration and a storage retirement only once
+it has activated the lifecycle State (`migration::lifecycle_installed`, judged on the selection
+the root executes when the rule is evaluated). Every validator then runs a release with the
+engine, because the addition activated with every validator's support. On any other root both
+are refused as before.
+
+- **Declaration.** A release compiles a migration as native code
+  (`runtime::catalog::migrations`): the old and successor World fields, the cursor's codec, the
+  rows a stage moves, and four handlers. The catalog publishes one migration definition per
+  migration and execution services profile it compiles. This release declares none.
+- **Start.** A change set installs the successor storage and activates the migration. Its record
+  in `world.runtime_migrations` (`MigrationRecordV1`: status, cursor, stages, rows) starts
+  `Running`. At the start of every block, after the height's change sets and containment leases,
+  one stage copies the next rows after the committed cursor into the successor. The successor is
+  committed from the first stage, so every stage is certified and survives a restart. The old
+  storage stays authoritative.
+- **Write barrier.** As the last World write of every block, before the block's World commitment
+  is folded, the barrier mirrors the old rows that block touched at or before the cursor. It
+  reads the block's own journal of touched rows, so it covers every writer of the old storage:
+  instructions, hooks and the block's tail writes. When no old row lies after the cursor the
+  record is `Complete`, and the barrier keeps holding.
+- **Suspension and faults.** Closing a migration's admission suspends its stages and lifting the
+  restriction resumes them; the cursor and the barrier stay in place. A stage that fails writes
+  nothing and faults the migration: no further stage runs, the barrier keeps holding, and a
+  change set that deactivates it and activates a replacement over the same storage and cursor
+  hands the cursor over.
+- **Cutover.** A change set restricts the migration to completion only, with the transitions
+  that move the release's readers and writers to the successor (including the execution services
+  profile, when a block hook writes the old storage). It activates only once the record is
+  `Complete`. From its height the successor is authoritative, the barrier is lifted, and each
+  block one stage drains the next old rows. A write that still reaches the old storage stops the
+  drain (`StaleWrite`).
+- **Retirement.** A change set retires the old storage and deactivates the migration. It
+  activates only once the record is `Drained`. The World commitment drops a retired field only
+  when it is empty and unchanged in that block (`world_state_accumulator`), the snapshot leaves
+  it out, and the record stays as the retirement receipt.
+- **Structure.** Storage is retired only together with the deactivation of the migration whose
+  old storage it is, and a migration is otherwise deactivated only together with its
+  replacement. Two active migrations share no storage. The Ironwood identity cutover is the one
+  retirement outside a migration: it replaces storage definitions over the same fields and moves
+  no row.
+- **Drafts.** `ReleaseCatalog::migration_step` (`runtime::migration::draft_step`) drafts the
+  change set of each step from the committed selection.
+
+A storage definition names the definition a release founded or added the field with. A field
+whose definition an identity cutover replaced is migrated by a migration compiled against the
+successor definition. Because the baseline bundle declares every baseline table, retiring a
+baseline table also means replacing that bundle, which lapses while an escrow or AMX
+participation is live.
+
+## Checkpoint records
+
+The checkpoint policy and the two certified facts about a root's history are committed State
+(design §7.3, §13; `runtime::checkpoint`, `iroha_data_model::runtime::checkpoint`).
+
+- **Policy.** The custom parameter `runtime_checkpoint_policy_v1` (`RuntimeCheckpointPolicyV1`)
+  holds the production cadence, the retention minimums, the recovery window and the floor
+  notice, all in committed milliseconds. A height is a checkpoint height when its block is the
+  first committed in a cadence interval. A root reads the policy only once it has activated the
+  lifecycle State and judges it when it reads it, because the frozen baseline stores whatever
+  `SetParameter` writes under that identity; from activation on, `SetParameter` refuses a
+  malformed one.
+- **Boundaries.** `world.runtime_boundaries` holds the adoption anchor and the startup floors,
+  keyed by height, as storage of the lifecycle addition. Only the addition's two instructions
+  write it and activation starts it empty, so nothing a root committed before it activated the
+  lifecycle State is ever read as a boundary. Every validator's statement is the authority of a
+  record, so any account relays one.
+  - `RatifyRuntimeAdoptionAnchorV1 { anchor }` commits the `AdoptionRecordV1` with one statement
+    of it from every validator. The root holds no boundary yet, and the record names this
+    network and the block the chain committed at its height. A ratified anchor never changes.
+    `authorization` is zero for a network whose node configuration authorized the adoption.
+  - `RaiseRuntimeStartupFloorV1 { floor, attestations }` commits a floor. A raise needs the
+    committed policy, names the block the chain committed at its height, and lies above the
+    latest floor and the anchor. The kernel, not the relayer, sets the time the floor comes into
+    force: the policy's notice after the block that raises it, when its checkpoint must be at
+    least the recovery window old. One raise waits out its notice at a time, and a raise drops
+    the floors below the one in force, so the table holds the anchor, the floor in force and
+    the floor waiting.
+
+All `n` validators sign, never a quorum. A node derives the adoption record from its own store
+(`checkpoint::adoption_record`) and signs a record only after checking it against its own
+certified history (`checkpoint::attest_anchor`, `attest_floor`, over `CertifiedChain`): for the
+anchor, that it is the upgrade checkpoint the node was configured to adopt at, the block, the
+World root the predecessor certified after it, the root the first foundation block executed on,
+the committee of that height and the founded selection; for a floor, the block, its committed
+time and that the node holds the checkpoint.
+
+`checkpoint::history_boundary` is the height at or below which no release re-executes a block:
+the highest boundary in force. At startup a snapshot generation below the node's boundary is not
+a restore candidate, a configured `[snapshot.upgrade_checkpoint]` must name the block of a
+ratified anchor, and a State that carries a boundary gives it to Kura when the configuration
+names none.
+
+The startup re-validation of the signed genesis execution policy stays after an anchor is
+ratified. It is the only guard on the validity inputs a node still takes from its
+configuration; it goes when those inputs are committed State (ZK delivery F.4).
 
 ## Notice policy
 
@@ -320,6 +466,25 @@ The endorsed proposal is the release addition `iroha.runtime.endorsed_change_set
 (`catalog/additions.rs`). The baseline `ProposeRuntimeUpgradeProposal` keeps its frozen semantics
 and checks no provenance, so the policy binds a root's proposals only once a change set activates
 the addition and governance restricts the baseline proposal.
+
+## Restricted data space read delegation
+
+The independent addition `iroha.dataspace.restricted_read_delegation.v1` rebinds
+`iroha.grant`, `iroha.revoke`, `iroha.register` and `iroha.unregister`. The frozen baseline
+keeps `CanReadRestrictedDataspace` genesis-only. After explicit governed activation, the
+active ledger-backed SNS owner of the exact data space may grant or revoke that token.
+Possessing a read token never confers delegation authority. Role membership, role permission
+changes, role creation and role deletion retain the same owner check; a native handler also
+enforces it when a user executor dispatches the instruction. Ownership alone grants no read
+access, and existing tokens remain effective until revoked.
+
+The catalog compiles distinct successors for its exact baseline, lifecycle, Ironwood and
+Ironwood/lifecycle bundles. Each preserves its predecessor's interfaces, storage, services,
+and containment. An unknown or partially rebound predecessor fails drafting. No storage is
+installed, no token is issued by activation, and a binary upgrade does not select the addition.
+Use the ordinary authenticated runtime draft, governance notice, provenance, validator
+attestation and activation flow. This addition does not admit restricted asset homes on a
+Global root or qualify their independent read/write boundary.
 
 ## Torii
 
@@ -465,23 +630,29 @@ from snapshots; Strict start on stores holding a660d601da triggers and a
 
 Tracked in [`live_runtime_upgrades.md`](live_runtime_upgrades.md) §14 and `roadmap.md` N14:
 
-- **Nested World fields:** an addition of a field inside a top-level World member needs snapshots
-  to leave it out of its owner's member; the catalog refuses such an addition until then.
-- **Obligations:** kernel registration of contract-created obligations and migration cursors,
-  completion capabilities retained across rebinding, explicit current-binding consent and
-  narrower authenticated dynamic-call manifests.
-- **Transitions:** migrations with cursors, write barriers and atomic cutover, storage retirement,
-  storage capabilities and generic carriers.
+- **Obligations:** running a captured implementation beside its replacement, so a change set may
+  rebind what a live obligation reaches (one handler per implementation and wire ID, and an
+  execution context for every selection-dependent switch); registration of escrows, AMX
+  participations and in-flight game-unit exports with a captured closure; a kernel call for
+  contracts, which needs a new host profile; pending consent and scheduled triggers, with the
+  deferred-consent addition; narrower authenticated dynamic-call manifests.
+- **Migrations:** the operator route and CLI that draft a migration's steps; containment of a
+  migration by the emergency panel, whose targets the frozen baseline limits to interfaces and
+  implementations; storage capabilities and generic carriers.
+- **Checkpoints:** production of a checkpoint at every height the committed policy names and
+  retention of the generations it keeps, in the snapshot maker; starting a node from a
+  transferred checkpoint without the block bodies below it (Kura base offsets and a peer
+  transfer); a durable record of the highest boundary a store has seen, so a node needs no
+  configured checkpoint before it has State.
+- **Anchor and floor operations:** the operator routes and CLI that have a node derive and sign
+  a record and that draft the instruction relaying the collected statements. Taira's anchor is
+  ratified once its validators run this release, a change set activates
+  `iroha.runtime.lifecycle.v1`, each validator signs the record against its own store, and any
+  account relays the statements.
 - **Commitment and history:** complete-State commitments, which first need the node-configured
   policy cells (G1-D3, ZK delivery F.4) in committed State and a decision on how the pinned
-  history meets the new root; checkpoints and the startup floor.
-- **Anchor:** ratifying Taira's adoption record (`AdoptionRecordV1`) in committed State through
-  governance, with every validator's attestation, which a node starting from the anchor needs
-  (with checkpoint bootstrap); then deleting the startup re-validation of Taira's signed genesis
-  policy. `iroha_data_model::runtime::adoption` provides purpose-separated signatures over the
-  exact record and checks all-member coverage of a supplied committee. This primitive does not
-  authenticate that committee, the governance record or the complete-State import, and does not
-  construct a startup capability; those joins and the startup consumer remain unimplemented.
+  history meets the new root; deleting the startup re-validation of the signed genesis policy
+  then.
 
 Parliament lifecycle parameter updates are validated, but Core still needs the frozen
 governance-clock policy and anonymous-ballot integration owned by

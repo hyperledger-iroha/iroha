@@ -30,7 +30,11 @@ router behaviour changes.
 ### Configuration and inputs
 
 `SettlementConfig` (`crates/settlement_router/src/config.rs`) carries the
-roadmap defaults:
+router inputs. They are protocol constants of this release: a node
+configuration has no settlement router key. A chain-settable policy is a typed
+committed parameter that a release addition publishes and a governed change set
+activates (`specs/live_runtime_upgrades.md` §4); it does not exist yet. The
+constants are:
 
 - `twap_window`: 60 s TWAP window exported by the canonical oracle.
 - `epsilon`: 25 bps safety margin that ensures inclusion always over-collects.

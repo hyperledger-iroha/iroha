@@ -298,7 +298,20 @@ class KagemushaWalletHostNativeV1Test {
             assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.review(0, 1, identity, 1, 0, 0,
                 0, byteArrayOf(), byteArrayOf(1), byteArrayOf(2))).status)
         }
-        for ((tag, expected) in listOf(2 to byteArrayOf(), 0 to byteArrayOf(1), 1 to byteArrayOf())) {
+        // RetainedPreparing (2) carries no projection; it must reach owner admission
+        // for both money paths without granting an unknown owner a review capability.
+        for ((selector, amount) in listOf(1 to 0L, 8 to 1L)) {
+            val retained = assertNotNull(KagemushaWalletNativeV1.review(
+                0, 1, id, selector, amount, 0, 2, byteArrayOf(),
+                if (selector == 1) byteArrayOf(1) else byteArrayOf(),
+                if (selector == 1) byteArrayOf(2) else byteArrayOf(),
+            ))
+            assertEquals(-2, retained.status)
+            assertEquals(-1, retained.reason)
+            assertEquals(0, retained.platformCode)
+            assertTrue(retained.cleanupToken() == null)
+        }
+        for ((tag, expected) in listOf(3 to byteArrayOf(), 2 to byteArrayOf(1), 0 to byteArrayOf(1), 1 to byteArrayOf())) {
             assertEquals(-1, assertNotNull(KagemushaWalletNativeV1.review(0, 1, id, 1, 0, 0,
                 tag, expected, byteArrayOf(1), byteArrayOf(2))).status)
         }

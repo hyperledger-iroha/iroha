@@ -1,5 +1,10 @@
 //! Complete keyed State versions retained by the original execution/publication owner.
-//! A decoded snapshot has no native execution version and cannot answer row proofs.
+//!
+//! A decoded snapshot carries no version. Its published State becomes one only when node
+//! preparation rebuilds the complete selected schema from the restored State and that root
+//! equals the parent State root its certified successor binds (`specs/sumeragi.md` §16.5,
+//! E56). The pre-tail execution of the restored height is never reproduced, so that height
+//! serves no row proof.
 
 mod recovery;
 
@@ -21,9 +26,21 @@ use iroha_data_model::sumeragi_finality::{
 #[derive(Clone)]
 pub(super) struct KeyedCut {
     pub tip: NativeExecutionTip,
-    pub execution: KeyedStateTreeV1,
+    /// `X_h`. Absent only for a published State authenticated from a snapshot: restoration
+    /// rebuilds `P_h` and never the pre-tail execution it followed.
+    pub execution: Option<KeyedStateTreeV1>,
     pub published: KeyedStateTreeV1,
     pub schema: Arc<SelectedStateSchema>,
+}
+
+/// What a decoded snapshot claims under the keyed profile: the complete State published at
+/// `tip` has the parent State root that the certified successor of `tip` binds. The native
+/// tip restore authenticated `tip` and read `certified` from the verified prefix; the State
+/// itself stays a claim until [`State::authenticate_restored_keyed_state`] discharges it.
+#[derive(Clone, Copy)]
+pub(super) struct RestoredKeyedClaim {
+    pub tip: NativeExecutionTip,
+    pub certified: KeyedStateRoot,
 }
 
 /// The previous published version supplies a replacement block's parent. Persistent
@@ -32,8 +49,22 @@ pub(super) struct KeyedCut {
 pub(super) struct KeyedVersions {
     current: Option<KeyedCut>,
     previous: Option<KeyedCut>,
+    /// Undischarged snapshot claim. While it is present the State has no version at its tip,
+    /// so no block executes on it and no row proof is served.
+    restored: Option<RestoredKeyedClaim>,
 }
 impl KeyedVersions {
+    /// Record the claim of a State decoded from a snapshot. It grants nothing by itself.
+    pub(super) fn claim_restored(&mut self, claim: RestoredKeyedClaim) {
+        *self = Self {
+            current: None,
+            previous: None,
+            restored: Some(claim),
+        };
+    }
+    pub(super) fn restored_claim(&self) -> Option<RestoredKeyedClaim> {
+        self.restored
+    }
     pub(super) fn published_at(&self, tip: NativeExecutionTip) -> Option<&KeyedCut> {
         self.current
             .iter()
@@ -144,8 +175,13 @@ impl State {
             .cloned()
             .ok_or("no original keyed version for the certified execution")?;
         drop(view);
-        if &cut.execution.root() != tip.commitment().execution.world_state_root.as_ref()
-            || cut.execution.schema_digest() != cut.schema.digest
+        // A height authenticated from a snapshot has its published State only.
+        let execution = cut
+            .execution
+            .as_ref()
+            .ok_or("no original keyed execution for a State restored at this height")?;
+        if &execution.root() != tip.commitment().execution.world_state_root.as_ref()
+            || execution.schema_digest() != cut.schema.digest
         {
             return Err("keyed version differs from the certified execution".into());
         }
@@ -178,11 +214,11 @@ impl State {
                 table: table.clone(),
                 key: key.clone(),
             };
-            let value = cut.execution.get(&position);
+            let value = execution.get(&position);
             let size = value
                 .map_or(0, <[u8]>::len)
                 .checked_add(
-                    cut.execution
+                    execution
                         .proof_heap_bytes(&position)
                         .map_err(|e| e.to_string())?,
                 )
@@ -195,8 +231,7 @@ impl State {
             }
             retained.push(key_charge);
             retained.push(budget.try_reserve_bytes(size).map_err(|e| e.to_string())?);
-            let witness = cut
-                .execution
+            let witness = execution
                 .prove(&position)
                 .map_err(|error| error.to_string())?;
             rows.push(KeyedStateRowV1 {
@@ -352,7 +387,7 @@ impl StateBlockFields<'_> {
         Ok(KeyedCut {
             tip,
             published,
-            execution: execution.tree.clone(),
+            execution: Some(execution.tree.clone()),
             schema,
         })
     }

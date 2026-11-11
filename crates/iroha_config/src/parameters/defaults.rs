@@ -791,10 +791,6 @@ pub mod content {
             row_parity_stripes: 0,
         }
     }
-    /// Default auth mode string for content lane ("public" | "role:<role>" | "sponsor:<uaid>").
-    pub fn default_auth_mode() -> String {
-        "public".to_string()
-    }
 }
 /// Oracle pipeline defaults.
 pub mod oracle {
@@ -4194,8 +4190,6 @@ pub mod zk {
     /// Native STARK/FRI verifier configuration defaults.
     pub mod stark {
         /// Runtime toggle for STARK verification in hosts.
-        ///
-        /// Acceptance still requires binaries built with `zk-stark`.
         pub const ENABLED: bool = true;
         /// Maximum accepted outer STARK `OpenVerifyEnvelope` length (bytes).
         pub const MAX_ENVELOPE_BYTES: usize = 1024 * 1024; // 1 MiB

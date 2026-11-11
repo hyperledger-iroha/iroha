@@ -135,7 +135,6 @@ fn captured_original_core_health_frames() {
     shapes("network_message", "health", &crate::NetworkMessage::Health);
 }
 
-#[cfg(feature = "zk-stark")]
 #[test]
 fn captured_original_core_fp4_frames() {
     use crate::zk_stark::GoldilocksFp4V1;

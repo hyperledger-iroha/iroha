@@ -433,6 +433,10 @@ enum Installation {
     Fresh,
     /// Installed before this block: only its changes enter.
     Installed,
+    /// Retired by this block: it leaves the commitment. A migration drained it first
+    /// (`specs/live_runtime_upgrades.md` §5.4), so a table is empty and untouched and a cell's
+    /// value leaves with it.
+    Retired,
 }
 
 /// One projection pass over the World overlay.
@@ -546,8 +550,8 @@ impl Builder<'_> {
 /// a block pass also compares it with the selection before the block.
 ///
 /// # Errors
-/// A selection installs unsupported storage, retires a physical owner, or attempts an incomplete
-/// or uncertified Ironwood identity cutover. The fixed successor preserves all twelve owners.
+/// A selection installs unsupported storage, or attempts an incomplete or uncertified Ironwood
+/// identity cutover. The fixed successor preserves all twelve owners.
 fn installation(
     index: &FieldIndex,
     world: &WorldBlock<'_>,
@@ -567,19 +571,16 @@ fn installation(
         Direction::Capture => successor.clone(),
         _ => installed_slots(index, world.runtime_selection.get_before_block())?,
     };
-    successor
+    Ok(successor
         .iter()
         .zip(&parent)
-        .zip(&index.ids)
-        .map(|((successor, parent), id)| match (*parent, *successor) {
-            (false, false) => Ok(Installation::Absent),
-            (false, true) => Ok(Installation::Fresh),
-            (true, true) => Ok(Installation::Installed),
-            (true, false) => Err(format!(
-                "World field {id} is retired without a migration cutover"
-            )),
+        .map(|(successor, parent)| match (*parent, *successor) {
+            (false, false) => Installation::Absent,
+            (false, true) => Installation::Fresh,
+            (true, true) => Installation::Installed,
+            (true, false) => Installation::Retired,
         })
-        .collect()
+        .collect())
 }
 
 impl WorldProjection for Builder<'_> {
@@ -645,6 +646,16 @@ impl WorldProjection for Builder<'_> {
                     );
                 }
             }
+            // The commitment drops the field without visiting a row, so no row may be left or
+            // leave in this block: the migration that retires it drained it in earlier blocks.
+            (Installation::Retired, _) => {
+                if storage.iter().next().is_some() || storage.touched_entries().next().is_some() {
+                    return Err(format!(
+                        "World field {name} is retired while it holds or changes entries"
+                    )
+                    .into());
+                }
+            }
             (Installation::Fresh, _) | (Installation::Installed, Direction::Capture) => {
                 for (key, value) in storage.iter() {
                     let key = hash_value(key)?;
@@ -682,6 +693,14 @@ impl WorldProjection for Builder<'_> {
                         format!("World field {name} was written but is not installed").into(),
                     );
                 }
+            }
+            // A cell always holds a value: the one it held before the block leaves the
+            // commitment, and the block may not have written it.
+            (Installation::Retired, _) => {
+                if cell.touched_value().is_some() {
+                    return Err(format!("World field {name} is retired while it changes").into());
+                }
+                self.change(&path, None, Some(encode(cell.get())?), None)?;
             }
             (Installation::Fresh, _) | (Installation::Installed, Direction::Capture) => {
                 self.change(&path, None, None, Some(encode(cell.get())?))?;
@@ -788,6 +807,19 @@ pub enum WorldStateVerificationError {
         /// Published root from native execution and tail replay.
         retained: iroha_data_model::sumeragi_finality::KeyedStateRoot,
         /// Root rebuilt independently from every committed canonical row.
+        captured: iroha_data_model::sumeragi_finality::KeyedStateRoot,
+    },
+    /// A State decoded from a snapshot does not reproduce the complete State root that the
+    /// certified successor of its tip binds as parent.
+    #[error(
+        "keyed State restored at height {height} rebuilds root {captured}, but its certified successor binds parent State root {certified}"
+    )]
+    RestoredKeyedMismatch {
+        /// Height of the restored tip.
+        height: u64,
+        /// Parent State root certified by the successor block.
+        certified: iroha_data_model::sumeragi_finality::KeyedStateRoot,
+        /// Root rebuilt from every committed canonical row of the restored State.
         captured: iroha_data_model::sumeragi_finality::KeyedStateRoot,
     },
     /// A canonical value could not be encoded or the authority inventory was invalid.

@@ -1075,6 +1075,35 @@ impl Set {
 
 impl json::JsonDeserialize for Set {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        Self::json_deserialize_through_selection(parser, &[])
+    }
+}
+
+impl Set {
+    /// Decode a native snapshot's trigger set whose runtime selection does not install the
+    /// members named in `uninstalled` (`specs/live_runtime_upgrades.md` §5.5): the writer leaves
+    /// each out ([`Self::write_json_through_selection`]), so a present one is refused and an
+    /// absent one reads as empty.
+    ///
+    /// # Errors
+    /// The object is malformed, carries an uninstalled member, lacks an installed one, or holds
+    /// triggers outside the first-release limits.
+    pub(crate) fn json_deserialize_through_selection(
+        parser: &mut json::Parser<'_>,
+        uninstalled: &[&'static str],
+    ) -> Result<Self, json::Error> {
+        /// A member the snapshot must hold, or the empty store of one its selection leaves out.
+        fn installed<T: Default>(
+            value: Option<T>,
+            member: &'static str,
+            uninstalled: &[&'static str],
+        ) -> Result<T, json::Error> {
+            match value {
+                Some(value) => Ok(value),
+                None if uninstalled.contains(&member) => Ok(T::default()),
+                None => Err(json::MapVisitor::missing_field(member)),
+            }
+        }
         let mut visitor = json::MapVisitor::new(parser)?;
         let mut data_triggers: Option<Storage<TriggerId, LoadedAction<DataEventFilter>>> = None;
         let mut pipeline_triggers: Option<
@@ -1087,6 +1116,13 @@ impl json::JsonDeserialize for Set {
         let mut ids: Option<Storage<TriggerId, TriggeringEventType>> = None;
         let mut contracts: Option<Storage<HashOf<IvmBytecode>, IvmBytecodeEntry>> = None;
         while let Some(key) = visitor.next_key()? {
+            if uninstalled.contains(&key.as_str()) {
+                return Err(json::Error::InvalidField {
+                    field: format!("triggers.{}", key.as_str()),
+                    message: "unknown field is not permitted in a signed first-release snapshot"
+                        .to_owned(),
+                });
+            }
             match key.as_str() {
                 "data_triggers" => {
                     data_triggers = Some(visitor.parse_value()?);
@@ -1113,16 +1149,12 @@ impl json::JsonDeserialize for Set {
             }
         }
         visitor.finish()?;
-        let mut data_triggers =
-            data_triggers.ok_or_else(|| json::MapVisitor::missing_field("data_triggers"))?;
-        let mut pipeline_triggers = pipeline_triggers
-            .ok_or_else(|| json::MapVisitor::missing_field("pipeline_triggers"))?;
-        let mut time_triggers =
-            time_triggers.ok_or_else(|| json::MapVisitor::missing_field("time_triggers"))?;
-        let mut by_call_triggers =
-            by_call_triggers.ok_or_else(|| json::MapVisitor::missing_field("by_call_triggers"))?;
+        let mut data_triggers = installed(data_triggers, "data_triggers", uninstalled)?;
+        let mut pipeline_triggers = installed(pipeline_triggers, "pipeline_triggers", uninstalled)?;
+        let mut time_triggers = installed(time_triggers, "time_triggers", uninstalled)?;
+        let mut by_call_triggers = installed(by_call_triggers, "by_call_triggers", uninstalled)?;
         let ids = ids.ok_or_else(|| json::MapVisitor::missing_field("ids"))?;
-        let contracts = contracts.ok_or_else(|| json::MapVisitor::missing_field("contracts"))?;
+        let contracts = installed(contracts, "contracts", uninstalled)?;
         {
             let history = time_triggers.history();
             if history.current().len() > MAX_TIME_TRIGGERS_TOTAL
@@ -1205,9 +1237,25 @@ impl json::JsonDeserialize for Set {
 #[cfg(feature = "json")]
 impl FastJsonWrite for Set {
     fn write_json(&self, out: &mut String) {
+        self.write_json_through_selection(&[], out);
+    }
+}
+#[cfg(feature = "json")]
+impl Set {
+    /// Write the trigger set as a native snapshot holds it under a runtime selection that does
+    /// not install the members named in `uninstalled`: every other member, in the fixed order
+    /// (`specs/live_runtime_upgrades.md` §5.5).
+    pub(crate) fn write_json_through_selection(
+        &self,
+        uninstalled: &[&'static str],
+        out: &mut String,
+    ) {
         out.push('{');
         let mut first = true;
         let mut write = |name: &str, serialize: &dyn Fn(&mut String)| {
+            if uninstalled.contains(&name) {
+                return;
+            }
             if first {
                 first = false;
             } else {

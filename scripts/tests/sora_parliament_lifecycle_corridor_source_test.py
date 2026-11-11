@@ -1059,25 +1059,45 @@ def validate_native_finality_prefix(source: str) -> None:
 
 
 def validate_beacon_rotation_fixture(source: str) -> None:
-    """Require two complete feature-only DKG fixtures and exact-session dispatch."""
+    """Require signed all-edge DKG fixtures and committed-session share dispatch."""
 
-    require(
-        source.count("TEST_SUCCESSOR_SESSION_ID_DOMAIN_V1") == 2,
-        "rotatable beacon fixture lost the unique successor domain binding",
-    )
     for marker in (
-        "deterministic_parliament_beacon_successor_key_record_v1",
-        "deterministic_fixture_v1(network_id, ordered_roster, true, budget)",
-        "let initial_fixture =",
-        "deterministic_fixture_v1(self.network_id, &self.ordered_roster, false, &self.budget)",
-        "let successor_fixture =",
-        "deterministic_fixture_v1(self.network_id, &self.ordered_roster, true, &self.budget)",
-        "if successor_fixture.session.record() != session.record()",
-        "exact_seat_signer_supports_one_domain_separated_successor_session",
+        # The harness runs the complete signed ceremony on the fixture dealer stream,
+        # for the bootstrap session and for one exact certified successor session.
+        "deterministic_parliament_beacon_key_record_v1",
+        "bootstrap_session_v1(network_id, &roster)?,",
+        "deterministic_parliament_beacon_key_record_for_session_v1",
+        "signed_ceremony_v1(session, ordered_signing_keys, budget)",
+        "fixtures::adaptive_beacon_fixture_with_rngs(",
+        "Some(&mut dealer_rng),",
+        # A daemon reads its seat from the committed session's signed recipient keys,
+        # then derives only that seat's share against the committed transcript. It
+        # never rebuilds or compares a transcript.
+        "let dkg_session = record.adaptive_dkg.session;",
+        "|| dkg_session.network_id != self.network_id",
+        ".filter(|key| key.validator == self.local_peer)",
+        "deterministic_dealers_v1(&dkg_session)",
+        "session.transcript(),",
+        "exact_seat_signer_supports_a_certified_successor_session",
+        "the_seat_comes_from_the_committed_recipient_keys",
+        "seat_signer_follows_the_committed_transcript_not_a_rebuilt_one",
+        "seat_signer_refuses_a_fixture_identifier_with_foreign_dealers",
         "assert_ne!(initial.session.session_id, successor.session.session_id);",
         "verify_partial_signature(payload, &partial)",
     ):
         require(marker in source, f"rotatable beacon test fixture lost `{marker}`")
+    for retired in (
+        "deterministic_fixture_v1",
+        ".session.record() != session.record()",
+        # Core installs a successor only as the session of a certified committee
+        # transition, so a fixed fixture successor identifier is uninstallable.
+        "TEST_SUCCESSOR_SESSION_ID_DOMAIN_V1",
+        "deterministic_parliament_beacon_successor_key_record_v1",
+    ):
+        require(
+            retired not in source,
+            f"beacon test fixture regained retired `{retired}`",
+        )
 
 
 def validate_beacon_mode_profiles(source: str) -> None:
@@ -1713,13 +1733,23 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
     def test_beacon_rotation_fixture_rejects_adversarial_mutations(self) -> None:
         source = BEACON_TEST_SIGNER.read_text(encoding="utf-8")
         for marker in (
-            "TEST_SUCCESSOR_SESSION_ID_DOMAIN_V1",
-            "deterministic_fixture_v1(network_id, ordered_roster, true, budget)",
-            "deterministic_fixture_v1(self.network_id, &self.ordered_roster, true, &self.budget)",
-            "exact_seat_signer_supports_one_domain_separated_successor_session",
+            "bootstrap_session_v1(network_id, &roster)?,",
+            "signed_ceremony_v1(session, ordered_signing_keys, budget)",
+            "Some(&mut dealer_rng),",
+            "let dkg_session = record.adaptive_dkg.session;",
+            "|| dkg_session.network_id != self.network_id",
+            ".filter(|key| key.validator == self.local_peer)",
+            "exact_seat_signer_supports_a_certified_successor_session",
+            "seat_signer_follows_the_committed_transcript_not_a_rebuilt_one",
         ):
             with self.subTest(marker=marker), self.assertRaises(ContractError):
                 validate_beacon_rotation_fixture(source.replace(marker, "", 1))
+        for retired in (
+            "fn deterministic_fixture_v1() {}",
+            "const TEST_SUCCESSOR_SESSION_ID_DOMAIN_V1: &[u8] = b\"x\";",
+        ):
+            with self.subTest(retired=retired), self.assertRaises(ContractError):
+                validate_beacon_rotation_fixture(f"{source}\n{retired}\n")
 
     def test_mandatory_npos_boundary_rejects_adversarial_mutations(self) -> None:
         corridor = read_corridor_source()

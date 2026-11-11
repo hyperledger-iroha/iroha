@@ -381,4 +381,50 @@ pub(crate) mod tests {
             "the published World yields the policy signed by its original genesis"
         );
     }
+    #[test]
+    fn unselected_policy_parameter_names_stay_opaque_custom_parameters() {
+        use iroha_data_model::parameter::{CustomParameter, Parameter};
+        use iroha_primitives::json::Json;
+        let state = lane_hash_world(&[]);
+        let digest = state.execution_policy_digest_v1().unwrap();
+        let content = state.content_snapshot();
+        let mut staged = state.block(genesis_header());
+        // The frozen baseline interprets neither name: a payload that is no
+        // policy at all is stored like any other custom parameter.
+        for (name, payload) in [
+            ("content_policy_v1", Json::new("not a policy")),
+            ("settlement_router_policy_v1", Json::new(7_u32)),
+        ] {
+            staged
+                .world
+                .set_parameter_for_testing(Parameter::Custom(CustomParameter::new(
+                    name.parse().expect("parameter identifier"),
+                    payload,
+                )))
+                .expect("an unselected custom parameter is stored without interpretation");
+        }
+        assert_eq!(
+            staged_genesis_execution_policy_hash(&staged).unwrap(),
+            Hash::prehashed(digest),
+            "an opaque custom parameter must not move the signed policy"
+        );
+        staged.commit_world_overlay_for_testing().unwrap();
+        assert_eq!(state.execution_policy_digest_v1().unwrap(), digest);
+        let after = state.content_snapshot();
+        assert_eq!(after.max_bundle_bytes, content.max_bundle_bytes);
+        assert_eq!(after.max_files, content.max_files);
+        assert!(state.settlement_engine.matches_router_config(
+            &iroha_config::parameters::actual::Settlement::default().router
+        ));
+        let parameters = state.world.parameters.view();
+        for name in ["content_policy_v1", "settlement_router_policy_v1"] {
+            assert!(
+                parameters
+                    .custom()
+                    .get(&name.parse().expect("parameter identifier"))
+                    .is_some(),
+                "{name} is stored"
+            );
+        }
+    }
 }

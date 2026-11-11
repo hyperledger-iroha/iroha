@@ -693,6 +693,7 @@ mod tests {
     #[test]
     fn inventory_disclosure_violation_precedes_digest_composition() {
         const INVALID: &[Field] = &[Field {
+            member: "",
             id: "test.cell",
             role: Role::Canonical(Canonical::Cell(schema::<u64>())),
             disclosure: Disclosure::NotApplicable,

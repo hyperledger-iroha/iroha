@@ -1,7 +1,11 @@
 # Genesis-bound node configuration
 
 Status: proposal for owner decision (2026-10-29). Step 1, the field-level
-mismatch diagnostic, is implemented; G1 and G2 below are not.
+mismatch diagnostic, is implemented. The `[settlement.router]` section and the
+validity keys of `[content]` are removed from the node schema (owner decision
+of 2026-11-11) and their values are protocol constants; G1 and the typed
+parameters of G2 are not implemented. G2 as first written is superseded by the
+frozen-baseline constraint below.
 
 ## Problem
 
@@ -41,6 +45,21 @@ them; the digests read their committed value or protocol default.
 `[pipeline]`, `[zk]` and `[fraud_monitoring]` keep only node-local resources, so
 they can no longer cause a genesis policy mismatch.
 
+## What is fixed by the protocol
+
+These values have no node key and no committed parameter. The digests hash the
+protocol constant, which equals the former `iroha_config` default.
+
+| Family | Fixed value | Census entry |
+| --- | --- | --- |
+| Settlement router inputs | former `[settlement.router]` defaults | `cfg.settlement_router` (done) |
+| Content-bundle limits and defaults | former `[content]` defaults | `cfg.content` (done) |
+| Content publisher allow-list | empty: publishing is the executor's admission decision | `cfg.content` (done) |
+| Content default read authorization mode | `Public`: a bundle manifest states any other mode | `cfg.content` (done) |
+
+The node schema has no `[settlement]` section, and `[content]` keeps gateway
+resources only.
+
 ## What a node file still restates
 
 ### Nexus/AMX context (G1 scope)
@@ -78,8 +97,6 @@ counts are fields in that catalog.
 | --- | --- | --- |
 | `[gov]` | 88 (`governance.*`) | `cfg.governance` |
 | `[oracle]` | 29 (`oracle.*`) | `cfg.oracle` |
-| `[content]` | 11 (`content.*`) | `cfg.content` |
-| `[settlement.router]` | 7 (`settlement.router.*`) | `cfg.settlement_router` |
 | `[nexus.endorsement]` | `committee_keys`, `quorum` | `cfg.nexus.policy` |
 | `[nexus.governance]` | `default_module`, `modules` | `cfg.nexus.policy` |
 | `[nexus.hf_shared_leases]` | `drain_grace` | `cfg.nexus.policy` |
@@ -186,6 +203,36 @@ A chain that fails the rule needs a new genesis. Keeping a node-configuration
 source for chains without the parameters would be a second source per fact and
 a compatibility path, which the first release prohibits.
 
+## Frozen-baseline constraint on G2 (2026-11-11)
+
+A root that runs the live-upgrade foundation executes its frozen baseline
+unchanged (`specs/live_runtime_upgrades.md` §1.1, §4). Recognizing a new typed
+custom parameter is new behaviour: a `CanSetParameters` holder can submit
+`SetParameter` for any unreserved custom identifier, the baseline stores it
+without interpretation, and a binary that validated or applied it would disagree
+with one that does not while both execute the same selection. Two rules follow.
+
+1. A G2 parameter is published by a release addition and activated by a governed
+   change set. Until the root's selection activates it, every binary stores the
+   identifier opaquely, and validation, restore, projection, the State cells, the
+   digests and the executor-migration ownership list all ignore it. The checkpoint
+   policy of the lifecycle addition is the pattern
+   (`crates/iroha_core/src/runtime/checkpoint.rs`, `admit_parameter`). Activation
+   defines what happens to a value stored before it.
+2. Adoption is never a reset. The paragraphs above that tie Taira's adoption to a
+   public reset and prescribe a new genesis for a chain that fails the rule are
+   superseded: such a chain adopts by change set, with the addition's activation
+   installing the values its signed genesis bound.
+
+Removing a node key and fixing its value at the former default is not new
+behaviour for a chain whose configuration never set the key: both binaries
+compute the same results, and the digest and State-cell terms keep their bytes.
+`[settlement.router]` and the `[content]` validity keys were removed this way.
+Neither `configs/soranexus/nexus/config.toml` (Minamoto) nor
+`configs/soranexus/taira/config.toml` sets one; a chain whose signed genesis
+bound another value fails its genesis policy check at startup, and a validator
+file that still names a removed key fails to load.
+
 ## Alternatives not proposed
 
 - Publish execution-policy and Nexus-policy preimages and invert them into
@@ -204,7 +251,7 @@ a compatibility path, which the first release prohibits.
 ## Decisions requested
 
 1. Adopt G1, including removal of the G1 keys from the `iroha3d` node schema.
-2. Adopt G2 as the completion of F.4 for `[gov]`, `[oracle]`, `[content]`,
-   `[settlement.router]` and the Nexus service rows.
+2. Adopt G2, under the frozen-baseline constraint, as the completion of F.4
+   for `[gov]`, `[oracle]` and the Nexus service rows.
 3. Tie Taira's G2 adoption to its next public reset.
 4. Approve the Minamoto recomputation test as the G2 activation gate.

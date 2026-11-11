@@ -905,7 +905,7 @@
    "gates": "`pipa_r.enabled` and `stark.enabled`: retained Core proof verification, verifying-key registration and host ZK syscalls reject a disabled backend, and the Torii prover worker skips it. The standalone IVM host and mock no longer carry these backend switches; their envelope-only behavior does not establish production proof verification.",
    "decided_by": "Delete (plan-author decision of this task): both verifiers are always on. Until then the switches are fields of the committed policy (cfg.zk.validity_policy) with the protocol default `true`, so two validators cannot differ and no node configuration can turn one off.",
    "attribution": "read",
-   "open_reason": "Deleting the two fields changes the preimage of compute_zk_consensus_policy_hash, that is the confidential feature digest of every block header, and the ZK term of the execution-policy digest signed into genesis. It is an incompatible change of the `genesis` and `execution_semantics` surfaces: the pinned first-release history is regenerated and the cutover declared in the same change (specs/first_release_history_cutover.json, owned by BH.2 in this wave), and the authority-registry projection (state/authority_registry/zk_policy.rs, G.1) and the `zk-stark` feature gate (feature.zk_stark) change with it. Not done in this change; TODO(F.4) at the two fields in iroha_data_model::zk_validity_policy.",
+   "open_reason": "Deleting the two fields changes the preimage of compute_zk_consensus_policy_hash, that is the confidential feature digest of every block header, and the ZK term of the execution-policy digest signed into genesis. It is an incompatible change of the `genesis` and `execution_semantics` surfaces: the pinned first-release history is regenerated and the cutover declared in the same change (specs/first_release_history_cutover.json, owned by BH.2 in this wave), and the authority-registry projection (state/authority_registry/zk_policy.rs, G.1) changes with it. Taira's committed State also holds `zk_validity_policy_v1` in this layout (configs/soranexus/taira/genesis.template.json), so the deletion needs a governed transition of that parameter on the running network. Not done in this change; TODO(F.4) at the two fields in iroha_data_model::zk_validity_policy.",
    "sites": [
     ["crates/iroha_core/src/executor.rs", "config_switch", "enabled", 2],
     ["crates/iroha_core/src/smartcontracts/isi/world.rs", "config_switch", "enabled", 4],
@@ -1961,32 +1961,51 @@
   {
    "id": "cfg.content",
    "kind": "node_local_config",
-   "status": "open",
+   "status": "done",
    "owner": "F.4",
-   "path": "crates/iroha_config/src/parameters/actual.rs",
-   "symbol": "max_bundle_bytes",
-   "gates": "Content-bundle hosting limits of [content].",
-   "decided_by": "Committed State.",
+   "path": "crates/iroha_core/src/state/runtime_configuration.rs",
+   "symbol": "pub fn install_node_content(",
+   "gates": "Content-bundle hosting policy of [content]: the limits and defaults PublishContentBundle applies to an archive, the publisher allow-list and the default read authorization mode.",
+   "decided_by": "Removed from node configuration. The limits and defaults (bundle, file-count, path and retention caps, chunk size, cache defaults, default stripe layout) are protocol constants: State::install_node_content keeps a node's gateway resources and resets every limit, and the `[content]` schema has no key for them. The publisher allow-list is deleted: who may publish is the executor's admission decision (the Initial executor admits PublishContentBundle in genesis only; an installed executor enforces its own permission). The default read authorization mode is fixed at Public; a publisher that wants gated reads states the mode in its bundle manifest.",
    "attribution": "read",
-   "open_reason": "The committed-parameter mechanism exists (zk_validity_policy_v1). This family still reaches validation through the State copy installed from node configuration at startup; moving it needs its own typed committed parameter, the staged-genesis and deployment generators that author it, and regenerated deployment configurations.",
-   "sites": [
-    ["crates/iroha_core/src/smartcontracts/isi/domain/asset_alias_scope.rs", "node_policy_read", "content.publish_allow_accounts", 1]
-   ]
+   "note": "The execution-policy digest and the `state.content` State cell keep their V1 terms with the fixed values every default chain already encoded (the empty publisher set and Public), so their bytes do not change; a chain whose signed genesis bound other values fails its genesis policy check at startup instead of changing silently. Neither tracked network template sets a `[content]` key. Chain-settable limits are not node-local validity: they need a typed committed parameter published by a release addition and activated by a governed change set (specs/live_runtime_upgrades.md \u00a74), because the frozen baseline stores `content_policy_v1` as an opaque custom parameter.",
+   "tests": [
+    {"path": "crates/iroha_config/tests/committed_content_and_settlement_keys.rs", "name": "configuration_file_cannot_set_a_content_limit"},
+    {"path": "crates/iroha_config/tests/committed_content_and_settlement_keys.rs", "name": "moved_values_of_a_node_settings_value_are_the_protocol_defaults"},
+    {"path": "crates/iroha_core/src/state/authority_registry/content_policy.rs", "name": "publisher_set_and_default_read_mode_are_fixed_protocol_terms"},
+    {"path": "crates/iroha_core/src/sumeragi/genesis_meta.rs", "name": "unselected_policy_parameter_names_stay_opaque_custom_parameters"}
+   ],
+   "removed": [
+    {"path": "crates/iroha_config/src/parameters/user.rs", "contains": "defaults::content::MAX_BUNDLE_BYTES\")]"},
+    {"path": "crates/iroha_config/src/parameters/user.rs", "contains": "pub publish_allow_accounts"},
+    {"path": "crates/iroha_config/src/parameters/user.rs", "contains": "fn parse_content_auth_mode"},
+    {"path": "crates/iroha_core/src/smartcontracts/isi/content.rs", "contains": "content publishing not permitted for this account"},
+    {"path": "crates/iroha_core/src/smartcontracts/isi/domain/asset_alias_scope.rs", "contains": "content publish allow-list account"}
+   ],
+   "sites": []
   },
   {
    "id": "cfg.settlement_router",
    "kind": "node_local_config",
-   "status": "open",
+   "status": "done",
    "owner": "F.4",
-   "path": "crates/iroha_config/src/parameters/actual.rs",
-   "symbol": "twap_window",
+   "path": "crates/iroha_core/src/state/runtime_configuration.rs",
+   "symbol": "pub fn settlement(&self)",
    "gates": "Settlement router pricing windows and buffer thresholds.",
-   "decided_by": "Committed State (F.3 owns the economic invariant).",
+   "decided_by": "Removed from node configuration. The router inputs are protocol constants: the node schema has no `[settlement]` section and State has no settlement installer (State::set_settlement is deleted). F.3 owns the economic invariant.",
    "attribution": "read",
-   "open_reason": "The committed-parameter mechanism exists (zk_validity_policy_v1). This family still reaches validation through the State copy installed from node configuration at startup; moving it needs its own typed committed parameter, the staged-genesis and deployment generators that author it, and regenerated deployment configurations.",
-   "sites": [
-    ["crates/iroha_core/src/state/runtime_configuration.rs", "node_policy_read", "settlement.router.*", 1]
-   ]
+   "note": "No block execution path calls the settlement engine yet (docs/settlement-router.md): the inputs are bound by the execution-policy digest and the `state.settlement` State cell, whose bytes do not change. Neither tracked network template sets a `[settlement.router]` key. Chain-settable inputs are not node-local validity: they need a typed committed parameter published by a release addition and activated by a governed change set (specs/live_runtime_upgrades.md \u00a74), because the frozen baseline stores `settlement_router_policy_v1` as an opaque custom parameter.",
+   "tests": [
+    {"path": "crates/iroha_config/tests/committed_content_and_settlement_keys.rs", "name": "configuration_file_cannot_set_a_settlement_router_input"},
+    {"path": "crates/iroha_core/src/state/runtime_configuration_tests.rs", "name": "settlement_router_inputs_are_protocol_constants_without_an_installer"},
+    {"path": "crates/iroha_core/src/sumeragi/genesis_meta.rs", "name": "unselected_policy_parameter_names_stay_opaque_custom_parameters"}
+   ],
+   "removed": [
+    {"path": "crates/iroha_config/src/parameters/user.rs", "contains": "pub struct Router"},
+    {"path": "crates/iroha_config/src/parameters/user.rs", "contains": "InvalidSettlementConfig"},
+    {"path": "crates/iroha_core/src/state/runtime_configuration.rs", "contains": "pub fn set_settlement"}
+   ],
+   "sites": []
   },
   {
    "id": "cfg.execution_policy.digests",
@@ -2258,15 +2277,90 @@
   {
    "id": "feature.zk_stark",
    "kind": "cargo_feature",
-   "status": "open",
+   "status": "done",
    "owner": "F.4",
-   "path": "crates/iroha_core/Cargo.toml",
-   "symbol": "zk-stark = [\"iroha_core_zk/zk-stark\", \"iroha_core_privacy/zk-stark\"]",
-   "gates": "Native STARK/FRI verification, the privacy STARK engines and the IVM execution-proof verifier are compiled only with `zk-stark` (`proofs-stark`, `proofs-full`). A build without the feature rejects proofs a full build accepts.",
-   "decided_by": "Compile the verifier unconditionally in every node build; the daemon's `node` feature already enables it. B.2 and B.3 replace the STARK consumers on the shared backend.",
+   "path": "crates/iroha_core_zk/Cargo.toml",
+   "symbol": "fastpq_prover = { workspace = true }",
+   "gates": "Native STARK/FRI verification, the privacy STARK engines and the IVM execution-proof verifier were compiled only with `zk-stark` (`proofs-stark`, `proofs-full`): a build without the feature rejected proofs a full build accepted.",
+   "decided_by": "Removed: the verifier, the privacy STARK engines and their `fastpq_prover` dependency are compiled into every build, and no manifest declares the features. The `not(feature)` fallbacks, the Torii prover's build-availability refusal and the `NativeEngineNotCompiled` role limitation are deleted with them. The integration-test selector `stark-network-tests` chooses opt-in suites only and requires no daemon feature. B.2 and B.3 still replace the STARK consumers on the shared backend.",
    "attribution": "read",
-   "note": "The gate is measured, not only listed: the unit test feature_parity_record (crates/iroha_core/src/zk_validity_policy_feature_parity_tests.rs) prints one record per build and scripts/check_zk_feature_parity.py compares builds with and without the feature. Certified history, policy identities, limit decisions and verification gas must be identical; the record `gated.zk-stark.real_proof` (a real proof accepted, or not compiled) may differ only while this entry is open, and the script fails when the census and the builds disagree.",
-   "open_reason": "394 conditional-compilation sites in 30 Rust files of iroha_core, iroha_core_zk, iroha_core_privacy, iroha_torii and the integration tests (20 of them `not(feature)` fallbacks to delete with their items; P.1 deleted three with the feature-only `EngineUnavailable` verification error), the optional `fastpq_prover` dependency of iroha_core_zk, and the feature name in 12 manifests (the workspace root does not define it). The removal is one coordinated change with records other tasks own and are editing: two selection sites of specs/zk_operation_inventory.json quote `#[cfg(feature = \"zk-stark\")]` lines of isi/world.rs (F.1), six scopes of specs/zk_resource_contract.json carry the feature condition (F.2), scripts/check_cargo_feature_hygiene.py and scripts/check_release_feature_graph.py pin the feature tables, ci/dependency_budget.json the feature sets, and seven integration tests require a daemon built with the feature (`require_test_network_feature`). Filed as a shared-file request of F.4 for the integration pass.",
+   "note": "The unit test feature_parity_record (crates/iroha_core/src/zk_validity_policy_feature_parity_tests.rs) prints the real STARK proof outcome as the must-equal record `stark_real_proof`, and scripts/check_zk_feature_parity.py compares it across feature selections with the certified history, policy identities, limit decisions and verification gas.",
+   "removed": [
+    {
+     "path": "crates/iroha_core/Cargo.toml",
+     "contains": "zk-stark"
+    },
+    {
+     "path": "crates/iroha_core/Cargo.toml",
+     "contains": "proofs-stark"
+    },
+    {
+     "path": "crates/iroha_core/Cargo.toml",
+     "contains": "proofs-full"
+    },
+    {
+     "path": "crates/iroha_core_zk/Cargo.toml",
+     "contains": "zk-stark"
+    },
+    {
+     "path": "crates/iroha_core_zk/Cargo.toml",
+     "contains": "proofs-stark"
+    },
+    {
+     "path": "crates/iroha_core_privacy/Cargo.toml",
+     "contains": "zk-stark"
+    },
+    {
+     "path": "crates/iroha_torii/Cargo.toml",
+     "contains": "zk-stark"
+    },
+    {
+     "path": "crates/iroha_torii/Cargo.toml",
+     "contains": "proofs-stark"
+    },
+    {
+     "path": "crates/iroha_torii/Cargo.toml",
+     "contains": "proofs-full"
+    },
+    {
+     "path": "crates/irohad/Cargo.toml",
+     "contains": "zk-stark"
+    },
+    {
+     "path": "crates/irohad/bins/Cargo.toml",
+     "contains": "zk-stark"
+    },
+    {
+     "path": "integration_tests/Cargo.toml",
+     "contains": "zk-stark"
+    },
+    {
+     "path": "crates/iroha_core/src/zk_validity_policy_feature_parity_tests.rs",
+     "contains": "zk-stark"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/iroha_core/src/zk_validity_policy_feature_parity_tests.rs",
+     "name": "feature_parity_record"
+    },
+    {
+     "path": "pytests/scripts/check_cargo_feature_hygiene_test.py",
+     "name": "test_retired_stark_features_cannot_return"
+    },
+    {
+     "path": "pytests/scripts/check_cargo_feature_hygiene_test.py",
+     "name": "test_stark_field_dependency_is_mandatory_and_rejects_mutations"
+    },
+    {
+     "path": "pytests/scripts/check_cargo_feature_hygiene_test.py",
+     "name": "test_stark_sources_have_no_feature_opt_out"
+    },
+    {
+     "path": "scripts/tests/check_zk_feature_parity_test.py",
+     "name": "test_stark_verification_is_not_a_build_option"
+    }
+   ],
    "sites": []
   },
   {
@@ -3724,9 +3818,9 @@
     ["crates/iroha_core/src/smartcontracts/isi/privacy.rs", "unavailable", "unsupported", 2],
     ["crates/iroha_core_privacy/src/privacy_dispatch.rs", "unavailable", "unsupported", 14],
     ["crates/iroha_core_privacy/src/privacy_engines/p256.rs", "unavailable", "unavailable", 1],
-    ["crates/iroha_core_privacy/src/privacy_profiles.rs", "unavailable", "unavailable", 18],
+    ["crates/iroha_core_privacy/src/privacy_profiles.rs", "unavailable", "unavailable", 17],
     ["crates/iroha_core_privacy/src/privacy_verifier.rs", "unavailable", "unavailable", 3],
-    ["crates/iroha_core_privacy/src/privacy_verifier.rs", "unavailable", "unsupported", 6],
+    ["crates/iroha_core_privacy/src/privacy_verifier.rs", "unavailable", "unsupported", 4],
     ["crates/iroha_data_model/src/privacy/capability_manifest.rs", "unavailable", "unavailable", 8],
     ["crates/iroha_data_model/src/privacy/protocol.rs", "unavailable", "unavailable", 5],
     ["crates/iroha_data_model/src/privacy/protocol.rs", "unavailable", "unsupported", 2]
@@ -6758,8 +6852,6 @@
    "node": {"class": "service_surface", "reason": "Selects an API, transport, codec or model surface of the crate, not a validity rule."},
    "privacy-release-evidence": {"class": "availability_gate", "entry": "feature.privacy_release_evidence", "cfg_sites": 1},
    "profiling": {"class": "observability", "reason": "Metrics, tracing, profiling or operator alerts; no validation result depends on it."},
-   "proofs-full": {"class": "validity_gate", "entry": "feature.zk_stark", "cfg_sites": 0},
-   "proofs-stark": {"class": "validity_gate", "entry": "feature.zk_stark", "cfg_sites": 0},
    "quic": {"class": "service_surface", "reason": "Selects an API, transport, codec or model surface of the crate, not a validity rule."},
    "runtime": {"class": "service_surface", "reason": "Selects an API, transport, codec or model surface of the crate, not a validity rule."},
    "simd": {"class": "acceleration", "reason": "Hardware acceleration or parallelism with a deterministic scalar fallback."},
@@ -6772,7 +6864,6 @@
    "zk-ipa-native": {"class": "validity_gate", "entry": "feature.zk_halo2_family", "cfg_sites": 1},
    "zk-preverify": {"class": "validity_gate", "entry": "feature.zk_halo2_family", "cfg_sites": 15},
    "zk-proof-tags": {"class": "validity_gate", "entry": "feature.zk_halo2_family", "cfg_sites": 0},
-   "zk-stark": {"class": "validity_gate", "entry": "feature.zk_stark", "cfg_sites": 47},
    "zk-tests": {"class": "development_or_test", "reason": "Development, test, benchmark or measurement tooling; not part of a node release."},
    "kagemusha-simulator": {"class": "development_or_test", "reason": "Explicit nonshipping software-key wallet simulator for genuine-proof merchant acceptance; not a node release feature."}
   },
@@ -6781,8 +6872,7 @@
    "fastpq-replay-measurement": {"class": "development_or_test", "reason": "Development, test, benchmark or measurement tooling; not part of a node release."},
    "privacy-release-evidence": {"class": "availability_gate", "entry": "feature.privacy_release_evidence", "cfg_sites": 14},
    "simd": {"class": "acceleration", "reason": "Hardware acceleration or parallelism with a deterministic scalar fallback."},
-   "test-utils": {"class": "development_or_test", "reason": "Development, test, benchmark or measurement tooling; not part of a node release."},
-   "zk-stark": {"class": "validity_gate", "entry": "feature.zk_stark", "cfg_sites": 18}
+   "test-utils": {"class": "development_or_test", "reason": "Development, test, benchmark or measurement tooling; not part of a node release."}
   },
   "iroha_core_timed_ovn": {
    "default": {"class": "packaging", "reason": "The default feature set of the crate."},
@@ -6791,10 +6881,8 @@
   "iroha_core_zk": {
    "default": {"class": "packaging", "reason": "The default feature set of the crate."},
    "dev-tools": {"class": "development_or_test", "reason": "Required only by the kagemusha_wallet_artifacts developer binary; the empty feature selects no production verification branch."},
-   "proofs-stark": {"class": "validity_gate", "entry": "feature.zk_stark", "cfg_sites": 0},
    "test-utils": {"class": "development_or_test", "reason": "Development, test, benchmark or measurement tooling; not part of a node release."},
    "zk-preverify": {"class": "validity_gate", "entry": "feature.zk_halo2_family", "cfg_sites": 0},
-   "zk-stark": {"class": "validity_gate", "entry": "feature.zk_stark", "cfg_sites": 27},
    "zk-tests": {"class": "development_or_test", "reason": "Development, test, benchmark or measurement tooling; not part of a node release."},
    "kagemusha-simulator": {"class": "development_or_test", "reason": "Explicit nonshipping software-key wallet simulator for genuine-proof merchant acceptance; not a node release feature."}
   },
@@ -6881,8 +6969,6 @@
    "node-api": {"class": "service_surface", "reason": "Selects an API, transport, codec or model surface of the crate, not a validity rule."},
    "p2p_ws": {"class": "service_surface", "reason": "Selects an API, transport, codec or model surface of the crate, not a validity rule."},
    "profiling": {"class": "observability", "reason": "Metrics, tracing, profiling or operator alerts; no validation result depends on it."},
-   "proofs-full": {"class": "validity_gate", "entry": "feature.zk_stark", "cfg_sites": 0},
-   "proofs-stark": {"class": "validity_gate", "entry": "feature.zk_stark", "cfg_sites": 0},
    "push": {"class": "service_surface", "reason": "Selects an API, transport, codec or model surface of the crate, not a validity rule."},
    "schema": {"class": "service_surface", "reason": "Selects an API, transport, codec or model surface of the crate, not a validity rule."},
    "sm": {"class": "validity_gate", "entry": "feature.sm_gost_bls_pqc", "cfg_sites": 2},
@@ -6892,7 +6978,6 @@
    "transparent_api": {"class": "service_surface", "reason": "Selects an API, transport, codec or model surface of the crate, not a validity rule."},
    "ws_integration_tests": {"class": "service_surface", "reason": "Selects an API, transport, codec or model surface of the crate, not a validity rule."},
    "zk-proof-tags": {"class": "validity_gate", "entry": "feature.zk_halo2_family", "cfg_sites": 4},
-   "zk-stark": {"class": "validity_gate", "entry": "feature.zk_stark", "cfg_sites": 2},
    "zk-tests": {"class": "development_or_test", "reason": "Development, test, benchmark or measurement tooling; not part of a node release."},
    "zk-verify-batch": {"class": "validity_gate", "entry": "feature.zk_halo2_family", "cfg_sites": 17}
   },
@@ -6929,8 +7014,7 @@
    "telemetry": {"class": "observability", "reason": "Metrics, tracing, profiling or operator alerts; no validation result depends on it."},
    "test-network-disposable-broker": {"class": "availability_gate", "entry": "feature.test_network_hooks", "cfg_sites": 5},
    "test-network-parliament-signers": {"class": "availability_gate", "entry": "feature.test_network_hooks", "cfg_sites": 4},
-   "test-network-private-settlement-route-control": {"class": "availability_gate", "entry": "feature.test_network_hooks", "cfg_sites": 0},
-   "zk-stark": {"class": "validity_gate", "entry": "feature.zk_stark", "cfg_sites": 0}
+   "test-network-private-settlement-route-control": {"class": "availability_gate", "entry": "feature.test_network_hooks", "cfg_sites": 0}
   },
   "ivm": {
    "beep": {"class": "observability", "reason": "Metrics, tracing, profiling or operator alerts; no validation result depends on it."},
@@ -6947,8 +7031,8 @@
  },
  "summary": {
   "entries": 241,
-  "sites": 1513,
-  "by_status": {"done": 13, "local_resource": 24, "not_a_gate": 124, "open": 40, "out_of_plan": 21, "unsupported": 19},
+  "sites": 1511,
+  "by_status": {"done": 16, "local_resource": 24, "not_a_gate": 124, "open": 37, "out_of_plan": 21, "unsupported": 19},
   "by_owner": {"-": 145, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }
 }

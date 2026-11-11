@@ -1687,7 +1687,6 @@ fn sample_full_bootstrap_circuit_artifacts_for_secret(
     params: &BfvParameters,
     secret_key: &BfvSecretKey,
 ) -> BfvFullBootstrapCircuitArtifactBundleV1 {
-    #[cfg(feature = "zk-stark")]
     {
         let verifier_key = sample_fhe_full_bootstrap_execution_vk_box();
         let prover_key_material =
@@ -1697,25 +1696,6 @@ fn sample_full_bootstrap_circuit_artifacts_for_secret(
             .expect("sample native full-bootstrap prover-key material");
         let verifier_key_material =
             sample_full_bootstrap_native_verifier_material_for_core_vk(&verifier_key);
-        sample_full_bootstrap_circuit_artifacts_for_secret_and_proof_keys(
-            params,
-            secret_key,
-            &prover_key_material,
-            &verifier_key_material,
-        )
-    }
-    #[cfg(not(feature = "zk-stark"))]
-    {
-        let prover_key_material =
-            encode_bfv_full_bootstrap_native_stark_fri_prover_key_material_v1(
-                SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
-            )
-            .expect("sample native full-bootstrap prover-key material");
-        let verifier_key_material =
-            iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_v1(
-                SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
-            )
-            .expect("sample native full-bootstrap verifier-key material");
         sample_full_bootstrap_circuit_artifacts_for_secret_and_proof_keys(
             params,
             secret_key,

@@ -494,7 +494,7 @@ evidence.
   metadata before backend verifier dispatch; Core
   STARK verifier-dispatch and preverify coverage now pin those generic
   rejections before backend-native proof decoding or dedup/cache admission.
-  Under `zk-stark`, Core also decodes Soracloud FHE input-admission,
+  Core also decodes Soracloud FHE input-admission,
   bootstrap-key, full-bootstrap material, and full-bootstrap execution native
   `StarkVerifyEnvelopeV1` payloads before backend verification and
   adversarially rejects drift across transcript label, domain tag, AIR section
@@ -532,7 +532,7 @@ evidence.
 	  and material/execution generic AIR drift, so cache hits cannot bypass native
 	  envelope binding, verifier-owned material checks, the required material
 	  context, or the dedicated arithmetic-AIR boundary.
-  `zk-stark` full-bootstrap fixtures now install governed artifact-backed
+  The full-bootstrap fixtures now install governed artifact-backed
   STARK verifier keys and generate backend-verified binding-AIR
   `OpenVerifyEnvelope` payloads only as rejection fixtures: the active
   full-bootstrap material and execution verifier gates reject them before

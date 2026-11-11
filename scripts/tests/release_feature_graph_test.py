@@ -2629,6 +2629,17 @@ def test_shipping_graph_refuses_transitive_daemon_mutation_testing(
         assert "exclude test fixtures" in result.out
 
 
+def test_shipping_policy_reviews_no_retired_stark_feature() -> None:
+    """Native STARK/FRI verification is compiled into every build; no shipping root selects a feature for it."""
+    checker = load_checker()
+    retired = ("proofs-full", "proofs-stark", "zk-stark")
+    for package, allowed in checker.SHIPPING_ROOT_FEATURE_ALLOWLIST.items():
+        assert allowed.isdisjoint(retired), package
+    for package in ("iroha_core", "iroha_torii"):
+        graph = "\n".join(f'{package} feature "{feature}"' for feature in retired)
+        assert checker.unauthorized_root_features_in_graph(graph, package) == retired
+
+
 @pytest.mark.parametrize("entrypoint", ["shipping_profiles", "declared_shipping_targets"])
 def test_current_checkout_default_admission_matches_its_source_seal(
     monkeypatch, entrypoint: str

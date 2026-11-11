@@ -2685,10 +2685,7 @@
       "tests": [
         {
           "path": "crates/iroha_core_zk/src/stark/tests.rs",
-          "name": "stark_verifier_limits_cannot_relax_canonical_structure_caps",
-          "features": [
-            "zk-stark"
-          ]
+          "name": "stark_verifier_limits_cannot_relax_canonical_structure_caps"
         },
         {
           "path": "crates/iroha_core/src/state/authority_registry/zk_policy.rs",
@@ -9732,10 +9729,7 @@
         },
         {
           "path": "crates/iroha_core/src/zk_validity_policy_parity_tests.rs",
-          "name": "proof_bearing_history_is_identical_under_divergent_node_configuration",
-          "features": [
-            "zk-stark"
-          ]
+          "name": "proof_bearing_history_is_identical_under_divergent_node_configuration"
         },
         {
           "path": "crates/iroha_core/tests/zk_verify.rs",
@@ -10658,24 +10652,15 @@
       "tests": [
         {
           "path": "crates/iroha_core_zk/src/stark/tests.rs",
-          "name": "stark_verifier_limits_cannot_relax_canonical_structure_caps",
-          "features": [
-            "zk-stark"
-          ]
+          "name": "stark_verifier_limits_cannot_relax_canonical_structure_caps"
         },
         {
           "path": "crates/iroha_core_zk/src/stark/tests.rs",
-          "name": "stark_envelope_length_predicate_admits_exactly_the_bound_and_refuses_one_byte_more",
-          "features": [
-            "zk-stark"
-          ]
+          "name": "stark_envelope_length_predicate_admits_exactly_the_bound_and_refuses_one_byte_more"
         },
         {
           "path": "crates/iroha_core_zk/src/stark/tests.rs",
-          "name": "stark_verifier_accepts_an_envelope_of_exactly_its_bound_and_refuses_one_byte_more",
-          "features": [
-            "zk-stark"
-          ]
+          "name": "stark_verifier_accepts_an_envelope_of_exactly_its_bound_and_refuses_one_byte_more"
         }
       ],
       "test_note": "The verifier returns one refusal for every failure, so two tests share the boundary: the verifier test sets the caller's bound to the length of a valid envelope (it verifies) and to one byte less (the same envelope is refused); the predicate test shows that the bound a caller sets is clamped to 1 MiB, admitted inclusively."
@@ -13997,7 +13982,7 @@
       },
       "excluded": [
         {
-          "reason": "A mode switch, not a bound on bytes, counts or work. Its source is the committed ZK validity policy (zk_validity_policy_v1) since F.4; the switches remain availability toggles that F.4 removes with the zk-stark feature gate (census entry switch.zk.backend_enabled).",
+          "reason": "A mode switch, not a bound on bytes, counts or work. Its source is the committed ZK validity policy (zk_validity_policy_v1) since F.4; the switches remain availability toggles (census entry switch.zk.backend_enabled). No Cargo feature gates STARK verification: it is compiled into every build.",
           "fields": [
             "pipa_r.enabled",
             "stark.enabled"

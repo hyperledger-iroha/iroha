@@ -1158,9 +1158,12 @@ def test_supported_feature_matrix_preserves_all_current_nonmutation_features() -
     assert "governance" not in inventory["iroha_data_model"]
     assert {"application-model", "transparent_api", "test-fixtures",
             "fault_injection"} <= set(inventory["iroha_data_model"])
-    assert {"iroha-core-tests", "node", "simd", "zk-stark",
+    assert {"iroha-core-tests", "node", "simd", "zk-preverify",
             "test-network-private-settlement-evidence",
             "test-network-parliament-signers"} <= set(inventory["iroha_core"])
+    # Native STARK/FRI verification is compiled into every build: no package has a feature for it.
+    for package in ("iroha_core", "iroha_core_zk", "iroha_core_privacy", "iroha_torii", "irohad_lib"):
+        assert not {"zk-stark", "proofs-stark", "proofs-full"} & set(inventory[package]), package
     assert "sim" in inventory["iroha_sumeragi"]
     assert "test-network-disposable-broker" in inventory["irohad_lib"]
     for command in rust_ci.commands_for_checks(tuple(sorted(inventory)), ("clippy", "doc"),

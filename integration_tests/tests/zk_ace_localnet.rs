@@ -1,6 +1,6 @@
 //! Taira-shaped local-node fail-closed coverage for the disabled ZK-ACE
 //! privacy-transfer candidate.
-#![cfg(feature = "zk-stark")]
+#![cfg(feature = "stark-network-tests")]
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -40,21 +40,6 @@ const PROTOCOL: PrivacyRuntimeProtocolIdV1 = PrivacyRuntimeProtocolIdV1::ZkAcePq
 
 fn no_fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
-}
-
-fn require_test_network_feature(feature: &str) -> Result<()> {
-    let enabled = std::env::var("TEST_NETWORK_IROHAD_FEATURES")
-        .ok()
-        .is_some_and(|value| {
-            value
-                .split([',', ' ', '\t', '\n'])
-                .any(|item| item.trim() == feature)
-        });
-    ensure!(
-        enabled,
-        "{TEST_NAME}: TEST_NETWORK_IROHAD_FEATURES must include `{feature}`"
-    );
-    Ok(())
 }
 
 fn asset_definition_id() -> AssetDefinitionId {
@@ -107,7 +92,6 @@ fn policy(witness: &ZkAcePrivacyWitnessV1) -> PrivacyZkAcePolicyRecordV1 {
 
 #[test]
 fn zk_ace_privacy_transfer_fails_closed_taira_localnet() -> Result<()> {
-    require_test_network_feature("zk-stark")?;
     init_instruction_registry();
 
     ensure!(

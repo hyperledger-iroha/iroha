@@ -143,6 +143,11 @@ pub enum Disclosure {
 pub struct Field {
     /// Stable identity, independent of list order or Rust type location.
     pub id: &'static str,
+    /// Name of the owner's Rust field. A native snapshot writes the field under this member name
+    /// inside its owner's object, so a selection that does not install the field's storage
+    /// leaves exactly this member out (`specs/live_runtime_upgrades.md` §5.5). Empty for a
+    /// descriptor that belongs to no owner type.
+    pub member: &'static str,
     /// Reviewed authority class.
     pub role: Role,
     /// Fail-closed disclosure policy.
@@ -150,10 +155,17 @@ pub struct Field {
 }
 
 impl Field {
-    /// Register a field without granting any ability to disclose its values.
+    /// Register a descriptor that belongs to no owner field, without granting any ability to
+    /// disclose its values.
     pub(crate) const fn new(id: &'static str, role: Role) -> Self {
+        Self::of("", id, role)
+    }
+
+    /// Register the owner field `member` without granting any ability to disclose its values.
+    pub(crate) const fn of(member: &'static str, id: &'static str, role: Role) -> Self {
         Self {
             id,
+            member,
             disclosure: match role {
                 Role::Local(_) => Disclosure::NotApplicable,
                 _ => Disclosure::CommitmentOnly,
@@ -191,7 +203,7 @@ macro_rules! classified_owner {
         $( $(#[$attribute:meta])* $field:ident : $ty:ty => ($id:literal, $role:expr); )+
     }) => {
         pub const $registry: &[Field] = &[
-            $( $(#[$attribute])* Field::new($id, $role), )+
+            $( $(#[$attribute])* Field::of(stringify!($field), $id, $role), )+
         ];
         fn $check(owner: &$owner) {
             let $owner { $( $(#[$attribute])* $field, )+ } = owner;

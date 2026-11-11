@@ -580,6 +580,8 @@ pub struct Prepared {
     config_fingerprint: iroha_crypto::Hash,
     blocks: Arc<KuraBlockStore>,
     executor: StateExecutor,
+    // The executor's context archive, for the one barrier that ends startup replay.
+    native_context_archive: Arc<crate::query::native_context_archive::NativeContextArchive>,
     applied_watch: Arc<crate::sumeragi::lanes::global::AppliedWatch>,
     lane_stores: Arc<crate::sumeragi::lanes::registry::LaneStores>,
     chain_id: String,
@@ -606,11 +608,11 @@ impl core::fmt::Debug for Prepared {
     reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
 )]
 pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
-    // Tiered rows are a derived local projection. Replaying each historical block
-    // must not rewrite its entire manifest; publish the exact final projection once.
-    let tiered_replay = inputs
+    // Tiered rows and the query-index marker are derived local projections. Replaying
+    // each historical block must not rewrite either; persist the exact final ones once.
+    let derived_replay = inputs
         .state
-        .defer_tiered_snapshots_for_startup_replay()
+        .defer_derived_persistence_for_startup_replay()
         .map_err(NodeError::Input)?;
     let restored = startup::applied_height(&inputs.state);
     let replay_started = std::time::Instant::now();
@@ -619,6 +621,9 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
     } else {
         prepare_restored(inputs, restored, None)?
     };
+    // Replay republishes the context record of every block Kura holds. The archive makes
+    // the ones it only rechecks durable together, once, when the replay completes.
+    prepared.native_context_archive.begin_startup_replay();
     let state = &prepared.state;
     let crypto = &prepared.crypto;
     let blocks = &prepared.blocks;
@@ -657,6 +662,10 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
             );
         }
     }
+    prepared
+        .native_context_archive
+        .finish_startup_replay()
+        .map_err(|error| NodeError::Input(error.to_string()))?;
     // Compare the replayed publication with a cold capture under its selected commitment.
     // The terminal cut is checked even when Kura has no successor.
     state
@@ -666,7 +675,7 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
             reason: ReplayError::StateRoot(reason),
         })?;
     admit_window(state, crypto, stored.max(GENESIS_HEIGHT)).map_err(NodeError::Input)?;
-    if let Err(error) = tiered_replay.finish() {
+    if let Err(error) = derived_replay.finish() {
         // This derived local projection has always been best-effort. Its failed
         // baseline stays invalid so the next publication captures the full World.
         iroha_logger::warn!(%error, "tiered-state: failed to persist final startup snapshot");
@@ -812,6 +821,18 @@ fn prepare_restored(
     height: u64,
     isolated_source: Option<IsolatedSource>,
 ) -> Result<Prepared, NodeError> {
+    // Under the keyed commitment a decoded State is still a claim (§16.5). With the node's
+    // configuration installed, rebuild its complete selected schema and require the parent
+    // State root that the certified successor of its tip binds, before anything is built
+    // from it or replayed onto it. An LtHash State carries no claim: its World was
+    // authenticated when it was decoded.
+    inputs
+        .state
+        .authenticate_restored_keyed_state()
+        .map_err(|reason| NodeError::Replay {
+            height,
+            reason: ReplayError::StateRoot(reason),
+        })?;
     let chain_id = inputs.state.chain_id_ref().to_string();
     let Some((block, _certificate, tip)) = startup::stored_genesis(&inputs.state)? else {
         return Err(NodeError::Input(
@@ -986,10 +1007,11 @@ fn assemble_prepared(
             .retain_isolated_fastpq_target(state.kura(), height)
             .map_err(archive_error)?;
     }
+    let native_context_archive = Arc::new(native_context_archive);
     let context = ExecutorContext {
         time_source: iroha_primitives::time::TimeSource::new_system(),
         state: Arc::clone(&state),
-        native_context_archive: Arc::new(native_context_archive),
+        native_context_archive: Arc::clone(&native_context_archive),
         queue: None,
         staging,
         events,
@@ -1017,6 +1039,7 @@ fn assemble_prepared(
         config_fingerprint,
         blocks,
         executor,
+        native_context_archive,
         applied_watch,
         lane_stores,
         chain_id,
@@ -1072,6 +1095,8 @@ impl Prepared {
             config_fingerprint,
             blocks,
             executor,
+            // Startup replay ended in `prepare`; the executor keeps the archive.
+            native_context_archive: _,
             applied_watch,
             lane_stores,
             chain_id,

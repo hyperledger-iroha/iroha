@@ -263,7 +263,7 @@ pub fn frame_queue_charge_for<E: aead::AeadCore>(plaintext_frame_bytes: usize) -
 pub mod boilerplate {
     //! Module containing trait shorthands. Remove when trait aliases
     //! are stable <https://github.com/rust-lang/rust/issues/41517>
-    use aead::{Aead, AeadInOut, KeyInit};
+    use iroha_crypto::encryption::Cipher;
     /// Shorthand for traits required for payload
     pub trait Pload:
         norito::NoritoSerialize
@@ -284,8 +284,10 @@ pub mod boilerplate {
     {
     }
     /// Encryptors shared by the concurrently polled authenticated read/write exchange.
-    pub trait Enc: Aead + AeadInOut + KeyInit + Clone + Send + Sync + 'static {}
-    impl<T> Enc for T where T: Aead + AeadInOut + KeyInit + Clone + Send + Sync + 'static {}
+    /// Their seal and open kernels are `iroha_crypto`'s own code, never an instantiation
+    /// in this crate: every frame of a consensus payload passes through them.
+    pub trait Enc: Cipher + Clone + Send + Sync + 'static {}
+    impl<T> Enc for T where T: Cipher + Clone + Send + Sync + 'static {}
 }
 /// Errors used in [`crate`].
 #[derive(Debug, Error)]

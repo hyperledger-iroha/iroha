@@ -3,8 +3,10 @@
 Status: accepted design, 2026-10-29; implementation in progress (section 14). Independent model
 reviews (Codex, `gpt-6-astra`, read-only) shaped it. The definition contracts, the founded baseline
 selection with selection-aware dispatch, stable instruction envelopes, release additions after the
-frozen baseline with storage installation, and the change-set lifecycle of the universal root
-(proposal, notice, attestation, activation, lapse and the unsupported-node stop) are implemented;
+frozen baseline with storage installation, the change-set lifecycle of the universal root
+(proposal, notice, attestation, activation, lapse and the unsupported-node stop), and the
+kernel's lifecycle State (registered obligations, migrations with storage retirement, and the
+committed checkpoint policy, adoption anchor and startup floor) are implemented;
 [`runtime_upgrades.md`](runtime_upgrades.md) records that surface as built. It amends `AGENTS.md`,
 [`first_release_history_cutover.md`](first_release_history_cutover.md),
 [`runtime_upgrades.md`](runtime_upgrades.md) and `sumeragi.md` §16. This document authorizes no
@@ -702,11 +704,18 @@ What persists is the checkpoint:
    its block hash, and Kura refuses a store whose block at `H` has another hash.
 2. **Anchor.** The adoption record (`AdoptionRecordV1`) is the network's trust anchor. It names the
    network, `H` and its block hash, the predecessor's World root, the root of the imported State,
-   the committee, the foundation's selection and the authorizing governance record. Taira's is
-   still to be recorded in committed State through governance and attested by all `n` validators.
-   New nodes can then start from the anchor or a later checkpoint and verify forward instead of
-   trusting configuration (section 14, step 5). The startup re-validation of Taira's signed genesis
-   policy is deleted then too.
+   the committee, the foundation's selection and the authorizing governance record, which is
+   zero for an adoption node configuration authorized. The root ratifies it once, in the
+   kernel's own storage, with the statement of every validator: each derives the record from
+   its own store and signs only after checking it against its own certified history, and those
+   statements are the authority, so any account relays them
+   ([as built](runtime_upgrades.md#checkpoint-records)). Taira's is ratified once its
+   validators run a release with these records and activate the lifecycle State. New nodes can
+   then start from the anchor or a later checkpoint and verify forward instead of trusting
+   configuration, once a store records its boundary durably and a checkpoint can be transferred
+   (section 14, step 5). The startup re-validation of Taira's signed genesis policy stays until
+   the validity inputs a node takes from its configuration are committed State: it is their only
+   guard.
 3. **Deleted.** The import, its predecessor types and the predecessor's root rule (World-only
    coverage with a schema digest over every compiled field) are deleted. No later release carries
    pre-foundation code.
@@ -741,11 +750,11 @@ not a date: it happens once everything its first selection needs is implemented 
    to an opaque envelope that re-encodes byte for byte, and execution stops at the first unbound
    or opaque envelope with `definition_inactive` or `malformed_payload` before any type-dependent
    check; and snapshots through the selection: the writer leaves out each top-level World member
-   whose storage the selection does not install, a restore reads it as its empty default, and an
-   addition adds only top-level World fields. The keyed transition preserves the pinned
-   predecessor root and imports the registered State owners. Work remains on governing
-   changes to node-supplied semantic policy, authenticated accelerated restore,
-   snapshots of a nested World field, storage capabilities and generic carriers.
+   whose storage the selection does not install and each member of a nested owner whose storage
+   it does not install, and a restore reads it as its empty default. The keyed transition
+   preserves the pinned predecessor root and imports the registered State owners. Work remains
+   on governing changes to node-supplied semantic policy, authenticated accelerated restore,
+   storage capabilities and generic carriers.
 3. **Transition and lifecycle engine.** Change sets, all-`n` attestation of resolved selections,
    committed notice and provenance policy, scheduling, the unsupported-node stop, handshake
    profiles, restrictions, completion capabilities, the deferred-kind rules for every obligation the
@@ -762,10 +771,14 @@ not a date: it happens once everything its first selection needs is implemented 
    rebinding those interfaces, never inside the baseline. Native escrow activation also preserves its original completion closure instead of
    treating any active replacement as settlement authority. AMX participations are obligations
    too: an undecided global transaction and an unsettled participant escrow keep completing
-   through admission closure and completion-only, and no activation strands them. Still open: the
-   deferred-consent addition, kernel registration of contract-created obligations and migration
-   cursors, retained completion capabilities across rebinding, explicit current-binding consent
-   and narrower authenticated dynamic-call manifests.
+   through admission closure and completion-only, and no activation strands them. The kernel
+   registers obligations: an account, or the account that controls a contract's lifecycle,
+   commits the exact instructions that complete an obligation with their captured closure;
+   restrictions short of disabling do not stop those instructions, and no change set alters the
+   closure while the obligation is live. A migration's cursor is the kernel's own obligation.
+   Still open: the deferred-consent addition, running a captured implementation beside its
+   replacement (so a change set may rebind what a live obligation reaches), a kernel call for
+   contracts, which needs a new host profile, and narrower authenticated dynamic-call manifests.
 4. **Governance.** Parliament's Core integration (still a TODO in
    `parameter/parliament_lifecycle.rs`) with its committed timing policy, and the runtime emergency
    panel. Neither gets a temporary substitute on Taira. The panel's containment is implemented
@@ -781,7 +794,12 @@ not a date: it happens once everything its first selection needs is implemented 
    committed State (section 13), and a rehearsal that physically deletes retired code and then
    starts a node from the oldest accepted checkpoint. Done: the adoption import, used once on
    Taira and deleted with the predecessor's root rule; the upgrade checkpoint as the history
-   boundary that Kura checks against the stored block.
+   boundary that Kura checks against the stored block and below which no snapshot is restored;
+   the committed checkpoint policy; the adoption anchor and the startup floor as committed
+   records that every validator signs after checking them against its own certified history;
+   the boundary they set. Still open: checkpoint production and retention under the committed
+   policy, bootstrap from a transferred checkpoint without the block bodies below it, the
+   operator routes for the records, the deletion guard, and the rehearsal.
 6. **Operations and clients.** `--check-replay`, per-validator Taira tooling with rolling recovery,
    certified discovery and the client contract (8.4), tested against archived SDK and indexer
    builds. Done: `iroha3d --check-replay`, which replays a copy of a stopped store with the
@@ -801,9 +819,11 @@ not a date: it happens once everything its first selection needs is implemented 
    rooted data spaces with their own selections. A change set that
    asks for anything not yet implemented is rejected.
 
-Storage retirement, cell initialization and migration activation are refused by the successor
-resolver and lapse if encountered in an already scheduled record. They cannot be attested merely
-because the remaining definitions are compiled. The deferred-consent addition must account
+A root runs a migration and retires drained storage once it has activated the kernel's lifecycle
+State; on any other root the successor resolver refuses both, and an already scheduled record
+lapses. A cutover lapses until every old row is staged, and a retirement until the old storage is
+drained. Retaining or releasing a completion closure by a transition stays refused: the kernel's
+registry holds every closure. The deferred-consent addition must account
 explicitly for the triggers and pending proposals registered before it activates, which carry no
 capture; it never infers earlier consent from the current selection.
 

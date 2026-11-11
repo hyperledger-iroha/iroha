@@ -5058,18 +5058,6 @@ mod tests {
         );
     }
     #[test]
-    fn unregister_account_rejects_when_account_is_content_publish_allow_account() {
-        assert_account_unregister_guard_with_policy(
-            |state, account_id| {
-                state.content.publish_allow_accounts = vec![account_id.clone()];
-            },
-            |_, _, _, _| {},
-            "content publish allow-list account must not be unregistered",
-            "content publish allow-list account",
-            "error should explain content publish-allow conflict",
-        );
-    }
-    #[test]
     fn unregister_account_rejects_when_account_is_sorafs_telemetry_submitter() {
         assert_account_unregister_guard_with_policy(
             |state, account_id| {

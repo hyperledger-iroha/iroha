@@ -82,11 +82,7 @@ pub(super) fn append(
         "state.settlement",
         settlement_policy::borrowed(&fields.settlement)
     );
-    immutable!(
-        "state.content",
-        content_policy::BorrowedContentPolicy::new(&fields.content, output.budget())
-            .map_err(order)?
-    );
+    immutable!("state.content", content_policy::borrowed(&fields.content));
 
     if !output.skip_cell_projection("state.pipeline", source(), parameters_touched)? {
         let current = pipeline_policy::BorrowedPipelinePolicy::new(

@@ -51,8 +51,8 @@ workspace = true
 
 [features]
 # The node surface is selected explicitly by shipping leaves. `runtime` keeps
-# the mandatory first-release native proof policy intact; STARK support remains a
-# named proof aggregate rather than workspace-wide inheritance.
+# the mandatory first-release native proof policy intact. Native STARK/FRI
+# verification is compiled into every build and has no feature.
 # Portable node semantics are usable independently by integration and recovery
 # corridors; ordinary Core builds additionally select the optional accelerator.
 default = ["node", "simd"]
@@ -70,15 +70,12 @@ test-network-parliament-signers = []
 runtime = ["json", "bls", "zk-ipa-native"]
 node = [
     "runtime",
-    "proofs-stark",
     "app_api",
     "gost",
     "sm",
     "telemetry",
     "zk-preverify",
 ]
-proofs-stark = ["zk-stark"]
-proofs-full = ["proofs-stark", "zk-ipa-native"]
 # Enable QUIC transport helpers for Norito Streaming.
 quic = ["iroha_p2p/quic"]
 # Enable Norito-backed JSON helpers throughout the core crate.
@@ -122,8 +119,6 @@ fastpq-gpu = ["fastpq_prover/fastpq-gpu"]
 state-commitment-prototypes = ["fastpq_prover/dev-tools"]
 # Enable benchmark-only helpers used by this crate's Criterion targets.
 bench = []
-# ZK verifier feature flags ship enabled by default.
-zk-stark = ["iroha_core_zk/zk-stark", "iroha_core_privacy/zk-stark"]
 # Non-shipping native privacy release evidence. This is deliberately not a
 # default feature and is forwarded only by explicit release runners and
 # integration gates; it enables only the exact-12 conformance generator and
@@ -133,7 +128,6 @@ privacy-release-evidence = [
     "dep:orchard",
     "dep:incrementalmerkletree",
     "iroha_core_privacy/privacy-release-evidence",
-    "zk-stark",
     "json",
     "iroha_data_model/privacy-exact12-conformance",
 ]

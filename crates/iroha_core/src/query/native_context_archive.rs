@@ -49,6 +49,7 @@ use std::{
     io::{self, Read, Seek, Write},
     num::NonZeroUsize,
     path::Path,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 /// Original optional capture diagnostic retained without exposing a mutable witness.
@@ -215,6 +216,22 @@ impl PreparedNativeContext {
     }
 }
 
+/// Startup replay's coalesced directory barrier.
+///
+/// Startup replay republishes the record of every certified block Kura already holds. Those
+/// records exist from forward execution, and rechecking each behind its own directory barrier
+/// costs one device flush per block, serialized across every restarting node of a host.
+/// Inside this scope an already published record is only rechecked; leaving the scope makes
+/// all of them durable together. Nothing depends on one record's durability before then:
+/// a crash repeats the same replay from the same certified blocks.
+#[derive(Default)]
+struct ReplayBarrier {
+    // Startup replay owns the archive.
+    open: AtomicBool,
+    // A rechecked record awaits the barrier that closes the scope.
+    owed: AtomicBool,
+}
+
 /// Mandatory per-Kura context projection archive. It is not finality authority.
 pub struct NativeContextArchive {
     root: ArchiveDirectory,
@@ -225,6 +242,7 @@ pub struct NativeContextArchive {
     namespace: &'static str,
     fastpq_maximum: Option<NonZeroUsize>,
     fastpq_replay_target: Option<u64>,
+    replay_barrier: ReplayBarrier,
 }
 impl NativeContextArchive {
     /// Open the exact canonical Kura namespace using the original execution pool and finite limit.
@@ -247,6 +265,7 @@ impl NativeContextArchive {
             namespace: "native-contexts",
             fastpq_maximum: Some(kura.fastpq_object_max_bytes()),
             fastpq_replay_target: None,
+            replay_barrier: ReplayBarrier::default(),
         })
     }
 
@@ -297,6 +316,7 @@ impl NativeContextArchive {
             namespace: "native-contexts",
             fastpq_maximum: None,
             fastpq_replay_target: None,
+            replay_barrier: ReplayBarrier::default(),
         })
     }
 
@@ -318,6 +338,7 @@ impl NativeContextArchive {
             writable: false,
             fastpq_maximum: None,
             fastpq_replay_target: None,
+            replay_barrier: ReplayBarrier::default(),
         })
     }
 
@@ -342,6 +363,48 @@ impl NativeContextArchive {
             namespace: "native-contexts",
             fastpq_maximum: None,
             fastpq_replay_target: None,
+            replay_barrier: ReplayBarrier::default(),
+        })
+    }
+
+    /// Coalesce the directory barrier of every record startup replay finds already
+    /// published, until [`Self::finish_startup_replay`]. A record replay has to write, repair
+    /// or clean up keeps the barriers of ordinary publication.
+    pub(crate) fn begin_startup_replay(&self) {
+        self.replay_barrier.open.store(true, Ordering::Release);
+    }
+
+    /// Leave the startup replay scope, making every record it rechecked durable.
+    ///
+    /// # Errors
+    /// The directory barrier failed, or the archive namespace was removed or substituted.
+    pub(crate) fn finish_startup_replay(&self) -> Result<(), NativeContextArchiveError> {
+        self.replay_barrier.open.store(false, Ordering::Release);
+        if self.replay_barrier.owed.load(Ordering::Acquire) {
+            #[cfg(unix)]
+            self.directory.sync_all()?;
+            self.replay_barrier.owed.store(false, Ordering::Release);
+        }
+        self.recheck_namespace()
+    }
+
+    /// Whether publication would only recheck `original`: its records are published under
+    /// their canonical names, rebuild its exact bytes and left no stage behind.
+    #[cfg(unix)]
+    fn already_published(&self, original: &PreparedNativeContext) -> bool {
+        let (height, hash) = (original.height, original.carrier_hash);
+        published_record_matches(
+            &self.directory,
+            &RecordName::new(height, hash, false),
+            &RecordName::new(height, hash, true),
+            original.bytes.as_slice(),
+        ) && original.prepared_intents.as_ref().is_none_or(|intents| {
+            published_record_matches(
+                &self.directory,
+                &RecordName::intent(height, hash, false),
+                &RecordName::intent(height, hash, true),
+                intents.as_slice(),
+            )
         })
     }
 
@@ -508,6 +571,12 @@ impl NativeContextArchive {
         );
         #[cfg(test)]
         publication_test_hook::run()?;
+        // Descriptor-relative rechecks exist on Unix; elsewhere replay publishes ordinarily.
+        #[cfg(unix)]
+        if self.replay_barrier.open.load(Ordering::Acquire) && self.already_published(original) {
+            self.replay_barrier.owed.store(true, Ordering::Release);
+            return self.recheck_namespace();
+        }
         publish_record(
             &self.directory,
             original.height,
@@ -1065,6 +1134,26 @@ fn publish_named_record(
     bytes: &[u8],
 ) -> io::Result<()> {
     publish_stored(directory, target, staged, bytes, bytes)
+}
+/// Whether `target` is published, rebuilds exactly `original` and has no leftover stage.
+/// Every other finding, an unreadable entry included, is left to ordinary publication.
+#[cfg(unix)]
+fn published_record_matches(
+    directory: &File,
+    target: &RecordName,
+    staged: &RecordName,
+    original: &[u8],
+) -> bool {
+    let stage_absent = matches!(
+        open_named_record(directory, staged),
+        Err(error) if error.kind() == io::ErrorKind::NotFound
+    );
+    stage_absent
+        && open_named_record(directory, target)
+            .and_then(|file| {
+                packed::verify_original(directory, file, original, target.is_context())
+            })
+            .is_ok()
 }
 /// Recheck a record already published under its name, and drop its matching leftover stage.
 /// A context record may exist in either stored form, written by an earlier release or before an

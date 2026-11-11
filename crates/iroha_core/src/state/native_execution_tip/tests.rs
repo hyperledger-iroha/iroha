@@ -272,20 +272,19 @@ fn restore_reauthenticates_native_current_and_undo_and_rejects_claim_substitutio
         *restored.cell.predecessor_view().get(),
         *view.native_execution_tip_predecessor.get()
     );
+    // The slot is returned exactly as certified; the decoder interprets it per selection.
     assert_eq!(
-        restored.world_root,
+        restored.state_root,
         Some(
             chain
                 .committed(3)
                 .commitment()
                 .execution
                 .parent_world_state_root
-                .as_legacy_hash()
-                .unwrap()
         )
     );
     assert_eq!(
-        restored.world_root,
+        restored.state_root.and_then(|root| root.as_legacy_hash()),
         Some(view.world.state_accumulator.get().baseline_root().unwrap())
     );
     let mut wrong_result = claim();
@@ -380,7 +379,7 @@ fn restore_rebuilds_sparse_history_checkpoints_from_verified_snapshot_prefix() {
         *restored.cell.predecessor_view().get(),
         *view.native_execution_tip_predecessor.get()
     );
-    assert!(restored.world_root.is_some());
+    assert!(restored.state_root.is_some());
     assert_eq!(checkpoints.sparse_len(), 1);
     assert_eq!(
         checkpoints.recent_len(),

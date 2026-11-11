@@ -1,0 +1,21 @@
+[package]
+name = "zk-spartan"
+version = "0.1.0"
+edition = "2024"
+description = "Byte-gate spike: zero-knowledge Spartan with Hyrax rows and committed sumcheck rounds over the Pasta curves"
+publish = false
+
+[workspace]
+
+[dependencies]
+iroha_pasta = { path = "../../crates/iroha_pasta" }
+ff = "0.14.0"
+group = "0.14.0"
+rayon = "1.11.0"
+blake3 = "1.8.2"
+num-bigint = "0.4.8"
+num-integer = "0.1.46"
+num-traits = "0.2.19"
+
+[profile.release]
+debug = 1

@@ -173,8 +173,7 @@ pub(super) fn replay_asset(
     state.set_oracle(config.oracle.clone());
     state.install_node_fraud_monitoring(config.fraud_monitoring.clone());
     state.set_gov(config.gov.clone());
-    state.content = config.content.clone();
-    state.set_settlement(config.settlement);
+    let _ = state.install_node_content(config.content.clone());
     let baseline = Arc::new(LaneManifestRegistry::from_config(
         &config.nexus.configured_lane_catalog,
         &config.nexus.governance,

@@ -128,9 +128,9 @@ classified_owner!(State, check_state_fields, STATE_FIELDS, {
     gov: iroha_config::parameters::actual::Governance => ("state.gov",
         Role::Canonical(Canonical::Cell(Schema::Semantic { identity: "iroha:state:governance:v1", encoder: "state::authority_registry::governance_policy::GovernanceAuthorityV1::from_actual; governance admission, rewards, SoraFS and Parliament policy excluding diagnostics", layout: V1_LAYOUT })));
     content: iroha_config::parameters::actual::Content => ("state.content",
-        Role::Canonical(Canonical::Cell(Schema::Semantic { identity: "iroha:state:content:v1", encoder: "state::authority_registry::content_policy::ContentAdmissionPolicyV1::from_actual; isi::content::PublishContentBundle", layout: V1_LAYOUT })));
+        Role::Canonical(Canonical::Cell(Schema::Semantic { identity: "iroha:state:content:v1", encoder: "state::authority_registry::content_policy::ContentAdmissionPolicyV1::from_actual; protocol-fixed limits, empty publisher set and Public default read mode; isi::content::PublishContentBundle", layout: V1_LAYOUT })));
     settlement: iroha_config::parameters::actual::Settlement => ("state.settlement",
-        Role::Canonical(Canonical::Cell(Schema::Semantic { identity: "iroha:state:settlement:v1", encoder: "state::authority_registry::settlement_policy::SettlementPolicyV1::from_actual; exact router inputs", layout: V1_LAYOUT })));
+        Role::Canonical(Canonical::Cell(Schema::Semantic { identity: "iroha:state:settlement:v1", encoder: "state::authority_registry::settlement_policy::SettlementPolicyV1::from_actual; protocol-fixed router inputs, no installer", layout: V1_LAYOUT })));
     settlement_engine: crate::settlement::SettlementEngine => ("state.settlement_engine",
         Role::Derived { sources: &["state.settlement"], check: DerivationCheck::Rebuild("SettlementEngine::from_router_config(&State::settlement.router); SettlementEngine::matches_router_config before complete State root publication and after recovery") });
     chain_id: iroha_model_base::chain::ChainId => ("state.chain_id",

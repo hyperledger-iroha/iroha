@@ -1,6 +1,8 @@
 //! Executor authorization, execution and custody regression tests.
 #[path = "executor_custody_tests.rs"]
 mod custody_upgrade;
+#[path = "executor_restricted_dataspace_read_tests.rs"]
+mod restricted_dataspace_read;
 
 use super::*;
 use crate::{
@@ -40,7 +42,6 @@ use iroha_test_samples::{
     ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in,
 };
 use mv::storage::StorageReadOnly;
-#[cfg(feature = "zk-stark")]
 mod zk_hydration_route_tests {
     //! Real contract and trigger dispatch retain cold-registry refusals until abandonment.
 
@@ -6309,7 +6310,7 @@ fn initial_executor_restricted_reader_cannot_mutate_direct_or_role_grants() {
     for (path, instruction) in denied {
         let error = super::Executor::Initial
             .execute_instruction(&mut state_transaction, &holder, &instruction)
-            .expect_err("restricted-read permission mutations must be genesis-only");
+            .expect_err("restricted-read possession must not authorize mutations");
         assert!(matches!(error, ValidationFail::NotPermitted(_)));
         assert!(
             error.to_string().contains("CanReadRestrictedDataspace"),
@@ -10024,7 +10025,7 @@ fn encode_store(base: u8, rs: u8, imm12: u16, funct3: u8) -> u32 {
         | (imm_lo << 7)
         | 0x23
 }
-#[cfg(all(feature = "zk-preverify", feature = "zk-stark"))]
+#[cfg(feature = "zk-preverify")]
 fn preverify_stark_fixture() -> (
     String,
     iroha_data_model::proof::VerifyingKeyBox,
@@ -10055,7 +10056,7 @@ fn preverify_stark_fixture() -> (
     .expect("native STARK preverify fixture");
     (circuit_id, vk, proof)
 }
-#[cfg(all(feature = "zk-preverify", feature = "zk-stark"))]
+#[cfg(feature = "zk-preverify")]
 #[test]
 fn preverify_and_dedup_across_transactions_in_block() {
     use iroha_data_model::{
@@ -10175,7 +10176,7 @@ fn preverify_and_dedup_across_transactions_in_block() {
         assert!(res.is_err(), "duplicate proof should be rejected");
     }
 }
-#[cfg(all(feature = "zk-preverify", feature = "zk-stark"))]
+#[cfg(feature = "zk-preverify")]
 #[test]
 fn preverify_attachments_enforce_verifying_key_height_window() {
     use iroha_data_model::{

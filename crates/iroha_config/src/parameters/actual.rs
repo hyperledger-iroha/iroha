@@ -4664,10 +4664,9 @@ pub fn execution_policy_digest_v1(
         &content.max_retention_blocks,
     );
     policy.push("content.chunk_size_bytes", &content.chunk_size_bytes);
-    policy.push(
-        "content.publish_allow_accounts",
-        &execution_policy_canonical_set(content.publish_allow_accounts.iter()),
-    );
+    // Fixed V1 term: no setting holds a publisher list, and the preimage keeps
+    // the canonical empty set every default chain signed.
+    policy.push("content.publish_allow_accounts", &Vec::<Vec<u8>>::new());
     policy.push(
         "content.default_cache_max_age_secs",
         &content.default_cache_max_age_secs,
@@ -4677,7 +4676,8 @@ pub fn execution_policy_digest_v1(
         &content.max_cache_max_age_secs,
     );
     policy.push("content.immutable_bundles", &content.immutable_bundles);
-    policy.push("content.default_auth_mode", &content.default_auth_mode);
+    // Fixed V1 term: a bundle manifest that names no mode is public.
+    policy.push("content.default_auth_mode", &ContentAuthMode::Public);
     policy.push("content.stripe_layout", &content.stripe_layout);
     policy.push(
         "settlement.router.twap_window",
@@ -5980,8 +5980,6 @@ pub struct Content {
     pub max_retention_blocks: u64,
     /// Chunk size (bytes) used during ingestion.
     pub chunk_size_bytes: u32,
-    /// Optional allow-list of accounts permitted to publish bundles.
-    pub publish_allow_accounts: Vec<iroha_data_model::account::AccountId>,
     /// Rate/bandwidth limits for the content gateway.
     pub limits: ContentLimits,
     /// Default Cache-Control max-age (seconds) applied to bundles.
@@ -5990,8 +5988,6 @@ pub struct Content {
     pub max_cache_max_age_secs: u32,
     /// Whether bundles are immutable by default.
     pub immutable_bundles: bool,
-    /// Default read auth mode for bundles that omit an override.
-    pub default_auth_mode: ContentAuthMode,
     /// Service-level objectives for the content gateway.
     pub slo: ContentSlo,
     /// Proof-of-work guard configuration for content fetches.
@@ -10666,7 +10662,7 @@ impl_default!(DiagnosticTrace => {
 /// Native STARK/FRI verification settings.
 #[derive(Debug, Clone, Copy)]
 pub struct Stark {
-    /// Enable native STARK verification (requires `zk-stark` build feature).
+    /// Enable native STARK verification.
     pub enabled: bool,
     /// Maximum accepted outer STARK `OpenVerifyEnvelope` length (bytes).
     pub max_envelope_bytes: usize,

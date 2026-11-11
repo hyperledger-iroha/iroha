@@ -1661,7 +1661,6 @@ fn proof_processing_context_hash(
     processing_context_put_bytes(&mut hasher, b"iroha:torii:zk-prover-retry-context:v1");
     processing_context_put_str(&mut hasher, ctx.build_identity.version());
     processing_context_put_option_str(&mut hasher, Some(ctx.build_identity.source_commit()));
-    hasher.update([u8::from(cfg!(feature = "zk-stark"))]);
     hasher.update(
         u64::try_from(ctx.allowed_backends.len())
             .unwrap_or(u64::MAX)
@@ -1822,13 +1821,6 @@ fn process_proof_attachment_in_view(
         errors.push(format!("backend `{backend_str}` not allowed"));
         retryable = is_verifier_backend_registry_label_v1(backend_str);
         terminal_error |= !retryable;
-    }
-    match production_verify_backend_tag(backend_str) {
-        Some(BackendTag::Stark) if !cfg!(feature = "zk-stark") => {
-            errors.push("stark verification is unavailable in this node build".into());
-            retryable = true;
-        }
-        _ => {}
     }
     if let Some(view) = verifier_view {
         let zk = &view.zk;

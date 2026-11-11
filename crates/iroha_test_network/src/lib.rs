@@ -16059,7 +16059,7 @@ mod tests {
     fn program_spec_irohad_includes_features_from_env() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let old_env = env::var(super::PROGRAM_IROHAD_FEATURES_ENV).ok();
-        set_env_var(super::PROGRAM_IROHAD_FEATURES_ENV, "zk-stark");
+        set_env_var(super::PROGRAM_IROHAD_FEATURES_ENV, "fastpq-gpu");
         let spec = Program::Irohad.spec();
         let args: Vec<String> = spec
             .build_args
@@ -16067,7 +16067,7 @@ mod tests {
             .map(|arg| arg.to_string_lossy().to_string())
             .collect();
         assert!(args.contains(&"--features".to_string()));
-        assert!(args.contains(&"zk-stark".to_string()));
+        assert!(args.contains(&"fastpq-gpu".to_string()));
         if let Some(v) = old_env {
             set_env_var(super::PROGRAM_IROHAD_FEATURES_ENV, v);
         } else {
