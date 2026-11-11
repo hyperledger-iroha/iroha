@@ -6,8 +6,7 @@ use super::{
     DecodeFlagsGuard, EncodeContextGuard, Encoder, Error, ExactLengthWriter, ExactSliceWriter,
     FramedPayloadWriter, Header, NoritoSerialize, SerializePayload, compact_len_used, crc64,
     current_decode_flags_effective, default_encode_flags, encode_writers::LengthCountingWriter,
-    encoded_frame_len, finalized_encode_flags, payload_alignment_padding_for,
-    validate_header_flags,
+    encoded_frame_len, finalized_encode_flags, payload_padding_for, validate_layout_code,
 };
 
 /// Write a measured prefix followed by one complete frame using the active layout.
@@ -41,7 +40,7 @@ where
     F: for<'w> FnOnce(&mut Encoder<'w>, usize) -> Result<(), Error>,
 {
     let flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
-    validate_header_flags(flags)?;
+    validate_layout_code(flags)?;
     if writer.in_place_buffer().is_some() {
         return append_frame_in_place(value, writer, flags, prefix);
     }
@@ -97,7 +96,7 @@ where
     let payload = buffer.get(start..).ok_or_else(|| Error::LengthMismatch)?;
     let payload_len = payload.len();
     let checksum = crc64(payload);
-    let padding = payload_alignment_padding_for::<T>();
+    let padding = payload_padding_for::<T>(base_flags);
     let frame_len = Header::SIZE
         .checked_add(padding)
         .and_then(|size| size.checked_add(payload_len))
@@ -111,7 +110,7 @@ where
         u64::try_from(payload_len).map_err(|_| Error::LengthMismatch)?,
         checksum,
     );
-    header.flags |= flags;
+    header.set_layout_code(flags);
     // A prefix that swapped the destination or entered a bound leaves bytes
     // this frame cannot place; the caller discards the partial output.
     let buffer = writer
@@ -148,7 +147,7 @@ where
 {
     let _work = super::encode_work::ValueGuard::enter()?;
     let (payload_len, first_flags) = counted_payload(value, base_flags)?;
-    let padding = payload_alignment_padding_for::<T>();
+    let padding = payload_padding_for::<T>(base_flags);
     let header_len = Header::SIZE
         .checked_add(padding)
         .ok_or_else(|| Error::LengthMismatch)?;
@@ -166,7 +165,7 @@ where
         u64::try_from(payload_len).map_err(|_| Error::LengthMismatch)?,
         crc64(expected_payload),
     );
-    header.flags |= first_flags;
+    header.set_layout_code(first_flags);
     header.write(&mut *writer)?;
     const ZEROS: [u8; 64] = [0; 64];
     writer.write_all(&ZEROS[..padding])?;
@@ -221,10 +220,10 @@ where
         let result = write_typed_payload_frame::<T, P, _>(value, &mut exact, base_flags);
         return (result, exact);
     }
-    if let Err(error) = validate_header_flags(base_flags) {
+    if let Err(error) = validate_layout_code(base_flags) {
         return (Err(error), exact);
     }
-    let padding = payload_alignment_padding_for::<T>();
+    let padding = payload_padding_for::<T>(base_flags);
     let header_len = Header::SIZE + padding;
     let expected_payload = expected.get(header_len..).unwrap_or_default();
     let payload_guard = EncodeContextGuard::enter();
@@ -250,7 +249,7 @@ where
         header_payload_len,
         crc64(&expected_payload[..payload_len]),
     );
-    header.flags |= flags;
+    header.set_layout_code(flags);
     // Header and padding, on the stack: verification allocates nothing.
     let mut head = [0_u8; Header::SIZE + 64];
     if let Err(error) = header.write(&mut head[..Header::SIZE]) {
@@ -374,7 +373,7 @@ where
     F: FnOnce(&mut W, usize) -> Result<(), Error>,
 {
     let _work = super::encode_work::ValueGuard::enter()?;
-    validate_header_flags(base_flags)?;
+    validate_layout_code(base_flags)?;
     // A bounded frame may not trigger dynamic identity construction, even when
     // an unrelated operation warmed the memo. Prepay literal hashing before
     // source serialization or output allocation; the digest uses fixed scratch.
@@ -405,7 +404,7 @@ where
     let first_flags = finalized_encode_flags(base_flags, compact_len_used());
     drop(first_guard);
 
-    let padding = payload_alignment_padding_for::<T>();
+    let padding = payload_padding_for::<T>(base_flags);
     let frame_len = Header::SIZE
         .checked_add(padding)
         .and_then(|size| size.checked_add(payload_len))
@@ -417,7 +416,7 @@ where
         payload_len_u64,
         first_checksum,
     );
-    header.flags |= first_flags;
+    header.set_layout_code(first_flags);
     header.write(&mut *writer)?;
     let mut padding = padding;
     const ZEROS: [u8; 64] = [0; 64];
@@ -502,8 +501,11 @@ mod tests {
         }
     }
 
+    /// Every layout code: the minor-0 flag sets and the dense code.
     fn layouts() -> impl Iterator<Item = u8> {
-        (0..=supported_header_flags()).filter(|flags| validate_header_flags(*flags).is_ok())
+        (0..=supported_header_flags())
+            .filter(|flags| crate::core::validate_header_flags(*flags).is_ok())
+            .chain([crate::core::WireLayout::Dense.code()])
     }
 
     #[test]

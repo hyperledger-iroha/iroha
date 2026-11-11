@@ -155,7 +155,7 @@ fn enum_materializer_keeps_original_tags_variant_indices_and_normal_array_framin
     syn::parse2::<syn::File>(output.clone()).expect("complete canonical enum materializer");
     let text = output.to_string();
     assert_eq!(text.matches("fn decode_value_fields").count(), 1);
-    assert_eq!(text.matches("u32 :: from_le_bytes").count(), 1);
+    assert_eq!(text.matches("read_enum_tag").count(), 1);
     assert_eq!(text.matches("begin_variant").count(), 3);
     assert_eq!(text.matches("framed_field :: <").count(), 2);
     assert_eq!(text.matches("framed_byte_array_field :: <").count(), 1);

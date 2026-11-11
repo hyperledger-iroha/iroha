@@ -3,8 +3,9 @@
 use std::{io::Write, marker::PhantomData};
 
 use super::{
-    Compression, Error, Header, NoritoSerialize, crc64, payload_alignment_padding_for,
-    payload_len_to_usize, payload_without_leading_padding_exact, validate_header_flags,
+    Compression, Error, Header, NoritoSerialize, VERSION_MINOR_DENSE, crc64, is_dense_layout_code,
+    payload_len_to_usize, payload_padding_for, payload_without_leading_padding_exact,
+    validate_layout_code,
 };
 
 /// One typed fixed-payload frame layout retained by its original resource owner.
@@ -56,8 +57,8 @@ impl<T: NoritoSerialize> FixedFrameLayout<T> {
     /// length overflow. Schema identity construction remains the caller's funded
     /// initialization obligation; no caller-supplied schema digest is accepted.
     pub fn new(payload_len: usize, flags: u8) -> Result<Self, Error> {
-        validate_header_flags(flags)?;
-        let padding = payload_alignment_padding_for::<T>();
+        validate_layout_code(flags)?;
+        let padding = payload_padding_for::<T>(flags);
         let frame_len = Header::SIZE
             .checked_add(padding)
             .and_then(|len| len.checked_add(payload_len))
@@ -116,7 +117,7 @@ impl<T: NoritoSerialize> FixedFrameLayout<T> {
                 &[Compression::None],
             ));
         }
-        if header.flags != self.flags {
+        if header.layout_code() != self.flags {
             return Err(Error::NonCanonicalEncoding);
         }
         if header.length != self.payload_len_u64 {
@@ -144,7 +145,11 @@ pub(super) fn write_bare_frame<W: Write + ?Sized>(
 ) -> Result<(), Error> {
     let length = u64::try_from(payload.len()).map_err(|_| Error::LengthMismatch)?;
     let mut header = Header::new(schema, length, crc64(payload));
-    header.flags = flags;
+    if is_dense_layout_code(flags) {
+        header.minor = VERSION_MINOR_DENSE;
+    } else {
+        header.flags = flags;
+    }
     header.write(&mut *writer)?;
     const ZEROS: [u8; 64] = [0; 64];
     while padding != 0 {

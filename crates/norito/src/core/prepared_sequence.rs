@@ -154,7 +154,7 @@ impl<'input> ChargedElementSequence<'input> {
 fn admit_charged_sequence_spans(bytes: &[u8]) -> Result<(usize, u8), Error> {
     let (count, _) = read_seq_len_slice(bytes)?;
     let flags = effective_decode_flags().unwrap_or_else(default_encode_flags);
-    validate_header_flags(flags)?;
+    validate_layout_code(flags)?;
     validate_binary_sequence_reservation(bytes, flags, count)?;
     reserve_decode_sequence_storage::<SequenceSpan>(count)?;
     Ok((count, flags))
@@ -347,7 +347,7 @@ impl RetainedElementSequence {
 pub fn inspect_element_sequence(bytes: &[u8]) -> Result<(usize, usize), Error> {
     let (count, _) = inspect_seq_len_slice(bytes)?;
     let flags = effective_decode_flags().unwrap_or_else(default_encode_flags);
-    validate_header_flags(flags)?;
+    validate_layout_code(flags)?;
     let used = byte_sequence::visit_binary_sequence_with_count(bytes, flags, count, |_| Ok(()))?;
     note_payload_access(bytes, used);
     Ok((count, used))
@@ -371,7 +371,7 @@ pub fn prepare_element_sequence<'input, 'scratch>(
 ) -> Result<PreparedElementSequence<'input, 'scratch>, SequenceDestinationError> {
     let (count, _) = read_seq_len_slice(bytes)?;
     let flags = effective_decode_flags().unwrap_or_else(default_encode_flags);
-    validate_header_flags(flags)?;
+    validate_layout_code(flags)?;
     validate_binary_sequence_reservation(bytes, flags, count)?;
     if count > scratch.len() {
         return Err(SequenceDestinationError::Storage {

@@ -107,7 +107,7 @@ fn header_read_preserves_early_validation() {
         Err(Error::UnsupportedVersion { .. })
     ));
     bytes[4] = VERSION_MAJOR;
-    bytes[5] = VERSION_MINOR.wrapping_add(1);
+    bytes[5] = VERSION_MINOR_DENSE.wrapping_add(1);
     assert!(matches!(
         Header::read(&bytes[..6]),
         Err(Error::UnsupportedMinorVersion { .. })

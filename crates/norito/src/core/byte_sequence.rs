@@ -20,11 +20,23 @@ pub fn decode_byte_element_sequence_into(
     bytes: &[u8],
     destination: &mut [u8],
 ) -> Result<(usize, usize), Error> {
-    let (count, _) = read_seq_len_slice(bytes)?;
+    let (count, offset) = read_seq_len_slice(bytes)?;
     let flags = effective_decode_flags().unwrap_or_else(default_encode_flags);
-    validate_header_flags(flags)?;
+    validate_layout_code(flags)?;
     if count > destination.len() {
         return Err(Error::LengthMismatch);
+    }
+    if is_dense_layout_code(flags) {
+        // A dense byte sequence is its raw bytes after the count.
+        let end = offset
+            .checked_add(count)
+            .ok_or_else(|| Error::LengthMismatch)?;
+        let raw = bytes
+            .get(offset..end)
+            .ok_or_else(|| Error::LengthMismatch)?;
+        destination[..count].copy_from_slice(raw);
+        note_payload_access(bytes, end);
+        return Ok((count, end));
     }
     let mut index = 0;
     let used = visit_binary_sequence_with_count(bytes, flags, count, |span| {
@@ -103,8 +115,8 @@ fn byte_element_values(body: &[u8], flags: u8) -> impl Iterator<Item = u8> + '_ 
 /// same consumed range.
 pub(super) fn decode_canonical_byte_array<const N: usize>(
     bytes: &[u8],
+    flags: u8,
 ) -> Result<Option<([u8; N], usize)>, Error> {
-    let flags = effective_layout_flags();
     let Some(used) = N.checked_mul(byte_element_stride(flags)) else {
         return Ok(None);
     };
@@ -140,6 +152,9 @@ where
     T: DeserializePayload<'a>,
 {
     let flags = effective_decode_flags().unwrap_or_else(default_encode_flags);
+    if is_dense_layout_code(flags) {
+        return decode_dense_byte_sequence::<T>(bytes).map(Some);
+    }
     if validate_header_flags(flags).is_err() {
         return Ok(None);
     }
@@ -190,6 +205,28 @@ where
         .map_err(|_| Error::LengthMismatch)
 }
 
+/// Decode a dense one-byte element sequence: its count, then its raw bytes.
+///
+/// The count, allocation and access accounting are those of the raw `Vec<u8>`
+/// decoder; dense byte sequences of every container share that layout.
+fn decode_dense_byte_sequence<'a, T>(bytes: &[u8]) -> Result<(Vec<T>, usize), Error>
+where
+    T: DeserializePayload<'a>,
+{
+    let (len, offset) = read_seq_len_slice(bytes)?;
+    let end = offset
+        .checked_add(len)
+        .ok_or_else(|| Error::LengthMismatch)?;
+    let slice = bytes
+        .get(offset..end)
+        .ok_or_else(|| Error::LengthMismatch)?;
+    let mut raw = try_decode_vec_with_capacity::<u8>(len)?;
+    raw.extend_from_slice(slice);
+    let values = T::__norito_from_byte_elements(raw).map_err(|_| Error::LengthMismatch)?;
+    record_slice_access(bytes, end);
+    Ok((values, end))
+}
+
 /// Visit every length-prefixed element span of a sequence with a known count.
 ///
 /// Returns the total sequence payload length consumed from the front of `bytes`.
@@ -207,8 +244,9 @@ pub fn visit_binary_sequence_with_count(
     count: usize,
     mut visit: impl FnMut(SequenceSpan) -> Result<(), Error>,
 ) -> Result<usize, Error> {
-    validate_header_flags(flags)?;
-    let (declared_count, mut offset) = inspect_seq_len_slice(bytes)?;
+    validate_layout_code(flags)?;
+    require_context_layout(flags)?;
+    let (declared_count, mut offset) = inspect_seq_len_slice_with_flags(bytes, flags)?;
     if declared_count != count {
         return Err(Error::LengthMismatch);
     }

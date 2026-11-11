@@ -4,7 +4,7 @@
 //! writer measures first. These tests hold the single-pass paths to the
 //! streaming bytes and, for comparisons, to the streaming verdict on every
 //! single-byte change, truncation, extension, insertion and deletion of a
-//! valid encoding, in both V1 layouts.
+//! valid encoding, in all three layouts.
 
 use std::collections::BTreeMap;
 
@@ -18,6 +18,8 @@ struct Leaf {
     tags: Vec<String>,
     memo: Option<String>,
     key: [u8; 4],
+    digest: Option<[u8; 3]>,
+    pairs: Vec<[u8; 2]>,
 }
 
 #[derive(Clone, crate::SerializePayload, crate::NoritoSchema)]
@@ -27,6 +29,9 @@ enum Choice {
     One(Leaf),
     Pair { left: u64, right: Option<Leaf> },
 }
+
+/// Every layout code: fixed and compact minor-0 lengths, and dense.
+const LAYOUTS: [u8; 3] = [0, header_flags::COMPACT_LEN, DENSE_LAYOUT_CODE];
 
 /// A leaf carried as a nested frame behind a fixed `u64` length, the way
 /// instructions are carried.
@@ -63,6 +68,8 @@ fn leaf(seed: u8, name_len: usize) -> Leaf {
         tags: (0..seed % 3).map(|tag| format!("tag{tag}")).collect(),
         memo: seed.is_multiple_of(2).then(|| "memo".to_owned()),
         key: [seed; 4],
+        digest: seed.is_multiple_of(3).then_some([seed, 0, seed]),
+        pairs: (0..seed % 3).map(|pair| [pair, seed]).collect(),
     }
 }
 
@@ -154,7 +161,7 @@ fn variants(encoding: &[u8]) -> Vec<Vec<u8>> {
 
 #[test]
 fn buffers_place_frames_and_prefixes_exactly_where_streaming_writes_them() {
-    for flags in [0, header_flags::COMPACT_LEN] {
+    for flags in LAYOUTS {
         let _flags = DecodeFlagsGuard::enter(flags);
         for record in records() {
             let mut buffered = Vec::new();
@@ -178,7 +185,7 @@ fn buffers_place_frames_and_prefixes_exactly_where_streaming_writes_them() {
 #[test]
 fn payload_comparison_reaches_the_streaming_verdict_on_every_variant() {
     let mut cases = 0;
-    for flags in [0, header_flags::COMPACT_LEN] {
+    for flags in LAYOUTS {
         let _flags = DecodeFlagsGuard::enter(flags);
         for record in records() {
             let mut encoding = Vec::new();
@@ -202,7 +209,7 @@ fn payload_comparison_reaches_the_streaming_verdict_on_every_variant() {
 #[test]
 fn frame_comparison_reaches_the_streaming_verdict_on_every_variant() {
     let mut cases = 0;
-    for flags in [0, header_flags::COMPACT_LEN] {
+    for flags in LAYOUTS {
         let _flags = DecodeFlagsGuard::enter(flags);
         for record in records() {
             let mut encoding = Vec::new();

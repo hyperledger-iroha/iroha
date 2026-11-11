@@ -41,6 +41,8 @@ mod decode_robustness;
 mod decode_slice_bounds;
 #[path = "../default_flags.rs"]
 mod default_flags;
+#[path = "../dense_layout_vectors.rs"]
+mod dense_layout_vectors;
 #[path = "../derive_decode_bounds.rs"]
 mod derive_decode_bounds;
 #[path = "../encoded_len_exact.rs"]

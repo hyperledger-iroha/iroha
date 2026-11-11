@@ -132,7 +132,7 @@ and supplies the schema hash and checksum needed for deterministic decoding.
 | --- | --- | --- |
 | Magic | 4 | ASCII `NRT0` |
 | Major | 1 | `VERSION_MAJOR = 0` |
-| Minor | 1 | `VERSION_MINOR = 0x00` |
+| Minor | 1 | `VERSION_MINOR = 0x00` (current layout) or `VERSION_MINOR_DENSE = 0x01` ([dense layout](#dense-layout-header-minor-1)) |
 | Schema hash | 16 | First 16 bytes of a domain-separated SHA-256 schema digest |
 | Compression | 1 | `0 = None`, `1 = Zstd` |
 | Payload length | 8 | Uncompressed payload length (u64, little-endian) |
@@ -272,7 +272,8 @@ reserved; decoders reject them in headers, encoders never emit them, and
 ambient layout guards mask them.
 
 `COMPACT_LEN` affects per-value length prefixes only. Sequence and map entry
-counts remain fixed 8-byte little-endian `u64` headers in both layouts.
+counts remain fixed 8-byte little-endian `u64` headers in both minor-0 layouts. A dense
+frame (minor `1`) has no flags; see [Dense layout](#dense-layout-header-minor-1).
 
 Default v1 payloads use `COMPACT_LEN` (`flags = 0x02`) while keeping the minor
 version byte fixed at `0x00`. The header flag byte is therefore the source of
@@ -295,6 +296,67 @@ producer and the runtime loader. Ambient layout guards and the default compact
 layout do not change this checksum; the loader accepts only this V1 domain.
 This checksum checks the table body, not its optional manifest signature.
 
+## Dense layout (header minor 1)
+
+The dense layout is the second V1 payload layout. A frame declares it with header
+`Minor = 1` and flags `0x00`. The current layout (minor `0` with flags `0x00` or
+`0x02`) is unchanged and stays in use. A protocol owner selects one layout explicitly:
+- an Interface or Storage definition names `<major>.<minor>.<flags>` in its codec;
+- a headerless wire names it through its version byte.
+
+Nothing infers a layout from payload bytes. Encoders produce the current compact
+layout unless a caller passes `WireLayout::Dense`.
+
+Shared vectors: `fixtures/norito_dense/vectors.json` pins each rule's bare and
+framed bytes next to the current compact bytes, and
+`fixtures/norito_rpc/transaction_fixtures.dense.json` carries the Norito RPC
+fixture transactions in the dense layout, each signed over its dense payload hash
+with the same fixture key.
+
+TODO(dense-activation): no ledger definition selects dense yet. Activation needs
+the kernel and interface definitions and the specification amendment described in
+`specs/live_runtime_upgrades.md`.
+
+Header:
+- The 40-byte header keeps every field and offset. `Minor` is `1`.
+- The flags byte must be `0x00`, because dense has no layout flags. Any other value
+  with minor `1` is rejected.
+- There is no alignment padding. The payload starts at byte 40 for every type,
+  compressed or not. Decoders reject leading padding in a dense frame.
+
+Payload rules (anything not listed follows the current layout):
+1. Every per-value length prefix is an unsigned LEB128 varint in shortest form. This
+   covers fields, sequence elements, strings, blobs and map keys and values.
+2. Every sequence, map and set count is a varint in the same form. The current layout
+   writes a fixed little-endian `u64`.
+3. Byte sequences are `[count][raw bytes]`: `Vec<u8>`, `&[u8]`, `ConstVec<u8>` and
+   every other element sequence of `u8`. `SmallVec`, which no transaction or block
+   type uses, keeps per-element framing with varint count and prefixes.
+4. A fixed `[u8; N]` is exactly `N` raw bytes wherever it appears: an `Option`
+   payload, a sequence element, a tuple member or a map key. A record field keeps its
+   own field prefix. Dense has no per-byte `[len = 1][byte]` framing for arrays or
+   sequences of `u8`.
+5. An enum discriminant is its `u32` tag as a varint, which is one byte below 128.
+   `Option`, `Result` and `bool` keep their one-byte tags. Fixed-width scalars are
+   unchanged.
+6. A frame embedded in a dense payload is itself dense. The instruction envelope's
+   owner (`iroha_data_model::isi`) specifies its dense form: the wire ID and a
+   length-prefixed bare dense payload, with no nested header.
+
+Dense leaves these unchanged:
+- field order;
+- the positions of per-value prefixes (every derived field and generic sequence element
+  stays length-prefixed);
+- the `Option`, `Result` and `bool` encodings;
+- fixed-width scalars;
+- the formats this document fixes explicitly: the `BigInt` `u32` length, Kotodama
+  numeric frames and the rANS checksum domain;
+- schema hashes and CRC64.
+
+Each value has exactly one dense encoding: shortest varints, flags `0x00`, no
+padding and no trailing bytes. A minor-0 frame never decodes as dense, and a minor-1
+frame never decodes as the current layout.
+
 ## Length Prefixes
 
 Norito uses length prefixes in multiple places, with explicit flags deciding the
@@ -303,7 +365,8 @@ encoding:
 - Per-value prefixes (fields, elements, strings, blobs) use `COMPACT_LEN`.
   - If set: unsigned varint (7-bit continuation).
   - If not set: fixed 8-byte little-endian u64.
-- Sequence length headers are fixed 8-byte little-endian u64 in v1.
+- Sequence length headers are fixed 8-byte little-endian u64 in minor-0 layouts and
+  shortest-form varints in the dense layout.
 - The first-release standalone election finalization instruction, retained
   `ElectionState`, Torii tally response, and IVM `VoteGetTallyResponse` encode
   each option weight as canonical `u128`. Proof public-input limbs are 32-byte
@@ -986,7 +1049,13 @@ batch-item variants. Nodes reject an empty `Batch`; SDKs should reject one
 before signing. Instruction-only transactions use `Executable` tag `0`.
 
 Dynamic `InstructionBox` and erased `QueryBox` payloads carry a registry wire
-identifier plus the concrete Norito payload. First-release built-ins use
+identifier plus the concrete Norito payload. In the current layout an instruction
+envelope is the tuple `(wire_id, frame)`, where `frame` is a complete Norito frame of
+the concrete instruction. In the dense layout it is the tuple `(wire_id, payload)`
+encoded with dense rules, where `payload` is the instruction's bare dense payload:
+there is no nested header, checksum or padding, and the wire ID alone selects the
+decoder. An opaque envelope keeps its bytes and re-encodes only in the layout it was
+decoded from. First-release built-ins use
 explicit, frozen identifiers: instruction IDs are inventoried in
 `crates/iroha_data_model/src/isi/registry/wire_ids.rs`, and query IDs are pinned
 by `crates/iroha_data_model/tests/fixtures/query_wire_ids_v1.txt`. Iterable
@@ -1591,7 +1660,8 @@ Norito record.
 
 Maps encode deterministically with the same active layout flags:
 
-- Entry count uses a fixed 8-byte little-endian u64 header.
+- Entry count uses a fixed 8-byte little-endian u64 header (a varint in the dense
+  layout).
 - Each entry is `[key_len][key_payload][value_len][value_payload]`, with
   key/value lengths encoded via `COMPACT_LEN`.
 - `HashMap` encodes entries in sorted key order for deterministic output;
@@ -1719,7 +1789,8 @@ order. The record adds no header, field count, offset table or presence bitset:
 - `#[norito(skip)]` fields are omitted from the payload.
 - Unit and field-less records have an empty payload.
 - An enum variant is its `u32` tag followed by the variant's fields, each
-  length-prefixed as above; a unit variant is the tag alone.
+  length-prefixed as above; a unit variant is the tag alone. The tag is a
+  little-endian `u32` in minor-0 layouts and a varint in the dense layout.
 
 Field payloads use the frame's layout flags when encoding nested collections or
 string/blob values. Every derive-generated field is decoded canonically and
@@ -1734,7 +1805,8 @@ attributes supply values only for absent JSON fields. A missing or malformed
 binary field is rejected; binary decoding never synthesizes an omitted
 positional value.
 
-Every derive-generated enum tag is a canonical little-endian `u32`. An explicit
+Every derive-generated enum tag is a canonical little-endian `u32` in minor-0
+layouts and a shortest-form varint of the same value in the dense layout. An explicit
 Rust discriminant selects the wire tag, and subsequent implicit variants follow
 Rust's incrementing discriminant sequence. `#[codec(index = N)]` may pin an
 otherwise implicit variant; when used alongside an explicit Rust discriminant,

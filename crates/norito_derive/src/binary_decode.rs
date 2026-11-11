@@ -249,7 +249,7 @@ pub(super) fn derive_enum_deserialize(
         match &variant.fields {
             Fields::Unit => arms.push(quote! {
                 #disc => {
-                    let offset = 4usize;
+                    let offset = __norito_tag_len;
                     norito::core::finish_context_fields(__archived, offset)?;
                     Self::#v_ident
                 }
@@ -281,7 +281,7 @@ pub(super) fn derive_enum_deserialize(
                     .collect();
                 arms.push(quote! {
                     #disc => {
-                        let mut offset = 4usize;
+                        let mut offset = __norito_tag_len;
                         #(#deser_stmts)*
                         let __value = Self::#v_ident(#(#vars),*);
                         norito::core::finish_context_fields(__archived, offset)?;
@@ -317,7 +317,7 @@ pub(super) fn derive_enum_deserialize(
                     .collect();
                 arms.push(quote! {
                     #disc => {
-                        let mut offset = 4usize;
+                        let mut offset = __norito_tag_len;
 
                         #(#deser_stmts)*
 
@@ -364,9 +364,7 @@ pub(super) fn derive_enum_deserialize(
                 // Read the tag through the active, length-bounded payload
                 // context. Constructing a raw slice here would read beyond a
                 // truncated archive before the decoder could return an error.
-                let mut __tag_bytes = [0u8; 4];
-                __tag_bytes.copy_from_slice(norito::core::payload_range(__archived, 4)?);
-                let tag = u32::from_le_bytes(__tag_bytes);
+                let (tag, __norito_tag_len) = norito::core::read_enum_tag(__archived)?;
                 let value = match tag {
                     #(#arms,)*
                     _ => {

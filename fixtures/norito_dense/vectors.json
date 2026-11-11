@@ -1,0 +1,22 @@
+{
+  "layout": "norito.md, Dense layout (header minor 1)",
+  "bare": [
+    {"name": "u8_vec", "type": "Vec<u8>", "value": "[1, 2, 3]", "compact": "0300000000000000010203", "dense": "03010203"},
+    {"name": "u8_vec_128", "type": "Vec<u8>", "value": "128 bytes of 0x11 (two-byte count)", "compact": "80000000000000001111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111", "dense": "80011111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"},
+    {"name": "u8_array", "type": "[u8; 4]", "value": "[1, 2, 3, 4]", "compact": "0101010201030104", "dense": "01020304"},
+    {"name": "option_u8_array", "type": "Option<[u8; 4]>", "value": "Some([9, 9, 9, 9])", "compact": "01080109010901090109", "dense": "010409090909"},
+    {"name": "option_none", "type": "Option<[u8; 4]>", "value": "None", "compact": "00", "dense": "00"},
+    {"name": "vec_u8_array", "type": "Vec<[u8; 2]>", "value": "[[7, 7], [8, 8]]", "compact": "020000000000000004010701070401080108", "dense": "02020707020808"},
+    {"name": "vec_string", "type": "Vec<String>", "value": "[\"ab\"]", "compact": "010000000000000003026162", "dense": "0103026162"},
+    {"name": "vec_string_empty", "type": "Vec<String>", "value": "[]", "compact": "0000000000000000", "dense": "00"},
+    {"name": "map_string_u16", "type": "BTreeMap<String, u16>", "value": "{\"k\": 5}", "compact": "010000000000000002016b020500", "dense": "0102016b020500"},
+    {"name": "enum_unit", "type": "Choice (Unit = 0)", "value": "Unit", "compact": "00000000", "dense": "00"},
+    {"name": "enum_tuple", "type": "Choice (One(String) = 1)", "value": "One(\"hi\")", "compact": "0100000003026869", "dense": "0103026869"},
+    {"name": "enum_far", "type": "Choice (Far { value: u64 } = 300)", "value": "Far { value: 1 }", "compact": "2c010000080100000000000000", "dense": "ac02080100000000000000"},
+    {"name": "result_err", "type": "Result<u8, u8>", "value": "Err(7)", "compact": "010107", "dense": "010107"},
+    {"name": "record", "type": "Record { id: u32, key: [u8; 4], digests: Vec<[u8; 4]>, label: Option<String>, choice: Choice }", "value": "{ id: 7, key: [1, 2, 3, 4], digests: [[0xaa; 4], [0xbb; 4]], label: Some(\"hi\"), choice: Far { value: 1 } }", "compact": "040700000004010203041a02000000000000000801aa01aa01aa01aa0801bb01bb01bb01bb0501030268690d2c010000080100000000000000", "dense": "040700000004010203040b0204aaaaaaaa04bbbbbbbb0501030268690bac02080100000000000000"}
+  ],
+  "frames": [
+    {"name": "wide", "schema_name": "norito.vectors.dense.Wide", "type": "Wide { value: u128, tag: [u8; 2] }", "value": "{ value: 0x0102030405060708090a0b0c0d0e0f10, tag: [0xca, 0xfe] }", "compact": "4e5254300000b07726c1e1548f0b91470979887ed0d40014000000000000006ad82a8d0e1a719402000000000000000010100f0e0d0c0b0a09080706050403020102cafe", "dense": "4e5254300001b07726c1e1548f0b91470979887ed0d40014000000000000006ad82a8d0e1a71940010100f0e0d0c0b0a09080706050403020102cafe"}
+  ]
+}

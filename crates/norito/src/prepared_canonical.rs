@@ -171,6 +171,7 @@ impl PreparedCanonicalDecode {
                 &mut slot,
                 CanonicalDecodeScope::Prepared(&self.defaults),
                 CanonicalDecodeScope::Prepared(&self.schema),
+                crate::core::default_encode_flags(),
             )?;
             // Keep the initialized value in its original slot while the observer retires.
             slot.value().map(|_| ())

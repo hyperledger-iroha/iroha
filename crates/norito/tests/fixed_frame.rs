@@ -7,7 +7,8 @@ use std::{
 
 use norito::core::{
     DecodeFlagsGuard, Encoder, Error, FixedFrameLayout, Header, SerializePayload,
-    frame_bare_with_header_flags, header_flags, write_bare_frame_with_header_flags,
+    VERSION_MINOR_DENSE, frame_bare_with_header_flags, header_flags,
+    write_bare_frame_with_header_flags,
 };
 
 use super::allocations_during;
@@ -103,12 +104,12 @@ fn fixed_frame_malformed_headers_and_payloads_have_fixed_allocation_free_errors(
     let layout = FixedFrameLayout::<Aligned>::new(144, 0).unwrap();
     let original = frame(&layout, &[19; 144]);
     assert_eq!(layout.frame_len(), 64 + 144);
-    for case in 0..17 {
+    for case in 0..18 {
         let mut bytes = original.clone();
         match case {
             0 => bytes[0] ^= 1,
             1 => bytes[4] ^= 1,
-            2 => bytes[5] ^= 1,
+            2 => bytes[5] = VERSION_MINOR_DENSE + 1,
             3 => bytes[6] ^= 1,
             4 => bytes[22] = 1,
             5 => bytes[22] = 255,
@@ -123,6 +124,8 @@ fn fixed_frame_malformed_headers_and_payloads_have_fixed_allocation_free_errors(
             14 => *bytes.last_mut().unwrap() ^= 1,
             15 => bytes[39] = 0x01,
             16 => bytes[39] = 0x04,
+            // A dense header declares another layout than this fixed frame's.
+            17 => bytes[5] = VERSION_MINOR_DENSE,
             _ => unreachable!(),
         }
         let error = measured(|| layout.payload(&bytes)).unwrap_err();
@@ -135,7 +138,7 @@ fn fixed_frame_malformed_headers_and_payloads_have_fixed_allocation_free_errors(
                 4 | 5 => matches!(error, Error::UnsupportedCompression { .. }),
                 6..=8 | 13 => matches!(error, Error::LengthMismatch),
                 9 | 14 => matches!(error, Error::ChecksumMismatch),
-                10 => matches!(error, Error::NonCanonicalEncoding),
+                10 | 17 => matches!(error, Error::NonCanonicalEncoding),
                 11 | 12 | 15 | 16 => matches!(error, Error::UnsupportedFeature(_)),
                 _ => false,
             },

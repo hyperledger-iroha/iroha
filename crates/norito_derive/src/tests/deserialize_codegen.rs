@@ -71,8 +71,9 @@ fn context_field_paths_delegate_copy_and_context_setup_to_core() {
     ));
     for expansion in [&struct_expansion, &tuple_expansion, &enum_expansion] {
         assert!(
-            expansion
-                .contains("norito::core::decode_context_field_canonical::<Opaque>(__archived,&mutoffset)"),
+            expansion.contains(
+                "norito::core::decode_context_field_canonical::<Opaque>(__archived,&mutoffset)"
+            ),
             "framed fields must use the shared canonical context-field helper"
         );
         assert!(
@@ -116,7 +117,8 @@ fn context_field_paths_delegate_copy_and_context_setup_to_core() {
         "fixed-size enum fields keep their length-prefixed frame"
     );
     assert!(
-        enum_expansion.contains("decode_context_field_canonical::<Vec<u32>>(__archived,&mutoffset)"),
+        enum_expansion
+            .contains("decode_context_field_canonical::<Vec<u32>>(__archived,&mutoffset)"),
         "self-delimiting enum fields keep their length-prefixed frame"
     );
     assert!(
@@ -124,8 +126,8 @@ fn context_field_paths_delegate_copy_and_context_setup_to_core() {
         "enum fields must not consume bytes beyond their declared frame"
     );
     assert!(
-        enum_expansion.contains("payload_range(__archived,4)"),
-        "enum tags must use the bounded, marker-bound payload helper"
+        enum_expansion.contains("read_enum_tag(__archived)"),
+        "enum tags must use the bounded, marker-bound, layout-aware payload helper"
     );
     assert!(
         struct_expansion.contains(
@@ -504,11 +506,15 @@ fn enum_byte_array_fields_use_the_exact_raw_field_helper() {
         &input.attrs,
     ));
     assert_eq!(
-        expansion.matches("decode_context_framed_byte_array::<{2}>(__archived,&mutoffset)?").count(),
+        expansion
+            .matches("decode_context_framed_byte_array::<{2}>(__archived,&mutoffset)?")
+            .count(),
         2,
         "both enum field forms must follow their raw-byte encoder"
     );
     assert!(expansion.contains("finish_context_fields(__archived,offset)"));
     assert!(!expansion.contains("decode_context_field_canonical::<[u8;2]>"));
-    assert!(expansion.contains("decode_context_field_canonical::<Vec<u16>>(__archived,&mutoffset)"));
+    assert!(
+        expansion.contains("decode_context_field_canonical::<Vec<u16>>(__archived,&mutoffset)")
+    );
 }

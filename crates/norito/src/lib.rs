@@ -244,9 +244,22 @@ pub mod codec {
         value: &T,
         expected: &[u8],
     ) -> Result<(), Error> {
+        verify_exact_payload_with_layout(value, expected, core::WireLayout::Compact)
+    }
+    /// Compare `value`'s bare encoding in an explicit layout with `expected`.
+    ///
+    /// [`core::WireLayout::Compact`] is exactly [`verify_exact_payload`].
+    ///
+    /// # Errors
+    /// As [`verify_exact_payload`].
+    pub fn verify_exact_payload_with_layout<T: SerializePayload>(
+        value: &T,
+        expected: &[u8],
+        layout: core::WireLayout,
+    ) -> Result<(), Error> {
         let _context = core::EncodeContextGuard::enter();
         let (result, exact) = {
-            let _flags = core::DecodeFlagsGuard::enter(core::default_encode_flags());
+            let _flags = core::DecodeFlagsGuard::enter(layout.code());
             core::compare_payload(value, expected)
         };
         if exact.mismatched() {
@@ -441,6 +454,39 @@ pub mod codec {
         }
         let _reset = DecodeResetGuard;
         let _flags = core::DecodeFlagsGuard::enter(flags);
+        crate::with_decode_limits(crate::canonical_decode_limits(bytes.len()), || {
+            super::decode_payload_exact(bytes)
+        })
+    }
+    /// Bare encode in an explicit layout.
+    ///
+    /// A headerless payload carries no layout of its own, so its owner names the
+    /// layout (for example through a wire version byte).
+    /// [`core::WireLayout::Compact`] produces exactly [`encode_adaptive`]'s bytes.
+    ///
+    /// # Errors
+    /// Returns the serialization error.
+    pub fn encode_bare_with_layout<T: SerializePayload>(
+        value: &T,
+        layout: core::WireLayout,
+    ) -> Result<Vec<u8>, Error> {
+        let _flags = core::DecodeFlagsGuard::enter(layout.code());
+        core::encode_bare_with_flags(value).map(|(payload, _)| payload)
+    }
+    /// Bare decode of one exact payload in an explicit layout.
+    ///
+    /// Payload-derived limits apply and the decoder must consume every byte.
+    /// [`core::WireLayout::Compact`] decodes exactly as [`decode_adaptive`].
+    ///
+    /// # Errors
+    /// Returns the decode, consumption or resource error.
+    pub fn decode_bare_with_layout<T>(bytes: &[u8], layout: core::WireLayout) -> Result<T, Error>
+    where
+        T: for<'de> DeserializePayload<'de> + SerializePayload,
+    {
+        core::reset_decode_state();
+        let _reset = DecodeResetGuard;
+        let _flags = core::DecodeFlagsGuard::enter(layout.code());
         crate::with_decode_limits(crate::canonical_decode_limits(bytes.len()), || {
             super::decode_payload_exact(bytes)
         })
@@ -9364,13 +9410,13 @@ where
 {
     use core::Header;
     let header = Header::read(&mut reader)?;
-    core::prepare_header_decode(header.flags, false)?;
+    core::prepare_header_decode(header.layout_code(), false)?;
     if header.schema != norito::schema::identity::frame_hash::<T>() {
         return Err(Error::SchemaMismatch);
     }
     let payload_len = core::payload_len_to_usize(header.length)?;
     // Set decode flags for this stream
-    let _guard = core::DecodeFlagsGuard::enter(header.flags);
+    let _guard = core::DecodeFlagsGuard::enter(header.layout_code());
     core::reserve_decode_allocation(payload_len)?;
     let mut payload = Vec::new();
     payload
@@ -9381,7 +9427,7 @@ where
     match header.compression {
         Compression::None => {
             let mut buf = [0u8; 64 * 1024];
-            let padding = core::payload_alignment_padding_for::<T>();
+            let padding = core::payload_padding_for::<T>(header.layout_code());
             if padding != 0 {
                 core::stream::skip_padding(&mut reader, padding)?;
             }
@@ -9441,14 +9487,14 @@ where
     for<'de> T: NoritoDeserialize<'de>,
 {
     let payload = checked_uncompressed_payload::<T>(bytes, &header)?;
-    let _flags = core::DecodeFlagsGuard::enter(header.flags);
+    let _flags = core::DecodeFlagsGuard::enter(header.layout_code());
     decode_payload_exact(payload)
 }
 fn checked_uncompressed_payload<'a, T: NoritoSerialize>(
     bytes: &'a [u8],
     header: &core::Header,
 ) -> Result<&'a [u8], Error> {
-    core::prepare_header_decode(header.flags, false)?;
+    core::prepare_header_decode(header.layout_code(), false)?;
     checked_frame_payload::<T>(bytes, header)
 }
 
@@ -9484,7 +9530,7 @@ fn checked_frame_payload_with_archive_limit<'a, T: NoritoSerialize>(
         length: header.length,
         limit,
     })?;
-    let padding = core::payload_alignment_padding_for::<T>();
+    let padding = core::payload_padding_for::<T>(header.layout_code());
     let slice = bytes
         .get(core::Header::SIZE..)
         .ok_or_else(|| Error::LengthMismatch)?;
@@ -9539,6 +9585,35 @@ where
 /// Returns the serialization error or [`Error::LengthMismatch`] on length overflow.
 pub fn canonical_frame_len<T: NoritoSerialize>(value: &T) -> Result<usize, Error> {
     let _canonical_flags = core::DecodeFlagsGuard::enter(core::default_encode_flags());
+    core::encoded_frame_len(value)
+}
+/// Encode a value as one uncompressed canonical frame in an explicit layout.
+///
+/// [`core::WireLayout::Compact`] produces exactly [`encode_canonical`]'s bytes;
+/// [`core::WireLayout::Dense`] produces the dense frame (`norito.md`, "Dense
+/// layout"). The result is independent of ambient layout guards.
+///
+/// # Errors
+/// Returns the serialization error.
+pub fn encode_canonical_with_layout<T>(
+    value: &T,
+    layout: core::WireLayout,
+) -> Result<Vec<u8>, Error>
+where
+    T: NoritoSerialize,
+{
+    let _layout = core::DecodeFlagsGuard::enter(layout.code());
+    core::to_bytes(value)
+}
+/// Count the exact frame produced by [`encode_canonical_with_layout`].
+///
+/// # Errors
+/// Returns the serialization error or [`Error::LengthMismatch`] on length overflow.
+pub fn canonical_frame_len_with_layout<T: NoritoSerialize>(
+    value: &T,
+    layout: core::WireLayout,
+) -> Result<usize, Error> {
+    let _layout = core::DecodeFlagsGuard::enter(layout.code());
     core::encoded_frame_len(value)
 }
 const CANONICAL_DECODE_ALLOCATION_EXTRA_MULTIPLIER: usize = 63;
@@ -9622,6 +9697,33 @@ where
 {
     decode_canonical_with_limits(bytes, canonical_decode_limits(bytes.len()))
 }
+/// Decode one exact canonical frame of an explicit layout under payload-derived limits.
+///
+/// The frame must equal [`encode_canonical_with_layout`]'s bytes for the decoded
+/// value. A frame of any other layout, compression, padding or byte
+/// representation is rejected with [`Error::NonCanonicalEncoding`] or the
+/// decoder's own error; no alternate layout is attempted.
+///
+/// # Errors
+/// Returns an archive, decode or canonicality error.
+pub fn decode_canonical_with_layout<T>(bytes: &[u8], layout: core::WireLayout) -> Result<T, Error>
+where
+    T: NoritoSerialize,
+    for<'de> T: NoritoDeserialize<'de>,
+{
+    let header = checked_canonical_header(bytes)?;
+    let defaults = canonical_decode_limits(bytes.len());
+    let mut slot = core::TypedFieldSlot::<T>::new();
+    decode_canonical_with_scopes_into_slot(
+        bytes,
+        header,
+        &mut slot,
+        CanonicalDecodeScope::Ordinary(defaults),
+        CanonicalDecodeScope::Ordinary(defaults),
+        layout.code(),
+    )?;
+    slot.into_value()
+}
 /// Verify that `value` encodes to exactly `expected` under the active layout.
 ///
 /// The comparison streams the complete header, alignment padding, and payload directly over
@@ -9662,8 +9764,31 @@ pub fn verify_exact_canonical_frame<T>(value: &T, expected: &[u8]) -> Result<(),
 where
     T: NoritoSerialize,
 {
-    let (encode_result, exact) =
-        core::compare_typed_frame::<T, T>(value, expected, core::default_encode_flags());
+    verify_exact_frame_with_layout_code(value, expected, core::default_encode_flags())
+}
+/// Verify that `value` encodes to exactly `expected` as a canonical frame of `layout`.
+///
+/// # Errors
+/// As [`verify_exact_canonical_frame`].
+pub fn verify_exact_canonical_frame_with_layout<T>(
+    value: &T,
+    expected: &[u8],
+    layout: core::WireLayout,
+) -> Result<(), Error>
+where
+    T: NoritoSerialize,
+{
+    verify_exact_frame_with_layout_code(value, expected, layout.code())
+}
+fn verify_exact_frame_with_layout_code<T>(
+    value: &T,
+    expected: &[u8],
+    layout_code: u8,
+) -> Result<(), Error>
+where
+    T: NoritoSerialize,
+{
+    let (encode_result, exact) = core::compare_typed_frame::<T, T>(value, expected, layout_code);
     if exact.mismatched() {
         return Err(Error::NonCanonicalEncoding);
     }
@@ -9830,7 +9955,7 @@ pub fn canonical_frame_payload<T: NoritoSerialize>(
     expected_flags: u8,
 ) -> Result<&[u8], Error> {
     let header = checked_canonical_header(bytes)?;
-    if header.flags != expected_flags {
+    if header.layout_code() != expected_flags {
         return Err(Error::NonCanonicalEncoding);
     }
     checked_frame_payload::<T>(bytes, &header)
@@ -9962,6 +10087,7 @@ where
         slot,
         CanonicalDecodeScope::Ordinary(defaults),
         CanonicalDecodeScope::Ordinary(limits),
+        core::default_encode_flags(),
     )
 }
 
@@ -9989,17 +10115,18 @@ fn decode_canonical_with_scopes_into_slot<T>(
     slot: &mut core::TypedFieldSlot<T>,
     defaults: CanonicalDecodeScope<'_>,
     schema: CanonicalDecodeScope<'_>,
+    layout_code: u8,
 ) -> Result<(), Error>
 where
     T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
     defaults.with(|| {
-        let _canonical_flags = core::DecodeFlagsGuard::enter(core::default_encode_flags());
+        let _canonical_flags = core::DecodeFlagsGuard::enter(layout_code);
         let _payload_context = core::PayloadCtxGuard::enter(bytes);
         let decoded = schema.with(|| {
             let payload = checked_uncompressed_payload::<T>(bytes, &header)?;
-            let _flags = core::DecodeFlagsGuard::enter(header.flags);
+            let _flags = core::DecodeFlagsGuard::enter(header.layout_code());
             core::decode_field_canonical_into_slot(payload, slot)
         });
         match decoded {
@@ -10014,7 +10141,9 @@ where
             }
             Err(error) => return Err(error),
         }
-        verify_exact_canonical_frame(slot.value()?, bytes)
+        // The decoded value must re-encode to exactly these bytes in the
+        // requested layout; a frame of another layout never matches.
+        verify_exact_frame_with_layout_code(slot.value()?, bytes, layout_code)
     })
 }
 
@@ -10368,15 +10497,15 @@ where
     use core::{Header, header_flags};
     let mut reader = reader;
     let header = Header::read(&mut reader)?;
-    core::prepare_header_decode(header.flags, false)?;
+    core::prepare_header_decode(header.layout_code(), false)?;
     if header.schema != expected_schema {
         return Err(Error::SchemaMismatch);
     }
-    let flags = header.flags;
+    let flags = header.layout_code();
     let payload_len = core::payload_len_to_usize(header.length)?;
-    let padding = match header.compression {
-        Compression::None => padding,
-        Compression::Zstd => 0,
+    let padding = match (header.compression, header.layout()) {
+        (Compression::None, core::WireLayout::Fixed | core::WireLayout::Compact) => padding,
+        (Compression::None, core::WireLayout::Dense) | (Compression::Zstd, _) => 0,
     };
     if padding != 0 {
         core::stream::skip_padding(&mut reader, padding)?;
@@ -10451,7 +10580,11 @@ where
         Err(Error::LengthMismatch)
     }
     let entries = {
-        let v = read_u64_update(&mut digesting, &mut remaining)?;
+        let v = if core::is_dense_layout_code(flags) {
+            read_varint_update(&mut digesting, &mut remaining)?
+        } else {
+            read_u64_update(&mut digesting, &mut remaining)?
+        };
         core::enforce_decode_sequence_length(v)?;
         core::stream::u64_to_usize(v)?
     };
@@ -10689,15 +10822,15 @@ where
     pub fn new<R: Read + 'static>(mut reader: R) -> Result<Self, Error> {
         use core::Header;
         let header = Header::read(&mut reader)?;
-        core::prepare_header_decode(header.flags, true)?;
+        core::prepare_header_decode(header.layout_code(), true)?;
         type Top<U> = Vec<U>;
         if header.schema != norito::schema::identity::frame_hash::<Top<T>>() {
             return Err(Error::SchemaMismatch);
         }
         let payload_len = core::payload_len_to_usize(header.length)?;
-        let flags = header.flags;
+        let flags = header.layout_code();
         let padding = match header.compression {
-            Compression::None => core::payload_alignment_padding_for::<Top<T>>(),
+            Compression::None => core::payload_padding_for::<Top<T>>(header.layout_code()),
             Compression::Zstd => 0,
         };
         if padding != 0 {
@@ -11037,15 +11170,17 @@ where
     ) -> Result<Self, Error> {
         use core::{Header, header_flags};
         let header = Header::read(&mut reader)?;
-        core::prepare_header_decode(header.flags, false)?;
+        core::prepare_header_decode(header.layout_code(), false)?;
         if header.schema != expected_schema {
             return Err(Error::SchemaMismatch);
         }
         let payload_len = core::payload_len_to_usize(header.length)?;
-        let flags = header.flags;
-        let padding = match header.compression {
-            Compression::None => uncompressed_padding,
-            Compression::Zstd => 0,
+        let flags = header.layout_code();
+        let padding = match (header.compression, header.layout()) {
+            (Compression::None, core::WireLayout::Fixed | core::WireLayout::Compact) => {
+                uncompressed_padding
+            }
+            (Compression::None, core::WireLayout::Dense) | (Compression::Zstd, _) => 0,
         };
         if padding != 0 {
             core::stream::skip_padding(&mut reader, padding)?;
@@ -11091,8 +11226,42 @@ where
             read_exact_update(src, &mut b, d, remaining)?;
             Ok(u64::from_le_bytes(b))
         }
+        #[inline]
+        fn read_varint_update<Rd: Read>(
+            src: &mut Rd,
+            d: &mut core::PayloadChecksum,
+            remaining: &mut usize,
+        ) -> Result<u64, Error> {
+            let mut result = 0u64;
+            let mut shift = 0u32;
+            let mut buf = [0u8; 1];
+            for used in 1..=STREAM_MAX_VARINT_BYTES {
+                read_exact_update(src, &mut buf, d, remaining)?;
+                let byte = buf[0];
+                let payload = u64::from(byte & 0x7f);
+                if shift == 63 && payload > 1 {
+                    return Err(Error::LengthMismatch);
+                }
+                result |= payload << shift;
+                if byte & 0x80 == 0 {
+                    if used != core::varint_encoded_len_u64(result) {
+                        return Err(Error::LengthMismatch);
+                    }
+                    return Ok(result);
+                }
+                shift += 7;
+                if shift >= 64 {
+                    break;
+                }
+            }
+            Err(Error::LengthMismatch)
+        }
         let entries = {
-            let v = read_u64_update(&mut r, &mut digest, &mut remaining)?;
+            let v = if core::is_dense_layout_code(flags) {
+                read_varint_update(&mut r, &mut digest, &mut remaining)?
+            } else {
+                read_u64_update(&mut r, &mut digest, &mut remaining)?
+            };
             core::enforce_decode_sequence_length(v)?;
             core::stream::u64_to_usize(v)?
         };

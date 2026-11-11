@@ -237,6 +237,7 @@ impl PreparedDecodeWorkspace {
                 &mut slot,
                 CanonicalDecodeScope::Prepared(&defaults),
                 CanonicalDecodeScope::Prepared(&schema),
+                crate::core::default_encode_flags(),
             )?;
             // Keep the actual value in its slot until the observer retires.
             slot.value().map(|_| ())
@@ -606,7 +607,7 @@ impl PreparedDecodeWorkspace {
                         Some(view) => view.as_bytes(),
                         None => crate::checked_uncompressed_payload::<T>(bytes, &header)?,
                     };
-                    let _flags = DecodeFlagsGuard::enter(header.flags);
+                    let _flags = DecodeFlagsGuard::enter(header.layout_code());
                     let _depth = match root {
                         PreparedRecordRoot::CanonicalField => {
                             check_decode_field_length(
@@ -622,7 +623,7 @@ impl PreparedDecodeWorkspace {
                             PayloadCtxGuard::enter_with_schema_and_flags(
                                 payload,
                                 header.schema,
-                                header.flags,
+                                header.layout_code(),
                             )
                         }
                     };

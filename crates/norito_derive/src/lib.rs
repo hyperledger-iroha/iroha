@@ -1173,11 +1173,15 @@ fn derive_enum_serialize(
             Fields::Unit => {
                 arms.push(quote! {
                     Self::#v_ident => {
-                        norito::core::SerializePayload::serialize(&(#disc as u32), writer)?;
+                        norito::core::write_enum_tag(writer, #disc as u32)?;
                     }
                 });
-                hint_arms.push(quote! { Self::#v_ident => Some(4) });
-                exact_arms.push(quote! { Self::#v_ident => Some(4) });
+                hint_arms.push(quote! {
+                    Self::#v_ident => Some(norito::core::enum_tag_len(#disc as u32))
+                });
+                exact_arms.push(quote! {
+                    Self::#v_ident => Some(norito::core::enum_tag_len(#disc as u32))
+                });
             }
             Fields::Unnamed(fields) => {
                 let bindings: Vec<_> = (0..fields.unnamed.len())
@@ -1208,7 +1212,7 @@ fn derive_enum_serialize(
 
                 arms.push(quote! {
                     Self::#v_ident(#(#bindings),*) => {
-                        norito::core::SerializePayload::serialize(&(#disc as u32), writer)?;
+                        norito::core::write_enum_tag(writer, #disc as u32)?;
                         #(#ignored_bindings)*
                         #(#serialize_calls)*
                     }
@@ -1226,7 +1230,7 @@ fn derive_enum_serialize(
                         .collect::<Vec<_>>();
                     length_arms.push(quote! {
                         Self::#v_ident(#(#bindings),*) => {
-                            let mut __sum: usize = 4;
+                            let mut __sum: usize = norito::core::enum_tag_len(#disc as u32);
                             #(#ignored_bindings)*
                             #(#adds)*
                             Some(__sum)
@@ -1260,7 +1264,7 @@ fn derive_enum_serialize(
                 });
                 arms.push(quote! {
                     Self::#v_ident { #(#names),* } => {
-                        norito::core::SerializePayload::serialize(&(#disc as u32), writer)?;
+                        norito::core::write_enum_tag(writer, #disc as u32)?;
                         #(#ignored_names)*
                         #(#serialize_calls)*
                     }
@@ -1278,7 +1282,7 @@ fn derive_enum_serialize(
                         .collect::<Vec<_>>();
                     length_arms.push(quote! {
                         Self::#v_ident { #(#names),* } => {
-                            let mut __sum: usize = 4;
+                            let mut __sum: usize = norito::core::enum_tag_len(#disc as u32);
                             #(#ignored_names)*
                             #(#adds)*
                             Some(__sum)

@@ -1,7 +1,9 @@
 //! Prefix equality, measurement isolation and arithmetic limits for sequence length observations.
 
 use super::*;
-use crate::core::{self as codec, Encoder, default_encode_flags, header_flags};
+use crate::core::{
+    self as codec, Encoder, default_encode_flags, header_flags, validate_header_flags,
+};
 use std::cell::Cell;
 
 #[derive(Clone)]
@@ -15,7 +17,12 @@ impl SerializePayload for Bytes {
 }
 
 fn layouts() -> impl Iterator<Item = u8> {
-    [0, header_flags::COMPACT_LEN].into_iter()
+    [
+        0,
+        header_flags::COMPACT_LEN,
+        codec::WireLayout::Dense.code(),
+    ]
+    .into_iter()
 }
 
 fn assert_prefixes<T: SerializePayload + Clone>(values: &[T], flags: u8) {
@@ -35,7 +42,8 @@ fn assert_prefixes<T: SerializePayload + Clone>(values: &[T], flags: u8) {
         assert_eq!(measured.count(), count);
         assert_eq!(measured.is_empty(), count == 0);
         assert_eq!(measured.flags(), flags);
-        assert_eq!(&actual[..8], &u64::try_from(count).unwrap().to_le_bytes());
+        let (declared, _) = codec::read_seq_len_slice(&actual).unwrap();
+        assert_eq!(declared, count);
     }
 }
 
@@ -85,7 +93,10 @@ fn zero_length_elements_still_add_their_required_framing() {
         } else {
             1
         };
-        assert_eq!(measured.len(), 8);
+        assert_eq!(
+            measured.len(),
+            codec::seq_len_prefix_len_with_flags(0, flags)
+        );
         for count in 1..=4 {
             let before = measured.len();
             measured.push(&Bytes(vec![])).unwrap();
@@ -99,12 +110,42 @@ fn zero_length_elements_still_add_their_required_framing() {
 
 #[test]
 fn all_flag_bytes_are_validated_without_silent_sanitizing() {
+    let dense = codec::WireLayout::Dense.code();
     for flags in 0..=u8::MAX {
         assert_eq!(
             SequencePayloadLength::new(flags).is_ok(),
-            validate_header_flags(flags).is_ok()
+            validate_header_flags(flags).is_ok() || flags == dense,
+            "flags {flags:#04x}"
         );
     }
+}
+
+#[test]
+fn dense_counts_are_varints_whose_width_follows_the_count() {
+    let dense = codec::WireLayout::Dense.code();
+    let mut measured = SequencePayloadLength::new(dense).unwrap();
+    assert_eq!(measured.len(), 1);
+    let element = Bytes(vec![7; 3]);
+    for count in 1..=200_usize {
+        measured.push(&element).unwrap();
+        let count_width = if count < 128 { 1 } else { 2 };
+        assert_eq!(
+            measured.len(),
+            count_width + count * (1 + 3),
+            "count {count}"
+        );
+    }
+    let elements = vec![element; 200];
+    let mut encoded = Vec::new();
+    {
+        let _layout = codec::WireLayoutGuard::enter(codec::WireLayout::Dense);
+        codec::write_element_sequence::<Bytes, _>(
+            &mut Encoder::for_buffer(&mut encoded),
+            elements.iter(),
+        )
+        .unwrap();
+    }
+    assert_eq!(encoded.len(), measured.len());
 }
 
 #[test]
@@ -163,6 +204,21 @@ fn false_hints_cannot_change_measured_sequence_lengths() {
 fn raw_byte_vec_is_explicitly_a_different_payload() {
     for flags in layouts() {
         let _flags = DecodeFlagsGuard::enter(flags);
+        if codec::is_dense_layout_code(flags) {
+            // Dense has no per-byte framing: every sequence of `u8` is the raw
+            // `Vec<u8>` payload, which this measurement type does not cover.
+            let mut generic = Vec::new();
+            codec::write_element_sequence::<u8, _>(
+                &mut Encoder::for_buffer(&mut generic),
+                [1_u8, 2, 3],
+            )
+            .unwrap();
+            let mut raw = Vec::new();
+            codec::serialize_to_buffer(&vec![1_u8, 2, 3], &mut raw).unwrap();
+            assert_eq!(generic, raw);
+            assert_eq!(raw, [3, 1, 2, 3]);
+            continue;
+        }
         let mut measured = SequencePayloadLength::new(flags).unwrap();
         for byte in [1_u8, 2, 3] {
             measured.push(&byte).unwrap();
@@ -357,7 +413,8 @@ fn stateful_serialization_is_an_observation_not_a_later_byte_certificate() {
 fn checked_arithmetic_accepts_the_last_representable_length_then_rejects() {
     for flags in layouts() {
         let initial = SequencePayloadLength::new(flags).unwrap();
-        let framing = 8 + codec::len_prefix_len_with_flags(usize::MAX - 32, flags);
+        let framing = codec::seq_len_prefix_len_with_flags(1, flags)
+            + codec::len_prefix_len_with_flags(usize::MAX - 32, flags);
         // Synthetic arithmetic boundaries are private test inputs, never public measured evidence.
         let last = initial.checked_append(usize::MAX - framing).unwrap();
         assert_eq!(last.len(), usize::MAX);

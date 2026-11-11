@@ -103,6 +103,9 @@ mod compare_tests;
 #[path = "core/counting_tests.rs"]
 mod counting_tests;
 #[cfg(test)]
+#[path = "core/dense_layout_tests.rs"]
+mod dense_layout_tests;
+#[cfg(test)]
 #[path = "core/element_sequence_tests.rs"]
 mod element_sequence_tests;
 pub mod heuristics;
@@ -311,6 +314,140 @@ pub mod header_flags {
     /// lengths). Does not affect the fixed u64 sequence count header.
     pub const COMPACT_LEN: u8 = 0x02;
 }
+/// Context bit that selects the dense layout.
+///
+/// It never appears in a header: a dense frame declares itself through
+/// [`VERSION_MINOR_DENSE`] and a zero flag byte. Decode and encode contexts
+/// carry it together with [`header_flags::COMPACT_LEN`], because dense
+/// per-value lengths are compact varints as well.
+const DENSE_LAYOUT_BIT: u8 = 0x80;
+/// Layout code of the dense layout in decode and encode contexts.
+const DENSE_LAYOUT_CODE: u8 = DENSE_LAYOUT_BIT | header_flags::COMPACT_LEN;
+/// A Norito payload layout (`norito.md`, "Dense layout").
+///
+/// A frame declares its layout in the header (minor version and flags); a
+/// headerless payload's owner names it explicitly. Nothing infers a layout
+/// from payload bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WireLayout {
+    /// Minor `0` with fixed-width `u64` per-value lengths (header flags `0x00`).
+    Fixed,
+    /// Minor `0` with compact varint per-value lengths (header flags `0x02`).
+    /// This is the default encode layout.
+    Compact,
+    /// Minor `1`: varint lengths and counts, raw byte arrays, varint enum
+    /// tags and no header alignment padding.
+    Dense,
+}
+impl WireLayout {
+    /// Header minor version that declares this layout.
+    #[must_use]
+    pub const fn minor(self) -> u8 {
+        match self {
+            Self::Fixed | Self::Compact => VERSION_MINOR,
+            Self::Dense => VERSION_MINOR_DENSE,
+        }
+    }
+    /// The layout declared by a header's minor version and flag byte.
+    ///
+    /// # Errors
+    /// Returns [`Error::UnsupportedMinorVersion`] for an unknown minor version
+    /// and [`Error::UnsupportedFeature`] for flags the minor version does not
+    /// admit (any flag with minor `1`, reserved bits with minor `0`).
+    pub fn from_header(minor: u8, flags: u8) -> Result<Self, Error> {
+        match minor {
+            VERSION_MINOR => {
+                validate_header_flags(flags)?;
+                Ok(Self::from_code(flags))
+            }
+            VERSION_MINOR_DENSE => {
+                if flags != 0 {
+                    return Err(Error::UnsupportedFeature("layout flag"));
+                }
+                Ok(Self::Dense)
+            }
+            found => Err(Error::UnsupportedMinorVersion {
+                found,
+                supported: VERSION_MINOR,
+            }),
+        }
+    }
+    /// Layout code of this layout in decode and encode contexts.
+    ///
+    /// For minor-0 layouts the code equals the header flag byte. The dense
+    /// code is accepted by [`DecodeFlagsGuard`], [`PayloadCtxGuard`] and the
+    /// explicit-flag readers, and it is never written to a header.
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        match self {
+            Self::Fixed => 0,
+            Self::Compact => header_flags::COMPACT_LEN,
+            Self::Dense => DENSE_LAYOUT_CODE,
+        }
+    }
+    /// The layout a context code selects.
+    ///
+    /// Only the exact dense code selects [`WireLayout::Dense`]. Any other byte
+    /// is read as minor-0 flags with reserved bits ignored, exactly as layout
+    /// guards have always ignored them, so an unvalidated flag byte can never
+    /// select the dense layout.
+    #[must_use]
+    pub const fn from_code(code: u8) -> Self {
+        if code == DENSE_LAYOUT_CODE {
+            Self::Dense
+        } else if code & header_flags::COMPACT_LEN != 0 {
+            Self::Compact
+        } else {
+            Self::Fixed
+        }
+    }
+}
+/// Whether a context layout code is the dense layout's.
+///
+/// Only the exact dense code qualifies; see [`WireLayout::from_code`].
+#[inline]
+#[must_use]
+pub const fn is_dense_layout_code(code: u8) -> bool {
+    code == DENSE_LAYOUT_CODE
+}
+/// Validate a context layout code: a supported minor-0 flag set or the dense
+/// code.
+///
+/// # Errors
+/// Returns [`Error::UnsupportedFeature`] for any other value.
+#[inline]
+pub fn validate_layout_code(code: u8) -> Result<(), Error> {
+    if code == DENSE_LAYOUT_CODE {
+        return Ok(());
+    }
+    validate_header_flags(code)
+}
+/// Require an explicit layout code to agree with the active context on whether
+/// counts are dense.
+///
+/// Sequence counts are read through the active context. A caller that also
+/// passes an explicit code (span planners, element visitors) must not see a
+/// count of one layout followed by element prefixes of another.
+///
+/// # Errors
+/// Returns [`Error::DecodeFlagsMismatch`] when they disagree.
+#[inline]
+pub(crate) fn require_context_layout(code: u8) -> Result<(), Error> {
+    let active = effective_layout_flags();
+    if is_dense_layout_code(code) == is_dense_layout_code(active) {
+        return Ok(());
+    }
+    Err(Error::DecodeFlagsMismatch {
+        header_flags: code,
+        active_flags: active,
+    })
+}
+/// Normalize a context layout code: the dense code, or the supported minor-0
+/// flag bits.
+#[inline]
+const fn sanitize_layout_code(code: u8) -> u8 {
+    WireLayout::from_code(code).code()
+}
 fn schema_hash_with_domain(domain: &[u8], bytes: &[u8]) -> [u8; 16] {
     let mut hasher = Sha256::new();
     hasher.update(domain);
@@ -420,10 +557,19 @@ fn tagged_len_prefixed_payload_len(payload_len: usize) -> Option<usize> {
 }
 /// Number of bytes used to encode a sequence length prefix for `value`.
 ///
-/// Sequence length headers are fixed-width in v1.
+/// Sequence counts are a fixed 8-byte `u64` in minor-0 layouts and a varint in
+/// the dense layout.
 pub fn seq_len_prefix_len(value: usize) -> usize {
-    let _ = value;
-    8
+    seq_len_prefix_len_with_flags(value, effective_layout_flags())
+}
+/// Number of bytes of a sequence count for `value` under an explicit layout code.
+#[doc(hidden)]
+pub fn seq_len_prefix_len_with_flags(value: usize, flags: u8) -> usize {
+    if is_dense_layout_code(flags) {
+        varint_encoded_len(value as u64)
+    } else {
+        8
+    }
 }
 /// Number of bytes used to encode a compact varint length prefix.
 pub fn varint_len_prefix_len(value: usize) -> usize {
@@ -445,10 +591,6 @@ pub fn validate_header_flags(flags: u8) -> Result<(), Error> {
         return Err(Error::UnsupportedFeature("layout flag"));
     }
     Ok(())
-}
-#[inline]
-fn sanitize_layout_flags(flags: u8) -> u8 {
-    flags & supported_header_flags()
 }
 /// Return the default v1 encode layout flags.
 ///
@@ -627,7 +769,7 @@ impl DecodeTls {
             eprintln!("DecodeFlagsGuard::enter flags=0x{flags:02x}");
         }
         self.flags.replace(DecodeFlags {
-            flags: sanitize_layout_flags(flags),
+            flags: sanitize_layout_code(flags),
             active: true,
         })
     }
@@ -1416,7 +1558,11 @@ pub(crate) fn compact_len_used() -> bool {
 }
 #[inline]
 pub(crate) fn finalized_encode_flags(base_flags: u8, compact_len_used: bool) -> u8 {
-    debug_assert!(validate_header_flags(base_flags).is_ok());
+    debug_assert!(validate_layout_code(base_flags).is_ok());
+    if is_dense_layout_code(base_flags) {
+        // A dense header carries no flags; the code keeps naming the layout.
+        return DENSE_LAYOUT_CODE;
+    }
     if compact_len_used {
         base_flags | header_flags::COMPACT_LEN
     } else {
@@ -1788,7 +1934,7 @@ impl Drop for PayloadCtxGuard<'_> {
 fn set_decode_flags_raw(flags: u8) {
     DECODE_FLAGS.with(|cell| {
         cell.set(DecodeFlags {
-            flags: sanitize_layout_flags(flags),
+            flags: sanitize_layout_code(flags),
             ..cell.get()
         });
     });
@@ -1803,7 +1949,7 @@ fn set_decode_flags_active(active: bool) {
 }
 pub fn set_decode_flags(flags: u8) {
     DECODE_FLAGS.set(DecodeFlags {
-        flags: sanitize_layout_flags(flags),
+        flags: sanitize_layout_code(flags),
         active: true,
     });
 }
@@ -1828,6 +1974,35 @@ impl Drop for DecodeFlagsGuard {
     fn drop(&mut self) {
         DECODE_FLAGS.set(self.previous);
     }
+}
+/// RAII guard that selects a [`WireLayout`] for encoding and bare decoding.
+///
+/// Frame writers emit the selected layout's header; bare payload encoders and
+/// decoders use its length, count, tag and byte-array rules. The previous
+/// selection is restored on drop.
+pub struct WireLayoutGuard {
+    _flags: DecodeFlagsGuard,
+}
+impl WireLayoutGuard {
+    /// Select `layout` until the guard is dropped.
+    #[must_use]
+    pub fn enter(layout: WireLayout) -> Self {
+        Self {
+            _flags: DecodeFlagsGuard::enter(layout.code()),
+        }
+    }
+}
+/// The layout currently in force: an explicit selection, else the active
+/// payload's own, else the default compact layout.
+#[must_use]
+pub fn effective_layout() -> WireLayout {
+    WireLayout::from_code(effective_layout_flags())
+}
+/// Whether the dense layout is currently in force.
+#[inline]
+#[must_use]
+pub fn dense_layout_active() -> bool {
+    is_dense_layout_code(effective_layout_flags())
 }
 /// Convenience: reset both decode flags and payload context.
 ///
@@ -1865,12 +2040,8 @@ pub(crate) fn prepare_header_decode(flags: u8, require_match: bool) -> Result<()
 }
 #[inline]
 fn current_decode_flags_effective() -> Option<u8> {
-    let explicit = DECODE_FLAGS.get();
-    if explicit.active {
-        Some(explicit.flags)
-    } else {
-        payload_ctx_flags()
-    }
+    // One thread-local access: counts, tags and lengths consult this per value.
+    DECODE.with(DecodeTls::effective_flags)
 }
 /// Return the currently effective decode flags, if any.
 ///
@@ -1943,7 +2114,8 @@ pub struct SequencePlan {
 /// input slice, and `used` is the total sequence payload length consumed from the front of `bytes`.
 #[doc(hidden)]
 pub fn plan_binary_sequence(bytes: &[u8], flags: u8) -> Result<SequencePlan, Error> {
-    validate_header_flags(flags)?;
+    validate_layout_code(flags)?;
+    require_context_layout(flags)?;
     let (count, _) = read_seq_len_slice(bytes)?;
     plan_binary_sequence_with_count(bytes, flags, count)
 }
@@ -1952,7 +2124,7 @@ fn plan_binary_sequence_with_count(
     flags: u8,
     count: usize,
 ) -> Result<SequencePlan, Error> {
-    validate_header_flags(flags)?;
+    validate_layout_code(flags)?;
     let plan = plan_binary_sequence_scalar_with_count(bytes, flags, count)?;
     note_payload_access(bytes, plan.used);
     Ok(plan)
@@ -1975,7 +2147,7 @@ fn validate_binary_sequence_reservation(
     flags: u8,
     count: usize,
 ) -> Result<(), Error> {
-    let (declared_count, offset) = inspect_seq_len_slice(bytes)?;
+    let (declared_count, offset) = inspect_seq_len_slice_with_flags(bytes, flags)?;
     if declared_count != count {
         return Err(Error::LengthMismatch);
     }
@@ -2051,8 +2223,77 @@ pub fn write_len_with_flags<W: Write>(
         writer.write_all(&value.to_le_bytes())
     }
 }
-/// Write a sequence length prefix (fixed u64).
+/// Write an enum discriminant: a little-endian `u32` in minor-0 layouts, a
+/// canonical varint in the dense layout.
+///
+/// # Errors
+/// Returns the destination's write error.
+pub fn write_enum_tag(writer: &mut Encoder<'_>, tag: u32) -> Result<(), Error> {
+    if dense_layout_active() {
+        let mut buf = [0u8; MAX_VARINT_BYTES];
+        let used = encode_varint(u64::from(tag), &mut buf);
+        writer.write_all(&buf[..used])?;
+        return Ok(());
+    }
+    tag.serialize(writer)
+}
+/// Number of bytes [`write_enum_tag`] writes for `tag` under the active layout.
+#[must_use]
+pub fn enum_tag_len(tag: u32) -> usize {
+    if dense_layout_active() {
+        varint_encoded_len(u64::from(tag))
+    } else {
+        4
+    }
+}
+/// Read an enum discriminant from the front of `bytes` under the active layout.
+///
+/// Returns the tag and the bytes it occupies.
+///
+/// # Errors
+/// Rejects truncation, a non-canonical varint and a dense tag above `u32::MAX`.
+pub fn read_enum_tag_from_slice(bytes: &[u8]) -> Result<(u32, usize), Error> {
+    if dense_layout_active() {
+        let (value, used) = decode_varint_from_slice(bytes)?;
+        let tag = u32::try_from(value).map_err(|_| invalid_enum_tag())?;
+        record_slice_access(bytes, used);
+        return Ok((tag, used));
+    }
+    let word = bytes.get(..4).ok_or_else(|| Error::LengthMismatch)?;
+    record_slice_access(bytes, 4);
+    Ok((u32::from_le_bytes([word[0], word[1], word[2], word[3]]), 4))
+}
+/// Read the enum discriminant at the start of `archived` inside the active
+/// payload context.
+///
+/// Generated decoders use this; the read is bounded by the active payload and
+/// recorded as accessed, exactly like [`payload_range`].
+///
+/// # Errors
+/// As [`read_enum_tag_from_slice`], plus a missing or exceeded payload context.
+#[doc(hidden)]
+pub fn read_enum_tag<T: ?Sized>(archived: &Archived<T>) -> Result<(u32, usize), Error> {
+    if dense_layout_active() {
+        let remaining = payload_slice(archived)?;
+        let (value, used) = decode_varint_from_slice(remaining)?;
+        let tag = u32::try_from(value).map_err(|_| invalid_enum_tag())?;
+        payload_range(archived, used)?;
+        return Ok((tag, used));
+    }
+    let word = payload_range(archived, 4)?;
+    Ok((u32::from_le_bytes([word[0], word[1], word[2], word[3]]), 4))
+}
+fn invalid_enum_tag() -> Error {
+    Error::Message("invalid enum discriminant".into())
+}
+/// Write a sequence count: a fixed `u64` in minor-0 layouts, a varint in the
+/// dense layout.
 pub fn write_seq_len<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
+    if dense_layout_active() {
+        let mut buf = [0u8; MAX_VARINT_BYTES];
+        let used = encode_varint(value, &mut buf);
+        return writer.write_all(&buf[..used]);
+    }
     writer.write_all(&value.to_le_bytes())
 }
 /// Append a length prefix honoring `COMPACT_LEN` to `out`.
@@ -2097,7 +2338,7 @@ fn write_framed_payload(
     prefix: LengthPrefix,
 ) -> Result<(), Error> {
     // Measuring a child validates the layout it is measured under.
-    validate_header_flags(match prefix {
+    validate_layout_code(match prefix {
         LengthPrefix::Layout(flags) => flags,
         LengthPrefix::Fixed => effective_layout_flags(),
     })?;
@@ -2201,6 +2442,9 @@ where
         u64::try_from(len).map_err(|_| Error::LengthMismatch)?,
     )?;
     let flags = effective_layout_flags();
+    if is_dense_layout_code(flags) {
+        return write_dense_byte_elements::<T, _>(writer, iter, len);
+    }
     let mut framer = ByteElementFramer::new(flags)?;
     let mut count = 0usize;
     for item in iter {
@@ -2223,6 +2467,45 @@ where
         .ok_or_else(|| Error::LengthMismatch)
 }
 
+/// Write the raw bytes of a dense one-byte element sequence after its count.
+///
+/// The iterator's reported length was already written as the count; its
+/// actual yields must match it.
+#[inline(never)]
+fn write_dense_byte_elements<T, I>(
+    writer: &mut Encoder<'_>,
+    iter: I,
+    len: usize,
+) -> Result<(), Error>
+where
+    T: SerializePayload,
+    I: Iterator,
+    I::Item: std::borrow::Borrow<T>,
+{
+    let mut block = [0_u8; BYTE_ELEMENT_RUN];
+    let mut pending = 0usize;
+    let mut count = 0usize;
+    for item in iter {
+        if count == len {
+            return Err(Error::LengthMismatch);
+        }
+        let value: &T = std::borrow::Borrow::borrow(&item);
+        let Some(&[byte]) = T::__norito_byte_elements(core::slice::from_ref(value)) else {
+            return Err(Error::LengthMismatch);
+        };
+        block[pending] = byte;
+        pending += 1;
+        if pending == BYTE_ELEMENT_RUN {
+            writer.write_all(&block)?;
+            pending = 0;
+        }
+        count += 1;
+    }
+    writer.write_all(&block[..pending])?;
+    (count == len)
+        .then_some(())
+        .ok_or_else(|| Error::LengthMismatch)
+}
 /// One-byte elements collected before [`ByteElementFramer`] frames them in one write.
 const BYTE_ELEMENT_RUN: usize = 256;
 
@@ -2270,7 +2553,7 @@ impl ByteElementFramer {
         }
         if !self.validated {
             // The per-element measurement validates the active layout first.
-            validate_header_flags(self.flags)?;
+            validate_layout_code(self.flags)?;
             self.validated = true;
         }
         let compact = compact_len_enabled_for_flags(self.flags);
@@ -2318,6 +2601,11 @@ fn write_byte_element_array(
     bytes: &[u8],
     flags: u8,
 ) -> Result<(), Error> {
+    if is_dense_layout_code(flags) {
+        // A dense `[u8; N]` is its raw bytes.
+        writer.write_all(bytes)?;
+        return Ok(());
+    }
     let mut framer = ByteElementFramer::new(flags)?;
     for &byte in bytes {
         framer.push(writer, byte)?;
@@ -2393,7 +2681,8 @@ where
     T: SerializePayload + 'a,
     I: IntoIterator<Item = &'a T>,
 {
-    let mut total = 8usize;
+    let mut total = 0usize;
+    let mut count = 0usize;
     let flags = effective_layout_flags();
     for item in items {
         let elem_len = item
@@ -2401,8 +2690,9 @@ where
             .or_else(|| item.encoded_len_hint())?;
         total = total.checked_add(len_prefix_len_with_flags(elem_len, flags))?;
         total = total.checked_add(elem_len)?;
+        count = count.checked_add(1)?;
     }
-    Some(total)
+    total.checked_add(seq_len_prefix_len_with_flags(count, flags))
 }
 /// Exact canonical element-sequence sizing without staging a temporary byte Vec.
 /// Returns `None` when any original leaf has no representable exact length.
@@ -2412,14 +2702,16 @@ where
     T: SerializePayload + 'a,
     I: IntoIterator<Item = &'a T>,
 {
-    let mut total = 8usize;
+    let mut total = 0usize;
+    let mut count = 0usize;
     let flags = effective_layout_flags();
     for item in items {
         let elem_len = item.encoded_len_exact()?;
         total = total.checked_add(len_prefix_len_with_flags(elem_len, flags))?;
         total = total.checked_add(elem_len)?;
+        count = count.checked_add(1)?;
     }
-    Some(total)
+    total.checked_add(seq_len_prefix_len_with_flags(count, flags))
 }
 /// Canonical map sizing shared by exact immutable collection owners.
 #[doc(hidden)]
@@ -2429,7 +2721,8 @@ where
     V: SerializePayload + 'a,
     I: IntoIterator<Item = (&'a K, &'a V)>,
 {
-    let mut total = 8usize;
+    let mut total = 0usize;
+    let mut count = 0usize;
     let flags = effective_layout_flags();
     for (key, value) in entries {
         let key_len = key.encoded_len_exact().or_else(|| key.encoded_len_hint())?;
@@ -2440,8 +2733,9 @@ where
         total = total.checked_add(key_len)?;
         total = total.checked_add(len_prefix_len_with_flags(value_len, flags))?;
         total = total.checked_add(value_len)?;
+        count = count.checked_add(1)?;
     }
-    Some(total)
+    total.checked_add(seq_len_prefix_len_with_flags(count, flags))
 }
 /// Exact canonical map sizing without an owned staging collection.
 #[doc(hidden)]
@@ -2451,7 +2745,8 @@ where
     V: SerializePayload + 'a,
     I: IntoIterator<Item = (&'a K, &'a V)>,
 {
-    let mut total = 8usize;
+    let mut total = 0usize;
+    let mut count = 0usize;
     let flags = effective_layout_flags();
     for (key, value) in entries {
         let key_len = key.encoded_len_exact()?;
@@ -2460,8 +2755,9 @@ where
         total = total.checked_add(key_len)?;
         total = total.checked_add(len_prefix_len_with_flags(value_len, flags))?;
         total = total.checked_add(value_len)?;
+        count = count.checked_add(1)?;
     }
-    Some(total)
+    total.checked_add(seq_len_prefix_len_with_flags(count, flags))
 }
 /// Write the canonical map layout directly from borrowed entries in strict key order.
 ///
@@ -2553,7 +2849,7 @@ pub fn inspect_raw_len_from_slice_with_flags(
     bytes: &[u8],
     flags: u8,
 ) -> Result<(usize, usize), Error> {
-    validate_header_flags(flags)?;
+    validate_layout_code(flags)?;
     let (value, used) = read_raw_len_from_slice_with_flags(bytes, flags)?;
     let length = usize::try_from(value).map_err(|_| Error::LengthMismatch)?;
     Ok((length, used))
@@ -2623,29 +2919,55 @@ pub fn inspect_seq_len_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
 /// Returns the existing truncation error or rejects a count outside `usize`.
 #[doc(hidden)]
 pub fn inspect_raw_seq_len_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
-    let raw_len = read_raw_seq_len_slice(bytes)?;
-    Ok((len_u64_to_usize(raw_len)?, 8))
+    let (raw_len, used) = read_raw_seq_len_slice(bytes)?;
+    Ok((len_u64_to_usize(raw_len)?, used))
 }
 
-fn read_raw_seq_len_slice(bytes: &[u8]) -> Result<u64, Error> {
+/// Read one sequence count: a fixed little-endian `u64` in minor-0 layouts, a
+/// canonical varint in the dense layout. Returns the count and its width.
+fn read_raw_seq_len_slice(bytes: &[u8]) -> Result<(u64, usize), Error> {
+    read_raw_seq_len_slice_with_flags(bytes, effective_layout_flags())
+}
+/// [`read_raw_seq_len_slice`] under an explicit layout code.
+fn read_raw_seq_len_slice_with_flags(bytes: &[u8], flags: u8) -> Result<(u64, usize), Error> {
+    if is_dense_layout_code(flags) {
+        let (value, used) = decode_varint_from_slice(bytes)?;
+        record_slice_access(bytes, used);
+        return Ok((value, used));
+    }
     if bytes.len() < 8 {
         return Err(Error::LengthMismatch);
     }
     let mut len_bytes = [0u8; 8];
     len_bytes.copy_from_slice(&bytes[..8]);
     record_slice_access(bytes, 8);
-    Ok(u64::from_le_bytes(len_bytes))
+    Ok((u64::from_le_bytes(len_bytes), 8))
 }
 
 fn read_seq_len_slice_impl(bytes: &[u8], account: bool) -> Result<(usize, usize), Error> {
-    let raw_len = read_raw_seq_len_slice(bytes)?;
+    read_seq_len_slice_impl_with_flags(bytes, effective_layout_flags(), account)
+}
+/// Inspect a sequence count under an explicit layout code, like
+/// [`inspect_seq_len_slice`], for callers that already hold the layout.
+pub(crate) fn inspect_seq_len_slice_with_flags(
+    bytes: &[u8],
+    flags: u8,
+) -> Result<(usize, usize), Error> {
+    read_seq_len_slice_impl_with_flags(bytes, flags, false)
+}
+fn read_seq_len_slice_impl_with_flags(
+    bytes: &[u8],
+    flags: u8,
+    account: bool,
+) -> Result<(usize, usize), Error> {
+    let (raw_len, used) = read_raw_seq_len_slice_with_flags(bytes, flags)?;
     if account {
         enforce_decode_sequence_length(raw_len)?;
     } else {
         check_decode_sequence_length(raw_len)?;
     }
     let len = len_u64_to_usize(raw_len)?;
-    Ok((len, 8))
+    Ok((len, used))
 }
 #[inline]
 fn encode_varint(mut value: u64, out: &mut [u8; MAX_VARINT_BYTES]) -> usize {
@@ -2910,7 +3232,16 @@ where
 fn decode_element_framed_byte_array<const N: usize>(
     bytes: &[u8],
 ) -> Result<([u8; N], usize), Error> {
-    if let Some(decoded) = byte_sequence::decode_canonical_byte_array::<N>(bytes)? {
+    let flags = effective_layout_flags();
+    if is_dense_layout_code(flags) {
+        // A dense `[u8; N]` is exactly its raw bytes.
+        let raw = bytes.get(..N).ok_or_else(|| Error::LengthMismatch)?;
+        let mut out = [0_u8; N];
+        out.copy_from_slice(raw);
+        record_slice_access(bytes, N);
+        return Ok((out, N));
+    }
+    if let Some(decoded) = byte_sequence::decode_canonical_byte_array::<N>(bytes, flags)? {
         return Ok(decoded);
     }
     decode_element_framed_byte_array_by_element::<N>(bytes)
@@ -3601,6 +3932,10 @@ pub const V1_LAYOUT_FLAGS: u8 = 0;
 /// This stays `0` for v1. Header flags carry all active layout selections for a
 /// payload, including the compact-length default.
 pub const VERSION_MINOR: u8 = 0;
+/// Minor version that declares the dense layout ([`WireLayout::Dense`]).
+///
+/// A dense header carries flag byte `0x00` and no alignment padding.
+pub const VERSION_MINOR_DENSE: u8 = 1;
 /// Compression algorithm used for the payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Compression {
@@ -4018,6 +4353,26 @@ const fn payload_alignment_padding_for_align(align: usize) -> usize {
 pub(crate) fn payload_alignment_padding_for<T>() -> usize {
     payload_alignment_padding_for_align(archived_payload_align::<T>())
 }
+/// Padding between the header and the payload of a `T` frame in `layout`: the
+/// type's alignment padding for minor-0 frames, none for dense frames.
+///
+/// Code that sizes or slices frames by hand uses this instead of recomputing
+/// `Header::SIZE % align`, so dense frames are measured without padding.
+#[must_use]
+pub fn payload_padding_for_layout<T>(layout: WireLayout) -> usize {
+    payload_padding_for::<T>(layout.code())
+}
+/// Padding between the header and the payload of a `T` frame in the layout
+/// selected by `code`: the type's alignment padding for minor-0 frames, none
+/// for dense frames.
+#[inline]
+pub(crate) fn payload_padding_for<T>(code: u8) -> usize {
+    if is_dense_layout_code(code) {
+        0
+    } else {
+        payload_alignment_padding_for::<T>()
+    }
+}
 impl Default for Header {
     fn default() -> Self {
         Self::new([0; 16], 0, 0)
@@ -4040,9 +4395,56 @@ impl Header {
             flags: 0,
         }
     }
+    /// Create a header for a frame written in the layout selected by `code`.
+    ///
+    /// A minor-0 frame records `COMPACT_LEN` only when its payload emitted a
+    /// compact length. A dense frame always carries minor `1` and flags `0x00`.
+    pub(crate) fn for_layout_code(
+        schema: [u8; 16],
+        length: u64,
+        checksum: u64,
+        code: u8,
+        compact_len_used: bool,
+    ) -> Self {
+        let mut header = Self::new(schema, length, checksum);
+        if is_dense_layout_code(code) {
+            header.minor = VERSION_MINOR_DENSE;
+        } else {
+            header.flags = finalized_encode_flags(code, compact_len_used);
+        }
+        header
+    }
+    /// Apply an already finalized context layout code: the dense code selects
+    /// minor `1` with no flags, a minor-0 code is the flag byte itself.
+    pub(crate) fn set_layout_code(&mut self, code: u8) {
+        if is_dense_layout_code(code) {
+            self.minor = VERSION_MINOR_DENSE;
+            self.flags = 0;
+        } else {
+            self.minor = VERSION_MINOR;
+            self.flags = code;
+        }
+    }
+    /// The layout this header declares.
+    ///
+    /// [`Header::read`] admits only valid minor/flag pairs, so the result of a
+    /// read header is always one of the three layouts.
+    #[must_use]
+    pub fn layout(&self) -> WireLayout {
+        if self.minor == VERSION_MINOR_DENSE {
+            WireLayout::Dense
+        } else {
+            WireLayout::from_code(self.flags)
+        }
+    }
+    /// Context layout code of this header's layout (see [`WireLayout::code`]).
+    #[must_use]
+    pub fn layout_code(&self) -> u8 {
+        self.layout().code()
+    }
     /// Write the header to the given writer.
     fn write(&self, mut w: impl Write) -> Result<(), Error> {
-        validate_header_flags(self.flags)?;
+        WireLayout::from_header(self.minor, self.flags)?;
         w.write_all(&self.magic)?;
         w.write_all(&[self.major])?;
         w.write_all(&[self.minor])?;
@@ -4076,7 +4478,7 @@ impl Header {
         }
         r.read_exact(&mut byte)?;
         let minor = byte[0];
-        if minor != VERSION_MINOR {
+        if minor != VERSION_MINOR && minor != VERSION_MINOR_DENSE {
             return Err(Error::UnsupportedMinorVersion {
                 found: minor,
                 supported: VERSION_MINOR,
@@ -4095,7 +4497,7 @@ impl Header {
         let checksum = u64::from_le_bytes(word);
         r.read_exact(&mut byte)?;
         let flags = byte[0];
-        validate_header_flags(flags)?;
+        WireLayout::from_header(minor, flags)?;
         Ok(Self {
             magic,
             major,
@@ -5756,6 +6158,9 @@ impl<T: SerializePayload, const N: usize> SerializePayload for [T; N] {
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         let flags = effective_layout_flags();
+        if is_dense_layout_code(flags) && T::__norito_byte_elements(&[]).is_some() {
+            return Some(N);
+        }
         let mut total = 0usize;
         for item in self {
             let elem_len = item
@@ -5769,6 +6174,9 @@ impl<T: SerializePayload, const N: usize> SerializePayload for [T; N] {
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         let flags = effective_layout_flags();
+        if is_dense_layout_code(flags) && T::__norito_byte_elements(&[]).is_some() {
+            return Some(N);
+        }
         let mut total = 0usize;
         for item in self {
             let elem_len = item.encoded_len_exact()?;
@@ -5866,19 +6274,19 @@ pub mod stream {
         R: Read,
     {
         let header = Header::read(&mut reader)?;
-        super::prepare_header_decode(header.flags, false)?;
+        super::prepare_header_decode(header.layout_code(), false)?;
         if header.schema != expected_schema {
             return Err(Error::SchemaMismatch);
         }
         let payload_len = super::payload_len_to_usize(header.length)?;
-        let padding = match header.compression {
-            Compression::None => padding,
-            Compression::Zstd => 0,
+        let padding = match (header.compression, header.layout()) {
+            (Compression::None, super::WireLayout::Fixed | super::WireLayout::Compact) => padding,
+            (Compression::None, super::WireLayout::Dense) | (Compression::Zstd, _) => 0,
         };
         if padding != 0 {
             skip_padding(&mut reader, padding)?;
         }
-        let _flags = DecodeFlagsGuard::enter(header.flags);
+        let _flags = DecodeFlagsGuard::enter(header.layout_code());
         let limits = super::DecodeLimits::new(
             max_elements,
             usize::MAX,
@@ -5888,7 +6296,7 @@ pub mod stream {
         );
         super::with_decode_limits(limits, || {
             let mut payload = DigestingReader::new(PayloadStream::new(reader, header.compression)?);
-            let decoder = SeqLenDecoder::new(&mut payload, header.flags, payload_len)?;
+            let decoder = SeqLenDecoder::new(&mut payload, header.layout_code(), payload_len)?;
             Ok(decoder.total_len())
         })
     }
@@ -5906,21 +6314,21 @@ pub mod stream {
         F: FnMut(Acc, T) -> Acc,
     {
         let header = Header::read(&mut reader)?;
-        super::prepare_header_decode(header.flags, false)?;
+        super::prepare_header_decode(header.layout_code(), false)?;
         if header.schema != expected_schema {
             return Err(Error::SchemaMismatch);
         }
         let payload_len = super::payload_len_to_usize(header.length)?;
-        let padding = match header.compression {
-            Compression::None => padding,
-            Compression::Zstd => 0,
+        let padding = match (header.compression, header.layout()) {
+            (Compression::None, super::WireLayout::Fixed | super::WireLayout::Compact) => padding,
+            (Compression::None, super::WireLayout::Dense) | (Compression::Zstd, _) => 0,
         };
         if padding != 0 {
             skip_padding(&mut reader, padding)?;
         }
-        let _fg = DecodeFlagsGuard::enter(header.flags);
+        let _fg = DecodeFlagsGuard::enter(header.layout_code());
         let mut payload = DigestingReader::new(PayloadStream::new(reader, header.compression)?);
-        let mut len_decoder = SeqLenDecoder::new(&mut payload, header.flags, payload_len)?;
+        let mut len_decoder = SeqLenDecoder::new(&mut payload, header.layout_code(), payload_len)?;
         let mut acc = init(len_decoder.total_len())?;
         let mut scratch = AlignedScratch::new();
         let archived_align = archived_payload_align::<T>();
@@ -6175,8 +6583,12 @@ pub mod stream {
             flags: u8,
             payload_len: usize,
         ) -> Result<Self, Error> {
-            super::validate_header_flags(flags)?;
-            let len = Self::read_u64_len(reader)?;
+            super::validate_layout_code(flags)?;
+            let len = if super::is_dense_layout_code(flags) {
+                reader.read_varint_u64().map_err(Self::map_unexpected_eof)?
+            } else {
+                Self::read_u64_len(reader)?
+            };
             super::enforce_decode_sequence_length(len)?;
             let total = u64_to_usize(len)?;
             let remaining_payload = payload_len
@@ -6359,11 +6771,11 @@ impl SerializePayload for &[u8] {
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        self.len().checked_add(8)
+        self.len().checked_add(seq_len_prefix_len(self.len()))
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        self.len().checked_add(8)
+        self.len().checked_add(seq_len_prefix_len(self.len()))
     }
 }
 
@@ -6378,13 +6790,13 @@ impl<T: SerializePayload> SerializePayload for Vec<T> {
     }
     fn encoded_len_hint(&self) -> Option<usize> {
         if T::__norito_byte_elements(&[]).is_some() {
-            return self.len().checked_add(8);
+            return self.len().checked_add(seq_len_prefix_len(self.len()));
         }
         sequence_encoded_len_hint(self.iter())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         if T::__norito_byte_elements(&[]).is_some() {
-            return self.len().checked_add(8);
+            return self.len().checked_add(seq_len_prefix_len(self.len()));
         }
         sequence_encoded_len_exact(self.iter())
     }
@@ -6604,7 +7016,7 @@ pub(crate) fn encode_bare_with_flags<T: SerializePayload>(
 ) -> Result<(Vec<u8>, u8), Error> {
     let encode_guard = EncodeContextGuard::enter();
     let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
-    validate_header_flags(base_flags)?;
+    validate_layout_code(base_flags)?;
     let flags = base_flags;
     let mut sink = ByteSink::with_headroom(0, 0);
     {
@@ -6633,7 +7045,7 @@ pub fn encoded_payload_len(value: &dyn SerializePayload) -> Result<usize, Error>
     let _work = encode_work::ValueGuard::enter()?;
     let encode_guard = EncodeContextGuard::enter();
     let flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
-    validate_header_flags(flags)?;
+    validate_layout_code(flags)?;
     let mut counted = LengthCountingWriter::default();
     {
         let _guard = DecodeFlagsGuard::enter(flags);
@@ -6679,7 +7091,7 @@ pub fn encoded_frame_len_bounded<T: NoritoSerialize>(
     maximum: usize,
 ) -> Result<usize, Error> {
     let framing = Header::SIZE
-        .checked_add(payload_alignment_padding_for::<T>())
+        .checked_add(payload_padding_for::<T>(effective_layout_flags()))
         .ok_or_else(|| Error::LengthMismatch)?;
     let payload_maximum = maximum
         .checked_sub(framing)
@@ -6699,7 +7111,7 @@ pub fn encoded_frame_len_bounded<T: NoritoSerialize>(
 /// length cannot be represented by `usize`.
 pub fn encoded_frame_len<T: NoritoSerialize>(value: &T) -> Result<usize, Error> {
     let framing = Header::SIZE
-        .checked_add(payload_alignment_padding_for::<T>())
+        .checked_add(payload_padding_for::<T>(effective_layout_flags()))
         .ok_or_else(|| Error::LengthMismatch)?;
     // A framed child contributes header bytes even when its payload is empty.
     encode_writers::charge_counted_bytes(framing)?;
@@ -6733,7 +7145,7 @@ pub fn to_bytes_bounded<T: NoritoSerialize>(
             max_bytes: max_frame_bytes,
         });
     }
-    let padding = payload_alignment_padding_for::<T>();
+    let padding = payload_padding_for::<T>(effective_layout_flags());
     let headroom = Header::SIZE
         .checked_add(padding)
         .ok_or_else(|| Error::LengthMismatch)?;
@@ -6746,7 +7158,7 @@ pub fn to_bytes_bounded<T: NoritoSerialize>(
     out.resize(headroom, 0);
     let encode_guard = EncodeContextGuard::enter();
     let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
-    validate_header_flags(base_flags)?;
+    validate_layout_code(base_flags)?;
     let mut bounded = FixedCapacityVecWriter::new(&mut out, encoded_bytes);
     let serialize_result = {
         let _guard = DecodeFlagsGuard::enter(base_flags);
@@ -6765,13 +7177,13 @@ pub fn to_bytes_bounded<T: NoritoSerialize>(
     debug_assert_eq!(out.len() - headroom, expected_payload_len);
     let compact_len_used = compact_len_used();
     drop(encode_guard);
-    let final_flags = finalized_encode_flags(base_flags, compact_len_used);
-    let mut header = Header::new(
+    let header = Header::for_layout_code(
         crate::schema::identity::frame_hash::<T>(),
         header_payload_len,
         checksum,
+        base_flags,
+        compact_len_used,
     );
-    header.flags |= final_flags;
     {
         let mut header_slice = &mut out[..Header::SIZE];
         header.write(&mut header_slice)?;
@@ -6795,9 +7207,9 @@ pub fn to_bytes<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
 pub fn to_bytes_in<T: NoritoSerialize>(value: &T, out: &mut Vec<u8>) -> Result<(), Error> {
     let encode_guard = EncodeContextGuard::enter();
     let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
-    validate_header_flags(base_flags)?;
+    validate_layout_code(base_flags)?;
     let flags = base_flags;
-    let padding = payload_alignment_padding_for::<T>();
+    let padding = payload_padding_for::<T>(flags);
     let headroom = Header::SIZE + padding;
     let mut sink = ByteSink::with_headroom_from(std::mem::take(out), 0, headroom);
     {
@@ -6810,13 +7222,13 @@ pub fn to_bytes_in<T: NoritoSerialize>(value: &T, out: &mut Vec<u8>) -> Result<(
     let checksum = sink.checksum();
     let compact_len_used = compact_len_used();
     drop(encode_guard);
-    let final_flags = finalized_encode_flags(flags, compact_len_used);
-    let mut header = Header::new(
+    let header = Header::for_layout_code(
         crate::schema::identity::frame_hash::<T>(),
         payload_len,
         checksum,
+        flags,
+        compact_len_used,
     );
-    header.flags |= final_flags;
     {
         let mut header_slice = &mut sink.buf[..Header::SIZE];
         header.write(&mut header_slice)?;
@@ -6837,11 +7249,11 @@ where
     let start = writer.stream_position()?;
     let encode_guard = EncodeContextGuard::enter();
     let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
-    validate_header_flags(base_flags)?;
+    validate_layout_code(base_flags)?;
     let flags = base_flags;
     let zero_header = [0u8; Header::SIZE];
     writer.write_all(&zero_header)?;
-    let mut padding = payload_alignment_padding_for::<T>();
+    let mut padding = payload_padding_for::<T>(flags);
     if padding != 0 {
         const ZEROS: [u8; 64] = [0; 64];
         while padding != 0 {
@@ -6860,14 +7272,14 @@ where
     let checksum = payload_writer.digest.sum64();
     let compact_len_used = compact_len_used();
     drop(encode_guard);
-    let final_flags = finalized_encode_flags(flags, compact_len_used);
     let end = payload_writer.inner.stream_position()?;
-    let mut header = Header::new(
+    let header = Header::for_layout_code(
         crate::schema::identity::frame_hash::<T>(),
         payload_len,
         checksum,
+        flags,
+        compact_len_used,
     );
-    header.flags |= final_flags;
     payload_writer.inner.seek(SeekFrom::Start(start))?;
     header.write(&mut payload_writer.inner)?;
     payload_writer.inner.seek(SeekFrom::Start(end))?;
@@ -7053,7 +7465,7 @@ pub fn frame_bare_with_header_flags<T: NoritoSerialize>(
     payload: &[u8],
     flags: u8,
 ) -> Result<Vec<u8>, Error> {
-    let padding = payload_alignment_padding_for::<T>();
+    let padding = payload_padding_for::<T>(flags);
     let frame_len = Header::SIZE
         .checked_add(padding)
         .and_then(|len| len.checked_add(payload.len()))
@@ -7080,7 +7492,7 @@ where
         writer,
         payload,
         crate::schema::identity::frame_hash::<T>(),
-        payload_alignment_padding_for::<T>(),
+        payload_padding_for::<T>(flags),
         flags,
     )
 }
@@ -7360,14 +7772,14 @@ pub fn to_bytes_auto<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
         __ns,
     );
     let padding = if matches!(algorithm, Compression::None) {
-        payload_alignment_padding_for::<T>()
+        payload_padding_for::<T>(flags)
     } else {
         0
     };
     let mut out = Vec::with_capacity(Header::SIZE + padding + body.len());
     let mut header = Header::new(crate::schema::identity::frame_hash::<T>(), len, checksum);
     header.compression = algorithm;
-    header.flags |= flags;
+    header.set_layout_code(flags);
     header.write(&mut out)?;
     if padding != 0 {
         let len = out.len();
@@ -7421,14 +7833,14 @@ pub fn to_compressed_bytes<T: NoritoSerialize>(
         __ns,
     );
     let padding = if matches!(algorithm, Compression::None) {
-        payload_alignment_padding_for::<T>()
+        payload_padding_for::<T>(flags)
     } else {
         0
     };
     let mut out = Vec::with_capacity(Header::SIZE + padding + body.len());
     let mut header = Header::new(crate::schema::identity::frame_hash::<T>(), len, checksum);
     header.compression = algorithm;
-    header.flags |= flags;
+    header.set_layout_code(flags);
     header.write(&mut out)?;
     if padding != 0 {
         let len = out.len();
@@ -7462,7 +7874,7 @@ pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
 ) -> Result<ArchivedBox<T>, Error> {
     let mut cursor = std::io::Cursor::new(bytes);
     let header = Header::read(&mut cursor)?;
-    check_active_header_flags(header.flags)?;
+    check_active_header_flags(header.layout_code())?;
     if header.schema != crate::schema::identity::frame_hash::<T>() {
         return Err(Error::SchemaMismatch);
     }
@@ -7470,7 +7882,7 @@ pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
     let compressed = &bytes[Header::SIZE..];
     let payload = match header.compression {
         Compression::None => {
-            let padding = payload_alignment_padding_for::<T>();
+            let padding = payload_padding_for::<T>(header.layout_code());
             let trimmed = payload_without_leading_padding_exact(compressed, payload_len, padding)?;
             trimmed.to_vec()
         }
@@ -7505,7 +7917,7 @@ pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
     Ok(ArchivedBox::from_payload(
         payload,
         header.schema,
-        header.flags,
+        header.layout_code(),
     ))
 }
 /// Validate a typed frame borrowed from `bytes`.
@@ -7527,7 +7939,7 @@ pub fn from_bytes<'a, T: NoritoDeserialize<'a>>(
 ) -> Result<ArchivedFrame<'a, T>, Error> {
     let mut cursor = std::io::Cursor::new(bytes);
     let header = Header::read(&mut cursor)?;
-    check_active_header_flags(header.flags)?;
+    check_active_header_flags(header.layout_code())?;
     if header.compression != Compression::None {
         return Err(Error::unsupported_compression_with(
             header.compression as u8,
@@ -7540,7 +7952,7 @@ pub fn from_bytes<'a, T: NoritoDeserialize<'a>>(
     let pos = cursor.position() as usize;
     let slice = &bytes[pos..];
     let payload_len = payload_len_to_usize(header.length)?;
-    let padding = payload_alignment_padding_for::<T>();
+    let padding = payload_padding_for::<T>(header.layout_code());
     let payload = payload_without_leading_padding_exact(slice, payload_len, padding)?;
     if crc64(payload) != header.checksum {
         return Err(Error::ChecksumMismatch);
@@ -7548,7 +7960,7 @@ pub fn from_bytes<'a, T: NoritoDeserialize<'a>>(
     Ok(ArchivedFrame {
         payload,
         schema: header.schema,
-        flags: header.flags,
+        flags: header.layout_code(),
         _marker: PhantomData,
     })
 }
@@ -7600,7 +8012,7 @@ impl<'a> ArchiveView<'a> {
         if self.schema != crate::schema::identity::frame_hash::<T>() {
             return Err(Error::SchemaMismatch);
         }
-        if self.padding_len != payload_alignment_padding_for::<T>() {
+        if self.padding_len != payload_padding_for::<T>(self.flags) {
             return Err(Error::LengthMismatch);
         }
         with_decode_limits(crate::canonical_decode_limits(self.bytes.len()), || {
@@ -7619,7 +8031,7 @@ impl<'a> ArchiveView<'a> {
         if self.schema != crate::schema::identity::frame_hash::<T>() {
             return Err(Error::SchemaMismatch);
         }
-        if self.padding_len != payload_alignment_padding_for::<T>() {
+        if self.padding_len != payload_padding_for::<T>(self.flags) {
             return Err(Error::LengthMismatch);
         }
         with_decode_limits(crate::canonical_decode_limits(self.bytes.len()), || {
@@ -7645,7 +8057,7 @@ impl<'a> ArchiveView<'a> {
         if self.schema != crate::schema::identity::frame_hash::<T>() {
             return Err(Error::SchemaMismatch);
         }
-        if self.padding_len != payload_alignment_padding_for::<T>() {
+        if self.padding_len != payload_padding_for::<T>(self.flags) {
             return Err(Error::LengthMismatch);
         }
         with_decode_limits(crate::canonical_decode_limits(self.bytes.len()), || {
@@ -7678,7 +8090,13 @@ pub fn from_bytes_view<'a>(bytes: &'a [u8]) -> Result<ArchiveView<'a>, Error> {
     let pos = cursor.position() as usize;
     let slice = &bytes[pos..];
     let payload_len = payload_len_to_usize(header.length)?;
-    let payload = payload_without_leading_padding(slice, payload_len, MAX_HEADER_PADDING)?;
+    // A dense frame has no padding; a minor-0 frame read without its type may
+    // carry up to `MAX_HEADER_PADDING` zero bytes, checked by typed decoders.
+    let max_padding = match header.layout() {
+        WireLayout::Dense => 0,
+        WireLayout::Fixed | WireLayout::Compact => MAX_HEADER_PADDING,
+    };
+    let payload = payload_without_leading_padding(slice, payload_len, max_padding)?;
     let padding_len = slice.len() - payload.len();
     if crc64(payload) != header.checksum {
         return Err(Error::ChecksumMismatch);
@@ -7686,7 +8104,7 @@ pub fn from_bytes_view<'a>(bytes: &'a [u8]) -> Result<ArchiveView<'a>, Error> {
     Ok(ArchiveView {
         bytes: payload,
         padding_len,
-        flags: header.flags,
+        flags: header.layout_code(),
         schema: header.schema,
     })
 }
@@ -7709,7 +8127,7 @@ where
     if view.schema() != crate::schema::identity::frame_hash::<T>() {
         return Err(Error::SchemaMismatch);
     }
-    if view.padding_len != payload_alignment_padding_for::<T>() {
+    if view.padding_len != payload_padding_for::<T>(view.flags) {
         return Err(Error::LengthMismatch);
     }
     let payload_src = view.as_bytes();

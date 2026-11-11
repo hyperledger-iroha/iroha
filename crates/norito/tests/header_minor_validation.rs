@@ -1,6 +1,9 @@
 //! Validate header minor-version handling.
 use norito::{
-    core::{Compression, Error, NoritoSerialize, VERSION_MAJOR, VERSION_MINOR, header_flags},
+    core::{
+        Compression, Error, NoritoSerialize, VERSION_MAJOR, VERSION_MINOR, VERSION_MINOR_DENSE,
+        header_flags,
+    },
     decode_from_bytes,
 };
 fn frame_payload<T: NoritoSerialize>(minor: u8, flags: u8, payload: &[u8]) -> Vec<u8> {
@@ -19,8 +22,23 @@ fn frame_payload<T: NoritoSerialize>(minor: u8, flags: u8, payload: &[u8]) -> Ve
     bytes
 }
 #[test]
+fn dense_minor_admits_only_an_empty_flag_byte() {
+    let bytes = frame_payload::<()>(VERSION_MINOR_DENSE, 0, &[]);
+    decode_from_bytes::<()>(&bytes).expect("a dense header with no flags is supported");
+    for flags in 1..=u8::MAX {
+        let bytes = frame_payload::<()>(VERSION_MINOR_DENSE, flags, &[]);
+        assert!(
+            matches!(
+                decode_from_bytes::<()>(&bytes),
+                Err(Error::UnsupportedFeature("layout flag"))
+            ),
+            "dense header flags {flags:#04x}"
+        );
+    }
+}
+#[test]
 fn header_minor_mismatch_is_rejected() {
-    let minor = VERSION_MINOR.wrapping_add(1);
+    let minor = VERSION_MINOR_DENSE.wrapping_add(1);
     let bytes = frame_payload::<()>(minor, 0, &[]);
     let err = decode_from_bytes::<()>(&bytes).expect_err("minor mismatch must be rejected");
     assert!(matches!(

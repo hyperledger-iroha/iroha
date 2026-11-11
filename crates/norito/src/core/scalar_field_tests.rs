@@ -127,7 +127,7 @@ where
                     outcome(general.map(|(value, used)| (value.0, used)), general_access),
                     "element {label}"
                 );
-                for flags in [0, header_flags::COMPACT_LEN] {
+                for flags in [0, header_flags::COMPACT_LEN, DENSE_LAYOUT_CODE] {
                     let (fast, fast_offset, fast_access) =
                         under(limits, || decode_member::<T>(&field, flags));
                     let (general, general_offset, general_access) =

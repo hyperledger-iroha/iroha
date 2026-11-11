@@ -108,10 +108,8 @@ pub(crate) fn derive(
             {
                 norito::core::with_payload_ctx(__bytes,||->::core::result::Result<(Self,usize),norito::core::DecodeIntoError<__Destination::Error>> {
                     let __archived=norito::core::Archived::<Self>::start_of(__bytes);
-                    let mut __tag_bytes=[0u8;4];
-                    __tag_bytes.copy_from_slice(norito::core::payload_range(__archived,4)?);
-                    let __tag=u32::from_le_bytes(__tag_bytes);
-                    let mut __offset=4usize;
+                    let (__tag,__norito_tag_len)=norito::core::read_enum_tag(__archived)?;
+                    let mut __offset=__norito_tag_len;
                     let __value=match __tag {
                         #(#arms,)*
                         _=>return Err(norito::core::DecodeIntoError::Codec(norito::core::Error::Message("invalid enum discriminant".into()))),

@@ -2,7 +2,7 @@
 
 use super::{
     DecodeFlagsGuard, Error, SerializePayload, encoded_payload_len,
-    len_prefixed_payload_len_with_flags, validate_header_flags,
+    len_prefixed_payload_len_with_flags, seq_len_prefix_len_with_flags, validate_layout_code,
 };
 
 /// Incrementally measure generic element-sequence payloads under one explicit layout.
@@ -12,11 +12,12 @@ use super::{
 /// this value is a constant-size snapshot and [`Self::len`] is constant time. Appending costs the
 /// serialization work for the new element plus constant-time checked arithmetic.
 ///
-/// This uses the framing of [`super::write_element_sequence`]: an eight-byte element count followed
-/// by individually length-prefixed payloads, with each prefix sized by the stored layout flags
-/// (`COMPACT_LEN` varints or fixed-width `u64`). This does **not** measure the raw `Vec<u8>`
-/// specialization, which has no element framing. Pushing a `u8` here measures one individually
-/// framed byte, as `write_element_sequence::<u8, _>` does.
+/// This uses the framing of [`super::write_element_sequence`]: an element count followed by
+/// individually length-prefixed payloads, with the count and each prefix sized by the stored layout
+/// code (fixed-width `u64` or varints; the dense layout's count is a varint). This does **not**
+/// measure raw byte sequences, which have no element framing: `Vec<u8>` in every layout, and every
+/// sequence of `u8` in the dense layout. In minor-0 layouts, pushing a `u8` measures one
+/// individually framed byte, as `write_element_sequence::<u8, _>` does there.
 ///
 /// The result records observed payload lengths, not element identity, semantic validity, or quota
 /// authority. Elements are borrowed only during each push. Later mutation, interior mutability,
@@ -32,21 +33,25 @@ pub struct SequencePayloadLength {
     flags: u8,
     count: usize,
     len: usize,
+    /// Framed element bytes, excluding the count.
+    elements: usize,
 }
 
 impl SequencePayloadLength {
-    /// Measure an empty generic element sequence (its eight-byte count) with validated, fixed
-    /// layout flags.
+    /// Measure an empty generic element sequence (its count alone) under a validated, fixed
+    /// layout code.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnsupportedFeature`] when `flags` sets any bit other than `COMPACT_LEN`.
+    /// Returns [`Error::UnsupportedFeature`] unless `flags` is a minor-0 flag set or the dense
+    /// layout code.
     pub fn new(flags: u8) -> Result<Self, Error> {
-        validate_header_flags(flags)?;
+        validate_layout_code(flags)?;
         Ok(Self {
             flags,
             count: 0,
-            len: 8,
+            len: seq_len_prefix_len_with_flags(0, flags),
+            elements: 0,
         })
     }
 
@@ -102,17 +107,21 @@ impl SequencePayloadLength {
             .ok_or_else(|| Error::LengthMismatch)?;
         u64::try_from(count).map_err(|_| Error::LengthMismatch)?;
         u64::try_from(measured).map_err(|_| Error::LengthMismatch)?;
-        let len = self
-            .len
+        let elements = self
+            .elements
             .checked_add(
                 len_prefixed_payload_len_with_flags(measured, self.flags)
                     .ok_or_else(|| Error::LengthMismatch)?,
             )
             .ok_or_else(|| Error::LengthMismatch)?;
+        let len = elements
+            .checked_add(seq_len_prefix_len_with_flags(count, self.flags))
+            .ok_or_else(|| Error::LengthMismatch)?;
         Ok(Self {
             flags: self.flags,
             count,
             len,
+            elements,
         })
     }
 }
