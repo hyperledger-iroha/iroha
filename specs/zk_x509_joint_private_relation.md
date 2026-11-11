@@ -431,6 +431,48 @@ remaining checks listed for the previous revision.
 `JointSecurityReductionIncomplete` remains the production result.
 
 
+## `FixedByte` address anchor
+
+Gap 3 of the [coverage ledger](zk_x509_relation_coverage.md) is closed by a
+relation change, and gap 9 is masked by it.
+
+A `FixedByte` run compares a verifier-fixed profile pattern, such as an
+algorithm identifier, the version, an extension or name OID or the
+`critical` byte, with the bytes of a required node. Its first row's topology
+query ties the run's start and exact length to that node, and every row's
+DER byte query is keyed by document, address and value, but `BASE_ADDRESS`
+was constrained only by its increment. The compared bytes could therefore
+come from any consecutive occurrence of the pattern in the same document.
+The RFC relation now has one more residue,
+`ACTIVE · fixed[FixedByte] · (ADDRESS − START − OFFSET)`, of trace degree two,
+so every row compares the node's byte at `START + OFFSET`. RFC local
+constraints go from 2,145 to 2,146; no column, opening, wire field, proof
+byte, point map or lookup event is added, so the ledger above is unchanged.
+The anchored patterns that pin the BIT STRING unused-bits octet to zero and
+the whole key usage TLV now also force the octet the DER AIR carries without
+reading it, for every BIT STRING the closed grammar admits.
+
+No compiled-profile field binds the RFC 5280 schedule by digest, so the
+change reaches the profile through the `rfc5280-temporal-air` text of field
+9, which records the count and the anchoring rule; the segmented STARK and
+RFC descriptors record them too, and a test ties all three to the actual
+constant. The pin, captured from the actual compilers, is `a7d5eaa2`; its
+predecessor `dd803a10`, identical except for field 9, is a rejection
+fixture. The control evaluates every local residue on every row of the
+complete canonical RFC trace, all zero, then moves the run that checks the
+leaf's TBS signature AlgorithmIdentifier onto the identical outer
+signatureAlgorithm bytes of the same certificate, keeping the run's node,
+start and length and moving its DER byte-table multiplicity; the prover's
+own replay rebuilds the auxiliary columns and accepts the balanced lookup,
+and only the new residue is nonzero, on each of the run's twelve rows.
+Ordinary and maximum diagnostic proofs of 9,436,016 bytes verify on one
+loaded macOS host, with producer self-check, independent replay and the
+wrong-genesis, nonce and tamper controls; proving took 340 s and 456 s, still
+over the 300 s target. Still required: a forged-proof control, and the
+remaining checks listed for the earlier revisions.
+`JointSecurityReductionIncomplete` remains the production result.
+
+
 ## Round-by-round state function and Fiat–Shamir lift
 
 This section puts the candidate ledger above into round-by-round form and lifts

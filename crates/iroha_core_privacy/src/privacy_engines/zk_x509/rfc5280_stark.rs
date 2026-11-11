@@ -103,12 +103,12 @@ mod variable_output;
 use binding::numeric_lookup_event_v1;
 /// Stable identity of the native RFC adapter integrated only through MAIN.
 #[cfg(test)]
-pub const ZK_X509_RFC5280_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-rfc5280-stark-v1-incompatible:native-log19:base285:aux280:fixed147:constraints2145:degree4:source-node-root-kind-active-gated-helper-fixed-eight-equality-and-fifteen-embedded-endpoint-slots-complete-nonempty-original-node-spans-live-prefix-count-typed-copy-domains103-104-affine-one-plus-tuple-for-shared-domains90-98-99-102-103-104-affine-one-plus-tuple-for-shared-profile-domains96-97-optional-slot-canonical-zero-exact-extension-oid-ordinal-ku-document-and-critical-cardinality-eku-canonical-profile-uuid-oids:output-metadata-six-verifier-fixed-equations-certificate-slot-output-producer-and-consumer-fixed-selector-equals-global-activity:five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-big-endian-length-pairs-live-prefix-count-node-continuity-source-start-helper:projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa:max-private-active-rows246673:fixed-public-nonpadding-rows292206:four-copy-lanes:zero-sized-public-shape:constant-registration-transcript:no-private-depth-length-count-or-family-boundary-disclosure:committed-family-active-prefixes-except-verifier-fixed-temporal-basic-constraints-and-complete-copy-slot-census:inactive-rows-canonical-zero:four-fixed-top-document-slots:top-document-max4096:optional-certificate-slot2-boolean-provenance-bound:depth2-slot2-zero-byte-zero-node-dummy:certificate-slot-active-output-channel:source-byte-and-node-private-joined-der-endpoints:canonical-parent-child-tag-ordinal-grammar:closed-leaf-five-ca-four-extension-cardinality-and-ordinal-bound-critical-positions:no-host-role-labels:extension-embedded-exact-copy:algorithm-and-profile-fixed-byte-rows:decimal-calendar-to-unix-arithmetic:gregorian-euclidean-year-quotients-and-exact-leap-bit:utc1970-2049-generalized2050-9999-actual-der-tag-and-raw-year-bound:fixed72-authenticated-document-role-instance-time-slots:complete-der-time-node-census:fixed15-decimal-byte-rows-including-z-and-zero-utc-padding:fixed73-two-phase-relations-with-verifier-public-operands-and-only-next-update-strict:entry-count-equals64-boolean-entry-census-and-weighted-serial-comparison-census:38-bit-nonwrapping-timestamp-and-slack:range-byte-before-after-transition-bound:four-lane-affine-one-plus-tuple-logarithmic-lookup-domains100-101:singular-inverse-zero-and-exact-singular-count:bounded-public-presentation-window:private-certificate-validity-covers-window:private-crl-interval-covers-window:basic-constraints-fixed-three-slots-twelve-rows-original-signed-extension-ordinal3-complete-bytes-eight-canonical-u32-integer-variants-32bit-pathlen-and-nonwrapping-slack-at-least-subordinate-count:ku-eku-bc:serial-positive-max20:complete-crl-max64:fixed-two-phase-serial-comparator-layout:fixed-seven-phase-calendar-copy-layout:max-serial-comparisons127:max-serial-comparator-logical-rows2667:max-serial-comparator-physical-rows5334:max-serial-source-rows5334:leaf-vs-every-entry-nonmembership-forced-by-entry-census:adjacent-revoked-serial-strict-increasing-unsigned-magnitude:length-then-byte-lexicographic:active-prefix-count-and-zero-padding:first-magnitude-byte-nonzero:first-difference-range-checked:der-integer-optional-sign-octet-bound:serial-source-node-and-byte-zero-safe-log-lookups-with-singular-count-equality:serial-decimal-relation-to-comparator-calendar-range-four-lane-grand-product:one-compressed-factor-per-physical-row:zero-product-factors-total-no-prover-abort:full-input-affine-degree-audit:issuer-name-and-aki-ski-byte-equality:fixed-five-document-sha-call-sources:fixed-three-certificate-signature-key-slots:depth2-third-tbs-signature-key-canonical-dummy:full-signed-crl-commitment-and-tbs-p256-message-distinct:producer-and-consumer-terminals-enumerated:thirty-nine-relation-four-lane-union-bound-at-least170-bits:canonical-base-fixed-aux-column-provider:eighteen-verifier-fixed-output-role-endpoint-selectors:nine-independent-normalized-producer-and-nine-actual-consumer-four-lane-products:governed-root-spki-and-certificate-slot-active-products-air-bound:four-private-governed-root-consumer-to-original-CA-polynomial-links:private-normalized-producer-to-consumer36-final-equalities:16-native-constant-private-sha-bridge-columns:16-sha-quartic-endpoint-plus4-rfc-quartic-union-main-joins:endpoint-map6,2,2,2,3,3,2,4,3:direction0:instance0:typed-family-role-endpoint-lane-addresses:no-der-public-claim-slots:der-rfc8-private-linear-quotients:verifier-original-polynomial-private-link-replay:no-public-terminal-products:sha-terminal-ca-call-family-lane-addresses-fixed:compact-ca-call-role-and-order-fixed:verifier-committed-sha-terminal-replay:five-p256-witnesses-native-rust-fixed-certificate-crl-wallet-order:p256348-private-products-no-public-codec:p256184-private-linear-links:four-certificate-or-crl-then-wallet-role-order:p256-bus-cross-start-terminal-and-sink-addresses-fixed:canonical-goldilocks-big-endian:verifier-authenticated-p256-private-oods-link-equations:compact-ca-subproof-dedicated-x5c1-x5c2-complete:ca-claim-free-frame10bytes-main-frame1034-joint132-Fp4-openings4224:ca-single-log12-trace4096-base695-aux128-fixed80-constraints1363-degree3-4chunks:ca-local-lde-log16-mask2100-deep52800-fri136-rounds6-terminal1024-degree143-grinding20:shared-x5b1-single-joined-main-base-root-plus-ca-base-root-challenge-schedule:ca-public-profile-and-root-bound:ca-prover-self-verifies-independent-verifier-and-resource-gates:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
+pub const ZK_X509_RFC5280_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-rfc5280-stark-v1-incompatible:native-log19:base285:aux280:fixed147:constraints2146:degree4:source-node-root-kind-active-gated-helper-fixed-eight-equality-and-fifteen-embedded-endpoint-slots-complete-nonempty-original-node-spans-live-prefix-count-typed-copy-domains103-104-affine-one-plus-tuple-for-shared-domains90-98-99-102-103-104-affine-one-plus-tuple-for-shared-profile-domains96-97-optional-slot-canonical-zero-exact-extension-oid-ordinal-ku-document-and-critical-cardinality-eku-canonical-profile-uuid-oids:output-metadata-six-verifier-fixed-equations-certificate-slot-output-producer-and-consumer-fixed-selector-equals-global-activity:five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-big-endian-length-pairs-live-prefix-count-node-continuity-source-start-helper:projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa:max-private-active-rows246673:fixed-public-nonpadding-rows292206:four-copy-lanes:zero-sized-public-shape:constant-registration-transcript:no-private-depth-length-count-or-family-boundary-disclosure:committed-family-active-prefixes-except-verifier-fixed-temporal-basic-constraints-and-complete-copy-slot-census:inactive-rows-canonical-zero:four-fixed-top-document-slots:top-document-max4096:optional-certificate-slot2-boolean-provenance-bound:depth2-slot2-zero-byte-zero-node-dummy:certificate-slot-active-output-channel:source-byte-and-node-private-joined-der-endpoints:canonical-parent-child-tag-ordinal-grammar:closed-leaf-five-ca-four-extension-cardinality-and-ordinal-bound-critical-positions:no-host-role-labels:extension-embedded-exact-copy:algorithm-and-profile-fixed-byte-rows-address-equals-start-plus-offset:decimal-calendar-to-unix-arithmetic:gregorian-euclidean-year-quotients-and-exact-leap-bit:utc1970-2049-generalized2050-9999-actual-der-tag-and-raw-year-bound:fixed72-authenticated-document-role-instance-time-slots:complete-der-time-node-census:fixed15-decimal-byte-rows-including-z-and-zero-utc-padding:fixed73-two-phase-relations-with-verifier-public-operands-and-only-next-update-strict:entry-count-equals64-boolean-entry-census-and-weighted-serial-comparison-census:38-bit-nonwrapping-timestamp-and-slack:range-byte-before-after-transition-bound:four-lane-affine-one-plus-tuple-logarithmic-lookup-domains100-101:singular-inverse-zero-and-exact-singular-count:bounded-public-presentation-window:private-certificate-validity-covers-window:private-crl-interval-covers-window:basic-constraints-fixed-three-slots-twelve-rows-original-signed-extension-ordinal3-complete-bytes-eight-canonical-u32-integer-variants-32bit-pathlen-and-nonwrapping-slack-at-least-subordinate-count:ku-eku-bc:serial-positive-max20:complete-crl-max64:fixed-two-phase-serial-comparator-layout:fixed-seven-phase-calendar-copy-layout:max-serial-comparisons127:max-serial-comparator-logical-rows2667:max-serial-comparator-physical-rows5334:max-serial-source-rows5334:leaf-vs-every-entry-nonmembership-forced-by-entry-census:adjacent-revoked-serial-strict-increasing-unsigned-magnitude:length-then-byte-lexicographic:active-prefix-count-and-zero-padding:first-magnitude-byte-nonzero:first-difference-range-checked:der-integer-optional-sign-octet-bound:serial-source-node-and-byte-zero-safe-log-lookups-with-singular-count-equality:serial-decimal-relation-to-comparator-calendar-range-four-lane-grand-product:one-compressed-factor-per-physical-row:zero-product-factors-total-no-prover-abort:full-input-affine-degree-audit:issuer-name-and-aki-ski-byte-equality:fixed-five-document-sha-call-sources:fixed-three-certificate-signature-key-slots:depth2-third-tbs-signature-key-canonical-dummy:full-signed-crl-commitment-and-tbs-p256-message-distinct:producer-and-consumer-terminals-enumerated:thirty-nine-relation-four-lane-union-bound-at-least170-bits:canonical-base-fixed-aux-column-provider:eighteen-verifier-fixed-output-role-endpoint-selectors:nine-independent-normalized-producer-and-nine-actual-consumer-four-lane-products:governed-root-spki-and-certificate-slot-active-products-air-bound:four-private-governed-root-consumer-to-original-CA-polynomial-links:private-normalized-producer-to-consumer36-final-equalities:16-native-constant-private-sha-bridge-columns:16-sha-quartic-endpoint-plus4-rfc-quartic-union-main-joins:endpoint-map6,2,2,2,3,3,2,4,3:direction0:instance0:typed-family-role-endpoint-lane-addresses:no-der-public-claim-slots:der-rfc8-private-linear-quotients:verifier-original-polynomial-private-link-replay:no-public-terminal-products:sha-terminal-ca-call-family-lane-addresses-fixed:compact-ca-call-role-and-order-fixed:verifier-committed-sha-terminal-replay:five-p256-witnesses-native-rust-fixed-certificate-crl-wallet-order:p256348-private-products-no-public-codec:p256184-private-linear-links:four-certificate-or-crl-then-wallet-role-order:p256-bus-cross-start-terminal-and-sink-addresses-fixed:canonical-goldilocks-big-endian:verifier-authenticated-p256-private-oods-link-equations:compact-ca-subproof-dedicated-x5c1-x5c2-complete:ca-claim-free-frame10bytes-main-frame1034-joint132-Fp4-openings4224:ca-single-log12-trace4096-base695-aux128-fixed80-constraints1363-degree3-4chunks:ca-local-lde-log16-mask2100-deep52800-fri136-rounds6-terminal1024-degree143-grinding20:shared-x5b1-single-joined-main-base-root-plus-ca-base-root-challenge-schedule:ca-public-profile-and-root-bound:ca-prover-self-verifies-independent-verifier-and-resource-gates:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
 /// SHA-256 of [`ZK_X509_RFC5280_STARK_DESCRIPTOR_V1`].
 #[cfg(test)]
 pub const ZK_X509_RFC5280_STARK_DESCRIPTOR_SHA256_V1: [u8; 32] = [
-    0xd6, 0x8f, 0x47, 0x9b, 0x03, 0xa8, 0xeb, 0x14, 0x7e, 0xcd, 0x98, 0x35, 0xb0, 0x4a, 0x56, 0xae,
-    0x46, 0x00, 0x2e, 0x41, 0xb1, 0xa1, 0x72, 0xd7, 0x74, 0xdb, 0xb6, 0xcb, 0x5d, 0xf9, 0x87, 0xa2,
+    0x70, 0xbe, 0x60, 0xb1, 0x60, 0x8d, 0xbf, 0x01, 0x53, 0x1c, 0xb7, 0x83, 0x62, 0x97, 0x27, 0x11,
+    0xda, 0xfc, 0xc6, 0x9a, 0xc5, 0xca, 0xbb, 0xb8, 0x0b, 0x00, 0x7f, 0x77, 0x87, 0x35, 0x1f, 0xe3,
 ];
 /// Native trace logarithm after the 4 KiB X.509 admission cap.
 pub const ZK_X509_RFC5280_STARK_TRACE_LOG2_V1: u8 = 19;
@@ -142,7 +142,7 @@ const RFC5280_RESIDUE_SECTIONS_V1: [(&str, usize); 20] = [
     ("grammar-ordinal-local", 34),
     (
         "fixed-equal-decimal-and-name-uniqueness",
-        56 + name_policy::RESIDUES + name_values::RESIDUES + profile_identity::RESIDUES,
+        57 + name_policy::RESIDUES + name_values::RESIDUES + profile_identity::RESIDUES,
     ),
     (
         "calendar",
@@ -8179,6 +8179,17 @@ fn evaluate_rfc5280_relation_with_context_v1<A: PolynomialAirFieldV1>(
     residues.push(fixed_byte_continue.mul(next[BASE_OFFSET].sub(current[BASE_OFFSET]).sub(A::ONE)));
     residues
         .push(fixed_byte_continue.mul(next[BASE_ADDRESS].sub(current[BASE_ADDRESS]).sub(A::ONE)));
+    // Anchor every compared byte to the run's own start. Without it the byte
+    // lookup, keyed by document, address and value, accepts the pattern from
+    // anywhere in the same document while the topology query still ties
+    // `START` and the exact length to the required node.
+    residues.push(
+        fixed_byte.mul(
+            current[BASE_ADDRESS]
+                .sub(current[BASE_START])
+                .sub(current[BASE_OFFSET]),
+        ),
+    );
     residues.extend(name_policy::residues(current, next, fixed));
     residues.extend(name_values::residues(current, next, fixed));
     residues.extend(profile_identity::residues(current, fixed));
@@ -11086,7 +11097,7 @@ mod tests {
     }
     #[test]
     fn full_opened_input_affine_degree_inventory_is_exactly_four() {
-        const EXPECTED_AFFINE_DEGREE_INVENTORY_V1: [usize; 5] = [0, 1, 916, 577, 655];
+        const EXPECTED_AFFINE_DEGREE_INVENTORY_V1: [usize; 5] = [0, 1, 916, 578, 655];
         const SAMPLE_POINTS: u64 = 9;
         let mut maximum_degrees = vec![0_usize; ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1];
         for seed in [3_u64, 5, 11] {
@@ -11144,7 +11155,8 @@ mod tests {
         // Native finite differences vary every opened base, auxiliary and fixed
         // input at nine points for each of the three seeds above. The expected
         // inventory includes BasicConstraints126 plus copy40 and identity43,
-        // replacing five old cubic equations. Native execution must confirm it.
+        // replacing five old cubic equations, and the cubic FixedByte address
+        // anchor. Native execution must confirm it.
 
         assert_eq!(
             inventory, EXPECTED_AFFINE_DEGREE_INVENTORY_V1,
@@ -12665,7 +12677,7 @@ mod tests {
                 3
             );
         }
-        assert_eq!(ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1, 2_149);
+        assert_eq!(ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1, 2_150);
         assert_eq!(
             (
                 ZK_X509_RFC5280_STARK_BASE_WIDTH_V1,
@@ -12863,6 +12875,134 @@ mod tests {
                     .any(|v| *v != F::ZERO)
             );
         }
+    }
+    /// Evaluate every local residue on every row of one complete trace and
+    /// return the nonzero `(row, residue)` pairs.
+    fn nonzero_rfc5280_local_residues_v1(
+        material: &ZkX509Rfc5280StarkBaseMaterialV1,
+    ) -> Vec<(usize, usize)> {
+        use crate::privacy_engines::aggregate_stark::MASKED_TRACE_LDE_COLUMN_BATCH_V1 as BATCH;
+        let der = der_challenges_v1();
+        let rfc = challenges_v1();
+        let union = ZkX509ShaUnionCentersV1::identity_fixture_v1();
+        let rows = ZK_X509_RFC5280_STARK_TRACE_SIZE_V1;
+        let mut columns = vec![vec![F::ZERO; rows]; ZK_X509_RFC5280_STARK_AUX_WIDTH_V1];
+        for (batch, chunk) in columns.chunks_mut(BATCH).enumerate() {
+            let mut outputs = chunk.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>();
+            aux_replay::fill_columns_v1(material, &der, &rfc, batch * BATCH, &mut outputs, &union)
+                .expect("complete auxiliary columns");
+        }
+        let aux_row = |row: usize| -> ZkX509Rfc5280StarkAuxRowV1 {
+            core::array::from_fn(|column| columns[column][row])
+        };
+        let mut nonzero = Vec::new();
+        let mut current = material.base_row(0).expect("base row");
+        let mut current_aux = aux_row(0);
+        for row in 0..rows {
+            let next_row = (row + 1) % rows;
+            let next = material.base_row(next_row).expect("base row");
+            let next_aux = aux_row(next_row);
+            let fixed = material.fixed_row(row).expect("fixed row");
+            let residues = evaluate_zk_x509_rfc5280_local_residues_v1(
+                &current,
+                &next,
+                &current_aux,
+                &next_aux,
+                &fixed,
+                &der,
+                &rfc,
+            )
+            .expect("canonical residue evaluation");
+            assert_eq!(residues.len(), ZK_X509_RFC5280_LOCAL_CONSTRAINT_COUNT_V1);
+            nonzero.extend(
+                residues
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, residue)| **residue != F::ZERO)
+                    .map(|(position, _)| (row, position)),
+            );
+            current = next;
+            current_aux = next_aux;
+        }
+        nonzero
+    }
+    #[test]
+    fn a_fixed_byte_run_read_from_another_occurrence_fails_only_the_address_anchor() {
+        use ZkX509Rfc5280StarkFamilyV1 as Family;
+        let honest =
+            build_zk_x509_rfc5280_stark_base_material_v1(&canonical_trace_v1()).expect("material");
+        assert_eq!(
+            nonzero_rfc5280_local_residues_v1(&honest),
+            Vec::new(),
+            "the honest trace satisfies every local residue"
+        );
+        // The leaf's TBS signature AlgorithmIdentifier and its outer
+        // signatureAlgorithm carry the same twelve bytes. The forged trace
+        // reads the TBS run from the outer copy, keeping the run's node, start
+        // and length, and moves its DER byte-table multiplicity with it.
+        let run = |parent: ZkX509Rfc5280GrammarRoleV1| {
+            honest.family_rows[Family::FixedByte as usize]
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| {
+                    row[BASE_ROLE] == F(1)
+                        && row[BASE_PARENT] == F(parent as u64)
+                        && row[BASE_DOCUMENT] == F::ZERO
+                })
+                .map(|(ordinal, row)| (ordinal, row[BASE_START], row[BASE_ADDRESS]))
+                .collect::<Vec<_>>()
+        };
+        let tbs = run(ZkX509Rfc5280GrammarRoleV1::CertificateTbsAlgorithm);
+        let outer = run(ZkX509Rfc5280GrammarRoleV1::CertificateOuterAlgorithm);
+        assert_eq!(tbs.len(), ECDSA_SHA256_ALGORITHM_V1.len());
+        assert_eq!(outer.len(), ECDSA_SHA256_ALGORITHM_V1.len());
+        let (tbs_start, outer_start) = (tbs[0].1, outer[0].1);
+        assert_ne!(tbs_start, outer_start);
+        let shift = outer_start.sub(tbs_start);
+        let mut forged = honest.clone();
+        let moved = tbs.iter().map(|(ordinal, ..)| *ordinal).collect::<Vec<_>>();
+        for (ordinal, row) in forged.family_rows[Family::FixedByte as usize]
+            .iter_mut()
+            .enumerate()
+        {
+            if moved.contains(&ordinal) {
+                row[BASE_ADDRESS] = row[BASE_ADDRESS].add(shift);
+            }
+        }
+        let byte_rows = |start: F| {
+            let first = usize::try_from(start.0).expect("small address");
+            first..first + ECDSA_SHA256_ALGORITHM_V1.len()
+        };
+        for (ordinal, row) in forged.family_rows[Family::SourceByte as usize]
+            .iter_mut()
+            .enumerate()
+        {
+            // Document 0 occupies the first 4,096 source-byte slots.
+            if byte_rows(tbs_start).contains(&ordinal) {
+                row[SERIAL_BYTE_TABLE_MULTIPLICITY] =
+                    row[SERIAL_BYTE_TABLE_MULTIPLICITY].sub(F::ONE);
+            }
+            if byte_rows(outer_start).contains(&ordinal) {
+                row[SERIAL_BYTE_TABLE_MULTIPLICITY] =
+                    row[SERIAL_BYTE_TABLE_MULTIPLICITY].add(F::ONE);
+            }
+        }
+        // The anchor follows the 32 `FixedByte` residues before it in the
+        // `fixed-equal-decimal-and-name-uniqueness` section.
+        let anchor = RFC5280_RESIDUE_SECTIONS_V1[..5]
+            .iter()
+            .map(|section| section.1)
+            .sum::<usize>()
+            + 32;
+        let start = forged.schedule.starts[Family::FixedByte as usize];
+        assert_eq!(
+            nonzero_rfc5280_local_residues_v1(&forged),
+            moved
+                .iter()
+                .map(|ordinal| (start + ordinal, anchor))
+                .collect::<Vec<_>>(),
+            "only the address anchor rejects the relocated run, on each of its rows"
+        );
     }
     include!("rfc5280_nonkey_provenance_tests.rs");
     include!("rfc5280_sha_union_tests.rs");

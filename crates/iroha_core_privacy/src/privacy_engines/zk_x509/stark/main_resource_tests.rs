@@ -792,15 +792,15 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
             2_803_630_080,
             95_420_416,
             3_732_930_560,
-            4_498_391_040, // RFC: 2,145 local residues across 2^21 quotient rows.
+            4_500_488_192, // RFC: 2,146 local residues across 2^21 quotient rows.
             9_965_666_304,
             4_771_020_800,
         ]
         .into_iter()
         .sum::<u64>(),
-        26_289_479_680
+        26_291_576_832
     );
-    assert_eq!(residues, 26_289_479_680);
+    assert_eq!(residues, 26_291_576_832);
     // The public prefix cache does not enlarge the admitted arithmetic envelope.
     assert_eq!(
         buffers.maximum_live_buffers,

@@ -1371,12 +1371,15 @@ Its ordinary and maximum diagnostic proofs verify on one macOS host with
 replay and negative controls; that host was loaded, so no time is recorded.
 A second read covered the remaining segments and found that non-minimal
 SHA-256 padding was accepted, so one certificate could publish up to 29
-different nullifiers. A minimal-padding residue closes that gap in source;
-the compiled profile is now `dd803a10`, and `cbf1bd12` is a rejection
-fixture. Its ordinary and maximum diagnostic proofs verify with replay and
-negative controls on one loaded host, in 492 s and 441 s. Fix proposals for `FixedByte` address anchoring and signature-scalar
-provenance await approval; unconstrained sibling ordinals, the BIT STRING
-unused-bit count, the fixed-schedule evaluators and forged-proof controls
+different nullifiers. A minimal-padding residue closes that gap (profile
+`dd803a10`, whose ordinary and maximum diagnostic proofs verified with
+replay and negative controls in 492 s and 441 s on one loaded host). An
+address anchor on every `FixedByte` row then closes the profile-pattern
+gap and masks the BIT STRING unused-bit gap; the compiled profile is now
+`a7d5eaa2`, with `dd803a10` and `cbf1bd12` as rejection fixtures, and its
+diagnostic proofs verify likewise in 340 s and 456 s. A fix
+proposal for signature-scalar provenance awaits approval; unconstrained
+sibling ordinals, the fixed-schedule evaluators and forged-proof controls
 remain open.
 
 The public presentation window has one definition, recorded in the

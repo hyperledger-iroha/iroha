@@ -21,8 +21,9 @@ their read; gap 5 is one reader's finding on the grammar side. The covered
 rows are per-cluster readings with spot checks; the second read's sections
 were each read once and their gaps and load-bearing claims re-checked. On
 that revision the 1,506 non-ignored `zk_x509` library tests pass in release.
-Only the closure of gap 7 is backed by forged traces, at the level of the SHA
-capacity AIR; nothing has a forged-proof control yet.
+The closures of gaps 3 and 7 are backed by forged traces, of the complete RFC
+5280 trace and of the SHA capacity AIR; nothing has a forged-proof control
+yet.
 
 ## What the verifier adds across segments
 
@@ -82,63 +83,62 @@ traces of the SHA capacity AIR. None has a forged-proof control yet.
    `serial_census_balances_only_for_the_complete_comparison_prefix` and
    `entry_census_weights_live_only_on_entry_relations_and_serial_comparisons`.
 
-Closed on 2026-11-11 with the owner's approval, not yet committed:
+Closed on 2026-11-11 with the owner's approval. Gap 7 is committed as
+`c3191d4c32`; gap 3, and with it gap 9, is not yet committed.
 
-7. **SHA-256 padding was not forced minimal.** The SHA capacity AIR
-   (`evaluate_sha_word_capacity_residues_with_context_v1` in
-   `sha_word_stark.rs`) set `final_block` by activity alone, checked the
-   marker, the zero fill and the two length words in the final block only,
-   and tied the number of active blocks to nothing: after the marker, words 14
-   and 15 of a non-final block were merely zero. A prover could activate extra
-   all-zero blocks up to the call's capacity, and the digest rows then read
-   the compression of `m ‖ 0x80 ‖ 0^(k+64j) ‖ 8L`, not SHA-256(m). Where the
-   digest meets a P-256 signature, a governed digest or a CA hash (calls 0 to
-   4, 12 and 16 to 28) that needs a compression collision. Where it is itself
-   a public output it did not: the Projection calls have a capacity of 33
-   blocks against frames of five or six, the certificate nullifier is
-   deterministic in the reference relation (`derive_certificate_nullifier_v1`),
-   Projection pins call 6's digest to `statement.certificate_nullifier`, and
-   consensus marks only the published value consumed (`x509_submission.rs`).
-   One certificate could therefore publish up to 29 different nullifiers and
-   be presented as fresh up to 29 times; the scoped subject-key digest (call 5)
-   had the same freedom. A capacity residue now forbids the marker before word
-   14 of any active block that is not final, which is exactly minimal padding.
-   The compiled-profile pin is `dd803a10`; `cbf1bd12` is a rejection fixture.
-   Controls: `non_minimal_sha_padding_is_rejected_only_by_the_minimal_padding_residue`,
-   which builds whole non-minimal capacity traces under the canonical fixed
-   schedule and finds every other residue zero and the new one nonzero at
-   word 14 of each non-final block after the marker, one per extra block, and
-   `compiled_profile_rejects_non_minimal_sha_padding`.
+- **Gap 7. SHA-256 padding was not forced minimal.** The SHA capacity AIR
+  (`evaluate_sha_word_capacity_residues_with_context_v1` in
+  `sha_word_stark.rs`) set `final_block` by activity alone, checked the
+  marker, the zero fill and the two length words in the final block only,
+  and tied the number of active blocks to nothing: after the marker, words 14
+  and 15 of a non-final block were merely zero. A prover could activate extra
+  all-zero blocks up to the call's capacity, and the digest rows then read
+  the compression of `m ‖ 0x80 ‖ 0^(k+64j) ‖ 8L`, not SHA-256(m). Where the
+  digest meets a P-256 signature, a governed digest or a CA hash (calls 0 to
+  4, 12 and 16 to 28) that needs a compression collision. Where it is itself
+  a public output it did not: the Projection calls have a capacity of 33
+  blocks against frames of five or six, the certificate nullifier is
+  deterministic in the reference relation (`derive_certificate_nullifier_v1`),
+  Projection pins call 6's digest to `statement.certificate_nullifier`, and
+  consensus marks only the published value consumed (`x509_submission.rs`).
+  One certificate could therefore publish up to 29 different nullifiers and
+  be presented as fresh up to 29 times; the scoped subject-key digest (call 5)
+  had the same freedom. A capacity residue now forbids the marker before word
+  14 of any active block that is not final, which is exactly minimal padding.
+  The compiled-profile pin is `dd803a10`; `cbf1bd12` is a rejection fixture.
+  Controls: `non_minimal_sha_padding_is_rejected_only_by_the_minimal_padding_residue`,
+  which builds whole non-minimal capacity traces under the canonical fixed
+  schedule and finds every other residue zero and the new one nonzero at
+  word 14 of each non-final block after the marker, one per extra block, and
+  `compiled_profile_rejects_non_minimal_sha_padding`.
+- **Gap 3. `FixedByte` addresses were not anchored.** A run constrained
+  `BASE_ADDRESS` only by its increment, while the topology query tied its
+  start and exact length to a required node and the byte lookup was keyed by
+  document, address and value. The compared bytes could therefore be any
+  consecutive occurrence of the pattern in the same document, so profile
+  checks on the top-level certificates (algorithm identifiers, version,
+  extension and name OIDs, the `critical` byte, the key prefix) could read
+  their bytes elsewhere. Exploiting it needed a nonconforming certificate
+  signed by a governed CA. One RFC residue now anchors every row,
+  `ADDRESS = START + OFFSET`. The compiled-profile pin is `a7d5eaa2`;
+  `dd803a10` is a rejection fixture. Controls:
+  `a_fixed_byte_run_read_from_another_occurrence_fails_only_the_address_anchor`,
+  which evaluates every local residue on every row of the complete canonical
+  trace, finds them all zero, then moves the run that checks the leaf's TBS
+  signature AlgorithmIdentifier onto the identical outer signatureAlgorithm
+  bytes, rebalances the DER byte table, and finds only the new residue
+  nonzero, on each row of that run; and
+  `compiled_profile_rejects_unanchored_fixed_byte_addresses`.
+- **Gap 9. The BIT STRING unused-bit count was not bound to its octet.**
+  Closed by masking, with no DER change: the closed grammar admits BIT
+  STRINGs only for the two signature values, the public key and the key
+  usage root, and the profile patterns that pin their unused-bits octet to
+  zero and the whole key usage TLV are now anchored. The DER AIR still
+  carries the column without reading the octet, which would matter only if
+  the grammar admitted another BIT STRING.
 
 ## Open gaps
 
-3. **`FixedByte` addresses are not anchored.** Confirmed on 2026-11-11
-   against the residues and the verifier. The family's residues (the
-   `FixedByte` block of `evaluate_rfc5280_relation_with_context_v1`,
-   `name_policy::residues` and `profile_identity::residues`) constrain
-   `BASE_ADDRESS` only by `next − current = 1` inside a run; nothing equates
-   it to `BASE_START + BASE_OFFSET`. The first row of a run (`OFFSET = 0`)
-   queries the node topology table (domain 97), which ties `START`, the node's
-   start, content start and content end, its instance and tag to a node of a
-   required role, and every row queries the profile table (domain 96) and the
-   DER byte table (domain 91, keyed by document, address and value). So the
-   run's start and exact length belong to the node, but the compared bytes can
-   be any consecutive occurrence of the pattern in the same document. Every
-   sibling family anchors its addresses: Decimal, copy census, NameValue,
-   variable output, path length, Projection serial and disclosure. Reach: the
-   patterns in top-level documents, that is signature and SPKI algorithm
-   identifiers, version, the signature unused-bits byte, the `00 04` key
-   prefix, certificate and CRL extension OIDs, the `critical` byte and name
-   attribute OIDs. The key usage, EKU and CRL-number patterns span their whole
-   embedded document and are therefore self-anchored. Disclosed-attribute OIDs
-   are anchored separately to verifier-fixed bytes in `projection_disclosure`,
-   so disclosure selection is unaffected. The CRL is digest-bound to the
-   governed record, so in practice the gap concerns the private certificates.
-   Exploiting it needs a certificate outside the closed profile that a governed
-   CA signed; the typed value checks still apply. A run cannot spill past the
-   end of the family block: the next row is the first `EqualByte` row, a
-   required issuer slot anchored to its own node, which cannot also be the
-   run's required-role node. Fix proposal below.
 4. **Signature scalars are not joined to the documents.** Confirmed on
    2026-11-11. The RFC `P256Signature` role (the 72-byte padded signature DER
    and its length, for each certificate and the CRL) closes inside the RFC
@@ -185,33 +185,24 @@ Found by the second read:
    authoritative time blocks, the disclosed attribute is selected by its
    anchored OID and the value adjacent to it, and every CRL entry is still
    compared with the leaf, so revocation cannot be bypassed.
-9. **The BIT STRING unused-bit count is not bound to its octet.** Found on
-   2026-11-11 and confirmed. In the DER AIR, `BASE_UNUSED_BITS` is packed
-   from free payload cells and carried through the primitive; the only check
-   on the octet itself is that it is below 8. The empty-payload and padding
-   checks read the column, so `03 02 05 FF` and `03 01 07` pass with the
-   column set to zero, against `der.rs` (`UnusedBitsWithoutPayload`,
-   `NonZeroUnusedBits`). Masked: the closed grammar admits BIT STRINGs only
-   for the two signature values, the public key and the key usage root, and
-   profile patterns pin the octet to zero and the whole key usage TLV. Those
-   are `FixedByte` rows, so the gap is live only through gap 3 and closes
-   with it.
 
-By severity: gap 7, open to any holder of an in-profile credential, is closed
-in source above. Of the open gaps, 3 and 8 need a nonconforming document
-signed by a governed CA, gap 3 being the more likely misissuance; gaps 4, 5
-and 9 are mismatches without a forgery, gap 9 masked by the profile patterns.
-Gap 6 is the separate quiet-chain item of task X.6.
+By severity: gap 7, open to any holder of an in-profile credential, and gap
+3 are closed in source above, gap 9 with gap 3. Of the open gaps, 8 needs a
+nonconforming document signed by a governed CA; gaps 4 and 5 are mismatches
+without a forgery. Gap 6 is the separate quiet-chain item of task X.6.
 
 ## Fix proposals awaiting approval
 
-Gap 7's proposal is applied; the others are not. Each changes the relation and
+The proposals for gaps 3 and 7 are applied; the others are not. Each changes the relation and
 the profile identity, so the affected segment and profile descriptors, the
 compiled-profile pin and the fixtures are regenerated from the compilers and
 the maximum proof rerun. Proof sizes below are source-derived from the framing
 in the [joint relation contract](zk_x509_joint_private_relation.md).
 
-### Gap 3: anchor every `FixedByte` row
+### Gap 3: anchor every `FixedByte` row (applied)
+
+Applied as proposed on 2026-11-11 with the owner's approval, and not yet
+committed; the pin is `a7d5eaa2`.
 
 - **Constraint.** One RFC residue, `ACTIVE · fixed[FixedByte] · (ADDRESS −
   START − OFFSET)`, in the `FixedByte` block. Honest rows already satisfy it:
@@ -219,21 +210,36 @@ in the [joint relation contract](zk_x509_joint_private_relation.md).
   topology-anchored run compares the node byte at `START + OFFSET`, where
   `START` is the node's start or content start. The existing continuation
   `next.ADDRESS − ADDRESS − 1` becomes implied inside the block and can stay.
-- **Size.** Trace degree two, so the RFC maximum stays four. RFC constraints
-  go from 2,145 to 2,146 (the `fixed-equal-decimal-and-name-uniqueness`
-  section gains one). No base or auxiliary column, no opening, no X5M1 field:
-  X5M1 stays 1,034 framing bytes and the maximum proof 9,436,016 bytes.
+- **Size.** Trace degree two, so the RFC maximum stays four. RFC local
+  constraints go from 2,145 to 2,146 (the
+  `fixed-equal-decimal-and-name-uniqueness` section gains one). No base or
+  auxiliary column, no opening, no X5M1 field: X5M1 stays 1,034 framing bytes
+  and the maximum proof 9,436,016 bytes.
+- **Profile.** No compiled-profile field binds the RFC 5280 schedule by digest
+  (`TODO(X.3)` in `compiled_profile_fields_v1`), so the change reaches the pin
+  through the `rfc5280-temporal-air` text of field 9, which now records the
+  count and the rule; the segmented STARK and RFC descriptors record them
+  too, and a test ties all three to the actual constant.
 - **Ledger.** Unchanged. No new map, so the point exclusion stays
   E = 3,353,141,249. D, B_MAIN = 19,398,656 and B_CA = 40,960 are unchanged
   because the RFC fixed-aware degree is. The alpha term 64/|F| counts one
   cancellation event, whatever the number of constraints. No lookup event is
   added, so the RFC collision term keeps 39 relations of at most 2^19 events.
   The exponents stay [160, 187, 160, 199, 164, 165, 158].
-- **Controls.** A residue control that shifts every row of an honest
-  top-level run, for example the leaf's first extension OID, to another
-  occurrence of the same bytes in the same document: every existing residue
-  still vanishes and the DER byte query equals a genuine table factor, while
-  the new residue does not vanish. A forged-trace control later.
+- **Controls.** A whole-trace control on the canonical fixture: every local
+  residue on every one of the 2^19 rows is zero for the honest trace. The
+  forged trace moves the twelve-row run that checks the leaf's TBS signature
+  AlgorithmIdentifier onto the identical outer signatureAlgorithm bytes,
+  keeping its node, start and length, and moves the DER byte-table
+  multiplicity with it; the auxiliary columns are rebuilt by the prover's
+  own replay, which accepts the balanced lookup. Every residue still
+  vanishes except the new one, which is nonzero on each of the twelve rows.
+  The profile test checks that `dd803a10` differs only in field 9 and is
+  rejected.
+- **Proofs.** Ordinary and maximum diagnostic proofs of 9,436,016 bytes verify
+  with producer self-check and independent replay, and reject the
+  wrong-genesis, 32 nonce-byte and tamper mutations; proving took 340 s and
+  456 s on a loaded host, still over the 300 s target.
 
 ### Gap 4: join `r` and `s` to the documents
 
@@ -260,7 +266,7 @@ key blocks join them.**
   non-live rows hold zero. The 32 output bytes are then the integer's value,
   left-padded, a sign octet inside the window contributing its zero byte. The
   BIT STRING's unused-bits byte stays the purpose-4 profile pattern, anchored
-  once gap 3 is closed. The range `1 ≤ r, s < n` stays with P-256.
+  since gap 3 was closed. The range `1 ≤ r, s < n` stays with P-256.
 - **RFC cost.** No new committed column: one base column costs about 1,152
   proof bytes (136 query values and two DEEP values) against 1,168 bytes of
   room, so the rows reuse the generic columns. One more verifier-fixed family
@@ -351,7 +357,7 @@ committed; the pin is `dd803a10`.
 
 ### Gaps 8 and 9: sketches
 
-Not yet worked out to the same precision.
+Not worked out to the same precision.
 
 - **Gap 8.** Add each child's start and end to the domain 95 tuple on both
   sides, and give the grammar ordinal table rows a carried span: the first
@@ -362,10 +368,10 @@ Not yet worked out to the same precision.
   This reuses free tuple slots and generic columns, adds a node query to the
   existing domain 92 lookup and some RFC residues, and needs no column,
   opening or X5M1 field; the ledger is unchanged.
-- **Gap 9.** One DER residue binding `BASE_UNUSED_BITS` to the octet on the
-  first content row of a BIT STRING, its degree to be checked against the DER
-  maximum. No column or opening, ledger unchanged. Since gap 3's fix masks it
-  fully, it could ride with that revision.
+- **Gap 9.** Closed by masking with gap 3; no DER change was made. A DER
+  residue binding `BASE_UNUSED_BITS` to the octet on the first content row of
+  a BIT STRING stays available should the grammar ever admit another BIT
+  STRING.
 
 ## Reported covered
 
@@ -374,18 +380,18 @@ Not yet worked out to the same precision.
 | Statement against governed records, replay, binding to transaction, account and chain | native consensus checks in `validate_privacy_zk_x509_statement_state_v1` and the X.509 submission executor, before proof verification |
 | Chain length, private depth | one Boolean `BASE_CERT2_ACTIVE`, constant across the trace, read by every depth-dependent rule and joined to P-256 sink 2 |
 | Window against every certificate and the CRL | required relation slots with the public window as fixed cells and range-checked slack |
-| Leaf and CA basic constraints, key usage, extended key usage, path length | verifier-fixed profile patterns and path-length slots, subject to gap 3 |
+| Leaf and CA basic constraints, key usage, extended key usage, path length | verifier-fixed profile patterns, anchored to their nodes since gap 3, and path-length slots |
 | Name chaining and key identifiers, including the root and the CRL issuer | fixed equality slots joined by a copy product |
 | Signature messages, keys and their pairing for all five signatures | fixed output sources, SHA union, digest and key blocks; sinks other than slot 2 are required active |
 | Wallet ownership digest and low `s` | verifier-fixed Projection constants, SHA call 11, digest block 4 |
 | CRL number, digests and exact timestamps | profile pattern and the four authoritative blocks |
 | Trust-anchor membership | governed-root producer rows of document `1 + depth bit`, four root links, 104 hash links, public root on a fixed CA row |
 | Projection frames to SHA and public digests | verifier-fixed frame constants and expected digests, four Projection-to-SHA links, subject to gap 7 |
-| Strict DER encoding | minimal identifiers (low or high tag form, no `0x80` lead, at most five octets), the universal tag set and form, no end-of-contents; definite minimal lengths up to `0x4000`; canonical BOOLEAN, NULL, INTEGER, ENUMERATED and OID contents; SET OF order by pair products and a zero-safe byte comparator (`der_stark.rs`); BIT STRING subject to gap 9 |
+| Strict DER encoding | minimal identifiers (low or high tag form, no `0x80` lead, at most five octets), the universal tag set and form, no end-of-contents; definite minimal lengths up to `0x4000`; canonical BOOLEAN, NULL, INTEGER, ENUMERATED and OID contents; SET OF order by pair products and a zero-safe byte comparator (`der_stark.rs`); BIT STRING unused bits only through the anchored profile patterns (gap 9) |
 | DER structure and node table | offset one per consumed byte, frame push and pop products equal at the last row with frame identity the unique node ordinal, so spans nest, siblings are contiguous, parents close exactly and the root covers the document; node ordinals unique per document and every node field in the tuple; document count at most 19 with indices one apart (document lengths are checked on the last document only and never exported) |
 | DER to RFC source tables | the eight DER-to-RFC links equate the byte and node products (multiset equality of `(document, address, byte)` and of node tuples); `SourceNode` rows sit at fixed `(document, ordinal)` with prefix activity, so they equal the DER nodes row for row; `SourceByte` rows fix `(document, address)` below 4,096 per top-level document and are otherwise pinned by the multiset equality |
 | Grammar | role, tag, parent role and count by the rule lookup against the verifier-fixed table and the parent lookup with multiplicity the parent's count; exact ordinals and counts force the required children; `(document, role, instance)` unique because the instance formulas are injective and name ordinals are bounded; which sibling takes which ordinal is gap 8 |
-| Embedded documents | each embedded root is node 0 at start 0, its bytes equal the extension value bytes through the copy census (domain 104, live prefix equal to the span), and a fixed slot map assigns its kind, the extension OID being tied to the instance by a `FixedByte` pattern (gaps 3 and 8) |
+| Embedded documents | each embedded root is node 0 at start 0, its bytes equal the extension value bytes through the copy census (domain 104, live prefix equal to the span), and a fixed slot map assigns its kind, the extension OID being tied to the instance by an anchored `FixedByte` pattern (gap 8) |
 | TBS bytes hashed | the variable-output producer reads `(document, START + i)` for every byte of the `CertificateTbs` span through the byte lookup, authenticates the node through the node lookup, and fixes the count to `CONTENT_END − START` |
 | SHA-256 compression and chaining | evaluated through `evaluate_zk_x509_sha_batch_local_residues_over_field_v1`, the capacity AIR and the inner word AIR (`sha_word_stark.rs`); IV and the 64 round constants verifier-fixed as in FIPS 180-4; σ and Σ as XORs of Boolean rotated bits, Ch and Maj by 8-bit chunks; additions mod 2^32 with three carry bits over range-checked operands, at most 5·2^32 so no wrap; word memory with verifier-fixed addresses and a sorted table; blocks chained through fixed addresses, activity a block prefix, inactive rows zero and event-free |
 | SHA-256 padding, message and digest rows | marker `0x80`, zero fill, word 14 zero and word 15 eight times the exact count in the final block, at most one marker; message bytes a prefix with exact count; RFC calls through the SHA union with the carried 13-bit length; Projection calls through the shared products (512 words, length, digest); frame-prefix bytes by fixed masks; eight digest rows forced active at `active_blocks·680 + j`, read by every join on the call's fixed final rows; subject to gap 7 |
@@ -436,7 +442,7 @@ validation. A relation change alters the profile identity, so descriptors,
 pins and fixtures are regenerated from the actual compiler and the maximum
 proof is rerun.
 
-TODO(X.3): as the owner approves them, close gaps 3 (with 9), 8 and 4; add
-forged-proof controls for gaps 1, 2 and 7 and for each new closure; read the
+TODO(X.3): as the owner approves them, close gaps 8 and 4; add forged-proof
+controls for gaps 1, 2, 3 and 7 and for each new closure; read the
 fixed-schedule evaluators; then repeat this read against the changed
 relation.
