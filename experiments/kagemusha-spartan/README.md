@@ -19,9 +19,10 @@ four points.
 
 - Send's and Receive's own relations have the census's gadgets and sizes over
   synthetic values, not the monetary semantics.
-- The cross-field binding chain uses stand-in `rho` and `mu` values, and the
-  link's R is not computed inside the proven circuits; that needs a third commit
-  phase (A2-UNIFORM.md, "Uniform Send").
+- The pair binding runs inside both proven circuits, in a link phase between the
+  first and second phases (A2-UNIFORM.md, "The pair binding inside the
+  circuits"). Its mask `mu` is derived from the pair's shared values here; a
+  prover samples it per pair.
 - The public base-case flag can discard predecessor claims. Authenticated
   first-state admission and its binding to the real wallet protocol are not
   implemented (an owner decision: the spec's Bootstrap step is the natural first

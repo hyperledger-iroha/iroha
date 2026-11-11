@@ -121,6 +121,8 @@ pub struct Copies<F> {
     /// Late io: (io index, source array, cell, instance) per value, in proof
     /// order. The prover fills these after the second-phase challenges.
     pub late_io: Vec<(usize, usize, usize, usize)>,
+    /// The link phase (cells that follow the pair link's rho).
+    pub link: LinkPhase<F>,
 }
 
 impl<F> Default for Copies<F> {
@@ -131,6 +133,46 @@ impl<F> Default for Copies<F> {
             challenge: ChallengeRows::default(),
             io_arrays: Vec::new(),
             late_io: Vec::new(),
+            link: LinkPhase::default(),
+        }
+    }
+}
+
+/// The values of a builder's link-phase cells once the pair link's rho (its
+/// 32-byte word) is known: (array, cell, instance, value).
+pub type LinkFill<F> = Box<dyn Fn(&[u8; 32]) -> Vec<(usize, usize, usize, F)> + Send + Sync>;
+
+/// The link's io values from rho and R, one per link io array (in order).
+pub type LinkIo<F> = Box<dyn Fn(&[u8; 32], &[u8; 32]) -> Vec<F> + Send + Sync>;
+
+/// A builder's link phase: whole arrays whose values follow the pair link's
+/// rho, committed after the link's word and before the second-phase
+/// challenges (with the chunk arrays their lookups move into); tables that
+/// only link-phase cells read (their multiplicities, counted after the fill,
+/// are link-phase cells too); the fill; the link's io (one-cell arrays in z's
+/// public half, past the header's io, whose values prover and verifier both
+/// take from rho and R); and the cells of the circuit's binding value R.
+pub struct LinkPhase<F> {
+    pub arrays: Vec<usize>,
+    pub tables: Vec<u32>,
+    pub fill: Option<LinkFill<F>>,
+    /// (array, io index of its instance 0), as `io_arrays`.
+    pub io: Vec<(usize, usize)>,
+    pub io_values: Option<LinkIo<F>>,
+    /// R's limbs as cells (array, cell, instance), low limb first, and the
+    /// limb width in bits.
+    pub binding: Option<(Vec<(usize, usize, usize)>, u32)>,
+}
+
+impl<F> Default for LinkPhase<F> {
+    fn default() -> Self {
+        LinkPhase {
+            arrays: Vec::new(),
+            tables: Vec::new(),
+            fill: None,
+            io: Vec::new(),
+            io_values: None,
+            binding: None,
         }
     }
 }
@@ -206,6 +248,8 @@ pub struct Layout {
     pub sx: usize,
     pub row_bits: usize,
     pub p1: usize,
+    /// The link phase's rows (after the first phase's).
+    pub pl: usize,
     pub fixed: usize,
 }
 
@@ -254,8 +298,17 @@ pub struct UniformCircuit<F> {
     index_arrays: Vec<(usize, usize)>,
     /// Hyrax rows of the first phase.
     p1_rows: usize,
-    /// Second-phase rows in use (after the first phase's).
+    /// Rows of the link phase (after the first phase's).
+    pl_rows: usize,
+    /// Second-phase rows in use (after the link phase's).
     p2_rows: usize,
+    /// The link phase: its tables (multiplicities counted after the fill),
+    /// the fill, the link's io arrays and their values, and R's limb cells.
+    link_tables: Vec<u32>,
+    link_fill: Option<LinkFill<F>>,
+    link_io: Vec<(usize, usize)>,
+    link_io_values: Option<LinkIo<F>>,
+    link_binding: Option<(Vec<(usize, usize, usize)>, u32)>,
     /// Which r of each array are instances: `(sigma, inner, outer)`, r
     /// present when `r mod 2^sigma < inner` and `r >> sigma < outer` (a chunk
     /// array's `r = j 2^sigma + s` is chunk j of instance s; other arrays
@@ -1280,11 +1333,23 @@ impl<F: Scalar> UniformCircuit<F> {
         let mut copies = copies;
         let split_of = split_families(&mut arrays, &mut pi, &mut counts, &mut copies);
         let challenge = std::mem::take(&mut copies.challenge);
-        let io_arrays = std::mem::take(&mut copies.io_arrays);
+        let mut io_arrays = std::mem::take(&mut copies.io_arrays);
         let late_io = std::mem::take(&mut copies.late_io);
+        let link = std::mem::take(&mut copies.link);
+        // The link's io arrays are io arrays whose values come from rho.
+        io_arrays.extend(link.io.iter().copied());
+        let link_slots: HashSet<usize> = link.io.iter().map(|x| x.1).collect();
         let is_io: Vec<bool> = (0..arrays.len())
             .map(|a| io_arrays.iter().any(|(x, _)| *x == a))
             .collect();
+        // Link-phase arrays (with their split families' clones).
+        let mut link_array: Vec<bool> = vec![false; arrays.len()];
+        for &a in &link.arrays {
+            link_array[a] = true;
+            if let Some(Some((c, _))) = split_of.get(a) {
+                link_array[*c] = true;
+            }
+        }
         for &(a, off) in &io_arrays {
             let arr = &arrays[a];
             assert!(
@@ -1308,7 +1373,17 @@ impl<F: Scalar> UniformCircuit<F> {
             arrays.iter().map(|a| (a.rho, a.r_count, 1)).collect();
         let mut moved: Vec<Vec<Option<(usize, usize, usize)>>> =
             arrays.iter().map(|a| vec![None; a.cells()]).collect();
+        let before_chunks = arrays.len();
         chunk_arrays(&mut arrays, &mut rfield, &mut moved);
+        // A link array's chunks move into chunk arrays of the link phase.
+        link_array.resize(arrays.len(), false);
+        for a in 0..before_chunks {
+            if link_array[a] {
+                for &(ca, _, _) in moved[a].iter().flatten() {
+                    link_array[ca] = true;
+                }
+            }
+        }
         // The copy argument: index columns, reads as lookups, entry arrays.
         let (exports, lookup_mask, lookup_mask_col, index_arrays, mut export_helpers) =
             copy_layout(&mut arrays, &pi, &counts, &mut rfield, &mut moved, &copies);
@@ -1427,6 +1502,11 @@ impl<F: Scalar> UniformCircuit<F> {
             rfield.push(fva);
             moved.push(vec![None; 2]);
             tables.push((va, tid, wa));
+            // A link table's multiplicities follow the link phase's values.
+            link_array.resize(arrays.len(), false);
+            if link.tables.contains(&tid) {
+                link_array[wa] = true;
+            }
         }
         if !lookup_arrays.is_empty() || !exports.is_empty() {
             let mut sum: Lin<F> = Vec::new();
@@ -1603,7 +1683,13 @@ impl<F: Scalar> UniformCircuit<F> {
                 arr.name
             );
         }
-        // Regions: 0 first phase, 1 second phase, 2 constant columns.
+        // Regions: 0 first phase, 1 second phase, 2 constant columns, 3 the
+        // link phase (between the first and the second).
+        let link_array = {
+            let mut l = link_array;
+            l.resize(arrays.len(), false);
+            l
+        };
         let collect_sizes = |region: usize| -> Vec<(usize, usize, usize, u16)> {
             let mut v: Vec<(usize, usize, usize, u16)> = arrays
                 .iter()
@@ -1614,6 +1700,8 @@ impl<F: Scalar> UniformCircuit<F> {
                         2
                     } else if phase2[a][k] {
                         1
+                    } else if link_array[a] {
+                        3
                     } else {
                         0
                     };
@@ -1627,6 +1715,7 @@ impl<F: Scalar> UniformCircuit<F> {
         let sizes = collect_sizes(0);
         let p2_sizes = collect_sizes(1);
         let fixed_sizes = collect_sizes(2);
+        let link_sizes = collect_sizes(3);
         // A block claims only the stripes holding its array's present
         // instances: no row reads an absent instance with a nonzero
         // coefficient, so other blocks' cells may sit on the rest.
@@ -1671,6 +1760,12 @@ impl<F: Scalar> UniformCircuit<F> {
         let p1_list: Vec<(usize, usize, usize, u16, u8)> = sizes
             .iter()
             .map(|&(a, k, m, w)| (a, k, m, w, 1 + class_map[class_of(w)] as u8))
+            .collect();
+        // Link-phase cells: a class of their own, on the rows after the first
+        // phase's.
+        let link_list: Vec<(usize, usize, usize, u16, u8)> = link_sizes
+            .iter()
+            .map(|&(a, k, m, w)| (a, k, m, w, 3 + classes.len() as u8))
             .collect();
         // Second-phase cells: helpers committed by value on rows of their own
         // first, then the rest.
@@ -1732,10 +1827,12 @@ impl<F: Scalar> UniformCircuit<F> {
         }
         let sx = target.map_or(sx, |t| t.sx);
         let p1_min = target.map_or(0, |t| t.p1);
+        let pl_min = target.map_or(0, |t| t.pl);
         // The fixed rows the constants need (a target may ask for more).
         let mut natural_fixed;
         let mut fixed_rows = 0;
         let mut p1_rows = 0;
+        let pl_rows;
         let mut p2_rows = 0;
         let mut row_bits = target.map_or(2, |t| t.row_bits);
         let mut stripe_c = 0;
@@ -1818,49 +1915,61 @@ impl<F: Scalar> UniformCircuit<F> {
             if frows < s.rows() {
                 // The fewest rows that hold both phases: a row budget for the
                 // marked rows (full blocks may run on to the end), by bisection.
-                let attempt =
-                    |budget: usize, blocks: &mut Vec<Vec<Block>>| -> Option<(Rows, usize, usize)> {
-                        let limits = (budget, s.rows());
-                        let mut rows = Rows::default();
-                        // Classes on bands of rows, narrowest first.
-                        let (mut e1, mut x1) = (0, 0);
-                        for class in 1..=classes.len() as u8 {
-                            let list: Vec<_> =
-                                p1_list.iter().copied().filter(|e| e.4 == class).collect();
-                            if !list.is_empty() {
-                                let (e, x) = place(
-                                    &list, &claims_v, &present_n, e1, limits, col_bits, active, c,
-                                    &mut rows, blocks,
-                                )?;
-                                e1 = e;
-                                x1 = x1.max(x);
-                            }
-                        }
-                        let p1 = e1.max(1).max(p1_min);
-                        let (e2, x2) = if p2_list.is_empty() {
-                            (p1, p1)
-                        } else {
-                            place(
-                                &p2_list, &claims_v, &present_n, p1, limits, col_bits, active, c,
-                                &mut rows, blocks,
-                            )?
-                        };
-                        let (e2, x2) = if p2_rest.is_empty() {
-                            (e2, x2)
-                        } else {
+                let attempt = |budget: usize,
+                               blocks: &mut Vec<Vec<Block>>|
+                 -> Option<(Rows, usize, usize, usize)> {
+                    let limits = (budget, s.rows());
+                    let mut rows = Rows::default();
+                    // Classes on bands of rows, narrowest first.
+                    let (mut e1, mut x1) = (0, 0);
+                    for class in 1..=classes.len() as u8 {
+                        let list: Vec<_> =
+                            p1_list.iter().copied().filter(|e| e.4 == class).collect();
+                        if !list.is_empty() {
                             let (e, x) = place(
-                                &p2_rest, &claims_v, &present_n, e2, limits, col_bits, active, c,
+                                &list, &claims_v, &present_n, e1, limits, col_bits, active, c,
                                 &mut rows, blocks,
                             )?;
-                            (e, x2.max(x))
-                        };
-                        (x1.max(x2) <= s.rows()).then_some((rows, p1, e2))
+                            e1 = e;
+                            x1 = x1.max(x);
+                        }
+                    }
+                    let p1 = e1.max(1).max(p1_min);
+                    // The link phase, from the first phase's end.
+                    let (el, xl) = if link_list.is_empty() {
+                        (p1, p1)
+                    } else {
+                        place(
+                            &link_list, &claims_v, &present_n, p1, limits, col_bits, active, c,
+                            &mut rows, blocks,
+                        )?
                     };
+                    let el = el.max(p1 + pl_min);
+                    let (e2, x2) = if p2_list.is_empty() {
+                        (el, el)
+                    } else {
+                        place(
+                            &p2_list, &claims_v, &present_n, el, limits, col_bits, active, c,
+                            &mut rows, blocks,
+                        )?
+                    };
+                    let (e2, x2) = if p2_rest.is_empty() {
+                        (e2, x2)
+                    } else {
+                        let (e, x) = place(
+                            &p2_rest, &claims_v, &present_n, e2, limits, col_bits, active, c,
+                            &mut rows, blocks,
+                        )?;
+                        (e, x2.max(x))
+                    };
+                    (x1.max(xl).max(x2) <= s.rows()).then_some((rows, p1, el, e2))
+                };
                 let max_budget = s.rows() - frows;
                 if attempt(max_budget, &mut blocks).is_some() {
                     let cap = (active >> c) << c;
                     let need: usize = sizes
                         .iter()
+                        .chain(&link_sizes)
                         .chain(&p2_sizes)
                         .map(|&(a, _, _, _)| present_n[a])
                         .sum();
@@ -1873,7 +1982,7 @@ impl<F: Scalar> UniformCircuit<F> {
                             lo = mid + 1;
                         }
                     }
-                    let (rows, p1, e2) =
+                    let (rows, p1, el, e2) =
                         attempt(hi, &mut blocks).expect("the bisection's budget fits");
                     let shift = (s.rows() - frows) * s.cols();
                     for &(a, k, _, _) in &fixed_sizes {
@@ -1881,7 +1990,8 @@ impl<F: Scalar> UniformCircuit<F> {
                     }
                     fixed_rows = frows;
                     p1_rows = p1;
-                    p2_rows = e2 - p1;
+                    pl_rows = el - p1;
+                    p2_rows = e2 - el;
                     let mut b = rows.bounds;
                     b.resize(s.rows(), 1);
                     for x in b.iter_mut() {
@@ -1902,6 +2012,7 @@ impl<F: Scalar> UniformCircuit<F> {
                 sx: shape.sx,
                 row_bits: shape.row_bits,
                 p1: p1_rows,
+                pl: pl_rows,
                 fixed: fixed_rows,
             };
             assert_eq!(got, t, "{label}: built at the target layout");
@@ -2042,7 +2153,7 @@ impl<F: Scalar> UniformCircuit<F> {
         // their io indices.
         let late_slots: HashSet<usize> = late_io.iter().map(|x| x.0).collect();
         for &(a, off) in &io_arrays {
-            if late_slots.contains(&off) {
+            if late_slots.contains(&off) || link_slots.contains(&off) {
                 continue;
             }
             for i in 0..arrays[a].r_count {
@@ -2102,7 +2213,13 @@ impl<F: Scalar> UniformCircuit<F> {
                 .collect(),
             index_arrays,
             p1_rows,
+            pl_rows,
             p2_rows,
+            link_tables: link.tables.clone(),
+            link_fill: link.fill,
+            link_io: link.io.clone(),
+            link_io_values: link.io_values,
+            link_binding: link.binding.clone(),
             rfield,
             moved,
             split_of,
@@ -2335,7 +2452,58 @@ impl<F: Scalar> UniformCircuit<F> {
             sx: self.shape.sx,
             row_bits: self.shape.row_bits,
             p1: self.p1_rows,
+            pl: self.pl_rows,
             fixed: self.fixed_rows,
+        }
+    }
+
+    /// The link phase's rows.
+    pub fn link_phase_rows(&self) -> usize {
+        self.pl_rows
+    }
+
+    /// Counts the link tables' multiplicities from the witness (after the
+    /// link phase's fill), as the build counts the others.
+    fn recount_link_tables(&self, w: &mut [F]) {
+        let key = |vals: &[F]| -> Vec<u8> {
+            vals.iter()
+                .flat_map(|v| v.to_repr().as_ref().to_vec())
+                .collect()
+        };
+        for &(va, tid, wa) in self
+            .tables
+            .iter()
+            .filter(|t| self.link_tables.contains(&t.1))
+        {
+            let mut index: HashMap<Vec<u8>, usize> = HashMap::new();
+            for i in (0..1usize << self.m(va)).filter(|i| self.present(va, *i)) {
+                let entry: Vec<F> = (0..self.arrays[va].cells())
+                    .map(|k| w[self.blocks[va][k].index(i)])
+                    .collect();
+                index.insert(key(&entry), i);
+            }
+            let mut mult = vec![0u64; 1usize << self.m(va)];
+            for &(a, _, _) in &self.lookup_arrays {
+                for i in (0..1usize << self.m(a)).filter(|i| self.present(a, *i)) {
+                    for (t, tuple) in &self.arrays[a].lookups {
+                        if *t != tid {
+                            continue;
+                        }
+                        let vals: Vec<F> =
+                            tuple.iter().map(|lin| self.eval_w(w, a, lin, i)).collect();
+                        let slot = *index.get(&key(&vals)).unwrap_or_else(|| {
+                            panic!(
+                                "{}: a link-phase tuple is in table {tid}",
+                                self.arrays[a].name
+                            )
+                        });
+                        mult[slot] += 1;
+                    }
+                }
+            }
+            for i in (0..1usize << self.m(va)).filter(|i| self.present(va, *i)) {
+                w[self.blocks[wa][0].index(i)] = F::from(mult[i]);
+            }
         }
     }
 
@@ -4880,6 +5048,44 @@ impl<F: Scalar> Circuit<F> for UniformCircuit<F> {
             .iter()
             .map(|&(_, a, k, i)| w[self.cell_index(a, k, i)])
             .collect()
+    }
+    fn link_rows(&self, _shape: &Shape) -> usize {
+        self.pl_rows
+    }
+    fn link_io(&self, rho: &[u8; 32], r: &[u8; 32]) -> Vec<(usize, F)> {
+        match &self.link_io_values {
+            None => Vec::new(),
+            Some(values) => {
+                let v = values(rho, r);
+                assert_eq!(v.len(), self.link_io.len(), "a value per link io array");
+                self.link_io.iter().map(|&(_, slot)| slot).zip(v).collect()
+            }
+        }
+    }
+    fn fill_link(&self, rho: &[u8; 32], w: &mut [F]) {
+        if let Some(fill) = &self.link_fill {
+            for (a, k, i, v) in fill(rho) {
+                w[self.cell_index(a, k, i)] = v;
+            }
+        }
+        self.recount_link_tables(w);
+    }
+    fn binding_r(&self, w: &[F]) -> Option<[u8; 32]> {
+        use num_bigint::BigUint;
+        let (cells, bits) = self.link_binding.as_ref()?;
+        let mut r = BigUint::default();
+        for (j, &(a, k, i)) in cells.iter().enumerate() {
+            let v = w[self.cell_index(a, k, i)];
+            r += BigUint::from_bytes_le(v.to_repr().as_ref()) << (*bits as usize * j);
+        }
+        let bytes = r.to_bytes_le();
+        // A value past 32 bytes is no word: it never equals the link's R.
+        let mut word = [0xff_u8; 32];
+        if bytes.len() <= 32 {
+            word = [0_u8; 32];
+            word[..bytes.len()].copy_from_slice(&bytes);
+        }
+        Some(word)
     }
 }
 

@@ -1734,9 +1734,10 @@ blocks could use the empty tails.
    - done: batched native q (part 4), with pointwise parity and degree-bound tests on both Pasta fields;
    - done: the uniform Send circuit and a predecessor of either kind ("Uniform Send" below): the fixed point holds
      over all four orders with one circuit per operation; model 2.21 s per Receive pair, 1.55 s per Send pair;
-   - next: the binding chain's rho and mu inside the proven circuits (a third commit phase, see "Uniform Send");
-     the base case's authorization (owner decision); a Pixel run of the fixed point with both operations; the
-     witness at 32 rows (about 65k fewer positions in P-recv; it would also bring S-recv back toward 2^18);
+   - done: the pair binding inside the proven circuits ("The pair binding inside the circuits" below): a link
+     phase between the first and second phases holds both chains; rho and R are the link's io; model unchanged;
+   - next: the base case's authorization (owner decision); a Pixel run of the fixed point with both operations;
+     the witness at 32 rows (about 65k fewer positions in P-recv; it would also bring S-recv back toward 2^18);
    - then: general bit maps, 14-round partial blocks, one range table, constants in the first half of the rows.
 
 
@@ -1914,16 +1915,8 @@ Building a Send circuit twice gives identical matrices (`ZKS_DETERMINISM=1`, eve
   into another width class and changed the placement and the matrices. The width now comes from the number of
   lookups into the table. P-recv's first phase grew by one row (39 to 40).
 
-**Still open:**
+**Still open** (the binding: next section):
 
-- **The binding chain's rho and mu.** The link's R is still computed from stand-in values. Gate 1f synthesized the R
-  chains beside a toy circuit; it did not put them inside the proven circuits (VERIFIER.md, "Not covered"). Inside
-  the uniform circuits rho must follow both proofs' first-phase commitments, and the chain's values follow rho. In
-  P the chain is non-native and range-checked by lookups, whose multiplicities must be committed before alpha and
-  beta. So the prover needs a third commit phase: the values (the shared values and the mask mu among them), the
-  link (d, then rho), the chain's values and every multiplicity, alpha and beta, then the helpers. R becomes late io
-  that the verifier checks against the absorbed R. That changes the prover, the native verifier, the in-circuit
-  transcript replay and the placement (a phase class between the two).
 - **The base case's authorization**, an owner decision. The spec starts every wallet with a Bootstrap step whose
   package the ledger verifies at activation, so a Bootstrap circuit kind with no predecessor is the natural first
   link; Send and Receive would then have no genesis flag. The alternative keeps the flag and has every Send and
@@ -1931,3 +1924,85 @@ Building a Send circuit twice gives identical matrices (`ZKS_DETERMINISM=1`, eve
 - **A Pixel run** of the fixed point with both operations.
 - **The witness at 32 rows** (an owner decision on rate-8 transcripts), which would also cut the row-fold work of
   every verified proof and could bring S-recv back toward 2^18.
+
+## The pair binding inside the circuits (2026-11-11)
+
+Owner: "Yes, keep building". Code: `spartan::link_word`, `link_value` and `link_r`; `r1cs::Circuit`'s
+`link_rows`, `link_io`, `fill_link` and `binding_r`; `uniform::LinkPhase` (the builder's link phase);
+`nonnative::binding_chain_linked` (P's chain); `full::native_binding` (S's), `full::p_binding` and
+`full::link_ties`; `verifier::trace_with`; the replay order in `points::PointsBuilder::verify_keyed`. Test:
+`full::tests::pair_binding_chains_link_and_refuse`. Logs: `../../output/kagemusha-100x-20261108/spike/runs/claude-binding-test-1.log`,
+`claude-binding-tests-all-2.log` (all tests), `claude-binding-fp-2.log` (the fixed point; `claude-binding-fp-1.log`
+is the same run before the swapped-partner check and the link-phase row count were added to the runner).
+
+**What was missing.** Each circuit computed its binding chain from constant stand-ins for rho and mu, and the
+link's R was a native value beside the proofs. Nothing tied the R both transcripts absorbed to either circuit's
+shared values, so a P proof and an S proof over different shared values could still be paired.
+
+**The order a proof commits in** (prover, native verifier and in-circuit replay alike):
+
+1. the header (shape, io digest), then the first phase's rows: every value that does not follow rho, the shared
+   values and the mask mu among them;
+2. the link's word: P squeezes d and absorbs rho, S absorbs d and squeezes rho (iroha 871be7779b moved the word
+   here from after every row);
+3. the link phase's rows: the chain's values, which follow rho, and the multiplicities of the link range table,
+   the one table only link-phase cells read;
+4. the second-phase challenges (alpha, beta), the late io (the folded claim), then the second phase's rows (the
+   LogUp helpers) and the fixed rows;
+5. R, after every row.
+
+**The chains.**
+
+- **S** (native): `acc_(r+1) = acc_r rho + v_r` from `acc_0 = mu` over the circuit's shared values, ending at
+  `acc_n = R`; one link-phase cell per shared value.
+- **P** (Fq in Fp): stage A's chain split by phase. The shared values (128-bit, chunked, on the first phase's range
+  table) and mu's three limbs are first-phase cells. The chain's values (`acc_0 .. acc_n`, then rho; limbs of 88,
+  88 and 79 bits with range-checked chunks) and its non-native checks are link-phase cells, chunked on the link
+  range table. `acc_0` is tied to the first phase's mu.
+- **Word gadgets** (P): the transcript carries rho and R as two 128-bit limbs (lo, hi). A gadget splits the middle
+  limb, `l1 = t + 2^40 u` with t and u range-checked, so that `lo = l0 + 2^88 t` and `hi = u + 2^48 l2`: as
+  integers, `lo + 2^128 hi` is the three-limb value.
+- **rho and R are the link's io**, at io indices 124-127, past the header's io and the folded claim (late io from
+  64): prover and verifier set them from the transcript (rho) and the link (R), so proofs do not carry them. S
+  reads each as one value `lo + 2^128 hi`, P reads the four limbs. A chain that does not end at the link's R fails
+  its own circuit's relation, which replaces the separate binding check.
+- **mu** is one value for both circuits of a pair, a first-phase cell in each. R is public, so mu hides the shared
+  values' combination; it is committed before rho, so a prover cannot solve for it afterwards. If P's and S's
+  vectors (mu, v) differ, their degree-n polynomials in rho agree with probability at most `n / |Fq|`. A prover
+  samples mu per pair; the experiment derives it from the pair's shared values (`full::binding_mu`), a stand-in
+  like `SpikeRng`.
+
+**The verifier circuits** tie each verified circuit proof's link io (its io fold's leaves at 124-127) to the pair's
+shared values: rho's limbs (the S proof's first challenge) and R's (the P proof's last two shared values). Both
+transcript replays absorb those limbs, so a verified proof's circuit read the link's rho and R (`full::link_ties`:
+four rows per verified P proof in a P circuit, two per verified S proof in an S circuit).
+
+**The runner** keeps its order: P's first pass gives d, S with d gives rho and R (the second proof now takes R from
+its own chain, `Circuit::binding_r`), and P proves again with rho and R. The first pass runs to the end with
+placeholder rho and R and is discarded; a production prover would suspend after the first phase.
+
+**Results** (`ZKS_SCHEDULE=lean ZKS_HOPS=8 ZKS_GENESIS_HOP=7 zk-spartan fixed-point`). All 42 experiment tests pass.
+
+- Every pair at every hop verifies with both chains inside its circuits. The matrices are equal from hop 4 to 5 on,
+  as before; at hop 8 all four orders use the same circuits; the accumulators hold at hops 6 (Send), 7 and 8.
+- **Refused:** another R on either side, another rho, S with another mu, S over another shared value (the test);
+  partners swapped at hop 8, P-recv linked with S-send: S verifies, P refuses (the runner).
+
+| At the fixed point (hop 8) | P-recv | S-recv | P-send | S-send |
+|---|---:|---:|---:|---:|
+| Constraint rows | 477,566 (+2,374) | 272,204 (+265) | 262,822 (+2,230) | 138,059 (+131) |
+| Witness rows used, of 64: first, link, second phase, fixed | 35 + 5 + 11 + 3 | 46 + 1 + 3 + 2 | 35 + 5 + 6 + 3 | 46 + 1 + 2 + 2 |
+| Cells | 603,857 (+6,191) | 295,666 (-7) | 341,951 (+6,191) | 153,358 (-7) |
+| Pixel model, kernels of 11-10 | 1.35 s | 0.86 s | 0.96 s | 0.59 s |
+
+- **The binding costs nothing visible at the model's resolution:** Receive 2.21 s and Send 1.55 s per pair, as
+  before, with 9.9 KB of proofs. P's chain had been in its circuits all along (on stand-ins); the additions are the
+  link range table (2,048 entries and their multiplicities), the word gadgets and the ties. P's five link-phase rows
+  came out of its first phase (40 → 35); S gains one row.
+- The link range table undoes part of the plan's "one range table" saving (about 6k positions in P); folding the
+  first phase's range lookups into it would need their multiplicities in the link phase, which is allowed (the
+  link phase precedes alpha and beta) and is a cleanup for later.
+
+**Still open:** the base case's authorization (an owner decision), a Pixel run, the witness at 32 rows (see
+"Uniform Send"); mu from a prover's randomness and a prover that suspends after the first phase belong to the
+production integration.

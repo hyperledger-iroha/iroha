@@ -3021,8 +3021,9 @@ fn describe_hop_circuit<S: fs::Scalar>(
     let shape = c.shape;
     let ((cells, rows), (terms, work)) = (c.sizes(), c.template_size());
     let regions = c.regions();
+    let pl = c.link_phase_rows();
     println!(
-        "  {name}: 2^{} constraints ({rows} rows), witness {} rows of {} ({} + {} + {} used), {cells} cells; template terms {terms}, matrix-MLE products {work}; fold: {} coordinates, q of degree {} (computed in {:.0} ms)",
+        "  {name}: 2^{} constraints ({rows} rows), witness {} rows of {} ({} + {pl} + {} + {} used: first phase, link phase, second phase, fixed), {cells} cells; template terms {terms}, matrix-MLE products {work}; fold: {} coordinates, q of degree {} (computed in {:.0} ms)",
         shape.sx,
         shape.rows(),
         shape.cols(),
@@ -3039,7 +3040,7 @@ fn describe_hop_circuit<S: fs::Scalar>(
             &shape,
             &c.width_classes(&wit.w),
             rows,
-            regions.0 + regions.1 + regions.2
+            regions.0 + pl + regions.1 + regions.2
         )
     );
 }
@@ -3192,9 +3193,15 @@ fn row_breaks<S: fs::Scalar>(
         .map(|_| rng.scalar())
         .collect();
     let mut w = wit.w.clone();
+    // The link phase at a rho below 2^128, ending at the circuit's own R.
+    let mut rho = [0u8; 32];
+    rho[..16].copy_from_slice(&0x1234_5678_9abc_def1_0fed_cba9_8765_4321_u128.to_le_bytes());
+    r1cs::Circuit::fill_link(c, &rho, &mut w);
+    let r = r1cs::Circuit::binding_r(c, &w).unwrap_or([0; 32]);
+    let link_io = r1cs::Circuit::link_io(c, &rho, &r);
     let rel = r1cs::Circuit::instantiate(c, &c.shape, &ch, Some(&mut w));
     let io = spartan::io_with_late(
-        &inst.io,
+        &r1cs::io_with_link(&inst.io, &link_io),
         &r1cs::Circuit::late_slots(c),
         &r1cs::Circuit::late_values(c, &w),
     );
@@ -3222,6 +3229,8 @@ struct LinkedPair {
     rho: [u8; 32],
     r: [u8; 32],
     ok: bool,
+    /// Each side's verdict: S, then P.
+    sides: (bool, bool),
     secs: f64,
 }
 
@@ -3298,14 +3307,18 @@ fn prove_linked_pair(
         &Link::First { rho, r },
         cp,
     );
-    let ok = vs.as_ref().is_ok_and(|x| *x == rho) && vp.as_ref().is_ok_and(|x| *x == d);
+    let sides = (
+        vs.as_ref().is_ok_and(|x| *x == rho),
+        vp.as_ref().is_ok_and(|x| *x == d),
+    );
     LinkedPair {
         pp,
         ps,
         d,
         rho,
         r,
-        ok,
+        ok: sides.0 && sides.1,
+        sides,
         secs,
     }
 }
@@ -3466,6 +3479,18 @@ fn run_fixed_point() {
         report("Receive", &recv, &gens);
         report("Send", &send, &gens);
         if hop == hops {
+            // The pair binding refuses swapped partners: P-recv linked with
+            // S-send proves S-send's chain ending at its R, which P-recv's
+            // chain over the Receive pair's shared values does not reach.
+            let swapped = prove_linked_pair("swapped", hop, &cp, &ip, &wp, &cu, &iu, &wu);
+            println!(
+                "  partners swapped (P-recv linked with S-send): S verifies {}, P verifies {}",
+                swapped.sides.0, swapped.sides.1
+            );
+            assert!(
+                swapped.sides == (true, false),
+                "P refuses a partner whose chain ends at another R"
+            );
             // The orders after a Send: the previous hop's Send pair as the
             // predecessor (and, for Receive, as the payer's too). The
             // circuits must be the ones just built.

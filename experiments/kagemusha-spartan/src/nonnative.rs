@@ -1870,6 +1870,473 @@ pub fn binding_chain(
     }
 }
 
+/// The link range table's id: the range table again, for the link phase's
+/// lookups. Their values follow rho, so their multiplicities are link-phase
+/// cells too, committed after the first phase's (whose range table's
+/// multiplicities the first phase commits).
+pub const LINK_RANGE_TABLE: u32 = 4;
+
+/// An Fq value (below q) as its 32-byte little-endian word.
+pub fn fq_bytes(x: &BigUint) -> [u8; 32] {
+    let b = x.to_bytes_le();
+    assert!(b.len() <= 32, "a value below 2^256");
+    let mut out = [0u8; 32];
+    out[..b.len()].copy_from_slice(&b);
+    out
+}
+
+/// Array offsets from `first` of the linked chain.
+pub const BL_SHARED: usize = 0;
+pub const BL_MU: usize = 1;
+pub const BL_VALUE: usize = 2;
+pub const BL_CHECK: usize = 3;
+pub const BL_WORD: usize = 4;
+pub const BL_RANGE: usize = 5;
+pub const BL_LINK_RANGE: usize = 6;
+/// The link's io arrays from `first + BL_IO`: rho's limbs (lo, hi), R's.
+pub const BL_IO: usize = 7;
+
+/// Widths of a word gadget's split of the middle limb: l1 = t + 2^40 u, so
+/// that lo = l0 + 2^88 t and hi = u + 2^48 l2 (lo + 2^128 hi = the value).
+const WORD_T: usize = 128 - L;
+const WORD_U: usize = L - WORD_T;
+
+/// A link phase's cells: (array, cell, instance, value).
+pub type LinkCells = Vec<(usize, usize, usize, Fp)>;
+
+/// The binding chain of `binding_chain` split by phase (the pair link's rho
+/// follows the first phase's commitments): first-phase arrays hold the shared
+/// values and the mask mu (three limbs); link-phase arrays hold the chain's
+/// values (acc_0 = mu .. acc_n, then rho, as limbs and chunks), its checks,
+/// and two word gadgets that read rho and R = acc_n as the link's io limbs
+/// (lo, hi). The link phase's lookups use `LINK_RANGE_TABLE`.
+pub struct LinkedBinding {
+    pub arrays: Vec<Array<Fp>>,
+    pub tables: Vec<(usize, u32)>,
+    /// The link phase's arrays (absolute indices).
+    pub link_arrays: Vec<usize>,
+    /// The link's io arrays (absolute) and their io slots.
+    pub io: Vec<(usize, usize)>,
+    /// The link phase's cells from rho (a 32-byte word below 2^255).
+    pub fill: Box<dyn Fn(&[u8; 32]) -> LinkCells + Send + Sync>,
+    /// R's limb cells: acc_n's three limbs (88 bits each, low first).
+    pub binding: Vec<(usize, usize, usize)>,
+}
+
+/// The linked chain's link-phase columns for one rho.
+struct LinkedColumns {
+    value: Vec<Vec<Fp>>,
+    check: Vec<Vec<Fp>>,
+    word: Vec<Vec<Fp>>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn linked_columns(
+    shape: &CheckShape,
+    q: &BigUint,
+    mu: &BigUint,
+    values: &[u128],
+    rho: &BigUint,
+    nn: usize,
+    chunks: &[Vec<usize>; 3],
+    word_chunks: &[Vec<usize>; 2],
+) -> LinkedColumns {
+    let n = values.len();
+    let zero = Fp::from(0u64);
+    assert!(rho.bits() <= 255, "rho below 2^255");
+    let mut accs = vec![mu.clone()];
+    for v in values {
+        let next = (accs.last().unwrap() * rho + BigUint::from(*v)) % q;
+        accs.push(next);
+    }
+    let vcount = 3 + chunks.iter().map(|c| c.len()).sum::<usize>();
+    let mut value = vec![vec![zero; nn]; vcount];
+    let fill = |value: &mut Vec<Vec<Fp>>, r: usize, x: &BigUint| {
+        let l = limbs(x);
+        let mut k = 3;
+        for i in 0..3 {
+            value[i][r] = fp_u(&l[i]);
+            for c in chunk_values(&l[i], &chunks[i]) {
+                value[k][r] = c;
+                k += 1;
+            }
+        }
+    };
+    for (r, x) in accs.iter().enumerate() {
+        fill(&mut value, r, x);
+    }
+    fill(&mut value, n + 1, rho);
+    let lim = |x: &BigUint| -> [BigInt; 3] { limbs(x).map(BigInt::from) };
+    let mut check = vec![vec![zero; nn]; shape.cells];
+    for (r, v) in values.iter().enumerate() {
+        let nxt = lim(&accs[r + 1]);
+        let linv = [BigInt::from(*v) - &nxt[0], -nxt[1].clone(), -nxt[2].clone()];
+        for (k, cell) in shape
+            .witness(&[lim(&accs[r])], &[lim(rho)], &[1], &linv, 0, 0)
+            .into_iter()
+            .enumerate()
+        {
+            check[k][r] = cell;
+        }
+    }
+    let wcount = 2 + word_chunks.iter().map(|c| c.len()).sum::<usize>();
+    let mut word = vec![vec![zero; 2]; wcount];
+    for (i, x) in [rho, &accs[n]].into_iter().enumerate() {
+        let l1 = &limbs(x)[1];
+        let (t, u) = (l1 % pow2(WORD_T), l1 >> WORD_T);
+        word[0][i] = fp_u(&t);
+        word[1][i] = fp_u(&u);
+        let mut k = 2;
+        for (y, wc) in [(&t, &word_chunks[0]), (&u, &word_chunks[1])] {
+            for c in chunk_values(y, wc) {
+                word[k][i] = c;
+                k += 1;
+            }
+        }
+    }
+    LinkedColumns { value, check, word }
+}
+
+/// The linked binding chain from array index `first` (family `fam`; the
+/// range tables in global family `gfam`; the link's io arrays at io slots
+/// `rho_io`, `rho_io + 1` (rho's lo, hi) and `r_io`, `r_io + 1` (R's)).
+pub fn binding_chain_linked(
+    first: usize,
+    fam: usize,
+    gfam: usize,
+    mu: &BigUint,
+    values: &[u128],
+    (rho_io, r_io): (usize, usize),
+) -> LinkedBinding {
+    let q = fq_modulus();
+    assert!(mu < &q, "mu below q");
+    let n = values.len();
+    assert!(n > 0, "a chain over shared values");
+    let rho_bits = (n + 2).next_power_of_two().trailing_zeros() as usize;
+    let nn = 1usize << rho_bits;
+    let value_a = first + BL_VALUE;
+    let (mu_a, word_a, io_a) = (first + BL_MU, first + BL_WORD, first + BL_IO);
+    let one = Fp::from(1u64);
+    let zero = Fp::from(0u64);
+    let chunks = FQ_LIMBS.map(chunk_widths);
+    let word_chunks = [chunk_widths(WORD_T), chunk_widths(WORD_U)];
+    let link_table = |lookups: &mut Vec<(u32, Vec<Lin<Fp>>)>| {
+        for (t, _) in lookups.iter_mut() {
+            assert_eq!(*t, RANGE_TABLE, "the chain's lookups are range lookups");
+            *t = LINK_RANGE_TABLE;
+        }
+    };
+    // Values: limb recomposition, and instance 0 is the first phase's mu.
+    let (mut vr, mut vl) = (Vec::new(), Vec::new());
+    let mut first_chunk = 3;
+    for (k, wk) in chunks.iter().enumerate() {
+        vr.push([
+            plus(&own(k, nn), &scaled(&recompose(first_chunk, wk, nn), -one)),
+            constant(vec![one; nn]),
+            Vec::new(),
+        ]);
+        for (c, w) in wk.iter().enumerate() {
+            range_lookups(&mut vl, first_chunk + c, *w, nn);
+        }
+        first_chunk += wk.len();
+    }
+    let at0: Vec<Fp> = (0..nn).map(|r| if r == 0 { one } else { zero }).collect();
+    for k in 0..3 {
+        vr.push([
+            plus(
+                &vec![Term {
+                    src: USrc::Own(k),
+                    coef: at0.clone(),
+                }],
+                &link(
+                    mu_a,
+                    k,
+                    (0..nn).map(|r| (r == 0).then_some(0)).collect(),
+                    -one,
+                ),
+            ),
+            constant(vec![one; nn]),
+            Vec::new(),
+        ]);
+    }
+    link_table(&mut vl);
+    // Checks: acc_r rho + v_r - acc_(r+1) = 0 (mod q), v_r read from the
+    // shared array.
+    let lb = |k: usize| pow2(FQ_LIMBS[k]) - 1u32;
+    let acc_bound: Bound = [lb(0), lb(1), lb(2)];
+    let lin_bound: Bound = [lb(0) + pow2(128), lb(1), lb(2)];
+    let shape = CheckShape::new(
+        &[(acc_bound.clone(), acc_bound)],
+        &lin_bound,
+        0,
+        std::slice::from_ref(&q),
+    );
+    let port = |g: &dyn Fn(usize) -> usize| Port {
+        links: vec![(
+            value_a,
+            0,
+            (0..nn).map(|r| (r < n).then(|| g(r))).collect(),
+            vec![one; nn],
+        )],
+        consts: [vec![zero; nn], vec![zero; nn], vec![zero; nn]],
+    };
+    let next = |k: usize| {
+        link(
+            value_a,
+            k,
+            (0..nn).map(|r| (r < n).then_some(r + 1)).collect(),
+            -one,
+        )
+    };
+    let shared = link(
+        first + BL_SHARED,
+        0,
+        (0..nn).map(|r| (r < n).then_some(r)).collect(),
+        one,
+    );
+    let lin = [plus(&shared, &next(0)), next(1), next(2)];
+    let (cr, mut cl) = shape.template_lin(
+        &[port(&|r| r)],
+        &[port(&|_| n + 1)],
+        &[vec![one; nn]],
+        &lin,
+        &vec![zero; nn],
+        &vec![0; nn],
+        nn,
+    );
+    link_table(&mut cl);
+    // Word gadgets: instance 0 reads rho (value instance n + 1) as the
+    // link's io limbs (lo, hi), instance 1 R = acc_n (value instance n).
+    let src = [Some(n + 1), Some(n)];
+    let limb = |k: usize| link(value_a, k, src.to_vec(), one);
+    let io_of = |j: usize| {
+        plus(
+            &link(io_a + j, 0, vec![Some(0), None], one),
+            &link(io_a + 2 + j, 0, vec![None, Some(0)], one),
+        )
+    };
+    let t_first = 2;
+    let u_first = 2 + word_chunks[0].len();
+    let mut wr = vec![
+        [
+            plus(
+                &own(0, 2),
+                &scaled(&recompose(t_first, &word_chunks[0], 2), -one),
+            ),
+            constant(vec![one; 2]),
+            Vec::new(),
+        ],
+        [
+            plus(
+                &own(1, 2),
+                &scaled(&recompose(u_first, &word_chunks[1], 2), -one),
+            ),
+            constant(vec![one; 2]),
+            Vec::new(),
+        ],
+    ];
+    // l1 = t + 2^40 u; lo = l0 + 2^88 t; hi = u + 2^48 l2.
+    wr.push([
+        plus(
+            &limb(1),
+            &plus(
+                &scaled(&own(0, 2), -one),
+                &scaled(&own(1, 2), -fp_u(&pow2(WORD_T))),
+            ),
+        ),
+        constant(vec![one; 2]),
+        Vec::new(),
+    ]);
+    wr.push([
+        plus(
+            &io_of(0),
+            &plus(
+                &scaled(&limb(0), -one),
+                &scaled(&own(0, 2), -fp_u(&pow2(L))),
+            ),
+        ),
+        constant(vec![one; 2]),
+        Vec::new(),
+    ]);
+    wr.push([
+        plus(
+            &io_of(1),
+            &plus(
+                &scaled(&own(1, 2), -one),
+                &scaled(&limb(2), -fp_u(&pow2(WORD_U))),
+            ),
+        ),
+        constant(vec![one; 2]),
+        Vec::new(),
+    ]);
+    let mut wl = Vec::new();
+    for (c, w) in word_chunks.iter().flatten().enumerate() {
+        range_lookups(&mut wl, 2 + c, *w, 2);
+    }
+    link_table(&mut wl);
+    // Shared values: v and its 128-bit chunks (first phase).
+    let vchunks = chunk_widths(128);
+    let mut shv = vec![vec![zero; nn]; 1 + vchunks.len()];
+    for (r, v) in values.iter().enumerate() {
+        let x = BigUint::from(*v);
+        shv[0][r] = fp_u(&x);
+        for (c, val) in chunk_values(&x, &vchunks).into_iter().enumerate() {
+            shv[1 + c][r] = val;
+        }
+    }
+    let srows = vec![[
+        plus(&own(0, nn), &scaled(&recompose(1, &vchunks, nn), -one)),
+        constant(vec![one; nn]),
+        Vec::new(),
+    ]];
+    let mut sl = Vec::new();
+    for (c, w) in vchunks.iter().enumerate() {
+        range_lookups(&mut sl, 1 + c, *w, nn);
+    }
+    let mut sw: Vec<u16> = vec![128];
+    sw.extend(vchunks.iter().map(|w| *w as u16));
+    let mut vw: Vec<u16> = FQ_LIMBS.iter().map(|w| *w as u16).collect();
+    vw.extend(chunks.iter().flatten().map(|w| *w as u16));
+    let mut ww: Vec<u16> = vec![WORD_T as u16, WORD_U as u16];
+    ww.extend(word_chunks.iter().flatten().map(|w| *w as u16));
+    // The build's columns (rho = 0); the prover fills the link phase from
+    // the link's rho.
+    let cols = linked_columns(
+        &shape,
+        &q,
+        mu,
+        values,
+        &BigUint::zero(),
+        nn,
+        &chunks,
+        &word_chunks,
+    );
+    let range = |name: &'static str| Array {
+        name,
+        family: gfam,
+        rho: CHUNK,
+        r_count: 1 << CHUNK,
+        fixed: true,
+        lookups: Vec::new(),
+        widths: vec![CHUNK as u16],
+        rows: Vec::new(),
+        values: vec![(0..1u64 << CHUNK).map(Fp::from).collect()],
+    };
+    let io_cell = |name: &'static str| Array {
+        name,
+        family: gfam,
+        rho: 0,
+        r_count: 1,
+        fixed: false,
+        lookups: Vec::new(),
+        widths: vec![128],
+        rows: Vec::new(),
+        values: vec![vec![zero]],
+    };
+    let mut arrays = vec![
+        Array {
+            name: "binding shared",
+            family: fam,
+            rho: rho_bits,
+            r_count: n,
+            fixed: false,
+            lookups: sl,
+            widths: sw,
+            rows: srows,
+            values: shv,
+        },
+        Array {
+            name: "binding mu",
+            family: fam,
+            rho: 0,
+            r_count: 1,
+            fixed: false,
+            lookups: Vec::new(),
+            widths: FQ_LIMBS.iter().map(|w| *w as u16).collect(),
+            rows: Vec::new(),
+            values: limbs(mu).iter().map(|l| vec![fp_u(l)]).collect(),
+        },
+        Array {
+            name: "binding value",
+            family: fam,
+            rho: rho_bits,
+            r_count: n + 2,
+            fixed: false,
+            lookups: vl,
+            widths: vw,
+            rows: vr,
+            values: cols.value,
+        },
+        Array {
+            name: "binding check",
+            family: fam,
+            rho: rho_bits,
+            r_count: n,
+            fixed: false,
+            lookups: cl,
+            widths: shape.widths(),
+            rows: cr,
+            values: cols.check,
+        },
+        Array {
+            name: "binding word",
+            family: fam,
+            rho: 1,
+            r_count: 2,
+            fixed: false,
+            lookups: wl,
+            widths: ww,
+            rows: wr,
+            values: cols.word,
+        },
+        range("range table"),
+        range("link range table"),
+    ];
+    arrays.extend(
+        [
+            "binding rho lo",
+            "binding rho hi",
+            "binding R lo",
+            "binding R hi",
+        ]
+        .map(io_cell),
+    );
+    let check_a = first + BL_CHECK;
+    let (mu_v, vals) = (mu.clone(), values.to_vec());
+    let fill = move |rho: &[u8; 32]| -> LinkCells {
+        let rho = BigUint::from_bytes_le(rho);
+        let cols = linked_columns(&shape, &q, &mu_v, &vals, &rho, nn, &chunks, &word_chunks);
+        let n = vals.len();
+        let mut out = Vec::new();
+        for (k, col) in cols.value.iter().enumerate() {
+            out.extend((0..n + 2).map(|r| (value_a, k, r, col[r])));
+        }
+        for (k, col) in cols.check.iter().enumerate() {
+            out.extend((0..n).map(|r| (check_a, k, r, col[r])));
+        }
+        for (k, col) in cols.word.iter().enumerate() {
+            out.extend((0..2).map(|i| (word_a, k, i, col[i])));
+        }
+        out
+    };
+    LinkedBinding {
+        arrays,
+        tables: vec![
+            (first + BL_RANGE, RANGE_TABLE),
+            (first + BL_LINK_RANGE, LINK_RANGE_TABLE),
+        ],
+        link_arrays: vec![value_a, check_a, word_a],
+        io: vec![
+            (io_a, rho_io),
+            (io_a + 1, rho_io + 1),
+            (io_a + 2, r_io),
+            (io_a + 3, r_io + 1),
+        ],
+        fill: Box::new(fill),
+        binding: (0..3).map(|k| (value_a, k, n)).collect(),
+    }
+}
+
 /// Test and measurement inputs: rho, mu and `count` shared values below 2^128.
 pub fn sample_binding(count: usize) -> (BigUint, BigUint, Vec<u128>) {
     let q = fq_modulus();

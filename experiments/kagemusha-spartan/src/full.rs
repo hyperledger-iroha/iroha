@@ -54,6 +54,8 @@ pub struct Wiring<F> {
     /// Arrays in z's public half and the late io (see `Copies`).
     pub io_arrays: Vec<(usize, usize)>,
     pub late_io: Vec<(usize, usize, usize, usize)>,
+    /// The link phase (see `Copies`).
+    pub link: crate::uniform::LinkPhase<F>,
 }
 
 impl<F: Scalar> Default for Wiring<F> {
@@ -68,6 +70,7 @@ impl<F: Scalar> Default for Wiring<F> {
             challenge: ChallengeRows::default(),
             io_arrays: Vec::new(),
             late_io: Vec::new(),
+            link: crate::uniform::LinkPhase::default(),
         }
     }
 }
@@ -134,6 +137,7 @@ impl<F: Scalar> Wiring<F> {
                 challenge: self.challenge,
                 io_arrays: self.io_arrays,
                 late_io: self.late_io,
+                link: self.link,
             },
         )
     }
@@ -1295,6 +1299,159 @@ mod tests {
         assert!(!tamper(bytes, 40, 3), "changed canonicity chunk refused");
     }
 
+    /// The pair's binding chains in the link phase, P's non-native (with the
+    /// link range table and the word gadgets) and S's native, over the same
+    /// shared values and mu, linked as the runner links them (P's first
+    /// phase gives d, S squeezes rho and ends at R, P proves again with rho
+    /// and R): both verify and R is the native rlc. Refused: a pair whose
+    /// chains differ (S's mu or one shared value changed), a changed R on
+    /// either side, a changed rho.
+    #[test]
+    fn pair_binding_chains_link_and_refuse() {
+        use crate::spartan::{Link, prove_linked_circuit, verify_linked_circuit};
+        use crate::verifier::Fq;
+        use iroha_pasta::Ep as Pallas;
+        let (_, _, values) = nonnative::sample_binding(20);
+        let mu = binding_mu(&values);
+        let fq = |x: &BigUint| Option::<Fq>::from(Fq::from_repr(nonnative::fq_bytes(x))).unwrap();
+        let p_of = |values: &[u128], mu: &BigUint| {
+            let mut w = Wiring::<Fp>::default();
+            let gfam = w.family(0, 1);
+            p_binding(&mut w, gfam, mu, values);
+            let (arrays, pi, counts, tables, copies) = w.finish();
+            UniformCircuit::build_with_copies(
+                "binding-p",
+                arrays,
+                pi,
+                counts,
+                tables,
+                copies,
+                12,
+                4,
+                b"binding p",
+            )
+        };
+        let s_of = |values: &[u128], mu: Fq| {
+            let mut w = Wiring::<Fq>::default();
+            let gfam = w.family(0, 1);
+            native_binding(&mut w, gfam, mu, values);
+            let (arrays, pi, counts, tables, copies) = w.finish();
+            UniformCircuit::build_with_copies(
+                "binding-s",
+                arrays,
+                pi,
+                counts,
+                tables,
+                copies,
+                10,
+                4,
+                b"binding s",
+            )
+        };
+        let (cp, ip, wp) = p_of(&values, &mu);
+        assert!(cp.link_phase_rows() > 0, "P has a link phase");
+        let gp = crate::ipa::Gens::<Vesta>::new(cp.shape.cols());
+        let rlc = |rho: &[u8; 32]| crate::verifier::rlc_value(rho, Fq::ZERO, &[]).to_repr();
+        // One linked pair: P's first pass (d), S, P again. Verdicts: S and P
+        // as linked, then S with another R, P with another R, P with
+        // another rho.
+        let pair = |cs: &UniformCircuit<Fq>, is: &Instance<Fq>, ws: &Witness<Fq>| {
+            let gs = crate::ipa::Gens::<Pallas>::new(cs.shape.cols());
+            let rng_p = SpikeRng::new(b"binding pair p");
+            let (_, d, _) = prove_linked_circuit(
+                &cp.shape,
+                &gp,
+                &ip,
+                &wp,
+                &mut rng_p.clone(),
+                &Link::First {
+                    rho: [0; 32],
+                    r: [0; 32],
+                },
+                &cp,
+            );
+            let (ps, rho, r) = prove_linked_circuit(
+                &cs.shape,
+                &gs,
+                is,
+                ws,
+                &mut SpikeRng::new(b"binding pair s"),
+                &Link::Second { d, rlc: &rlc },
+                cs,
+            );
+            let (pp, d2, _) = prove_linked_circuit(
+                &cp.shape,
+                &gp,
+                &ip,
+                &wp,
+                &mut rng_p.clone(),
+                &Link::First { rho, r },
+                &cp,
+            );
+            assert_eq!(d, d2, "same first phase, same d");
+            let verify_s = |r2: [u8; 32]| {
+                let fixed = move |_: &[u8; 32]| r2;
+                verify_linked_circuit(
+                    &cs.shape,
+                    &gs,
+                    is,
+                    &ps.to_bytes(),
+                    &Link::Second { d, rlc: &fixed },
+                    cs,
+                )
+                .is_ok_and(|x| x == rho)
+            };
+            let verify_p = |rho2: [u8; 32], r2: [u8; 32]| {
+                verify_linked_circuit(
+                    &cp.shape,
+                    &gp,
+                    &ip,
+                    &pp.to_bytes(),
+                    &Link::First { rho: rho2, r: r2 },
+                    &cp,
+                )
+                .is_ok_and(|x| x == d)
+            };
+            let flip = |mut x: [u8; 32]| {
+                x[0] ^= 1;
+                x
+            };
+            (
+                rho,
+                r,
+                [
+                    verify_s(r),
+                    verify_p(rho, r),
+                    verify_s(flip(r)),
+                    verify_p(rho, flip(r)),
+                    verify_p(flip(rho), r),
+                ],
+            )
+        };
+        let (cs, is, ws) = s_of(&values, fq(&mu));
+        let (rho, r, v) = pair(&cs, &is, &ws);
+        assert_eq!(
+            v,
+            [true, true, false, false, false],
+            "the honest pair verifies; another R (S, P) or rho (P) is refused"
+        );
+        assert_eq!(
+            r,
+            crate::verifier::rlc_value(&rho, fq(&mu), &values).to_repr(),
+            "R is the masked rlc of the shared values"
+        );
+        // S's chain over another mu, or another shared value: S ends at its
+        // own R, which P's chain does not reach.
+        let (cs, is, ws) = s_of(&values, fq(&mu) + Fq::ONE);
+        let (_, _, v) = pair(&cs, &is, &ws);
+        assert_eq!(v[..2], [true, false], "S with another mu: P refuses");
+        let mut other = values.clone();
+        other[7] ^= 1;
+        let (cs, is, ws) = s_of(&other, fq(&mu));
+        let (_, _, v) = pair(&cs, &is, &ws);
+        assert_eq!(v[..2], [true, false], "S over another value: P refuses");
+    }
+
     /// Send's own relation at the census's counts, built at Receive's layout
     /// (padded rows, and fixed rows padded when Send's constants need fewer):
     /// it proves and verifies, and a changed absorbed value is refused.
@@ -2290,20 +2447,9 @@ pub fn p_circuit(op: &Op, gens: &PairGens, pairs: &[TracedPair]) -> (Wiring<Fp>,
             keys.as_ref(),
         );
     }
-    // The binding chain (rho and mu stand-ins, as stage A).
-    let (rho, mu) = binding_rho_mu();
-    let first = w.arrays.len();
-    let b = nonnative::binding_chain(
-        first,
-        gfam,
-        gfam,
-        &BigUint::from_bytes_le(rho.to_repr().as_ref()),
-        &BigUint::from_bytes_le(mu.to_repr().as_ref()),
-        &values,
-    );
-    w.arrays.extend(b.arrays);
-    w.tables.extend(b.tables);
-    let shared = first + nonnative::B_SHARED;
+    // The binding chain: the shared values and mu in the first phase, the
+    // chain in the link phase (rho and R are the link's io).
+    let shared = p_binding(&mut w, gfam, &binding_mu(&values), &values);
     let n_sh = 1usize << w.arrays[shared].rho;
     w.set_export(e_v, shared, vec![own(0, n_sh)]);
     // The P proofs' scalar sides and their io digests.
@@ -2374,6 +2520,12 @@ pub fn p_circuit(op: &Op, gens: &PairGens, pairs: &[TracedPair]) -> (Wiring<Fp>,
         (shared, kind_at),
         gens.genesis,
     );
+    let linked: Vec<(bool, usize)> = pairs
+        .iter()
+        .zip(&scalars)
+        .map(|(pr, sc)| (has_link_io(&pr.tr_p), sc.io))
+        .collect();
+    link_ties(&mut w, defer.fold.values, &linked, &offsets, shared, true);
     let mut rng = SpikeRng::new(b"p-recv pool");
     let pidx = pool.build(&mut w, e_out, &mut rng);
     let points = pb.build(&mut w, gfam, shared, false);
@@ -2394,6 +2546,58 @@ pub fn p_circuit(op: &Op, gens: &PairGens, pairs: &[TracedPair]) -> (Wiring<Fp>,
             defer,
         },
     )
+}
+
+/// Whether a verified proof's circuit reads the link's io.
+fn has_link_io<C: iroha_pasta::PastaCurve>(tr: &crate::verifier::Trace<C>) -> bool {
+    tr.circuit.as_ref().is_some_and(|c| !c.link_io.is_empty())
+}
+
+/// Ties each verified circuit proof's link io (its io fold's leaves at the
+/// link's slots) to the pair's shared values: rho's two limbs (the second
+/// proof's first challenge, at `off_s`) and R's (the first proof's last two
+/// shared values). Both transcripts' link words carry these limbs, so the
+/// rho and R a verified proof's circuit read are the link's: its chain ends
+/// at the R both proofs absorbed. `split`: the proofs read each limb as an
+/// io value (P); else one value lo + 2^128 hi (S). `host`: a one-instance
+/// array the rows join. `proofs`: (reads the link's io, io fold array).
+fn link_ties<S: Scalar>(
+    w: &mut Wiring<S>,
+    host: usize,
+    proofs: &[(bool, usize)],
+    offsets: &[(usize, usize, usize)],
+    shared: usize,
+    split: bool,
+) {
+    let one = S::ONE;
+    let two128 = S::from(2u64).pow_vartime([128u64]);
+    let sh = |k: usize, c: S| link(shared, 0, vec![Some(k)], c);
+    for (&(linked, io), &(off_p, off_s, len_p)) in proofs.iter().zip(offsets) {
+        if !linked {
+            continue;
+        }
+        let leaves = (1usize << w.arrays[io].rho) / 2;
+        let leaf = |slot: usize| link(io, 0, vec![Some(leaves + slot)], one);
+        let words = [
+            (LINK_RHO_IO, [off_s, off_s + 1]),
+            (LINK_R_IO, [off_p + len_p - 2, off_p + len_p - 1]),
+        ];
+        for (slot, [lo, hi]) in words {
+            let rows: Vec<Lin<S>> = if split {
+                vec![
+                    plus(&leaf(slot), &sh(lo, -one)),
+                    plus(&leaf(slot + 1), &sh(hi, -one)),
+                ]
+            } else {
+                vec![plus(&leaf(slot), &plus(&sh(lo, -one), &sh(hi, -two128)))]
+            };
+            for r in rows {
+                w.arrays[host]
+                    .rows
+                    .push([r, constant(vec![one]), Vec::new()]);
+            }
+        }
+    }
 }
 
 /// The deferred matrix claims of the verified proofs whose scalar sides a
@@ -2499,7 +2703,10 @@ where
         let kind = kinds[i].0;
         let (shape, inst, tr, _, acc) = proofs[i];
         let io = tr.circuit.as_ref().map_or(&inst.io[..], |c| &c.io_full[..]);
-        let tail = &io[io.len() - n - 1..];
+        // A circuit proof's accumulator is its late io (at LATE_IO, before
+        // the link's io); a toy proof's, its io's tail.
+        let base = tr.circuit.as_ref().map_or(io.len() - n - 1, |_| LATE_IO);
+        let tail = &io[base..base + n + 1];
         assert!(
             tail[..n] == acc.point[..] && tail[n] == acc.value,
             "proof {i}'s io ends with its accumulator"
@@ -2559,12 +2766,12 @@ where
         let (kind, from_io) = kinds[i];
         let (shape, inst, tr, sc, _) = proofs[i];
         // The accumulator: io leaves (a circuit proof's late io).
-        let io_len = tr
+        let n_io = 1usize << w.arrays[sc.io].rho;
+        let base = tr
             .circuit
             .as_ref()
-            .map_or(inst.io.len(), |c| c.io_full.len());
-        let n_io = 1usize << w.arrays[sc.io].rho;
-        let (leaves, base) = (n_io / 2, io_len - n - 1);
+            .map_or(inst.io.len() - n - 1, |_| LATE_IO);
+        let leaves = n_io / 2;
         let io_map: Vec<Option<usize>> = (0..nc)
             .map(|j| (j < n).then(|| leaves + base + j))
             .collect();
@@ -2726,7 +2933,7 @@ where
     w.arrays[fold.values].rows.extend(vrows);
     // The folded claim is the proof's late io, after the early io (64 values
     // at most).
-    let late = deferral::expose(w, gfam, &fold, 64);
+    let late = deferral::expose(w, gfam, &fold, LATE_IO);
     DeferIdx {
         fold,
         late,
@@ -2878,31 +3085,97 @@ fn binding_values(pairs: &[TracedPair]) -> (Vec<u128>, Vec<(usize, usize, usize)
     (values, offsets)
 }
 
-/// The binding chain's stand-ins for the phase-2 rho and the mask mu (as
-/// stage A's `real-receive`).
-fn binding_rho_mu() -> (crate::verifier::Fq, crate::verifier::Fq) {
-    // TODO: wire the real phase-2 challenge and hiding mask into both
-    // circuits; these stand-ins do not implement monetary pair binding.
-    (
-        crate::verifier::Fq::from(0x0123_4567_u64).square().square(),
-        crate::verifier::Fq::from(0x0bad_cafe_u64).square(),
-    )
+/// The link's io slots, past the header's io (0..64) and the folded claim's
+/// late io (64..64 + n + 1, below 124): rho at 124 (P reads its two 128-bit
+/// limbs, at 124 and 125), R at 126 (P: 126 and 127).
+pub const LINK_RHO_IO: usize = 124;
+pub const LINK_R_IO: usize = 126;
+/// The folded claim's late io (after the early io).
+pub const LATE_IO: usize = 64;
+
+/// A 32-byte word (a sponge word or R) as two 128-bit limbs, low first.
+pub fn word_limbs(word: &[u8; 32]) -> [u128; 2] {
+    [
+        u128::from_le_bytes(word[..16].try_into().unwrap()),
+        u128::from_le_bytes(word[16..].try_into().unwrap()),
+    ]
 }
 
-/// S-recv's binding chain, native: `acc_(r+1) = acc_r rho + v_r` from
-/// `acc_0 = mu`. Cells: the shared value v (cell 0), acc; rho one global cell.
-fn native_binding<S: Scalar>(
-    w: &mut Wiring<S>,
+/// A 32-byte word as a field element: lo + 2^128 hi (reduced, as a circuit
+/// recomposes it from the two limbs).
+pub fn word_scalar<S: Scalar>(word: &[u8; 32]) -> S {
+    let [lo, hi] = word_limbs(word);
+    S::from_u128(lo) + S::from(2u64).pow_vartime([128u64]) * S::from_u128(hi)
+}
+
+/// The binding chain's mask mu, one value for both circuits of a pair. A
+/// prover samples it fresh per pair; the experiment derives it from the
+/// pair's shared values, so the pair's two circuits agree without a channel.
+pub fn binding_mu(values: &[u128]) -> BigUint {
+    let tag = values.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, v| {
+        (h ^ (*v as u64) ^ ((*v >> 64) as u64)).wrapping_mul(0x0100_0000_01b3)
+    });
+    p256::scalar_below(&format!("binding-mu-{tag:016x}"), &nonnative::fq_modulus())
+}
+
+/// P's binding chain (`nonnative::binding_chain_linked`): the shared values
+/// and mu in the first phase, the chain in the link phase, rho's and R's
+/// 128-bit limbs the link's io. Returns the shared array.
+fn p_binding(w: &mut Wiring<Fp>, gfam: usize, mu: &BigUint, values: &[u128]) -> usize {
+    let first = w.arrays.len();
+    let b =
+        nonnative::binding_chain_linked(first, gfam, gfam, mu, values, (LINK_RHO_IO, LINK_R_IO));
+    w.arrays.extend(b.arrays);
+    w.tables.extend(b.tables);
+    w.link.arrays.extend(b.link_arrays);
+    w.link.tables.push(nonnative::LINK_RANGE_TABLE);
+    w.link.io.extend(b.io);
+    w.link.fill = Some(b.fill);
+    w.link.io_values = Some(Box::new(|rho: &[u8; 32], r: &[u8; 32]| {
+        let ([a, b], [c, d]) = (word_limbs(rho), word_limbs(r));
+        [a, b, c, d].map(Fp::from_u128).to_vec()
+    }));
+    w.link.binding = Some((b.binding, 88));
+    first + nonnative::BL_SHARED
+}
+
+/// S's binding chain, native: `acc_(r+1) = acc_r rho + v_r` from the mask
+/// `acc_0 = mu`, ending at `acc_n = R`. The shared values v (the circuit's
+/// shared array) and mu are first-phase cells; the chain is the link phase,
+/// filled once rho is known; rho and R are the link's io (rho from the
+/// transcript, R the link's value), so a chain that does not end at the
+/// link's R fails. Returns the shared array.
+fn native_binding(
+    w: &mut Wiring<crate::verifier::Fq>,
     gfam: usize,
-    rho: S,
-    mu: S,
+    mu: crate::verifier::Fq,
     values: &[u128],
 ) -> usize {
+    use crate::verifier::Fq;
     let n = values.len();
-    let rb = (n + 1).next_power_of_two().trailing_zeros() as usize;
+    assert!(n > 0, "a chain over shared values");
+    let rb = n.next_power_of_two().trailing_zeros() as usize;
     let nn = 1usize << rb;
-    let rho_a = w.push(Array {
-        name: "binding rho",
+    let one = Fq::ONE;
+    let io_cell = |w: &mut Wiring<Fq>, name: &'static str, slot: usize| -> usize {
+        let a = w.push(Array {
+            name,
+            family: gfam,
+            rho: 0,
+            r_count: 1,
+            fixed: false,
+            lookups: Vec::new(),
+            widths: vec![255],
+            rows: Vec::new(),
+            values: vec![vec![Fq::ZERO]],
+        });
+        w.link.io.push((a, slot));
+        a
+    };
+    let rho_a = io_cell(w, "binding rho", LINK_RHO_IO);
+    let r_a = io_cell(w, "binding R", LINK_R_IO);
+    let mu_a = w.push(Array {
+        name: "binding mu",
         family: gfam,
         rho: 0,
         r_count: 1,
@@ -2910,47 +3183,115 @@ fn native_binding<S: Scalar>(
         lookups: Vec::new(),
         widths: vec![255],
         rows: Vec::new(),
-        values: vec![vec![rho]],
+        values: vec![vec![mu]],
     });
-    let mut v = vec![vec![S::ZERO; nn]; 2];
-    let mut acc = mu;
-    for r in 0..=n {
-        v[1][r] = acc;
-        if r < n {
-            v[0][r] = S::from_u128(values[r]);
-            acc = acc * rho + v[0][r];
-        }
+    let mut v = vec![Fq::ZERO; nn];
+    for (r, x) in values.iter().enumerate() {
+        v[r] = Fq::from_u128(*x);
     }
-    let a = w.arrays.len();
-    let mask: Vec<S> = (0..nn)
-        .map(|r| if r < n { S::ONE } else { S::ZERO })
-        .collect();
-    let next: Vec<Option<usize>> = (0..nn).map(|r| (r < n).then_some(r + 1)).collect();
-    let row = [
-        vec![crate::uniform::Term {
-            src: crate::uniform::Src::Own(1),
-            coef: mask.clone(),
-        }],
-        link(rho_a, 0, vec![Some(0); nn], S::ONE),
-        plus(
-            &link(a, 1, next, S::ONE),
-            &vec![crate::uniform::Term {
-                src: crate::uniform::Src::Own(0),
-                coef: mask.iter().map(|c| -*c).collect(),
-            }],
-        ),
-    ];
-    w.push(Array {
+    let shared = w.push(Array {
         name: "binding native",
         family: gfam,
         rho: rb,
-        r_count: n + 1,
+        r_count: n,
         fixed: false,
         lookups: Vec::new(),
-        widths: vec![128, 255],
-        rows: vec![row],
-        values: v,
-    })
+        widths: vec![128],
+        rows: Vec::new(),
+        values: vec![v],
+    });
+    // The chain: instance r holds acc_(r+1).
+    let vals = values.to_vec();
+    let chain = move |rho: Fq| -> Vec<Fq> {
+        let mut acc = mu;
+        vals.iter()
+            .map(|x| {
+                acc = acc * rho + Fq::from_u128(*x);
+                acc
+            })
+            .collect()
+    };
+    let acc_a = w.arrays.len();
+    let at = |pick: &dyn Fn(usize) -> bool| -> Vec<Fq> {
+        (0..nn)
+            .map(|r| if pick(r) { one } else { Fq::ZERO })
+            .collect()
+    };
+    let prev = plus(
+        &link(
+            mu_a,
+            0,
+            (0..nn).map(|r| (r == 0).then_some(0)).collect(),
+            one,
+        ),
+        &link(
+            acc_a,
+            0,
+            (0..nn).map(|r| (r >= 1 && r < n).then(|| r - 1)).collect(),
+            one,
+        ),
+    );
+    let step = [
+        prev,
+        link(rho_a, 0, vec![Some(0); nn], one),
+        plus(
+            &vec![crate::uniform::Term {
+                src: crate::uniform::Src::Own(0),
+                coef: at(&|r| r < n),
+            }],
+            &link(
+                shared,
+                0,
+                (0..nn).map(|r| (r < n).then_some(r)).collect(),
+                -one,
+            ),
+        ),
+    ];
+    let ends_at_r = [
+        plus(
+            &vec![crate::uniform::Term {
+                src: crate::uniform::Src::Own(0),
+                coef: at(&|r| r == n - 1),
+            }],
+            &link(
+                r_a,
+                0,
+                (0..nn).map(|r| (r == n - 1).then_some(0)).collect(),
+                -one,
+            ),
+        ),
+        constant(vec![one; nn]),
+        Vec::new(),
+    ];
+    let mut accs = vec![Fq::ZERO; nn];
+    for (r, x) in chain(Fq::ZERO).into_iter().enumerate() {
+        accs[r] = x;
+    }
+    let pushed = w.push(Array {
+        name: "binding acc",
+        family: gfam,
+        rho: rb,
+        r_count: n,
+        fixed: false,
+        lookups: Vec::new(),
+        widths: vec![255],
+        rows: vec![step, ends_at_r],
+        values: vec![accs],
+    });
+    assert_eq!(pushed, acc_a, "the chain's own index");
+    w.link.arrays.push(acc_a);
+    w.link.fill = Some(Box::new(move |rho: &[u8; 32]| {
+        chain(word_scalar(rho))
+            .into_iter()
+            .enumerate()
+            .map(|(r, x)| (acc_a, 0, r, x))
+            .collect()
+    }));
+    w.link.io_values = Some(Box::new(|rho: &[u8; 32], r: &[u8; 32]| {
+        vec![word_scalar::<Fq>(rho), word_scalar::<Fq>(r)]
+    }));
+    w.link.binding = Some((vec![(acc_a, 0, n - 1)], 255));
+    shared
 }
 
 /// Where S-recv's parts sit.
@@ -3026,8 +3367,11 @@ pub fn s_circuit(
             keys.as_ref(),
         );
     }
-    let (rho, mu) = binding_rho_mu();
-    let shared = native_binding(&mut w, gfam, rho, mu, &values);
+    let mu = Option::<crate::verifier::Fq>::from(crate::verifier::Fq::from_repr(
+        nonnative::fq_bytes(&binding_mu(&values)),
+    ))
+    .expect("mu below q");
+    let shared = native_binding(&mut w, gfam, mu, &values);
     let n_sh = 1usize << w.arrays[shared].rho;
     w.set_export(e_v, shared, vec![own(0, n_sh)]);
     let _table = endo_table(&mut w, gfam);
@@ -3095,6 +3439,12 @@ pub fn s_circuit(
         (shared, kind_at),
         gens.genesis,
     );
+    let linked: Vec<(bool, usize)> = pairs
+        .iter()
+        .zip(&scalars)
+        .map(|(pr, sc)| (has_link_io(&pr.tr_s), sc.io))
+        .collect();
+    link_ties(&mut w, defer.fold.values, &linked, &offsets, shared, false);
     let perms = pool.len();
     let mut rng = SpikeRng::new(b"s-recv pool");
     let _pidx = pool.build(&mut w, e_out, &mut rng);

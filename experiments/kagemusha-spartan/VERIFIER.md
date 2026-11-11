@@ -69,7 +69,8 @@ points, and the link words.
 **Not covered:**
 - **R inside the proven circuits.** The spike's toy circuit cannot hold the R chains, so they are synthesized as
   gadgets on the real shared values. The pairing link itself is in the real proofs: each proof verifies only with
-  its partner.
+  its partner. (The uniform circuits hold both chains since 2026-11-11: A2-UNIFORM.md, "The pair binding inside
+  the circuits".)
 - **Modulus aliases.** The canonicity comparisons and lookup range checks are counted, not synthesized.
 - **Wrong-width claims** have no explicit test. Fabricated claims are refused.
 - **The burn branch's** total verifier.

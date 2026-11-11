@@ -187,17 +187,20 @@ pub trait Circuit<F: Scalar>: Sync {
     fn link_rows(&self, _shape: &Shape) -> usize {
         0
     }
-    /// The link's io: the io slots the link word rho fills, as this circuit
-    /// reads it. Prover and verifier both set them from the transcript, so
-    /// proofs do not carry them; they lie past the header's io.
-    fn link_io(&self, _rho: &[u8; 32]) -> Vec<(usize, F)> {
+    /// The link's io: the io slots the link's rho and R fill, as this
+    /// circuit reads them. Prover and verifier both set them from the
+    /// transcript (rho) and the link (R), so proofs do not carry them; they
+    /// lie past the header's io. The circuit pins its binding value to R
+    /// there, so a proof whose chain does not end at R fails.
+    fn link_io(&self, _rho: &[u8; 32], _r: &[u8; 32]) -> Vec<(usize, F)> {
         Vec::new()
     }
     /// Fills the link phase's cells of `w` once rho is known.
     fn fill_link(&self, _rho: &[u8; 32], _w: &mut [F]) {}
-    /// The binding value R the circuit computed (from its late io): the
-    /// verifier requires it to be the R the link absorbs. None without one.
-    fn binding_r(&self, _late: &[F]) -> Option<[u8; 32]> {
+    /// The binding value R the circuit computed (from its filled witness):
+    /// the second proof's prover takes the link's R from it. None without
+    /// one.
+    fn binding_r(&self, _w: &[F]) -> Option<[u8; 32]> {
         None
     }
 }

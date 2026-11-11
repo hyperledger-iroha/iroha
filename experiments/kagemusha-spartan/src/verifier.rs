@@ -766,6 +766,16 @@ fn traced_link_word<C: PastaCurve>(
     }
 }
 
+/// The link's R in a trace: the first proof's given value, the second's
+/// `rlc` of its squeezed rho (a verifier's `rlc` returns the R it was given).
+fn traced_link_r(link: &Link, squeezed: &[u8; 32]) -> [u8; 32] {
+    match link {
+        Link::None => unreachable!("a link word without a link"),
+        Link::First { r, .. } => *r,
+        Link::Second { rlc, .. } => rlc(squeezed),
+    }
+}
+
 pub fn trace<C: PastaCurve>(
     shape: &Shape,
     gens: &Gens<C>,
@@ -866,9 +876,11 @@ fn trace_with<C: PastaCurve>(
                 t.point(b"row", row);
             }
             let word = traced_link_word(&mut t, &mut ch, link);
-            // rho: absorbed by the first proof, squeezed by the second.
+            // rho: absorbed by the first proof, squeezed by the second; R:
+            // the link's.
             let link_io = word.map_or(Vec::new(), |(first, squeezed, absorbed)| {
-                c.link_io(if first { &absorbed } else { &squeezed })
+                let rho = if first { absorbed } else { squeezed };
+                c.link_io(&rho, &traced_link_r(link, &squeezed))
             });
             let pl = c.link_rows(shape);
             for row in &rows[p1..p1 + pl] {
@@ -904,11 +916,7 @@ fn trace_with<C: PastaCurve>(
     };
     // The link's R, after every row.
     let link_words = word.map(|(first, squeezed, absorbed)| {
-        let r = match link {
-            Link::None => unreachable!("a link word without a link"),
-            Link::First { r, .. } => *r,
-            Link::Second { rlc, .. } => rlc(&squeezed),
-        };
+        let r = traced_link_r(link, &squeezed);
         t.word_limbs(b"pair/R", &r);
         (first, squeezed, absorbed, r)
     });
