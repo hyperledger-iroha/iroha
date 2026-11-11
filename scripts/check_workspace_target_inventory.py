@@ -136,9 +136,8 @@ EXPECTED_DECLARED_BINS = EXPECTED_DEFAULT_BINS | frozenset(
 FORBIDDEN_COMPATIBILITY_BINS = frozenset(
     {"iroha2", "iroha2d", "iroha3", "iroha_cli", "irohad"}
 )
-BASELINE_DEFAULT_BIN_COUNT = 92
+# Ceiling on the shipping set: raising it is a reviewed release decision.
 MAX_DEFAULT_BIN_COUNT = 24
-BASELINE_DECLARED_BIN_COUNT = 116
 EXPECTED_DECLARED_BIN_COUNT = len(EXPECTED_DECLARED_BINS)
 
 
@@ -204,8 +203,7 @@ def check_metadata(metadata: dict[str, Any]) -> list[str]:
         errors.append(f"non-shipping binaries enabled by default: {unexpected!r}")
     if len(actual) > MAX_DEFAULT_BIN_COUNT:
         errors.append(
-            f"default binary count {len(actual)} exceeds {MAX_DEFAULT_BIN_COUNT} "
-            f"(pre-refactor baseline: {BASELINE_DEFAULT_BIN_COUNT})"
+            f"default binary count {len(actual)} exceeds {MAX_DEFAULT_BIN_COUNT}"
         )
 
     declared = all_workspace_bins(metadata)
@@ -218,8 +216,7 @@ def check_metadata(metadata: dict[str, Any]) -> list[str]:
     if len(declared) != EXPECTED_DECLARED_BIN_COUNT:
         errors.append(
             f"declared binary count {len(declared)} differs from the expected "
-            f"{EXPECTED_DECLARED_BIN_COUNT} in the reviewed first-release inventory "
-            f"(pre-refactor baseline: {BASELINE_DECLARED_BIN_COUNT})"
+            f"{EXPECTED_DECLARED_BIN_COUNT} in the reviewed first-release inventory"
         )
 
     forbidden = sorted(
@@ -253,11 +250,9 @@ def main() -> int:
             print(f"  - {error}")
         return 1
 
-    reduction = BASELINE_DEFAULT_BIN_COUNT - len(EXPECTED_DEFAULT_BINS)
     print(
         "Workspace target inventory passed: "
-        f"{len(EXPECTED_DEFAULT_BINS)} default binaries "
-        f"({reduction} fewer than the {BASELINE_DEFAULT_BIN_COUNT}-target baseline), "
+        f"{len(EXPECTED_DEFAULT_BINS)} default binaries, "
         f"{EXPECTED_DECLARED_BIN_COUNT} total declared binaries"
     )
     return 0
