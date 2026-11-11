@@ -1091,6 +1091,112 @@ fn initial_permission_revocation_allowed(
     }
     initial_permission_delegation_allowed(state_transaction, authority, permission)
 }
+/// The successor grants only from current ledger-backed ownership, never from token possession.
+fn restricted_dataspace_read_owner(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    permission: &Permission,
+) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+    let token = executor_permission::query::CanReadRestrictedDataspace::try_from(permission)
+        .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+    if Permission::from(token) != *permission {
+        return Err(invalid_initial_permission_payload(
+            permission,
+            "requires an exact data space scope",
+        )
+        .into());
+    }
+    Ok(crate::sns::active_dataspace_owner_by_id(
+        &state_transaction.world,
+        state_transaction.world.dataspace_catalog(),
+        token.dataspace,
+        state_transaction.block_unix_timestamp_ms(),
+    )
+    .map_err(sns_permission_attempt_error)?
+    .as_ref()
+        == Some(authority))
+}
+
+/// Dispatch permission authority with the instruction's selected implementation. The frozen
+/// baseline helper remains genesis-only for restricted reads, including unselected role paths.
+fn selected_permission_mutation_allowed(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    instruction: &InstructionBox,
+    permission: &Permission,
+    is_revoke: bool,
+) -> Result<bool, crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+    if permission.name() == "CanReadRestrictedDataspace"
+        && crate::runtime::restricted_dataspace_read::selected_for(
+            state_transaction.world.runtime_selection(),
+            instruction,
+        )
+    {
+        return restricted_dataspace_read_owner(state_transaction, authority, permission);
+    }
+    if is_revoke {
+        initial_permission_revocation_allowed(state_transaction, authority, permission)
+    } else {
+        initial_permission_delegation_allowed(state_transaction, authority, permission)
+    }
+}
+
+/// Enforce the selected native successor even for an installed user executor. Other permission
+/// semantics stay with that executor; wrapping a restricted read in a role cannot bypass its
+/// owner authority. The caller has already resolved the instruction's selected implementation.
+pub(crate) fn validate_selected_restricted_read_mutation(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    instruction: &InstructionBox,
+) -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+    if is_initial_genesis_context(state_transaction)
+        || !crate::runtime::restricted_dataspace_read::selected_for(
+            state_transaction.world.runtime_selection(),
+            instruction,
+        )
+    {
+        return Ok(());
+    }
+    let check = |permission: &Permission| -> Result<(), crate::execution_attempt::ExecutionAttemptError<ValidationFail>> {
+        if permission.name() == "CanReadRestrictedDataspace"
+            && !restricted_dataspace_read_owner(state_transaction, authority, permission)?
+        {
+            return Err(ValidationFail::NotPermitted(
+                "only the active data space owner may mutate CanReadRestrictedDataspace".to_owned(),
+            )
+            .into());
+        }
+        Ok(())
+    };
+    match extract_permission_or_role_mutation(instruction) {
+        Some(
+            PermissionOrRoleMutation::AccountPermission { permission, .. }
+            | PermissionOrRoleMutation::RolePermission { permission, .. },
+        ) => check(permission)?,
+        Some(PermissionOrRoleMutation::AccountRole { role, .. }) => {
+            if let Some(role) = state_transaction.world.roles().get(role) {
+                for permission in role.permissions() {
+                    check(permission)?;
+                }
+            }
+        }
+        None => {}
+    }
+    if let Some(register) = extract_register_role(instruction) {
+        for permission in register.object().inner().permissions() {
+            check(permission)?;
+        }
+    }
+    if let Some(unregister) = extract_unregister_role(instruction)
+        && let Some(role) = state_transaction.world.roles().get(unregister.object())
+    {
+        for permission in role.permissions() {
+            check(permission)?;
+        }
+    }
+    Ok(())
+}
+
 fn validate_initial_account_permission_destination(
     _state_transaction: &StateTransaction<'_, '_>,
     permission: &Permission,
@@ -1139,11 +1245,13 @@ fn validate_initial_permission_or_role_mutation(
                 is_genesis,
                 is_revoke,
             )?;
-            let allowed = if is_revoke {
-                initial_permission_revocation_allowed(state_transaction, authority, permission)?
-            } else {
-                initial_permission_delegation_allowed(state_transaction, authority, permission)?
-            };
+            let allowed = selected_permission_mutation_allowed(
+                state_transaction,
+                authority,
+                instruction,
+                permission,
+                is_revoke,
+            )?;
             let scoped_enrollment = !is_genesis
                 && !allowed
                 && !is_revoke
@@ -1184,19 +1292,13 @@ fn validate_initial_permission_or_role_mutation(
                 let normalized =
                     normalize_role_permission_for_initial_executor(state_transaction, permission)?;
                 if !is_genesis {
-                    let allowed = if is_revoke {
-                        initial_permission_revocation_allowed(
-                            state_transaction,
-                            authority,
-                            &normalized,
-                        )?
-                    } else {
-                        initial_permission_delegation_allowed(
-                            state_transaction,
-                            authority,
-                            &normalized,
-                        )?
-                    };
+                    let allowed = selected_permission_mutation_allowed(
+                        state_transaction,
+                        authority,
+                        instruction,
+                        &normalized,
+                        is_revoke,
+                    )?;
                     if !allowed {
                         return Err(ValidationFail::NotPermitted(format!(
                             "authority cannot grant or revoke role `{role_id}` because it cannot delegate contained permission `{}`",
@@ -1217,17 +1319,27 @@ fn validate_initial_permission_or_role_mutation(
             if is_genesis {
                 return Ok(());
             }
-            if !authority_has_role(&state_transaction.world, authority, role) {
+            // A new native SNS owner must be able to remove its exact read capability from
+            // roles created by a previous owner, without first receiving those roles.
+            let owner_revoke = is_revoke
+                && normalized.name() == "CanReadRestrictedDataspace"
+                && crate::runtime::restricted_dataspace_read::selected_for(
+                    state_transaction.world.runtime_selection(),
+                    instruction,
+                );
+            if !authority_has_role(&state_transaction.world, authority, role) && !owner_revoke {
                 return Err(ValidationFail::NotPermitted(
                     "authority cannot modify a role it does not hold".to_owned(),
                 )
                 .into());
             }
-            let allowed = if is_revoke {
-                initial_permission_revocation_allowed(state_transaction, authority, &normalized)?
-            } else {
-                initial_permission_delegation_allowed(state_transaction, authority, &normalized)?
-            };
+            let allowed = selected_permission_mutation_allowed(
+                state_transaction,
+                authority,
+                instruction,
+                &normalized,
+                is_revoke,
+            )?;
             if !allowed {
                 return Err(ValidationFail::NotPermitted(format!(
                     "authority cannot grant or revoke role permission `{}`",

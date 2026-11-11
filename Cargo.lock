@@ -4134,6 +4134,7 @@ dependencies = [
  "iroha_data_model",
  "iroha_executor_data_model",
  "iroha_fs",
+ "iroha_futures",
  "iroha_genesis",
  "iroha_logger",
  "iroha_model_base",

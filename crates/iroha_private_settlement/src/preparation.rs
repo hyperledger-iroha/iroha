@@ -3,7 +3,10 @@ use super::*;
 use iroha::workflow::{
     CustodyHandleV1, WorkflowJournalV1, WorkflowRunnerLease, WorkflowStorageError,
 };
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    collections::BTreeSet,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 pub fn driver_identity() -> DriverIdentityV1 {
     DriverIdentityV1 {
@@ -70,6 +73,36 @@ pub struct PreparationDriver {
     retained_bytes: AtomicUsize,
     error: Mutex<Option<OneCallPrivateSettlementError>>,
     worker: Arc<tokio::sync::Semaphore>,
+    verified: Arc<VerifiedProofs>,
+}
+
+/// Artifacts whose proof this driver has verified against its one immutable request.
+///
+/// Proof verification is a function of the request's intent and the artifact's statement
+/// and proof, all of which the artifact digest and this driver fix. One run otherwise
+/// verifies each leg three times: inside the prover before it releases the proof, when the
+/// artifact is bound, and when the completed round rereads it. The record is process-local
+/// and never persisted, so a cold process verifies every artifact it loads.
+#[derive(Default)]
+struct VerifiedProofs(Mutex<BTreeSet<Digest32>>);
+impl VerifiedProofs {
+    /// Record a proof the prover released only after verifying it under this request.
+    fn record(&self, digest: Digest32) -> std::result::Result<(), OneCallPrivateSettlementError> {
+        lock(&self.0)?.insert(digest);
+        Ok(())
+    }
+    /// Run `verify` unless `digest` is recorded, and record it once `verify` succeeds.
+    fn verify_once(
+        &self,
+        digest: Digest32,
+        verify: impl FnOnce() -> std::result::Result<(), OneCallPrivateSettlementError>,
+    ) -> std::result::Result<(), OneCallPrivateSettlementError> {
+        if lock(&self.0)?.contains(&digest) {
+            return Ok(());
+        }
+        verify()?;
+        self.record(digest)
+    }
 }
 
 // Original artifact ownership includes the round lease until native digesting/final assembly
@@ -164,6 +197,7 @@ impl PreparationDriver {
             retained_bytes: AtomicUsize::new(0),
             error: Mutex::new(None),
             worker: Arc::new(tokio::sync::Semaphore::new(1)),
+            verified: Arc::default(),
         }
     }
     pub fn begin_call(
@@ -518,6 +552,7 @@ impl PreparationDriver {
                 .map_err(|_| OneCallPrivateSettlementError::Capacity)?;
             let artifacts = self.artifacts.clone();
             let wallet = self.wallet.clone();
+            let verified_proofs = Arc::clone(&self.verified);
             let block = block.clone();
             let (result,original_lease)=run_native_worker(permit,lease,move||{
                 (|| -> std::result::Result<Option<(Artifact,usize)>,OneCallPrivateSettlementError> {
@@ -529,7 +564,7 @@ impl PreparationDriver {
                     }
                     let existing=artifacts.read(key,request.0.max_artifact_bytes)?;
                     let (artifact,length)=if let Some(existing)=existing {
-                        validate_artifact(&request,&context,context_digest,&existing.0)?; existing
+                        validate_artifact(&request,&context,context_digest,&existing.0,&verified_proofs)?; existing
                     } else {
                         if !may_prepare {return Ok(None);}
                         let terms=&request.0.terms[index];
@@ -551,7 +586,12 @@ impl PreparationDriver {
                             statement:prepared.statement,proof:prepared.proof,delta:prepared.delta,
                             capsule:prepared.audit_capsule,policy:opening.policy,authority:context.authority().clone(),
                             retention_height:request.0.retention_height};
-                        validate_artifact(&request,&context,context_digest,&artifact)?;
+                        // The prover released this proof only after verifying it under the
+                        // cut's height; at the request's height that is the check below.
+                        if artifact.statement.authority_context_height==request.intent().authority_context_height {
+                            verified_proofs.record(artifact.digest()?)?;
+                        }
+                        validate_artifact(&request,&context,context_digest,&artifact,&verified_proofs)?;
                         let length=norito::canonical_frame_len(&artifact)?;
                         if bytes.checked_add(length).is_none_or(|n|n>request.0.max_total_artifact_bytes) {
                             return Err(OneCallPrivateSettlementError::Capacity);
@@ -737,11 +777,14 @@ fn validate_material_limits(
     Ok(())
 }
 
+// Bind `artifact` to the request and selected context, then verify its proof unless this
+// driver already verified these exact artifact bytes.
 fn validate_artifact(
     request: &OneCallPrivateSettlementRequest,
     context: &iroha_data_model::nexus::VerifiedPrivateSettlementContextV1<'_>,
     context_digest: Digest32,
     artifact: &Artifact,
+    verified: &VerifiedProofs,
 ) -> std::result::Result<(), OneCallPrivateSettlementError> {
     validate_selected_request(request, context)?;
     validate_material_limits(context.admission_limits(), artifact)?;
@@ -770,15 +813,17 @@ fn validate_artifact(
         artifact.retention_height,
     )
     .map_err(AtomicPrivateSettlementPreparationErrorV1::Wallet)?;
-    verify_atomic_private_settlement_intent_v1(
-        request.intent(),
-        statement,
-        *request.intent().network_id.as_genesis_hash().as_ref(),
-        request.intent().authority_context_height,
-        &artifact.proof,
-    )
-    .map_err(AtomicPrivateSettlementPreparationErrorV1::Proof)?;
-    Ok(())
+    verified.verify_once(artifact.digest()?, || {
+        verify_atomic_private_settlement_intent_v1(
+            request.intent(),
+            statement,
+            *request.intent().network_id.as_genesis_hash().as_ref(),
+            request.intent().authority_context_height,
+            &artifact.proof,
+        )
+        .map_err(AtomicPrivateSettlementPreparationErrorV1::Proof)?;
+        Ok(())
+    })
 }
 impl WorkflowDriver for PreparationDriver {
     fn identity(&self) -> DriverIdentityV1 {
@@ -868,6 +913,67 @@ mod finality_budget_tests {
             std::fs::read_dir(&path).unwrap().count(),
             0,
             "budget selection and accessor create no finality or lock file and discard no original"
+        );
+    }
+}
+
+#[cfg(test)]
+mod verified_proofs_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn a_proof_is_verified_once_per_driver_and_only_a_success_is_recorded() {
+        let verified = VerifiedProofs::default();
+        let runs = Cell::new(0_u32);
+        let verify = |outcome: bool| {
+            verified.verify_once([7; 32], || {
+                runs.set(runs.get() + 1);
+                if outcome {
+                    Ok(())
+                } else {
+                    Err(OneCallPrivateSettlementError::Binding)
+                }
+            })
+        };
+        // A refused proof is never recorded: the next read verifies it again.
+        assert!(matches!(
+            verify(false),
+            Err(OneCallPrivateSettlementError::Binding)
+        ));
+        assert!(matches!(
+            verify(false),
+            Err(OneCallPrivateSettlementError::Binding)
+        ));
+        assert_eq!(runs.get(), 2);
+        verify(true).unwrap();
+        assert_eq!(runs.get(), 3);
+        // Once verified, the same artifact bytes are not verified again, whatever the caller.
+        verify(true).unwrap();
+        verify(false).unwrap();
+        assert_eq!(runs.get(), 3);
+        // Another artifact is another proof.
+        verified
+            .verify_once([8; 32], || {
+                runs.set(runs.get() + 1);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(runs.get(), 4);
+    }
+
+    #[test]
+    fn a_proof_the_prover_released_needs_no_second_verification() {
+        let verified = VerifiedProofs::default();
+        verified.record([9; 32]).unwrap();
+        verified
+            .verify_once([9; 32], || Err(OneCallPrivateSettlementError::Binding))
+            .unwrap();
+        // The record is this driver's alone: a fresh one verifies the same bytes.
+        assert!(
+            VerifiedProofs::default()
+                .verify_once([9; 32], || Err(OneCallPrivateSettlementError::Binding))
+                .is_err()
         );
     }
 }

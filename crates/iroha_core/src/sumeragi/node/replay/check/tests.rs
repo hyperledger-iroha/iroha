@@ -96,8 +96,7 @@ fn restored_destination(seed: &NativeReplaySeed, snapshot: &str, kura: &Arc<Kura
     state.set_oracle(seed.oracle.clone());
     state.install_node_fraud_monitoring(seed.fraud.clone());
     state.set_gov(seed.governance.clone());
-    state.content = seed.content.clone();
-    state.set_settlement(seed.settlement);
+    let _ = state.install_node_content(seed.content.clone());
     Arc::from(state)
 }
 

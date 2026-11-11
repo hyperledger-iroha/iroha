@@ -2412,5 +2412,5 @@ fn prepared_parent_service_attempt_preserves_original_capacity_and_allocator_fie
     assert_eq!(pool.reserved_bytes(), 0);
 }
 
-#[cfg(all(test, feature = "zk-stark"))]
+#[cfg(test)]
 mod zk_snapshot_refusal_tests;

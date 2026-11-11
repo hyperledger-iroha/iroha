@@ -9,18 +9,21 @@
 pub mod attestation;
 pub mod catalog;
 pub(crate) mod change_set;
+pub mod checkpoint;
 pub(crate) mod containment;
 pub(crate) mod envelope;
 pub mod ironwood;
 pub mod keyed_state;
 pub mod lifecycle_activation;
 pub mod lifecycle_preflight;
-pub mod state_row_permission;
 pub(crate) mod lifecycle_support;
+pub mod migration;
 pub(crate) mod obligations;
+pub(crate) mod restricted_dataspace_read;
 pub(crate) mod sorafs_authority;
 /// The owner-authorized, all-four-certified one-time Taira SoraFS transition.
 pub mod sorafs_repair;
+pub mod state_row_permission;
 pub mod taira_activation;
 
 use iroha_data_model::runtime::{
@@ -56,7 +59,7 @@ pub(crate) fn founded_selection() -> Result<RootSelectionV1, CatalogError> {
 /// Activate this release's additions on `world`'s universal root, in declaration order, up to and
 /// including `through`, as their governed change sets do at block start: publish each addition's
 /// definitions, install its storage (a cell at its published initial value) and move the
-/// selection. The independent authority addition activates alone. An addition already active
+/// selection. The independent authority and restricted-read additions activate alone. An addition already active
 /// stays as it is.
 ///
 /// Fixtures only. A network activates an addition through a governed change set
@@ -80,7 +83,10 @@ pub fn activate_additions_for_testing(
         iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0; 32])),
     );
     let mut block = world.block();
-    let additions = if through == catalog::additions::SORAFS_AUTHORITY.module {
+    let additions = if through == catalog::additions::SORAFS_AUTHORITY.module
+        || through == catalog::additions::RESTRICTED_DATASPACE_READ.module
+        || through == catalog::additions::RUNTIME_LIFECYCLE.module
+    {
         &catalog.additions[last..=last]
     } else {
         &catalog.additions[..=last]
@@ -88,6 +94,14 @@ pub fn activate_additions_for_testing(
     for addition in additions {
         let current = block.runtime_selection.get().clone();
         if current.active.contains(&addition.implementation)
+            || (addition.module == catalog::additions::RESTRICTED_DATASPACE_READ.module
+                && addition.rebinds.keys().all(|wire| {
+                    current.bindings.iter().any(|binding| {
+                        binding.wire_id == *wire
+                            && catalog.native_module(&binding.implementation)
+                                == Some(addition.module)
+                    })
+                }))
             || (addition.module == catalog::additions::SORAFS_AUTHORITY.module
                 && sorafs_authority_enabled(&current).map_err(|error| error.to_string())?)
         {
@@ -116,33 +130,126 @@ pub fn activate_additions_for_testing(
     Ok(())
 }
 
-/// The top-level World members whose storage `selection` does not install, by snapshot member
-/// name (`specs/live_runtime_upgrades.md` §5.5).
+/// The World snapshot members a selection leaves out because it does not install their storage
+/// (`specs/live_runtime_upgrades.md` §5.5).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct UninstalledWorldMembers {
+    /// Top-level World members, in registry order of their fields.
+    pub(crate) members: Vec<&'static str>,
+    /// Members inside a nested owner's member, by the owner's top-level member name.
+    pub(crate) nested: Vec<(&'static str, Vec<&'static str>)>,
+}
+
+impl UninstalledWorldMembers {
+    /// The members left out of the nested owner written as the top-level member `owner`.
+    pub(crate) fn nested_in(&self, owner: &str) -> &[&'static str] {
+        self.nested
+            .iter()
+            .find(|(member, _)| *member == owner)
+            .map_or(&[], |(_, children)| children.as_slice())
+    }
+
+    /// Whether the selection installs every World field of this release.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.members.is_empty() && self.nested.is_empty()
+    }
+}
+
+/// Top-level World members that are nested owners whose snapshot reader applies the selection:
+/// it refuses a member the selection does not install and reads an absent one as empty
+/// (`crate::state::deserialize`). A new nested owner joins this list with such a reader.
+pub(crate) const SELECTION_AWARE_OWNERS: &[&str] = &["triggers"];
+
+/// Where a snapshot writes the canonical World field `field`: its top-level member and, for a
+/// field of a nested owner, its member inside that owner's object.
+///
+/// A snapshot can leave out a field one owner deep, inside an owner of
+/// [`SELECTION_AWARE_OWNERS`]. No World owner nests another owner, and [`catalog`] refuses an
+/// addition whose field has no such member.
+pub(crate) fn world_snapshot_member(field: &str) -> Option<(&'static str, Option<&'static str>)> {
+    use crate::state::authority_registry::{Canonical, Role, WORLD_FIELDS};
+    WORLD_FIELDS.iter().find_map(|top| {
+        if top.id == field {
+            return matches!(
+                top.role,
+                Role::Canonical(Canonical::Table { .. } | Canonical::Cell(_))
+            )
+            .then_some((top.member, None));
+        }
+        let Role::Canonical(Canonical::Owner(children)) = top.role else {
+            return None;
+        };
+        if !SELECTION_AWARE_OWNERS.contains(&top.member) {
+            return None;
+        }
+        children
+            .iter()
+            .find(|child| {
+                child.id == field
+                    && matches!(
+                        child.role,
+                        Role::Canonical(Canonical::Table { .. } | Canonical::Cell(_))
+                    )
+            })
+            .map(|child| (top.member, Some(child.member)))
+    })
+}
+
+/// The World members whose storage `selection` does not install, by snapshot member name
+/// (`specs/live_runtime_upgrades.md` §5.5).
 ///
 /// A World field a release addition adds stays out of snapshots until a change set installs its
 /// storage, and a restore gives it its empty default, so the release before the addition keeps
-/// reading this release's snapshots until activation.
+/// reading this release's snapshots until activation. A field of a nested owner (the trigger
+/// set) stays out of its owner's member in the same way.
 ///
 /// # Errors
-/// The release catalog cannot be built (a build defect), or an uninstalled field is not a
-/// top-level World member.
+/// The release catalog cannot be built (a build defect), or an uninstalled field has no snapshot
+/// member.
 pub(crate) fn uninstalled_world_members(
     selection: &RootSelectionV1,
-) -> Result<Vec<&'static str>, String> {
+) -> Result<UninstalledWorldMembers, String> {
     let catalog = release_catalog().map_err(|error| error.to_string())?;
     let members = <crate::state::World as norito::json::FastJsonWrite>::json_object_field_order()
         .unwrap_or_default();
-    catalog
-        .world_storage
-        .iter()
-        .filter(|(_, storage)| selection.installed_storage.binary_search(storage).is_err())
-        .map(|(field, _)| {
-            field
-                .strip_prefix("world.")
-                .and_then(|name| members.iter().find(|member| **member == name).copied())
-                .ok_or_else(|| format!("uninstalled World field {field} is not a top-level member"))
-        })
-        .collect()
+    // A field is installed when the selection installs a storage definition of its namespace,
+    // whichever definition that is: an identity cutover replaces the definition a release
+    // founded the field with by its successor over the same field.
+    let mut installed = std::collections::BTreeSet::new();
+    for storage in &selection.installed_storage {
+        match catalog.definitions.get(storage) {
+            Some(DefinitionDescriptorV1::Storage(descriptor)) => {
+                installed.insert(descriptor.namespace.as_str());
+            }
+            _ => {
+                return Err(format!(
+                    "the selection installs storage {storage}, which this release does not \
+                     implement"
+                ));
+            }
+        }
+    }
+    let mut uninstalled = UninstalledWorldMembers::default();
+    for field in catalog.world_storage.keys() {
+        if installed.contains(*field) {
+            continue;
+        }
+        let (member, child) = world_snapshot_member(field)
+            .filter(|(member, _)| members.contains(member))
+            .ok_or_else(|| format!("uninstalled World field {field} has no snapshot member"))?;
+        match child {
+            None => uninstalled.members.push(member),
+            Some(child) => match uninstalled
+                .nested
+                .iter_mut()
+                .find(|(owner, _)| *owner == member)
+            {
+                Some((_, children)) => children.push(child),
+                None => uninstalled.nested.push((member, vec![child])),
+            },
+        }
+    }
+    Ok(uninstalled)
 }
 
 /// The change set that moves the universal root of `world`, on `network`, from its committed
@@ -161,8 +268,17 @@ pub fn draft_addition(
 ) -> Result<iroha_data_model::runtime::lifecycle::ChangeSetV1, CatalogError> {
     let published = change_set::PublishedDefinitions(world.runtime_definitions());
     if module == iroha_data_model::runtime::keyed_state::PROFILE_NAME {
-        return keyed_state::next_change_set(network, world.runtime_selection(), &published, effective_height, qualification)
-            .map_err(|reason| CatalogError::Addition { module: module.to_owned(), reason });
+        return keyed_state::next_change_set(
+            network,
+            world.runtime_selection(),
+            &published,
+            effective_height,
+            qualification,
+        )
+        .map_err(|reason| CatalogError::Addition {
+            module: module.to_owned(),
+            reason,
+        });
     }
     release_catalog()?.activation(
         module,
@@ -234,6 +350,37 @@ pub(crate) fn resolve(
         )?;
     }
     Ok(Some(binding.implementation))
+}
+
+/// Resolve `instruction` where it executes (§5.2, §7.1, §7.2): against the selection the root
+/// executes at this height, with its restrictions and the live obligation the instruction acts
+/// on. An instruction that is a committed terminal effect of a registered obligation, and what
+/// it invokes, complete that obligation.
+///
+/// Every native path that executes an instruction calls it before any check that depends on
+/// what the instruction is, so a restriction or a containment holds whichever path runs the
+/// instruction.
+///
+/// Returns the implementation the selection binds, or `None` for a private primitive.
+///
+/// # Errors
+/// The stable rejection the live-upgrade mechanism commits for the instruction.
+pub(crate) fn resolve_executing(
+    state_transaction: &crate::state::StateTransaction<'_, '_>,
+    instruction: &iroha_data_model::isi::InstructionBox,
+) -> Result<Option<DefinitionId>, iroha_data_model::isi::error::InstructionExecutionError> {
+    envelope::resolve_envelope(
+        state_transaction.world.runtime_selection.get(),
+        state_transaction._curr_block.height().get(),
+        instruction,
+        || {
+            if state_transaction.completing_obligation {
+                Some(obligations::Step::Complete)
+            } else {
+                obligations::step(instruction, &state_transaction.world)
+            }
+        },
+    )
 }
 
 /// Require the successor storage contract for an Ironwood write, including private native calls.

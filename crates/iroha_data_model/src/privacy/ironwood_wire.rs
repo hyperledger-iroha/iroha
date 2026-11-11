@@ -231,6 +231,8 @@ impl<T: norito::SerializePayload> norito::SerializePayload for PrivacyWireBorrow
         self.0.encoded_len_exact()
     }
 }
+// The zero-length array contributes only `Wire`'s alignment; the layout is declared.
+#[repr(C)]
 struct PrivacySelectedFrame<Wire, Payload> {
     payload: Payload,
     _wire_alignment: [Wire; 0],

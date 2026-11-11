@@ -768,7 +768,6 @@ fn gas_charged_by_next_block(state: &State, instruction: &InstructionBox) -> (u6
     )
 }
 
-#[cfg(feature = "zk-stark")]
 #[test]
 fn proof_bearing_history_is_identical_under_divergent_node_configuration() {
     let backend = crate::zk::ZK_BACKEND_STARK_FRI_V1;
@@ -954,7 +953,6 @@ fn proof_bearing_history_is_identical_under_divergent_node_configuration() {
     );
 }
 
-#[cfg(feature = "zk-stark")]
 #[test]
 fn committed_gas_schedule_prices_a_real_proof_identically_on_every_node() {
     let backend = crate::zk::ZK_BACKEND_STARK_FRI_V1;

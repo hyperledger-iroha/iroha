@@ -207,11 +207,9 @@ use iroha_data_model::{
         ComputePriceRiskClass, ComputePriceWeights, ComputeResourceBudget, ComputeSandboxRules,
         ComputeSponsorPolicy,
     },
-    content::ContentAuthMode,
     da::{
         commitment::DaProofScheme,
         confidential_compute::{ConfidentialComputeMechanism, ConfidentialComputePolicy},
-        prelude::DaStripeLayout,
         types::{BlobClass, DaRentPolicyV1, GovernanceTag, RetentionPolicy},
     },
     jurisdiction::JdgSignatureScheme,
@@ -219,10 +217,9 @@ use iroha_data_model::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
         AUTOSCALE_META_MANAGED, DaManifestPolicy, DataSpaceCatalog, DataSpaceMetadata,
         FeeSponsorProgramId, LaneCatalog, LaneConfig, LaneSchedulerPolicy,
-        LaneSettlementBufferPolicy, LaneStorageProfile, LaneVisibility, UniversalAccountId,
+        LaneSettlementBufferPolicy, LaneStorageProfile, LaneVisibility,
     },
     privacy::{PrivacyIssuerIdV1, PrivacyPolicyIdV1},
-    role::RoleId,
     sorafs::{
         pin_registry::{
             ProviderIngestCompletionSignerPolicyV1, StorageClass as SorafsStorageClass,
@@ -926,8 +923,6 @@ pub struct Root {
     streaming: Streaming,
     #[config(nested)]
     crypto: Crypto,
-    #[config(nested)]
-    settlement: Settlement,
     /// Norito codec configuration
     #[config(nested)]
     norito: Norito,
@@ -1014,9 +1009,6 @@ pub enum ParseError {
     /// Telemetry configuration contained invalid or unsupported values.
     #[error("Invalid telemetry configuration")]
     InvalidTelemetryConfig,
-    /// Settlement engine configuration was invalid or incomplete.
-    #[error("Invalid settlement configuration")]
-    InvalidSettlementConfig,
     /// Invalid native AMX relay custody, trust or local scheduling configuration.
     #[error("invalid AMX relay configuration")]
     InvalidAmxRelayConfig,
@@ -1463,7 +1455,9 @@ impl Root {
         let crypto = crypto_input.parse(&mut emitter);
         let legacy_genesis =
             legacy_genesis::parse(legacy_crypto, legacy_staking, &crypto, &mut emitter);
-        let settlement = self.settlement.parse(&mut emitter);
+        // The settlement router inputs are protocol constants; the settings
+        // value a node builds holds them and this schema has no such section.
+        let settlement = actual::Settlement::default();
         let amx_relay = self.amx_relay.parse(&mut emitter);
         if let Err(err) = concurrency.validate() {
             emitter.emit(err);
@@ -3982,26 +3976,15 @@ impl Compute {
     }
 }
 /// User-level configuration for the content lane.
+///
+/// Gateway resources of this node only. The bundle limits and defaults (the
+/// size, file-count, path and retention caps, the chunk size, the cache
+/// defaults and the default stripe layout) are protocol constants, who may
+/// publish is the executor's admission decision, and a bundle manifest that
+/// names no read authorization mode is public. None of these is a key of this
+/// schema, so a configuration that names one fails to load.
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Content {
-    /// Maximum tarball size accepted for a bundle (bytes).
-    #[config(default = "defaults::content::MAX_BUNDLE_BYTES")]
-    pub max_bundle_bytes: u64,
-    /// Maximum number of files in an archive.
-    #[config(default = "defaults::content::MAX_FILES")]
-    pub max_files: u32,
-    /// Maximum allowed path length per file.
-    #[config(default = "defaults::content::MAX_PATH_LEN")]
-    pub max_path_len: u32,
-    /// Maximum retention window (blocks) for expiring bundles.
-    #[config(default = "defaults::content::MAX_RETENTION_BLOCKS")]
-    pub max_retention_blocks: u64,
-    /// Chunk size (bytes) used during ingestion.
-    #[config(default = "defaults::content::CHUNK_SIZE_BYTES")]
-    pub chunk_size_bytes: u32,
-    /// Accounts permitted to publish bundles (empty = allow all).
-    #[config(default)]
-    pub publish_allow_accounts: Vec<AccountId>,
     /// Maximum requests per second served by the content gateway.
     #[config(default = "defaults::content::MAX_REQUESTS_PER_SECOND")]
     pub max_requests_per_second: u32,
@@ -4014,18 +3997,6 @@ pub struct Content {
     /// Burst size for egress token buckets (bytes).
     #[config(default = "defaults::content::EGRESS_BURST_BYTES")]
     pub egress_burst_bytes: u64,
-    /// Default Cache-Control max-age (seconds) applied to bundles.
-    #[config(default = "defaults::content::DEFAULT_CACHE_MAX_AGE_SECS")]
-    pub default_cache_max_age_secs: u32,
-    /// Upper bound for Cache-Control max-age (seconds).
-    #[config(default = "defaults::content::MAX_CACHE_MAX_AGE_SECS")]
-    pub max_cache_max_age_secs: u32,
-    /// Whether bundles are immutable by default.
-    #[config(default = "defaults::content::IMMUTABLE_BUNDLES")]
-    pub immutable_bundles: bool,
-    /// Default auth mode (`public`, `role:<role_id>`, or `sponsor:<uaid>`).
-    #[config(default = "defaults::content::default_auth_mode()")]
-    pub default_auth_mode: String,
     /// Target p50 latency (milliseconds) for content responses.
     #[config(default = "defaults::content::TARGET_P50_LATENCY_MS")]
     pub target_p50_latency_ms: u32,
@@ -4041,29 +4012,22 @@ pub struct Content {
     /// Header carrying `PoW` tokens.
     #[config(default = "defaults::content::default_pow_header()")]
     pub pow_header: String,
-    /// Default DA stripe layout applied to content bundles.
-    #[config(default = "defaults::content::default_stripe_layout()")]
-    pub stripe_layout: DaStripeLayout,
 }
 impl Content {
     fn parse(self) -> actual::Content {
-        let max_cache_max_age_secs = self.max_cache_max_age_secs.max(1);
-        let default_cache_max_age_secs = self
-            .default_cache_max_age_secs
-            .min(max_cache_max_age_secs)
-            .max(1);
+        // The bundle limits and defaults are protocol constants; the settings
+        // value a node builds holds them.
         let pow_header = if self.pow_header.trim().is_empty() {
             defaults::content::default_pow_header()
         } else {
             self.pow_header
         };
         actual::Content {
-            max_bundle_bytes: self.max_bundle_bytes,
-            max_files: self.max_files,
-            max_path_len: self.max_path_len,
-            max_retention_blocks: self.max_retention_blocks,
-            chunk_size_bytes: self.chunk_size_bytes,
-            publish_allow_accounts: self.publish_allow_accounts,
+            max_bundle_bytes: defaults::content::MAX_BUNDLE_BYTES,
+            max_files: defaults::content::MAX_FILES,
+            max_path_len: defaults::content::MAX_PATH_LEN,
+            max_retention_blocks: defaults::content::MAX_RETENTION_BLOCKS,
+            chunk_size_bytes: defaults::content::CHUNK_SIZE_BYTES,
             limits: actual::ContentLimits {
                 max_requests_per_second: NonZeroU32::new(self.max_requests_per_second)
                     .unwrap_or_else(|| nonzero!(1_u32)),
@@ -4076,10 +4040,9 @@ impl Content {
                 egress_burst_bytes: NonZeroU64::new(self.egress_burst_bytes)
                     .unwrap_or_else(|| nonzero!(1_u64)),
             },
-            default_cache_max_age_secs,
-            max_cache_max_age_secs,
-            immutable_bundles: self.immutable_bundles,
-            default_auth_mode: parse_content_auth_mode(&self.default_auth_mode),
+            default_cache_max_age_secs: defaults::content::DEFAULT_CACHE_MAX_AGE_SECS,
+            max_cache_max_age_secs: defaults::content::MAX_CACHE_MAX_AGE_SECS,
+            immutable_bundles: defaults::content::IMMUTABLE_BUNDLES,
             slo: actual::ContentSlo {
                 target_p50_latency_ms: NonZeroU32::new(self.target_p50_latency_ms)
                     .unwrap_or_else(|| nonzero!(1_u32)),
@@ -4092,29 +4055,9 @@ impl Content {
                 difficulty_bits: self.pow_difficulty_bits,
                 header_name: pow_header,
             },
-            stripe_layout: self.stripe_layout,
+            stripe_layout: defaults::content::default_stripe_layout(),
         }
     }
-}
-fn parse_content_auth_mode(raw: &str) -> ContentAuthMode {
-    if raw == "public" {
-        return ContentAuthMode::Public;
-    }
-    if let Some(role_str) = raw.strip_prefix("role:") {
-        let role = RoleId::from_str(role_str).unwrap_or_else(|err| {
-            panic!("invalid content.default_auth_mode role `{role_str}`: {err}");
-        });
-        return ContentAuthMode::RoleGate(role);
-    }
-    if let Some(uaid_str) = raw.strip_prefix("sponsor:") {
-        let uaid = UniversalAccountId::from_str(uaid_str).unwrap_or_else(|err| {
-            panic!("invalid content.default_auth_mode sponsor `{uaid_str}`: {err}");
-        });
-        return ContentAuthMode::Sponsor(uaid);
-    }
-    panic!(
-        "invalid content.default_auth_mode value `{raw}`; expected exact `public`, `role:<role_id>`, or `sponsor:uaid:<lowercase-hex>`"
-    );
 }
 /// Economic settings for the compute lane (pricing, bounds, sponsorship).
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
@@ -8345,51 +8288,6 @@ impl Queue {
         }
     }
 }
-/// User-level configuration container for `Settlement`.
-#[derive(Debug, ReadConfig, Clone, Copy, Default)]
-pub struct Settlement {
-    /// Router configuration (shadow price, buffers).
-    #[config(nested)]
-    pub router: Router,
-}
-/// User-level configuration for the settlement router.
-#[derive(Debug, ReadConfig, Clone, Copy)]
-pub struct Router {
-    /// TWAP window used for settlement quotes (seconds).
-    #[config(default = "defaults::settlement::router::TWAP_WINDOW_SECS")]
-    pub twap_window_seconds: u64,
-    /// Base epsilon margin applied to every quote (basis points).
-    #[config(default = "defaults::settlement::router::EPSILON_BPS")]
-    pub epsilon_bps: u16,
-    /// Buffer alert threshold percentage.
-    #[config(default = "defaults::settlement::router::ALERT_PCT")]
-    pub buffer_alert_pct: u8,
-    /// Buffer throttle threshold percentage.
-    #[config(default = "defaults::settlement::router::THROTTLE_PCT")]
-    pub buffer_throttle_pct: u8,
-    /// Buffer XOR-only threshold percentage.
-    #[config(default = "defaults::settlement::router::XOR_ONLY_PCT")]
-    pub buffer_xor_only_pct: u8,
-    /// Buffer halt threshold percentage.
-    #[config(default = "defaults::settlement::router::HALT_PCT")]
-    pub buffer_halt_pct: u8,
-    /// Buffer horizon (hours).
-    #[config(default = "defaults::settlement::router::BUFFER_HORIZON_HOURS")]
-    pub buffer_horizon_hours: u16,
-}
-impl Default for Router {
-    fn default() -> Self {
-        Self {
-            twap_window_seconds: defaults::settlement::router::TWAP_WINDOW_SECS,
-            epsilon_bps: defaults::settlement::router::EPSILON_BPS,
-            buffer_alert_pct: defaults::settlement::router::ALERT_PCT,
-            buffer_throttle_pct: defaults::settlement::router::THROTTLE_PCT,
-            buffer_xor_only_pct: defaults::settlement::router::XOR_ONLY_PCT,
-            buffer_halt_pct: defaults::settlement::router::HALT_PCT,
-            buffer_horizon_hours: defaults::settlement::router::BUFFER_HORIZON_HOURS,
-        }
-    }
-}
 /// User-level configuration container for `Confidential`.
 ///
 /// Node-local settings only. Confidential proof limits, windows, registry caps
@@ -8411,74 +8309,6 @@ pub struct Confidential {
     /// Local wall-clock budget of one confidential proof verification attempt.
     #[config(default = "defaults::confidential::VERIFY_TIMEOUT.into()")]
     pub verify_timeout_ms: DurationMs,
-}
-impl Settlement {
-    /// Convert this user configuration into the runtime representation.
-    pub fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Settlement {
-        actual::Settlement {
-            router: self.router.parse(emitter),
-        }
-    }
-}
-impl Router {
-    /// Convert router knobs into runtime parameters, validating guard rails.
-    pub fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Router {
-        const MAX_EPSILON_BPS: u16 = 10_000;
-        let Router {
-            mut twap_window_seconds,
-            mut epsilon_bps,
-            buffer_alert_pct,
-            buffer_throttle_pct,
-            buffer_xor_only_pct,
-            buffer_halt_pct,
-            mut buffer_horizon_hours,
-        } = self;
-        if twap_window_seconds == 0 {
-            emitter.emit(ParseError::InvalidSettlementConfig.into());
-            twap_window_seconds = defaults::settlement::router::TWAP_WINDOW_SECS;
-        }
-        if epsilon_bps > MAX_EPSILON_BPS {
-            emitter.emit(ParseError::InvalidSettlementConfig.into());
-            epsilon_bps = defaults::settlement::router::EPSILON_BPS;
-        }
-        if buffer_horizon_hours == 0 {
-            emitter.emit(ParseError::InvalidSettlementConfig.into());
-            buffer_horizon_hours = defaults::settlement::router::BUFFER_HORIZON_HOURS;
-        }
-        let thresholds = (
-            buffer_alert_pct,
-            buffer_throttle_pct,
-            buffer_xor_only_pct,
-            buffer_halt_pct,
-        );
-        let resolved_thresholds = if Self::thresholds_valid(thresholds) {
-            thresholds
-        } else {
-            emitter.emit(
-                Report::new(ParseError::InvalidSettlementConfig)
-                    .attach("buffer thresholds must satisfy alert > throttle > xor_only > halt"),
-            );
-            (
-                defaults::settlement::router::ALERT_PCT,
-                defaults::settlement::router::THROTTLE_PCT,
-                defaults::settlement::router::XOR_ONLY_PCT,
-                defaults::settlement::router::HALT_PCT,
-            )
-        };
-        actual::Router {
-            twap_window: Duration::from_secs(twap_window_seconds),
-            epsilon_bps,
-            buffer_alert_pct: resolved_thresholds.0,
-            buffer_throttle_pct: resolved_thresholds.1,
-            buffer_xor_only_pct: resolved_thresholds.2,
-            buffer_halt_pct: resolved_thresholds.3,
-            buffer_horizon_hours,
-        }
-    }
-    fn thresholds_valid(thresholds: (u8, u8, u8, u8)) -> bool {
-        let (alert, throttle, xor_only, halt) = thresholds;
-        alert <= 100 && halt < xor_only && xor_only < throttle && throttle < alert && halt < 100
-    }
 }
 impl Default for Confidential {
     fn default() -> Self {
@@ -34034,10 +33864,6 @@ mod configuration_regression_tests {
     }
 }
 include!("user_validation_tests.rs");
-#[cfg(test)]
-#[path = "user/settlement_router_tests.rs"]
-mod settlement_router_tests;
-
 #[cfg(test)]
 mod committed_fee_configuration_tests {
     use super::*;

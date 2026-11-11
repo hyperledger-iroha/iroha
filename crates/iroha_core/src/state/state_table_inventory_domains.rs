@@ -760,9 +760,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     OtherDomains {
         usage: Use::Name,
         reason: "Root domain of the keyed State contract's test-only reference oracle",
-        literals: &[
-            r"iroha:state-keyed-commitment:reference-oracle:root:v1\0",
-        ],
+        literals: &[r"iroha:state-keyed-commitment:reference-oracle:root:v1\0"],
     },
     OtherDomains {
         usage: Use::Name,
@@ -1559,6 +1557,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha.kernel.v1",
             r"iroha.parameters.v1",
             r"iroha.runtime.endorsed_change_set_proposal.v1",
+            r"iroha.runtime.lifecycle.v1",
             r"iroha.sorafs.authority_governance.v1",
             r"iroha.world.lthash16.v1",
             r"iroha:ironwood:qualification-evidence:v1\0",
@@ -1572,7 +1571,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Record,
-        reason: "Identities and signature domains of live-upgrade lifecycle records (specs/live_runtime_upgrades.md §6, §7, §13): change sets and the release signers' provenance endorsements of them, validator support attestations with the release digests and committees they bind, adoption trust anchors, and emergency containment with its panel endorsements. Each hashes or signs one canonical record or a release's build status and implemented definitions; none commits to State content",
+        reason: "Identities and signature domains of live-upgrade lifecycle records (specs/live_runtime_upgrades.md §6, §7, §13): change sets and the release signers' provenance endorsements of them, validator support attestations with the release digests and committees they bind, adoption trust anchors, startup floors with the validators' statements of them, emergency containment with its panel endorsements, and the identities of kernel-registered obligations and of the exact instructions they commit to (§7.2). Each hashes or signs one canonical record, account or instruction, or a release's build status and implemented definitions; none commits to State content",
         literals: &[
             r"iroha:runtime:adoption-attestation:v1\0",
             r"iroha:runtime:adoption:v1\0",
@@ -1581,15 +1580,23 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha:runtime:committee:v1\0",
             r"iroha:runtime:containment-endorsement:v1\0",
             r"iroha:runtime:containment:v1\0",
+            r"iroha:runtime:obligation:v1\0",
             r"iroha:runtime:release:v1\0",
+            r"iroha:runtime:startup-floor-attestation:v1\0",
+            r"iroha:runtime:startup-floor:v1\0",
             r"iroha:runtime:support-attestation:v1\0",
+            r"iroha:runtime:terminal-effect:v1\0",
         ],
     },
     OtherDomains {
         usage: Use::Name,
-        reason: "Exact wire identities of the runtime lifecycle instructions that are not governance proposals (specs/live_runtime_upgrades.md §6, §7.1): a validator's support attestation of a scheduled change set and the emergency panel's containment, including their built-in dispatch entries. They select instruction layouts; the attestation's and endorsements' own signature domains authenticate them, and the identifiers compute no State digest",
+        reason: "Exact wire identities of the runtime lifecycle instructions that are not governance proposals (specs/live_runtime_upgrades.md §6, §7.1): a validator's support attestation of a scheduled change set, the emergency panel's containment, the registration and completion of a kernel obligation (§7.2), and the ratification of the adoption anchor and raising of the startup floor (§7.3, §13), including their built-in dispatch entries. They select instruction layouts; the attestation's and endorsements' own signature domains authenticate them, and the identifiers compute no State digest",
         literals: &[
+            r"iroha.runtime.boundary.anchor.v1",
+            r"iroha.runtime.boundary.floor.v1",
             r"iroha.runtime.contain.v1",
+            r"iroha.runtime.obligation.complete.v1",
+            r"iroha.runtime.obligation.register.v1",
             r"iroha.runtime.support.attest.v1",
         ],
     },

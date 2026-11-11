@@ -12,13 +12,18 @@
 //! caller to supply a nonce with sufficient entropy and should never be reused when encrypting
 //! with the same `key`.
 //!
-//! The convenience struct [`crate::encryption::SymmetricEncryptor`] exists to allow users to easily
-//! switch between algorithms by using any algorithm that implements [`aead::Aead`] and [`aead::KeyInit`].
-//!
-//! [`crate::encryption::ChaCha20Poly1305`] is the only algorithm currently supported,
+//! [`crate::encryption::SymmetricEncryptor`] accepts the algorithms that implement
+//! [`crate::encryption::Cipher`]. [`crate::encryption::ChaCha20Poly1305`] is the only one,
 //! as it is the only one used by the Iroha p2p transport protocol.
+//!
+//! Every encryptor method runs the cipher through the two [`crate::encryption::Cipher`]
+//! kernels. They are monomorphic functions of this crate, so a consumer executes the code
+//! this crate generates for the cipher whatever its own build profile is. A generic
+//! [`aead::AeadInOut`] call is instead instantiated in the crate that makes it: a node built
+//! without optimization then seals and opens every transport frame with an unoptimized
+//! cipher, which costs seconds per maximum-size consensus payload.
 use crate::SessionKey;
-use aead::{Aead, AeadCore, AeadInOut, KeyInit, Payload, TagPosition};
+use aead::{AeadCore, AeadInOut, KeyInit, TagPosition};
 pub use chacha20poly1305::ChaCha20Poly1305;
 use rand::rngs::SysError;
 use rand::rngs::SysRng;
@@ -66,18 +71,84 @@ where
 fn nonce_from_slice<E: AeadCore>(bytes: &[u8]) -> Result<aead::Nonce<E>, Error> {
     aead::Nonce::<E>::try_from(bytes).map_err(|_| Error::NotEnoughData)
 }
-/// Helper wrapper around an [`Aead`] implementation that provides convenience
-/// helpers for nonce management and envelope layout.
+mod sealed {
+    /// Only this crate names the algorithms whose kernels it compiles.
+    pub trait Sealed {}
+    impl Sealed for super::ChaCha20Poly1305 {}
+}
+/// An AEAD algorithm whose detached seal and open kernels this crate compiles.
+///
+/// Both methods are implemented as monomorphic, never-inlined functions of this crate;
+/// see the module documentation for why they are not left to generic instantiation.
+pub trait Cipher: AeadInOut + KeyInit + sealed::Sealed {
+    /// Encrypt `message` in place under `nonce`, authenticating it together with `aad`.
+    ///
+    /// # Errors
+    /// The algorithm cannot seal a message of this length.
+    fn seal_detached(
+        &self,
+        nonce: &aead::Nonce<Self>,
+        aad: &[u8],
+        message: &mut [u8],
+    ) -> Result<aead::Tag<Self>, aead::Error>;
+    /// Authenticate `message`, `aad` and `tag` under `nonce`, then decrypt `message` in place.
+    ///
+    /// # Errors
+    /// Authentication failed; `message` may no longer hold the original ciphertext.
+    fn open_detached(
+        &self,
+        nonce: &aead::Nonce<Self>,
+        aad: &[u8],
+        message: &mut [u8],
+        tag: &aead::Tag<Self>,
+    ) -> Result<(), aead::Error>;
+}
+impl Cipher for ChaCha20Poly1305 {
+    #[inline(never)]
+    fn seal_detached(
+        &self,
+        nonce: &aead::Nonce<Self>,
+        aad: &[u8],
+        message: &mut [u8],
+    ) -> Result<aead::Tag<Self>, aead::Error> {
+        self.encrypt_inout_detached(nonce, aad, message.into())
+    }
+    #[inline(never)]
+    fn open_detached(
+        &self,
+        nonce: &aead::Nonce<Self>,
+        aad: &[u8],
+        message: &mut [u8],
+        tag: &aead::Tag<Self>,
+    ) -> Result<(), aead::Error> {
+        self.decrypt_inout_detached(nonce, aad, message.into(), tag)
+    }
+}
+/// The message and tag slots of `message || tag` or `tag || message` storage, by the
+/// algorithm's tag position. `None` when the storage cannot hold a tag.
+fn split_tag<E: AeadCore>(body: &mut [u8]) -> Option<(&mut [u8], &mut [u8])> {
+    let tag_len = mem::size_of::<aead::Tag<E>>();
+    let message_len = body.len().checked_sub(tag_len)?;
+    Some(match E::TAG_POSITION {
+        TagPosition::Prefix => {
+            let (tag, message) = body.split_at_mut(tag_len);
+            (message, tag)
+        }
+        TagPosition::Postfix => body.split_at_mut(message_len),
+    })
+}
+/// Helper wrapper around a [`Cipher`] that provides convenience helpers for nonce
+/// management and envelope layout.
 #[derive(Debug, Clone)]
 pub struct SymmetricEncryptor<E>
 where
-    E: Aead + KeyInit,
+    E: Cipher,
 {
     encryptor: E,
 }
 impl<E> SymmetricEncryptor<E>
 where
-    E: Aead + KeyInit,
+    E: Cipher,
 {
     /// Create a new [`SymmetricEncryptor`] using the provided `encryptor`
     pub fn new(encryptor: E) -> Self {
@@ -109,22 +180,9 @@ where
     /// [`Error::InertNonce`] if the RNG returns all-zero nonce material, or
     /// [`Error::Encryption`] if the cipher rejects the payload.
     pub fn encrypt_easy<A: AsRef<[u8]>>(&self, aad: A, plaintext: A) -> Result<Vec<u8>, Error> {
-        let nonce = random_nonce::<E>()?;
-        let ciphertext = self
-            .encryptor
-            .encrypt(
-                &nonce,
-                Payload {
-                    msg: plaintext.as_ref(),
-                    aad: aad.as_ref(),
-                },
-            )
-            .map_err(Error::Encryption)?;
-        let nonce_bytes: &[u8] = nonce.as_ref();
-        let mut result = Vec::with_capacity(nonce_bytes.len() + ciphertext.len());
-        result.extend_from_slice(nonce_bytes);
-        result.extend_from_slice(&ciphertext);
-        Ok(result)
+        let mut envelope = Vec::new();
+        self.encrypt_easy_into(aad, plaintext, &mut envelope)?;
+        Ok(envelope)
     }
     /// Encrypt `plaintext` and integrity protect `aad` into the provided buffer.
     ///
@@ -141,24 +199,16 @@ where
         aad: A,
         plaintext: A,
         out: &'a mut Vec<u8>,
-    ) -> Result<&'a [u8], Error>
-    where
-        E: AeadInOut,
-    {
+    ) -> Result<&'a [u8], Error> {
         let nonce = random_nonce::<E>()?;
-        let nonce_bytes: &[u8] = nonce.as_ref();
-        let nonce_len = nonce_bytes.len();
+        let plaintext = plaintext.as_ref();
+        let nonce_len = mem::size_of::<aead::Nonce<E>>();
+        let tag_len = mem::size_of::<aead::Tag<E>>();
         out.clear();
-        out.extend_from_slice(plaintext.as_ref());
-        self.encryptor
-            .encrypt_in_place(&nonce, aad.as_ref(), out)
-            .map_err(Error::Encryption)?;
-        // Prefix the nonce by shifting ciphertext bytes to the right.
-        let ciphertext_len = out.len();
-        out.reserve(nonce_len);
-        out.resize(ciphertext_len + nonce_len, 0);
-        out.copy_within(0..ciphertext_len, nonce_len);
-        out[..nonce_len].copy_from_slice(nonce_bytes);
+        out.resize(nonce_len + plaintext.len() + tag_len, 0);
+        let (message, _) = split_tag::<E>(&mut out[nonce_len..]).ok_or(Error::NotEnoughData)?;
+        message.copy_from_slice(plaintext);
+        self.seal_envelope(&nonce, aad.as_ref(), out)?;
         Ok(out.as_slice())
     }
     /// Seal an initialized envelope in place without allocating backing storage.
@@ -176,10 +226,7 @@ where
         &self,
         aad: A,
         data: &mut [u8],
-    ) -> Result<(), Error>
-    where
-        E: AeadInOut,
-    {
+    ) -> Result<(), Error> {
         self.encrypt_easy_in_place_from_rng(aad.as_ref(), data, &mut SysRng)
     }
 
@@ -188,28 +235,31 @@ where
         aad: &[u8],
         data: &mut [u8],
         rng: &mut R,
-    ) -> Result<(), Error>
-    where
-        E: AeadInOut,
-    {
+    ) -> Result<(), Error> {
         let nonce_len = mem::size_of::<aead::Nonce<E>>();
         let tag_len = mem::size_of::<aead::Tag<E>>();
         if data.len() < nonce_len + tag_len {
             return Err(Error::NotEnoughData);
         }
         let nonce = random_nonce_from_rng::<E, _>(rng)?;
-        let (nonce_bytes, envelope) = data.split_at_mut(nonce_len);
-        let message_len = envelope.len() - tag_len;
-        let (message, tag_bytes) = match E::TAG_POSITION {
-            TagPosition::Prefix => {
-                let (tag, message) = envelope.split_at_mut(tag_len);
-                (message, tag)
-            }
-            TagPosition::Postfix => envelope.split_at_mut(message_len),
-        };
+        self.seal_envelope(&nonce, aad, data)
+    }
+
+    /// Seal an envelope whose message slot is initialized, writing `nonce` and the tag
+    /// into their slots. Nothing but the message slot is written if sealing fails.
+    fn seal_envelope(
+        &self,
+        nonce: &aead::Nonce<E>,
+        aad: &[u8],
+        data: &mut [u8],
+    ) -> Result<(), Error> {
+        let (nonce_bytes, body) = data
+            .split_at_mut_checked(mem::size_of::<aead::Nonce<E>>())
+            .ok_or(Error::NotEnoughData)?;
+        let (message, tag_bytes) = split_tag::<E>(body).ok_or(Error::NotEnoughData)?;
         let tag = self
             .encryptor
-            .encrypt_inout_detached(&nonce, aad, message.into())
+            .seal_detached(nonce, aad, message)
             .map_err(Error::Encryption)?;
         nonce_bytes.copy_from_slice(nonce.as_slice());
         tag_bytes.copy_from_slice(tag.as_slice());
@@ -228,15 +278,16 @@ where
         plaintext: A,
     ) -> Result<Vec<u8>, Error> {
         let nonce = nonce_from_slice::<E>(nonce.as_ref())?;
-        self.encryptor
-            .encrypt(
-                &nonce,
-                Payload {
-                    msg: plaintext.as_ref(),
-                    aad: aad.as_ref(),
-                },
-            )
-            .map_err(Error::Encryption)
+        let plaintext = plaintext.as_ref();
+        let mut body = vec![0; plaintext.len() + mem::size_of::<aead::Tag<E>>()];
+        let (message, tag_bytes) = split_tag::<E>(&mut body).ok_or(Error::NotEnoughData)?;
+        message.copy_from_slice(plaintext);
+        let tag = self
+            .encryptor
+            .seal_detached(&nonce, aad.as_ref(), message)
+            .map_err(Error::Encryption)?;
+        tag_bytes.copy_from_slice(tag.as_slice());
+        Ok(body)
     }
     /// Decrypt `ciphertext` using integrity protected `aad`. The result is the plaintext if successful
     /// or an error if the `ciphertext` cannot be decrypted due to tampering, an incorrect `aad` value,
@@ -269,10 +320,7 @@ where
         aad: A,
         ciphertext: A,
         out: &'a mut Vec<u8>,
-    ) -> Result<&'a [u8], Error>
-    where
-        E: AeadInOut,
-    {
+    ) -> Result<&'a [u8], Error> {
         let data = ciphertext.as_ref();
         let nonce_len = mem::size_of::<aead::Nonce<E>>();
         let tag_len = mem::size_of::<aead::Tag<E>>();
@@ -283,9 +331,7 @@ where
         let nonce = nonce_from_slice::<E>(nonce_bytes)?;
         out.clear();
         out.extend_from_slice(ciphertext_bytes);
-        self.encryptor
-            .decrypt_in_place(&nonce, aad.as_ref(), out)
-            .map_err(Error::Decryption)?;
+        self.open_body(&nonce, aad.as_ref(), out)?;
         Ok(out.as_slice())
     }
     /// Decrypt an easy-envelope directly inside its source allocation.
@@ -301,10 +347,7 @@ where
         &self,
         aad: A,
         data: &'a mut [u8],
-    ) -> Result<&'a mut [u8], Error>
-    where
-        E: AeadInOut,
-    {
+    ) -> Result<&'a mut [u8], Error> {
         let nonce_len = mem::size_of::<aead::Nonce<E>>();
         let tag_len = mem::size_of::<aead::Tag<E>>();
         if data.len() < nonce_len + tag_len {
@@ -312,20 +355,10 @@ where
         }
         let (nonce_bytes, envelope) = data.split_at_mut(nonce_len);
         let nonce = nonce_from_slice::<E>(nonce_bytes)?;
-        let message_len = envelope
-            .len()
-            .checked_sub(tag_len)
-            .ok_or(Error::NotEnoughData)?;
-        let (message, tag_bytes) = match E::TAG_POSITION {
-            TagPosition::Prefix => {
-                let (tag, message) = envelope.split_at_mut(tag_len);
-                (message, tag)
-            }
-            TagPosition::Postfix => envelope.split_at_mut(message_len),
-        };
+        let (message, tag_bytes) = split_tag::<E>(envelope).ok_or(Error::NotEnoughData)?;
         let tag = aead::Tag::<E>::try_from(&*tag_bytes).map_err(|_| Error::NotEnoughData)?;
         self.encryptor
-            .decrypt_inout_detached(&nonce, aad.as_ref(), message.into(), &tag)
+            .open_detached(&nonce, aad.as_ref(), message, &tag)
             .map_err(Error::Decryption)?;
         Ok(message)
     }
@@ -349,15 +382,33 @@ where
         aad: &[u8],
         ciphertext: &[u8],
     ) -> Result<Vec<u8>, Error> {
+        let mut body = ciphertext.to_vec();
+        self.open_body(nonce, aad, &mut body)?;
+        Ok(body)
+    }
+
+    /// Open `message || tag` or `tag || message` storage in place, leaving only the message.
+    /// Storage too short to hold its tag fails authentication.
+    fn open_body(
+        &self,
+        nonce: &aead::Nonce<E>,
+        aad: &[u8],
+        body: &mut Vec<u8>,
+    ) -> Result<(), Error> {
+        let (message, tag_bytes) = split_tag::<E>(body).ok_or(Error::Decryption(aead::Error))?;
+        let tag =
+            aead::Tag::<E>::try_from(&*tag_bytes).map_err(|_| Error::Decryption(aead::Error))?;
         self.encryptor
-            .decrypt(
-                nonce,
-                Payload {
-                    msg: ciphertext,
-                    aad,
-                },
-            )
-            .map_err(Error::Decryption)
+            .open_detached(nonce, aad, message, &tag)
+            .map_err(Error::Decryption)?;
+        let message_len = message.len();
+        match E::TAG_POSITION {
+            TagPosition::Prefix => {
+                body.drain(..body.len() - message_len);
+            }
+            TagPosition::Postfix => body.truncate(message_len),
+        }
+        Ok(())
     }
 }
 #[cfg(test)]
@@ -530,3 +581,6 @@ mod error_tests;
 
 #[cfg(test)]
 mod initialized_tests;
+
+#[cfg(test)]
+mod kernel_tests;

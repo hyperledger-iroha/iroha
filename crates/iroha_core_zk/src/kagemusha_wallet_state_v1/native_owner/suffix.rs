@@ -150,7 +150,7 @@ impl ReviewedSuffixFailureV1 {
 /// Nonserialized correlation for one source-selected bounded proof turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct WorkBinding {
-    request: [u8; 32],
+    request_id: [u8; 32],
     source_capsule: [u8; 32],
     source_sequence: u128,
     source_selected_generation: u128,

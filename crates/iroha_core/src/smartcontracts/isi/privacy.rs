@@ -250,7 +250,6 @@ fn privacy_verification_error(
         | PrivacyVerificationErrorV1::NativeFcmp(_)
         | PrivacyVerificationErrorV1::NativeIvmPrivateNote(_)
         | PrivacyVerificationErrorV1::NativePqMasp(_) => false,
-        #[cfg(feature = "zk-stark")]
         PrivacyVerificationErrorV1::NativeZkAce(_) => false,
     };
     ExecutionAttemptError::Rejected(if invariant {
@@ -8443,7 +8442,6 @@ mod tests {
         assert_eq!(transaction.world.privacy_commitments.get(&policy_key), None);
         assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
     }
-    #[cfg(feature = "zk-stark")]
     #[test]
     fn zk_ace_submit_has_no_available_compiled_profile() {
         let protocol_id = PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1;

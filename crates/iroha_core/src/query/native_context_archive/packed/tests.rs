@@ -2,7 +2,7 @@
 
 use super::super::{
     CastingBindingsRef, LaneStateRef, NativeContextArchive, OrdinaryWritesRef,
-    PreparedNativeContext, Projection, open_directory, pack_existing_records,
+    PreparedNativeContext, Projection, ReplayBarrier, open_directory, pack_existing_records,
 };
 use super::*;
 use crate::query::native_context_archive::PackMode;
@@ -98,6 +98,7 @@ fn archive(root: &Path, budget: AllocationBudget) -> NativeContextArchive {
         namespace: "native-contexts",
         fastpq_maximum: None,
         fastpq_replay_target: None,
+        replay_barrier: ReplayBarrier::default(),
     }
 }
 fn record(
@@ -375,6 +376,7 @@ fn refused_rebuild_keeps_the_selected_record_and_retries_exactly() {
         namespace: "native-contexts",
         fastpq_maximum: None,
         fastpq_replay_target: None,
+        replay_barrier: ReplayBarrier::default(),
     };
     let blocker = ChargedBuffer::<u8>::new(1, &budget).unwrap();
     let mut read = reader.read_job(2, carrier(2));

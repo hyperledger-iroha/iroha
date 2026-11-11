@@ -289,6 +289,12 @@ impl_direct_instruction_box!(crate::isi::retail_daily_limit::BindRetailIdentityV
 impl_direct_instruction_box!(crate::isi::retail_daily_limit::RetailMonetaryMovementV1);
 impl_direct_instruction_box!(crate::isi::account_signing_key::SetAccountSigningKeyV1);
 impl_direct_instruction_box!(
+    crate::isi::runtime_obligation::RegisterRuntimeObligationV1,
+    crate::isi::runtime_obligation::CompleteRuntimeObligationV1,
+    crate::isi::runtime_boundary::RatifyRuntimeAdoptionAnchorV1,
+    crate::isi::runtime_boundary::RaiseRuntimeStartupFloorV1,
+);
+impl_direct_instruction_box!(
     crate::isi::game_partition::InstallGamePartitionV1,
     crate::isi::game_partition::RegisterGamePartitionPeerV1,
     crate::isi::game_partition::SeedGameUnitV1,
@@ -2227,6 +2233,10 @@ mod registry_install;
 /// Repo settlement instructions.
 pub mod repo;
 pub mod retail_daily_limit;
+/// Ratification of a root's adoption anchor and raising of its startup floor.
+pub mod runtime_boundary;
+/// Kernel registration and completion of obligations.
+pub mod runtime_obligation;
 /// Runtime upgrade instructions and payloads.
 pub mod runtime_upgrade;
 /// Real-world asset lot instructions.

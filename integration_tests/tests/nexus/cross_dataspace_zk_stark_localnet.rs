@@ -1,4 +1,4 @@
-#![cfg(feature = "zk-stark")]
+#![cfg(feature = "stark-network-tests")]
 //! Cross-dataspace STARK verification tests that validate proof outcomes while
 //! ensuring proof payload details are not exposed to other dataspaces.
 use super::localnet_npos::npos_override_transactions;
@@ -220,23 +220,6 @@ async fn wait_for_committed_success(
     Err(eyre!(
         "{context}: timed out waiting for committed transaction outcome for transaction {entry_hash}{suffix}"
     ))
-}
-fn has_test_network_feature(feature: &str) -> bool {
-    std::env::var("TEST_NETWORK_IROHAD_FEATURES")
-        .ok()
-        .map(|value| {
-            value
-                .split([',', ' ', '\t', '\n'])
-                .any(|item| item.trim() == feature)
-        })
-        .unwrap_or(false)
-}
-fn require_test_network_feature(feature: &str, test_name: &str) -> Result<()> {
-    ensure!(
-        has_test_network_feature(feature),
-        "{test_name}: TEST_NETWORK_IROHAD_FEATURES must include `{feature}` to execute the runtime path"
-    );
-    Ok(())
 }
 fn localnet_builder() -> NetworkBuilder {
     NetworkBuilder::new()
@@ -1216,10 +1199,6 @@ async fn wait_for_absent_proof_record(
 #[tokio::test]
 #[ignore = "native STARK/FRI V1 proving fails closed until AIR openings are implemented"]
 async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Result<()> {
-    require_test_network_feature(
-        "zk-stark",
-        stringify!(stark_cross_dataspace_verifyproof_validity_without_payload_leak),
-    )?;
     let Some(network) = sandbox::start_network_async_or_skip(
         localnet_builder(),
         stringify!(stark_cross_dataspace_verifyproof_validity_without_payload_leak),
@@ -1345,10 +1324,6 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
 #[ignore = "native STARK/FRI V1 proving fails closed until AIR openings are implemented"]
 async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_payload_leak()
 -> Result<()> {
-    require_test_network_feature(
-        "zk-stark",
-        stringify!(stark_cross_dataspace_verifyproof_validity_ds2_submission_without_payload_leak),
-    )?;
     let Some(network) = sandbox::start_network_async_or_skip(
         localnet_builder(),
         stringify!(stark_cross_dataspace_verifyproof_validity_ds2_submission_without_payload_leak),
@@ -1473,10 +1448,6 @@ async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_paylo
 #[tokio::test]
 #[ignore = "native STARK/FRI V1 proving fails closed until AIR openings are implemented"]
 async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> Result<()> {
-    require_test_network_feature(
-        "zk-stark",
-        stringify!(stark_cross_dataspace_verifyproof_rejection_without_payload_leak),
-    )?;
     let Some(network) = sandbox::start_network_async_or_skip(
         localnet_builder(),
         stringify!(stark_cross_dataspace_verifyproof_rejection_without_payload_leak),
@@ -1623,12 +1594,6 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
 #[ignore = "native STARK/FRI V1 proving fails closed until AIR openings are implemented"]
 async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_payload_leak()
 -> Result<()> {
-    require_test_network_feature(
-        "zk-stark",
-        stringify!(
-            stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_payload_leak
-        ),
-    )?;
     let Some(network) = sandbox::start_network_async_or_skip(
         localnet_builder(),
         stringify!(

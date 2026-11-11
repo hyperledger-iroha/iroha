@@ -232,7 +232,6 @@ mod strict_verifying_key_preparation_tests {
             "a tiny key container must not honor an attacker-declared TLV allocation"
         );
     }
-    #[cfg(feature = "zk-stark")]
     #[test]
     fn stark_preparation_rejects_oversized_declared_string_from_tiny_container() {
         let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";

@@ -17,7 +17,6 @@ use iroha_data_model::{
     NetworkId, Registrable,
     account::AccountId,
     block::BlockHeader,
-    content::ContentAuthMode,
     isi::smart_contract_code::{
         CommitContractDeployment, FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
         SMART_CONTRACT_CODE_CHUNK_BYTES, UploadSmartContractCodeChunk,
@@ -1233,7 +1232,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             max_path_len: defaults::content::MAX_PATH_LEN,
             max_retention_blocks: defaults::content::MAX_RETENTION_BLOCKS,
             chunk_size_bytes: defaults::content::CHUNK_SIZE_BYTES,
-            publish_allow_accounts: Vec::new(),
             limits: A::ContentLimits {
                 max_requests_per_second: nonzero!(defaults::content::MAX_REQUESTS_PER_SECOND),
                 request_burst: nonzero!(defaults::content::REQUEST_BURST),
@@ -1247,7 +1245,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             default_cache_max_age_secs: defaults::content::DEFAULT_CACHE_MAX_AGE_SECS,
             max_cache_max_age_secs: defaults::content::MAX_CACHE_MAX_AGE_SECS,
             immutable_bundles: defaults::content::IMMUTABLE_BUNDLES,
-            default_auth_mode: ContentAuthMode::Public,
             slo: A::ContentSlo {
                 target_p50_latency_ms: nonzero!(defaults::content::TARGET_P50_LATENCY_MS),
                 target_p99_latency_ms: nonzero!(defaults::content::TARGET_P99_LATENCY_MS),

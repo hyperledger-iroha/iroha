@@ -63,8 +63,10 @@ This crate hosts cross-component tests for Iroha.
   The focused filters are `proofs::submit_proof_and_query_record` in
   `queries_and_proofs`, `events::proof::proof_event_scenarios` in
   `events_and_triggers`, and `queries::proof::proof_query_scenarios` in
-  `queries_and_proofs`. The mixed-backend query scenario requires `--features zk-stark`
-  and a daemon built with `zk-stark`; its negative STARK fixture corrupts an actual
+  `queries_and_proofs`. The mixed-backend query scenario requires
+  `--features stark-network-tests`, which selects only the suite's prover and
+  fixture dependencies: every daemon verifies STARK proofs, so no daemon feature
+  is needed. Its negative STARK fixture corrupts an actual
   current-profile Binding proof while retaining valid framing and key material.
   All three networks have exactly four validators and retain production proof limits
   and verification deadlines. Require `IROHA_TEST_REQUIRE_NETWORK=1` and
@@ -95,7 +97,7 @@ This crate hosts cross-component tests for Iroha.
   transport failure or a stalled network. This does not qualify proof-backed
   IVM execution: the complete native execution relation and State-owned anchor
   remain unfinished, and no derive or commitment-binding producer is restored.
-- Feature flags: `telemetry` (default), `fault_injection`, `js_host_parity`, `zk-stark`, and the non-shipping `privacy-release-evidence` gate. Enable with `cargo test -p integration_tests --features "<feature list>"`.
+- Feature flags: `telemetry` (default), `fault_injection`, `js_host_parity`, `stark-network-tests` (the opt-in STARK and ZK-ACE network suites; it adds their prover and conformance-fixture dependencies and no daemon feature, because native STARK/FRI verification is compiled into every build), and the non-shipping `privacy-release-evidence` gate. Enable with `cargo test -p integration_tests --features "<feature list>"`.
 - The `js_host_parity` local test runs the Rust fetch owner, the actual Node module through the SDK's authenticated native loader, and the actual C ABI through `ctypes`. Build the current JavaScript native artifact first, then select the rebuilt host bridge directory with `IROHA_NATIVE_LIBRARY_PATH=/absolute/bridge/directory cargo test -p integration_tests --features js_host_parity --test nexus_and_streaming orchestrator_parity_across_runtimes`. `IROHA_PARITY_NODE` and `IROHA_PARITY_PYTHON` can select installed runtimes; absent or stale native artifacts fail the test. Comparisons cover payload bytes, scoreboard weights/eligibility, provider reports, receipts and native-call timing, excluding process startup.
 - Norito FEC parity, missing-chunk recovery and corruption tests run in the ordinary `nexus_and_streaming` harness using its local GF(256) helpers; no optional external Reed–Solomon dependency is needed.
 - Ignored/long cases (e.g., adversarial network, flaky trigger paths): `IROHA_RUN_IGNORED=1 cargo test -p integration_tests -- --ignored --nocapture`.
@@ -229,6 +231,39 @@ A same-source daemon, the full-World disclosure containment gate and privileged
 bank roles are prerequisites. This source candidate is not network qualification
 or G3 State-proof readiness.
 
+The `sumeragi_npos_committee_transition` staking cases cover validator exits,
+a finality-owned slash and withdrawals on actual peers. Every genesis signs a
+staking policy with a slash sink distinct from the stake escrow and a one-tenth
+slash fraction. Evidence has no HTTP, CLI or instruction entry, so the fixture
+acts as the offending validator's operator: it stops one separately running,
+never-seated candidate process, runs the unchanged P2P stack under that
+process's own transport identity and configuration, and delivers to every other
+current voter two Prepare votes for the next uncommitted height, both signed
+with the offender's real consensus key. No daemon has a fault control.
+
+- `double_signing_voter_is_slashed_to_the_signed_sink_after_the_signed_delay`
+  uses five processes (four bonded genesis voters and one candidate) and needs
+  only the same-source `iroha3d` daemon. It requires the committed evidence
+  record, the exact escrow, stake-reserve, sink and supply movement, continued
+  exact-quorum finality and no second penalty.
+- `complete_real_xor_committee_rotates_four_to_seven_to_four` uses eight
+  processes and the DKG/custody executables above. A departing seven-seat voter
+  schedules its full bond for release, its operator double-signs, the pending
+  principal is slashed in place, and the remainder is withdrawn only after
+  certified replacement and liability expiry, followed by all-seat restarts and
+  consumed-plan rejection.
+
+Run one case with the daemon built first:
+
+```bash
+IROHA_TEST_SKIP_BUILD=1 IROHA_TEST_REQUIRE_NETWORK=1 TEST_NETWORK_BIN_IROHAD="$PWD/target/debug/iroha3d" scripts/cargo_fast.sh --stable-local-metadata --incremental -- test -p integration_tests --test sumeragi_npos_committee_transition double_signing_voter_is_slashed -- --test-threads=1 --nocapture
+```
+
+No staking reward can exist on these fresh networks; both cases assert that the
+node refuses to prepare a reward claim. Positive funded conversion and claims
+need an authentically aged network
+(`specs/staking_validator_completion.md`, "Real-network reward gate").
+
 ## Fixtures
 
 The native SoraFS repair corridor runs with
@@ -332,14 +367,14 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
   policy rollback, exact replay, and restarted-peer catch-up in
   `tests/privacy_exact12_jindo_network.rs`. Run the
   `privacy_exact12_jindo_network::canonical_jindo_actions_survive_four_peer_policy_replay_and_restart`
-  selector in `network_functional` with `zk-stark privacy-release-evidence`.
+  selector in `network_functional` with `stark-network-tests privacy-release-evidence`.
 - Canonical native Orchard and PQ-MASP proving uses the default protocol limits
   in `tests/privacy_exact12_orchard_pq_masp_network.rs`. The scenario exercises
   four-peer DA convergence, corrupted-proof rejection, stable-nullifier and
   exact transaction replay, failure atomicity, and a fresh nullifier replay
   through the restarted peer to authenticate recovered PQ state. The fixture
   builders are non-shipping and require the explicit feature. Run it with
-  `TEST_NETWORK_IROHAD_FEATURES=zk-stark IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test network_functional --features 'zk-stark privacy-release-evidence' privacy_exact12_orchard_pq_masp_network::canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_restart -- --exact --nocapture --test-threads=1`.
+  `IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test network_functional --features 'stark-network-tests privacy-release-evidence' privacy_exact12_orchard_pq_masp_network::canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_restart -- --exact --nocapture --test-threads=1`.
 - Canonical native Anonymous PGC, VeRange, Bootle/Lantern, FCMP++, and
   private-IVM proving, default protocol limits, independently corrupted proofs,
   cross-profile proof substitution, wrong statement binding, exact and
@@ -350,7 +385,7 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
   available-engine setup action and proof traverses the production native
   executor path. The fixture builders are non-shipping and require the explicit
   feature. Run the enforced release gate with
-  `TEST_NETWORK_IROHAD_FEATURES=zk-stark IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test network_functional --features 'zk-stark privacy-release-evidence' privacy_exact12_retained_network::canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart -- --exact --nocapture --test-threads=1`.
+  `IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test network_functional --features 'stark-network-tests privacy-release-evidence' privacy_exact12_retained_network::canonical_retained_exact12_actions_survive_four_peer_adversarial_replay_and_restart -- --exact --nocapture --test-threads=1`.
 - The positive ZK-AMS/Vega acceptance suite in
   `tests/privacy_exact12_zk_ams_vega_network.rs` exercises canonical native
   proving under default protocol limits, issuer and registry governance,
@@ -358,7 +393,7 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
   four-validator finality, and restarted-validator recovery. It remains an
   enforced release-evidence gate: an unavailable native relation is a failure.
   Run the combined scenario with
-  `TEST_NETWORK_IROHAD_FEATURES=zk-stark IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test network_functional --features 'zk-stark privacy-release-evidence' privacy_exact12_zk_ams_vega_network::canonical_zk_ams_and_vega_actions_survive_four_validator_activation_replay_and_restart -- --exact --nocapture --test-threads=1`.
+  `IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test network_functional --features 'stark-network-tests privacy-release-evidence' privacy_exact12_zk_ams_vega_network::canonical_zk_ams_and_vega_actions_survive_four_validator_activation_replay_and_restart -- --exact --nocapture --test-threads=1`.
 - The positive ZK-X509 production-action scenario in
   `tests/privacy_exact12_zk_x509_network.rs` retains trust-anchor,
   certificate-policy and signed-CRL governance, native semantic negatives,
@@ -366,7 +401,7 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
   refuses because the joint security reduction is incomplete, so the scenario
   fails before it can establish network acceptance. Resource receipts alone
   cannot satisfy that missing cryptographic construction. Run it with
-  `TEST_NETWORK_IROHAD_FEATURES=zk-stark IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test network_functional --features 'zk-stark privacy-release-evidence' privacy_exact12_zk_x509_network::canonical_zk_x509_action_survives_four_peer_activation_replay_and_restart -- --exact --nocapture --test-threads=1`.
+  `IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test network_functional --features 'stark-network-tests privacy-release-evidence' privacy_exact12_zk_x509_network::canonical_zk_x509_action_survives_four_peer_activation_replay_and_restart -- --exact --nocapture --test-threads=1`.
 - The canonical exact-12 catalog and ordinary resource-policy network scenario
   lives in `tests/privacy_exact12_activation_network.rs` in `network_functional`.
   It checks native availability without protocol registration, unauthorized and
@@ -375,7 +410,7 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
   exact future decreases and increases with three of four validators online,
   cold pending-policy recovery, and final restart/catch-up. This test does not
   claim valid privacy proof execution. Run it with
-  `TEST_NETWORK_IROHAD_FEATURES=zk-stark IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test network_functional --features zk-stark privacy_exact12_activation_network::canonical_exact12_policy_updates_survive_four_peer_replay_and_restart -- --exact --nocapture --test-threads=1`.
+  `IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test network_functional --features stark-network-tests privacy_exact12_activation_network::canonical_exact12_policy_updates_survive_four_peer_replay_and_restart -- --exact --nocapture --test-threads=1`.
 - `tests/zk_confidential_localnet.rs` covers only the exclusion of retired
   confidential wires from the instruction registry.
 - SoraNet web deploy + public DNS ALIAS/CNAME + NS/DS delegation placeholders coverage lives at `tests/soranet_web_deploy.rs`.
@@ -419,9 +454,24 @@ carrier transactions keep committing on every peer past the retired
 rejoins, and the request stays pending on exactly its original slot
 ([ballot design](../specs/parliament_private_ballot_design.md) section 9).
 It does not install a below-threshold key session and does not replace the
-mandatory-NPoS corridors, which need the `test-network-parliament-signers`
+mandatory-NPoS corridors, which install the `test-network-parliament-signers`
 beacon fixture. Sortition corridors run on a signed 128-block NPoS epoch and
 compute each slot from the certified epoch length.
+
+The fixture key session is an ordinary signed all-edge DKG session of exactly
+four validators with threshold two. The harness owns every validator's
+consensus key, so it runs the complete ceremony (signed recipient keys, signed
+dealer broadcasts, all sixteen encrypted edges and their acceptances) with
+`deterministic_parliament_beacon_key_record_v1`, and ordinary execution replays
+that transcript when the lifecycle certificate installs it. A test daemon owns
+only its seat: it reads the seat from the committed session's recipient keys,
+re-derives the fixture dealers of that session and derives its one share
+against the committed transcript. It never rebuilds a transcript, because
+sealing an edge draws fresh randomness. Core installs a successor key only as
+the session of a certified committee-transition preparation, so a rotation
+corridor passes that exact session to
+`deterministic_parliament_beacon_key_record_for_session_v1`. No rotation
+corridor exists yet.
 
 ### Running the Parliament corridors
 

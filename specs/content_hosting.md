@@ -9,8 +9,12 @@ individual files directly from Torii.
 - **Publish**: submit `PublishContentBundle` with a tar archive, optional expiry
   height, and an optional manifest. The bundle ID is the blake2b hash of the
   tarball. Tar entries must be regular files; names are normalised UTF-8 paths.
-  Size/path/file-count caps come from `content` config (`max_bundle_bytes`,
-  `max_files`, `max_path_len`, `max_retention_blocks`, `chunk_size_bytes`).
+  Size/path/file-count caps, the retention window, the chunk size, the cache
+  defaults and the default stripe layout are protocol constants of this
+  release. Who may publish is the executor's admission decision: the Initial
+  executor admits `PublishContentBundle` in genesis only, and an installed
+  executor enforces its own permission. The `[content]` node configuration
+  holds gateway resources only.
   Manifests include the Norito-index hash, dataspace/lane, cache policy
   (`max_age_seconds`, `immutable`), auth mode (`public` / `role:<role>` /
   `sponsor:<uaid>`), retention policy placeholder, and MIME overrides.
@@ -38,9 +42,10 @@ individual files directly from Torii.
   admits the configured file count and final padded tar size before retaining
   each source, and builds into one exact-capacity archive buffer; symlinks and
   other non-regular inputs fail closed.
-- **Config**: cache/auth knobs live under `content.*` in `iroha_config`
-  (`default_cache_max_age_secs`, `max_cache_max_age_secs`, `immutable_bundles`,
-  `default_auth_mode`) and are enforced at publish time.
+- **Cache and auth defaults**: the default and maximum cache lifetime and the
+  immutable-bundle default are protocol constants enforced at publish time. A
+  publish that supplies no manifest gets the `public` auth mode; a publisher
+  that wants gated reads states the mode in its manifest.
 - **SLO + limits**: `content.max_requests_per_second` / `request_burst` and
   `content.max_egress_bytes_per_second` / `egress_burst_bytes` cap read-side
   throughput; Torii enforces both before serving bytes and exports

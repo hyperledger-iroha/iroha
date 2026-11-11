@@ -99,7 +99,6 @@ pub mod isi {
     #[cfg(test)]
     use iroha_data_model::governance::types::GlobalDataTriggerPermissionGovernanceProposalV1;
     use iroha_data_model::isi::runtime_upgrade;
-    #[cfg(feature = "zk-stark")]
     use iroha_data_model::proof::VerifyingKeyBox;
     use iroha_data_model::smart_contract::ContractArtifactId;
     use iroha_data_model::{
@@ -1455,10 +1454,7 @@ pub mod isi {
             )));
         }
         if let Some(vk) = &record.key {
-            #[cfg(feature = "zk-stark")]
             validate_soracloud_fhe_stark_verifying_key_payload(profile, vk, state_transaction)?;
-            #[cfg(not(feature = "zk-stark"))]
-            let _ = vk;
         }
         if record.status == ConfidentialStatus::Active && record.key.is_none() {
             return Err(invalid_smart_contract_parameter(format!(
@@ -1468,7 +1464,6 @@ pub mod isi {
         }
         Ok(())
     }
-    #[cfg(feature = "zk-stark")]
     fn validate_soracloud_fhe_stark_verifying_key_payload(
         profile: SoracloudFheStarkVerifierProfile,
         vk: &VerifyingKeyBox,
@@ -17383,7 +17378,10 @@ pub mod isi {
             let mut role = new_role.build(authority);
             super::sorafs_authority::guard_role_mutation(&state_transaction.world, role.id())?;
             for token in role.permissions() {
-                crate::runtime::state_row_permission::guard_role_grant(&state_transaction.world, token)?;
+                crate::runtime::state_row_permission::guard_role_grant(
+                    &state_transaction.world,
+                    token,
+                )?;
                 super::sorafs_authority::guard_permission_mutation(
                     &state_transaction.world,
                     token,
@@ -17480,7 +17478,10 @@ pub mod isi {
         ) -> Result<(), Error> {
             let role_id = self.destination().clone();
             let permission = self.object().clone();
-            crate::runtime::state_row_permission::guard_role_grant(&state_transaction.world, &permission)?;
+            crate::runtime::state_row_permission::guard_role_grant(
+                &state_transaction.world,
+                &permission,
+            )?;
             super::sorafs_authority::guard_role_mutation(&state_transaction.world, &role_id)?;
             super::sorafs_authority::guard_permission_mutation(
                 &state_transaction.world,
@@ -17734,6 +17735,10 @@ pub mod isi {
                     )
                     .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
                 }
+                // The checkpoint policy, the adoption anchor and the startup floor of a root that
+                // has activated the kernel's lifecycle State (§7.3, §13).
+                crate::runtime::checkpoint::admit_parameter(state_transaction, custom)
+                    .map_err(invalid_smart_contract_parameter)?;
                 if state_transaction._curr_block.is_genesis()
                     && custom.id() == &iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id()
                 {
@@ -28892,7 +28897,6 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             state.gov.bond_escrow_account = account_id.clone();
             state.gov.viral_incentives.incentive_pool_account = account_id.clone();
             state.oracle.economics.reward_pool = account_id.clone();
-            state.content.publish_allow_accounts = vec![account_id.clone()];
             state
                 .gov
                 .sorafs_telemetry
@@ -30798,7 +30802,6 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
         fn soracloud_bootstrap_vk_profile() -> SoracloudFheVkTestProfile {
             soracloud_fhe_stark_vk_test_profiles()[1]
         }
-        #[cfg(feature = "zk-stark")]
         fn soracloud_fhe_stark_vk_box_for_test(
             profile: SoracloudFheVkTestProfile,
             n_log2: u8,
@@ -30820,7 +30823,6 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                     .expect("encode canonical Soracloud STARK verifying key"),
             )
         }
-        #[cfg(feature = "zk-stark")]
         fn attach_soracloud_fhe_stark_vk_box(
             record: &mut VerifyingKeyRecord,
             vk_box: VerifyingKeyBox,
@@ -31888,7 +31890,6 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "public-input schema mismatch");
         });
-        #[cfg(feature = "zk-stark")]
         world_test!(register_vk_accepts_soracloud_fhe_stark_verifier_payload_at_production_floor {
             original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
@@ -31926,7 +31927,6 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 assert!(stored.key.is_some());
             }
         });
-        #[cfg(feature = "zk-stark")]
         world_test!(registered_and_soracloud_stark_vks_reject_alternate_norito_layout {
             let test_profile = soracloud_fhe_stark_vk_test_profiles()[0];
             let verifier_profile = SORACLOUD_FHE_STARK_VERIFIER_PROFILES
@@ -31976,7 +31976,6 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let message = smart_contract_error_message(error);
             assert_contains!(message, "invalid canonical STARK/FRI verifier key: non-canonical encoding", "unexpected registered alternate-layout rejection: {message}");
         });
-        #[cfg(feature = "zk-stark")]
         world_test!(register_vk_rejects_soracloud_fhe_stark_verifier_payload_below_production_floor {
             original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
@@ -32006,7 +32005,6 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                 assert_contains!(msg, "below consensus floor", "unexpected msg for {}: {msg}", profile.label);
             }
         });
-        #[cfg(feature = "zk-stark")]
         world_test!(update_vk_rejects_soracloud_fhe_stark_verifier_payload_below_production_floor {
             original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
@@ -32160,7 +32158,6 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             assert_contains!(message, "compiled relation", "unexpected fixed-k rejection: {message}");
             assert!(stx.world.verifying_keys.get(&id).is_none());
         });
-        #[cfg(feature = "zk-stark")]
         world_test!(register_vk_rejects_tiny_stark_key_with_huge_declared_inner_length {
             original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
@@ -34388,7 +34385,6 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             let msg = smart_contract_error_message(err);
             assert_contains!(msg, "vk_len", "unexpected msg: {msg}");
         });
-        #[cfg(feature = "zk-stark")]
         world_test!(update_vk_rejects_mixed_case_stark_curve {
             original_blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");

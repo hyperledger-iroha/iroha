@@ -46,7 +46,6 @@ fn verifier_arm_of(error: &PrivacyVerificationErrorV1) -> Option<PrivacyRuntimeP
         Error::NativeVeRange(_) => Protocol::VeRangeTransparentRangeV1,
         Error::NativeJindo(_) => Protocol::IrohaJindoPolynomialCommitmentV1,
         Error::VegaState(_) | Error::NativeVega(_) => Protocol::VegaExistingCredentialZkV1,
-        #[cfg(feature = "zk-stark")]
         Error::NativeZkAce(_) => Protocol::ZkAcePqAuthorizationV1,
         Error::NativeZkAms(_) => Protocol::IrohaZkAmsV1,
         Error::ZkX509State(_) | Error::NativeZkX509(_) => Protocol::IrohaZkX509StarkP256V1,

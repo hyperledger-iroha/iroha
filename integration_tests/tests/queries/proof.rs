@@ -1,13 +1,13 @@
 //! Integration tests for proof queries.
-//! The mixed native PIPA-R/STARK network scenario requires the `zk-stark` feature and daemon.
+//! The mixed native PIPA-R/STARK network scenario requires the `stark-network-tests` feature.
 use crate::proof_fixtures::confidential_attachment;
-#[cfg(feature = "zk-stark")]
+#[cfg(feature = "stark-network-tests")]
 use crate::proof_fixtures::rejected_confidential_attachment;
-#[cfg(feature = "zk-stark")]
+#[cfg(feature = "stark-network-tests")]
 use eyre::Result;
-#[cfg(feature = "zk-stark")]
+#[cfg(feature = "stark-network-tests")]
 use integration_tests::sandbox;
-#[cfg(feature = "zk-stark")]
+#[cfg(feature = "stark-network-tests")]
 use iroha::data_model::{
     confidential::ConfidentialStatus,
     prelude::*,
@@ -18,16 +18,16 @@ use iroha::data_model::{
     zk::BackendTag,
 };
 use iroha::data_model::{isi::verifying_keys, proof::ProofAttachment};
-#[cfg(feature = "zk-stark")]
+#[cfg(feature = "stark-network-tests")]
 use iroha_core_zk::hash_vk;
 use iroha_data_model::zk::OpenVerifyEnvelope;
-#[cfg(feature = "zk-stark")]
+#[cfg(feature = "stark-network-tests")]
 use iroha_test_network::NetworkBuilder;
-#[cfg(feature = "zk-stark")]
+#[cfg(feature = "stark-network-tests")]
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
-#[cfg(feature = "zk-stark")]
+#[cfg(feature = "stark-network-tests")]
 use std::{thread::sleep, time::Duration};
-#[cfg(feature = "zk-stark")]
+#[cfg(feature = "stark-network-tests")]
 fn active_vk_record(
     circuit_id: &str,
     backend: BackendTag,
@@ -60,7 +60,7 @@ fn native_attachment_and_registration(
 ) -> (ProofAttachment, verifying_keys::RegisterVerifyingKey) {
     confidential_attachment(statement, vk_name)
 }
-#[cfg(feature = "zk-stark")]
+#[cfg(feature = "stark-network-tests")]
 fn rejected_stark_attachment_and_registration(
     label: &str,
 ) -> (ProofAttachment, verifying_keys::RegisterVerifyingKey) {
@@ -126,7 +126,7 @@ fn rejected_stark_attachment_and_registration(
         verifying_keys::RegisterVerifyingKey { id: vk_id, record },
     )
 }
-#[cfg(feature = "zk-stark")]
+#[cfg(feature = "stark-network-tests")]
 #[test]
 fn rejected_stark_fixture_retains_canonical_key_and_proof_framing() {
     let (attachment, registration) = rejected_stark_attachment_and_registration("query_control_vk");
@@ -139,7 +139,7 @@ fn rejected_stark_fixture_retains_canonical_key_and_proof_framing() {
     assert!(registration.record.key.is_some());
 }
 
-#[cfg(feature = "zk-stark")]
+#[cfg(feature = "stark-network-tests")]
 fn proof_query_network_builder(
     registrations: impl IntoIterator<Item = verifying_keys::RegisterVerifyingKey>,
 ) -> NetworkBuilder {
@@ -162,7 +162,7 @@ fn native_attachment(statement: &str) -> ProofAttachment {
     .0
 }
 #[test]
-#[cfg(feature = "zk-stark")]
+#[cfg(feature = "stark-network-tests")]
 fn proof_query_scenarios() -> Result<()> {
     let (find_attachment, find_vk) = native_attachment_and_registration("query-find", "query_vk");
     let (backend_attachment, _) = native_attachment_and_registration("query-backend", "query_vk");
@@ -270,7 +270,7 @@ fn proof_query_scenarios() -> Result<()> {
     }
     Ok(())
 }
-#[cfg(feature = "zk-stark")]
+#[cfg(feature = "stark-network-tests")]
 fn retry_records_by_status(
     client: &iroha::blocking::Client,
     status: iroha::data_model::proof::ProofStatus,
@@ -282,13 +282,13 @@ fn retry_records_by_status(
             .execute_all()?)
     })
 }
-#[cfg(feature = "zk-stark")]
+#[cfg(feature = "stark-network-tests")]
 fn retry_all_proof_records(
     client: &iroha::blocking::Client,
 ) -> Result<Vec<iroha::data_model::proof::ProofRecord>> {
     retry_proof_records(|| Ok(client.client().query(FindProofRecords).execute_all()?))
 }
-#[cfg(feature = "zk-stark")]
+#[cfg(feature = "stark-network-tests")]
 fn retry_records_by_backend(
     client: &iroha::blocking::Client,
     backend: &str,
@@ -300,7 +300,7 @@ fn retry_records_by_backend(
             .execute_all()?)
     })
 }
-#[cfg(feature = "zk-stark")]
+#[cfg(feature = "stark-network-tests")]
 fn retry_proof_records(
     mut query: impl FnMut() -> Result<Vec<iroha::data_model::proof::ProofRecord>>,
 ) -> Result<Vec<iroha::data_model::proof::ProofRecord>> {
@@ -324,7 +324,7 @@ fn retry_proof_records(
     }
     unreachable!()
 }
-#[cfg(feature = "zk-stark")]
+#[cfg(feature = "stark-network-tests")]
 fn proof_record_backends(records: &[iroha::data_model::proof::ProofRecord]) -> Vec<String> {
     records
         .iter()

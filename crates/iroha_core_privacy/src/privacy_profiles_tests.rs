@@ -289,7 +289,6 @@ mod tests {
             PQ_MASP_PARAMETER_SET_LABEL_V1,
             b"goldilocks-sha3-384-proof-managed-note-stark+pq-masp+mldsa65+mlkem768-v1"
         );
-        #[cfg(feature = "zk-stark")]
         assert_eq!(
             ZK_ACE_PARAMETER_SET_LABEL_V1,
             b"goldilocks-sha3-384-fp4-binary-fri8-q136+poseidon-x7-identity-zk-ace-v1"
@@ -310,7 +309,6 @@ mod tests {
                     .windows(stale_geometry.len())
                     .any(|window| window == stale_geometry)
             );
-            #[cfg(feature = "zk-stark")]
             assert!(
                 !ZK_ACE_PARAMETER_SET_LABEL_V1
                     .windows(stale_geometry.len())
@@ -1287,7 +1285,6 @@ mod tests {
         }
     }
     #[test]
-    #[cfg(feature = "zk-stark")]
     fn zk_ace_sha3_outer_profile_stays_unavailable_without_qrom_certification() {
         let protocol_id = PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1;
         assert_eq!(

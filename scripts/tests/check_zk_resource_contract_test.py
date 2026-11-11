@@ -3530,9 +3530,13 @@ def test_feature_gated_tests_record_the_features_that_compile_them(tmp_path: Pat
             "features", []
         )
 
-    assert recorded("proof.stark_fri_max_envelope_bytes", "stark_verifier_limits_cannot_relax_canonical_structure_caps") == [
-        "zk-stark"
-    ]
+    # Native STARK/FRI verification is compiled into every build: its tests name no feature.
+    for name in (
+        "stark_verifier_limits_cannot_relax_canonical_structure_caps",
+        "stark_envelope_length_predicate_admits_exactly_the_bound_and_refuses_one_byte_more",
+        "stark_verifier_accepts_an_envelope_of_exactly_its_bound_and_refuses_one_byte_more",
+    ):
+        assert recorded("proof.stark_fri_max_envelope_bytes", name) == [], name
     gated = {
         (test["path"], test["name"]): test["features"]
         for item in CONTRACT["bounds"]
@@ -3580,19 +3584,31 @@ def test_feature_gated_tests_record_the_features_that_compile_them(tmp_path: Pat
     plain = {"path": "crates/iroha_data_model/src/sccp/inbound.rs", "name": "source_proof_bounds_hold_at_every_boundary"}
     assert CHECKER["test_features"](ROOT, plain, "test") == []
 
+    retained = bound(CONTRACT, "proof.config_proof_history_cap")["tests"][0]
+    assert (retained["name"], retained["features"]) == ("manual_prune_instruction_applies_new_cap", ["zk-tests"])
+
     def forgotten(contract: dict) -> None:
-        test = bound(contract, "proof.stark_fri_max_envelope_bytes")["tests"][0]
+        test = bound(contract, "proof.config_proof_history_cap")["tests"][0]
         del test["features"]
 
     assert_fails(
         edited(forgotten),
-        "is compiled with features ['zk-stark']; the contract records none in `features`",
+        "is compiled with features ['zk-tests']; the contract records none in `features`",
     )
 
     def wrong(contract: dict) -> None:
-        bound(contract, "proof.stark_fri_max_envelope_bytes")["tests"][0]["features"] = ["zk-tests"]
+        bound(contract, "proof.config_proof_history_cap")["tests"][0]["features"] = ["zk-preverify"]
 
-    assert_fails(edited(wrong), "the contract records ['zk-tests'] in `features`")
+    assert_fails(
+        edited(wrong),
+        "is compiled with features ['zk-tests']; the contract records ['zk-preverify'] in `features`",
+    )
+
+    def retired(contract: dict) -> None:
+        # A feature that no longer exists cannot be recorded for a STARK test.
+        bound(contract, "proof.stark_fri_max_envelope_bytes")["tests"][0]["features"] = ["zk-stark"]
+
+    assert_fails(edited(retired), "is compiled with features []; the contract records ['zk-stark']")
 
     def invented(contract: dict) -> None:
         bound(contract, "proof.sccp_source_proof_max_bytes")["tests"][0]["features"] = ["zk-tests"]
@@ -3602,12 +3618,11 @@ def test_feature_gated_tests_record_the_features_that_compile_them(tmp_path: Pat
     # The commands that run every named test are derived from the same records.
     commands = CHECKER["test_commands"](ROOT, CONTRACT)
     assert any(
-        command.startswith(
-            "cargo test --locked -p iroha_core_zk --features zk-stark --lib -- "
-        )
+        command.startswith("cargo test --locked -p iroha_core_zk --lib -- ")
         and "stark_verifier_limits_cannot_relax_canonical_structure_caps" in command
         for command in commands
     ), commands
+    assert not any("zk-stark" in command or "proofs-stark" in command for command in commands)
     assert any(
         command.startswith(
             "cargo test --locked -p iroha_core --features zk-tests --test iroha_core_group_05 -- "
@@ -3854,8 +3869,8 @@ def test_a_module_gate_on_a_tracked_boundary_test_is_reported() -> None:
     }
     assert CHECKER["test_features"](ROOT, test, "test") == []
     for gate, expected in (
-        ('#[cfg(all(test, feature = "zk-tests", feature = "zk-stark"))]', ["zk-stark", "zk-tests"]),
-        ('#[cfg(all(test, feature = "zk-stark"))]', ["zk-stark"]),
+        ('#[cfg(all(test, feature = "zk-tests", feature = "zk-preverify"))]', ["zk-preverify", "zk-tests"]),
+        ('#[cfg(all(test, feature = "zk-preverify"))]', ["zk-preverify"]),
     ):
         CHECKER["_OVERRIDES"][path] = source.replace(plain, gate + "\nmod guardrails_tests {")
         try:

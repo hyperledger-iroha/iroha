@@ -201,18 +201,18 @@ impl StateRangeProofV1 {
         if key.validate().is_err() {
             return false;
         }
-        let mut next = 0;
-        let mut total = 0;
-        if let Some(before) = &self.before {
-            if before.key >= key {
-                return false;
+        let (mut next, mut total) = match &self.before {
+            Some(before) => {
+                if before.key >= key {
+                    return false;
+                }
+                let Some((rank, count)) = before.rank(schema, root) else {
+                    return false;
+                };
+                (rank + 1, count)
             }
-            let Some((rank, count)) = before.rank(schema, root) else {
-                return false;
-            };
-            next = rank + 1;
-            total = count;
-        }
+            None => (0, 0),
+        };
 
         for (i, ((raw, value), proof)) in rows.iter().zip(&self.rows).enumerate() {
             if *raw < lower

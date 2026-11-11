@@ -58,8 +58,6 @@ pub enum PrivacyRoleLimitationV1 {
     /// ZK-X509: the joint round-by-round/Fiat–Shamir security reduction for
     /// its shared challenges and correlated cross-domain openings is incomplete.
     ZkX509JointSecurityReductionIncomplete,
-    /// The native engine of the role is not compiled into this build.
-    NativeEngineNotCompiled,
 }
 
 impl PrivacyRoleLimitationV1 {
@@ -79,7 +77,6 @@ impl PrivacyRoleLimitationV1 {
             Self::ZkX509JointSecurityReductionIncomplete => {
                 "the joint ZK-X509 round-by-round/Fiat–Shamir security reduction is incomplete"
             }
-            Self::NativeEngineNotCompiled => "the native engine is not compiled into this build",
         }
     }
 }
@@ -561,12 +558,6 @@ mod tests {
                 PrivacyActionRoleV1::ZkX509CertificatePresentation,
             ]
         );
-        assert!(
-            refused
-                .values()
-                .all(|limitation| *limitation != PrivacyRoleLimitationV1::NativeEngineNotCompiled),
-            "a default build compiles every native engine"
-        );
     }
 
     #[test]
@@ -576,7 +567,6 @@ mod tests {
             PrivacyRoleLimitationV1::ZkAmsCompositeVerifierIncomplete,
             PrivacyRoleLimitationV1::VegaFigure9RelationIncomplete,
             PrivacyRoleLimitationV1::ZkX509JointSecurityReductionIncomplete,
-            PrivacyRoleLimitationV1::NativeEngineNotCompiled,
         ];
         let mut seen = std::collections::BTreeSet::new();
         for limitation in limitations {

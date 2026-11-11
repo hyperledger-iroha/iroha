@@ -7143,8 +7143,14 @@ impl SumeragiEvidenceListFilter {
     }
 
     fn apply_to_url(self, url: &mut Url) -> Result<()> {
+        let entries = self.param_entries()?;
+        // Torii refuses a present query without a pair, and opening the serializer alone
+        // leaves a bare `?`. An unfiltered listing therefore carries no query at all.
+        if entries.is_empty() {
+            return Ok(());
+        }
         let mut query = url.query_pairs_mut();
-        for (key, value) in self.param_entries()? {
+        for (key, value) in entries {
             query.append_pair(key, &value);
         }
         Ok(())
@@ -8365,6 +8371,24 @@ mod evidence_filter_tests {
         let filter = SumeragiEvidenceListFilter::default();
         let params = filter.param_entries().expect("default filter is valid");
         assert!(params.is_empty());
+    }
+
+    #[test]
+    fn evidence_filter_without_params_leaves_the_url_without_a_query() {
+        let mut url = Url::parse("http://127.0.0.1:8080/v1/sumeragi/evidence").expect("url");
+        SumeragiEvidenceListFilter::default()
+            .apply_to_url(&mut url)
+            .expect("default filter is valid");
+        // A bare `?` is a present, empty query, which Torii rejects with 400.
+        assert_eq!(url.query(), None);
+        assert_eq!(url.as_str(), "http://127.0.0.1:8080/v1/sumeragi/evidence");
+        SumeragiEvidenceListFilter {
+            limit: Some(7),
+            ..SumeragiEvidenceListFilter::default()
+        }
+        .apply_to_url(&mut url)
+        .expect("bounded filter is valid");
+        assert_eq!(url.query(), Some("limit=7"));
     }
 
     #[test]

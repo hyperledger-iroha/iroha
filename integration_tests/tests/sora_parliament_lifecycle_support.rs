@@ -420,6 +420,29 @@ pub async fn ordered_validator_roster(
     Ok(roster)
 }
 
+/// Return the validators' consensus key pairs in exact frozen roster order.
+///
+/// The signed all-edge beacon fixture ceremony needs every seat's signature, so only a
+/// harness that owns the whole committee can build it.
+pub fn ordered_validator_signing_keys(
+    network: &iroha_test_network::Network,
+    ordered_roster: &[PeerId],
+) -> Result<Vec<KeyPair>> {
+    ordered_roster
+        .iter()
+        .map(|peer_id| {
+            network
+                .peers()
+                .iter()
+                .find(|peer| peer.id() == *peer_id)
+                .ok_or_else(|| eyre!("signed roster peer is absent from the network"))?
+                .bls_key_pair()
+                .cloned()
+                .ok_or_else(|| eyre!("validator lacks its normal BLS keypair"))
+        })
+        .collect()
+}
+
 pub fn lifecycle_certificate(
     network: &iroha_test_network::Network,
     ordered_roster: &[PeerId],

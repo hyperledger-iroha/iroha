@@ -5,7 +5,6 @@
 //! derived statement-schema, engine-manifest, and limit bindings exactly match the proposed
 //! profile snapshot. A protocol whose complete verifier is not compiled is rejected before it
 //! enters world state.
-#[cfg(feature = "zk-stark")]
 use crate::privacy_engines::zk_ace::{
     ZK_ACE_AIR_RELATION_SCHEMA_V1, ZK_ACE_AUTHORIZATION_PROJECTION_V1,
     ZK_ACE_DIGEST384_PARAMETER_SHA3_256_V1, ZK_ACE_FULL_ENGINE_AVAILABLE_V1,
@@ -172,7 +171,6 @@ use crate::privacy_engines::{
         stark::{ZK_X509_MAIN_PROOF_DESCRIPTOR_V1, ZK_X509_SEGMENTED_STARK_DESCRIPTOR_V1},
     },
 };
-#[cfg(feature = "zk-stark")]
 use iroha_data_model::privacy::ZkAcePqAuthorizationStatementV1;
 use iroha_data_model::privacy::{
     ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1, ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
@@ -324,9 +322,7 @@ const ZK_AMS_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
     b"iroha-native-rust:clean-room:arxiv-2602.16130v2:algorithms-1-4:appendices-a-c:closed-phase-v:v1";
 const ZK_AMS_BATCH_EFFECT_SCHEMA_V1: &[u8] = b"issuer_id:32|registry_id:32|prior_root:32|prior_epoch:u64|next_root:32|next_epoch:u64|ordered_anchors[seed_key:32,link_tag:32]";
 const ZK_AMS_PROVISION_EFFECT_SCHEMA_V1: &[u8] = b"issuer_id:32|registry_id:32|current_root:32|current_epoch:u64|ring[seed_key:32]|account_id:norito|key_image:32";
-#[cfg(feature = "zk-stark")]
 const ZK_ACE_PROTOCOL_LABEL_V1: &[u8] = b"zk-ace-pq-authorization-v1";
-#[cfg(feature = "zk-stark")]
 const ZK_ACE_PARAMETER_SET_LABEL_V1: &[u8] =
     b"goldilocks-sha3-384-fp4-binary-fri8-q136+poseidon-x7-identity-zk-ace-v1";
 const ZK_X509_PARAMETER_SET_LABEL_V1: &[u8] =
@@ -547,7 +543,6 @@ pub fn compiled_privacy_profile_v1(
     protocol_id: PrivacyRuntimeProtocolIdV1,
 ) -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
     match protocol_id {
-        #[cfg(feature = "zk-stark")]
         PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1 => compiled_zk_ace_profile_v1(),
         PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1 => compiled_anonymous_pgc_profile_v1(),
         PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1 => compiled_verange_profile_v1(),
@@ -567,13 +562,6 @@ pub fn compiled_privacy_profile_v1(
         }
         PrivacyRuntimeProtocolIdV1::PqMaspStarkV1 => compiled_pq_masp_profile_v1(),
         PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 => compiled_zk_x509_profile_v1(),
-        // A build that deliberately excludes transparent STARK support must
-        // expose ZK-ACE as unavailable; governance never substitutes an alias,
-        // compatibility verifier, or incomplete implementation.
-        #[cfg(not(feature = "zk-stark"))]
-        PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1 => {
-            Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
-        }
     }
 }
 fn compiled_zk_x509_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1>
@@ -1668,7 +1656,6 @@ pub(crate) fn validate_compiled_privacy_profile_against_profile_v1(
     }
     Ok(())
 }
-#[cfg(feature = "zk-stark")]
 fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
     let protocol_id = PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1;
     if !ZK_ACE_FULL_ENGINE_AVAILABLE_V1 {

@@ -62,7 +62,7 @@ Only the coordinated build owner should execute these commands:
 
 ```sh
 cargo test --locked -p iroha_core --lib --features privacy-release-evidence --no-run --message-format=json-render-diagnostics
-cargo test --locked -p integration_tests --test network_functional --features privacy-release-evidence,zk-stark --no-run --message-format=json-render-diagnostics
+cargo test --locked -p integration_tests --test network_functional --features privacy-release-evidence,stark-network-tests --no-run --message-format=json-render-diagnostics
 ```
 
 First run these exact non-network leaves from the captured binaries with `--exact`:
@@ -73,8 +73,9 @@ First run these exact non-network leaves from the captured binaries with `--exac
 
 The real leaf needs `--ignored --exact --nocapture --test-threads=1` and explicitly
 `IROHA_TEST_REQUIRE_NETWORK=1`; a skipped network fails the gate. For a local diagnostic,
-use an absolute newly built `TEST_NETWORK_BIN_IROHAD`, `TEST_NETWORK_IROHAD_FEATURES=zk-stark`
-and `IROHA_TEST_SKIP_BUILD=1`, preserving source, binary and invocation hashes. This is
+use an absolute newly built `TEST_NETWORK_BIN_IROHAD` and `IROHA_TEST_SKIP_BUILD=1`,
+preserving source, binary and invocation hashes. The daemon needs no feature for this:
+native STARK/FRI verification is compiled into every build. This is
 separate from official release evidence, which also requires the clean signed source
 identity, release-profile daemon/tools/harness and authenticated same-candidate program
 bundle consumed by `iroha_test_network`'s release runner.

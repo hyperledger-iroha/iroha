@@ -539,13 +539,16 @@ pub mod query {
         }
     }
     permission! {
-        /// Permission to read non-public ledger data from one exact dataspace.
+        /// Permission to read non-public ledger data from one exact data space.
         ///
-        /// The token does not authorize writes, reads from any other dataspace,
+        /// The token does not authorize writes, reads from any other data space,
         /// or account-alias resolution without its separate exact permission.
+        /// The baseline permits only genesis issuance. The governed restricted-read delegation
+        /// successor permits the active native SNS data space owner to grant and revoke this
+        /// exact token; possessing it alone never authorizes delegation or revocation.
         #[derive(Copy)]
         pub struct CanReadRestrictedDataspace {
-            /// Exact restricted dataspace whose ledger data may be read.
+            /// Exact restricted data space whose ledger data may be read.
             pub dataspace: DataSpaceId,
         }
     }

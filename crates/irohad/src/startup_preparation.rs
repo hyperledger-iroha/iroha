@@ -384,6 +384,36 @@ impl PreparedStartup {
                 "restored native chain identity differs from configured consensus instance",
             ));
         }
+        {
+            // The adoption anchor a network ratified is the checkpoint its nodes were configured
+            // to adopt the foundation at, so a configured checkpoint must name the same block.
+            // A State that carries a boundary gives it to Kura when the configuration names none,
+            // so this run re-executes no block at or below it.
+            let world = state.world_view();
+            if let (Some(anchor), Some(configured)) = (
+                iroha_core::runtime::checkpoint::committed_anchor(&world),
+                &upgrade_checkpoint,
+            ) {
+                let configured_hash: &[u8; 32] = configured.block_hash.as_ref();
+                if anchor.record.height != configured.height
+                    || anchor.record.block_hash != *configured_hash
+                {
+                    return Err(Report::new(StartError::InitKura).attach(format!(
+                        "snapshot.upgrade_checkpoint names height {}, but the network ratified its adoption anchor at height {} with another block",
+                        configured.height, anchor.record.height
+                    )));
+                }
+            }
+            if upgrade_checkpoint.is_none()
+                && let Some(boundary) = iroha_core::runtime::checkpoint::history_boundary(
+                    &world,
+                    state.latest_block_creation_time_ms_fast().unwrap_or(0),
+                )
+            {
+                kura.set_upgrade_checkpoint(&boundary)
+                    .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
+            }
+        }
         if !loaded_state_from_snapshot {
             // Snapshot candidates install this at their post-decode,
             // pre-reconciliation boundary. Fresh and Kura-rebuilt state has no

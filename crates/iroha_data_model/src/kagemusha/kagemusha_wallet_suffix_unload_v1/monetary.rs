@@ -68,6 +68,10 @@ impl SuffixRecoveryBodyV1 {
     /// Check the exact canonical body and all noncryptographic cross-object bindings.
     /// # Errors
     /// Incorrect identity, header, statement, proof, opening, output or state commitment.
+    #[expect(
+        clippy::suspicious_operation_groupings,
+        reason = "The header's source capsule is bound to this body's predecessor capsule digest; the body has no same-named field."
+    )]
     pub fn validate(&self) -> SuffixResult<()> {
         tag(self.version, self.discriminator, 10)?;
         for value in [

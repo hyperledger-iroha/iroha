@@ -8720,7 +8720,7 @@ fn decode_world_fields(
         .ok_or_else(|| json::Error::missing_field("triggers"))?;
     let triggers = ivm_seed
         .cast::<TriggerSet>()
-        .parse_trigger_set(triggers_value)?;
+        .parse_trigger_set(triggers_value, map.uninstalled_children("triggers"))?;
     let executor: Cell<Executor> = take_required(&mut map, "executor")?;
     let executor_data_model: Cell<ExecutorDataModel> =
         take_required(&mut map, "executor_data_model")?;
@@ -9093,6 +9093,16 @@ fn decode_world_fields(
         AccountId,
         iroha_data_model::account::signing_key::AccountSigningKeyReservationV1,
     > = take_required(&mut map, "account_signing_key_reservations")?;
+    let runtime_obligations: Storage<
+        iroha_data_model::runtime::obligation::ObligationId,
+        iroha_data_model::runtime::obligation::ObligationRecordV1,
+    > = take_required(&mut map, "runtime_obligations")?;
+    let runtime_migrations: Storage<
+        iroha_data_model::runtime::definition::DefinitionId,
+        iroha_data_model::runtime::obligation::MigrationRecordV1,
+    > = take_required(&mut map, "runtime_migrations")?;
+    let runtime_boundaries: Storage<u64, iroha_data_model::runtime::checkpoint::RuntimeBoundaryV1> =
+        take_required(&mut map, "runtime_boundaries")?;
     let sorafs_authority_proposals: Storage<[u8; 32], SorafsAuthorityProposalRecordV1> =
         take_required(&mut map, "sorafs_authority_proposals")?;
     let sorafs_authority_heads: Storage<[u8; 32], SorafsAuthorityHeadV1> =
@@ -9194,6 +9204,9 @@ fn decode_world_fields(
         game_partitions,
         account_signing_keys,
         account_signing_key_reservations,
+        runtime_obligations,
+        runtime_migrations,
+        runtime_boundaries,
         sorafs_authority_proposals,
         sorafs_authority_heads,
         sorafs_authority_leases,

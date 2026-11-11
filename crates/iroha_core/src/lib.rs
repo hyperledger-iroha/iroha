@@ -210,8 +210,7 @@ pub mod zk_guardrails;
 #[cfg_attr(test, deny(clippy::large_stack_arrays))]
 pub mod zk_validity_policy;
 pub use block::InvalidGenesisError;
-/// Native STARK/FRI verifier under `zk-stark`; external crates use `iroha_core_zk::stark`.
-#[cfg(feature = "zk-stark")]
+/// Native STARK/FRI verifier; external crates use `iroha_core_zk::stark`.
 pub(crate) use iroha_core_zk::stark as zk_stark;
 use iroha_model_base::peer::PeerId;
 /// Pre-validate a genesis block against the expected genesis account prior to startup.

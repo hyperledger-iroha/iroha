@@ -247,16 +247,40 @@ def test_a_new_catalog_field_in_the_resource_contract_fails(tree_scan) -> None:
 
 def test_feature_classification_is_complete_and_counted(tree_scan) -> None:
     def drop(census):
-        census["features"]["iroha_core"].pop("zk-stark")
-    assert_fails(tree_scan, edited(drop), "feature iroha_core/zk-stark: not classified")
+        census["features"]["iroha_core"].pop("zk-preverify")
+    assert_fails(tree_scan, edited(drop), "feature iroha_core/zk-preverify: not classified")
 
     def bump(census):
-        census["features"]["iroha_core"]["zk-stark"]["cfg_sites"] += 1
-    assert_fails(tree_scan, edited(bump), "conditional-compilation site(s)")
+        census["features"]["iroha_core"]["zk-preverify"]["cfg_sites"] += 1
+    assert any(
+        problem.startswith("feature iroha_core/zk-preverify: ")
+        and "conditional-compilation site(s)" in problem
+        for problem in problems(tree_scan, edited(bump))
+    )
 
     def invent(census):
-        census["features"]["iroha_core"]["zk-invented"] = {"class": "validity_gate", "entry": "feature.zk_stark", "cfg_sites": 0}
-    assert_fails(tree_scan, edited(invent), "classified but neither declared nor used")
+        census["features"]["iroha_core"]["zk-invented"] = {"class": "validity_gate", "entry": "feature.zk_halo2_family", "cfg_sites": 0}
+    assert_fails(tree_scan, edited(invent), "feature iroha_core/zk-invented: classified but neither declared nor used")
+
+    # A retired feature cannot stay classified: native STARK/FRI verification
+    # is compiled into every build, so no manifest declares `zk-stark`,
+    # `proofs-stark` or `proofs-full` and no production source names them.
+    declared = tree_scan.crate_features()
+    for crate in ("iroha_core", "iroha_core_zk", "iroha_core_privacy", "iroha_torii", "irohad"):
+        for retired in ("zk-stark", "proofs-stark", "proofs-full"):
+            assert retired not in declared[crate], (crate, retired)
+            assert not any(
+                feature == retired for (_path, feature) in tree_scan.feature_rows
+            ), retired
+
+            def keep(census, crate=crate, retired=retired):
+                census["features"][crate][retired] = {
+                    "class": "validity_gate", "entry": "feature.zk_stark", "cfg_sites": 0,
+                }
+            assert_fails(
+                tree_scan, edited(keep),
+                f"feature {crate}/{retired}: classified but neither declared nor used",
+            )
 
 
 def test_the_detector_table_cannot_be_narrowed_in_the_census(tree_scan) -> None:
@@ -300,7 +324,7 @@ def test_scan_finds_each_kind_of_gate_in_production_code(tmp_path: Path) -> None
             let from_env = std::env::var("IROHA_ZK_OVERRIDE").is_ok();
             let build = option_env!("IROHA_GIT_COMMIT_HASH");
             let started = std::time::Instant::now();
-            #[cfg(feature = "zk-stark")]
+            #[cfg(feature = "zk-preverify")]
             let stark = cfg.stark.enabled;
             let ready = privacy_readiness_certificate(chain);
             let active = PrivacyLifecycle::Active == privacy_protocol_activation(chain);
@@ -325,7 +349,7 @@ def test_scan_finds_each_kind_of_gate_in_production_code(tmp_path: Path) -> None
     assert found[(path, "chain_condition", "production")] == 1
     assert found[(path, "time_budget", "timeout")] == 1
     assert found[(path, "unavailable", "unavailable")] == 1
-    assert Scan(tmp_path).feature_rows[(path, "zk-stark")] == 1
+    assert Scan(tmp_path).feature_rows[(path, "zk-preverify")] == 1
 
 
 def test_scan_tracks_pipa_r_switches_and_family_identifiers(tmp_path: Path) -> None:

@@ -24,6 +24,13 @@ the lines.
   while every compared selection agrees on all its gated records although at
   least one selection lacks the feature (the census is then stale).
 
+The test prints no `gated` record now: native STARK/FRI verification is
+compiled into every build (there is no `zk-stark` feature and no build without
+STARK), and the outcome of a real STARK proof is the `must_equal` record
+`stark_real_proof`. The `gated` mechanism stays for a feature that still
+compiles an operation conditionally; with no gated record the comparison is the
+`must_equal` records alone and the census is read but decides nothing.
+
 The script changes no tracked file. It reads no environment variable; the
 Cargo target directory is the `--target-dir` argument. Each selection is a
 separate build of the `iroha_core` unit-test binary, so a full run takes two
@@ -54,10 +61,10 @@ GATE_CLASSES = ("validity_gate", "availability_gate")
 
 # Feature selections of `iroha_core`. `node` is the shipped default feature
 # set (`node` plus `simd`). Each other selection removes one gate family from
-# the same list; `None` means the crate's default features.
+# the same list; `None` means the crate's default features. STARK verification
+# has no feature, so no selection builds without it.
 NODE_FEATURES = (
     "runtime",
-    "proofs-stark",
     "app_api",
     "gost",
     "sm",
@@ -67,10 +74,9 @@ NODE_FEATURES = (
 )
 SELECTIONS: dict[str, Optional[tuple[str, ...]]] = {
     "node": None,
-    "node-without-stark": tuple(f for f in NODE_FEATURES if f != "proofs-stark"),
     "node-without-sm-gost": tuple(f for f in NODE_FEATURES if f not in ("sm", "gost")),
 }
-DEFAULT_SELECTIONS = ("node", "node-without-stark")
+DEFAULT_SELECTIONS = ("node", "node-without-sm-gost")
 
 
 class ParityError(Exception):
@@ -150,6 +156,7 @@ def compare(
         gated_keys.update(records[name]["gated"])
     differing_features: set[str] = set()
     covered_features: set[str] = set()
+    incomplete_features: set[str] = set()
     for key in sorted(gated_keys):
         feature = key.split(".", 1)[0]
         covered_features.add(feature)
@@ -157,6 +164,8 @@ def compare(
         if any(value is None for value in values.values()):
             missing = [name for name, value in values.items() if value is None]
             problems.append(f"gated.{key}: not printed by {missing}")
+            # A record one selection did not print is not an agreement.
+            incomplete_features.add(feature)
             continue
         if len(set(values.values())) == 1:
             continue
@@ -176,7 +185,7 @@ def compare(
 
     # A gate the census still lists as open must show in a comparison that
     # includes a selection without the feature.
-    for feature in sorted(covered_features - differing_features):
+    for feature in sorted(covered_features - differing_features - incomplete_features):
         gate = gates.get(feature)
         compiled = {
             name: feature in records[name]["features"].get("compiled", "").split(",")
@@ -285,9 +294,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 1
     names = sorted(records)
     count = len(records[names[0]]["must_equal"])
+    gated = any(records[name]["gated"] for name in names)
     print(
         f"check_zk_feature_parity: OK ({count} must-equal records identical across "
-        f"{names}; gated differences are open census gates)"
+        f"{names}; "
+        + ("gated differences are open census gates)" if gated else "no gated record)")
     )
     return 0
 

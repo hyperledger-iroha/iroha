@@ -463,6 +463,9 @@ struct SnapshotJsonMap<'a> {
     // Members the snapshot's runtime selection does not install, with the empty default each
     // reads as: the writer leaves them out (`specs/live_runtime_upgrades.md` §5.5).
     omitted: Vec<(&'static str, &'static str)>,
+    // Members of a nested owner the selection does not install, by the owner's member: the
+    // writer leaves them out of the owner's object, whose decoder reads them as empty.
+    omitted_nested: Vec<(&'static str, Vec<&'static str>)>,
     #[cfg(test)]
     fields: BTreeMap<String, SnapshotJsonField<'a>>,
     // Only the DOM-order test fixture records this; admitted maps validate their
@@ -569,6 +572,7 @@ impl<'a> SnapshotJsonMap<'a> {
         Ok(Self {
             admitted: Some(entries),
             omitted: Vec::new(),
+            omitted_nested: Vec::new(),
             #[cfg(test)]
             fields: BTreeMap::new(),
             #[cfg(test)]
@@ -600,6 +604,7 @@ impl<'a> SnapshotJsonMap<'a> {
         Self {
             admitted: None,
             omitted: Vec::new(),
+            omitted_nested: Vec::new(),
             fields: map
                 .into_iter()
                 .map(|(key, value)| (key, SnapshotJsonField::Owned(value)))
@@ -684,31 +689,33 @@ impl<'a> SnapshotJsonMap<'a> {
         Ok(Self {
             admitted: None,
             omitted: Vec::new(),
+            omitted_nested: Vec::new(),
             fields,
             source_order: Some(source_order),
         })
     }
     /// Read the World members the snapshot's runtime selection does not install as their empty
     /// defaults (`specs/live_runtime_upgrades.md` §5.5). The writer leaves them out, so they are
-    /// absent from the source order too; a present one is refused as an unknown field.
-    fn omit_uninstalled_world_members(&mut self) -> Result<(), StateRestoreError> {
+    /// absent from the source order too; a present one is refused as an unknown field. A member
+    /// of a nested owner is left out of the owner's object, and the owner's decoder applies the
+    /// same rule to it ([`Self::uninstalled_children`]).
+    ///
+    /// Returns whether that selection commits the complete State under the keyed profile.
+    /// The answer only chooses which certified root the decoded State must reproduce; the
+    /// selection is itself a row of either root, so a false claim fails that comparison.
+    fn omit_uninstalled_world_members(&mut self) -> Result<bool, StateRestoreError> {
         let selection: Cell<iroha_data_model::runtime::definition::RootSelectionV1> = self
             .get("runtime_selection")
             .ok_or_else(|| json::Error::missing_field("world.runtime_selection"))?
             .decode_canonical("runtime_selection")?;
-        // The snapshot has neither the original pre-tail execution version nor the
-        // replayed publication. Only the native Kura replay path reconstructs both.
-        // This selection read authorizes refusal only, never acceptance of a root.
-        if crate::runtime::keyed_state::selected(selection.view().get()) {
-            return Err(StateRestoreError::NativeExecutionReplayRequired);
-        }
+        let keyed = crate::runtime::keyed_state::selected(selection.view().get());
         let members = crate::runtime::uninstalled_world_members(selection.view().get()).map_err(
             |message| json::Error::InvalidField {
                 field: "world.runtime_selection".to_owned(),
                 message,
             },
         )?;
-        for member in members {
+        for member in members.members {
             let default =
                 world_member_default(member).map_err(|message| json::Error::InvalidField {
                     field: format!("world.{member}"),
@@ -716,7 +723,16 @@ impl<'a> SnapshotJsonMap<'a> {
                 })?;
             self.omitted.push((member, default));
         }
-        Ok(())
+        self.omitted_nested = members.nested;
+        Ok(keyed)
+    }
+    /// The members of the nested owner written as `owner` that the snapshot's runtime selection
+    /// does not install: absent from the owner's object and read as empty.
+    fn uninstalled_children(&self, owner: &str) -> &[&'static str] {
+        self.omitted_nested
+            .iter()
+            .find(|(member, _)| *member == owner)
+            .map_or(&[], |(_, children)| children.as_slice())
     }
     /// The empty default of an omitted World member, if `key` names one.
     fn omitted_default(&self, key: &str) -> Option<SnapshotJsonField<'a>> {
@@ -979,8 +995,49 @@ impl<'e, T> IvmSeed<'e, T> {
 }
 impl IvmSeed<'_, TriggerSet> {
     #[allow(clippy::unused_self)]
-    fn parse_trigger_set(self, value: SnapshotJsonField<'_>) -> Result<TriggerSet, json::Error> {
-        value.decode_canonical("triggers")
+    /// Decode the snapshot's `triggers` member. `uninstalled` names the members the snapshot's
+    /// runtime selection does not install (`specs/live_runtime_upgrades.md` §5.5): the writer
+    /// leaves them out, so a present one is refused, an absent one reads as empty, and the
+    /// canonical form the source must equal leaves them out too.
+    fn parse_trigger_set(
+        self,
+        value: SnapshotJsonField<'_>,
+        uninstalled: &[&'static str],
+    ) -> Result<TriggerSet, json::Error> {
+        if uninstalled.is_empty() {
+            return value.decode_canonical("triggers");
+        }
+        let invalid = |error: json::Error| json::Error::InvalidField {
+            field: "triggers".to_owned(),
+            message: error.to_string(),
+        };
+        let (raw, has_original_bytes) = match &value {
+            SnapshotJsonField::Borrowed { raw } => (std::borrow::Cow::Borrowed(*raw), true),
+            #[cfg(test)]
+            SnapshotJsonField::Owned(value) => (
+                std::borrow::Cow::Owned(json::to_json(value).map_err(invalid)?),
+                false,
+            ),
+        };
+        let mut parser = json::Parser::new(&raw);
+        let set = TriggerSet::json_deserialize_through_selection(&mut parser, uninstalled)
+            .map_err(invalid)?;
+        parser.skip_ws();
+        if !parser.eof() {
+            return Err(invalid(json::Error::Message(
+                "trailing bytes after the trigger set".to_owned(),
+            )));
+        }
+        if has_original_bytes {
+            let mut canonical = String::new();
+            set.write_json_through_selection(uninstalled, &mut canonical);
+            if canonical.as_bytes() != raw.as_bytes() {
+                return Err(invalid(json::Error::Message(
+                    "snapshot field is not canonically encoded".to_owned(),
+                )));
+            }
+        }
+        Ok(set)
     }
 }
 pub struct KuraSeed {
@@ -1229,6 +1286,7 @@ mod state_snapshot_decode_error_tests {
         SnapshotJsonMap {
             admitted: None,
             omitted: Vec::new(),
+            omitted_nested: Vec::new(),
             fields: BTreeMap::from([(
                 "parameters".to_owned(),
                 SnapshotJsonField::Borrowed { raw },
@@ -1546,7 +1604,7 @@ impl KuraSeed {
             canonical_world_field_order(),
             &self.execution_budget,
         )?;
-        world_map.omit_uninstalled_world_members()?;
+        let keyed_state = world_map.omit_uninstalled_world_members()?;
         world_map.require_source_order(canonical_world_field_order(), "world")?;
         if !world_map.contains_key("contract_subject_bindings") {
             return Err((json::Error::missing_field("world.contract_subject_bindings")).into());
@@ -1683,14 +1741,16 @@ impl KuraSeed {
             ),
             None => None,
         };
-        // A decoded World is unauthenticated until its cold-captured state root matches the
-        // certified parent World state root of its successor block, which the native tip
-        // restore authenticates from signed genesis (checked once the State is built below).
+        // A decoded State is unauthenticated until a cold capture of it reproduces the parent
+        // State root of its certified successor block, which the native tip restore reads
+        // from the prefix it verifies from signed genesis. Under LtHash that root commits the
+        // World, checked before the State is built below; under the keyed profile it commits
+        // the complete selected schema, checked by node preparation (see the claim below).
         let native_tip_claim: native_execution_tip::NativeExecutionTipSnapshot =
             take_required(&mut map, "native_execution_tip")?;
         let native_execution_tip::RestoredNativeTip {
             cell: native_execution_tip,
-            world_root: certified_world_root,
+            state_root: certified_state_root,
         } = native_tip_claim
             .restore(
                 &self.execution_budget,
@@ -1895,12 +1955,29 @@ impl KuraSeed {
                     message,
                 })
             })?;
-        // The World is final here; authenticate it before State construction loads or
-        // recovers any durable journal on its behalf. Only empty history has no certified
-        // successor to authenticate against.
-        if let Some(certified) = certified_world_root {
-            authenticate_restored_world(&world, &self.execution_budget, certified)?;
-        }
+        // The World is final here. Under LtHash, authenticate it before State construction
+        // loads or recovers any durable journal on its behalf. Only empty history has no
+        // certified successor to authenticate against.
+        let keyed_claim = match (keyed_state, certified_state_root) {
+            (false, None) => None,
+            (false, Some(certified)) => {
+                let certified =
+                    certified
+                        .as_legacy_hash()
+                        .ok_or_else(|| json::Error::InvalidField {
+                            field: "native_execution_tip".to_owned(),
+                            message:
+                                "restoring an LtHash State requires its original certified root"
+                                    .to_owned(),
+                        })?;
+                authenticate_restored_world(&world, &self.execution_budget, certified)?;
+                None
+            }
+            // No certified successor binds a keyed State at empty history, and a new World is
+            // founded on the baseline selection: only original execution can select the profile.
+            (true, None) => return Err(StateRestoreError::NativeExecutionReplayRequired),
+            (true, Some(certified)) => Some((*native_execution_tip.view().get(), certified)),
+        };
         let state = build_state(
             BuildStateInputs {
                 execution_budget: self.execution_budget,
@@ -1932,6 +2009,22 @@ impl KuraSeed {
             false,
         )
         .map_err(durable_state_restore_error)?;
+        if let Some((tip, certified)) = keyed_claim {
+            // The keyed root also commits lane policy and the policy cells that the node
+            // installs from its configuration after this decode (G1-D3), so the complete
+            // State can only be rebuilt once that is done. Record the certified root as a
+            // claim: until `State::authenticate_restored_keyed_state` discharges it in
+            // `sumeragi::node::prepare`, this State has no keyed version at its tip, so no
+            // block executes on it and no row proof is served from it.
+            let tip = tip.ok_or_else(|| json::Error::InvalidField {
+                field: "native_execution_tip".to_owned(),
+                message: "a keyed State snapshot requires its authenticated native tip".to_owned(),
+            })?;
+            state
+                .keyed_versions
+                .lock()
+                .claim_restored(keyed_state::RestoredKeyedClaim { tip, certified });
+        }
         Ok(state)
     }
 }
@@ -3799,12 +3892,16 @@ mod keyed_snapshot_tests {
     use super::*;
 
     #[test]
-    fn keyed_selection_requires_original_replay_before_a_snapshot_can_supply_state() {
-        let mut world=World::new();
-        crate::runtime::keyed_state::install_for_test(&mut world);
-        let raw = norito::json::to_json(&world.runtime_selection).unwrap();
-        let text=format!(r#"{{"runtime_selection":{raw}}}"#);
-        let mut map=SnapshotJsonMap::parse_world_fixture(&text).unwrap();
-        assert!(matches!(map.omit_uninstalled_world_members(), Err(StateRestoreError::NativeExecutionReplayRequired)));
+    fn the_decoded_selection_chooses_the_certified_root_a_snapshot_must_reproduce() {
+        for keyed in [false, true] {
+            let mut world = World::new();
+            if keyed {
+                crate::runtime::keyed_state::install_for_test(&mut world);
+            }
+            let raw = norito::json::to_json(&world.runtime_selection).unwrap();
+            let text = format!(r#"{{"runtime_selection":{raw}}}"#);
+            let mut map = SnapshotJsonMap::parse_world_fixture(&text).unwrap();
+            assert_eq!(map.omit_uninstalled_world_members().unwrap(), keyed);
+        }
     }
 }

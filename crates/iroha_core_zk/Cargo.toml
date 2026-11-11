@@ -43,13 +43,10 @@ path = "tests/kagemusha_suffix_corpus.rs"
 [features]
 # Offline packaging generators are built only through explicit artifact selection.
 dev-tools = []
-# Every build includes native PIPA-R proving and verification. Defaults also
-# select STARK and advisory pre-verification; test fixtures remain separate.
-default = ["proofs-stark", "zk-preverify"]
-proofs-stark = ["zk-stark"]
-# Native PIPA-R opening/proving is mandatory in every build.
-# STARK remains a separately selected algorithm.
-zk-stark = ["dep:fastpq_prover"]
+# Every build includes native PIPA-R proving and verification and the native
+# STARK/FRI verifier: a consensus verifier is never a build option. Defaults
+# also select advisory pre-verification; test fixtures remain separate.
+default = ["zk-preverify"]
 # Enable stateless advisory pre-verification, deduplication, and trace diagnostics.
 zk-preverify = []
 # Non-shipping helpers and fixtures for iroha_core's test builds; forbidden in
@@ -76,7 +73,7 @@ iroha_sumeragi = { workspace = true }
 iroha_version = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "pqc"] }
 ivm_abi = { workspace = true }
-fastpq_prover = { workspace = true, optional = true }
+fastpq_prover = { workspace = true }
 fastpq_isi = { path = "../fastpq_isi" }
 tracing = { workspace = true }
 sha2 = { version = "0.11.1", default-features = false, features = ["alloc"] }

@@ -108,12 +108,10 @@ impl StateKeyV1 {
     }
 
     fn byte(&self, i: usize) -> Option<u8> {
-        if i < self.table.len() {
-            self.table.as_bytes().get(i).copied()
-        } else if i == self.table.len() {
-            Some(0)
-        } else {
-            self.key.get(i - self.table.len() - 1).copied()
+        match i.cmp(&self.table.len()) {
+            std::cmp::Ordering::Less => self.table.as_bytes().get(i).copied(),
+            std::cmp::Ordering::Equal => Some(0),
+            std::cmp::Ordering::Greater => self.key.get(i - self.table.len() - 1).copied(),
         }
     }
 

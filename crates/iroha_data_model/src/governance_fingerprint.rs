@@ -51,6 +51,22 @@ pub const PARLIAMENT_EXECUTION_FAILURE_ROOT_V1: &[u8] =
 pub const PARLIAMENT_EXPECTED_HEAD_ROOT_V1: &[u8] =
     b"iroha.governance.parliament.expected_head.root.v1";
 pub const GOVERNANCE_CERTIFICATE_ID_V1: &[u8] = b"iroha.governance.certificate.id.v1";
+/// Attempt identifier of the anonymous Parliament definition family.
+pub const ANONYMOUS_GOVERNANCE_ATTEMPT_ID_V1: &[u8] =
+    b"iroha.governance.parliament.anonymous.attempt.id.v1";
+/// Body-instance identifier of the anonymous Parliament definition family, over the 64-byte
+/// roster root.
+pub const ANONYMOUS_BODY_INSTANCE_ID_V1: &[u8] =
+    b"iroha.governance.parliament.anonymous.body_instance.id.v1";
+/// Digest of an exact transition of the anonymous Parliament definition family.
+pub const ANONYMOUS_PARLIAMENT_TRANSITION_DIGEST_V1: &[u8] =
+    b"iroha.governance.parliament.anonymous.transition.digest.v1";
+/// Certificate identifier of the anonymous Parliament definition family.
+pub const ANONYMOUS_GOVERNANCE_CERTIFICATE_ID_V1: &[u8] =
+    b"iroha.governance.parliament.anonymous.certificate.id.v1";
+/// Execution-failure root of the anonymous Parliament definition family.
+pub const ANONYMOUS_PARLIAMENT_EXECUTION_FAILURE_ROOT_V1: &[u8] =
+    b"iroha.governance.parliament.anonymous.execution_failure.root.v1";
 pub fn fingerprint(domain: &[u8], proposal: &impl Encode) -> [u8; 32] {
     let encoded = proposal.encode();
     let domain_len = u64::try_from(domain.len())
@@ -99,6 +115,11 @@ mod tests {
             PARLIAMENT_EXECUTION_FAILURE_ROOT_V1,
             PARLIAMENT_EXPECTED_HEAD_ROOT_V1,
             GOVERNANCE_CERTIFICATE_ID_V1,
+            ANONYMOUS_GOVERNANCE_ATTEMPT_ID_V1,
+            ANONYMOUS_BODY_INSTANCE_ID_V1,
+            ANONYMOUS_PARLIAMENT_TRANSITION_DIGEST_V1,
+            ANONYMOUS_GOVERNANCE_CERTIFICATE_ID_V1,
+            ANONYMOUS_PARLIAMENT_EXECUTION_FAILURE_ROOT_V1,
         ];
         assert_eq!(
             domains.into_iter().collect::<BTreeSet<_>>().len(),

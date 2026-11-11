@@ -6233,15 +6233,21 @@ state_test! { sync executor_data_model_reconciliation_purges_undeclared_permissi
         "the permission purge and model update must be one stateful operation",
     );
 }
-state_test! { sync content_snapshot_reflects_latest_content_config
+state_test! { sync content_snapshot_keeps_node_gateway_resources_and_protocol_limits
     let mut state = blank_test_state();
-    let mut updated = state.content_snapshot();
-    updated.max_files = updated.max_files.saturating_add(11);
-    updated.max_bundle_bytes = updated.max_bundle_bytes.saturating_add(1024);
-    state.content = updated.clone();
+    let fixed = state.content_snapshot();
+    let mut node = fixed.clone();
+    node.max_files = node.max_files.saturating_add(11);
+    node.stripe_layout.total_stripes += 1;
+    node.pow.difficulty_bits = 5;
+    // A node value cannot replace a protocol limit; its gateway resource is kept.
+    assert_eq!(state.install_node_content(node), ["max_files", "stripe_layout"]);
     let snapshot = state.content_snapshot();
-    assert_eq!(snapshot.max_files, updated.max_files);
-    assert_eq!(snapshot.max_bundle_bytes, updated.max_bundle_bytes);
+    assert_eq!(snapshot.max_files, fixed.max_files);
+    assert_eq!(snapshot.stripe_layout, fixed.stripe_layout);
+    assert_eq!(snapshot.pow.difficulty_bits, 5);
+    assert_eq!(state.view().content.max_files, fixed.max_files);
+    assert_eq!(state.view().content.pow.difficulty_bits, 5);
 }
 state_test! { sync query_view_matches_basic_read_only_snapshot_fields
     let (state, kura) = blank_test_state_with_kura();
@@ -17462,6 +17468,36 @@ state_test! { sync concurrent_query_index_persistence_keeps_raw_disk_usage_exact
     assert!(!path.with_extension("norito.tmp").exists());
     let_row! { persisted = QueryIndexJournal::load(path) .expect("load concurrently persisted query-index journal") .snapshot() };
     assert_eq!(persisted, state.query_index_status_snapshot());
+}
+state_test! { sync startup_replay_persists_the_query_index_marker_once_when_it_finishes
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let kura = state_journal_test_kura(temp_dir.path().join("kura").as_path());
+    let_row! { state = Arc::new(State::new_for_testing( World::default(), Arc::clone(&kura), LiveQueryStore::start_test(), )) };
+    let path = state.query_index_journal_path();
+    let marker = |height: u8| Some(HashOf::from_untyped_unchecked(Hash::prehashed([height; Hash::LENGTH])));
+    let durable = || QueryIndexJournal::load(&path).expect("load query index journal").snapshot();
+    state.persist_query_index_status(1, marker(1));
+    assert_eq!(durable(), state.query_index_status_snapshot());
+    let replay = state.defer_derived_persistence_for_startup_replay().expect("startup replay scope");
+    for height in 2..=9_u8 {
+        state.persist_query_index_status(u64::from(height), marker(height));
+    }
+    // Replay advanced the marker in memory only: the durable one still names the earlier tip.
+    assert_eq!(state.query_index_status_snapshot().indexed_height, 9);
+    assert_eq!(durable().indexed_height, 1);
+    replay.finish().expect("finish startup replay");
+    assert_eq!(durable(), state.query_index_status_snapshot());
+    assert_eq!(durable().indexed_height, 9);
+    assert!(!path.with_extension("norito.tmp").exists());
+    // Outside the scope each publication persists its own marker again.
+    state.persist_query_index_status(10, marker(10));
+    assert_eq!(durable().indexed_height, 10);
+    // An abandoned replay leaves the durable marker untouched.
+    let abandoned = state.defer_derived_persistence_for_startup_replay().expect("second startup replay scope");
+    state.persist_query_index_status(11, marker(11));
+    drop(abandoned);
+    assert_eq!(durable().indexed_height, 10);
+    assert_eq!(state.query_index_status_snapshot().indexed_height, 11);
 }
 state_test! { sync state_commit_persists_query_index_status_journal
     let chain = crate::sumeragi::test_chain::CertifiedTestChain::start(

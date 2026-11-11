@@ -52,6 +52,8 @@ pub mod query;
 pub mod ram_lfe;
 pub mod repo;
 pub mod retail_daily_limit;
+pub mod runtime_boundary;
+pub mod runtime_obligation;
 pub mod rwa;
 /// SCCP v1 cross-chain core: state access, hooks, admission and instructions.
 pub mod sccp;
@@ -419,6 +421,13 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::game_partition::ExportGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::game_partition::ImportGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::account_signing_key::SetAccountSigningKeyV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    // Registering or ending an obligation changes no balance: its terminal effects are ordinary
+    // instructions the owner issues, each with its own asset checks.
+    dispatch_instruction::<iroha_data_model::isi::runtime_obligation::RegisterRuntimeObligationV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::runtime_obligation::CompleteRuntimeObligationV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    // A boundary of the root's history is a record every validator signed; it moves no asset.
+    dispatch_instruction::<iroha_data_model::isi::runtime_boundary::RatifyRuntimeAdoptionAnchorV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::runtime_boundary::RaiseRuntimeStartupFloorV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RegisterAmxDataspaceV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::private_dataspace::RegisterPrivateDataspace> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::private_dataspace::AnchorPrivateDataspace> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
@@ -888,6 +897,28 @@ define_instruction_handlers! {
         iroha_data_model::isi::sccp::ReportSccpLightClientEquivocationV1
     > => CoreAuthorized,
 }
+/// Enforce the selected owner policy before executing the unchanged native mutation.
+fn dispatch_restricted_dataspace_read_successor(
+    instruction: &InstructionBox,
+    authority: &AccountId,
+    state_transaction: &mut StateTransaction<'_, '_>,
+) -> Option<Result<(), Error>> {
+    if let Err(error) = crate::executor::validate_selected_restricted_read_mutation(
+        state_transaction,
+        authority,
+        instruction,
+    ) {
+        return Some(Err(Error::from(
+            state_transaction
+                .attempt_error_to_validation_fail(error)
+                .to_string(),
+        )));
+    }
+    NATIVE_INSTRUCTIONS
+        .get(instruction)
+        .and_then(|native| (native.handler)(instruction, authority, state_transaction))
+}
+
 /// Handlers of additions after the baseline that rebind an earlier wire ID to their own code
 /// (`specs/live_runtime_upgrades.md` §4, "Fix behaviour within an interface's contract"), by
 /// addition module and wire ID.
@@ -905,13 +936,24 @@ static ADDITION_HANDLERS: std::sync::LazyLock<
     let transition: InstructionHandler = dispatch_instruction::<
         iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1,
     >;
-    std::collections::BTreeMap::from([(
-        crate::runtime::catalog::additions::SORAFS_AUTHORITY.module,
-        std::collections::BTreeMap::from([(
-            "iroha.governance.parliament.transition.submit.v1",
-            transition,
-        )]),
-    )])
+    let restricted_read: InstructionHandler = dispatch_restricted_dataspace_read_successor;
+    std::collections::BTreeMap::from([
+        (
+            crate::runtime::catalog::additions::SORAFS_AUTHORITY.module,
+            std::collections::BTreeMap::from([(
+                "iroha.governance.parliament.transition.submit.v1",
+                transition,
+            )]),
+        ),
+        (
+            crate::runtime::catalog::additions::RESTRICTED_DATASPACE_READ.module,
+            crate::runtime::catalog::additions::RESTRICTED_DATASPACE_READ
+                .rebinds
+                .iter()
+                .map(|wire| (*wire, restricted_read))
+                .collect(),
+        ),
+    ])
 });
 
 /// The handler that executes `instruction` for the `implementation` its root binds (§5.2).
@@ -951,12 +993,7 @@ pub(crate) fn execute_borrowed_instruction(
         if crate::runtime::taira_activation::admitted_by_boundary(state_transaction, instruction) {
             None
         } else {
-            crate::runtime::envelope::resolve_envelope(
-                state_transaction.world.runtime_selection.get(),
-                state_transaction._curr_block.height().get(),
-                instruction,
-                || crate::runtime::obligations::step(instruction, &state_transaction.world),
-            )?
+            crate::runtime::resolve_executing(state_transaction, instruction)?
         };
     crate::executor::root_scope::ensure_instruction_scope(instruction, state_transaction)
         .map_err(|error| Error::from(error.to_string()))?;

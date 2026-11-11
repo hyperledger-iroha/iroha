@@ -21,8 +21,7 @@
 //! verifying-key registry ISIs; consensus-critical state and policies live in
 //! `iroha_core`'s `smartcontracts::isi` and related modules.
 #![allow(unexpected_cfgs)]
-/// Native STARK/FRI verifier under `zk-stark` (`stark/fri/*`).
-#[cfg(feature = "zk-stark")]
+/// Native STARK/FRI verifier (`stark/fri/*`), compiled into every build.
 pub mod stark;
 //
 use std::{
@@ -77,10 +76,8 @@ mod ram_lfe_test_support;
 mod ram_lfe_word;
 /// Core-owned authenticated confidential-spool adapter for MKHE RNS-native sources.
 pub mod rns_native_source_v1;
-#[cfg(feature = "zk-stark")]
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use iroha_data_model::proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord};
-#[cfg(feature = "zk-stark")]
 use iroha_data_model::zk::StarkFriOpenProofV1;
 #[cfg(test)]
 use kaigi_zk::{
@@ -418,7 +415,6 @@ pub enum PreparedVerifyingKeyMaterialV1 {
         ipa_k: u32,
     },
     /// Native STARK/FRI material pinned by the canonical registry payload.
-    #[cfg_attr(not(feature = "zk-stark"), allow(dead_code))]
     StarkFri {
         /// Canonical circuit identifier embedded in the key payload.
         circuit_id: String,
@@ -475,12 +471,6 @@ pub(crate) fn validate_and_prepare_verifying_key_material_v1(
             Ok(PreparedVerifyingKeyMaterialV1::NativePipaRPasta { ipa_k: kind.k() })
         }
         iroha_data_model::zk::BackendTag::Stark => {
-            #[cfg(not(feature = "zk-stark"))]
-            {
-                let _ = (circuit_id, vk);
-                Err(("verifying-key backend Stark is not enabled".to_owned()).into())
-            }
-            #[cfg(feature = "zk-stark")]
             {
                 // The decoder performs the whole-container check and bounded
                 // canonical Norito decode before materializing the typed key.
@@ -730,24 +720,18 @@ pub fn stark_open_verify_circuit_id_matches_backend(backend: &str, circuit_id: &
         )
         && !stark_open_verify_circuit_id_uses_reserved_proof_family(circuit_id)
 }
-#[cfg(feature = "zk-stark")]
 #[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
 struct StarkVerifyingKeyCacheKeyV1 {
     backend: String,
     circuit_id: String,
     vk_hash: [u8; 32],
 }
-#[cfg(feature = "zk-stark")]
 type StarkVerifyingKeyCacheMapV1 =
     std::collections::BTreeMap<StarkVerifyingKeyCacheKeyV1, crate::stark::StarkFriVerifyingKeyV1>;
-#[cfg(feature = "zk-stark")]
 type StarkVerifyingKeyCacheV1 = std::sync::Mutex<StarkVerifyingKeyCacheMapV1>;
-#[cfg(feature = "zk-stark")]
 const STARK_VERIFYING_KEY_CACHE_CAPACITY_V1: usize = 512;
-#[cfg(feature = "zk-stark")]
 static STARK_VERIFYING_KEY_CACHE_V1: std::sync::OnceLock<StarkVerifyingKeyCacheV1> =
     std::sync::OnceLock::new();
-#[cfg(feature = "zk-stark")]
 fn insert_stark_verifying_key_cache_v1(
     cache: &mut StarkVerifyingKeyCacheMapV1,
     key: StarkVerifyingKeyCacheKeyV1,
@@ -767,7 +751,7 @@ fn insert_stark_verifying_key_cache_v1(
     cache.insert(key, payload.clone());
     payload
 }
-#[cfg(all(test, feature = "zk-stark"))]
+#[cfg(test)]
 mod stark_verifying_key_cache_tests {
     use super::*;
 
@@ -808,7 +792,7 @@ mod stark_verifying_key_cache_tests {
         );
     }
 }
-#[cfg(all(test, feature = "zk-stark"))]
+#[cfg(test)]
 std::thread_local! {
     // Observe entry, including cache hits, without sharing counters between
     // concurrently executing native tests. No production admission state.
@@ -821,7 +805,6 @@ std::thread_local! {
 /// The returned value is the typed, bounded material that proof verification
 /// consumes. Validation binds its circuit and the sole six-lane commitment profile to the exact
 /// production backend before a registry record can retain the original bytes.
-#[cfg(feature = "zk-stark")]
 #[doc(hidden)]
 pub fn validate_stark_fri_verifying_key_v1(
     backend: &str,
@@ -958,7 +941,6 @@ fn canonical_circuit_is_soracloud_fhe_relation_for_backend(
     .map(|circuit_id| format!("{backend}:{circuit_id}"))
     .any(|circuit_id| circuit_id == canonical_circuit_id)
 }
-#[cfg(feature = "zk-stark")]
 #[doc(hidden)]
 pub fn stark_open_verify_domain_tag_current(
     backend: &str,
@@ -978,16 +960,11 @@ pub fn stark_open_verify_domain_tag_current(
         .expect("bounded OpenVerify binding preimage hashes into six Goldilocks lanes");
     URL_SAFE_NO_PAD.encode(digest.to_le_bytes())
 }
-#[cfg(feature = "zk-stark")]
 const STARK_BINDING_AIR_CONSTANT: u64 = 17;
-#[cfg(feature = "zk-stark")]
 const STARK_BINDING_AIR_Z_COEFF: u64 = 19;
-#[cfg(feature = "zk-stark")]
 const STARK_GOLDILOCKS_MODULUS: u128 = (1u128 << 64) - (1u128 << 32) + 1;
-#[cfg(feature = "zk-stark")]
 #[doc(hidden)]
 pub const STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1: &str = "IROHA-STARK-AIR-V1";
-#[cfg(feature = "zk-stark")]
 fn stark_binding_air_preimage(
     backend: &str,
     circuit_id: &str,
@@ -1016,7 +993,6 @@ fn stark_binding_air_preimage(
     preimage.extend_from_slice(&cell_count.to_le_bytes());
     preimage
 }
-#[cfg(feature = "zk-stark")]
 fn stark_binding_air_terms(
     backend: &str,
     circuit_id: &str,
@@ -1058,7 +1034,6 @@ fn stark_binding_air_terms(
     });
     terms
 }
-#[cfg(feature = "zk-stark")]
 #[doc(hidden)]
 pub fn stark_open_verify_air_public_digest_current(
     backend: &str,
@@ -1086,7 +1061,6 @@ pub fn stark_open_verify_air_public_digest_current(
 /// The first-release native V1 circuit carries an explicit AIR section whose
 /// public statement digest is reconstructed from the outer envelope metadata,
 /// verifying-key hash, schema descriptor, and public input columns.
-#[cfg(feature = "zk-stark")]
 ///
 /// # Errors
 ///
@@ -1109,7 +1083,7 @@ pub fn prove_stark_fri_open_verify_envelope(
         public_inputs,
     )
 }
-#[cfg(all(feature = "zk-stark", any(test, feature = "test-utils")))]
+#[cfg(any(test, feature = "test-utils"))]
 fn prove_stark_fri_open_verify_envelope_inner(
     backend: &str,
     circuit_id: &str,
@@ -1259,7 +1233,6 @@ pub mod test_utils {
         }
     }
     /// Build a native public-input binding proof for relation-confusion tests.
-    #[cfg(feature = "zk-stark")]
     #[must_use]
     pub fn stark_public_binding_fixture_envelope() -> FixtureEnvelope {
         use crate::stark::{
@@ -1654,7 +1627,6 @@ pub fn preverify_with_budget(
     }
     Ok(PreverifyResult::Accepted)
 }
-#[cfg(feature = "zk-stark")]
 fn verify_stark_fri_open_verify_envelope(
     backend: &str,
     proof: &ProofBox,
@@ -1667,7 +1639,6 @@ fn verify_stark_fri_open_verify_envelope(
         &crate::stark::StarkVerifierLimits::default(),
     )
 }
-#[cfg(feature = "zk-stark")]
 fn verify_stark_fri_open_verify_envelope_with_limits(
     backend: &str,
     proof: &ProofBox,
@@ -1895,19 +1866,10 @@ pub fn verify_backend(
     }
     // STARK/FRI family: native multi-fold verifier
     if is_stark_fri_v1_backend(backend) {
-        #[cfg(feature = "zk-stark")]
         {
             // STARK proofs must use `OpenVerifyEnvelope` so the verifier can bind the
             // backend/circuit metadata and verifying-key hash into the inner STARK envelope.
             return verify_stark_fri_open_verify_envelope(backend, proof, vk);
-        }
-        #[cfg(not(feature = "zk-stark"))]
-        {
-            tracing::debug!(
-                backend,
-                "stark/fri backend requested but binary was built without `zk-stark`"
-            );
-            return Ok(false);
         }
     }
     // Groth16 family: unsupported in the first release.
@@ -2614,7 +2576,7 @@ mod stark_backend_tag_tests {
         }
     }
 }
-#[cfg(all(test, feature = "zk-stark"))]
+#[cfg(test)]
 macro_rules! consensus_stark_vk {
     ($circuit_id:expr $(,)?) => {
         $crate::stark::StarkFriVerifyingKeyV1 {
@@ -2634,7 +2596,7 @@ type OpenVerifyMutation = (
     fn(&mut iroha_data_model::zk::OpenVerifyEnvelope),
 );
 
-#[cfg(all(test, feature = "zk-stark"))]
+#[cfg(test)]
 mod stark_prover_tests {
     use super::{
         STARK_BINDING_AIR_CONSTANT, STARK_BINDING_AIR_Z_COEFF, STARK_GOLDILOCKS_MODULUS,
@@ -4193,7 +4155,6 @@ pub fn verify_backend_with_timing_guardrails(
             );
             return Ok(REJECTED_VERIFY_REPORT);
         }
-        #[cfg(feature = "zk-stark")]
         {
             let started = Instant::now();
             let limits = crate::stark::StarkVerifierLimits {
@@ -4206,14 +4167,6 @@ pub fn verify_backend_with_timing_guardrails(
                 ok,
                 elapsed: started.elapsed(),
             });
-        }
-        #[cfg(not(feature = "zk-stark"))]
-        {
-            tracing::debug!(
-                backend,
-                "stark/fri backend requested but binary was built without `zk-stark`"
-            );
-            return Ok(REJECTED_VERIFY_REPORT);
         }
     }
     verify_backend_with_timing(backend, proof, vk)
@@ -4795,7 +4748,6 @@ mod guardrails_tests {
             assert_guardrails_reject!(backend, &proof, None, ENABLED_GUARDRAILS, "case {case}",);
         }
     }
-    #[cfg(feature = "zk-stark")]
     #[test]
     fn guardrails_stark_proof_limit_applies_to_inner_envelope_not_outer_wrapper() {
         let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
@@ -4834,7 +4786,6 @@ mod guardrails_tests {
         .expect("verification attempt must complete for this semantic fixture");
         assert!(report.ok);
     }
-    #[cfg(feature = "zk-stark")]
     #[test]
     fn guardrails_reject_stark_proof_backend_alias_mismatch_before_dispatch() {
         let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";

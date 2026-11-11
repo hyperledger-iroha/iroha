@@ -24,6 +24,7 @@ fn fixture(bytes: &[u8], budget: AllocationBudget) -> (tempfile::TempDir, Native
         // Same context-only policy as open_read_only: no optional FASTPQ capture.
         fastpq_maximum: None,
         fastpq_replay_target: None,
+        replay_barrier: ReplayBarrier::default(),
     };
     #[cfg(not(windows))]
     fs::write(canonical_path(directory.path()), bytes).unwrap();

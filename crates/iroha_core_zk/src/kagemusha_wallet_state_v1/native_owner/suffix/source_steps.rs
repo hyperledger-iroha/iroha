@@ -14,10 +14,6 @@ use crate::kagemusha_wallet_state_v1::{
 /// `credit_tree` is the independent clone selected with the anchor, never the live manifest.
 /// Failed reads, decoding, validation or encoding leave that clone unchanged. Staged immutable
 /// map nodes may remain unreachable after a failed attempt; no selected root is changed.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "separate selected originals and independent map"
-)]
 pub(super) fn step_original(
     store: &mut impl ObjectWorkspace,
     released: &ReleasedStep,

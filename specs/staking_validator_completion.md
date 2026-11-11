@@ -7,9 +7,9 @@ No live deployment or release readiness is established by this record.
 ## Active implementation goal
 
 The complete first-release implementation and qualification goal is active.
-Implementation and validation use only the `optimizations` branch in
-`/Users/takemiyamakoto/soramitsudev/iroha`. Results from another checkout do not
-qualify this candidate; all outstanding gates must run against this source.
+Implementation and validation use only the `optimizations` branch of this
+repository. Results from another checkout or branch do not qualify this
+candidate; all outstanding gates must run against this source.
 The selected design replaces retired layouts and paths; backward-compatible
 decoders, aliases, shims and parallel implementations are prohibited.
 
@@ -22,7 +22,7 @@ decoders, aliases, shims and parallel implementations are prohibited.
 | Monetary fees | Exact signed effects, bounded claims with retained dust, and principal distinct from assessed fees | Monetary plans and native effect checks are present. Required explicit fee-reward claim bindings and additive shared custody are implemented; canonical reward-currency admission, current-policy integration, multisig/proved execution and paid network coverage remain under validation |
 | Production progress | One funded original execution reaches durable Apply; native lane runner is the sole production owner | Native execution/context retention, deterministic history and Kura's fail-stop gate are integrated. Complete original-pool funding through World/DA/proof graphs, publication, replay and retained-generation reclamation remains open |
 | Operator/client delivery | Canonical signing, provisioning, status, SDK and fixture workflows | Candidate and credential commands and native evidence readers are present. Same-source native artifacts, regenerated fixtures, complete SDK consumers and operator network qualification remain open |
-| Unchanged network qualification | Real 4→7→4 network, faults, replay, restart, penalties, rewards and full withdrawal; maintained formal/DA/workspace/SDK gates | Pending |
+| Unchanged network qualification | Real 4→7→4 network, faults, replay, restart, penalties and withdrawal; funded rewards on an aged network; maintained formal/DA/workspace/SDK gates | Exits, a real-peer double-sign slash and withdrawal of the slashed remainder are integrated in the real-peer scenarios and await execution on one unchanged candidate. Funded rewards cannot be qualified by a disposable run (reward gate below) |
 
 Rewards automatically accrue from authenticated funded XOR conversion using
 historical validator and nominator exposure. Committee preparation
@@ -296,16 +296,45 @@ readers must retain actual release owners, with callbacks outside enclosing fenc
   five, eight and eleven candidates, missing incumbent keys, missing target
   custody, and real-XOR 4→7→4 transitions. They use the native finality journal
   and restart all peers while provisioning pending credentials. Setup without
-  an actual network fails the qualification. The scenarios explicitly exclude
-  an enacted retail validation-fee policy. The complete rotation includes full
-  withdrawal after retained liability expiry, with separately settled native
-  fees. TODO: qualify positive automatic funded conversion and signed nominator
-  claims across a monthly boundary on a real four-peer network. The connected Parliament
+  an actual network fails the qualification. Every genesis signs one staking
+  policy with a slash sink distinct from the stake escrow and a one-tenth slash
+  fraction. In the complete rotation a departing seven-seat voter schedules its
+  full bond for release and its operator then double-signs (below); the
+  remainder is withdrawn after replacement and retained liability expiry, with
+  separately settled native fees. The connected Parliament
   helper requests and consumes a genuine sortition pulse during E+1 while current
   and pending credentials coexist; it separately verifies the fresh epoch-boundary
   scheduling pulse and rejects early activation. These scenarios require compilation
-  and execution on one unchanged candidate. The connected enacted-policy scenario
-  remains open; slashing uses the deterministic native component below.
+  and execution on one unchanged candidate. No scenario enacts a retail
+  validation-fee policy: see "Real-network reward gate" below.
+- Real-peer double-sign (`support/committee_equivocation.rs`). Consensus evidence
+  enters only through the authenticated consensus peer path
+  ([evidence API](sumeragi_evidence_api.md)); there is no HTTP, CLI or
+  instruction entry and none is added. The fixture is the offending validator's
+  operator. It stops one separately running, never-seated candidate process and
+  runs the unchanged P2P stack under that process's own transport identity and
+  effective configuration, with handshake capabilities derived from the signed
+  genesis. Through it every other current voter receives two Prepare votes for
+  the next uncommitted height, both signed with the offender's real consensus
+  key; the offender's own daemon keeps running, as with a duplicated signer.
+  The votes name the view the voters report once the transport is authenticated:
+  an uncommitted height keeps rotating views through timeout certificates even
+  without work, and a core pools a vote only within one view of its own.
+  Exactly one pair is signed, and each witness must report the retained conflict
+  before the borrowed process is restarted. No daemon has a fault control: the
+  honest cores report `VoteEquivocation`, an honest leader admits the proof with
+  ordinary paid work, and the mandatory penalty follows the signed
+  `slashing_delay_blocks`.
+  `double_signing_voter_is_slashed_to_the_signed_sink_after_the_signed_delay`
+  requires this on four bonded genesis voters: the committed record names the
+  one signer under root scope, escrow balance and stake reserve fall by one
+  tenth of the bond, the sink rises by the same quantity, supply changes only by
+  authenticated fee burns, the same exact quorum keeps finalizing, and no second
+  penalty follows. In the complete rotation the slash must reduce the pending
+  unbond in place: the request keeps its identity and liability horizon, the
+  node prepares withdrawal of exactly the remainder and refuses it until
+  replacement and expiry. Both cases are source-integrated and await execution
+  on one unchanged candidate; until then this is not a real-peer slashing result.
 - The finality-owned lane penalty component
   `native_lane_original_genesis_escrow_is_debited_only_by_delayed_authenticated_admission`
   now covers signed full-unbond scheduling, a delayed physical XOR transfer to a
@@ -316,13 +345,12 @@ readers must retain actual release owners, with callbacks outside enclosing fenc
   and time maturity, withdraws the remaining XOR, and checks a freshly signed replay
   with exact fees, balances and reserves. The extension is implemented but awaits
   compilation and runtime qualification; it is a deterministic native component,
-  not a real-peer slashing result.
+  not a real-peer slashing result; the real-peer double-sign above is that gate.
   Torii exposes evidence reads, not an external evidence-submission endpoint;
-  the Initial executor admits manual slashing only in genesis. An offline proof
-  cannot currently drive the disposable network's finality-owned penalty through
-  an existing external submission command. Keep mandatory-slash simulator and
-  component evidence separate from network qualification; do not add a manual
-  authority or node fault switch to make that gate pass.
+  the Initial executor admits manual slashing only in genesis. Keep
+  mandatory-slash simulator and component evidence separate from network
+  qualification; do not add a manual authority, a submission endpoint or a node
+  fault switch to make that gate pass.
 - Candidate keys require BLS peer consent and the exact BLS proof of possession
   bound into the validator generation. Every prepared seat additionally proves
   custody of its exact beacon share under the finalized DKG transcript and complete transition context. A
@@ -375,8 +403,8 @@ node's own certificates (certificates are per node, `specs/sumeragi.md` §12.7):
 | Prepared beacon transition | The signed encrypted all-edge DKG model and reducer bind the frozen exact roster and fail closed before finalization if an edge or acceptance is absent. The deterministic Core fixture still constructs secrets centrally; daemon per-seat custody, authenticated exchange, genesis orchestration, current/pending session restart and atomic activation need qualification. Parliament creates no pulse demand: its sortition waits governance-locally for the consensus-native epoch-end pulse ([ballot design](parliament_private_ballot_design.md) section 9). Do not bypass finalized pulse or certificate checks. | Beacon, Parliament, Sumeragi and daemon |
 | Staking under the enacted validation-fee policy | `RetailMonthlyAllowance` is the canonical policy: calendar maintenance, included retail payments and overage, with an institutional per-payment fee and separate immutable reward custody. Native assessment checks qualifying payments of the enacted fee asset. TODO: complete and qualify staking integration, distinct fee-asset accounting, bounded claims, multisig/proved overlays and signed payer bounds through original execution. Staking principal cannot satisfy a fee obligation. | Core/native execution and fees |
 | Production liveness | Complete the original Validate-to-Apply owner, admitted resources, durable publication and autonomous lane runner together. TODO: qualify silent authors, saturation, final-transaction progress and retirement/restart cuts, with named deterministic regressions and mutation controls. | Core/Sumeragi, Queue, Kura and formal owners |
-| Reward allocation | Funded canonical-XOR conversion preserves validator service-count gross rewards and automatically divides them using historical eligible stake cohorts, with zero commission. TODO: qualify monthly funding, multiple nominator claims and restart together on a real four-peer network. | Core finalized service, fee conversion and staking custody |
-| Network qualification | TODO: one unchanged candidate proves admission, prepared 4→7→4 rotation, Parliament sortition consuming the boundary pulse after rotation, missing target signer, all-seat restart, replay rejection, rewards, slashing and final withdrawal. Run the maintained fault/DA/formal gates and complete workspace checks. | Integration, release and subsystem owners |
+| Reward allocation | Funded canonical-XOR conversion preserves validator service-count gross rewards and automatically divides them using historical eligible stake cohorts, with zero commission. TODO: qualify monthly funding, multiple nominator claims and restart together on an authentically aged real network; the reward gate below rules out a fresh disposable network. | Core finalized service, fee conversion and staking custody |
+| Network qualification | TODO: one unchanged candidate proves admission, prepared 4→7→4 rotation, Parliament sortition consuming the boundary pulse after rotation, missing target signer, all-seat restart, replay rejection, the real-peer double-sign slash and withdrawal of the slashed remainder, with no claimable reward. Run the maintained fault/DA/formal gates and complete workspace checks. Funded rewards are the separate aged-network gate. | Integration, release and subsystem owners |
 
 The current fee owners are `iroha_data_model::validation_fee`,
 `iroha_core::retail_fee` and the common numeric-asset mutation path. The native
@@ -392,13 +420,42 @@ before recording terminal state or pruning; these connected regressions remain
 under validation. Complete fee/custody conservation requires connected tests
 under the current policy, not a restored retired charging mode.
 
-Retail-policy enactment checks the activation time against the actual finalized
-Parliament enactment time: at least thirty days later, at a Honiara month boundary.
-Backdated notice metadata cannot shorten this interval. A fresh short-lived
-disposable network can qualify genuine enactment and delayed activation, but
-active-policy staking requires an authentically aged chain or the actual elapsed
-interval. Do not seed an enacted registry or substitute a fabricated chain clock
-for that network gate.
+### Real-network reward gate
+
+A staking reward exists only as funded XOR conversion of collected retail fees.
+On a real network that requires, in order:
+
+1. a Parliament-enacted payout lifecycle (wrapper contract, DLMM pool, reference
+   feed and providers); per-block validator service and nominator exposure
+   capture start with it;
+2. a Parliament-enacted pricing policy. Enactment checks the activation time
+   against the actual finalized enactment block: at least thirty days later, at
+   a Honiara month boundary. Backdated notice metadata cannot shorten this
+   interval, and signed genesis cannot carry the registry;
+3. fee collection under the active policy in an earning month;
+4. the end of that month: only a closed earning month converts;
+5. fresh reference observations, the scheduled conversion, automatic accrual
+   and a signed claim of at least the binding's claim threshold.
+
+The earliest positive reward is therefore about 58 to 92 days of real ledger
+time after pricing enactment. Block time is the proposer's clock within the
+signed drift bound, so no disposable network can reach it in one run. The
+notice interval is a consumer-protection rule and is not a test parameter. Do
+not seed an enacted registry or pending credit, shorten the notice, or
+substitute a fabricated chain clock for this gate.
+
+The fresh real-peer scenarios therefore qualify absence: no validation-fee
+registry exists, and after genuine service, a slash and a pending withdrawal the
+node refuses to prepare a reward claim ("no funded reward entitlement"), so
+principal and slashed stake can never be paid out as a reward. Conversion,
+accrual, claims, replay and recovery are covered by the deterministic Core
+suites (`validation_fee/runtime_rewards_tests.rs`,
+`runtime_reward_history_tests.rs`, `runtime_reward_crash_tests.rs`,
+`validation_fee_rewards/automatic_tests.rs`, `signed_claim_tests.rs`,
+`exposure_lifecycle_tests.rs`), which seed the registry and a historical clock
+and are component evidence only. TODO: qualify a positive funded conversion and
+signed validator and nominator claims on an authentically aged network; this is
+the one staking gate a disposable run cannot close.
 
 The canonical reward plan requires one positive `fee_claim` with exact lifecycle,
 beneficiary revision, global XOR source and destination, amount and next claim

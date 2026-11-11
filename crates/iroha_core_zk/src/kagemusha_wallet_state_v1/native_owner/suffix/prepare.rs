@@ -476,7 +476,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         self.require_source(&selected, &record)?;
         let total = record.source_sequence - record.anchor_sequence;
         if let Some(pass) = &self.proofs.suffix_pass {
-            if pass.binding.request != record.request_id
+            if pass.binding.request_id != record.request_id
                 || pass.binding.source_capsule != record.source_capsule
             {
                 return Err(Error::OperationConflict);
@@ -494,7 +494,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         let mut pass = self.proofs.suffix_pass.take().unwrap_or(LiveSuffixPass {
             scheduler: self.scheduler.clone(),
             binding: WorkBinding {
-                request: record.request_id,
+                request_id: record.request_id,
                 source_capsule: record.source_capsule,
                 source_sequence: record.source_sequence,
                 source_selected_generation: record.source_selected_generation,
@@ -623,8 +623,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                 record.progress = Some(write_record(&mut self.archive, &progress)?);
                 self.save_request(&mut selected, &record)?;
                 let chunk_index = done / 8;
-                let mut stream_offset = 0;
-                if chunk_index > 0 {
+                let stream_offset = if chunk_index > 0 {
                     // Fixed-size progress lookup: each previous chunk commits its end offset.
                     let previous_key = address(
                         &progress
@@ -643,8 +642,10 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                             &self.scheme_id,
                         )
                     })?;
-                    stream_offset = previous.stream_offset + previous.data.len() as u128;
-                }
+                    previous.stream_offset + previous.data.len() as u128
+                } else {
+                    0
+                };
                 Phase::Chunk {
                     cursor,
                     chunk_index,
@@ -882,7 +883,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
         }
         let mut selected = self.selected_suffix_checkpoint()?.ok_or(Error::NoHead)?;
         let mut record = self
-            .suffix_request(&selected, &proved.binding.request)?
+            .suffix_request(&selected, &proved.binding.request_id)?
             .ok_or(Error::WitnessLost("suffix worker request"))?;
         if selected.suffix.as_ref().and_then(|s| s.active_request) != Some(record.request_id) {
             return Err(Error::OperationConflict);

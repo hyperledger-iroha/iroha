@@ -814,6 +814,7 @@ mod tests {
         ];
         assert_eq!(require_complete_inventory(VALID_DERIVATION), Ok(()));
         const INVALID_DISCLOSURE: &[Field] = &[Field {
+            member: "",
             id: "test.rows",
             role: Role::Canonical(Canonical::Cell(schema::<u64>())),
             disclosure: Disclosure::NotApplicable,

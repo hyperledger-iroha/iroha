@@ -36,6 +36,7 @@ fn archive(root: &Path, budget: AllocationBudget, maximum: usize) -> NativeConte
         // production open(kura) binds the independent configured source ceiling.
         fastpq_maximum: None,
         fastpq_replay_target: None,
+        replay_barrier: ReplayBarrier::default(),
     }
 }
 fn canonical_path(root: &Path) -> std::path::PathBuf {
@@ -252,6 +253,79 @@ fn canonical_retry_preserves_an_inconsistent_private_stage() {
     write_stage_fixture(&writer, dir.path(), changed);
     assert!(writer.publish(&original).is_err());
     assert_eq!(fs::read(stage_path(dir.path())).unwrap(), changed);
+    assert_eq!(
+        fs::read(canonical_path(dir.path())).unwrap(),
+        original.canonical_bytes()
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn startup_replay_rechecks_published_records_behind_one_final_barrier() {
+    let dir = tempfile::tempdir().unwrap();
+    let lanes = SumeragiLaneState::default();
+    let writer = archive(dir.path(), AllocationBudget::new(4096), 4096);
+    let original = writer.encode_projection(&projection(&lanes)).unwrap();
+    let owed = || writer.replay_barrier.owed.load(Ordering::Acquire);
+    writer.begin_startup_replay();
+    // A record replay has to write is published behind its own barriers.
+    writer.publish(&original).unwrap();
+    assert!(!owed());
+    // Once published, replay rechecks it and owes one barrier, however often it does.
+    writer.publish(&original).unwrap();
+    writer.publish(&original).unwrap();
+    assert!(owed());
+    assert_eq!(
+        fs::read(canonical_path(dir.path())).unwrap(),
+        original.canonical_bytes()
+    );
+    assert!(!stage_path(dir.path()).exists());
+    writer.finish_startup_replay().unwrap();
+    assert!(!owed());
+    assert!(!writer.replay_barrier.open.load(Ordering::Acquire));
+    // Outside the scope the same publication is durable by itself again.
+    writer.publish(&original).unwrap();
+    assert!(!owed());
+    // A scope that rechecked nothing owes nothing.
+    writer.begin_startup_replay();
+    writer.finish_startup_replay().unwrap();
+    assert!(!owed());
+}
+
+#[test]
+#[cfg(unix)]
+fn startup_replay_leaves_changed_records_and_stages_to_ordinary_publication() {
+    let dir = tempfile::tempdir().unwrap();
+    let lanes = SumeragiLaneState::default();
+    let writer = archive(dir.path(), AllocationBudget::new(4096), 4096);
+    let original = writer.encode_projection(&projection(&lanes)).unwrap();
+    let owed = || writer.replay_barrier.owed.load(Ordering::Acquire);
+    writer.publish(&original).unwrap();
+    writer.begin_startup_replay();
+    // A changed canonical record is refused and never overwritten.
+    let mut changed = original.canonical_bytes().to_vec();
+    changed[0] ^= 1;
+    fs::write(canonical_path(dir.path()), &changed).unwrap();
+    assert!(writer.publish(&original).is_err());
+    assert_eq!(fs::read(canonical_path(dir.path())).unwrap(), changed);
+    assert!(!owed());
+    // An identical leftover stage is retired by ordinary publication, behind its barrier.
+    fs::remove_file(canonical_path(dir.path())).unwrap();
+    fs::write(stage_path(dir.path()), original.canonical_bytes()).unwrap();
+    fs::hard_link(stage_path(dir.path()), canonical_path(dir.path())).unwrap();
+    writer.publish(&original).unwrap();
+    assert!(!stage_path(dir.path()).exists());
+    assert!(!owed());
+    // An inconsistent stage is preserved and refuses, exactly as outside the scope.
+    let inconsistent = b"inconsistent retained stage";
+    fs::write(stage_path(dir.path()), inconsistent).unwrap();
+    assert!(writer.publish(&original).is_err());
+    assert_eq!(fs::read(stage_path(dir.path())).unwrap(), inconsistent);
+    assert!(!owed());
+    fs::remove_file(stage_path(dir.path())).unwrap();
+    writer.publish(&original).unwrap();
+    assert!(owed());
+    writer.finish_startup_replay().unwrap();
     assert_eq!(
         fs::read(canonical_path(dir.path())).unwrap(),
         original.canonical_bytes()

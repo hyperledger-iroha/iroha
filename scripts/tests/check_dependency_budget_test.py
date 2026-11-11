@@ -892,6 +892,24 @@ def test_native_policy_preserves_every_original_context_and_layer() -> None:
     for package in VALIDATOR_DEPLOY_STACK:
         assert validator_denials.count(package) == 1
         validator_denials.remove(package)
+    # Native STARK/FRI verification has no Cargo feature any more, so no selection
+    # names `proofs-stark` or `zk-stark` among the forbidden `iroha_core_zk` features.
+    # The projection restores them at their original positions for the pins below.
+    assert all(
+        not {"proofs-full", "proofs-stark", "zk-stark"} & set(features)
+        for selection in policy["configurations"].values()
+        for features in selection["forbidden_features"].values()
+    )
+    for context in SDK_SELECTIONS:
+        core_zk = previous_configurations[context]["forbidden_features"]["iroha_core_zk"]
+        assert core_zk == ["default", "halo2-dev-tests", "test-utils", "zk-tests"]
+        core_zk.insert(2, "proofs-stark")
+        core_zk.insert(4, "zk-stark")
+    assert not any(
+        "iroha_core_zk" in selection["forbidden_features"]
+        for context, selection in policy["configurations"].items()
+        if context not in SDK_SELECTIONS
+    )
     previous_layers = copy.deepcopy(policy["layers"])
     assert previous_layers["node_execution"].count("iroha_private_settlement") == 1
     previous_layers["node_execution"].remove("iroha_private_settlement")

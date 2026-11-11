@@ -495,11 +495,14 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        // The 410 baseline instructions and fifteen additions: six game partition,
+        // The 410 baseline instructions and nineteen additions: six game partition,
         // three Ironwood, the endorsed runtime-upgrade proposal, account signing keys,
-        // the Taira repair and activation, and two SoraFS authority instructions.
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 425;
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 425;
+        // the Taira repair and activation, two SoraFS authority instructions, and the
+        // four of the kernel's lifecycle State: the registration and completion of an
+        // obligation, the ratification of the adoption anchor and the raising of the
+        // startup floor.
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 429;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 429;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -647,6 +650,10 @@ mod tests {
                 privacy::BootstrapPrivacyIronwoodPoolV1::WIRE_ID,
                 privacy::SchedulePrivacyIronwoodLimitsUpdateV1::WIRE_ID,
                 privacy::SubmitPrivacyIronwoodProofV1::WIRE_ID,
+                crate::isi::runtime_boundary::RatifyRuntimeAdoptionAnchorV1::WIRE_ID,
+                crate::isi::runtime_boundary::RaiseRuntimeStartupFloorV1::WIRE_ID,
+                crate::isi::runtime_obligation::CompleteRuntimeObligationV1::WIRE_ID,
+                crate::isi::runtime_obligation::RegisterRuntimeObligationV1::WIRE_ID,
                 "iroha.runtime.taira_time_ironwood.schedule.v1",
                 "iroha.sorafs.authority.attempt.create.v1",
                 "iroha.sorafs.authority.propose.v1",

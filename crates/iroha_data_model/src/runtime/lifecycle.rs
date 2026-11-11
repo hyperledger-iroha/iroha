@@ -5,9 +5,9 @@
 //! performs: it adds the published definitions, applies the transitions in order, and requires the
 //! result to be the declared successor and to satisfy the closure rules. Validators state that
 //! their release executes that successor with a [`SupportAttestationV1`]. Effects that leave work
-//! behind register it as an [`ObligationRecordV1`], emergency containment is a [`ContainmentV1`],
-//! and a running network that adopts the foundation records its trust anchor as an
-//! [`AdoptionRecordV1`].
+//! behind register it through the kernel ([`super::obligation`]), emergency containment is a
+//! [`ContainmentV1`], and a running network that adopts the foundation records its trust anchor
+//! as an [`AdoptionRecordV1`].
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -17,8 +17,8 @@ use norito::codec::{Decode, Encode};
 
 use super::definition::{
     BindingV1, CompletionClosureV1, DefinitionDescriptorV1, DefinitionError, DefinitionId,
-    DefinitionKind, DefinitionLookup, ResourceLimitsV1, RestrictionEntryV1, RestrictionV1,
-    RootSelectionV1, SelectionError, SelectionId, StorageShapeV1,
+    DefinitionKind, DefinitionLookup, RestrictionEntryV1, RestrictionV1, RootSelectionV1,
+    SelectionError, SelectionId, StorageShapeV1,
 };
 use crate::NetworkId;
 
@@ -355,8 +355,12 @@ impl ChangeSetV1 {
                     else {
                         return Err(fail("only a published storage definition can be installed"));
                     };
-                    if matches!(storage.shape, StorageShapeV1::Cell) && storage.initial.is_none()
-                        && !*import_existing.get_or_init(|| super::keyed_state::imports_existing_storage(self, predecessor.kernel)) {
+                    if matches!(storage.shape, StorageShapeV1::Cell)
+                        && storage.initial.is_none()
+                        && !*import_existing.get_or_init(|| {
+                            super::keyed_state::imports_existing_storage(self, predecessor.kernel)
+                        })
+                    {
                         return Err(fail(
                             "a cell without initial bytes is installed only by the act that founds its root",
                         ));
@@ -674,8 +678,10 @@ pub struct AdoptionRecordV1 {
     pub committee: [u8; 32],
     /// The foundation's initial selection.
     pub selection: SelectionId,
-    /// Identity of the governance record that authorized the adoption or, for a network whose node
-    /// configuration alone authorized it (Taira), the record that ratifies this anchor.
+    /// Identity of the governance record that authorized the adoption. All zero for a network
+    /// whose node configuration alone authorized it (Taira): the record that ratifies its anchor
+    /// is the activated change set that publishes the anchor's definition
+    /// ([`super::checkpoint`]), which this field cannot name without a hash cycle.
     #[norito(json = "crate::json_helpers::fixed_bytes_hex")]
     pub authorization: [u8; 32],
 }
@@ -721,37 +727,6 @@ pub enum ObligationKindV1 {
     MigrationCursor,
     /// An AMX participation awaiting decision or settlement.
     AmxParticipation,
-}
-
-/// An obligation registered through the kernel, with what its completion needs.
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Encode,
-    Decode,
-    iroha_schema::IntoSchema,
-    norito::NoritoSchema,
-    crate::DeriveJsonSerialize,
-    crate::DeriveJsonDeserialize,
-)]
-#[norito_schema(name = "iroha_data_model::runtime::lifecycle::ObligationRecordV1")]
-pub struct ObligationRecordV1 {
-    /// What kind of work it is.
-    pub kind: ObligationKindV1,
-    /// The implementation that created it.
-    pub creator: DefinitionId,
-    /// Height at which it was created.
-    pub created_at: u64,
-    /// Definitions its completion needs; `closure.obligation` is the obligation's identity.
-    pub closure: CompletionClosureV1,
-    /// Terminal effects the completion may perform, sorted and unique.
-    pub terminal_effects: Vec<String>,
-    /// Resource budget reserved for completion.
-    pub budget: ResourceLimitsV1,
 }
 
 /// What emergency containment may impose (§7.1).

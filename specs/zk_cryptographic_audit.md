@@ -1194,7 +1194,7 @@ counterexamples.
 scripts/formal/zk_tlc.sh fast
 scripts/formal/zk_tlc.sh mutations
 cargo test -p iroha_core_zk --lib stark::tests::
-cargo test -p iroha_core --features zk-stark --lib zk_ace
+cargo test -p iroha_core --lib zk_ace
 cargo test -p iroha_core_zk --lib
 cargo test -p iroha_zkp_halo2
 cargo test -p fastpq_prover

@@ -1,24 +1,27 @@
-//! Coalesce the local tiered projection while canonical startup replay owns State.
+//! Coalesce the derived local projections while canonical startup replay owns State:
+//! the tiered rows and the query-index marker. Replay republishes every historical tip,
+//! and only the final value of either is ever read.
 
 use super::*;
 
 /// Startup-only persistence scope. It grants no execution or restoration authority.
-pub struct StartupTieredReplay {
+pub struct StartupReplayPersistence {
     state: Arc<State>,
 }
 
 impl State {
-    /// Defer derived row snapshots until startup has authenticated its final World.
+    /// Defer derived row snapshots and query-index marker writes until startup has
+    /// authenticated its final World. The marker still advances in memory.
     /// The caller must own startup before any live execution producer is admitted.
-    pub(crate) fn defer_tiered_snapshots_for_startup_replay(
+    pub(crate) fn defer_derived_persistence_for_startup_replay(
         self: &Arc<Self>,
-    ) -> Result<StartupTieredReplay, String> {
+    ) -> Result<StartupReplayPersistence, String> {
         let worker = &self.tiered_snapshot_worker.inner;
         worker
             .startup_replay_active
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| "tiered startup replay already has an owner".to_owned())?;
-        let owner = StartupTieredReplay {
+        let owner = StartupReplayPersistence {
             state: Arc::clone(self),
         };
         // The worker never acquires State/World locks. Finish its previously
@@ -33,9 +36,11 @@ impl State {
     }
 }
 
-impl StartupTieredReplay {
+impl StartupReplayPersistence {
     /// Persist the complete authenticated tip before live execution can start.
     pub(crate) fn finish(self) -> Result<(), String> {
+        // Best-effort like every marker write; it reports its own failure.
+        self.state.persist_replayed_query_index_status();
         if !self.state.tiered_backend.lock().enabled() {
             return Ok(());
         }
@@ -59,7 +64,7 @@ impl StartupTieredReplay {
     }
 }
 
-impl Drop for StartupTieredReplay {
+impl Drop for StartupReplayPersistence {
     fn drop(&mut self) {
         // Entry invalidates the baseline; a failed/abandoned startup therefore
         // forces a complete capture on the next normal publication. Only a
@@ -164,8 +169,14 @@ mod tests {
             .record_world_snapshot(&state.world)
             .unwrap();
         assert_eq!(manifest_count(directory.path()), 1);
-        let replay = state.defer_tiered_snapshots_for_startup_replay().unwrap();
-        assert!(state.defer_tiered_snapshots_for_startup_replay().is_err());
+        let replay = state
+            .defer_derived_persistence_for_startup_replay()
+            .unwrap();
+        assert!(
+            state
+                .defer_derived_persistence_for_startup_replay()
+                .is_err()
+        );
         for value in 3..20 {
             mutate(&state, value);
         }
@@ -186,7 +197,9 @@ mod tests {
             .lock()
             .record_world_snapshot(&state.world)
             .unwrap();
-        let replay = state.defer_tiered_snapshots_for_startup_replay().unwrap();
+        let replay = state
+            .defer_derived_persistence_for_startup_replay()
+            .unwrap();
         mutate(&state, 3);
         drop(replay);
         assert!(!state.tiered_backend.lock().snapshot_baseline_ready());
@@ -207,7 +220,9 @@ mod tests {
     #[test]
     fn failed_startup_projection_releases_scope_and_keeps_baseline_invalid() {
         let (state, directory) = fixture();
-        let replay = state.defer_tiered_snapshots_for_startup_replay().unwrap();
+        let replay = state
+            .defer_derived_persistence_for_startup_replay()
+            .unwrap();
         mutate(&state, 9);
         // A colliding staging entry refuses local projection publication; it
         // cannot change the already executed World or leave replay suppression on.

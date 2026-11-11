@@ -2451,25 +2451,4 @@ fn soracloud_runtime_worker_and_cache_limits_are_bounded() {
         );
     }
 }
-#[test]
-fn content_auth_mode_requires_exact_sponsor_uaid() {
-    let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(b"content-sponsor"));
-    let canonical = format!("sponsor:{uaid}");
-    assert!(matches!(
-        parse_content_auth_mode(&canonical),
-        ContentAuthMode::Sponsor(parsed) if parsed == uaid
-    ));
-    let hex = uaid.as_hash().to_string();
-    for noncanonical in [
-        format!("sponsor:{hex}"),
-        format!("sponsor:UAID:{hex}"),
-        format!(" sponsor:{uaid}"),
-        format!("sponsor:{uaid} "),
-    ] {
-        assert!(
-            std::panic::catch_unwind(|| parse_content_auth_mode(&noncanonical)).is_err(),
-            "noncanonical sponsor mode must reject: {noncanonical:?}"
-        );
-    }
-}
 include!("user/runtime_tail_tests.rs");

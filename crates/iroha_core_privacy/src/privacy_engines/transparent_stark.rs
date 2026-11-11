@@ -572,7 +572,6 @@ impl GoldilocksFp4V1 {
         Self { coefficients }
     }
     /// Additive inverse.
-    #[cfg_attr(not(any(test, feature = "zk-stark")), allow(dead_code))]
     pub(crate) fn neg(self) -> Self {
         Self::ZERO.sub(self)
     }
@@ -2683,7 +2682,6 @@ pub fn append_u64_v1(bytes: &mut Vec<u8>, value: u64) {
     bytes.extend_from_slice(&value.to_be_bytes());
 }
 /// Append one canonical quartic-extension value.
-#[cfg_attr(not(any(test, feature = "zk-stark")), allow(dead_code))]
 pub fn append_goldilocks_fp4_v1(bytes: &mut Vec<u8>, value: GoldilocksFp4V1) {
     bytes.extend_from_slice(&value.to_be_bytes());
 }

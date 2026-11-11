@@ -2,8 +2,10 @@
 //!
 //! `PublishContentBundle` reads these fields to accept an archive and form its
 //! canonical record. Gateway quotas, response objectives and fetch `PoW` do not
-//! change ledger execution. The account allow-list is a set for admission, so
-//! its incidental configuration order and repeated identities are excluded.
+//! change ledger execution. The publisher allow-list and the default read
+//! authorization mode of the V1 cell are fixed protocol terms, the empty set and
+//! `Public`: no setting supplies them, and their encoded positions stay so the
+//! cell of a chain that never set either keeps its bytes.
 
 use iroha_config::parameters::actual::Content;
 use iroha_data_model::{account::AccountId, content::ContentAuthMode};
@@ -39,20 +41,17 @@ pub(super) struct ContentAdmissionPolicyV1 {
 impl ContentAdmissionPolicyV1 {
     /// Project exactly the fields read by deterministic bundle admission.
     pub(super) fn from_actual(config: &Content) -> Self {
-        let mut publish_allow_accounts = config.publish_allow_accounts.clone();
-        publish_allow_accounts.sort_unstable();
-        publish_allow_accounts.dedup();
         Self {
             max_bundle_bytes: config.max_bundle_bytes,
             max_files: config.max_files,
             max_path_len: config.max_path_len,
             max_retention_blocks: config.max_retention_blocks,
             chunk_size_bytes: config.chunk_size_bytes,
-            publish_allow_accounts,
+            publish_allow_accounts: Vec::new(),
             default_cache_max_age_secs: config.default_cache_max_age_secs,
             max_cache_max_age_secs: config.max_cache_max_age_secs,
             immutable_bundles: config.immutable_bundles,
-            default_auth_mode: config.default_auth_mode.clone(),
+            default_auth_mode: ContentAuthMode::Public,
             stripe_layout: ContentStripeLayoutV1 {
                 total_stripes: config.stripe_layout.total_stripes,
                 shards_per_stripe: config.stripe_layout.shards_per_stripe,
@@ -62,67 +61,17 @@ impl ContentAdmissionPolicyV1 {
     }
 }
 
-/// Borrow the complete policy and fund the account set's canonical ordering.
-pub(super) struct BorrowedContentPolicy<'a> {
-    config: &'a Content,
-    accounts: super::policy_borrowed::SortedRefs<'a, AccountId>,
-}
-impl<'a> BorrowedContentPolicy<'a> {
-    pub(super) fn new(
-        config: &'a Content,
-        budget: &iroha_allocation::AllocationBudget,
-    ) -> Result<Self, super::policy_borrowed::OrderError> {
-        Ok(Self {
-            config,
-            accounts: super::policy_borrowed::SortedRefs::new_by(
-                &config.publish_allow_accounts,
-                budget,
-                Ord::cmp,
-            )?,
-        })
-    }
-}
-impl norito::SerializePayload for BorrowedContentPolicy<'_> {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
-        use super::policy_borrowed::{Ref, Seq, record};
-        let config = self.config;
-        record!(
-            config.max_bundle_bytes,
-            config.max_files,
-            config.max_path_len,
-            config.max_retention_blocks,
-            config.chunk_size_bytes,
-            Seq(self.accounts.unique()),
-            config.default_cache_max_age_secs,
-            config.max_cache_max_age_secs,
-            config.immutable_bundles,
-            Ref(&config.default_auth_mode),
-            record!(
-                config.stripe_layout.total_stripes,
-                config.stripe_layout.shards_per_stripe,
-                config.stripe_layout.row_parity_stripes
-            )
-        )
-        .serialize(writer)
-    }
+/// The V1 cell holds scalars and two fixed terms, so it needs no projection storage.
+pub(super) fn borrowed(config: &Content) -> impl norito::SerializePayload {
+    ContentAdmissionPolicyV1::from_actual(config)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_config::parameters::actual::{ContentLimits, ContentPow, ContentSlo};
-    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::da::prelude::DaStripeLayout;
-    use iroha_data_model::role::RoleId;
     use std::num::{NonZeroU32, NonZeroU64};
-
-    fn account(seed: &[u8]) -> AccountId {
-        AccountId::new(
-            KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519)
-                .public_key()
-                .clone(),
-        )
-    }
 
     fn policy() -> Content {
         Content {
@@ -131,7 +80,6 @@ mod tests {
             max_path_len: 120,
             max_retention_blocks: 1_000,
             chunk_size_bytes: 512,
-            publish_allow_accounts: vec![account(b"content-allow-a"), account(b"content-allow-b")],
             limits: ContentLimits {
                 max_requests_per_second: NonZeroU32::new(10).unwrap(),
                 request_burst: NonZeroU32::new(20).unwrap(),
@@ -141,7 +89,6 @@ mod tests {
             default_cache_max_age_secs: 60,
             max_cache_max_age_secs: 120,
             immutable_bundles: false,
-            default_auth_mode: ContentAuthMode::Public,
             slo: ContentSlo {
                 target_p50_latency_ms: NonZeroU32::new(10).unwrap(),
                 target_p99_latency_ms: NonZeroU32::new(100).unwrap(),
@@ -161,8 +108,7 @@ mod tests {
 
     fn frame(policy: &Content) -> Vec<u8> {
         super::super::policy_borrowed::assert_same_payload(
-            &BorrowedContentPolicy::new(policy, &iroha_allocation::AllocationBudget::new(1 << 20))
-                .unwrap(),
+            &borrowed(policy),
             &ContentAdmissionPolicyV1::from_actual(policy),
         );
         norito::encode_canonical(&ContentAdmissionPolicyV1::from_actual(policy)).unwrap()
@@ -185,6 +131,24 @@ mod tests {
     }
 
     #[test]
+    fn publisher_set_and_default_read_mode_are_fixed_protocol_terms() {
+        let projected = ContentAdmissionPolicyV1::from_actual(&policy());
+        assert!(projected.publish_allow_accounts.is_empty());
+        assert_eq!(projected.default_auth_mode, ContentAuthMode::Public);
+        // The cell keeps both positions with the values every chain already
+        // encoded: an empty account sequence and the `Public` mode.
+        let explicit = ContentAdmissionPolicyV1 {
+            publish_allow_accounts: Vec::<AccountId>::new(),
+            default_auth_mode: ContentAuthMode::Public,
+            ..projected.clone()
+        };
+        assert_eq!(
+            norito::encode_canonical(&explicit).unwrap(),
+            frame(&policy())
+        );
+    }
+
+    #[test]
     fn every_content_admission_input_changes_the_projection() {
         let baseline = policy();
         let expected = frame(&baseline);
@@ -204,11 +168,6 @@ mod tests {
         changed.chunk_size_bytes += 1;
         assert_ne!(frame(&changed), expected, "chunk size");
         let mut changed = baseline.clone();
-        changed
-            .publish_allow_accounts
-            .push(account(b"content-allow-c"));
-        assert_ne!(frame(&changed), expected, "publisher allow-list");
-        let mut changed = baseline.clone();
         changed.default_cache_max_age_secs += 1;
         assert_ne!(frame(&changed), expected, "default cache age");
         let mut changed = baseline.clone();
@@ -217,10 +176,6 @@ mod tests {
         let mut changed = baseline.clone();
         changed.immutable_bundles = true;
         assert_ne!(frame(&changed), expected, "immutable default");
-        let mut changed = baseline.clone();
-        changed.default_auth_mode =
-            ContentAuthMode::RoleGate(RoleId::new("reader".parse().unwrap()));
-        assert_ne!(frame(&changed), expected, "read authorization default");
         let mut changed = baseline.clone();
         changed.stripe_layout.total_stripes += 1;
         assert_ne!(frame(&changed), expected, "DA stripe count");
@@ -233,16 +188,9 @@ mod tests {
     }
 
     #[test]
-    fn content_allow_list_is_a_set_and_gateway_controls_are_local() {
+    fn gateway_controls_are_local() {
         let baseline = policy();
         let expected = frame(&baseline);
-        let mut changed = baseline.clone();
-        changed.publish_allow_accounts.reverse();
-        changed
-            .publish_allow_accounts
-            .push(changed.publish_allow_accounts[0].clone());
-        assert_eq!(frame(&changed), expected);
-
         let mut local = baseline;
         local.limits.max_requests_per_second = NonZeroU32::new(11).unwrap();
         local.limits.request_burst = NonZeroU32::new(21).unwrap();

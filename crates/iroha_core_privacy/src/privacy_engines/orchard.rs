@@ -67,7 +67,7 @@ enum BundleProfileV1 {
     Ironwood,
 }
 impl BundleProfileV1 {
-    fn version(self) -> BundleVersion {
+    fn bundle_version(self) -> BundleVersion {
         match self {
             Self::Orchard => BundleVersion::orchard_v3(),
             Self::Ironwood => BundleVersion::ironwood_v3(),
@@ -1210,7 +1210,7 @@ fn encode_authorized_bundle_for_profile_v1(
     consensus_binding: &PrivacyNativeConsensusBindingV1,
     profile: BundleProfileV1,
 ) -> Result<OrchardProvedBundleV1, OrchardProverErrorV1> {
-    if bundle.bundle_version() != profile.version() || *bundle.flags() != profile.flags() {
+    if bundle.bundle_version() != profile.bundle_version() || *bundle.flags() != profile.flags() {
         return Err(OrchardProverErrorV1::OutputShape);
     }
     let draft = public_draft_from_bundle_v1(bundle);
@@ -1581,7 +1581,7 @@ fn verify_bundle_for_profile_v1(
         public.value_balance,
         anchor,
         authorization,
-        profile.version(),
+        profile.bundle_version(),
     )
     .map_err(|_| OrchardNativeErrorV1::BundleEncoding)?;
     let sighash = derive_bundle_sighash_for_profile_v1(public, consensus_limits, profile)?;

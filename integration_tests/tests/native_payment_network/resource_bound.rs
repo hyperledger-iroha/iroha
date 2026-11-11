@@ -548,12 +548,17 @@ fn fixed_maximum_payment_and_rejection_survive_http_rs16_kura_and_receipt_recove
         for (index, peer) in network.validators().iter().enumerate() {
             let client = peer.client().with_request_deadline(deadline)?;
             let mut trusted = verifier(&wire, &selected)?;
-            for (height, hash) in [(2, rejected_hash), (3, success_hash)] {
+            // A fresh verifier admits only the height after its prefix: this peer's
+            // genesis decision is authenticated before either payment.
+            for (height, hash) in [(1, None), (2, Some(rejected_hash)), (3, Some(success_hash))] {
                 let proof = client.client().get_sumeragi_finality_proof(
                     NonZeroU64::new(height).unwrap(),
                     SumeragiRootScope::Global,
                 )?;
                 let verified = trusted.verify(&proof)?;
+                let Some(hash) = hash else {
+                    continue;
+                };
                 exact_payment(&verified, hash)?;
                 let expected_context = &mut contexts[usize::try_from(height - 2)?];
                 ensure!(

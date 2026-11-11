@@ -9,6 +9,7 @@ use crate::{
     sumeragi::certified_chain::{CertifiedBlock, CertifiedChain, ChainReadError, CommittedBlock},
 };
 use iroha_allocation::{AllocationBudget, AllocationCharge};
+use iroha_data_model::sumeragi_finality::KeyedStateRoot;
 use iroha_sumeragi::types::Hash32;
 
 /// Fixed execution identity retained by the original publication generation.
@@ -203,8 +204,10 @@ impl NativeExecutionTipSnapshot {
     /// the decoded Cell or World. H1-only restart must replay signed genesis.
     ///
     /// The certified successor of the tip in Kura extends the same verified walk: its
-    /// `parent_world_state_root` is the root of the World published at the tip, which the
-    /// caller must match against a cold capture of the decoded World (E51, E56).
+    /// `parent_world_state_root` slot is the root of the State published at the tip under
+    /// the commitment profile selected there. The caller must match it against a cold
+    /// capture of the decoded State: the World under LtHash, the complete selected schema
+    /// under the keyed profile (E51, E56, §16.6).
     ///
     /// Every certified block from genesis through the tip also passes through `observe`, so
     /// callers that check other snapshot fields against the same history share this walk.
@@ -224,7 +227,7 @@ impl NativeExecutionTipSnapshot {
             }
             return Ok(RestoredNativeTip {
                 cell: initialize(budget, None, None).map_err(TipRestoreError::Admission)?,
-                world_root: None,
+                state_root: None,
             });
         }
         if height == 1 {
@@ -271,7 +274,7 @@ impl NativeExecutionTipSnapshot {
         }
         drop(walk);
         // The sequential cursor stands at the tip, so the successor costs one certificate.
-        let world_root = restored_successor_world_root(&chain, successor, current)?;
+        let state_root = restored_successor_world_root(&chain, successor, current)?;
         Ok(RestoredNativeTip {
             cell: initialize(
                 budget,
@@ -279,27 +282,29 @@ impl NativeExecutionTipSnapshot {
                 Some(Some(NativeExecutionTip(previous))),
             )
             .map_err(TipRestoreError::Admission)?,
-            world_root: Some(world_root),
+            state_root: Some(state_root),
         })
     }
 }
 
-/// An authenticated native tip and the certified root of the World published at it.
+/// An authenticated native tip and the certified root of the State published at it.
 pub(in crate::state) struct RestoredNativeTip {
     /// The funded tip Cell with its authenticated predecessor undo.
     pub(in crate::state) cell: TipCell,
-    /// `parent_world_state_root` of the tip's certified successor; `None` for empty history.
-    pub(in crate::state) world_root: Option<Hash>,
+    /// The parent State root slot of the tip's certified successor, exactly as certified;
+    /// `None` for empty history. Which profile produced it is the restored selection's
+    /// claim, and that selection is itself a row the root commits.
+    pub(in crate::state) state_root: Option<KeyedStateRoot>,
 }
 
 // The successor's certified header must extend the authenticated tip; its certified result
-// then binds the World published at the tip as its parent World state root.
+// then binds the State published at the tip as its parent State root.
 #[inline(never)]
 fn restored_successor_world_root(
     chain: &CertifiedChain<'_, StateView<'_>>,
     successor: u64,
     tip: NativeExecutionTipRecord,
-) -> Result<Hash, TipRestoreError> {
+) -> Result<KeyedStateRoot, TipRestoreError> {
     let certified = chain
         .certified(successor)
         .map_err(TipRestoreError::from)?
@@ -314,12 +319,7 @@ fn restored_successor_world_root(
     {
         return Err("certified successor does not extend the snapshot tip".into());
     }
-    committed
-        .commitment()
-        .execution
-        .parent_world_state_root
-        .as_legacy_hash()
-        .ok_or_else(|| "restoring an LtHash State requires its original certified root".into())
+    Ok(committed.commitment().execution.parent_world_state_root)
 }
 
 // Keep the complete H1 receipt outside the restore frame. It retires before the

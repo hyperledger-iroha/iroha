@@ -8,10 +8,10 @@
 //!
 //! Release gate:
 //! ```text
-//! TEST_NETWORK_IROHAD_FEATURES=zk-stark IROHA_TEST_REQUIRE_NETWORK=1 \
+//! IROHA_TEST_REQUIRE_NETWORK=1 \
 //! IROHA_TEST_SERIALIZE_NETWORKS=1 \
 //! cargo test --locked -p integration_tests --test network_functional \
-//! --features 'zk-stark privacy-release-evidence' \
+//! --features 'stark-network-tests privacy-release-evidence' \
 //! privacy_exact12_zk_x509_network::canonical_zk_x509_action_survives_four_peer_activation_replay_and_restart \
 //! -- --exact --nocapture --test-threads=1
 //! ```
@@ -72,7 +72,6 @@ use std::{
 use tokio::time::{Instant, sleep, timeout};
 const RELEASE_TEST_NAME: &str =
     "canonical_zk_x509_action_survives_four_peer_activation_replay_and_restart";
-const REQUIRED_DAEMON_FEATURE: &str = "zk-stark";
 const ZK_X509_PROTOCOL: PrivacyRuntimeProtocolIdV1 =
     PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1;
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(120);
@@ -94,21 +93,6 @@ const DUPLICATE_CERTIFICATE_NULLIFIER_MESSAGE: &str = concat!(
     "privacy proof admission rejected: trusted X.509 state failed validation: ",
     "DuplicateCertificateNullifier"
 );
-fn require_test_network_feature(feature: &str) -> Result<()> {
-    let enabled = std::env::var("TEST_NETWORK_IROHAD_FEATURES")
-        .ok()
-        .is_some_and(|value| {
-            value
-                .split([',', ' ', '\t', '\n'])
-                .any(|item| item.trim() == feature)
-        });
-    ensure!(
-        enabled,
-        "{RELEASE_TEST_NAME}: TEST_NETWORK_IROHAD_FEATURES must include `{feature}` so the four real \
-         validators expose the STARK-capable production surface required by this gate"
-    );
-    Ok(())
-}
 fn require_authoritative_network_mode() -> Result<()> {
     let enabled = std::env::var(sandbox::REQUIRE_NETWORK_ENV)
         .ok()
@@ -974,7 +958,6 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
          certificate after source pin authentication",
     )?;
     require_authoritative_network_mode()?;
-    require_test_network_feature(REQUIRED_DAEMON_FEATURE)?;
     ensure!(
         resource_certificate.process_limits.rayon_worker_count
             == PRIVACY_RELEASE_RAYON_THREAD_COUNT_V1

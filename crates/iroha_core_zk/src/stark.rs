@@ -854,7 +854,7 @@ fn merkle_path_depth_ok(
     true
 }
 #[cfg(any(test, feature = "test-utils"))]
-/// Verify a STARK FRI envelope under `zk-stark` with default limits.
+/// Verify a STARK FRI envelope with default limits.
 ///
 /// # Errors
 ///
@@ -3873,7 +3873,7 @@ fn verify_stark_air_opening(
     }
     true
 }
-/// Verify a STARK FRI envelope under `zk-stark` with caller-provided limits.
+/// Verify a STARK FRI envelope with caller-provided limits.
 ///
 /// # Errors
 ///

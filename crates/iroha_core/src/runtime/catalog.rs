@@ -26,6 +26,7 @@
 //! until a governed change set ([`ReleaseCatalog::activation`]) moves the root to them.
 
 pub(crate) mod additions;
+pub mod migrations;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -39,16 +40,19 @@ use iroha_data_model::{
             BindingV1, CommitmentProfileDescriptorV1, DefinitionDescriptorV1, DefinitionError,
             DefinitionId, DefinitionLookup, EntrypointV1, EventDescriptorV1,
             HostProfileDescriptorV1, ImplementationCodeV1, ImplementationDescriptorV1,
-            InterfaceDescriptorV1, KernelDescriptorV1, ParameterDescriptorV1,
-            PermissionDescriptorV1, ProjectionV1, ResourceLimitsV1, RootSelectionV1, SchemaV1,
-            SelectionError, SelectionId, ServiceEntryV1, ServicesProfileDescriptorV1,
-            StorageDescriptorV1, StorageShapeV1,
+            InterfaceDescriptorV1, KernelDescriptorV1, MigrationDescriptorV1,
+            ParameterDescriptorV1, PermissionDescriptorV1, ProjectionV1, ResourceLimitsV1,
+            RestrictionEntryV1, RootSelectionV1, SchemaV1, SelectionError, SelectionId,
+            ServiceEntryV1, ServicesProfileDescriptorV1, StorageDescriptorV1, StorageShapeV1,
         },
-        lifecycle::{ChangeSetV1, RootScopeV1, SelectionTransitionV1},
+        lifecycle::{ChangeSetV1, RestrictionKindV1, RootScopeV1, SelectionTransitionV1},
     },
 };
 
-use self::additions::{Addition, CellInstaller, StorageAddition};
+use self::{
+    additions::{Addition, CellInstaller, StorageAddition},
+    migrations::MigrationAddition,
+};
 use crate::state::authority_registry::{
     Canonical, CanonicalLayout, Field, Role, Schema, WORLD_FIELDS,
 };
@@ -115,6 +119,11 @@ pub struct ReleaseCatalog {
     pub additions: Vec<AdditionDefinitions>,
     /// How each cell an addition adds is installed, by storage definition.
     cell_installers: BTreeMap<DefinitionId, CellInstaller>,
+    /// The native code of every migration definition this release compiles: one definition per
+    /// migration and execution services profile.
+    migrations: BTreeMap<DefinitionId, MigrationAddition>,
+    /// Exact compiled predecessor implementations and their restricted-read successors.
+    pub(super) restricted_read_compositions: BTreeMap<DefinitionId, AdditionDefinitions>,
     /// Additive Ironwood definitions and the governed successor.
     pub ironwood: Option<super::ironwood::IronwoodCatalog>,
 }
@@ -169,6 +178,18 @@ pub(crate) fn is_baseline_instruction(wire_id: &str) -> bool {
             | SchedulePrivacyIronwoodLimitsUpdateV1::WIRE_ID
             | ScheduleTairaTimeIronwoodV1::WIRE_ID
     )
+}
+
+/// One governed step of a migration (§5.4), each its own change set
+/// ([`ReleaseCatalog::migration_step`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MigrationStep {
+    /// Install the successor storage and activate the migration.
+    Start,
+    /// Make the successor authoritative and start draining the old storage.
+    CutOver,
+    /// Retire the drained old storage and deactivate the migration.
+    Retire,
 }
 
 /// A catalog that cannot be built: a build defect the catalog tests catch.
@@ -234,6 +255,16 @@ pub(crate) mod test_catalog {
     /// Run `body` with the catalog of a release whose additions are `additions` as this thread's
     /// release catalog. Code that runs on other threads still sees the real catalog.
     pub fn with_additions<T>(additions: &[Addition], body: impl FnOnce() -> T) -> T {
+        with_release(additions, &[], body)
+    }
+
+    /// Run `body` with the catalog of a release that adds `additions` and compiles `migrations`
+    /// as this thread's release catalog.
+    pub fn with_release<T>(
+        additions: &[Addition],
+        migrations: &[super::MigrationAddition],
+        body: impl FnOnce() -> T,
+    ) -> T {
         struct Restore(Option<&'static ReleaseCatalog>);
         impl Drop for Restore {
             fn drop(&mut self) {
@@ -241,7 +272,7 @@ pub(crate) mod test_catalog {
             }
         }
         let catalog: &'static ReleaseCatalog = Box::leak(Box::new(
-            ReleaseCatalog::build_from(additions).expect("test catalog"),
+            ReleaseCatalog::build_with(additions, migrations).expect("test catalog"),
         ));
         let _restore = Restore(CURRENT.with(|current| current.replace(Some(catalog))));
         body()
@@ -406,17 +437,30 @@ impl ReleaseCatalog {
     }
 
     fn build() -> Result<Self, CatalogError> {
-        Self::build_from(additions::ADDITIONS)
+        Self::build_with(additions::ADDITIONS, migrations::MIGRATIONS)
     }
 
-    /// The catalog of a release that adds `additions` after the baseline: everything compiled
-    /// that no addition claims is the baseline.
+    /// The catalog of a release that adds `additions` after the baseline and compiles no
+    /// migration ([`Self::build_with`]).
     ///
     /// # Errors
-    /// A definition is invalid, the baseline is not closed, or an addition claims something that
-    /// is not compiled, claims it twice, rebinds a wire ID nothing before it answers or reuses a
-    /// module.
+    /// See [`Self::build_with`].
+    #[cfg(test)]
     pub(crate) fn build_from(additions: &[Addition]) -> Result<Self, CatalogError> {
+        Self::build_with(additions, &[])
+    }
+
+    /// The catalog of a release that adds `additions` after the baseline and compiles
+    /// `migrations`: everything compiled that no addition claims is the baseline.
+    ///
+    /// # Errors
+    /// A definition is invalid, the baseline is not closed, an addition claims something that
+    /// is not compiled, claims it twice, rebinds a wire ID nothing before it answers or reuses a
+    /// module, or a migration is malformed.
+    pub(crate) fn build_with(
+        additions: &[Addition],
+        migrations: &[MigrationAddition],
+    ) -> Result<Self, CatalogError> {
         let claimed = Claimed::of(additions)?;
         let mut catalog = Self {
             definitions: BTreeMap::new(),
@@ -447,6 +491,8 @@ impl ReleaseCatalog {
             keyed_storage: Vec::new(),
             additions: Vec::new(),
             cell_installers: BTreeMap::new(),
+            migrations: BTreeMap::new(),
+            restricted_read_compositions: BTreeMap::new(),
             ironwood: None,
         };
 
@@ -629,6 +675,8 @@ impl ReleaseCatalog {
             let (storage_dependencies, interface_dependencies) = if addition.module
                 == additions::SORAFS_REPAIR.module
                 || addition.module == additions::SORAFS_AUTHORITY.module
+                || addition.module == additions::RESTRICTED_DATASPACE_READ.module
+                || addition.module == additions::RUNTIME_LIFECYCLE.module
             {
                 independent_interfaces = catalog
                     .baseline
@@ -666,8 +714,12 @@ impl ReleaseCatalog {
         catalog.lifecycle_id = catalog.lifecycle.id()?;
         catalog.compile_lifecycle_compositions()?;
         super::sorafs_authority::compile(&mut catalog)?;
+        super::restricted_dataspace_read::compile(&mut catalog)?;
         let mut state_fields = Vec::new();
-        flatten(crate::state::authority_registry::STATE_FIELDS, &mut state_fields);
+        flatten(
+            crate::state::authority_registry::STATE_FIELDS,
+            &mut state_fields,
+        );
         for field in state_fields {
             if (field.id.starts_with("state.") || field.id.starts_with("runtime."))
                 && let Some(storage) = world_storage(field)?
@@ -677,11 +729,243 @@ impl ReleaseCatalog {
             }
         }
         catalog.keyed_storage.sort_unstable();
-        catalog.publish(iroha_data_model::runtime::keyed_state::adoption_kernel(&catalog.keyed_storage))?;
+        catalog.publish(iroha_data_model::runtime::keyed_state::adoption_kernel(
+            &catalog.keyed_storage,
+        ))?;
         catalog.publish(super::keyed_state::descriptor())?;
         catalog.publish(super::state_row_permission::descriptor())?;
+        catalog.publish_migrations(migrations)?;
 
         Ok(catalog)
+    }
+
+    /// Publish one migration definition per migration of `migrations` and execution services
+    /// profile this catalog compiles: a migration relies on the services profile of the root
+    /// that runs it (§3.3), so a root running any compiled profile can activate it.
+    fn publish_migrations(&mut self, migrations: &[MigrationAddition]) -> Result<(), CatalogError> {
+        let services: Vec<DefinitionId> = self
+            .definitions
+            .iter()
+            .filter(|(_, descriptor)| {
+                matches!(descriptor, DefinitionDescriptorV1::ServicesProfile(_))
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        let mut modules = BTreeSet::new();
+        for migration in migrations {
+            let module = migration.module;
+            let fail = |reason: String| CatalogError::Addition {
+                module: module.to_owned(),
+                reason,
+            };
+            if module == BASELINE_MODULE
+                || !modules.insert(module)
+                || self
+                    .additions
+                    .iter()
+                    .any(|addition| addition.module == module)
+            {
+                return Err(fail("its module is the baseline's or repeated".to_owned()));
+            }
+            let storage = |fields: &[&'static str]| {
+                fields
+                    .iter()
+                    .map(|field| {
+                        self.world_storage.get(field).copied().ok_or_else(|| {
+                            fail(format!("{field} is not a canonical World table or cell"))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(sorted)
+            };
+            let (from, to) = (storage(migration.from)?, storage(migration.to)?);
+            if from.len() != migration.from.len()
+                || to.len() != migration.to.len()
+                || from.is_empty()
+                || to.is_empty()
+                || from.iter().any(|storage| to.binary_search(storage).is_ok())
+            {
+                return Err(fail(
+                    "its old and successor storage must be distinct, non-empty and disjoint"
+                        .to_owned(),
+                ));
+            }
+            if migration.rows_per_stage == 0 {
+                return Err(fail("a stage must move at least one row".to_owned()));
+            }
+            for services_profile in &services {
+                let id =
+                    self.publish(DefinitionDescriptorV1::Migration(MigrationDescriptorV1 {
+                        code: ImplementationCodeV1::Native {
+                            module: module.into(),
+                            reference_closure: addition_digest(module, &[b"migration"]),
+                        },
+                        from: from.clone(),
+                        to: to.clone(),
+                        cursor: SchemaV1::Codec(migration.cursor.to_owned()),
+                        host_profile: None,
+                        services_profile: *services_profile,
+                        limits: ResourceLimitsV1 {
+                            max_gas: u64::MAX,
+                            max_effects: migration.rows_per_stage,
+                            max_call_depth: 1,
+                        },
+                    }))?;
+                self.migrations.insert(id, *migration);
+            }
+        }
+        Ok(())
+    }
+
+    /// The native code of the migration definition `id`, if this release compiles it.
+    #[must_use]
+    pub(crate) fn migration(&self, id: &DefinitionId) -> Option<&MigrationAddition> {
+        self.migrations.get(id)
+    }
+
+    /// The definition of the migration `module` a root running `selection` activates: the one
+    /// that relies on the root's execution services profile.
+    ///
+    /// # Errors
+    /// `module` is not a migration of this release, or this release does not compile it for
+    /// the root's services profile.
+    pub fn migration_definition(
+        &self,
+        module: &str,
+        selection: &RootSelectionV1,
+    ) -> Result<(DefinitionId, &MigrationDescriptorV1), CatalogError> {
+        self.migrations
+            .iter()
+            .filter(|(_, migration)| migration.module == module)
+            .find_map(|(id, _)| match self.definitions.get(id) {
+                Some(DefinitionDescriptorV1::Migration(descriptor))
+                    if descriptor.services_profile == selection.services_profile =>
+                {
+                    Some((*id, descriptor))
+                }
+                _ => None,
+            })
+            .ok_or_else(|| CatalogError::Addition {
+                module: module.to_owned(),
+                reason: "not a migration this release compiles for the root's services profile"
+                    .to_owned(),
+            })
+    }
+
+    /// Draft the change set of one step of the migration `module` on a root running `current`,
+    /// effective at `effective_height` (§5.4):
+    ///
+    /// - [`MigrationStep::Start`] publishes what the root lacks, installs the successor storage
+    ///   and activates the migration, whose stages then copy the old storage;
+    /// - [`MigrationStep::CutOver`] restricts the migration to completion only: from that
+    ///   height the successor is authoritative and stages drain the old storage. A release adds
+    ///   to this change set the transitions that move its readers and writers to the successor;
+    /// - [`MigrationStep::Retire`] retires the drained old storage and deactivates the
+    ///   migration.
+    ///
+    /// # Errors
+    /// `module` is not a migration of this release, or the step does not apply to `current`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is one independent input of the drafted change set"
+    )]
+    pub fn migration_step(
+        &self,
+        module: &str,
+        step: MigrationStep,
+        current: &RootSelectionV1,
+        published: &impl DefinitionLookup,
+        network: NetworkId,
+        effective_height: u64,
+        qualification: [u8; 32],
+    ) -> Result<ChangeSetV1, CatalogError> {
+        let fail = |reason: String| CatalogError::Addition {
+            module: module.to_owned(),
+            reason,
+        };
+        let (migration, descriptor) = self.migration_definition(module, current)?;
+        let mut successor = current.clone();
+        let mut publish = Vec::new();
+        let mut transitions = Vec::new();
+        match step {
+            MigrationStep::Start => {
+                let install: Vec<DefinitionId> = descriptor
+                    .to
+                    .iter()
+                    .copied()
+                    .filter(|storage| current.installed_storage.binary_search(storage).is_err())
+                    .collect();
+                publish = sorted(
+                    install
+                        .iter()
+                        .copied()
+                        .chain([migration])
+                        .filter(|id| published.definition(id).is_none())
+                        .collect(),
+                )
+                .into_iter()
+                .map(|id| self.definitions[&id].clone())
+                .collect();
+                transitions.extend(
+                    install
+                        .iter()
+                        .map(|storage| SelectionTransitionV1::InstallStorage(*storage)),
+                );
+                transitions.push(SelectionTransitionV1::Activate(migration));
+                successor.installed_storage.extend(install);
+                successor.installed_storage = sorted(successor.installed_storage);
+                successor.active.push(migration);
+                successor.active = sorted(successor.active);
+            }
+            MigrationStep::CutOver => {
+                transitions.push(SelectionTransitionV1::Restrict {
+                    definition: migration,
+                    restriction: RestrictionKindV1::CompletionOnly,
+                });
+                successor
+                    .restrictions
+                    .retain(|entry| entry.definition != migration);
+                successor.restrictions.push(RestrictionEntryV1 {
+                    definition: migration,
+                    restriction: RestrictionKindV1::CompletionOnly.at(effective_height),
+                });
+                successor.restrictions.sort_by_key(|entry| entry.definition);
+            }
+            MigrationStep::Retire => {
+                transitions.extend(
+                    descriptor
+                        .from
+                        .iter()
+                        .map(|storage| SelectionTransitionV1::RetireStorage(*storage)),
+                );
+                transitions.push(SelectionTransitionV1::Restrict {
+                    definition: migration,
+                    restriction: RestrictionKindV1::Disabled,
+                });
+                transitions.push(SelectionTransitionV1::Deactivate(migration));
+                successor
+                    .installed_storage
+                    .retain(|storage| descriptor.from.binary_search(storage).is_err());
+                successor.active.retain(|id| *id != migration);
+                successor
+                    .restrictions
+                    .retain(|entry| entry.definition != migration);
+            }
+        }
+        let change_set = ChangeSetV1 {
+            network,
+            root: RootScopeV1::Universal,
+            predecessor: current.id()?,
+            successor: successor.id()?,
+            effective_height,
+            publish,
+            transitions,
+            qualification,
+        };
+        change_set
+            .apply(current, published)
+            .map_err(|error| fail(error.to_string()))?;
+        Ok(change_set)
     }
 
     /// Publish `addition`'s storage, interfaces and implementation after the baseline and every
@@ -709,11 +993,12 @@ impl ReleaseCatalog {
                     "{field} is not a canonical World table or cell"
                 )));
             };
-            // Snapshots leave out an uninstalled field as a whole top-level World member (§5.5).
-            // TODO(`specs/live_runtime_upgrades.md` §5.5): leave out a nested field inside its
-            // owner's member before an addition adds one.
-            if !WORLD_FIELDS.iter().any(|top| top.id == field) {
-                return Err(fail(format!("{field} is not a top-level World field")));
+            // Snapshots leave an uninstalled field out as a top-level World member, or as a
+            // member of the nested owner that holds it (§5.5).
+            if crate::runtime::world_snapshot_member(field).is_none() {
+                return Err(fail(format!(
+                    "{field} has no snapshot member a selection can leave out"
+                )));
             }
             let mut descriptor = descriptor.clone();
             descriptor.invariants = addition_digest(module, &[b"storage", field.as_bytes()]);
@@ -870,11 +1155,18 @@ impl ReleaseCatalog {
             module: module.to_owned(),
             reason,
         };
+        let selected_addition;
         let addition = self
             .additions
             .iter()
             .find(|addition| addition.module == module)
             .ok_or_else(|| fail("not an addition of this release".to_owned()))?;
+        let addition = if module == additions::RESTRICTED_DATASPACE_READ.module {
+            selected_addition = super::restricted_dataspace_read::for_selection(self, current)?;
+            &selected_addition
+        } else {
+            addition
+        };
         let publish = addition
             .definitions()
             .into_iter()
@@ -929,6 +1221,23 @@ impl ReleaseCatalog {
         successor
             .bindings
             .sort_by(|left, right| left.wire_id.cmp(&right.wire_id));
+
+        if module == additions::RESTRICTED_DATASPACE_READ.module
+            && let Some(restriction) =
+                super::restricted_dataspace_read::inherited_restriction(current, effective_height)?
+        {
+            transitions.push(SelectionTransitionV1::Restrict {
+                definition: addition.implementation,
+                restriction,
+            });
+            successor.restrictions.push(
+                iroha_data_model::runtime::definition::RestrictionEntryV1 {
+                    definition: addition.implementation,
+                    restriction: restriction.at(effective_height),
+                },
+            );
+            successor.restrictions.sort_by_key(|entry| entry.definition);
+        }
 
         let change_set = ChangeSetV1 {
             network,

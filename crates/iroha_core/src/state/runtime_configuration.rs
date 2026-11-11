@@ -158,13 +158,80 @@ impl State {
         self.oracle = oracle;
     }
 
-    /// Update settlement configuration snapshot and rebuild the router engine.
-    pub fn set_settlement(&mut self, settlement: iroha_config::parameters::actual::Settlement) {
-        self.settlement = settlement;
-        self.settlement_engine = SettlementEngine::from_router_config(&self.settlement.router);
+    /// Install the content gateway resources of this node's own configuration.
+    ///
+    /// Rate limits, response objectives and the fetch proof-of-work guard are
+    /// taken from `node`. The limits and defaults `PublishContentBundle` applies
+    /// to an archive (the bundle, file-count, path and retention caps, the
+    /// ingestion chunk size, the cache defaults and the default stripe layout)
+    /// are protocol constants of this release, so a node configuration cannot
+    /// change which archive this validator accepts. Returns the names of the
+    /// limit fields `node` held with another value, which were ignored.
+    ///
+    /// TODO(F.4): a chain that needs other limits gets them from a typed
+    /// committed parameter published by a release addition and activated by a
+    /// governed change set (`specs/live_runtime_upgrades.md` §4); the frozen
+    /// baseline stores `content_policy_v1` as an opaque custom parameter.
+    pub fn install_node_content(
+        &mut self,
+        node: iroha_config::parameters::actual::Content,
+    ) -> Vec<&'static str> {
+        use iroha_config::parameters::{actual::Content, defaults::content as fixed};
+        // Every field is named: a field added to the settings does not compile
+        // until it is fixed by the protocol or classified as a node resource.
+        let Content {
+            max_bundle_bytes,
+            max_files,
+            max_path_len,
+            max_retention_blocks,
+            chunk_size_bytes,
+            limits,
+            default_cache_max_age_secs,
+            max_cache_max_age_secs,
+            immutable_bundles,
+            slo,
+            pow,
+            stripe_layout,
+        } = node;
+        let mut ignored = Vec::new();
+        macro_rules! fixed {
+            ($field:ident, $value:expr) => {{
+                let value = $value;
+                if $field != value {
+                    ignored.push(stringify!($field));
+                }
+                value
+            }};
+        }
+        self.content = Content {
+            max_bundle_bytes: fixed!(max_bundle_bytes, fixed::MAX_BUNDLE_BYTES),
+            max_files: fixed!(max_files, fixed::MAX_FILES),
+            max_path_len: fixed!(max_path_len, fixed::MAX_PATH_LEN),
+            max_retention_blocks: fixed!(max_retention_blocks, fixed::MAX_RETENTION_BLOCKS),
+            chunk_size_bytes: fixed!(chunk_size_bytes, fixed::CHUNK_SIZE_BYTES),
+            limits,
+            default_cache_max_age_secs: fixed!(
+                default_cache_max_age_secs,
+                fixed::DEFAULT_CACHE_MAX_AGE_SECS
+            ),
+            max_cache_max_age_secs: fixed!(max_cache_max_age_secs, fixed::MAX_CACHE_MAX_AGE_SECS),
+            immutable_bundles: fixed!(immutable_bundles, fixed::IMMUTABLE_BUNDLES),
+            slo,
+            pow,
+            stripe_layout: fixed!(stripe_layout, fixed::default_stripe_layout()),
+        };
+        ignored
     }
 
-    /// Current settlement configuration snapshot.
+    /// Settlement router inputs: protocol constants of this release.
+    ///
+    /// No node setting contributes and this State has no settlement installer.
+    ///
+    /// TODO(F.4): a chain that needs other inputs gets them from a typed
+    /// committed parameter published by a release addition and activated by a
+    /// governed change set (`specs/live_runtime_upgrades.md` §4); the frozen
+    /// baseline stores `settlement_router_policy_v1` as an opaque custom
+    /// parameter.
     #[must_use]
     pub fn settlement(&self) -> &iroha_config::parameters::actual::Settlement {
         &self.settlement

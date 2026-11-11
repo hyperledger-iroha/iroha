@@ -540,6 +540,10 @@ impl<'state> StateBlock<'state> {
                     }
                 }
             })?;
+            // Mirror what the block wrote to storage a migration is staging, whichever code
+            // wrote it, before the block's change set is folded
+            // (`specs/live_runtime_upgrades.md` §5.4).
+            crate::runtime::migration::barrier(world, block_height);
             // The last World write: fold the block's complete change set, including every
             // deterministic tail write above, into the stored World state accumulator, the
             // parent World state root of the next execution result (§4.1, Appendix E, E51).

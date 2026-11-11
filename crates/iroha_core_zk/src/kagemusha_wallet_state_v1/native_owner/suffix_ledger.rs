@@ -551,7 +551,7 @@ impl<C: Custody, A: ArchiveStore, N: NativeProofs> Coordinator<C, A, N> {
         }
         let mut attempts =
             self.retained_suffix_stage_attempts(stage)?
-                .unwrap_or(SuffixStageAttemptsV1 {
+                .unwrap_or_else(|| SuffixStageAttemptsV1 {
                     version: 1,
                     discriminator: 17,
                     scheme_id: self.scheme_id,

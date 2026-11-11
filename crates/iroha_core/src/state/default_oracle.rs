@@ -59,7 +59,6 @@ fn default_content_cfg() -> iroha_config::parameters::actual::Content {
         max_path_len: iroha_config::parameters::defaults::content::MAX_PATH_LEN,
         max_retention_blocks: iroha_config::parameters::defaults::content::MAX_RETENTION_BLOCKS,
         chunk_size_bytes: iroha_config::parameters::defaults::content::CHUNK_SIZE_BYTES,
-        publish_allow_accounts: Vec::new(),
         limits: iroha_config::parameters::actual::ContentLimits {
             max_requests_per_second: nonzero!(
                 iroha_config::parameters::defaults::content::MAX_REQUESTS_PER_SECOND
@@ -78,7 +77,6 @@ fn default_content_cfg() -> iroha_config::parameters::actual::Content {
             iroha_config::parameters::defaults::content::DEFAULT_CACHE_MAX_AGE_SECS,
         max_cache_max_age_secs: iroha_config::parameters::defaults::content::MAX_CACHE_MAX_AGE_SECS,
         immutable_bundles: iroha_config::parameters::defaults::content::IMMUTABLE_BUNDLES,
-        default_auth_mode: iroha_data_model::content::ContentAuthMode::Public,
         slo: iroha_config::parameters::actual::ContentSlo {
             target_p50_latency_ms: nonzero!(
                 iroha_config::parameters::defaults::content::TARGET_P50_LATENCY_MS

@@ -1047,6 +1047,10 @@
           "role": "source"
         },
         {
+          "path": "crates/connect_norito_bridge/src/zk_x509_transaction_ffi.rs",
+          "role": "source"
+        },
+        {
           "path": "crates/iroha_core/src/privacy_release_evidence.rs",
           "role": "source"
         },

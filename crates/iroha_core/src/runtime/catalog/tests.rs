@@ -235,6 +235,135 @@ fn ironwood_storage_transition_is_required_for_every_native_admission() {
 }
 
 #[test]
+fn every_canonical_world_field_has_a_snapshot_member_a_selection_can_leave_out() {
+    let mut fields = Vec::new();
+    flatten(WORLD_FIELDS, &mut fields);
+    let empty = norito::json::to_json(&crate::state::World::default()).expect("empty World");
+    let world = crate::state::deserialize::json_object_members(&empty).expect("World object");
+    let mut beside_the_world = Vec::new();
+    for field in fields {
+        let canonical = matches!(
+            field.role,
+            Role::Canonical(Canonical::Table { .. } | Canonical::Cell(_))
+        );
+        let member = crate::runtime::world_snapshot_member(field.id);
+        assert_eq!(member.is_some(), canonical, "{}", field.id);
+        let Some((top, child)) = member else {
+            continue;
+        };
+        let Some((_, raw)) = world.iter().find(|(key, _)| *key == top) else {
+            beside_the_world.push(field.id);
+            continue;
+        };
+        if let Some(child) = child {
+            assert_eq!(child, field.member);
+            assert!(
+                crate::state::deserialize::json_object_members(raw)
+                    .expect("a nested owner is one object")
+                    .iter()
+                    .any(|(key, _)| *key == child),
+                "{} is written as member {child} of {top}",
+                field.id
+            );
+        } else {
+            assert_eq!(top, field.member);
+        }
+    }
+    // The State snapshot writes some baseline fields beside the World object. No selection can
+    // leave one of those out: `uninstalled_world_members` refuses a selection that does not
+    // install it, a release that retires one first moves its writer into the World object, and
+    // every field an addition adds is a member of the World object.
+    assert!(beside_the_world.contains(&"world.space_directory_manifests"));
+    let catalog = release_catalog().expect("release catalog");
+    for addition in crate::runtime::catalog::additions::ADDITIONS {
+        for entry in addition.storage {
+            assert!(
+                !beside_the_world.contains(&entry.field()),
+                "{} adds {}, which no snapshot can leave out",
+                addition.module,
+                entry.field()
+            );
+        }
+    }
+    let mut without = catalog.baseline.clone();
+    let storage = catalog.world_storage["world.space_directory_manifests"];
+    without.installed_storage.retain(|id| *id != storage);
+    assert!(
+        crate::runtime::uninstalled_world_members(&without)
+            .is_err_and(|reason| reason.contains("world.space_directory_manifests"))
+    );
+}
+
+#[test]
+fn every_nested_world_owner_reads_snapshots_through_the_selection() {
+    let owners: Vec<&str> = WORLD_FIELDS
+        .iter()
+        .filter(|field| matches!(field.role, Role::Canonical(Canonical::Owner(_))))
+        .map(|field| field.member)
+        .collect();
+    assert_eq!(owners, crate::runtime::SELECTION_AWARE_OWNERS);
+    for field in WORLD_FIELDS {
+        let Role::Canonical(Canonical::Owner(children)) = field.role else {
+            continue;
+        };
+        assert!(
+            children
+                .iter()
+                .all(|child| !matches!(child.role, Role::Canonical(Canonical::Owner(_)))),
+            "{} nests another owner, which a snapshot cannot leave a member out of",
+            field.id
+        );
+    }
+}
+
+#[test]
+fn an_addition_adds_a_field_inside_a_nested_world_owner() {
+    use super::additions::test_additions::{NESTED, NESTED_MEMBER, NESTED_TABLE};
+    let catalog = ReleaseCatalog::build_from(&[NESTED]).expect("a nested field is added storage");
+    let storage = catalog.world_storage[NESTED_TABLE];
+    assert!(
+        catalog
+            .baseline
+            .installed_storage
+            .binary_search(&storage)
+            .is_err(),
+        "the baseline leaves the added nested field uninstalled"
+    );
+    assert_eq!(catalog.additions[0].storage[NESTED_TABLE], storage);
+    super::test_catalog::with_additions(&[NESTED], || {
+        let catalog = release_catalog().expect("test catalog");
+        let before = crate::runtime::uninstalled_world_members(&catalog.baseline).unwrap();
+        assert!(before.members.is_empty());
+        assert_eq!(before.nested, [("triggers", vec![NESTED_MEMBER])]);
+        assert_eq!(before.nested_in("triggers"), [NESTED_MEMBER]);
+        assert!(before.nested_in("accounts").is_empty());
+        let network = iroha_data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([3; 32])),
+        );
+        let change = catalog
+            .activation(
+                NESTED.module,
+                &catalog.baseline,
+                &catalog.definitions,
+                network,
+                9,
+                [0; 32],
+            )
+            .expect("draft the nested addition");
+        let after = change
+            .apply(&catalog.baseline, &catalog.definitions)
+            .expect("the activation applies")
+            .selection;
+        assert!(
+            crate::runtime::uninstalled_world_members(&after)
+                .unwrap()
+                .is_empty(),
+            "installing the nested field brings it back into snapshots"
+        );
+    });
+}
+
+#[test]
 fn every_canonical_world_field_is_founded_or_added_storage() {
     let catalog = release_catalog().expect("release catalog");
     let mut fields = Vec::new();
@@ -565,13 +694,15 @@ mod addition_tests {
             }
         );
         assert_eq!(catalog.unsupported(&applied.selection), None);
-        let missing = release_catalog()
-            .expect("release catalog")
+        // The same release without the addition: it compiles the field the addition claims as
+        // baseline storage, under another definition.
+        let missing = build(&[])
             .unsupported(&applied.selection)
             .expect("a release without the addition stops before it activates");
         assert!(
             addition.definitions().contains(&missing),
-            "it names one of the addition's definitions"
+            "it names one of the addition's definitions, not {missing}: {:?}",
+            catalog.definitions.get(&missing)
         );
 
         let mut after = published.clone();
@@ -727,12 +858,21 @@ mod addition_tests {
                 )],
             ),
             (
-                "not a top-level World field",
+                "a derived member of a nested owner",
                 vec![addition(
                     "iroha.test.a",
                     &[LOG_WIRE_ID],
                     &[],
-                    &[StorageAddition::Table("triggers.data")],
+                    &[StorageAddition::Table("triggers.ids")],
+                )],
+            ),
+            (
+                "a nested owner itself",
+                vec![addition(
+                    "iroha.test.a",
+                    &[LOG_WIRE_ID],
+                    &[],
+                    &[StorageAddition::Table("world.triggers")],
                 )],
             ),
             (

@@ -1737,19 +1737,6 @@ impl Execute for Unregister<Account> {
         }
         ensure_account_not_retained_by_monetary_policy(state_transaction, &account_id)?;
         if state_transaction
-            .content
-            .publish_allow_accounts
-            .iter()
-            .any(|publisher| publisher == &account_id)
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister account {account_id}: it is configured as content publish allow-list account (`content.publish_allow_accounts`); update content config first"
-                    )
-                    .into(),
-                ));
-        }
-        if state_transaction
             .gov
             .sorafs_telemetry
             .submitters

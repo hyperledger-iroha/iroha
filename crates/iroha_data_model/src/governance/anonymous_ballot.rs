@@ -22,7 +22,17 @@
 //! - the closure record with its checked outcome arithmetic, the committed governance
 //!   block-start outputs with their anchors and the output partition, and the pass's
 //!   height-progress ticket ([`AdvanceToNativeSlotV1`]);
-//! - the qualification record and the release-controlled gate constant.
+//! - the qualification record and the release-controlled gate constant;
+//! - the anonymous definition family (design §12.3): its identifiers
+//!   ([`anonymous_governance_attempt_id_v1`], [`anonymous_body_instance_id_v1`]), its
+//!   attempt-creation and transition payloads ([`CreateAnonymousParliamentAttemptV1`],
+//!   [`SubmitAnonymousParliamentTransitionV1`]), the certificate binding of an approved
+//!   ballot ([`AnonymousBallotCertificateBindingV1`]) and the complete certificate with
+//!   its purpose ([`AnonymousGovernanceCertificateV1`]);
+//! - the purpose of an attempt of the anonymous definition family
+//!   ([`ParliamentBallotPurposeV1`]) and what World keeps for it: the compact credential of
+//!   an accepted assignment and the board of a sealed body
+//!   ([`ParliamentCredentialRecordV1`], [`ParliamentBallotBoardRecordV1`]).
 //!
 //! [`framing`] implements `Frame`, SHA3-512 and the pinned `Enc`; [`digests`] implements
 //! the formulas of the integration decisions of 2026-10-18. The digests that bind the
@@ -37,16 +47,22 @@
 //! is a separate integration phase.
 
 mod ballot;
+mod board_record;
 mod bytes;
 mod candidate_testing;
+mod certificate;
 mod closure;
 mod context;
 pub mod digests;
 pub mod framing;
+mod governance_certificate;
+mod identity;
+mod instruction;
 mod outcome;
 mod output;
 mod policy;
 mod progress;
+mod purpose;
 mod qualification;
 mod registration_input;
 
@@ -59,6 +75,10 @@ pub use self::{
         AnonymousBallotEnvelopeV1, AnonymousBallotRejectionV1, AnonymousBallotV1, BallotChoiceV1,
         CanonicalAnonymousBallotEnvelopeV1,
     },
+    board_record::{
+        BALLOT_BOARD_RECORD_MAX_BYTES_V1, BallotCastingClockV1, ParliamentBallotBoardRecordErrorV1,
+        ParliamentBallotBoardRecordV1, ParliamentCredentialRecordV1, ParliamentCredentialSourceV1,
+    },
     bytes::{
         AdmissionNonceV1, BallotAuthorityBindingV1, BallotProofBytesV1, BallotScopeV1,
         CredentialCommitmentV1, Digest512, FixedBytesErrorV1, NullifierV1, ProofProfileIdV1,
@@ -69,6 +89,7 @@ pub use self::{
         ParliamentCandidateTestingPolicyV1, authenticate_parliament_candidate_genesis_v1,
         parliament_candidate_testing_from_genesis_v1,
     },
+    certificate::{AnonymousBallotBindingErrorV1, AnonymousBallotCertificateBindingV1},
     closure::{BallotClosureErrorV1, BallotClosureRecordV1},
     context::{
         AnonymousParliamentRosterRootPreimageV1, AnonymousRosterBindingV1,
@@ -78,6 +99,20 @@ pub use self::{
     },
     digests::{AnonymousBallotCorpusErrorV1, EncodedBallotContextV1},
     framing::AnonymousBallotCodecErrorV1,
+    governance_certificate::{
+        AnonymousBodyResultV1, AnonymousGovernanceCertificateErrorV1,
+        AnonymousGovernanceCertificateV1, AnonymousParliamentBodyBindingV1,
+        AnonymousPublicFindingResultV1, AnonymousSealedBodyV1, anonymous_execution_failure_root_v1,
+        anonymous_governance_certificate_id_v1,
+    },
+    identity::{
+        AnonymousGovernanceAttemptV1, anonymous_body_instance_id_v1,
+        anonymous_governance_attempt_id_v1,
+    },
+    instruction::{
+        AnonymousParliamentTransitionV1, CreateAnonymousParliamentAttemptV1,
+        SubmitAnonymousParliamentTransitionV1,
+    },
     outcome::{BallotDecisionV1, BallotOutcomeV1, BallotTallyErrorV1, ParliamentDecisionRuleV1},
     output::{
         CASTING_CLOCK_ROW_MAX_BYTES_V1, CastingClockEstablishedV1, CastingOpenedV1,
@@ -93,6 +128,7 @@ pub use self::{
         FrozenParliamentAttemptPolicyV1, FrozenSortitionPolicyV1, RequiredBodyPolicyV1,
     },
     progress::{AdvanceToNativeSlotErrorV1, AdvanceToNativeSlotV1},
+    purpose::{ParliamentBallotPurposeErrorV1, ParliamentBallotPurposeV1},
     qualification::{
         BallotQualificationRecordV1, BallotSecurityContractV1, BallotSecurityTupleV1,
         BallotServiceContractV1, PARLIAMENT_BALLOT_QUALIFICATION_V1,

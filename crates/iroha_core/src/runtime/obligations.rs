@@ -52,10 +52,20 @@
 //! completions are native and invoke no IVM contract, so unlike controlled locks they retain no
 //! host profile.
 //!
-//! TODO(§7.2): obligations created by contracts register through a kernel syscall with their
-//! captured completion closure, retained in `RootSelectionV1::completion_closures`, and complete
-//! under it after a rebinding; obligations transfer under their preserved invariants; pending
-//! consent (multisig, §8.2), scheduled triggers and migration cursors become further kinds.
+//! **Registered obligations.** An account, or the account that controls a contract's lifecycle,
+//! registers an obligation with the kernel ([`registry`]): the record in
+//! `world.runtime_obligations` commits to the exact instructions that complete it and captures
+//! their completion closure from the selection the root executes at that moment. When the owner
+//! issues one of those instructions, it and what it invokes complete the obligation, once. A
+//! registered obligation is live until it expires or has performed every committed instruction,
+//! and while it is live a change set that changes its captured closure lapses, as it does for
+//! the classes above.
+//!
+//! **Migration cursors.** A migration is the kernel's own obligation ([`super::migration`]): its
+//! record in `world.runtime_migrations` holds the cursor until the cutover.
+//!
+//! TODO(§7.2, §8.2): pending consent (multisig) and scheduled triggers register no obligation
+//! yet; they ship with the deferred-consent addition that rebinds those interfaces.
 
 use std::collections::BTreeSet;
 
@@ -90,6 +100,8 @@ use iroha_data_model::{
 };
 use iroha_model_base::topology::DataSpaceId;
 use mv::storage::StorageReadOnly as _;
+
+pub(crate) mod registry;
 
 /// How an instruction acts on a live obligation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -312,6 +324,17 @@ pub fn step(
     if let Some(step) = authority_step(instruction, world) {
         return Some(step);
     }
+    if let Some(exercise) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::runtime_obligation::CompleteRuntimeObligationV1>(
+    ) {
+        // Ending a registered obligation completes it; its handler decides who may. A root
+        // that holds no obligation skips the identity derivation.
+        return (world.runtime_obligations.iter().next().is_some()
+            && iroha_data_model::runtime::obligation::ObligationId::derive(&exercise.owner)
+                .is_ok_and(|id| world.runtime_obligations.get(&id).is_some()))
+        .then_some(Step::Complete);
+    }
     let (participation, step) = amx_step(instruction)?;
     participation
         .is_live(
@@ -461,10 +484,29 @@ pub struct LiveObligations {
     amx_settlements: usize,
     /// Selected SoraFS authority custody and pending Parliament certificates.
     sorafs_authorities: usize,
+    /// The distinct completion closures of the live obligations registered through the kernel,
+    /// each with how many obligations share it.
+    registered: Vec<(
+        iroha_data_model::runtime::obligation::CompletionCaptureV1,
+        usize,
+    )>,
 }
 
 impl LiveObligations {
-    /// Live obligations of `world`.
+    /// These obligations with the obligations registered through the kernel that are live in
+    /// `world` at committed time `now_ms`.
+    #[must_use]
+    pub(crate) fn with_registered(
+        mut self,
+        world: &crate::state::WorldTransaction<'_, '_>,
+        now_ms: u64,
+    ) -> Self {
+        self.registered = registry::live_captures(world, now_ms);
+        self
+    }
+
+    /// The custody and participation obligations of `world`: escrows, AMX participations and
+    /// selected SoraFS authorities. [`Self::with_registered`] adds the registered ones.
     pub(crate) fn of(world: &crate::state::WorldTransaction<'_, '_>) -> Self {
         let sorafs_authorities =
             if super::sorafs_authority_enabled(world.runtime_selection.get()).ok() == Some(true) {
@@ -493,6 +535,7 @@ impl LiveObligations {
             };
         Self {
             sorafs_authorities,
+            registered: Vec::new(),
             escrows: world
                 .asset_escrows
                 .iter()
@@ -520,12 +563,15 @@ impl LiveObligations {
                 .count(),
             amx_settlements: participant.map_or(0, unsettled_escrows),
             sorafs_authorities: 0,
+            registered: Vec::new(),
         }
     }
 
     /// Whether no obligation is live.
     pub(crate) fn is_empty(&self) -> bool {
-        self.sorafs_authorities == 0 && Class::ALL.into_iter().all(|class| self.count(class) == 0)
+        self.sorafs_authorities == 0
+            && self.registered.is_empty()
+            && Class::ALL.into_iter().all(|class| self.count(class) == 0)
     }
 
     /// How many live obligations of `class` there are.
@@ -555,6 +601,7 @@ impl LiveObligations {
             amx_decisions: decisions,
             amx_settlements: settlements,
             sorafs_authorities: 0,
+            registered: Vec::new(),
         }
     }
 }
@@ -689,13 +736,14 @@ fn closure_gap(
 
 /// Why `successor` would strand `live` obligations, if it would (§7.2).
 ///
-/// No live obligation has a captured completion capability that dispatch can follow after a
-/// rebinding yet. Keep the predecessor closure of each class of live obligations unchanged
-/// through every activation, rather than silently treating a newly bound implementation as their
-/// settlement authority.
+/// No live obligation has a completion capability that dispatch can follow after a rebinding:
+/// a release answers a wire ID from the selection it executes. Keep the closure of every live
+/// obligation unchanged through every activation, rather than silently treating a newly bound
+/// implementation as its settlement authority: the predecessor closure of each class of escrows
+/// and AMX participations, and the closure each registered obligation captured
+/// ([`registry::closure_gap`]).
 ///
-/// TODO(§7.2): pending consent, scheduled triggers and migration cursors do not register as
-/// obligations yet; `LiveObligations::of` counts none.
+/// TODO(§7.2, §8.2): pending consent and scheduled triggers do not register as obligations yet.
 pub fn stranded(
     predecessor: &RootSelectionV1,
     successor: &RootSelectionV1,
@@ -704,6 +752,10 @@ pub fn stranded(
 ) -> Option<String> {
     if live.is_empty() {
         return None;
+    }
+    if let Some(reason) = registry::closure_gap(predecessor, successor, published, &live.registered)
+    {
+        return Some(reason);
     }
     if live.sorafs_authorities != 0 {
         let ids = [

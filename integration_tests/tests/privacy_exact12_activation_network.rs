@@ -6,9 +6,9 @@
 //! This scenario does not construct valid privacy proofs. Native proof/action scenarios own
 //! that coverage; the generic X509 wire is explicitly rejected in favor of signed attachments.
 //!
-//! Run with `TEST_NETWORK_IROHAD_FEATURES=zk-stark IROHA_TEST_REQUIRE_NETWORK=1
+//! Run with `IROHA_TEST_REQUIRE_NETWORK=1
 //! IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests
-//! --test network_functional --features zk-stark
+//! --test network_functional --features stark-network-tests
 //! privacy_exact12_activation_network::canonical_exact12_policy_updates_survive_four_peer_replay_and_restart
 //! -- --exact --nocapture --test-threads=1`.
 use super::privacy_exact12_network_support::{privacy_capabilities, wait_for_transaction_on_peers};
@@ -45,7 +45,6 @@ use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use std::time::Duration;
 use tokio::time::{Instant, sleep, timeout};
 const TEST_NAME: &str = "canonical_exact12_policy_updates_survive_four_peer_replay_and_restart";
-const REQUIRED_DAEMON_FEATURE: &str = "zk-stark";
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(60);
 const PEER_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(90);
 const RESTART_TIMEOUT: Duration = Duration::from_secs(90);
@@ -125,21 +124,6 @@ fn unavailable_profile_diagnostics_match_the_exact_compiled_catalog() {
             );
         }
     }
-}
-fn require_test_network_feature(feature: &str) -> Result<()> {
-    let enabled = std::env::var("TEST_NETWORK_IROHAD_FEATURES")
-        .ok()
-        .is_some_and(|value| {
-            value
-                .split([',', ' ', '\t', '\n'])
-                .any(|item| item.trim() == feature)
-        });
-    ensure!(
-        enabled,
-        "{TEST_NAME}: TEST_NETWORK_IROHAD_FEATURES must include `{feature}` so the four real \
-         validators execute the same exact-12 availability catalog as the test harness"
-    );
-    Ok(())
 }
 fn bounded_client(client: Client) -> Client {
     integration_tests::sync::rebind_blocking_client(&client, |client| {
@@ -661,7 +645,6 @@ fn all_unreleased_profiles_fail_closed_across_four_peer_restart() -> Result<()> 
     )
 }
 async fn all_unreleased_profiles_fail_closed_across_four_peer_restart_impl() -> Result<()> {
-    require_test_network_feature(REQUIRED_DAEMON_FEATURE)?;
     init_instruction_registry();
     for protocol_id in UNAVAILABLE_PROTOCOLS {
         let unavailable =
@@ -982,7 +965,6 @@ fn canonical_exact12_policy_updates_survive_four_peer_replay_and_restart() -> Re
 
 async fn canonical_exact12_policy_updates_survive_four_peer_replay_and_restart_impl() -> Result<()>
 {
-    require_test_network_feature(REQUIRED_DAEMON_FEATURE)?;
     init_instruction_registry();
     let profiles = compiled_available_profiles()?;
     let builder = NetworkBuilder::new()

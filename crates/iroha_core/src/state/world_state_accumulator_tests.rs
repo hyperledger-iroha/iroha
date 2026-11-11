@@ -1244,3 +1244,45 @@ fn sorafs_authority_storage_preserves_old_root_and_binds_every_selected_table() 
     assert_eq!(selected_empty, before.apply_block(&block).unwrap());
     assert_eq!(old_root, before.root(&catalog.baseline).unwrap());
 }
+
+#[test]
+fn drained_storage_leaves_the_commitment_and_populated_storage_cannot() {
+    let world = World::default();
+    let catalog = crate::runtime::release_catalog().unwrap();
+    let table = catalog.world_storage["world.viral_bonus_paid"];
+    let cell = catalog.world_storage["world.soracloud_sequence_watermark"];
+    let mut block = world.block();
+    let before = WorldStateAccumulator::capture(&block).unwrap();
+    // A migration drained the table in earlier blocks; this block retires it and the cell.
+    let mut successor = catalog.baseline.clone();
+    successor
+        .installed_storage
+        .retain(|storage| *storage != table && *storage != cell);
+    *block.runtime_selection.get_mut() = successor.clone();
+    let retired = before.apply_block(&block).unwrap();
+    assert_eq!(
+        retired,
+        WorldStateAccumulator::capture(&block).unwrap(),
+        "the incremental commitment equals a cold capture without the retired fields"
+    );
+    assert_ne!(
+        retired.root(&successor).unwrap(),
+        before.root(&catalog.baseline).unwrap()
+    );
+
+    // A table that still holds a row, or changes in the retiring block, is not retired.
+    block
+        .viral_bonus_paid
+        .insert(Hash::prehashed([0x31; 32]), true);
+    let error = before.apply_block(&block).unwrap_err();
+    assert!(
+        error.contains("is retired while it holds or changes entries"),
+        "{error}"
+    );
+    block.viral_bonus_paid.remove(Hash::prehashed([0x31; 32]));
+    let error = before.apply_block(&block).unwrap_err();
+    assert!(
+        error.contains("is retired while it holds or changes entries"),
+        "a row removed in the retiring block still changes the field: {error}"
+    );
+}

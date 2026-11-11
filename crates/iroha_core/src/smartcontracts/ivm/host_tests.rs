@@ -7955,7 +7955,6 @@ fn set_verifying_keys_rejects_malformed_native_material_during_rehydration() {
     );
     assert!(host.prepared_verifying_keys.is_empty());
 }
-#[cfg(feature = "zk-stark")]
 #[test]
 fn set_verifying_keys_rejects_weak_stark_parameters_during_rehydration() {
     let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
@@ -10898,7 +10897,6 @@ fn active_vk_record(
     rec.key = Some(VerifyingKeyBox::new(backend.into(), vk_bytes));
     rec
 }
-#[cfg(feature = "zk-stark")]
 fn registered_stark_batch_fixture(
     host: &mut CoreHost,
     namespace: &str,

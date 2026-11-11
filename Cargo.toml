@@ -686,10 +686,23 @@ opt-level = 3
 # unoptimized field arithmetic. Optimize the concrete crypto instantiations and
 # their arithmetic dependencies in both runnable profiles, retaining assertions
 # and overflow checks and sharing artifacts between the node and test harnesses.
+# The transport AEAD kernels (`iroha_crypto::encryption::Cipher`) depend on this
+# too: a four-validator profile of a maximum-size payment found 86% of the busy
+# runtime threads sealing P2P frames with a ChaCha20-Poly1305 instantiated in
+# unoptimized crates, which outlasted the view timers of every early view.
 [profile.dev.package.iroha_crypto]
 opt-level = 3
 
 [profile.test.package.iroha_crypto]
+opt-level = 3
+
+# `poly1305` compiles its software block function in its own crate, so the transport
+# kernels above reach it through a call their own profile cannot optimize. After the
+# kernels moved, it was the largest remaining cost of sealing a maximum-size payload.
+[profile.dev.package.poly1305]
+opt-level = 3
+
+[profile.test.package.poly1305]
 opt-level = 3
 
 [profile.dev.package.w3f-bls]

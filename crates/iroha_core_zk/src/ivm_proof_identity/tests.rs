@@ -109,7 +109,6 @@ fn reserved_ivm_registry_records_reject_before_inline_material() {
     }
 }
 
-#[cfg(feature = "zk-stark")]
 fn key_payload(circuit: &str) -> crate::stark::StarkFriVerifyingKeyV1 {
     use crate::stark::*;
     StarkFriVerifyingKeyV1 {
@@ -123,7 +122,6 @@ fn key_payload(circuit: &str) -> crate::stark::StarkFriVerifyingKeyV1 {
     }
 }
 
-#[cfg(feature = "zk-stark")]
 fn key(circuit: &str) -> iroha_data_model::proof::VerifyingKeyBox {
     iroha_data_model::proof::VerifyingKeyBox::new(
         ZK_BACKEND_STARK_FRI_V1.to_owned(),
@@ -131,7 +129,6 @@ fn key(circuit: &str) -> iroha_data_model::proof::VerifyingKeyBox {
     )
 }
 
-#[cfg(feature = "zk-stark")]
 #[test]
 fn reserved_ivm_native_material_rejects_interior_and_snake_case_components() {
     let backend = ZK_BACKEND_STARK_FRI_V1;
@@ -197,7 +194,6 @@ fn reserved_ivm_native_material_rejects_interior_and_snake_case_components() {
     }
 }
 
-#[cfg(feature = "zk-stark")]
 #[test]
 fn reserved_ivm_valid_public_binding_control_verifies() {
     let backend = ZK_BACKEND_STARK_FRI_V1;

@@ -1255,6 +1255,9 @@ macro_rules! with_world_overlay_fields {
             game_partitions,
             account_signing_keys,
             account_signing_key_reservations,
+            runtime_obligations,
+            runtime_migrations,
+            runtime_boundaries,
             sorafs_authority_proposals,
             sorafs_authority_heads,
             sorafs_authority_leases,
@@ -1512,6 +1515,7 @@ mod publication_lock_tests;
     )
 )]
 pub(crate) mod authority_registry;
+pub(crate) mod keyed_state;
 mod world_commit;
 #[cfg_attr(
     not(test),
@@ -1521,7 +1525,6 @@ mod world_commit;
     )
 )]
 mod world_journals;
-pub(crate) mod keyed_state;
 pub use keyed_state::FundedKeyedStateRows;
 pub(crate) mod world_projection;
 pub use world_projection::world_state_accumulator::{
@@ -4263,6 +4266,22 @@ pub struct WorldData {
     /// Every key that is or was an account's off-chain signing key, so none is reused,
     /// keyed by the single-key `AccountId` the key would control.
     pub(crate) account_signing_key_reservations: Storage<AccountId, AccountSigningKeyReservationV1>,
+    /// Obligations registered through the kernel, each with its captured completion closure
+    /// (`specs/live_runtime_upgrades.md` §7.2); installed only by its selected addition.
+    pub(crate) runtime_obligations: Storage<
+        iroha_data_model::runtime::obligation::ObligationId,
+        iroha_data_model::runtime::obligation::ObligationRecordV1,
+    >,
+    /// The committed cursor of every migration, keyed by its definition
+    /// (`specs/live_runtime_upgrades.md` §5.4); installed only by its selected addition.
+    pub(crate) runtime_migrations: Storage<
+        iroha_data_model::runtime::definition::DefinitionId,
+        iroha_data_model::runtime::obligation::MigrationRecordV1,
+    >,
+    /// The boundaries of the root's history by height: its adoption anchor and startup floors
+    /// (`specs/live_runtime_upgrades.md` §7.3, §13); installed only by its selected addition.
+    pub(crate) runtime_boundaries:
+        Storage<u64, iroha_data_model::runtime::checkpoint::RuntimeBoundaryV1>,
     /// Parliament-owned SoraFS authority state, installed only by its selected addition.
     pub(crate) sorafs_authority_proposals: Storage<[u8; 32], SorafsAuthorityProposalRecordV1>,
     /// Parliament-owned SoraFS authority state, installed only by its selected addition.
@@ -5294,6 +5313,21 @@ pub struct WorldBlockFields<'world> {
     /// Every key that is or was an account's off-chain signing key.
     pub(crate) account_signing_key_reservations:
         StorageField<'world, AccountId, AccountSigningKeyReservationV1>,
+    /// Obligations registered through the kernel.
+    pub(crate) runtime_obligations: StorageField<
+        'world,
+        iroha_data_model::runtime::obligation::ObligationId,
+        iroha_data_model::runtime::obligation::ObligationRecordV1,
+    >,
+    /// The committed cursor of every migration.
+    pub(crate) runtime_migrations: StorageField<
+        'world,
+        iroha_data_model::runtime::definition::DefinitionId,
+        iroha_data_model::runtime::obligation::MigrationRecordV1,
+    >,
+    /// The boundaries of the root's history by height.
+    pub(crate) runtime_boundaries:
+        StorageField<'world, u64, iroha_data_model::runtime::checkpoint::RuntimeBoundaryV1>,
     /// Parliament-owned SoraFS authority state, installed only by its selected addition.
     pub(crate) sorafs_authority_proposals:
         StorageField<'world, [u8; 32], SorafsAuthorityProposalRecordV1>,
@@ -6512,6 +6546,9 @@ impl WorldBlock<'_> {
             game_partitions,
             account_signing_keys,
             account_signing_key_reservations,
+            runtime_obligations,
+            runtime_migrations,
+            runtime_boundaries,
             sorafs_authority_proposals,
             sorafs_authority_heads,
             sorafs_authority_leases,
@@ -7070,6 +7107,21 @@ pub struct WorldTransaction<'block, 'world> {
     /// Every key that is or was an account's off-chain signing key.
     pub(crate) account_signing_key_reservations:
         StorageTransaction<'block, AccountId, AccountSigningKeyReservationV1>,
+    /// Obligations registered through the kernel.
+    pub(crate) runtime_obligations: StorageTransaction<
+        'block,
+        iroha_data_model::runtime::obligation::ObligationId,
+        iroha_data_model::runtime::obligation::ObligationRecordV1,
+    >,
+    /// The committed cursor of every migration.
+    pub(crate) runtime_migrations: StorageTransaction<
+        'block,
+        iroha_data_model::runtime::definition::DefinitionId,
+        iroha_data_model::runtime::obligation::MigrationRecordV1,
+    >,
+    /// The boundaries of the root's history by height.
+    pub(crate) runtime_boundaries:
+        StorageTransaction<'block, u64, iroha_data_model::runtime::checkpoint::RuntimeBoundaryV1>,
     /// Parliament-owned SoraFS authority state, installed only by its selected addition.
     pub(crate) sorafs_authority_proposals:
         StorageTransaction<'block, [u8; 32], SorafsAuthorityProposalRecordV1>,
@@ -9330,6 +9382,21 @@ pub struct WorldView<'world> {
     /// Every key that is or was an account's off-chain signing key.
     pub(crate) account_signing_key_reservations:
         StorageView<'world, AccountId, AccountSigningKeyReservationV1>,
+    /// Obligations registered through the kernel.
+    pub(crate) runtime_obligations: StorageView<
+        'world,
+        iroha_data_model::runtime::obligation::ObligationId,
+        iroha_data_model::runtime::obligation::ObligationRecordV1,
+    >,
+    /// The committed cursor of every migration.
+    pub(crate) runtime_migrations: StorageView<
+        'world,
+        iroha_data_model::runtime::definition::DefinitionId,
+        iroha_data_model::runtime::obligation::MigrationRecordV1,
+    >,
+    /// The boundaries of the root's history by height.
+    pub(crate) runtime_boundaries:
+        StorageView<'world, u64, iroha_data_model::runtime::checkpoint::RuntimeBoundaryV1>,
     /// Parliament-owned SoraFS authority state, installed only by its selected addition.
     pub(crate) sorafs_authority_proposals:
         StorageView<'world, [u8; 32], SorafsAuthorityProposalRecordV1>,
@@ -14427,6 +14494,12 @@ pub struct StateTransaction<'block, 'state> {
     /// Exact signed activation plan admitted by the owner-authorized Taira boundary.
     /// Ephemeral transaction custody; never serialized or inherited by contract callbacks.
     pub(crate) taira_activation_entrypoint: Option<[u8; 32]>,
+    /// Whether the instruction being executed is a committed terminal effect of a registered
+    /// obligation (`specs/live_runtime_upgrades.md` §7.2): while it is set, the instruction and
+    /// what it invokes complete that obligation, so admission closure and completion-only do
+    /// not stop them. Ephemeral transaction custody; set and cleared around that instruction
+    /// alone (`crate::runtime::obligations::registry::performing`).
+    pub(crate) completing_obligation: bool,
     /// Mutable counter shared with the parent [`StateBlock`] recording committed fragments.
     committed_fragments: &'block mut usize,
     /// Lanes whose state was touched in this transaction.
@@ -21474,6 +21547,16 @@ macro_rules! world_ro_accessors {
             storage account_signing_keys: AccountId => AccountSigningKeyRecordV1;
             /// Every key that is or was an account's off-chain signing key.
             storage account_signing_key_reservations: AccountId => AccountSigningKeyReservationV1;
+            /// Obligations registered through the kernel (read-only).
+            storage runtime_obligations:
+                iroha_data_model::runtime::obligation::ObligationId
+                    => iroha_data_model::runtime::obligation::ObligationRecordV1;
+            /// The committed cursor of every migration (read-only).
+            storage runtime_migrations:
+                iroha_data_model::runtime::definition::DefinitionId
+                    => iroha_data_model::runtime::obligation::MigrationRecordV1;
+            /// The boundaries of the root's history by height (read-only).
+            storage runtime_boundaries: u64 => iroha_data_model::runtime::checkpoint::RuntimeBoundaryV1;
             /// Immutable authority proposal content and shared Parliament status (read-only).
             storage sorafs_authority_proposals: [u8; 32] => SorafsAuthorityProposalRecordV1;
             /// Monotonic authority heads and retained enactment receipts (read-only).
@@ -25374,6 +25457,9 @@ impl WorldTransaction<'_, '_> {
             game_partitions: _,
             account_signing_keys: _,
             account_signing_key_reservations: _,
+            runtime_obligations: _,
+            runtime_migrations: _,
+            runtime_boundaries: _,
             sorafs_authority_proposals: _,
             sorafs_authority_heads: _,
             sorafs_authority_leases: _,
@@ -25833,6 +25919,9 @@ impl WorldTransaction<'_, '_> {
         self.game_partitions.apply();
         self.account_signing_keys.apply();
         self.account_signing_key_reservations.apply();
+        self.runtime_obligations.apply();
+        self.runtime_migrations.apply();
+        self.runtime_boundaries.apply();
         self.sorafs_authority_proposals.apply();
         self.sorafs_authority_heads.apply();
         self.sorafs_authority_leases.apply();
@@ -27059,10 +27148,26 @@ impl State {
         let _persistence_guard = self.query_index_journal_persistence_lock.lock();
         let path = self.query_index_journal_path();
         self.set_query_index_status(indexed_height, indexed_block_hash);
-        if path.as_os_str().is_empty() {
+        // Startup replay republishes every historical tip. Only its final marker is ever
+        // read, so the replay's persistence owner writes that one when it finishes.
+        if path.as_os_str().is_empty()
+            || self
+                .tiered_snapshot_worker
+                .inner
+                .startup_replay_active
+                .load(Ordering::Acquire)
+        {
             return;
         }
         self.persist_query_index_status_snapshot_locked(&path);
+    }
+    /// Persist the query-index marker that startup replay advanced only in memory.
+    fn persist_replayed_query_index_status(&self) {
+        let _persistence_guard = self.query_index_journal_persistence_lock.lock();
+        let path = self.query_index_journal_path();
+        if !path.as_os_str().is_empty() {
+            self.persist_query_index_status_snapshot_locked(&path);
+        }
     }
     fn set_query_index_status(
         &self,
@@ -27906,6 +28011,12 @@ impl State {
         let mut block = self.world.axt_policies.block();
         block.remove(*dsid);
         block.commit();
+    }
+    /// Treat the DA indexes as rebuilt, for a fixture whose committed heights are block hashes
+    /// alone ([`Self::push_block_hash_for_testing`]): Kura holds no body to rebuild them from.
+    #[cfg(test)]
+    pub(crate) fn assume_da_indexes_hydrated_for_testing(&self) {
+        *self.da_indexes_hydrated.write() = Some(Ok(()));
     }
     /// Push a committed block hash when constructing scenarios in tests.
     ///
@@ -28758,7 +28869,6 @@ impl State {
                 max_path_len: iroha_config::parameters::defaults::content::MAX_PATH_LEN,
                 max_retention_blocks: iroha_config::parameters::defaults::content::MAX_RETENTION_BLOCKS,
                 chunk_size_bytes: iroha_config::parameters::defaults::content::CHUNK_SIZE_BYTES,
-                publish_allow_accounts: Vec::new(),
                 limits: iroha_config::parameters::actual::ContentLimits {
                     max_requests_per_second: nonzero!(
                         iroha_config::parameters::defaults::content::MAX_REQUESTS_PER_SECOND
@@ -28781,7 +28891,6 @@ impl State {
                     iroha_config::parameters::defaults::content::DEFAULT_CACHE_MAX_AGE_SECS,
                 max_cache_max_age_secs: iroha_config::parameters::defaults::content::MAX_CACHE_MAX_AGE_SECS,
                 immutable_bundles: iroha_config::parameters::defaults::content::IMMUTABLE_BUNDLES,
-                default_auth_mode: iroha_data_model::content::ContentAuthMode::Public,
                 slo: iroha_config::parameters::actual::ContentSlo {
                     target_p50_latency_ms: nonzero!(
                         iroha_config::parameters::defaults::content::TARGET_P50_LATENCY_MS
@@ -30213,6 +30322,9 @@ impl State {
         // Containment leases end after the height's change sets apply, so a ratification that
         // takes a contained definition over is never undone by the expiry it replaces.
         crate::runtime::containment::expire_due(&mut wtx, now_h, now_ms);
+        // One bounded stage of every migration the selection activates, after the height's
+        // change sets and containment leases decided which run (§5.4).
+        crate::runtime::migration::run_stages(&mut wtx, now_h);
         // Collect candidates to open (avoid borrow conflicts)
         let to_open: Vec<(String, u64, u64)> = wtx
             .governance_referenda
@@ -32037,7 +32149,9 @@ impl State {
     ) {
         (&self.gov.voting_asset_id, &self.gov.bond_escrow_account)
     }
-    /// Snapshot the current content configuration.
+    /// Snapshot the current content settings: this node's gateway resources
+    /// with the bundle limits the protocol fixes
+    /// ([`Self::install_node_content`]).
     ///
     /// This avoids acquiring a full [`StateView`] when only content limits/settings are needed.
     #[must_use]
@@ -39697,6 +39811,7 @@ impl<'state> StateBlock<'state> {
             native_execution_tip: *fields.native_execution_tip.get(),
             sorafs_repair_entrypoint: None,
             taira_activation_entrypoint: None,
+            completing_obligation: false,
             committed_fragments: &mut fields.committed_fragments,
             touched_lanes: &mut fields.touched_lanes,
             world,
@@ -43811,6 +43926,7 @@ impl StateTransaction<'_, '_> {
             native_execution_tip: _,
             sorafs_repair_entrypoint: _,
             taira_activation_entrypoint: _,
+            completing_obligation: _,
             committed_fragments,
             touched_lanes,
             mut world,

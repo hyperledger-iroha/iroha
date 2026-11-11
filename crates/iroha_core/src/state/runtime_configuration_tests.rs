@@ -270,21 +270,21 @@ fn pipeline_reload_keeps_borrowed_execution_pool_across_shrink_and_growth() {
 }
 
 #[test]
-fn settlement_setter_rebuilds_the_exact_state_owned_router_engine() {
+fn settlement_router_inputs_are_protocol_constants_without_an_installer() {
     run_runtime_configuration_test(|| {
-        let mut state = State::new_for_testing(
+        let state = State::new_for_testing(
             World::new(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let original = *state.settlement();
+        let fixed = iroha_config::parameters::actual::Settlement::default();
+        assert!(state.settlement_engine.matches_router_config(&fixed.router));
         assert!(
             state
                 .settlement_engine
-                .matches_router_config(&original.router)
+                .matches_router_config(&state.settlement().router)
         );
-
-        let mut changed = original;
+        let mut changed = fixed;
         changed.router.epsilon_bps += 1;
         changed.router.buffer_halt_pct += 1;
         assert!(
@@ -292,17 +292,9 @@ fn settlement_setter_rebuilds_the_exact_state_owned_router_engine() {
                 .settlement_engine
                 .matches_router_config(&changed.router)
         );
-        state.set_settlement(changed);
-        assert!(
-            state
-                .settlement_engine
-                .matches_router_config(&state.settlement().router)
-        );
-        assert!(
-            !state
-                .settlement_engine
-                .matches_router_config(&original.router)
-        );
+        // A block and a view carry the same constants.
+        let view = state.view();
+        assert!(view.settlement_engine().matches_router_config(&fixed.router));
     });
 }
 

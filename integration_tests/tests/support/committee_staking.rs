@@ -216,6 +216,8 @@ pub struct WithdrawalLifecycle {
     // departing owner has withdrawn. This is a read, never a new delegation.
     reserve_validator: AccountId,
     pending: PublicLaneUnbonding,
+    // Whole principal the owner bonded; the signed slash fraction applies to this exposure.
+    bonded: u64,
     network_id: NetworkId,
     retained_stake: Quantity,
     history: Arc<committee_staking_history::RetainedHistory>,
@@ -386,6 +388,104 @@ impl WithdrawalLifecycle {
             request_id: self.pending.request_id,
             monetary_plan: plan.clone(),
         })
+    }
+
+    /// The owner's operator double-signs while the owner still votes and its whole bond is
+    /// pending release.
+    ///
+    /// The honest daemons admit the proof and, after the signed delay, slash the signed
+    /// fraction of the pending principal to the distinct signed sink. The retained request
+    /// keeps its identity and liability horizon; only its amount shrinks, so the node
+    /// prepares the withdrawal of exactly the remainder and still refuses it while the
+    /// owner's seat and the frozen successor committee retain their obligations.
+    #[cfg(unix)]
+    pub(super) async fn double_sign_while_unbonding(
+        &mut self,
+        network: &sandbox::SerializedNetwork,
+        admin: &Client,
+        voters: &[PeerId],
+        carrier: &PeerId,
+        slashing_delay_blocks: u64,
+    ) -> Result<()> {
+        let policy = committee_slashing::signed_policy(self.escrow.definition());
+        // Read through the owner's ingress: a retained return-committee seat that is a
+        // current voter and can never be the stopped transport process.
+        let admin = &rebind_blocking_client(admin, |builder| {
+            builder.torii_url = self.owner.client.client().endpoint().clone();
+        });
+        let authenticated = |height: u64| {
+            let client = self.owner.client.clone();
+            let history = Arc::clone(&self.history);
+            async move {
+                read_on_dedicated_thread(move || {
+                    history.read_until(&client, height, Instant::now() + WAIT)
+                })
+                .await
+                .wrap_err("slash finality worker failed")
+            }
+        };
+        let before =
+            committee_slashing::custody(admin, &policy, &self.escrow, &self.reserve_validator)
+                .await?;
+        let chain = authenticated(before.height).await?;
+        let tip = chain
+            .last()
+            .ok_or_else(|| eyre!("no authenticated tip before the offence"))?;
+        ensure!(
+            tip.height() == before.height
+                && tip.height() < TARGET_LAST
+                && tip
+                    .commitment()
+                    .schedule
+                    .current
+                    .committee
+                    .iter()
+                    .any(|seat| seat.validator == self.owner.peer),
+            "the double-sign must occur inside the owner's retained seven-seat tenure"
+        );
+        let sign =
+            committee_equivocation::double_sign(network, carrier, &self.owner.peer, tip).await?;
+        let penalty = committee_equivocation::await_applied_penalty(
+            network,
+            voters,
+            admin,
+            &sign,
+            slashing_delay_blocks,
+        )
+        .await?;
+        let after =
+            committee_slashing::custody(admin, &policy, &self.escrow, &self.reserve_validator)
+                .await?;
+        ensure!(
+            after.height == penalty.applied_height && after.height < TARGET_LAST,
+            "custody must be observed at the exact seven-seat height that applied the penalty"
+        );
+        let chain = authenticated(after.height).await?;
+        let slashed = committee_slashing::slash_of(self.bonded)?;
+        committee_slashing::assert_slashed(
+            &before,
+            &after,
+            &chain,
+            self.escrow.definition(),
+            &slashed,
+        )?;
+        self.pending.amount = self.pending.amount.checked_sub(&slashed)?;
+        self.retained_stake = self.retained_stake.checked_sub(&slashed)?;
+        committee_slashing::assert_no_reward_entitlement(admin, &self.owner.account).await?;
+        // The node itself now prepares the withdrawal of exactly the slashed remainder
+        // under the unchanged request identity and liability horizon.
+        let remainder = self.observe(self.unbond_intent()).await?;
+        self.withdrawal(&remainder)?;
+        ensure!(
+            remainder.asset(&self.escrow)?.stake_reserved == self.retained_stake,
+            "pending principal differs from the bond less its one consensus slash"
+        );
+        self.reject_early(
+            remainder,
+            "authenticated release of current and frozen committee obligations",
+        )
+        .await?;
+        Ok(())
     }
 
     /// All processes were restarted while the owner was still a seven-seat voter.
@@ -881,30 +981,6 @@ fn assert_effects(
     Ok(())
 }
 
-#[cfg(test)]
-fn assert_reward_reservation(
-    before: &Observation,
-    after: &Observation,
-    treasury: &AssetId,
-    escrow: &AssetId,
-    recipient: &AssetId,
-    reward: &Quantity,
-    fee: &Quantity,
-) -> Result<()> {
-    let source = before.asset(treasury)?;
-    let reserved = after.asset(treasury)?;
-    ensure!(
-        source.balance.checked_sub(fee)? == reserved.balance
-            && source.stake_reserved == reserved.stake_reserved
-            && source.rewards_reserved.checked_add(reward)? == reserved.rewards_reserved
-            && before.asset(escrow)? == after.asset(escrow)?
-            && before.asset(recipient)? == after.asset(recipient)?
-            && before.supply.checked_sub(fee)? == after.supply,
-        "reward distribution must reserve existing treasury XOR and burn only its admin fee without consuming stake"
-    );
-    Ok(())
-}
-
 /// Schedule a full-bond withdrawal and preserve its authenticated committee liability.
 pub async fn schedule_retained_withdrawal(
     network: &sandbox::SerializedNetwork,
@@ -955,19 +1031,16 @@ pub async fn schedule_retained_withdrawal(
     )?
     .ok_or_else(|| eyre!("signed NPoS policy invalid"))?;
     ensure!(
-        npos.evidence_horizon_blocks == EPOCH * 2 && npos.slashing_delay_blocks == 1,
+        npos.evidence_horizon_blocks == EPOCH * 2 && npos.slashing_delay_blocks == SLASHING_DELAY,
         "withdrawal must use the signed evidence and slashing horizons"
     );
+    let bonded: u64 = if genesis_validator { 1_000 } else { 2_000 };
     let pending = PublicLaneUnbonding {
         request_id: Hash::new_from_chunks(&[
             b"iroha:real-xor-withdrawal:v1",
             &norito::encode_canonical(&owner.account)?,
         ]),
-        amount: if genesis_validator {
-            1_000_u64.into()
-        } else {
-            2_000_u64.into()
-        },
+        amount: bonded.into(),
         release_at_ms: finite_release_deadline()?,
         slashable_through_height: return_preparation.last_height,
         liability_release_height: return_preparation
@@ -991,6 +1064,7 @@ pub async fn schedule_retained_withdrawal(
         reward_treasury,
         reserve_validator,
         pending,
+        bonded,
         network_id: network.network_id(),
         retained_stake: Quantity::zero(),
         history,
@@ -1048,9 +1122,10 @@ pub async fn schedule_retained_withdrawal(
         before_reward.prepared.observed_height < TARGET_LAST,
         "unbond scheduling missed the seven-seat tenure"
     );
-    // TODO: qualify automatic funded reward conversion and signed nominator claims
-    // in a real-peer scenario with authenticated monthly funding and reference
-    // observations. This retained-tenure scenario only qualifies principal custody.
+    // Principal custody only: a reward exists solely as funded conversion of collected
+    // retail fees, which a fresh network cannot have (thirty days of enactment notice, a
+    // Honiara month boundary and a closed earning month). The slash phase asserts that no
+    // claim can be prepared; positive rewards are qualified on an aged network.
     lifecycle
         .reject_early(
             before_reward,
@@ -1468,44 +1543,6 @@ mod tests {
             )
             .is_err()
         );
-        Ok(())
-    }
-
-    #[test]
-    fn treasury_reward_reservation_burns_only_admin_fee_and_preserves_stake() -> Result<()> {
-        let before = distinct_custody_observation(1_000, 900, 100, 800, 0, 2_000);
-        let after = distinct_custody_observation(998, 900, 100, 800, 25, 1_998);
-        let treasury = &before.prepared.balances[0].asset;
-        let recipient = &before.prepared.balances[1].asset;
-        let escrow = &before.prepared.balances[2].asset;
-        assert_reward_reservation(
-            &before,
-            &after,
-            treasury,
-            escrow,
-            recipient,
-            &25_u64.into(),
-            &2_u64.into(),
-        )?;
-        for invalid in [
-            distinct_custody_observation(1_000, 898, 100, 800, 25, 1_998), // admin fee charged to stake escrow
-            distinct_custody_observation(998, 900, 100, 775, 25, 1_998), // reward consumes principal
-            distinct_custody_observation(973, 900, 125, 800, 0, 1_998), // reservation pays/mints prematurely
-            distinct_custody_observation(998, 900, 100, 800, 25, 2_000), // missing mandatory Burn
-        ] {
-            assert!(
-                assert_reward_reservation(
-                    &before,
-                    &invalid,
-                    treasury,
-                    escrow,
-                    recipient,
-                    &25_u64.into(),
-                    &2_u64.into()
-                )
-                .is_err()
-            );
-        }
         Ok(())
     }
 

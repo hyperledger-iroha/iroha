@@ -861,8 +861,9 @@ fn configure_staged_genesis_state(
         state.set_oracle(config.oracle.clone());
         state.install_node_fraud_monitoring(config.fraud_monitoring.clone());
         state.set_gov(config.gov.clone());
-        state.content = config.content.clone();
-        state.set_settlement(config.settlement);
+        // The content limits and the settlement router inputs are protocol
+        // constants: the staging configuration supplies gateway resources only.
+        let _ = state.install_node_content(config.content.clone());
         // ZK validity values are committed chain policy: a genesis that needs
         // non-default ones carries the `zk_validity_policy_v1` parameter. The
         // staging configuration supplies local resource settings only.

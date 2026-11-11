@@ -428,7 +428,7 @@ fn ironwood_coherent_candidate_pool_cannot_enter_the_baseline_world() {
 fn authority_activation_installs_only_its_tables() {
     let catalog = release_catalog().unwrap();
     let before = catalog.baseline.clone();
-    let omitted = uninstalled_world_members(&before).unwrap();
+    let omitted = uninstalled_world_members(&before).unwrap().members;
     let authority_members = [
         "sorafs_authority_heads",
         "sorafs_authority_leases",
@@ -457,7 +457,7 @@ fn authority_activation_installs_only_its_tables() {
         .unwrap()
         .selection;
     assert_eq!(
-        uninstalled_world_members(&after).unwrap(),
+        uninstalled_world_members(&after).unwrap().members,
         omitted
             .into_iter()
             .filter(|member| !authority_members.contains(member))
@@ -486,4 +486,61 @@ fn test_only_activation_keeps_new_foundations_baseline_and_is_idempotent() {
         )
         .unwrap()
     );
+}
+
+#[test]
+fn a_field_stays_in_snapshots_when_an_identity_cutover_replaces_its_storage_definition() {
+    let catalog = release_catalog().unwrap();
+    let ironwood = catalog.ironwood.as_ref().expect("compiled Ironwood");
+    let before = uninstalled_world_members(&catalog.baseline).unwrap();
+    // The cutover installs successor definitions over the same fields, among them four tables
+    // of the trigger set. A snapshot holds a field whichever definition of it is installed.
+    let after = uninstalled_world_members(&ironwood.selection).unwrap();
+    assert!(after.nested.is_empty(), "{after:?}");
+    assert!(
+        after
+            .members
+            .iter()
+            .all(|member| before.members.contains(member)),
+        "the cutover uninstalls no field: {after:?}"
+    );
+    for field in ironwood.world_storage.keys() {
+        let (member, child) = world_snapshot_member(field).expect("a canonical World field");
+        assert!(
+            child.is_some() || !after.members.contains(&member),
+            "{field}"
+        );
+    }
+
+    let mut foreign = catalog.baseline.clone();
+    foreign.installed_storage.push(DefinitionId([0xee; 32]));
+    foreign.installed_storage.sort_unstable();
+    assert!(
+        uninstalled_world_members(&foreign).is_err(),
+        "a selection this release cannot execute has no snapshot form"
+    );
+}
+
+#[test]
+fn every_nested_trigger_table_is_a_snapshot_member_of_the_trigger_set() {
+    for (field, member) in [
+        ("triggers.data", "data_triggers"),
+        ("triggers.pipeline", "pipeline_triggers"),
+        ("triggers.time", "time_triggers"),
+        ("triggers.by_call", "by_call_triggers"),
+        ("triggers.contracts", "contracts"),
+    ] {
+        assert_eq!(
+            world_snapshot_member(field),
+            Some(("triggers", Some(member))),
+            "{field}"
+        );
+    }
+    assert_eq!(
+        world_snapshot_member("world.accounts"),
+        Some(("accounts", None))
+    );
+    assert_eq!(world_snapshot_member("world.triggers"), None, "an owner");
+    assert_eq!(world_snapshot_member("triggers.ids"), None, "derived");
+    assert_eq!(world_snapshot_member("world.missing"), None);
 }

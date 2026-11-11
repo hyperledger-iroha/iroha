@@ -18,6 +18,9 @@
 //! - [`registration`]: the registration statement and its verification;
 //! - [`ballot`]: the vote statement, proof verification, the seven ordered admission
 //!   checks and the block-execution decision used by the full verifier;
+//! - [`board`]: the node's authoritative board: the registration ledger of an election
+//!   attempt, its seal (list, mapping and roster binding), and one sealed body's ballot from
+//!   opening through the casting clock and block execution to the closure record;
 //! - [`stamp`]: the admission-stamp nonce search;
 //! - [`corpus`]: the incremental accepted corpus and the closure-record builder;
 //! - [`replay`]: the streaming core of independent full verification;
@@ -66,6 +69,7 @@
 #![forbid(unsafe_code)]
 
 pub mod ballot;
+pub mod board;
 pub mod context;
 pub mod corpus;
 mod entropy;

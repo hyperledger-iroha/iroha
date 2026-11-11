@@ -313,8 +313,8 @@ Validation rejects unsupported versions with
   - `max_output_ciphertexts <= max_input_ciphertexts`.
   - Full-bootstrap verifier-key artifacts carry exactly the governed
     BFV-native V1 payload on every build. A normalized Core STARK payload is
-    not a second wire format; `zk-stark` builds validate the native payload and
-    convert it deterministically for internal verification.
+    not a second wire format; every build validates the native payload and
+    converts it deterministically for internal verification.
   - Bootstrap-capable policies (`max_bootstrap_count > 0`) must use exactly one
     governed mode: `bootstrap_key_zero_refresh_proof_statement_digest` for
     `RefreshOnlyV1`, or a digest-pinned, trusted-reviewer-signed full-bootstrap

@@ -156,6 +156,11 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(crate::isi::game_partition::ImportGameUnitV1 => "iroha.game_partition.import.v1", register, tolerant),
     // Added after the frozen baseline by the `iroha.account.signing_key.v1` addition.
     built_in_wire_id!(crate::isi::account_signing_key::SetAccountSigningKeyV1 => "iroha.account.signing_key.set.v1", register, tolerant),
+    // Added after the frozen baseline by the `iroha.runtime.lifecycle.v1` addition.
+    built_in_wire_id!(crate::isi::runtime_obligation::RegisterRuntimeObligationV1 => "iroha.runtime.obligation.register.v1", register, tolerant),
+    built_in_wire_id!(crate::isi::runtime_obligation::CompleteRuntimeObligationV1 => "iroha.runtime.obligation.complete.v1", register, tolerant),
+    built_in_wire_id!(crate::isi::runtime_boundary::RatifyRuntimeAdoptionAnchorV1 => "iroha.runtime.boundary.anchor.v1", register, tolerant),
+    built_in_wire_id!(crate::isi::runtime_boundary::RaiseRuntimeStartupFloorV1 => "iroha.runtime.boundary.floor.v1", register, tolerant),
     built_in_wire_id!(crate::isi::sumeragi_amx::RegisterAmxDataspaceV1 => "iroha.sumeragi.amx.register_dataspace.v1", register),
     built_in_wire_id!(crate::isi::private_dataspace::RegisterPrivateDataspace => "iroha.private_dataspace.register.v1", register),
     built_in_wire_id!(crate::isi::private_dataspace::AnchorPrivateDataspace => "iroha.private_dataspace.anchor.v1", register),

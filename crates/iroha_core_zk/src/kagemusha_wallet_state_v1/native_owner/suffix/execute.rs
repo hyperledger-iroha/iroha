@@ -126,7 +126,7 @@ impl<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1, S: OriginalSourceV1 +
                 self.proofs.suffix_pass = Some(LiveSuffixPass {
                     scheduler: self.scheduler.clone(),
                     binding: WorkBinding {
-                        request: record.request_id,
+                        request_id: record.request_id,
                         source_capsule: record.source_capsule,
                         source_sequence: record.source_sequence,
                         source_selected_generation: record.source_selected_generation,

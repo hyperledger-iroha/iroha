@@ -13,8 +13,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = REPO_ROOT / "crates/iroha_core/src/smartcontracts/isi/soracloud_tests.rs"
 
 REGION_START = '#[derive(Clone, Copy)]\nenum FheInputAdmissionPayloadShape'
-REGION_END = '#[cfg(feature = "zk-stark")]\n#[test]\nfn mutate_soracloud_state_rejects_registered_binding_only_fhe_input_admission_proof'
-REGION_HASH = "e8599a8fa3eb3868df32f14864565f9be368aa06d7f86d3846ac0fde1e01063c"
+REGION_END = '#[test]\nfn mutate_soracloud_state_rejects_registered_binding_only_fhe_input_admission_proof'
+REGION_HASH = "79612d550d031d42034604f53a7407abe7a60af6a76ff7a91865470f816e1a61"
 
 TEST_CASES = {
     "mutate_soracloud_state_rejects_fhe_input_admission_proof_without_registered_verifier": (
@@ -26,15 +26,15 @@ TEST_CASES = {
         ("OversizedEnvelope",),
     ),
     "mutate_soracloud_state_rejects_registered_fhe_input_admission_wrong_circuit": (
-        ('cfg(feature = "zk-stark")', "test"),
+        ("test",),
         ("RegisteredVerifierWrongCircuit",),
     ),
     "mutate_soracloud_state_rejects_registered_fhe_input_admission_wrong_version": (
-        ('cfg(feature = "zk-stark")', "test"),
+        ("test",),
         ("RegisteredVerifierWrongVersion",),
     ),
     "mutate_soracloud_state_rejects_restored_fhe_input_verifier_metadata_drift": (
-        ('cfg(feature = "zk-stark")', "test"),
+        ("test",),
         ("RestoredVerifierWrongCurve", "RestoredVerifierWrongLength"),
     ),
 }
@@ -236,10 +236,16 @@ class SoracloudFheInputAdmissionCaseMatrixSourceTests(unittest.TestCase):
 
     def test_ordered_attribute_mutation_is_rejected(self) -> None:
         name = "mutate_soracloud_state_rejects_registered_fhe_input_admission_wrong_circuit"
-        old = f'#[cfg(feature = "zk-stark")]\n    #[test]\n    fn {name}'
+        old = f'    #[test]\n    fn {name}'
         mutated = _replace_once(self.source, old, old.replace("#[test]", "#[ignore]"))
         with self.assertRaises(GuardError):
             validate_source(mutated)
+        # STARK verification is compiled into every build: a feature gate on a
+        # registered-verifier case would remove it from the default test run.
+        for gate in ('#[cfg(feature = "zk-stark")]', '#[cfg(feature = "zk-preverify")]'):
+            gated = _replace_once(self.source, old, f"    {gate}\n{old}")
+            with self.subTest(gate=gate), self.assertRaises(GuardError):
+                validate_source(gated)
 
     def test_case_wiring_mutation_is_rejected(self) -> None:
         name = next(iter(TEST_CASES))
