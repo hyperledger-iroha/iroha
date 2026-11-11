@@ -94,7 +94,7 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
         ),
     )
     .await?;
-    assert_eq!(current_height(client).await?, request_height);
+    observe_exact_height(client, request_height, "request height").await?;
     // Governance-local wait for the consensus-native pre-boundary pulse at the slot;
     // the draw is consumed after the epoch boundary that the same pulse scheduled.
     let pulse = await_native_sortition_pulse(
@@ -196,7 +196,7 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
         }),
     )
     .await?;
-    assert_eq!(current_height(client).await?, roster_seal_height);
+    observe_exact_height(client, roster_seal_height, "roster seal height").await?;
 
     let rules_body_id = read_attempt(client, attempt_id)
         .await?
@@ -360,7 +360,7 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
         ),
     )
     .await?;
-    assert_eq!(current_height(client).await?, retry_request_height);
+    observe_exact_height(client, retry_request_height, "retry request height").await?;
     let retry_pulse = await_native_sortition_pulse(
         network,
         client,
@@ -464,7 +464,7 @@ pub(super) async fn exercise_public_finding_no_result_retries_and_restore(
         }),
     )
     .await?;
-    assert_eq!(current_height(client).await?, retry_roster_seal_height);
+    observe_exact_height(client, retry_roster_seal_height, "retry roster seal height").await?;
 
     let retry_rules_body_id = read_attempt(client, retry_id)
         .await?

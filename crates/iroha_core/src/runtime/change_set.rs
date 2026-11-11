@@ -514,6 +514,14 @@ pub fn activate_due(
                         iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
                         return false;
                     }
+                    // No grant of the content-publishing name crosses a change of its selection.
+                    if super::content_publish_permission::selected(&current)
+                        != super::content_publish_permission::selected(&applied.selection)
+                        && let Err(reason) = super::content_publish_permission::validate_inventory(&*wtx)
+                    {
+                        iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
+                        return false;
+                    }
                     if matches!(
                         (
                             super::sorafs_authority_enabled(&current),
@@ -525,6 +533,14 @@ pub fn activate_due(
                             iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
                             return false;
                         }
+                    }
+                    if let Err(reason) = super::committed_policy::check_retirement(
+                        &*wtx,
+                        &current,
+                        &applied.selection,
+                    ) {
+                        iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
+                        return false;
                     }
                     super::ironwood::validate_cutover(
                         &current,
@@ -543,6 +559,7 @@ pub fn activate_due(
             for (definition, descriptor) in applied.published {
                 wtx.runtime_definitions.insert(definition, descriptor);
             }
+            super::committed_policy::install(wtx, &applied.selection, catalog, height)?;
             *wtx.runtime_selection.get_mut() = applied.selection;
             install_cells(wtx, &record.change_set, catalog, height)?;
             super::migration::activated(wtx, &record.change_set, height);

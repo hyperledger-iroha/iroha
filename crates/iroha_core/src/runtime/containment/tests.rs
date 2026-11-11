@@ -520,3 +520,65 @@ fn expiry_leaves_a_restriction_governance_took_over() {
         RestrictionV1::AdmissionClosed(3)
     ));
 }
+
+#[test]
+fn a_root_with_the_lifecycle_state_contains_a_running_migration_by_closing_its_admission() {
+    let catalog = release_catalog().expect("release catalog");
+    let migration = catalog.ironwood.as_ref().expect("Ironwood").migration;
+    let world_with = |lifecycle: bool, record: Option<MigrationRecordV1>| {
+        let world = World::default();
+        if lifecycle {
+            crate::runtime::activate_additions_for_testing(
+                &world,
+                crate::runtime::catalog::additions::RUNTIME_LIFECYCLE.module,
+            )
+            .expect("activate the lifecycle addition");
+        }
+        let mut block = world.block();
+        block
+            .runtime_definitions
+            .insert(migration, catalog.definitions[&migration].clone());
+        let selection = block.runtime_selection.get_mut();
+        selection.active.push(migration);
+        selection.active.sort_unstable();
+        if let Some(record) = record {
+            block.runtime_migrations.insert(migration, record);
+        }
+        block.commit();
+        world
+    };
+    let check = |world: &World, kind| {
+        check_target(
+            world.runtime_selection.view().get(),
+            &world.runtime_definitions.view(),
+            &world.runtime_migrations.view(),
+            kind,
+            &migration,
+        )
+    };
+    // A root without the lifecycle State refuses a migration target as the baseline does.
+    let baseline = world_with(false, None);
+    let error = check(&baseline, ContainmentKindV1::AdmissionClosed).expect_err("baseline");
+    assert!(
+        format!("{error:?}").contains("only interfaces and implementations are contained"),
+        "{error:?}"
+    );
+    // With the lifecycle State, closing a running migration's admission suspends it.
+    let running = world_with(true, Some(MigrationRecordV1::started(5)));
+    check(&running, ContainmentKindV1::AdmissionClosed).expect("a running migration");
+    let error = check(&running, ContainmentKindV1::CompletionOnly).expect_err("never moved on");
+    assert!(
+        format!("{error:?}").contains("only by closing its admission"),
+        "{error:?}"
+    );
+    // A migration that copies no more rows is moved on by governance alone.
+    let mut complete = MigrationRecordV1::started(5);
+    complete.status = MigrationStatusV1::Complete(9);
+    for world in [world_with(true, Some(complete)), world_with(true, None)] {
+        let error = check(&world, ContainmentKindV1::AdmissionClosed).expect_err("not running");
+        assert!(
+            format!("{error:?}").contains("only a running migration is contained"),
+            "{error:?}"
+        );
+    }
+}

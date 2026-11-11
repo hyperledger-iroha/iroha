@@ -30,13 +30,33 @@ struct Source {
     fail_read: AtomicBool,
     proof_reads: AtomicUsize,
     submitted: AtomicBool,
+    /// Settlement reads still to refuse with the node's parallel-query capacity envelope.
+    capacity_refusals: AtomicUsize,
+}
+fn query_capacity_refusal() -> NativePaymentObservationError {
+    NativePaymentObservationError::Query(crate::query::QueryError::Http {
+        status: http::StatusCode::TOO_MANY_REQUESTS,
+        code: "query_validation_failed".into(),
+        message: iroha_data_model::query::error::QueryExecutionFail::CapacityLimit.to_string(),
+    })
 }
 impl PaymentSource for Source {
     fn settlement<'a>(
         &'a self,
         _: &'a iroha_data_model::isi::SettlementId,
     ) -> WorkflowFuture<'a, Result<Option<PaymentLocator>, NativePaymentObservationError>> {
-        Box::pin(async { Ok(self.visible.load(Ordering::Relaxed).then_some(self.locator)) })
+        Box::pin(async {
+            if self
+                .capacity_refusals
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                    left.checked_sub(1)
+                })
+                .is_ok()
+            {
+                return Err(query_capacity_refusal());
+            }
+            Ok(self.visible.load(Ordering::Relaxed).then_some(self.locator))
+        })
     }
     fn carrier(
         &self,
@@ -188,6 +208,7 @@ fn fixture(
         fail_read: AtomicBool::new(false),
         proof_reads: AtomicUsize::new(0),
         submitted: AtomicBool::new(false),
+        capacity_refusals: AtomicUsize::new(0),
     });
     (native, request, transaction, source)
 }
@@ -553,6 +574,86 @@ async fn native_payment_final_tip_receipt_survives_restart_without_dispatch() {
     assert_eq!(account.signs.load(Ordering::Relaxed), 0);
     assert_eq!(account.dispatches.load(Ordering::Relaxed), 0);
 }
+#[test]
+fn only_the_exact_parallel_query_refusal_is_retryable() {
+    assert!(is_query_capacity_refusal(&query_capacity_refusal()));
+    let http = |status, code: &str, message: String| {
+        NativePaymentObservationError::Query(crate::query::QueryError::Http {
+            status,
+            code: code.into(),
+            message,
+        })
+    };
+    let capacity = iroha_data_model::query::error::QueryExecutionFail::CapacityLimit.to_string();
+    for refusal in [
+        http(
+            http::StatusCode::BAD_REQUEST,
+            "query_validation_failed",
+            capacity.clone(),
+        ),
+        http(
+            http::StatusCode::TOO_MANY_REQUESTS,
+            "query_capacity_exceeded",
+            capacity,
+        ),
+        http(
+            http::StatusCode::TOO_MANY_REQUESTS,
+            "query_validation_failed",
+            "permanent validation failure".into(),
+        ),
+        NativePaymentObservationError::ReadBudgetExhausted,
+    ] {
+        assert!(!is_query_capacity_refusal(&refusal), "{refusal}");
+    }
+}
+
+#[tokio::test]
+async fn business_lookup_waits_out_parallel_query_refusals_within_its_deadline() {
+    let (native, request, transaction, source) = fixture(false);
+    source.visible.store(true, Ordering::Relaxed);
+    source.capacity_refusals.store(2, Ordering::Relaxed);
+    let root = tempfile::tempdir().unwrap();
+    let storage =
+        Arc::new(FileWorkflowStorage::open_or_create(root.path().join("payment")).unwrap());
+    let (operation, account) = operation(
+        request,
+        transaction.clone(),
+        source.clone(),
+        &native,
+        storage,
+    );
+    let mut bounded = options();
+    bounded.workflow.observation_timeout = Duration::from_secs(30);
+    let settled = operation.submit(&bounded).await.unwrap();
+    assert_eq!(settled.receipt.transaction_hash(), transaction.hash());
+    assert_eq!(source.capacity_refusals.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        account.signs.load(Ordering::Relaxed),
+        0,
+        "the recovered receipt needs no new carrier"
+    );
+    assert_eq!(account.dispatches.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn business_lookup_returns_the_refusal_when_its_deadline_cannot_wait() {
+    let (native, request, transaction, source) = fixture(false);
+    source.visible.store(true, Ordering::Relaxed);
+    source.capacity_refusals.store(2, Ordering::Relaxed);
+    let root = tempfile::tempdir().unwrap();
+    let storage =
+        Arc::new(FileWorkflowStorage::open_or_create(root.path().join("payment")).unwrap());
+    let (operation, account) = operation(request, transaction, source.clone(), &native, storage);
+    let error = operation.submit(&options()).await.unwrap_err();
+    assert!(
+        matches!(&error, NativePaymentError::Observation { cause, .. } if is_query_capacity_refusal(cause)),
+        "{error}"
+    );
+    assert_eq!(source.capacity_refusals.load(Ordering::Relaxed), 1);
+    assert_eq!(account.signs.load(Ordering::Relaxed), 0);
+    assert_eq!(account.dispatches.load(Ordering::Relaxed), 0);
+}
+
 fn operation_for_restart(
     request: NativePaymentRequest,
     transaction: SignedTransaction,
@@ -731,6 +832,7 @@ async fn native_payment_original_recovery_binds_intent_fees_and_stored_completio
         fail_read: AtomicBool::new(false),
         proof_reads: AtomicUsize::new(0),
         submitted: AtomicBool::new(false),
+        capacity_refusals: AtomicUsize::new(0),
     });
     let fresh = tempfile::tempdir().unwrap();
     let (operation, account) = operation_for_restart(

@@ -4677,6 +4677,17 @@ impl Iroha {
         let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(build_identity, torii_telemetry)
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
             .with_runtime_attestation_signer(config.common.key_pair.clone())
+            .with_runtime_checkpoints(
+                iroha_core::snapshot::checkpoints::SnapshotCheckpoints::from_config(
+                    &config.snapshot,
+                    config
+                        .snapshot
+                        .verification_public_key
+                        .clone()
+                        .unwrap_or_else(|| config.common.key_pair.public_key().clone()),
+                    snapshot_read_buffer_budget.clone(),
+                ),
+            )
             .with_vpn_relay_trust(vpn_relay_trust);
         let runtime_deps = runtime_deps
             .with_private_settlement_availability_signer(private_settlement_availability_signer)
@@ -11186,7 +11197,7 @@ mod tests {
                 "a node-local ZK setting must not move the consensus policy hash"
             );
             assert_eq!(
-                state.settlement().router.epsilon_bps,
+                state.settlement_snapshot().router.epsilon_bps,
                 iroha_config::parameters::defaults::settlement::router::EPSILON_BPS,
                 "a node-local settlement value must not replace the protocol router inputs",
             );

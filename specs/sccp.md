@@ -1243,9 +1243,11 @@ D17); the Parliament workstream owns the ballot items that the pass runs.
   Reflection, ballot casting openings (`s0`), certifications and fast-pause
   enactments. Every other deadline is a fixed offset from an anchor, computed
   when the anchor is applied, and never moves.
-- Converting the remaining height-based Parliament windows (invitation and
-  deliberation) to this clock is part of this work (§12, coordinated with the
-  Parliament workstream).
+- The anonymous Parliament family runs its qualification, invitation,
+  deliberation and public-finding windows and its enactment delay on this clock
+  (`specs/parliament_private_ballot_design.md` §8.1). Baseline Parliament
+  attempts keep their height windows until their governed retirement (ballot
+  spec §12.3).
 
 #### 4.7.2 Block-start pass
 
@@ -1258,16 +1260,29 @@ complete generation draw (32), all six possible SCCP conclusions (1 each) and
 one enactment (4): 1 + 32 + 6 + 4 = 43. It does not promise that every
 enactment fits a busy pass; the maximum bounds the work of one block start.
 
+- **Prelude** `EstablishCastingClock`: for every casting window opened in the
+  parent block, `closing_ms = t(B) + casting_window_ms` at `h_open + 1`
+  (ballot spec §3.4, §9). Mandatory and never deferred, so it always captures
+  the actual `t(h_open + 1)`; outside the budget and not positioned; at most
+  `K` per block.
 - **G0** pause-panel draw (§4.14.7), at the native pre-boundary pulse
   carrying height, one block before the committee boundary. Outside the budget;
   not due work.
-- **G1** Parliament sortition, at the exact pulse slot, in the request order of
-  the Parliament pipeline.
+- **G1** Parliament sortition: first the height-progress ticket, then each due
+  generation in `(slot, governance_attempt_id)` order, every body of a
+  generation in pipeline order inside its one item. A generation is due when B
+  carries its authenticated exact-slot pulse at `h = slot`, or when that pulse
+  was committed at `slot < h` and this generation has not consumed it: a
+  budget deferral or a restart delays consumption. One pulse may serve the
+  generations of several attempts, each consuming it once; no pulse is
+  produced late, and a slot that passed without its pulse is not due (ballot
+  spec §8.1, §9).
 - **G2** transitions with `due_ms ≤ t(B)`, in three segments:
   - **G2a**, ranks 0–3, in `(due_ms, kind_rank, item key)` order. Ranks 0–2
-    are Parliament lifecycle transitions (phase-advance intents, invitation
-    closes, public-finding conclusions), whose keys and costs the Parliament
-    workstream fixes. Rank 3 is the SCCP rank: the pause-panel conclusion,
+    are the Parliament lifecycle items of ballot spec §8.1: rank 0
+    qualification and phase transitions, rank 1 invitation closes and
+    election exhaustion, rank 2 public-finding conclusions; that section fixes
+    their keys and costs. Rank 3 is the SCCP rank: the pause-panel conclusion,
     and the end of a reconciliation window (§4.10). Their common item key is
     `(network tag, SCCP kind, subkey)`: pause conclusions have kind 0 and
     subkey primary 0 or backup 1; reconciliation ends have kind 1 and subkey
@@ -1323,9 +1338,9 @@ among the items processed in that block's pass, in processing order. Ballot
 openings record theirs in `s0`, and fast-pause enactments record theirs in
 `enacted_at`; the lift rule compares them (§4.14.7). Because G2c precedes G3, a
 ballot that opens in the block of a fast-pause enactment always has the
-smaller position. S0, G0 and G4 are not positioned.
-`governance_due_applied` is true iff at least one G1, G2 or G3 item was
-processed.
+smaller position. S0, the prelude, G0 and G4 are not positioned.
+`governance_due_applied` is true iff the prelude established a casting clock or
+at least one G1, G2 or G3 item was processed.
 
 #### 4.7.3 Due predicate
 
@@ -1337,10 +1352,13 @@ sccp_due(parent, t) := SCCP exists
                      ∧ t ≥ current.start_timestamp_ms + committee_heartbeat_ms   // G2 BEAT would fire
 
 governance_due(parent, h, t) :=
-     ∃ unconsumed Parliament pulse request with pulse_height = h          // the exact slot only
+     ∃ casting window opened at h - 1                                    // prelude EstablishCastingClock
+  ∨ ∃ Parliament generation awaiting the pulse of slot s, with s = h      // B must carry the exact-slot pulse (K4)
+         or s < h and that pulse committed and not consumed by it          // a deferred or restarted draw
+  ∨ ∃ height-progress ticket for h                                       // ballot spec §9
   ∨ ∃ G2a or G2b item with due_ms ≤ t                                   // deadlines, pending early-close flags, reconciliation ends, ballot closures
   ∨ ∃ ballot opening with opening_at ≤ t while fewer than K casting windows are open   // G2c
-  ∨ ∃ certified attempt with enact_not_before_ms ≤ t                     // G3
+  ∨ ∃ certified attempt with production authority and enact_not_before_ms ≤ t   // G3; an anonymous candidate certificate is terminal
   ∨ ∃ fast-pause round with certify_due                                  // §4.14.7
   ∨ ∃ item carried over by the block-start budget
 ```
@@ -1348,19 +1366,29 @@ governance_due(parent, h, t) :=
 - **Admission** evaluates the predicate on the committed tip, with `h = tip +
   1` and `t = c + 1`, where `c` is the keepalive's `creation_time_ms`.
   Execution validity is K2.
-- A pulse request is due only at its exact slot. A slot that passes without its
-  pulse leaves the request waiting for that exact pulse
-  (`specs/parliament_private_ballot_design.md` §9); it is not due work, so a
-  missing beacon never manufactures blocks. `TODO:` (WP-S3, with the
-  Parliament availability-isolation step, ballot spec §12.2): the due leg for a
-  late pulse; under the progress invariant below it may make a request due only
-  in a pass that consumes it. Fast-pause lapses and panel draws are not due,
-  because they act by time alone or wait for a boundary pulse.
-- **Progress invariant** (normative for every present and future term). An item
-  may appear in `governance_due` only if the block-start pass that finds it due
-  consumes or terminalizes it. An item that waits for external material is not
-  due. So every keepalive block strictly shrinks the due set or creates a
-  generation, and an idle chain makes at most one block per due item.
+- For admission, a generation awaiting the pulse of slot `h` counts as
+  potential due work; K4 additionally requires the candidate block to carry
+  that authenticated pulse. Execution draws it when B carries the pulse at `h
+  = slot`, or later while the committed pulse stays unconsumed by that
+  generation. A slot that passes without its pulse leaves the generation
+  waiting for that exact pulse (`specs/parliament_private_ballot_design.md`
+  §9); it is not due work, so a missing beacon never manufactures blocks.
+  Fast-pause lapses and panel draws are not due, because they act by time
+  alone or wait for a boundary pulse.
+- **Progress invariant** (normative for every present and future term). Every
+  item that `governance_due` reports is executable: the pass that finds it due
+  consumes or terminalizes it when the budget reaches it, and an item that
+  waits for external material is not due. A pass processes its first item
+  unconditionally. Pause-panel certification is preparatory and may repeat
+  after a G3 budget deferral (§4.7.2). Every governance-justified keepalive
+  block nevertheless establishes a casting clock, consumes or terminalizes a
+  non-preparatory occurrence, enacts or terminalizes a fast-pause round, or
+  consumes a height-progress ticket whose successor strictly decreases the
+  remaining height to the nearest admitted slot (ballot spec §9). An idle
+  chain therefore makes at most one governance block per occurrence (each
+  phase, generation, closure, opening, casting clock and enactment counts
+  separately) plus one per height to that slot; SCCP-only keepalives obey
+  K2's separate heartbeat and degraded-run bounds.
 
 #### 4.7.4 `Keepalive` and block rules
 

@@ -646,6 +646,59 @@ impl GoldilocksFp4V1 {
         })
     }
 }
+/// Exact sum of base-field values times extension coefficients, reduced once.
+///
+/// Each canonical product is below `2^128` and is accumulated as two 64-bit limbs per extension
+/// coefficient, so no partial sum can overflow before `2^64` terms. [`Self::finish`] reduces the
+/// limbs exactly, giving the same element as folding `sum.add(alpha.mul_base(value))` term by
+/// term. The order of terms does not matter, and no input-dependent branch is taken.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct GoldilocksFp4DotV1 {
+    low: [u128; GOLDILOCKS_FP4_DEGREE_V1],
+    high: [u128; GOLDILOCKS_FP4_DEGREE_V1],
+}
+impl GoldilocksFp4DotV1 {
+    /// Add `coefficient * value`.
+    #[inline]
+    pub(crate) fn add_product(&mut self, coefficient: GoldilocksFp4V1, value: GoldilocksFieldV1) {
+        debug_assert!(value.0 < GOLDILOCKS_MODULUS_V1);
+        let value = u128::from(value.0);
+        for ((low, high), part) in self
+            .low
+            .iter_mut()
+            .zip(self.high.iter_mut())
+            .zip(coefficient.coefficients)
+        {
+            debug_assert!(part.0 < GOLDILOCKS_MODULUS_V1);
+            let product = value * u128::from(part.0);
+            *low += product & u128::from(u64::MAX);
+            *high += product >> 64;
+        }
+    }
+    /// Add `coefficients[i] * values[i]` for every index both slices hold.
+    #[inline]
+    pub(crate) fn add_products(
+        &mut self,
+        coefficients: &[GoldilocksFp4V1],
+        values: &[GoldilocksFieldV1],
+    ) {
+        for (coefficient, value) in coefficients.iter().zip(values) {
+            self.add_product(*coefficient, *value);
+        }
+    }
+    /// Reduce the accumulated sum: `high * 2^64 + low`, where `2^64 = 2^32 - 1 (mod p)`.
+    pub(crate) fn finish(self) -> GoldilocksFp4V1 {
+        let mut coefficients = [GoldilocksFieldV1::ZERO; GOLDILOCKS_FP4_DEGREE_V1];
+        for (target, (low, high)) in coefficients
+            .iter_mut()
+            .zip(self.low.into_iter().zip(self.high))
+        {
+            *target = GoldilocksFieldV1::reduce(low)
+                .add(GoldilocksFieldV1::reduce(high).mul(GoldilocksFieldV1(GOLDILOCKS_EPSILON_V1)));
+        }
+        GoldilocksFp4V1 { coefficients }
+    }
+}
 fn goldilocks_fp2_mul_v1(
     left: [GoldilocksFieldV1; 2],
     right: [GoldilocksFieldV1; 2],
@@ -922,7 +975,8 @@ fn goldilocks_fft_stage_with_grain_v1<
     }
 }
 
-/// In-place radix-two FFT.
+/// In-place radix-two FFT with nested stage parallelism; the test oracle for batch kernels.
+#[cfg(test)]
 pub fn goldilocks_fft_v1(
     values: &mut [GoldilocksFieldV1],
     root: GoldilocksFieldV1,
@@ -1712,6 +1766,198 @@ impl Drop for ZeroizingGoldilocksValuesV1 {
         for coefficient in &mut self.0 {
             coefficient.zeroize_v1();
         }
+    }
+}
+/// Exact public tables for interpolating native columns, one column per worker.
+///
+/// Batch provers that spread many columns across workers transform each column on one thread.
+/// A shared table of inverse-root powers replaces the kernel's running twiddle product with table
+/// reads. Every result equals [`masked_trace_coefficients_with_mask_v1`] exactly.
+pub(crate) struct GoldilocksColumnInterpolatorV1 {
+    base_root: GoldilocksFieldV1,
+    inverse_powers: GoldilocksFftPowersV1,
+    base_size: usize,
+}
+impl GoldilocksColumnInterpolatorV1 {
+    /// Tables for the native subgroup of `2^base_log_size` rows.
+    pub(crate) fn new_v1(base_log_size: u8) -> Result<Self, TransparentStarkErrorV1> {
+        let base_size = 1_usize
+            .checked_shl(u32::from(base_log_size))
+            .ok_or(TransparentStarkErrorV1::InvalidDomain)?;
+        let base_root = goldilocks_primitive_root_v1(base_log_size)?;
+        let inverse_powers = GoldilocksFftPowersV1::new_v1(
+            base_size,
+            base_root
+                .inv()
+                .ok_or(TransparentStarkErrorV1::DivisionByZero)?,
+            GoldilocksFftPowersV1::required_payload_bytes_v1(base_size)?,
+        )?;
+        Ok(Self {
+            base_root,
+            inverse_powers,
+            base_size,
+        })
+    }
+
+    /// `T(X) + mask(X) * (X^n - 1)` for the column's interpolant `T`; an empty mask adds nothing.
+    /// The witness-interpolating vector stays guarded until the caller releases it.
+    fn coefficients_v1(
+        &self,
+        base_column: &[GoldilocksFieldV1],
+        mask: &[GoldilocksFieldV1],
+    ) -> Result<ZeroizingGoldilocksValuesV1, TransparentStarkErrorV1> {
+        if mask
+            .iter()
+            .any(|coefficient| coefficient.0 >= GOLDILOCKS_MODULUS_V1)
+        {
+            return Err(TransparentStarkErrorV1::NonCanonicalField);
+        }
+        let coefficient_count = self
+            .base_size
+            .checked_add(mask.len())
+            .ok_or(TransparentStarkErrorV1::InvalidDomain)?;
+        if base_column.len() != self.base_size {
+            return Err(TransparentStarkErrorV1::InvalidDomain);
+        }
+        let mut coefficients = ZeroizingGoldilocksValuesV1(Vec::new());
+        coefficients
+            .try_reserve_exact(coefficient_count)
+            .map_err(|_| TransparentStarkErrorV1::AllocationFailure)?;
+        coefficients.extend_from_slice(base_column);
+        goldilocks_ifft_coarse_with_powers_v1(
+            &mut coefficients,
+            self.base_root,
+            &self.inverse_powers,
+        )?;
+        coefficients.resize(coefficient_count, GoldilocksFieldV1::ZERO);
+        for (degree, random) in mask.iter().copied().enumerate() {
+            coefficients[degree] = coefficients[degree].sub(random);
+            coefficients[self.base_size + degree] =
+                coefficients[self.base_size + degree].add(random);
+        }
+        Ok(coefficients)
+    }
+
+    /// Exactly [`masked_trace_coefficients_with_mask_v1`], computed on the calling worker.
+    pub(crate) fn masked_coefficients_v1(
+        &self,
+        base_column: &[GoldilocksFieldV1],
+        mask: &[GoldilocksFieldV1],
+    ) -> Result<Vec<GoldilocksFieldV1>, TransparentStarkErrorV1> {
+        if mask.is_empty() {
+            return Err(TransparentStarkErrorV1::InvalidDomain);
+        }
+        Ok(self.coefficients_v1(base_column, mask)?.into_inner())
+    }
+}
+/// Exact public tables for canonical-coset LDEs of native columns, one column per worker.
+///
+/// Root and coset-shift power tables replace the kernels' running products. Every masked result
+/// equals [`masked_trace_lde_column_with_mask_v1`] exactly, and every public result equals the
+/// coset evaluation of the column's interpolant.
+pub(crate) struct GoldilocksColumnLdeTablesV1 {
+    interpolator: GoldilocksColumnInterpolatorV1,
+    lde_root: GoldilocksFieldV1,
+    lde_powers: GoldilocksFftPowersV1,
+    /// `g^0, ..., g^(n + max_mask_len - 1)` for the canonical coset generator `g`.
+    shift_powers: Vec<GoldilocksFieldV1>,
+    lde_size: usize,
+}
+impl GoldilocksColumnLdeTablesV1 {
+    /// Tables for `2^base_log_size` native rows, masks of at most `max_mask_len` coefficients,
+    /// and the canonical generator coset of `2^lde_log_size` points.
+    pub(crate) fn new_v1(
+        base_log_size: u8,
+        lde_log_size: u8,
+        max_mask_len: usize,
+    ) -> Result<Self, TransparentStarkErrorV1> {
+        let base_size = 1_usize
+            .checked_shl(u32::from(base_log_size))
+            .ok_or(TransparentStarkErrorV1::InvalidDomain)?;
+        let lde_size = 1_usize
+            .checked_shl(u32::from(lde_log_size))
+            .ok_or(TransparentStarkErrorV1::InvalidDomain)?;
+        let coefficient_limit = base_size
+            .checked_add(max_mask_len)
+            .ok_or(TransparentStarkErrorV1::InvalidDomain)?;
+        if lde_size <= base_size || coefficient_limit > lde_size {
+            return Err(TransparentStarkErrorV1::InvalidDomain);
+        }
+        let interpolator = GoldilocksColumnInterpolatorV1::new_v1(base_log_size)?;
+        let lde_root = goldilocks_primitive_root_v1(lde_log_size)?;
+        let shift = GoldilocksFieldV1(GOLDILOCKS_GENERATOR_V1);
+        if shift.pow(base_size as u128) == GoldilocksFieldV1::ONE
+            || shift.pow(lde_size as u128) == GoldilocksFieldV1::ONE
+        {
+            return Err(TransparentStarkErrorV1::InvalidDomain);
+        }
+        let lde_powers = GoldilocksFftPowersV1::new_v1(
+            lde_size,
+            lde_root,
+            GoldilocksFftPowersV1::required_payload_bytes_v1(lde_size)?,
+        )?;
+        let mut shift_powers = Vec::new();
+        shift_powers
+            .try_reserve_exact(coefficient_limit)
+            .map_err(|_| TransparentStarkErrorV1::AllocationFailure)?;
+        let mut power = GoldilocksFieldV1::ONE;
+        for _ in 0..coefficient_limit {
+            shift_powers.push(power);
+            power = power.mul(shift);
+        }
+        Ok(Self {
+            interpolator,
+            lde_root,
+            lde_powers,
+            shift_powers,
+            lde_size,
+        })
+    }
+
+    /// Exactly [`masked_trace_lde_column_with_mask_v1`], computed on the calling worker.
+    pub(crate) fn masked_lde_column_v1(
+        &self,
+        base_column: &[GoldilocksFieldV1],
+        mask: &[GoldilocksFieldV1],
+    ) -> Result<Vec<GoldilocksFieldV1>, TransparentStarkErrorV1> {
+        if mask.is_empty() {
+            return Err(TransparentStarkErrorV1::InvalidDomain);
+        }
+        let coefficients = self.interpolator.coefficients_v1(base_column, mask)?;
+        self.coset_evaluations_v1(&coefficients)
+    }
+
+    /// Unmasked canonical-coset LDE of one public column, computed on the calling worker.
+    pub(crate) fn public_lde_column_v1(
+        &self,
+        base_column: &[GoldilocksFieldV1],
+    ) -> Result<Vec<GoldilocksFieldV1>, TransparentStarkErrorV1> {
+        let coefficients = self.interpolator.coefficients_v1(base_column, &[])?;
+        self.coset_evaluations_v1(&coefficients)
+    }
+
+    fn coset_evaluations_v1(
+        &self,
+        coefficients: &[GoldilocksFieldV1],
+    ) -> Result<Vec<GoldilocksFieldV1>, TransparentStarkErrorV1> {
+        if coefficients.len() > self.shift_powers.len() {
+            return Err(TransparentStarkErrorV1::InvalidDomain);
+        }
+        // The scaled coefficients still determine the witness polynomial; keep them guarded
+        // until the transform has replaced them with committed coset values.
+        let mut evaluations = ZeroizingGoldilocksValuesV1(Vec::new());
+        evaluations
+            .try_reserve_exact(self.lde_size)
+            .map_err(|_| TransparentStarkErrorV1::AllocationFailure)?;
+        evaluations.extend(
+            coefficients
+                .iter()
+                .zip(&self.shift_powers)
+                .map(|(coefficient, shift)| coefficient.mul(*shift)),
+        );
+        evaluations.resize(self.lde_size, GoldilocksFieldV1::ZERO);
+        goldilocks_fft_coarse_with_powers_v1(&mut evaluations, self.lde_root, &self.lde_powers)?;
+        Ok(evaluations.into_inner())
     }
 }
 /// Replayable zero-knowledge mask for one streamed trace column.
@@ -2695,6 +2941,64 @@ mod tests {
             PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
             b"aggregate-test-profile-v1",
         );
+    #[test]
+    fn fp4_dot_matches_the_term_by_term_fold_including_maximal_limbs() {
+        fn fold(coefficients: &[GoldilocksFp4V1], values: &[GoldilocksFieldV1]) -> GoldilocksFp4V1 {
+            coefficients
+                .iter()
+                .zip(values)
+                .fold(GoldilocksFp4V1::ZERO, |sum, (coefficient, value)| {
+                    sum.add(coefficient.mul_base(*value))
+                })
+        }
+        let maximum = GoldilocksFieldV1(GOLDILOCKS_MODULUS_V1 - 1);
+        let mut random = 0x5eed_d07d_0d07_0001_u64;
+        let mut next = || {
+            random = random
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            GoldilocksFieldV1(random % GOLDILOCKS_MODULUS_V1)
+        };
+        for terms in [0_usize, 1, 2, 3, 151, 1_526, 5_000] {
+            let mut coefficients = Vec::with_capacity(terms);
+            let mut values = Vec::with_capacity(terms);
+            for _ in 0..terms {
+                coefficients.push(
+                    GoldilocksFp4V1::from_coefficients([next(), next(), next(), next()])
+                        .expect("canonical coefficients"),
+                );
+                values.push(next());
+            }
+            let mut dot = GoldilocksFp4DotV1::default();
+            dot.add_products(&coefficients, &values);
+            assert_eq!(
+                dot.finish(),
+                fold(&coefficients, &values),
+                "{terms} random terms"
+            );
+            // Every product is (p - 1)^2, the largest possible limb pair.
+            let coefficients = vec![
+                GoldilocksFp4V1::from_coefficients([maximum; 4])
+                    .expect("canonical maximum");
+                terms
+            ];
+            let values = vec![maximum; terms];
+            let mut dot = GoldilocksFp4DotV1::default();
+            dot.add_products(&coefficients, &values);
+            let expected = fold(&coefficients, &values);
+            assert_eq!(dot.finish(), expected, "{terms} maximal terms");
+            assert!(expected.is_canonical());
+        }
+        // Slices of unequal length contribute only their common prefix, like `zip`.
+        let coefficients = [GoldilocksFp4V1::ONE; 3];
+        let values = [GoldilocksFieldV1(5), GoldilocksFieldV1(7)];
+        let mut dot = GoldilocksFp4DotV1::default();
+        dot.add_products(&coefficients, &values);
+        assert_eq!(
+            dot.finish(),
+            GoldilocksFp4V1::from_base(GoldilocksFieldV1(12))
+        );
+    }
     #[test]
     fn canonical_private_inverse_or_zero_matches_independent_integer_arithmetic() {
         fn reference(value: u64) -> u64 {
@@ -3717,6 +4021,93 @@ mod tests {
             ),
             Err(TransparentStarkErrorV1::NonCanonicalField)
         );
+    }
+    #[test]
+    fn single_worker_column_tables_equal_the_inner_parallel_kernels() {
+        // (native, LDE, mask) geometries; 11 -> 14 reaches the windowed butterfly stages.
+        for (base_log, lde_log, mask_len) in [(3_u8, 6_u8, 5_usize), (4, 7, 8), (11, 14, 976)] {
+            let mut rng = ChaCha12Rng::from_seed([base_log ^ 0x5A; 32]);
+            let base_size = 1_usize << base_log;
+            let tables = GoldilocksColumnLdeTablesV1::new_v1(base_log, lde_log, mask_len)
+                .expect("column LDE tables");
+            let interpolator =
+                GoldilocksColumnInterpolatorV1::new_v1(base_log).expect("column interpolator");
+            for _ in 0..2 {
+                let column = (0..base_size)
+                    .map(|_| random_goldilocks_v1(&mut rng).expect("column value"))
+                    .collect::<Vec<_>>();
+                let mask = sample_trace_mask_v1(mask_len - 1, &mut rng).expect("column mask");
+                let mask = mask.coefficients();
+                assert_eq!(
+                    interpolator.masked_coefficients_v1(&column, mask),
+                    masked_trace_coefficients_with_mask_v1(&column, base_log, mask),
+                    "masked coefficients for 2^{base_log}"
+                );
+                assert_eq!(
+                    tables.masked_lde_column_v1(&column, mask),
+                    masked_trace_lde_column_with_mask_v1(&column, base_log, lde_log, mask),
+                    "masked LDE for 2^{base_log} -> 2^{lde_log}"
+                );
+                // The public LDE is the plain coset evaluation of the column's interpolant.
+                let mut interpolant = column.clone();
+                goldilocks_ifft_v1(
+                    &mut interpolant,
+                    goldilocks_primitive_root_v1(base_log).expect("native root"),
+                )
+                .expect("reference interpolation");
+                assert_eq!(
+                    tables.public_lde_column_v1(&column),
+                    goldilocks_evaluate_coset_v1(
+                        &interpolant,
+                        1 << lde_log,
+                        goldilocks_primitive_root_v1(lde_log).expect("LDE root"),
+                        GoldilocksFieldV1(GOLDILOCKS_GENERATOR_V1),
+                    ),
+                    "public LDE for 2^{base_log} -> 2^{lde_log}"
+                );
+            }
+        }
+
+        let tables = GoldilocksColumnLdeTablesV1::new_v1(4, 7, 8).expect("small tables");
+        let interpolator = GoldilocksColumnInterpolatorV1::new_v1(4).expect("small interpolator");
+        let base = (0..16).map(GoldilocksFieldV1).collect::<Vec<_>>();
+        let mask = [GoldilocksFieldV1::ONE; 8];
+        for result in [
+            tables.masked_lde_column_v1(&base, &[]),
+            tables.masked_lde_column_v1(&base[..15], &mask),
+            tables.masked_lde_column_v1(&base, &[GoldilocksFieldV1::ONE; 9]),
+            tables.public_lde_column_v1(&base[..15]),
+            interpolator.masked_coefficients_v1(&base, &[]),
+            interpolator.masked_coefficients_v1(&base[..15], &mask),
+        ] {
+            assert_eq!(result, Err(TransparentStarkErrorV1::InvalidDomain));
+        }
+        let noncanonical = [GoldilocksFieldV1(GOLDILOCKS_MODULUS_V1)];
+        assert_eq!(
+            tables.masked_lde_column_v1(&base, &noncanonical),
+            Err(TransparentStarkErrorV1::NonCanonicalField)
+        );
+        assert_eq!(
+            interpolator.masked_coefficients_v1(&base, &noncanonical),
+            Err(TransparentStarkErrorV1::NonCanonicalField)
+        );
+        let mut noncanonical_column = base.clone();
+        noncanonical_column[3] = GoldilocksFieldV1(GOLDILOCKS_MODULUS_V1);
+        assert_eq!(
+            tables.public_lde_column_v1(&noncanonical_column),
+            Err(TransparentStarkErrorV1::NonCanonicalField)
+        );
+        for (base_log, lde_log, mask_len, expected) in [
+            (4, 4, 0, TransparentStarkErrorV1::InvalidDomain),
+            (4, 7, 113, TransparentStarkErrorV1::InvalidDomain),
+            (33, 34, 0, TransparentStarkErrorV1::DomainTooLarge),
+        ] {
+            assert_eq!(
+                GoldilocksColumnLdeTablesV1::new_v1(base_log, lde_log, mask_len).err(),
+                Some(expected),
+                "geometry 2^{base_log} -> 2^{lde_log} with {mask_len} mask coefficients"
+            );
+        }
     }
     #[test]
     fn merkle_paths_bind_domain_index_leaf_order_and_depth() {

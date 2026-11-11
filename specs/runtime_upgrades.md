@@ -1,6 +1,6 @@
 # Runtime change sets — as built
 
-Status: as built, 2026-10-31. [`live_runtime_upgrades.md`](live_runtime_upgrades.md) is the
+Status: as built, 2026-11-11. [`live_runtime_upgrades.md`](live_runtime_upgrades.md) is the
 design; this document records the implemented surface of its change-set lifecycle (§6) for the
 universal root. The ABI-v1 manifest records, their `ProposeRuntimeUpgrade`,
 `ActivateRuntimeUpgrade` and `CancelRuntimeUpgrade` instructions, the
@@ -119,8 +119,16 @@ World fields after it (design §4, "Add an instruction", "Add storage"):
   The independent `iroha.runtime.lifecycle.v1` addition is the kernel's lifecycle State: the
   `world.runtime_obligations`, `world.runtime_migrations` and `world.runtime_boundaries` tables,
   the two `iroha.runtime.obligation.*.v1` instructions and the two `iroha.runtime.boundary.*.v1`
-  instructions (Obligations, Migrations and Checkpoint records, below). Its dependencies are exactly the baseline, and it is declared last, so no ordered
-  addition declares its tables.
+  instructions (Obligations, Migrations and Checkpoint records, below). It is declared last, so
+  no ordered addition declares its tables. An implementation commits its services profile and
+  the closure it may touch, and an interface the events it may emit, so the catalog compiles
+  the addition once per predecessor family it supports (`runtime::catalog::kernel_lifecycle`):
+  the baseline, Time, Ironwood and Ironwood with Time. Each composition keeps the addition's
+  tables and wire IDs and takes the family's services profile, the events of its native bundle
+  and that bundle's declared closure; the baseline family's composition is the addition as
+  declared. The draft picks the composition by the services profile the root selects, so a root
+  activates the lifecycle State from the selection it executes, Taira after its Time and
+  Ironwood activation; a root whose services profile no family uses gets no draft.
 - **Definitions.** Each addition publishes one native implementation, one interface per wire ID it
   adds and one storage definition per field; a cell's definition carries its initial bytes. Like
   the baseline bundle it declares a conservative superset of dependencies, every storage definition
@@ -200,7 +208,11 @@ bounds and the containment to name this network and the universal root.
   (`iroha.instruction.v1::governance::*`), parameter (`iroha.set_parameter`) or lifecycle
   (`iroha.runtime.*`) wire ID. From the next height it is `AdmissionClosed` (or `CompletionOnly`),
   unless already restricted at least as much. The `ContainmentRecordV1` in
-  `world.runtime_containments` records each restriction it replaced (`Contained`).
+  `world.runtime_containments` records each restriction it replaced (`Contained`). A root that
+  has activated the kernel's lifecycle State also contains a running migration (its record is
+  `Running`), only by closing its admission: its stages stop while its cursor and write barrier
+  stay, and expiry or a lift resumes it. Containment never cuts a migration over; any other
+  root refuses a migration target as the baseline does.
 - **Ratification case.** Each containment opens a case that ordinary governance closes with change
   sets. When Parliament admits or approves a change set that addresses a contained definition (it
   activates, deactivates, restricts or lifts it, or binds or unbinds a wire ID behind it), the
@@ -381,7 +393,10 @@ are refused as before.
   retirement outside a migration: it replaces storage definitions over the same fields and moves
   no row.
 - **Drafts.** `ReleaseCatalog::migration_step` (`runtime::migration::draft_step`) drafts the
-  change set of each step from the committed selection.
+  change set of each step from the committed selection; an operator has the node draft it with
+  `POST /v1/runtime/migrations/draft` (`iroha ops runtime migration draft --migration <module>
+  --step start|cut-over|retire --effective-height <height> --qualification <hex>`), and endorses,
+  proposes and attests it like any change set.
 
 A storage definition names the definition a release founded or added the field with. A field
 whose definition an identity cutover replaced is migrated by a migration compiled against the
@@ -431,6 +446,40 @@ the highest boundary in force. At startup a snapshot generation below the node's
 a restore candidate, a configured `[snapshot.upgrade_checkpoint]` must name the block of a
 ratified anchor, and a State that carries a boundary gives it to Kura when the configuration
 names none.
+
+- **Operations.** `POST /v1/runtime/boundaries/anchor/attest` has a node derive the adoption
+  record from its own store and return it with its statement; `POST
+  /v1/runtime/boundaries/floor/attest` with `{ height }` has it state the floor at a checkpoint
+  it holds from its own history (the block and committed time it stores there) and return it
+  with its statement. The validator key never leaves the node. `iroha ops runtime boundary
+  anchor-statement` and `floor-statement --height <h>` print a node's statement;
+  `ratify-anchor --statement <file>...` and `raise-floor --statement <file>...` check that every
+  statement names one record and verifies for it, from distinct validators, and submit the
+  instruction. `GET /v1/runtime/boundaries` (`iroha ops runtime boundary list`) shows the
+  policy, anchor, floors and history boundary, and the upgrade checkpoint and checkpoints the
+  node holds.
+
+### Checkpoint production and retention
+
+A checkpoint at height `h` is the published State after block `h`, where `h` is the first block
+committed in a cadence interval of the committed policy (`snapshot::checkpoint_store`). The
+snapshot maker looks at the tip every half second: when the tip is at a checkpoint height it
+has not kept, it writes the tip, and when the generation it published is at that height it
+keeps the generation's five canonical artifacts under `checkpoints/<height>-<committed_ms>` of
+the snapshot store as hard links, so keeping copies no bytes and the rolling GC never removes
+them. It then keeps what the policy retains (the floor's own checkpoint, the newest, every one
+younger than `retain_all_ms` and one per `retain_spacing_ms` above the floor) and every floor
+waiting out its notice, and removes the other checkpoints. A root without a committed policy
+produces and keeps none. A node holds a checkpoint at `h` when an entry of its checkpoint store
+at `h` has a manifest that verifies under its snapshot key and names its chain and network, and
+five canonical artifacts whose payload matches the signed digest
+(`snapshot::checkpoints::SnapshotCheckpoints`); only then does it sign a floor at `h`.
+
+Production does not hold back block publication: when the next block publishes before the
+capture of a checkpoint height completes, the capture is overtaken and that node holds no
+checkpoint at that height, and a floor needs every validator to hold one. TODO(§7.3): capture a
+checkpoint height's State from a view pinned at its publication, so a chain whose blocks commit
+faster than a capture still yields every checkpoint.
 
 The startup re-validation of the signed genesis execution policy stays after an anchor is
 ratified. It is the only guard on the validity inputs a node still takes from its
@@ -500,6 +549,10 @@ Global root or qualify their independent read/write boundary.
 | `POST /v1/runtime/upgrades/attest/{id}` | The node signs its support with its validator key and drafts the `AttestRuntimeSupportV1` instruction; refused unless its release executes the successor and its key is a committee member |
 | `GET /v1/runtime/release` | Build, release digest, and whether the release executes the committed selection and each scheduled successor, naming the first definition it lacks |
 | `GET /v1/runtime/containments` | Every containment record by authorization height |
+| `POST /v1/runtime/migrations/draft` | Body: `{ migration, step, effective_height, qualification_hex }`, `step` one of `start`, `cut_over`, `retire`. Drafts, from the node's release catalog and the committed selection, the change set of that step of a migration the release compiles, with its identity as `id_hex` |
+| `GET /v1/runtime/boundaries` | Whether the root activated the lifecycle State, its checkpoint policy, ratified adoption anchor and startup floors, the history boundary at the committed tip's time, and the upgrade checkpoint and checkpoints this node holds |
+| `POST /v1/runtime/boundaries/anchor/attest` | The node derives the adoption record from its own store and returns it with its statement, signed with its validator key; refused when the node records no upgrade checkpoint, is not a committee member or its history does not certify the record |
+| `POST /v1/runtime/boundaries/floor/attest` | Body: `{ height }`. The node states the floor at that height from its own history and returns it with its statement; refused unless it holds a checkpoint at exactly that height and is a committee member |
 
 The list, propose and cancel routes back the `iroha.runtime.upgrades.*` MCP tools, beside the
 `iroha.runtime.abi.*` and `iroha.runtime.metrics` tools.
@@ -532,6 +585,13 @@ mounted, and fail on a missing route. They do not verify a node's selection.
 - `iroha ops runtime upgrade attest --id <hex>` has the node sign its support and submits the
   drafted `AttestRuntimeSupportV1`; the operator never handles the validator key.
 - `iroha ops runtime release` shows the node's release support.
+- `iroha ops runtime migration draft --migration <module> --step start|cut-over|retire
+  --effective-height <height> --qualification <hex>` prints the change set the node drafts for
+  one step of a migration of its release.
+- `iroha ops runtime boundary list|anchor-statement|floor-statement --height <h>` read the
+  boundaries and print a node's signed statement; `iroha ops runtime boundary ratify-anchor
+  --statement <file>...` and `raise-floor --statement <file>...` submit the instruction that
+  relays every validator's statement.
 
 For these operator reads, pass `--operator-private-key-file <absolute-runtime-key>`
 and `--config <runtime-client.toml>` before `ops`. Keep both inputs outside source
@@ -636,19 +696,18 @@ Tracked in [`live_runtime_upgrades.md`](live_runtime_upgrades.md) §14 and `road
   participations and in-flight game-unit exports with a captured closure; a kernel call for
   contracts, which needs a new host profile; pending consent and scheduled triggers, with the
   deferred-consent addition; narrower authenticated dynamic-call manifests.
-- **Migrations:** the operator route and CLI that draft a migration's steps; containment of a
-  migration by the emergency panel, whose targets the frozen baseline limits to interfaces and
-  implementations; storage capabilities and generic carriers.
-- **Checkpoints:** production of a checkpoint at every height the committed policy names and
-  retention of the generations it keeps, in the snapshot maker; starting a node from a
-  transferred checkpoint without the block bodies below it (Kura base offsets and a peer
-  transfer); a durable record of the highest boundary a store has seen, so a node needs no
-  configured checkpoint before it has State.
-- **Anchor and floor operations:** the operator routes and CLI that have a node derive and sign
-  a record and that draft the instruction relaying the collected statements. Taira's anchor is
-  ratified once its validators run this release, a change set activates
-  `iroha.runtime.lifecycle.v1`, each validator signs the record against its own store, and any
-  account relays the statements.
+- **Migrations:** storage capabilities and generic carriers.
+- **Checkpoints:** exact capture of every checkpoint height on a chain whose blocks commit
+  faster than a capture (a view-pinned capture); starting a node from a transferred checkpoint
+  without the block bodies below it (Kura base offsets and a peer transfer); a durable record of
+  the highest boundary a store has seen, so a node needs no configured checkpoint before it has
+  State; the deletion guard and the retirement rehearsal.
+- **Taira's anchor:** Taira's validators run a release with these records, a change set
+  activates `iroha.runtime.lifecycle.v1` (its Ironwood with Time composition, after Taira's Time
+  and Ironwood activation), each validator signs the record against its own store, and any
+  account relays the statements. Taira has no proposer for a governed change set yet
+  (`runtime/taira_time_ironwood_v1.md`, "Why a certificate"), so the activation waits for
+  Parliament's integration or another owner decision.
 - **Commitment and history:** complete-State commitments, which first need the node-configured
   policy cells (G1-D3, ZK delivery F.4) in committed State and a decision on how the pinned
   history meets the new root; deleting the startup re-validation of the signed genesis policy

@@ -7,58 +7,100 @@
 //! 64-byte roster root, a binding jury contributes the closure record of its one ballot,
 //! and there is no ballot retry, timed-OVN phase or TLE session.
 //!
-//! This module is the attempt's spine:
+//! The attempt runs on the governance clock of design §8.1: transactions record facts and
+//! intents, and the positioned block-start pass applies every transition at its anchor.
 //!
 //! - **Purpose.** The attempt records why it may exist, from creation, and the purpose
 //!   travels into its certificate. A candidate-testing attempt ends at its certificate:
 //!   every execution outcome requires production authority, so a candidate certificate is
 //!   never enacted, superseded or failed as a production effect.
 //! - **Policy.** The policy snapshot frozen at admission is the only policy the attempt
-//!   reads. The risk tier is locked before the first binding jury is sealed, and both
-//!   ballot policies derive from the snapshot and the locked tier.
+//!   reads. The initial sortition registration locks the risk tier, and both ballot
+//!   policies derive from the snapshot and the locked tier.
+//! - **Elections** ([`election`]). Sortition generations are registered by transactions,
+//!   drawn by the pass from the exact-slot pulse, answered by the invited accounts and
+//!   closed by the pass into a sealed body or `NoRoster`; retries and the proposal-wide
+//!   redraw budget bound them.
+//! - **Deliberation** ([`deliberation`]). Qualification and every phase have one
+//!   millisecond deadline each; authorized intents only shorten them. A public body is
+//!   decided by its endorsements and absences and concluded by the pass.
 //! - **Results.** Bodies are sealed in any order and produce results in pipeline order. A
 //!   public body's quorum-endorsed finding and a binding jury's approved closure advance
 //!   the attempt; any other closure outcome rejects it. A narrow Policy Jury approval
-//!   requires the approval of a Confirmation Jury before certification.
+//!   registers the Confirmation Jury's generation atomically, or ends the attempt when no
+//!   fresh capacity or redraw unit remains.
 //! - **Certificate and execution.** The certificate is built from the recorded results
 //!   alone and checked as a whole. Enactment is due on the governance clock once it
 //!   reaches the certifying closure's time plus the frozen enactment delay.
+//! - **Schedule** ([`schedule`]). The attempt reports its live occurrences with their due
+//!   times, keys and costs.
+//!
+//! - **Credentials** ([`credentials`]). A binding seat is accepted only with its verified
+//!   credential, and a binding jury seals exactly its seated credentials, built before the
+//!   close changes anything; the planner trial-applies due items with the same seal step
+//!   the pass applies, and the restore check binds the stored credentials and boards to
+//!   the State.
 //!
 //! Nothing dispatches this reducer yet: no instruction is registered and no State table
 //! holds it.
 //!
-//! TODO(E2, design §12.3 slice 1): the election machine (sortition requests and pulses,
-//! invitations, `NoRoster` retry generations, the proposal-wide randomness budget and the
-//! atomic Confirmation capacity check) and the deliberation machine (phases, endorsements
-//! and the public-finding expiry) are not here yet. They produce the sealed bodies and
-//! findings this spine records, and lock the risk tier at the first Policy Jury request.
-//! TODO(E2, slice 2): the credential-aware seal checks a sealed body's roster-root
-//! preimage and credential list before [`AnonymousParliamentAttemptStateV1::seal_body`].
-//! TODO(E2, slice 3): closures reach
-//! [`AnonymousParliamentAttemptStateV1::record_ballot_closure`] only from the positioned
-//! block-start pass, and execution outcomes only from its enactment item.
+//! TODO(E2, design §12.3 slice 2): the three World tables, their restore checks and the
+//! release addition that publishes them with the family's interfaces.
+//! TODO(E2, slice 3): the positioned pass drives the scheduled items, the ballot openings
+//! and closures ([`AnonymousParliamentAttemptStateV1::close_ballot`]) and the enactment
+//! item.
 
 use std::collections::BTreeMap;
 
-use iroha_data_model::governance::{
-    GovernanceAnchorV1,
-    anonymous_ballot::{
-        AnonymousBallotBindingErrorV1, AnonymousBallotCertificateBindingV1, AnonymousBodyResultV1,
-        AnonymousGovernanceAttemptV1, AnonymousGovernanceCertificateErrorV1,
-        AnonymousGovernanceCertificateV1, AnonymousParliamentBodyBindingV1,
-        AnonymousPublicFindingResultV1, AnonymousSealedBodyV1, BallotClosureRecordV1,
-        BallotOutcomeV1, BodyDecisionModeV1, FrozenBallotPolicyErrorV1,
-        FrozenParliamentAttemptPolicyV1, ParliamentBallotPurposeErrorV1, ParliamentBallotPurposeV1,
-        anonymous_execution_failure_root_v1,
-    },
-    types::{
-        GovernanceAttemptId, GovernanceAttemptStatusV1, GovernanceExpectedHeadV1,
-        GovernanceStageV1, ParliamentBody, RiskTierV1,
+use iroha_data_model::{
+    NetworkId,
+    account::AccountId,
+    governance::{
+        GovernanceAnchorV1,
+        anonymous_ballot::{
+            AnonymousBallotBindingErrorV1, AnonymousBallotCertificateBindingV1,
+            AnonymousBodyResultV1, AnonymousGovernanceAttemptV1,
+            AnonymousGovernanceCertificateErrorV1, AnonymousGovernanceCertificateV1,
+            AnonymousParliamentBodyBindingV1, AnonymousPublicFindingResultV1,
+            AnonymousSealedBodyV1, BallotClosureRecordV1, BallotOutcomeV1, BodyDecisionModeV1,
+            Digest512, FrozenBallotPolicyErrorV1, FrozenParliamentAttemptPolicyV1,
+            ParliamentBallotPurposeErrorV1, ParliamentBallotPurposeV1,
+            anonymous_execution_failure_root_v1,
+        },
+        types::{
+            DeliberationPhaseV1, GovernanceAttemptId, GovernanceAttemptStatusV1,
+            GovernanceExpectedHeadV1, GovernanceStageV1, ParliamentBody, RiskTierV1,
+        },
     },
 };
+use iroha_parliament_ballot::board::{BoardErrorV1, RegistrationLedgerErrorV1, SealErrorV1};
 use norito::{
     codec::{Decode, Encode},
     derive::{JsonDeserialize, JsonSerialize},
+};
+
+pub mod credentials;
+pub mod deliberation;
+pub mod election;
+mod restore;
+pub mod schedule;
+
+pub use self::{
+    credentials::{
+        AnonymousElectionCredentialsV1, AnonymousItemEffectV1, AnonymousItemOutcomeV1,
+        AnonymousPlannedItemV1, AnonymousSealedBoardV1,
+    },
+    deliberation::{
+        AnonymousBodyStateV1, AnonymousFindingDecisionV1, AnonymousFindingV1,
+        AnonymousFindingVerdictV1, AnonymousPhaseV1, AnonymousQualificationV1,
+    },
+    election::{
+        AnonymousDrawOutcomeV1, AnonymousDrawV1, AnonymousElectionClosedV1, AnonymousElectionV1,
+        AnonymousGenerationStatusV1, AnonymousGenerationV1, AnonymousInvitationCloseV1,
+        AnonymousNoRosterKindV1, AnonymousRegistrationV1, AnonymousSeatingV1,
+        AnonymousSortitionPulseV1,
+    },
+    schedule::{AnonymousDueItemV1, AnonymousLifecycleItemV1},
 };
 
 /// Why an anonymous attempt refuses a transition, or a restored State is not one this
@@ -169,6 +211,131 @@ pub enum AnonymousParliamentErrorV1 {
     /// The observed head is inert or of another subject.
     #[error("the superseding head is invalid")]
     InvalidSupersedingHead,
+    /// The redraw prefix inherited from the predecessor attempt is outside the lineage.
+    #[error("the inherited redraw count is outside the proposal's lineage")]
+    RedrawLineage,
+    /// The candidate snapshot is unordered, over its bounds, or empty where it must not be.
+    #[error("the candidate snapshot is not canonical or exceeds its bounds")]
+    CandidateSnapshot,
+    /// A height, slot or deadline overflows or is inert.
+    #[error("the lifecycle schedule cannot be expressed")]
+    Schedule,
+    /// The proposal-wide redraw budget is spent.
+    #[error("the proposal-wide redraw budget is spent")]
+    RedrawBudgetExhausted,
+    /// The body's sortition retries are spent.
+    #[error("the body's sortition retries are spent")]
+    SortitionRetryLimitExceeded,
+    /// The initial generation is already registered.
+    #[error("the initial sortition generation is already registered")]
+    SortitionRegistered,
+    /// Capacity evidence left no retry; `RejectExhausted` awaits its pass.
+    #[error("the attempt awaits its exhaustion")]
+    ExhaustionPending,
+    /// No body awaits a retry.
+    #[error("no body's election ended without a roster")]
+    NoRetryDue,
+    /// A retry is registered no later than a generation it retries.
+    #[error("a retry must follow the registration of the generation it retries")]
+    RetryTooEarly,
+    /// The body is not in the frozen pipeline.
+    #[error("{body:?} is not a body of the frozen pipeline")]
+    UnknownBody {
+        /// The body.
+        body: ParliamentBody,
+    },
+    /// No sealed body has the instance.
+    #[error("no sealed body has this instance")]
+    UnknownBodyInstance,
+    /// No generation awaits the slot.
+    #[error("no generation awaits this slot")]
+    UnknownGeneration,
+    /// The election is not the body's latest one.
+    #[error("the election is not the body's latest")]
+    UnknownElection,
+    /// The pulse is of another session, inert, or not yet at its slot.
+    #[error("the pulse does not bind the generation's slot")]
+    Pulse,
+    /// The allocation does not fit the generation's requests.
+    #[error("the allocation does not fit its requests")]
+    Allocation,
+    /// The item is not due at this anchor.
+    #[error("the item is not due")]
+    NotDue,
+    /// The item names an occurrence that has passed.
+    #[error("the item's occurrence has passed")]
+    StaleItem,
+    /// The election has no open invitations.
+    #[error("the election's invitations are not open")]
+    InvitationsNotOpen,
+    /// The invitation window closed.
+    #[error("the invitation window closed")]
+    InvitationWindowClosed,
+    /// The authority holds no invitation in the election.
+    #[error("the authority holds no invitation")]
+    UnknownInvitation,
+    /// The assignment already responded.
+    #[error("the assignment already responded")]
+    ResponseReplay,
+    /// A binding seat is accepted only with its credential.
+    #[error("a binding seat is accepted only with its credential")]
+    CredentialRequired,
+    /// A roster binding is missing, unexpected, or not of the seated roster.
+    #[error("the roster binding does not fit the seated roster")]
+    RosterBinding,
+    /// Qualification already started.
+    #[error("qualification already started")]
+    QualificationStarted,
+    /// The intent names another phase, one that never closes early, or a body without one.
+    #[error("the phase does not match the body's current phase")]
+    PhaseMismatch,
+    /// An early-close intent was already recorded for this wait.
+    #[error("an early-close intent is already recorded")]
+    EarlyCloseReplay,
+    /// The public body is already decided.
+    #[error("the public body is already decided")]
+    FindingDecided,
+    /// An absence follows an endorsement of the body.
+    #[error("an absence cannot follow an endorsement")]
+    AbsenceAfterEndorsement,
+    /// The finding window closed.
+    #[error("the finding window closed")]
+    FindingWindowClosed,
+    /// The authority holds no seat of the body, or not this one.
+    #[error("the authority holds no such seat")]
+    UnauthorizedMember,
+    /// The seat's absence is already recorded.
+    #[error("the seat's absence is already recorded")]
+    AbsenceReplay,
+    /// The seat is excluded by its absence.
+    #[error("the seat is excluded")]
+    SeatExcluded,
+    /// The seat already endorsed.
+    #[error("the seat already endorsed")]
+    EndorsementReplay,
+    /// The endorsed root is inert.
+    #[error("the endorsed root is inert")]
+    InertFindingRoot,
+    /// The ballot's chronology does not follow the jury's lifecycle.
+    #[error("the ballot opened before its jury's Reflection and notice")]
+    BallotChronology,
+    /// A credential registration is refused: a seat or commitment already registered, or a
+    /// registration that does not verify or that the node could not verify.
+    #[error(transparent)]
+    Credential(Box<RegistrationLedgerErrorV1>),
+    /// The credentials cannot be sealed.
+    #[error(transparent)]
+    Seal(Box<SealErrorV1>),
+    /// The board of a sealed jury cannot be built.
+    #[error(transparent)]
+    Board(Box<BoardErrorV1>),
+    /// A credential's source is not a block of finalized history.
+    #[error("a credential source must name a nonzero block height")]
+    CredentialSource,
+    /// The credentials World keeps for an election are not exactly one per accepted
+    /// assignment, or repeat a seat or commitment.
+    #[error("the stored credentials do not match their election's accepted assignments")]
+    CredentialStore,
     /// A restored State is inconsistent.
     #[error("restored attempt state is inconsistent: {field}")]
     Restore {
@@ -186,6 +353,9 @@ pub enum AnonymousBallotDecisionV1 {
     Certified,
     /// The jury did not approve: the attempt is rejected.
     Rejected(BallotOutcomeV1),
+    /// A narrow Policy Jury approval found no fresh Confirmation capacity or redraw unit:
+    /// the attempt ends `ConfirmationJuryCapacityUnavailable`.
+    ConfirmationCapacityUnavailable,
 }
 
 /// Why a public body ended without a finding.
@@ -236,8 +406,35 @@ pub struct AnonymousPublicFindingFailureV1 {
     pub body: ParliamentBody,
     /// Why it has no finding.
     pub kind: AnonymousPublicFindingFailureKindV1,
-    /// Height of the block that recorded the failure.
-    pub height: u64,
+    /// Anchor of the `ConcludeFinding` item that recorded the failure.
+    pub at: GovernanceAnchorV1,
+}
+
+/// The election that left the attempt without a retry.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito(deny_unknown_fields)]
+#[norito_schema(
+    name = "iroha_core::governance::parliament_anonymous::AnonymousSortitionExhaustionV1"
+)]
+pub struct AnonymousSortitionExhaustionV1 {
+    /// The body whose election ended without a roster; the first body of a generation that
+    /// ended as a whole.
+    pub body: ParliamentBody,
+    /// Why it ended without a roster.
+    pub kind: AnonymousNoRosterKindV1,
+    /// Anchor of the item that rejected the attempt.
+    pub at: GovernanceAnchorV1,
 }
 
 /// What rejected an attempt.
@@ -261,6 +458,13 @@ pub enum AnonymousAttemptRejectionV1 {
     /// A public body ended without a finding.
     #[codec(index = 1)]
     PublicFinding(AnonymousPublicFindingFailureV1),
+    /// A body's election ended without a roster and no retry was left.
+    #[codec(index = 2)]
+    SortitionExhausted(AnonymousSortitionExhaustionV1),
+    /// The Policy Jury approved narrowly, and no fresh Confirmation capacity or redraw unit
+    /// remained: `ConfirmationJuryCapacityUnavailable`, with that closure record.
+    #[codec(index = 3)]
+    ConfirmationCapacityUnavailable(Box<BallotClosureRecordV1>),
 }
 
 /// How the certified effect of a production attempt ended.
@@ -332,17 +536,46 @@ pub struct AnonymousParliamentAttemptStateV1 {
     purpose: ParliamentBallotPurposeV1,
     attempt: AnonymousGovernanceAttemptV1,
     policy: FrozenParliamentAttemptPolicyV1,
+    /// `proposal_digest` of the full canonical proposal, fixed at creation; every board and
+    /// closure record of the attempt carries it.
+    proposal_digest: Digest512,
     effect_preimage_hash: [u8; 32],
     expected_head: GovernanceExpectedHeadV1,
+    /// Proposal-wide redraw units its predecessor attempts consumed.
+    randomness_redraws_before_attempt: u32,
     risk_locked: bool,
-    /// The sealed instance of each body that has one.
-    sealed: BTreeMap<ParliamentBody, AnonymousSealedBodyV1>,
+    /// Creation, start and end of qualification.
+    qualification: AnonymousQualificationV1,
+    /// Every sortition generation, in registration order.
+    generations: Vec<election::AnonymousGenerationV1>,
+    /// Each sealed body with its phases and finding record.
+    bodies: BTreeMap<ParliamentBody, AnonymousBodyStateV1>,
     /// The immutable result of each body that produced an advancing one.
     results: BTreeMap<ParliamentBody, AnonymousParliamentBodyBindingV1>,
     /// What rejected the attempt.
     rejection: Option<AnonymousAttemptRejectionV1>,
     certificate: Option<AnonymousGovernanceCertificateV1>,
     execution: Option<AnonymousExecutionV1>,
+}
+
+impl AnonymousParliamentErrorV1 {
+    /// Whether the node could not decide (its proof profile, a pinned frame or a verifier
+    /// backend), as opposed to the transition being refused. A local error is never a
+    /// committed verdict: the node defers or retries instead.
+    #[must_use]
+    pub fn is_local(&self) -> bool {
+        match self {
+            Self::Credential(error) => error.is_local(),
+            Self::Seal(error) => error.is_local(),
+            Self::Board(error) => error.is_local(),
+            _ => false,
+        }
+    }
+}
+
+/// Whether `body` decides by an anonymous ballot.
+fn is_binding(body: ParliamentBody) -> bool {
+    BodyDecisionModeV1::of(body) == BodyDecisionModeV1::AnonymousBallot
 }
 
 const fn stage_for_body(body: ParliamentBody) -> GovernanceStageV1 {
@@ -423,31 +656,49 @@ fn head_supersedes(
     Ok(())
 }
 
+/// The immutable creation inputs of an attempt that the reducer cannot derive itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnonymousAttemptOriginV1 {
+    /// Time of the creating block: `StartQualification` is due at it.
+    pub created_at_ms: u64,
+    /// Proposal-wide redraw units the attempt's predecessors consumed; zero for a
+    /// sequence-zero attempt.
+    pub randomness_redraws_before_attempt: u32,
+}
+
 impl AnonymousParliamentAttemptStateV1 {
     /// Create the State of a new attempt.
     ///
     /// `purpose` is what Core selected for an attempt created now
     /// ([`ParliamentBallotPurposeV1::select_v1`]) and `policy` the snapshot it froze from
-    /// committed parameters; the caller of the instruction chooses neither.
+    /// committed parameters; the caller of the instruction chooses neither. `origin` is the
+    /// creating block's time and the redraw count the predecessor attempt ended with.
     ///
     /// # Errors
     /// [`AnonymousParliamentErrorV1`] for an unrecognized purpose, an invalid snapshot, a
-    /// noncanonical or over-limit attempt, an inert binding, or a noninitial snapshot.
+    /// noncanonical or over-limit attempt, an inert binding, a redraw prefix outside the
+    /// lineage, or a noninitial snapshot.
     pub fn try_new(
         purpose: ParliamentBallotPurposeV1,
         attempt: AnonymousGovernanceAttemptV1,
         policy: FrozenParliamentAttemptPolicyV1,
+        proposal_digest: Digest512,
         effect_preimage_hash: [u8; 32],
         expected_head: GovernanceExpectedHeadV1,
+        origin: AnonymousAttemptOriginV1,
     ) -> Result<Self, AnonymousParliamentErrorV1> {
         let state = Self {
             purpose,
             attempt,
             policy,
+            proposal_digest,
             effect_preimage_hash,
             expected_head,
+            randomness_redraws_before_attempt: origin.randomness_redraws_before_attempt,
             risk_locked: false,
-            sealed: BTreeMap::new(),
+            qualification: AnonymousQualificationV1::created(origin.created_at_ms),
+            generations: Vec::new(),
+            bodies: BTreeMap::new(),
             results: BTreeMap::new(),
             rejection: None,
             certificate: None,
@@ -477,12 +728,20 @@ impl AnonymousParliamentAttemptStateV1 {
             || attempt.proposal_content_id.as_bytes() == &[0; 32]
             || !attempt.has_canonical_id()
             || self.effect_preimage_hash == [0; 32]
+            || self.proposal_digest == Digest512::new([0; 64])
             || !expected_head_is_valid(self.expected_head)
         {
             return Err(AnonymousParliamentErrorV1::ImmutableBinding);
         }
         if attempt.sequence > self.policy.sortition_policy.max_governance_attempt_retries {
             return Err(AnonymousParliamentErrorV1::RetryLimitExceeded);
+        }
+        // A first attempt inherits nothing; a successor inherits a count that leaves it at
+        // least one generation (design §8.1).
+        let before = self.randomness_redraws_before_attempt;
+        let ceiling = self.policy.sortition_policy.max_randomness_redraws;
+        if (attempt.sequence == 0 && before != 0) || (attempt.sequence > 0 && before >= ceiling) {
+            return Err(AnonymousParliamentErrorV1::RedrawLineage);
         }
         Ok(())
     }
@@ -505,6 +764,12 @@ impl AnonymousParliamentAttemptStateV1 {
         &self.policy
     }
 
+    /// `proposal_digest` of the full canonical proposal, fixed at creation.
+    #[must_use]
+    pub const fn proposal_digest(&self) -> &Digest512 {
+        &self.proposal_digest
+    }
+
     /// Hash of the exact deterministic effect preimage.
     #[must_use]
     pub const fn effect_preimage_hash(&self) -> [u8; 32] {
@@ -523,10 +788,16 @@ impl AnonymousParliamentAttemptStateV1 {
         self.risk_locked
     }
 
+    /// Proposal-wide redraw units the attempt's predecessors consumed.
+    #[must_use]
+    pub const fn randomness_redraws_before_attempt(&self) -> u32 {
+        self.randomness_redraws_before_attempt
+    }
+
     /// The sealed instance of `body`.
     #[must_use]
     pub fn sealed_body(&self, body: ParliamentBody) -> Option<&AnonymousSealedBodyV1> {
-        self.sealed.get(&body)
+        self.bodies.get(&body).map(|state| &state.sealed)
     }
 
     /// The recorded result of `body`.
@@ -658,40 +929,6 @@ impl AnonymousParliamentAttemptStateV1 {
         Ok(())
     }
 
-    /// Finish qualification and enter the first required body.
-    ///
-    /// # Errors
-    /// [`AnonymousParliamentErrorV1`] for another or an inactive attempt, or a replay.
-    pub fn complete_qualification(
-        &mut self,
-        governance_attempt_id: GovernanceAttemptId,
-    ) -> Result<(), AnonymousParliamentErrorV1> {
-        self.ensure_active(governance_attempt_id)?;
-        self.ensure_stage(GovernanceStageV1::Qualification)?;
-        self.attempt.stage = self.first_stage()?;
-        Ok(())
-    }
-
-    /// Lock the risk tier: the first Policy Jury sortition request freezes it, and both
-    /// ballot policies are the snapshot under that tier from then on.
-    ///
-    /// # Errors
-    /// [`AnonymousParliamentErrorV1`] for another or an inactive attempt, a tier already
-    /// locked, or a snapshot that yields no ballot policy under the tier.
-    pub fn lock_risk(
-        &mut self,
-        governance_attempt_id: GovernanceAttemptId,
-    ) -> Result<(), AnonymousParliamentErrorV1> {
-        self.ensure_active(governance_attempt_id)?;
-        if self.risk_locked {
-            return Err(AnonymousParliamentErrorV1::RiskTierLocked);
-        }
-        self.policy
-            .binding_ballot_policies(self.attempt.risk_tier)?;
-        self.risk_locked = true;
-        Ok(())
-    }
-
     /// The rules of one sealed body within this attempt, beyond its own
     /// ([`AnonymousSealedBodyV1::validate`]): a binding jury seals at or above its floor
     /// under a locked tier.
@@ -738,82 +975,45 @@ impl AnonymousParliamentAttemptStateV1 {
         }
     }
 
-    /// Record the sealed instance of a body. Bodies seal in any order; each seals once.
-    ///
-    /// # Errors
-    /// [`AnonymousParliamentErrorV1`] for another or an inactive attempt, a body already
-    /// sealed, a sealed body that fails its own rules, a binding jury below its floor or
-    /// before the risk lock, or a Confirmation Jury no narrow approval admitted.
-    pub fn seal_body(
-        &mut self,
-        governance_attempt_id: GovernanceAttemptId,
-        sealed: AnonymousSealedBodyV1,
-    ) -> Result<(), AnonymousParliamentErrorV1> {
-        self.ensure_active(governance_attempt_id)?;
-        let body = sealed.body;
-        if self.sealed.contains_key(&body) {
-            return Err(AnonymousParliamentErrorV1::BodySealed { body });
-        }
-        self.check_seal(&sealed)?;
-        self.sealed.insert(body, sealed);
-        Ok(())
-    }
-
     /// The sealed instance of `body` when the attempt is at that body's stage.
     fn sealed_at_stage(
         &self,
         body: ParliamentBody,
     ) -> Result<&AnonymousSealedBodyV1, AnonymousParliamentErrorV1> {
         self.ensure_stage(stage_for_body(body))?;
-        self.sealed
-            .get(&body)
+        self.sealed_body(body)
             .ok_or(AnonymousParliamentErrorV1::BodyNotSealed { body })
     }
 
-    /// Record the quorum-endorsed finding of the public body at the current stage and
-    /// advance to the next required body.
-    ///
-    /// # Errors
-    /// [`AnonymousParliamentErrorV1`] for another or an inactive attempt, a body that is
-    /// not at its stage or not sealed, a binding jury, or a finding that fails its rules.
-    pub fn record_public_finding(
+    /// Record the quorum-endorsed finding of the public body at the current stage,
+    /// concluded at `at`, and advance to the next required body.
+    fn record_public_finding(
         &mut self,
-        governance_attempt_id: GovernanceAttemptId,
         body: ParliamentBody,
         result: AnonymousPublicFindingResultV1,
-        result_height: u64,
+        at: GovernanceAnchorV1,
     ) -> Result<(), AnonymousParliamentErrorV1> {
-        self.ensure_active(governance_attempt_id)?;
         if BodyDecisionModeV1::of(body) != BodyDecisionModeV1::PublicFinding {
             return Err(AnonymousParliamentErrorV1::DecisionMode { body });
         }
         let binding = AnonymousParliamentBodyBindingV1 {
             sealed: *self.sealed_at_stage(body)?,
-            result_height,
+            result_height: at.height,
             result: AnonymousBodyResultV1::PublicFinding(Box::new(result)),
         };
         self.validate_result(&binding)?;
         self.results.insert(body, binding);
-        self.attempt.stage = self.stage_after(body);
+        let next = self.stage_after(body);
+        self.enter_stage(next, at);
         Ok(())
     }
 
     /// Record that the public body at the current stage ended without a finding, which
     /// rejects the attempt: no later body can decide for it.
-    ///
-    /// The deliberation machine decides when a quorum is unreachable or the endorsement
-    /// window expired; this records its objective verdict.
-    ///
-    /// # Errors
-    /// [`AnonymousParliamentErrorV1`] for another or an inactive attempt, a body that is
-    /// not at its stage or not sealed, a binding jury, or a height at which no pulse could
-    /// have drawn the body.
-    pub fn fail_public_finding(
+    fn fail_public_finding(
         &mut self,
-        governance_attempt_id: GovernanceAttemptId,
         failure: AnonymousPublicFindingFailureV1,
     ) -> Result<(), AnonymousParliamentErrorV1> {
-        self.ensure_active(governance_attempt_id)?;
         self.check_public_finding_failure(&failure)?;
         self.attempt.status = GovernanceAttemptStatusV1::Rejected;
         self.rejection = Some(AnonymousAttemptRejectionV1::PublicFinding(failure));
@@ -831,7 +1031,7 @@ impl AnonymousParliamentAttemptStateV1 {
             return Err(AnonymousParliamentErrorV1::DecisionMode { body });
         }
         let sealed = self.sealed_at_stage(body)?;
-        if failure.height <= sealed.sortition_request.pulse_height {
+        if failure.at.height <= sealed.sortition_request.pulse_height {
             return Err(AnonymousParliamentErrorV1::FailureBeforeSortition);
         }
         Ok(())
@@ -850,28 +1050,40 @@ impl AnonymousParliamentAttemptStateV1 {
         Ok(())
     }
 
-    /// Record the closure of the binding jury at the current stage.
+    /// G2b `CloseBallot` of the binding jury at the current stage: record its closure.
     ///
-    /// An approval is the jury's immutable result. A narrow Policy Jury approval moves the
-    /// attempt to its Confirmation Jury; any other approval certifies it. A rejection or an
-    /// inquorate closure rejects the attempt: a binding jury has exactly one ballot.
+    /// An approval is the jury's immutable result. A narrow Policy Jury approval registers
+    /// the Confirmation Jury's first generation atomically and moves the attempt to it; its
+    /// snapshot is `eligible`, the canonical citizens eligible at the closure, less every
+    /// sealed Policy Jury member. When fewer than three citizens remain or the redraw budget
+    /// is spent, the attempt ends `ConfirmationJuryCapacityUnavailable` with no result
+    /// recorded. Core computes `eligible` only for that registration. Any other approval
+    /// certifies the attempt. A rejection or an inquorate closure rejects it: a binding jury
+    /// has exactly one ballot.
     ///
     /// # Errors
     /// [`AnonymousParliamentErrorV1`] for another or an inactive attempt, a jury that is
     /// not at its stage or not sealed, a public body, a record of another sealed body, a
-    /// record that fails its policy, or a certificate that fails as a whole.
-    pub fn record_ballot_closure(
+    /// ballot that opened before the jury's Reflection and notice, a record that fails its
+    /// policy, an invalid Confirmation registration, or a certificate that fails as a whole.
+    pub fn close_ballot<F>(
         &mut self,
         governance_attempt_id: GovernanceAttemptId,
         closure: BallotClosureRecordV1,
-    ) -> Result<AnonymousBallotDecisionV1, AnonymousParliamentErrorV1> {
+        network_id: &NetworkId,
+        eligible: F,
+    ) -> Result<AnonymousBallotDecisionV1, AnonymousParliamentErrorV1>
+    where
+        F: FnOnce() -> Vec<AccountId>,
+    {
         self.ensure_active(governance_attempt_id)?;
+        self.check_anchor(closure.closure_anchor)?;
         let body = closure.body_role;
         if BodyDecisionModeV1::of(body) != BodyDecisionModeV1::AnonymousBallot {
             return Err(AnonymousParliamentErrorV1::DecisionMode { body });
         }
         let sealed = *self.sealed_at_stage(body)?;
-        self.check_closure(&sealed, &closure)?;
+        self.check_closure(&sealed, &closure, network_id)?;
         let policy = self.policy.ballot_policy(self.attempt.risk_tier, body)?;
         if closure.outcome != BallotOutcomeV1::Approved {
             self.attempt.status = GovernanceAttemptStatusV1::Rejected;
@@ -879,47 +1091,104 @@ impl AnonymousParliamentAttemptStateV1 {
             return Ok(AnonymousBallotDecisionV1::Rejected(closure.outcome));
         }
 
+        let at = closure.closure_anchor;
         let binding = AnonymousParliamentBodyBindingV1 {
             sealed,
-            result_height: closure.closure_anchor.height,
+            result_height: at.height,
             result: AnonymousBodyResultV1::Ballot(Box::new(
                 AnonymousBallotCertificateBindingV1::approve(closure, &policy)?,
             )),
         };
         self.validate_result(&binding)?;
-        // Certification is all or nothing: a certificate that fails as a whole leaves the
-        // attempt exactly as it was.
+        // Every effect is all or nothing: a Confirmation registration or a certificate that
+        // fails leaves the attempt exactly as it was.
         let mut next = self.clone();
         next.results.insert(body, binding);
-        next.attempt.stage = next.stage_after(body);
-        let decision = if next.attempt.stage == GovernanceStageV1::Certification {
-            let certificate = next.build_certificate();
-            certificate.validate()?;
-            next.certificate = Some(certificate);
-            next.attempt.status = GovernanceAttemptStatusV1::Certified;
-            next.attempt.stage = GovernanceStageV1::Enactment;
-            AnonymousBallotDecisionV1::Certified
-        } else {
-            AnonymousBallotDecisionV1::ConfirmationRequired
-        };
+        let stage = next.stage_after(body);
+        if stage == GovernanceStageV1::ConfirmationJury {
+            if !next.register_confirmation(network_id, at, eligible())? {
+                self.attempt.status = GovernanceAttemptStatusV1::Rejected;
+                self.rejection = Some(
+                    AnonymousAttemptRejectionV1::ConfirmationCapacityUnavailable(Box::new(closure)),
+                );
+                return Ok(AnonymousBallotDecisionV1::ConfirmationCapacityUnavailable);
+            }
+            next.enter_stage(stage, at);
+            *self = next;
+            return Ok(AnonymousBallotDecisionV1::ConfirmationRequired);
+        }
+        let certificate = next.build_certificate();
+        certificate.validate()?;
+        next.certificate = Some(certificate);
+        next.attempt.status = GovernanceAttemptStatusV1::Certified;
+        next.attempt.stage = GovernanceStageV1::Enactment;
         *self = next;
-        Ok(decision)
+        Ok(AnonymousBallotDecisionV1::Certified)
     }
 
-    /// A closure record, whatever its outcome, is the record of `sealed` in this attempt,
-    /// opened after the body was drawn, and valid under the locked ballot policy.
+    /// The jury's ballot opened in a pass after its Reflection entry and no earlier than its
+    /// opening time (design §3.4, §8.1).
+    fn check_ballot_chronology(
+        &self,
+        body: ParliamentBody,
+        closure: &BallotClosureRecordV1,
+    ) -> Result<(), AnonymousParliamentErrorV1> {
+        let state = self
+            .bodies
+            .get(&body)
+            .ok_or(AnonymousParliamentErrorV1::BodyNotSealed { body })?;
+        let reflection = state
+            .entered(DeliberationPhaseV1::Reflection)
+            .ok_or(AnonymousParliamentErrorV1::BallotChronology)?;
+        let opening_at = self
+            .opening_at_ms(body)
+            .ok_or(AnonymousParliamentErrorV1::BallotChronology)?;
+        let opened = closure.opening_anchor;
+        if (opened.height, opened.position) <= (reflection.height, reflection.position)
+            || opened.timestamp_ms < opening_at
+        {
+            return Err(AnonymousParliamentErrorV1::BallotChronology);
+        }
+        Ok(())
+    }
+
+    /// A closure record, whatever its outcome, is the record of `sealed` in this attempt on
+    /// `network_id`, over the list its seal bound, opened after the body was drawn and after
+    /// its Reflection and notice, and valid under the locked ballot policy.
     fn check_closure(
         &self,
         sealed: &AnonymousSealedBodyV1,
         closure: &BallotClosureRecordV1,
+        network_id: &NetworkId,
     ) -> Result<(), AnonymousParliamentErrorV1> {
+        let context = |field| {
+            AnonymousParliamentErrorV1::Certificate(
+                AnonymousGovernanceCertificateErrorV1::BallotContext { field },
+            )
+        };
         if let Some(field) =
             sealed.closure_mismatch(self.attempt.proposal_content_id, self.attempt.id, closure)
         {
-            return Err(AnonymousParliamentErrorV1::Certificate(
-                AnonymousGovernanceCertificateErrorV1::BallotContext { field },
-            ));
+            return Err(context(field));
         }
+        if closure.network_id != *network_id {
+            return Err(context("network_id"));
+        }
+        if closure.proposal_digest != self.proposal_digest {
+            return Err(context("proposal_digest"));
+        }
+        let binding = self
+            .bodies
+            .get(&sealed.body)
+            .and_then(|state| state.roster_binding)
+            .ok_or(AnonymousParliamentErrorV1::BodyNotSealed { body: sealed.body })?;
+        if closure.list_digest != binding.list_digest {
+            return Err(context("list_digest"));
+        }
+        if closure.profile_id != binding.profile_id {
+            return Err(context("profile_id"));
+        }
+        self.check_ballot_chronology(sealed.body, closure)?;
         let policy = self
             .policy
             .ballot_policy(self.attempt.risk_tier, sealed.body)?;
@@ -1046,16 +1315,17 @@ impl AnonymousParliamentAttemptStateV1 {
         Ok(failure_root)
     }
 
-    /// Check a restored State: it is exactly one this reducer produces.
+    /// Check a restored State of an attempt on the network `network_id`: it is exactly one
+    /// this reducer produces.
     ///
     /// # Errors
     /// [`AnonymousParliamentErrorV1`] for the first rule a restored State violates.
-    pub fn validate(&self) -> Result<(), AnonymousParliamentErrorV1> {
+    pub fn validate(&self, network_id: &NetworkId) -> Result<(), AnonymousParliamentErrorV1> {
         use AnonymousParliamentErrorV1 as Error;
         use GovernanceAttemptStatusV1 as Status;
 
         self.validate_bindings()?;
-        self.validate_restored_bodies()?;
+        self.validate_restored_bodies(network_id)?;
 
         // The results are exactly the bodies the pipeline passed.
         let passed = self.passed_bodies()?;
@@ -1066,7 +1336,7 @@ impl AnonymousParliamentAttemptStateV1 {
             return Err(Error::Restore { field: "rejection" });
         }
         if let Some(rejection) = &self.rejection {
-            self.validate_restored_rejection(rejection)?;
+            self.validate_restored_rejection(rejection, network_id)?;
         }
 
         let certified = !matches!(self.attempt.status, Status::Active | Status::Rejected);
@@ -1083,24 +1353,32 @@ impl AnonymousParliamentAttemptStateV1 {
         if let Some(certificate) = &self.certificate {
             certificate.validate()?;
         }
-        self.validate_restored_execution()
+        self.validate_restored_execution()?;
+        self.validate_lifecycle(network_id)
     }
 
     /// Every sealed body, and every result against the sealed body it belongs to.
-    fn validate_restored_bodies(&self) -> Result<(), AnonymousParliamentErrorV1> {
+    fn validate_restored_bodies(
+        &self,
+        network_id: &NetworkId,
+    ) -> Result<(), AnonymousParliamentErrorV1> {
         use AnonymousParliamentErrorV1 as Error;
 
-        for (body, sealed) in &self.sealed {
-            if *body != sealed.body {
-                return Err(Error::Restore { field: "sealed" });
+        for (body, state) in &self.bodies {
+            if *body != state.sealed.body {
+                return Err(Error::Restore { field: "bodies" });
             }
-            self.check_seal(sealed)?;
+            self.check_seal(&state.sealed)?;
         }
         for (body, binding) in &self.results {
-            if self.sealed.get(body) != Some(&binding.sealed) {
+            if self.sealed_body(*body) != Some(&binding.sealed) {
                 return Err(Error::Restore { field: "results" });
             }
             self.validate_result(binding)?;
+            // A ballot result opened after its jury's Reflection and notice.
+            if let Some(ballot) = binding.ballot() {
+                self.check_closure(&binding.sealed, &ballot.closure, network_id)?;
+            }
         }
         Ok(())
     }
@@ -1165,6 +1443,7 @@ impl AnonymousParliamentAttemptStateV1 {
     fn validate_restored_rejection(
         &self,
         rejection: &AnonymousAttemptRejectionV1,
+        network_id: &NetworkId,
     ) -> Result<(), AnonymousParliamentErrorV1> {
         use AnonymousParliamentErrorV1 as Error;
 
@@ -1177,10 +1456,26 @@ impl AnonymousParliamentAttemptStateV1 {
                     return Err(Error::Restore { field: "rejection" });
                 }
                 let sealed = self.sealed_at_stage(body)?;
-                self.check_closure(sealed, closure)
+                self.check_closure(sealed, closure, network_id)
             }
             AnonymousAttemptRejectionV1::PublicFinding(failure) => {
                 self.check_public_finding_failure(failure)
+            }
+            AnonymousAttemptRejectionV1::SortitionExhausted(exhaustion) => {
+                self.validate_restored_exhaustion(exhaustion)
+            }
+            AnonymousAttemptRejectionV1::ConfirmationCapacityUnavailable(closure) => {
+                let policy = self
+                    .policy
+                    .ballot_policy(self.attempt.risk_tier, ParliamentBody::PolicyJury)?;
+                let approval = AnonymousBallotCertificateBindingV1::approve(**closure, &policy)?;
+                let sealed = self.sealed_at_stage(ParliamentBody::PolicyJury)?;
+                if closure.body_role != ParliamentBody::PolicyJury
+                    || !approval.requires_confirmation()
+                {
+                    return Err(Error::Restore { field: "rejection" });
+                }
+                self.check_closure(sealed, closure, network_id)
             }
         }
     }
@@ -1224,5 +1519,11 @@ impl AnonymousParliamentAttemptStateV1 {
     }
 }
 
+#[cfg(test)]
+mod credentials_tests;
+#[cfg(test)]
+mod lifecycle_tests;
+#[cfg(test)]
+mod test_driver;
 #[cfg(test)]
 mod tests;

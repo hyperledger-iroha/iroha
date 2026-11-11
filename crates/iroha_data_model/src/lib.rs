@@ -69,6 +69,8 @@ pub mod confidential;
 pub mod consensus;
 /// Static content hosting records.
 pub mod content;
+/// Committed content-bundle limits: the typed chain parameter, its protocol default and validation.
+pub mod content_policy;
 /// Accumulated exact-value contract-state commitments and inclusion proofs.
 pub mod contract_state_proof;
 /// Data availability ingest, manifest, and governance types.
@@ -177,6 +179,9 @@ pub mod role;
 pub mod runtime;
 /// Real-world asset lot structures and controls.
 pub mod rwa;
+mod scalar_policy_record;
+/// Committed settlement router policy: the typed chain parameter, its protocol default and validation.
+pub mod settlement_router_policy;
 /// Smart contract descriptors and execution metadata.
 pub mod smart_contract;
 /// Sora Name Service registrar data structures.

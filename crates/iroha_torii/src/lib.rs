@@ -1243,6 +1243,7 @@ mod private_settlement_route_control;
 mod router;
 pub(crate) mod routing;
 mod runtime;
+mod runtime_boundaries;
 #[cfg(feature = "app_api")]
 mod sns;
 #[cfg(feature = "app_api")]
@@ -2582,6 +2583,8 @@ struct AppState {
     vpn_operator_signer: Option<KeyPair>,
     /// The node's validator key pair, which signs its runtime support attestations.
     runtime_attestation_signer: Option<KeyPair>,
+    /// The checkpoints this node holds, which a startup-floor statement needs.
+    runtime_checkpoints: runtime_boundaries::SharedSnapshotCheckpoints,
     #[cfg(feature = "app_api")]
     public_dataspace_upstreams: Arc<BTreeMap<DataSpaceId, String>>,
     #[cfg(feature = "app_api")]
@@ -13444,6 +13447,29 @@ async fn handler_runtime_draft_upgrade(
     let payload = crate::runtime::handle_runtime_draft_upgrade(app.state.clone(), body).await?;
     Ok(crate::utils::respond_with_format(&payload, format))
 }
+async fn handler_runtime_draft_migration(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    body: crate::utils::extractors::NoritoJson<crate::runtime::RuntimeDraftMigrationRequest>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/runtime/migrations/draft",
+        true,
+    )
+    .await?;
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    let payload = crate::runtime::handle_runtime_draft_migration(app.state.clone(), body).await?;
+    Ok(crate::utils::respond_with_format(&payload, format))
+}
 async fn handler_runtime_cancel_upgrade(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -13510,6 +13536,116 @@ async fn handler_runtime_release(
     };
     let payload =
         crate::runtime::handle_runtime_release(app.state.clone(), &app.build_status).await?;
+    Ok(crate::utils::respond_with_format(&payload, format))
+}
+/// Run one runtime-boundary read on a blocking worker: it walks the node's certified chain and
+/// snapshot store.
+async fn runtime_boundary_blocking<T: Send + 'static>(
+    operation: impl FnOnce() -> Result<T, Error> + Send + 'static,
+) -> Result<T, Error> {
+    match crate::panic_recovery::spawn_blocking_recoverable(operation).await {
+        Ok(Ok(result)) => result,
+        _ => Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "runtime boundary read failed on its worker".to_owned(),
+            ),
+        ))),
+    }
+}
+async fn handler_runtime_boundaries(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/runtime/boundaries",
+        true,
+    )
+    .await?;
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    let (state, kura, checkpoints) = (
+        app.state.clone(),
+        app.kura.clone(),
+        app.runtime_checkpoints.clone(),
+    );
+    let payload = runtime_boundary_blocking(move || {
+        runtime_boundaries::handle_runtime_boundaries(&state, &kura, checkpoints.as_deref())
+    })
+    .await?;
+    Ok(crate::utils::respond_with_format(&payload, format))
+}
+async fn handler_runtime_attest_anchor(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/runtime/boundaries/anchor/attest",
+        true,
+    )
+    .await?;
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    let (state, kura, signer) = (
+        app.state.clone(),
+        app.kura.clone(),
+        app.runtime_attestation_signer.clone(),
+    );
+    let payload = runtime_boundary_blocking(move || {
+        runtime_boundaries::handle_runtime_attest_anchor(&state, &kura, signer.as_ref())
+    })
+    .await?;
+    Ok(crate::utils::respond_with_format(&payload, format))
+}
+async fn handler_runtime_attest_floor(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    body: crate::utils::extractors::NoritoJson<runtime_boundaries::RuntimeFloorAttestRequest>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/runtime/boundaries/floor/attest",
+        true,
+    )
+    .await?;
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    let (state, signer, checkpoints) = (
+        app.state.clone(),
+        app.runtime_attestation_signer.clone(),
+        app.runtime_checkpoints.clone(),
+    );
+    let payload = runtime_boundary_blocking(move || {
+        runtime_boundaries::handle_runtime_attest_floor(
+            &state,
+            signer.as_ref(),
+            checkpoints.as_deref(),
+            body,
+        )
+    })
+    .await?;
     Ok(crate::utils::respond_with_format(&payload, format))
 }
 async fn handler_zk_roots(
@@ -35804,6 +35940,7 @@ pub struct Torii {
     proxy_bridge_signer: KeyPair,
     vpn_operator_signer: Option<KeyPair>,
     runtime_attestation_signer: Option<KeyPair>,
+    runtime_checkpoints: runtime_boundaries::SharedSnapshotCheckpoints,
     #[cfg(feature = "app_api")]
     public_dataspace_upstreams: Arc<BTreeMap<DataSpaceId, String>>,
     #[cfg(feature = "app_api")]
@@ -36019,6 +36156,7 @@ pub struct ToriiRuntimeDeps {
     torii_proxy_bridge_signer: Option<KeyPair>,
     vpn_operator_signer: Option<KeyPair>,
     runtime_attestation_signer: Option<KeyPair>,
+    runtime_checkpoints: runtime_boundaries::SharedSnapshotCheckpoints,
 }
 impl ToriiRuntimeDeps {
     /// Construct dependencies from the owning executable identity and telemetry.
@@ -36115,6 +36253,7 @@ impl ToriiRuntimeDeps {
             torii_proxy_bridge_signer: None,
             vpn_operator_signer: None,
             runtime_attestation_signer: None,
+            runtime_checkpoints: None,
         }
     }
 
@@ -36623,6 +36762,16 @@ impl ToriiRuntimeDeps {
     #[must_use]
     pub fn with_runtime_attestation_signer(mut self, signer: KeyPair) -> Self {
         self.runtime_attestation_signer = Some(signer);
+        self
+    }
+    /// Attach the node's snapshot store, from which it states which checkpoints it holds before
+    /// it signs a startup floor (`specs/live_runtime_upgrades.md` §7.3).
+    #[must_use]
+    pub fn with_runtime_checkpoints(
+        mut self,
+        checkpoints: iroha_core::snapshot::checkpoints::SnapshotCheckpoints,
+    ) -> Self {
+        self.runtime_checkpoints = Some(Arc::new(checkpoints));
         self
     }
 }
@@ -39341,6 +39490,10 @@ impl Torii {
             RUNTIME_UPGRADE_ATTEST => operator_post(handler_runtime_attest_upgrade, app_state);
             RUNTIME_RELEASE => operator_get(handler_runtime_release, app_state);
             RUNTIME_CONTAINMENTS => operator_get(handler_runtime_containments_list, app_state);
+            RUNTIME_MIGRATION_DRAFT => operator_post(handler_runtime_draft_migration, app_state);
+            RUNTIME_BOUNDARIES => operator_get(handler_runtime_boundaries, app_state);
+            RUNTIME_BOUNDARY_ANCHOR_ATTEST => operator_post(handler_runtime_attest_anchor, app_state);
+            RUNTIME_BOUNDARY_FLOOR_ATTEST => operator_post(handler_runtime_attest_floor, app_state);
         );
         #[cfg(feature = "app_api")]
         {
@@ -39796,6 +39949,7 @@ impl Torii {
             .unwrap_or_else(|| da_receipt_signer.clone());
         let vpn_operator_signer = runtime_deps.vpn_operator_signer;
         let runtime_attestation_signer = runtime_deps.runtime_attestation_signer;
+        let runtime_checkpoints = runtime_deps.runtime_checkpoints;
         let app_query_limits = routing::AppQueryLimits::new(
             config.app_api.default_list_limit.get().into(),
             config.app_api.max_list_limit.get().into(),
@@ -41167,6 +41321,7 @@ ingress,
             proxy_bridge_signer: torii_proxy_bridge_signer,
             vpn_operator_signer,
             runtime_attestation_signer,
+            runtime_checkpoints,
             #[cfg(feature = "app_api")]
             public_dataspace_upstreams,
             #[cfg(feature = "app_api")]
@@ -42105,6 +42260,7 @@ ingress,
             torii_proxy_bridge_signer: self.proxy_bridge_signer.clone(),
             vpn_operator_signer: self.vpn_operator_signer.clone(),
             runtime_attestation_signer: self.runtime_attestation_signer.clone(),
+            runtime_checkpoints: self.runtime_checkpoints.clone(),
             #[cfg(feature = "app_api")]
             public_dataspace_upstreams: self.public_dataspace_upstreams.clone(),
             #[cfg(feature = "app_api")]

@@ -44,6 +44,10 @@ use crate::privacy_verifier::{
 /// Each variant names missing construction work, never an approval, a
 /// qualification record or an activation state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "every variant names one piece of incomplete construction work"
+)]
 pub enum PrivacyRoleLimitationV1 {
     /// ZK-ACE: the dedicated STARK has no completed Fiat--Shamir reduction in
     /// the quantum random-oracle model and no multi-target accounting for its

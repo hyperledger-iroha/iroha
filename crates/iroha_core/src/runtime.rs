@@ -10,7 +10,9 @@ pub mod attestation;
 pub mod catalog;
 pub(crate) mod change_set;
 pub mod checkpoint;
+pub mod committed_policy;
 pub(crate) mod containment;
+pub mod content_publish_permission;
 pub(crate) mod envelope;
 pub mod ironwood;
 pub mod keyed_state;
@@ -252,6 +254,25 @@ pub(crate) fn uninstalled_world_members(
     Ok(uninstalled)
 }
 
+/// Every module [`draft_addition`] drafts for: the additions of this release in activation order,
+/// then the keyed State profile, the typed committed parameters and the content-publishing
+/// permission.
+///
+/// # Errors
+/// The catalog cannot be built (a build defect).
+pub fn draftable_modules() -> Result<Vec<&'static str>, CatalogError> {
+    Ok(release_catalog()?
+        .additions
+        .iter()
+        .map(|addition| addition.module)
+        .chain([
+            iroha_data_model::runtime::keyed_state::PROFILE_NAME,
+            catalog::parameters::MODULE,
+            content_publish_permission::MODULE,
+        ])
+        .collect())
+}
+
 /// The change set that moves the universal root of `world`, on `network`, from its committed
 /// selection to the addition `module` of this release, effective at `effective_height`
 /// ([`ReleaseCatalog::activation`]); an operator endorses and proposes it.
@@ -279,6 +300,24 @@ pub fn draft_addition(
             module: module.to_owned(),
             reason,
         });
+    }
+    if module == catalog::parameters::MODULE {
+        return release_catalog()?.parameter_activation(
+            world.runtime_selection(),
+            &published,
+            network,
+            effective_height,
+            qualification,
+        );
+    }
+    if module == content_publish_permission::MODULE {
+        return content_publish_permission::activation(
+            world.runtime_selection(),
+            &published,
+            network,
+            effective_height,
+            qualification,
+        );
     }
     release_catalog()?.activation(
         module,

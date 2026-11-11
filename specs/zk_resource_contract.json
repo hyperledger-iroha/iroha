@@ -14686,6 +14686,16 @@
         }
       },
       {
+        "path": "crates/iroha_data_model/src/settlement_router_policy.rs",
+        "reason": "Ceiling of what a committed settlement router policy may hold, checked when SetParameter installs it on a root that recognizes the policy: the base safety margin is at most the whole amount in basis points. It bounds the policy, not a quantity on any path.",
+        "symbols": [
+          "MAX_EPSILON_BPS"
+        ],
+        "exprs": {
+          "MAX_EPSILON_BPS": "10_000"
+        }
+      },
+      {
         "path": "crates/norito/src/core.rs",
         "reason": "Codec-internal decode guards (archive length, nesting depth, header padding, varint width). Each chain bound above is measured on the framed encoding and is far below them; they never decide admission.",
         "symbols": [
@@ -26675,6 +26685,12 @@
               "path": "crates/iroha_core/src/sumeragi/penalties/funded_actions.rs",
               "sites": {
                 "max_bps.min(10_000)": 1
+              }
+            },
+            {
+              "path": "crates/iroha_data_model/src/settlement_router_policy.rs",
+              "sites": {
+                "self.buffer_alert_pct > 100": 1
               }
             }
           ]

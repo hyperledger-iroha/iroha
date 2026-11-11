@@ -146,10 +146,12 @@ pub(super) fn run(corpus: &Corpus) {
     wrong.receipt.payment_digest = steps[0].receipt.payment_digest;
     probe.refuse("receipt_for_another_payment", wrong.input());
     let mut wrong = steps[1].clone();
-    wrong.payer_credential = steps[2].payer_credential.clone();
+    wrong
+        .payer_credential
+        .clone_from(&steps[2].payer_credential);
     probe.refuse("another_payer_credential", wrong.input());
     let mut wrong = steps[1].clone();
-    wrong.request = steps[2].request.clone();
+    wrong.request.clone_from(&steps[2].request);
     probe.refuse("another_request", wrong.input());
     // A wrong amount: a statement or successor that credits one unit more.
     let mut wrong = steps[1].clone();

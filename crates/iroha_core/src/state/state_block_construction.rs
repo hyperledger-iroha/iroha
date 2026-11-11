@@ -72,6 +72,7 @@ impl State {
             &effective_zk,
             self.lane_compliance.read().clone(),
             self,
+            &acquired.world,
         ));
         pipeline_ivm_prepared_cache = Some(self.pipeline_ivm_prepared_cache.read().clone());
         query_ledger_time_ms = Some(Some(
@@ -98,7 +99,15 @@ impl State {
             acquired.world.parameters.get(),
         ));
         zk = Some(effective_zk);
-        settlement_engine = Some(self.settlement_engine.clone());
+        // The router inputs are frozen with the static policy above.
+        settlement_engine = Some(crate::settlement::SettlementEngine::from_router_config(
+            &runtime_policy
+                .as_ref()
+                .expect("prepared runtime policy")
+                .static_inputs()
+                .settlement
+                .router,
+        ));
         chain_id = Some(self.chain_id.clone());
         fastpq_transcripts = Some(BTreeMap::new());
         fastpq_quantity_candidate =

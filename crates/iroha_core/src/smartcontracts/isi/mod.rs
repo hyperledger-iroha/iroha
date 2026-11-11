@@ -1340,11 +1340,19 @@ mod registry_dispatch_tests {
         assert_native_registration::<privacy::RevokePrivacyZkX509CrlV1>();
         assert_native_registration::<privacy::SubmitPrivacyZkX509CertificateV1>();
         assert_native_registration::<privacy::SubmitPrivacyProofV1>();
+        assert_native_registration::<privacy::SchedulePrivacyIronwoodLimitsUpdateV1>();
+        assert_native_registration::<privacy::SubmitPrivacyIronwoodProofV1>();
         assert_reviewed_initial_family("iroha_data_model::isi::privacy::", &(BTreeSet::new()));
+        // The two proof submissions, general and Ironwood, move shielded value; every other
+        // privacy instruction publishes policy, roots or pool bootstraps and moves no numeric
+        // asset.
         assert_reviewed_asset_effect_family(
             "iroha_data_model::isi::privacy::",
-            28,
-            &(BTreeSet::from([core::any::type_name::<privacy::SubmitPrivacyProofV1>()])),
+            30,
+            &(BTreeSet::from([
+                core::any::type_name::<privacy::SubmitPrivacyProofV1>(),
+                core::any::type_name::<privacy::SubmitPrivacyIronwoodProofV1>(),
+            ])),
         );
         assert_reviewed_asset_effect_family(
             "iroha_data_model::isi::private_settlement::",

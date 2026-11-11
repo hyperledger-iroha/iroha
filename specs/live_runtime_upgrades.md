@@ -6,7 +6,8 @@ selection with selection-aware dispatch, stable instruction envelopes, release a
 frozen baseline with storage installation, the change-set lifecycle of the universal root
 (proposal, notice, attestation, activation, lapse and the unsupported-node stop), and the
 kernel's lifecycle State (registered obligations, migrations with storage retirement, and the
-committed checkpoint policy, adoption anchor and startup floor) are implemented;
+committed checkpoint policy with checkpoint production and retention, adoption anchor and startup
+floor, with the operator routes that collect every validator's statement) are implemented;
 [`runtime_upgrades.md`](runtime_upgrades.md) records that surface as built. It amends `AGENTS.md`,
 [`first_release_history_cutover.md`](first_release_history_cutover.md),
 [`runtime_upgrades.md`](runtime_upgrades.md) and `sumeragi.md` §16. This document authorizes no
@@ -402,6 +403,7 @@ genesis-signed execution policy and the governance authority.
 | Admission closed from `H` | Interfaces, implementations | No new work from `H`; work already admitted continues |
 | Completion-only from `H` | Implementations | Only narrowly scoped completion capabilities for live obligations run |
 | Disabled from `H` | Interfaces, implementations | No execution from `H`; allowed only once no live obligation needs it |
+| Disabled from `H` | Parameters | The root stops recognizing the parameter from `H`; the change set lapses unless the committed value equals the definition's initial value (`genesis_bound_node_configuration.md`, "Frozen-baseline constraint on G2") |
 | Re-enabled from `J` | Interfaces, implementations | A new committed authorization interval; earlier restrictions remain historical facts |
 | Installed, retired | Storage | Installed storage stays committed and readable; a migration retires it |
 
@@ -775,7 +777,10 @@ not a date: it happens once everything its first selection needs is implemented 
    registers obligations: an account, or the account that controls a contract's lifecycle,
    commits the exact instructions that complete an obligation with their captured closure;
    restrictions short of disabling do not stop those instructions, and no change set alters the
-   closure while the obligation is live. A migration's cursor is the kernel's own obligation.
+   closure while the obligation is live. A migration's cursor is the kernel's own obligation,
+   and the emergency panel suspends a running migration by closing its admission. The lifecycle
+   State is compiled over the baseline, Time, Ironwood and Ironwood-with-Time families, so a
+   root activates it from the selection it executes.
    Still open: the deferred-consent addition, running a captured implementation beside its
    replacement (so a change set may rebind what a live obligation reaches), a kernel call for
    contracts, which needs a new host profile, and narrower authenticated dynamic-call manifests.
@@ -797,16 +802,20 @@ not a date: it happens once everything its first selection needs is implemented 
    boundary that Kura checks against the stored block and below which no snapshot is restored;
    the committed checkpoint policy; the adoption anchor and the startup floor as committed
    records that every validator signs after checking them against its own certified history;
-   the boundary they set. Still open: checkpoint production and retention under the committed
-   policy, bootstrap from a transferred checkpoint without the block bodies below it, the
-   operator routes for the records, the deletion guard, and the rehearsal.
+   the boundary they set; checkpoint production at the heights the committed policy names and
+   retention of what it keeps, in a checkpoint store beside the rolling snapshots; and the
+   operator routes and CLI that have a node sign its statement of the anchor or a floor and
+   relay every validator's statements. Still open: capturing every checkpoint height on a chain
+   whose blocks commit faster than a capture, bootstrap from a transferred checkpoint without the
+   block bodies below it, the deletion guard, and the rehearsal.
 6. **Operations and clients.** `--check-replay`, per-validator Taira tooling with rolling recovery,
    certified discovery and the client contract (8.4), tested against archived SDK and indexer
    builds. Done: `iroha3d --check-replay`, which replays a copy of a stopped store with the
    candidate from its newest authenticated snapshot (or signed genesis) and names the first
    differing commitment component or the first missing body; and the operator route
    (`POST /v1/runtime/upgrades/draft`, `iroha runtime upgrade draft`) that drafts an addition's
-   activation from the node's release catalog; and the Taira launcher running `--check-replay`
+   activation from the node's release catalog, and its counterpart for a migration's steps
+   (`POST /v1/runtime/migrations/draft`); and the Taira launcher running `--check-replay`
    and `--check-storage` offline, without reading its runtime-signer descriptors. Still open: the
    rest of this step.
 7. **Taira** adopted the foundation at its upgrade checkpoint with a660d601da (section 13) before
@@ -1015,8 +1024,9 @@ window enters V2; V1-only windows retain their existing verification rules.
 #### Finality-reader activation prerequisite
 
 Every finality reader that will advance beyond activation MUST be rebuilt with
-this successor's data-model validation, even though `wire_schema_hash` remains
-`8c6e5380` and the IVM ABI remains `7531b45d`. Wire compatibility does not imply
+this successor's data-model validation, even where `wire_schema_hash` (`072924c3` since
+the execution commitment's World roots became `KeyedStateRoot`) and the IVM ABI
+(`7531b45d`) match. Wire compatibility does not imply
 support for selected output semantics. In particular, the predecessor decoder's
 `validate_output_merkle_cache` → lifecycle `validate_state` rejects unavailable
 Time/Pipeline markers, certain typed-store repairs, and rejection-policy traces

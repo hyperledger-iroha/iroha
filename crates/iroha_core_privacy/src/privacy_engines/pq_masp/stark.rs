@@ -480,7 +480,10 @@ const COPY_WIDTH: usize = PQ_MASP_COPY_WIDTH_V1;
 const DISTINCT_RIGHT_BITS_OFFSET: usize = SCRATCH_DISTINCT_RIGHT_BITS_OFFSET;
 const VM_DIFFERENCE_BITS_OFFSET: usize = SCRATCH_VM_DIFFERENCE_BITS_OFFSET;
 include!("../shared_note_profile_constraints.rs");
-define_note_profile_constraint_residues_v1!(pq_masp_profile_constraint_residues_inner_v1);
+define_note_profile_constraint_residues_v1!(
+    pq_masp_profile_constraint_residues_inner_v1,
+    PQ_MASP_PROFILE_CONSTRAINT_COUNT_V1
+);
 /// Statement-and-consensus-binding adapter used by both prover and verifier.
 pub(super) struct PqMaspStarkAdapterV1<'a> {
     statement: &'a PqMaspStarkStatementV1,

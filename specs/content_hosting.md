@@ -11,13 +11,35 @@ individual files directly from Torii.
   tarball. Tar entries must be regular files; names are normalised UTF-8 paths.
   Size/path/file-count caps, the retention window, the chunk size, the cache
   defaults and the default stripe layout are protocol constants of this
-  release. Who may publish is the executor's admission decision: the Initial
-  executor admits `PublishContentBundle` in genesis only, and an installed
-  executor enforces its own permission. The `[content]` node configuration
-  holds gateway resources only.
+  release until a governed change set activates the committed parameter
+  `content_policy_v1` (`iroha_core::runtime::committed_policy`); a root that
+  recognizes it applies the value its predecessor block committed. Who may publish is the executor's admission decision: the Initial
+  executor admits `PublishContentBundle` in genesis, and after genesis only
+  through the governed `CanPublishContentBundle` permission (see
+  **Publishers**); an installed executor enforces its own permission. The
+  `[content]` node configuration holds gateway resources only.
   Manifests include the Norito-index hash, dataspace/lane, cache policy
   (`max_age_seconds`, `immutable`), auth mode (`public` / `role:<role>` /
   `sponsor:<uaid>`), retention policy placeholder, and MIME overrides.
+- **Publishers**: under the Initial executor, publishing after genesis is a
+  release addition after the frozen baseline. The release publishes one
+  Permission definition, `CanPublishContentBundle`
+  (`iroha_core::runtime::content_publish_permission`), and nothing else; a
+  governed change set drafted under `iroha.permission.content_publish.v1`
+  activates it. A root that has not activated it admits `PublishContentBundle`
+  and `RetireContentBundle` in genesis only, exactly as the baseline does. On a
+  root that has activated it:
+  - an authority holding the exact unit permission, directly or through a role,
+    may publish while no `Disabled` restriction names the definition;
+  - only a `CanSetParameters` holder grants or revokes the permission, on an
+    account or a role, and it may remove the permission from a role it does
+    not hold; a holder cannot delegate it and may renounce its own direct
+    grant;
+  - a `Disabled` restriction stops publishing and new grants, while
+    revocation continues;
+  - the creator of a bundle may retire it after genesis;
+  - a change set that activates or retires the definition lapses while any
+    account or role holds a permission of that name.
 - **Deduping**: tar payloads are chunked (default 64 KiB) and stored once per
   hash with reference counts; retiring a bundle decrements and prunes chunks.
 - **Serve**: Torii exposes `GET /v1/content/{bundle}/{path}`. Responses stream
@@ -43,7 +65,8 @@ individual files directly from Torii.
   each source, and builds into one exact-capacity archive buffer; symlinks and
   other non-regular inputs fail closed.
 - **Cache and auth defaults**: the default and maximum cache lifetime and the
-  immutable-bundle default are protocol constants enforced at publish time. A
+  immutable-bundle default are enforced at publish time, from the same source as
+  the size caps. A
   publish that supplies no manifest gets the `public` auth mode; a publisher
   that wants gated reads states the mode in its manifest.
 - **SLO + limits**: `content.max_requests_per_second` / `request_burst` and
@@ -67,5 +90,9 @@ Key references:
 
 - Data model: `crates/iroha_data_model/src/content.rs`
 - Execution: `crates/iroha_core/src/smartcontracts/isi/content.rs`
+- Publishing permission: `crates/iroha_core/src/runtime/content_publish_permission.rs`
+  (definition, recognition, draft) and
+  `crates/iroha_core/src/executor_initial_permission_authority.rs` (Initial
+  admission, grants and revocations)
 - Torii handler: `crates/iroha_torii/src/content.rs`
 - CLI helper: `crates/iroha_cli/src/content.rs`

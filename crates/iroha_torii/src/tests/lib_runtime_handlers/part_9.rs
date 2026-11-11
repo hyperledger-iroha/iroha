@@ -1594,6 +1594,10 @@ async fn runtime_governance_http_routes_require_operator_signatures() {
         (HttpMethod::POST, "/v1/runtime/upgrades/propose"),
         (HttpMethod::POST, "/v1/runtime/upgrades/cancel/invalid-id"),
         (HttpMethod::POST, "/v1/runtime/upgrades/attest/invalid-id"),
+        (HttpMethod::POST, "/v1/runtime/migrations/draft"),
+        (HttpMethod::GET, "/v1/runtime/boundaries"),
+        (HttpMethod::POST, "/v1/runtime/boundaries/anchor/attest"),
+        (HttpMethod::POST, "/v1/runtime/boundaries/floor/attest"),
     ] {
         // Even malformed draft bodies and identifiers must reach the mandatory
         // operator gate before payload decoding. A missing route returning 404

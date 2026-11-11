@@ -3,6 +3,8 @@
 mod custody_upgrade;
 #[path = "executor_restricted_dataspace_read_tests.rs"]
 mod restricted_dataspace_read;
+#[path = "executor_content_publish_permission_tests.rs"]
+mod content_publish_permission;
 
 use super::*;
 use crate::{

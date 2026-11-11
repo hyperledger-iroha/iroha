@@ -54,7 +54,12 @@ pub(super) async fn install_threshold_sessions(
         )?)],
     )
     .await?;
-    assert_eq!(current_height(client).await?, install_height);
+    observe_exact_height(
+        client,
+        install_height,
+        "failure-corridor threshold-key installation",
+    )
+    .await?;
     let activation_height = install_height
         .checked_add(1)
         .ok_or_else(|| eyre!("failure-corridor key activation height overflow"))?;
@@ -67,7 +72,12 @@ pub(super) async fn install_threshold_sessions(
     )
     .await?;
     network.ensure_blocks(activation_height).await?;
-    assert_eq!(current_height(client).await?, activation_height);
+    observe_exact_height(
+        client,
+        activation_height,
+        "failure-corridor threshold-key activation",
+    )
+    .await?;
     Ok(ThresholdSessionsV1 {
         logical_beacon: BeaconSessionId::for_network_v1(&network.network_id()),
     })
@@ -356,7 +366,7 @@ async fn four_validator_hidden_capacity_retains_then_releases_citizenship_bond_i
             ),
         )
         .await?;
-        assert_eq!(current_height(&client).await?, request_height);
+        observe_exact_height(&client, request_height, "request height").await?;
 
         let observed = read_attempt(&client, attempt_id).await?;
         for failure_id in final_failure_ids.values() {

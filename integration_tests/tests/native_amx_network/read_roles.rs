@@ -3,7 +3,6 @@
 use super::*;
 use iroha_data_model::{ValidationFail, isi::Unregister, sumeragi_finality::VerifiedSumeragiBlock};
 use iroha_data_model::{isi::Grant, sumeragi_amx::AmxDebitApprovalV1};
-use std::num::NonZeroU64;
 
 async fn assert_disclosure_denied(mut response: reqwest::Response) -> Result<()> {
     ensure!(
@@ -87,10 +86,12 @@ fn verify_preserved_debit(
             let proof = if next == height {
                 cut.attestation.body.finality_proof.clone()
             } else {
-                root.client(&genesis_key(root.index))
-                    .client()
-                    .get_sumeragi_finality_proof_async(NonZeroU64::new(next).unwrap(), root.scope)
-                    .await?
+                finality_proof(
+                    root.client(&genesis_key(root.index)).client(),
+                    next,
+                    root.scope,
+                )
+                .await?
             };
             tip = Some(verifier.verify(&proof)?);
         }

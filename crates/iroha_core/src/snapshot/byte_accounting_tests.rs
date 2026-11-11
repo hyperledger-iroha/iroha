@@ -247,7 +247,10 @@ async fn snapshot_over_ten_million_byte_items_publishes_restarts_and_preserves_u
 fn snapshot_accounting_keeps_release_wire_and_abi_pins() {
     let wire = hex::encode(crate::release_identity::wire_schema_hash());
     let abi = hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1));
-    assert!(wire.starts_with("8c6e5380"), "wire={wire}");
+    // The execution commitment's World roots are `KeyedStateRoot` since 86b691f465
+    // (`sumeragi.md` §16.6), which moved the wire identity from 8c6e5380. LtHash roots keep
+    // their bytes; a reader built before it refuses a keyed root whose marker bit is clear.
+    assert!(wire.starts_with("072924c3"), "wire={wire}");
     assert!(abi.starts_with("7531b45d"), "abi={abi}");
     eprintln!("snapshot-byte-accounting: wire={wire} abi={abi}");
 }

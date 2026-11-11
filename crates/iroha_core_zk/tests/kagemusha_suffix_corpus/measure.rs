@@ -101,6 +101,10 @@ fn verify_all(verifier: &SuffixVerifierV1<'_>, corpus: &Corpus, steps: &[StepOri
     );
 }
 
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "a printed estimate; every reported count is far below 2^52"
+)]
 fn report(interval: &Interval, count: usize) {
     // Projection conventions, not device measurements: the cost model's equal-throughput
     // rate implied by the owner-supplied 45-65 s per k16 stage over the historical 4.625 T

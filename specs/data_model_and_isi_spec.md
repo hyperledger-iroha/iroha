@@ -196,6 +196,17 @@ account grant. This grant authorizes reading that key's value or absence
 on the signed Global State row proof route; it grants no other row or write
 authority. Activation rejects pre-existing direct grants carrying that name.
 
+`CanPublishContentBundle` has the exact unit (`null`) payload and carries
+authority only on a root whose selection activates its governed Permission
+definition (`content_hosting.md`, "Publishers"). There, only a
+`CanSetParameters` holder may grant or revoke it, on an account or a role, and
+it may remove it from a role it does not hold; a recipient cannot delegate it
+directly or through a role and may renounce its own direct grant. A `Disabled`
+restriction on the definition refuses new grants. A change set that activates
+or retires the definition lapses while any account or role holds a permission
+of that name. A root that has not activated it treats the name as the frozen
+baseline treats any unknown permission.
+
 - Grant Permission to Account: adds `Permission` unless already inherent. Events: `AccountEvent::PermissionAdded`. Errors: `Repetition(Grant, Permission)` if duplicate. Code: `core/.../isi/account.rs`.
 - Revoke Permission from Account: removes if present. Events: `AccountEvent::PermissionRemoved`. Errors: `FindError::Permission` if absent. Code: `core/.../isi/account.rs`.
 - Grant Role to Account: inserts `(account, role)` mapping if absent. Events: `AccountEvent::RoleGranted`. Errors: `Repetition(Grant, RoleId)`. Code: `core/.../isi/account.rs`.

@@ -3,9 +3,11 @@
 Status: proposal for owner decision (2026-10-29). Step 1, the field-level
 mismatch diagnostic, is implemented. The `[settlement.router]` section and the
 validity keys of `[content]` are removed from the node schema (owner decision
-of 2026-11-11) and their values are protocol constants; G1 and the typed
-parameters of G2 are not implemented. G2 as first written is superseded by the
-frozen-baseline constraint below.
+of 2026-11-11) and their values are protocol constants until a governed change
+set activates the typed parameters `content_policy_v1` and
+`settlement_router_policy_v1` (implemented, see "Frozen-baseline constraint on
+G2"). G1 and the other typed parameters of G2 are not implemented. G2 as first
+written is superseded by the frozen-baseline constraint below.
 
 ## Problem
 
@@ -52,8 +54,8 @@ protocol constant, which equals the former `iroha_config` default.
 
 | Family | Fixed value | Census entry |
 | --- | --- | --- |
-| Settlement router inputs | former `[settlement.router]` defaults | `cfg.settlement_router` (done) |
-| Content-bundle limits and defaults | former `[content]` defaults | `cfg.content` (done) |
+| Settlement router inputs | former `[settlement.router]` defaults, until a change set activates `settlement_router_policy_v1` | `cfg.settlement_router` (done) |
+| Content-bundle limits and defaults | former `[content]` defaults, until a change set activates `content_policy_v1` | `cfg.content` (done) |
 | Content publisher allow-list | empty: publishing is the executor's admission decision | `cfg.content` (done) |
 | Content default read authorization mode | `Public`: a bundle manifest states any other mode | `cfg.content` (done) |
 
@@ -232,6 +234,89 @@ Neither `configs/soranexus/nexus/config.toml` (Minamoto) nor
 `configs/soranexus/taira/config.toml` sets one; a chain whose signed genesis
 bound another value fails its genesis policy check at startup, and a validator
 file that still names a removed key fails to load.
+
+### Implemented: content limits and router inputs
+
+`content_policy_v1` (`iroha_data_model::content_policy::ContentPolicyV1`) and
+`settlement_router_policy_v1`
+(`iroha_data_model::settlement_router_policy::SettlementRouterPolicyV1`)
+follow rule 1.
+
+- **Publication.** The release catalog publishes one Parameter definition per
+  parameter: its identifier, the Norito schema of the typed record and the
+  canonical bytes of its protocol default
+  (`crates/iroha_core/src/runtime/catalog/parameters.rs`). Nothing else is
+  published for it, so the definition activates from every selection a root
+  may run, Taira's included. `draft_addition` drafts the change set under the
+  module name `iroha.parameter.content_and_router_policy.v1`.
+- **Recognition** (`crates/iroha_core/src/runtime/committed_policy.rs`). A root
+  recognizes a parameter while its definition is active and no `Disabled`
+  restriction names it. Nothing stores recognition: every reader derives it
+  from the selection and parameters version it reads (block construction, views,
+  `State::content_snapshot` and `settlement_snapshot`, the State execution-policy
+  digest, and each side of the `state.content` and `state.settlement` cells), so
+  restore, snapshots and the undo side of a cell need no further rule. A root
+  that does not recognize a parameter decodes nothing and applies the protocol
+  constants.
+- **Values stored before activation.** The change set that makes a parameter
+  recognized (activation, or lifting its `Disabled` restriction) writes the
+  definition's initial value over whatever the root stored while the identifier
+  was opaque, so such a value never becomes policy. The initial value is the
+  protocol default, which equals the constants, so activation changes no
+  committed byte. For these two parameters the values a signed genesis bound
+  (rule 2) are those constants on every tracked network, so the initial value
+  is also what rule 2 requires.
+- **Recognized.** `SetParameter` admits only a valid policy, executor
+  reconciliation can neither declare, replace nor retire the parameter, and a
+  value committed in block N governs block N + 1 on, like every committed
+  policy.
+- **Retirement.** Block construction freezes policy before block start applies
+  the height's change sets, so a change set that stops recognizing a parameter
+  (a `Disabled` restriction or deactivation) lapses unless the committed value
+  equals the initial value. That keeps its own block, like every later one, at
+  the constants the successor selection requires (`live_runtime_upgrades.md`
+  §6, "Scheduling"); governance sets the value back first. §7.1 defines the
+  other restrictions for interfaces and implementations only; they do not
+  change a parameter.
+- **Local refusal.** Writing the initial value goes through the funded
+  parameter owner. A finite-pool refusal stays a local storage refusal the node
+  retries; any other refusal is a release defect and stops the node at that
+  height. Neither turns an activation into a lapse.
+
+### Implemented: content publishers
+
+The deleted `[content]` publisher allow-list became an executor permission
+(owner decision of 2026-11-11). Recognizing a new permission name is new
+behaviour too, so `CanPublishContentBundle`
+(`iroha_executor_data_model::permission::content`) follows rule 1 the same way
+(`crates/iroha_core/src/runtime/content_publish_permission.rs`).
+
+- **Publication.** The release catalog publishes one Permission definition for
+  it, outside `INITIAL_EXECUTOR_PERMISSION_NAMES`, so the frozen baseline's
+  inventory is unchanged. Nothing else is published for it: `iroha.grant` and
+  `iroha.revoke` keep whichever implementation the root selected, the
+  restricted-read successor included, and each reaches the same Initial rule
+  for this name. `draft_addition` drafts the change set under the module name
+  `iroha.permission.content_publish.v1`.
+- **Recognition.** Every reader derives it from the selection it executes. A
+  root that has not selected the definition executes exactly as the frozen
+  baseline does: the Initial executor admits `PublishContentBundle` and
+  `RetireContentBundle` in genesis only. A root that selected it also admits,
+  after genesis, publishing by an authority holding the exact unit permission
+  directly or through a role while no `Disabled` restriction names the
+  definition, and retirement by the bundle's creator.
+- **Grants.** On a root that selected the definition, only a
+  `CanSetParameters` holder grants or revokes the permission, on accounts and
+  roles, and it may remove the permission from a role it does not hold. A
+  holder cannot delegate it and may renounce its own direct grant. A `Disabled`
+  restriction refuses new grants and keeps revocation, so the grant set only
+  shrinks while it lasts. §7.1 defines the other restrictions for interfaces
+  and implementations only; they do not change a permission.
+- **Grants made before activation.** A change set that activates or retires
+  the definition lapses while any account or role holds a permission of this
+  name. A token granted under the baseline's rules therefore never becomes
+  publishing authority, and no grant outlives the definition as an opaque token
+  that those rules would let its holder pass on.
 
 ## Alternatives not proposed
 

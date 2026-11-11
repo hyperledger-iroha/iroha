@@ -10105,12 +10105,24 @@ fn anonymous_ballot_tags_hash_records_without_an_authoritative_state_owner() {
                 .map(move |line| (path.as_str(), line.trim()))
         })
         .collect();
+    // The anonymous family's reducer drives the board's registration ledger and seal
+    // (design §12.3, slice 2); it writes no State of its own.
     assert_eq!(
         node_uses,
-        [(
-            PREPARATION,
-            "use iroha_parliament_ballot::registration::{RegistrationErrorV1, verify_registration_v1};"
-        )],
+        [
+            (
+                "crates/iroha_core/src/governance/parliament_anonymous.rs",
+                "use iroha_parliament_ballot::board::{BoardErrorV1, RegistrationLedgerErrorV1, SealErrorV1};"
+            ),
+            (
+                "crates/iroha_core/src/governance/parliament_anonymous/credentials.rs",
+                "use iroha_parliament_ballot::board::{"
+            ),
+            (
+                PREPARATION,
+                "use iroha_parliament_ballot::registration::{RegistrationErrorV1, verify_registration_v1};"
+            ),
+        ],
         "the node uses a ballot crate differently: {REVIEW}"
     );
     let preparation = &node_sources

@@ -208,10 +208,15 @@ fn retained_merchant_activation_preserves_every_original_and_reopens_exactly() {
         original_hashes,
         "complete exact data copy before any Native open"
     );
-    let before = original_hashes
-        .iter()
-        .map(|(name, (bytes, hash))| format!("{} {bytes} {}\n", hex::encode(hash), name.display()))
-        .collect::<String>();
+    let before =
+        original_hashes
+            .iter()
+            .fold(String::new(), |mut listing, (name, (bytes, hash))| {
+                use std::fmt::Write as _;
+                writeln!(listing, "{} {bytes} {}", hex::encode(hash), name.display())
+                    .expect("writing to a String cannot fail");
+                listing
+            });
     fs::write(output.join("source.sha256"), before).unwrap();
 
     let credential = corpus.credential;

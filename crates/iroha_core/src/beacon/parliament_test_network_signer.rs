@@ -4,7 +4,7 @@
 //! harness. A fixture key session is an ordinary signed all-edge DKG session of
 //! exactly four validators with threshold two, whose dealer polynomials derive
 //! from the session's public identifiers. That makes it test material and never
-//! a custody provider.
+//! production custody.
 //!
 //! The harness holds every validator's signing key and runs the complete signed
 //! ceremony: signed recipient keys, signed dealer broadcasts, all encrypted
@@ -19,7 +19,10 @@
 //! re-derives the fixture dealers of that session's identifiers, and derives its
 //! one share against the committed transcript. It never rebuilds or compares a
 //! transcript: sealing a private edge draws fresh KEM randomness, so two
-//! ceremonies differ. A session with other dealers yields no share. The signer
+//! ceremonies differ. A session with other dealers yields no share. The native
+//! producer signs only for a seat whose custody its signer attests, so the daemon
+//! attests exactly what it signs with: the share it derives for its own seat of
+//! the committed session, and nothing else. The signer
 //! never emits pulses, final signatures, seeds, reducer state, or validation
 //! results; the ordinary Sumeragi aggregator still independently verifies every
 //! returned share and constructs the unique pulse.
@@ -324,12 +327,13 @@ impl TestNetworkParliamentBeaconPartialSignerV1 {
         })
     }
 
-    /// Mark this feature-only provider as an adversarial outbound signer.
+    /// Mark this feature-only provider as an adversarial signer.
     ///
-    /// The provider still derives a proof-valid share. The Sumeragi test hook
-    /// corrupts that share only after signing, omits it from the local reducer,
-    /// and broadcasts it so every receiving validator must reject it through
-    /// the ordinary ingress verifier.
+    /// It attests its genuine seat custody but returns a share whose signature
+    /// it corrupted after signing. The native producer verifies its own share
+    /// before retaining or broadcasting it, so the faulty seat contributes
+    /// nothing, and receivers reject the same share through their ordinary
+    /// ingress verifier. Protocol code carries no fault-injection hook.
     #[must_use]
     pub fn with_deliberately_invalid_outbound(mut self) -> Self {
         self.emit_invalid_outbound = true;
@@ -365,26 +369,14 @@ impl TestNetworkParliamentBeaconPartialSignerV1 {
             _ => Err("test Parliament beacon session has no exact local seat".to_owned()),
         }
     }
-}
 
-impl GlobalThresholdBeaconPartialSignerV1 for TestNetworkParliamentBeaconPartialSignerV1 {
-    fn attest_partial_signing_capability(
-        &self,
-        _session: &ValidatedGlobalThresholdBeaconSessionV1,
-        _expected_signer_index: u16,
-    ) -> Result<
-        super::GlobalThresholdBeaconPartialSigningCapabilityV1,
-        super::GlobalThresholdBeaconCapabilityErrorV1,
-    > {
-        // Deterministic test-only keys cannot attest production readiness.
-        Err(super::GlobalThresholdBeaconCapabilityErrorV1::NotOwned)
-    }
-
-    fn sign_partial(
+    /// The signer of this daemon's own seat of the committed `session`: its
+    /// fixture share, derived from the session's identifiers and validated
+    /// against the committed transcript.
+    fn local_seat_signer_v1(
         &self,
         session: &ValidatedGlobalThresholdBeaconSessionV1,
-        payload: &[u8],
-    ) -> Result<GlobalThresholdBeaconPartialSignatureV1, String> {
+    ) -> Result<InMemoryGlobalThresholdBeaconPartialSignerV1, String> {
         let (dkg_session, local_signer_index) = self.committed_seat_v1(session)?;
         let dealers = deterministic_dealers_v1(&dkg_session)
             .map_err(|_| "test Parliament beacon fixture is unavailable".to_owned())?;
@@ -404,16 +396,39 @@ impl GlobalThresholdBeaconPartialSignerV1 for TestNetworkParliamentBeaconPartial
             &private_contributions,
         )
         .map_err(|_| "test Parliament beacon share validation failed".to_owned())?;
-        let signer = InMemoryGlobalThresholdBeaconPartialSignerV1::from_validated_share(
-            session.clone(),
-            share,
-        )
-        .map_err(|_| "test Parliament beacon signer import failed".to_owned())?;
-        signer.sign_partial(session, payload)
+        InMemoryGlobalThresholdBeaconPartialSignerV1::from_validated_share(session.clone(), share)
+            .map_err(|_| "test Parliament beacon signer import failed".to_owned())
+    }
+}
+
+impl GlobalThresholdBeaconPartialSignerV1 for TestNetworkParliamentBeaconPartialSignerV1 {
+    fn attest_partial_signing_capability(
+        &self,
+        session: &ValidatedGlobalThresholdBeaconSessionV1,
+        expected_signer_index: u16,
+    ) -> Result<
+        super::GlobalThresholdBeaconPartialSigningCapabilityV1,
+        super::GlobalThresholdBeaconCapabilityErrorV1,
+    > {
+        // The custody attested is the custody signed with: the fixture share of
+        // this daemon's own seat, validated against the committed transcript.
+        self.local_seat_signer_v1(session)
+            .map_err(|_| super::GlobalThresholdBeaconCapabilityErrorV1::NotOwned)?
+            .attest_partial_signing_capability(session, expected_signer_index)
     }
 
-    fn test_network_emit_invalid_outbound_partial_v1(&self) -> bool {
-        self.emit_invalid_outbound
+    fn sign_partial(
+        &self,
+        session: &ValidatedGlobalThresholdBeaconSessionV1,
+        payload: &[u8],
+    ) -> Result<GlobalThresholdBeaconPartialSignatureV1, String> {
+        let mut partial = self
+            .local_seat_signer_v1(session)?
+            .sign_partial(session, payload)?;
+        if self.emit_invalid_outbound {
+            partial.signature_share[0] ^= 1;
+        }
+        Ok(partial)
     }
 }
 
@@ -580,6 +595,61 @@ mod tests {
         );
     }
 
+    /// The native producer signs only for a seat whose custody its signer attests.
+    #[test]
+    fn the_seat_attests_exactly_the_custody_it_signs_with() {
+        use crate::beacon::GlobalThresholdBeaconCapabilityErrorV1 as CapabilityError;
+
+        let keys = signing_keys();
+        let roster = roster(&keys);
+        let record =
+            deterministic_parliament_beacon_key_record_v1(network_id(), &keys, &fixture_budget())
+                .expect("derive public fixture");
+        let validated = validated(&record);
+        let payload = b"attested custody is signing custody";
+        let seats = u16::try_from(roster.len()).expect("four seats");
+        for peer in &roster {
+            let signer = seat_signer(&roster, peer);
+            let seat = signer
+                .sign_partial(&validated, payload)
+                .expect("own seat signs")
+                .signer_index;
+            let capability = signer
+                .attest_partial_signing_capability(&validated, seat)
+                .expect("own seat attests");
+            assert!(capability.matches(&validated, seat));
+            // Another seat of the same session is not this daemon's custody, and a seat
+            // outside the transcript is no request at all.
+            assert_eq!(
+                signer.attest_partial_signing_capability(&validated, seat % seats + 1),
+                Err(CapabilityError::NotOwned)
+            );
+            assert_eq!(
+                signer.attest_partial_signing_capability(&validated, seats + 1),
+                Err(CapabilityError::InvalidRequest)
+            );
+        }
+
+        // A peer without a seat among the signed recipient keys owns nothing.
+        let outsider = PeerId::new(
+            KeyPair::try_from_seed(vec![9; 32], Algorithm::BlsNormal)
+                .expect("derive outsider key")
+                .public_key()
+                .clone(),
+        );
+        let mut foreign = roster.clone();
+        foreign[3] = outsider.clone();
+        let signer =
+            TestNetworkParliamentBeaconPartialSignerV1::try_new(network_id(), &foreign, &outsider)
+                .expect("bind a seat of a different roster");
+        for seat in 1..=seats {
+            assert_eq!(
+                signer.attest_partial_signing_capability(&validated, seat),
+                Err(CapabilityError::NotOwned)
+            );
+        }
+    }
+
     /// The seat follows the committed roster order, not the local configuration.
     #[test]
     fn the_seat_comes_from_the_committed_recipient_keys() {
@@ -744,25 +814,39 @@ mod tests {
     }
 
     #[test]
-    fn invalid_outbound_mode_preserves_valid_signing_and_sets_only_the_test_hook() {
+    fn invalid_outbound_mode_attests_its_seat_but_signs_a_share_that_never_verifies() {
         let keys = signing_keys();
         let roster = roster(&keys);
         let record =
             deterministic_parliament_beacon_key_record_v1(network_id(), &keys, &fixture_budget())
                 .expect("derive public fixture");
         let validated = validated(&record);
-        let signer = seat_signer(&roster, &roster[0]).with_deliberately_invalid_outbound();
+        let honest = seat_signer(&roster, &roster[0]);
+        let faulty = seat_signer(&roster, &roster[0]).with_deliberately_invalid_outbound();
         let payload = b"feature-isolated invalid-outbound fixture";
-        let partial = signer
+        let verifies = |partial: &GlobalThresholdBeaconPartialSignatureV1| {
+            adaptive_partial_signature_from_dto_v1(partial).is_ok_and(|decoded| {
+                validated
+                    .transcript()
+                    .verify_partial_signature(payload, &decoded)
+                    .is_ok()
+            })
+        };
+        let honest_share = honest
             .sign_partial(&validated, payload)
-            .expect("the provider itself must still produce a valid share");
-        let decoded = adaptive_partial_signature_from_dto_v1(&partial)
-            .expect("decode proof-valid provider output");
-        validated
-            .transcript()
-            .verify_partial_signature(payload, &decoded)
-            .expect("the corruption belongs to the outbound lifecycle hook");
-        assert!(signer.test_network_emit_invalid_outbound_partial_v1());
-        assert!(!seat_signer(&roster, &roster[1]).test_network_emit_invalid_outbound_partial_v1());
+            .expect("the honest seat signs");
+        assert!(verifies(&honest_share));
+        // The faulty provider's custody is genuine: it attests the same seat.
+        faulty
+            .attest_partial_signing_capability(&validated, honest_share.signer_index)
+            .expect("attest the genuine seat");
+        let faulty_share = faulty
+            .sign_partial(&validated, payload)
+            .expect("the faulty provider still answers");
+        assert_eq!(faulty_share.signer_index, honest_share.signer_index);
+        assert!(
+            !verifies(&faulty_share),
+            "the producer must refuse the faulty share before retaining or broadcasting it"
+        );
     }
 }

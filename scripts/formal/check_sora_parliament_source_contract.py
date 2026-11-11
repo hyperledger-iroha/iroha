@@ -894,19 +894,21 @@ def require_substitution_path_absent(relative: str, source: str) -> None:
         )
 
 
-def require_sortition_slot_rule(reducer: str, planner: str, world: str) -> None:
+def require_sortition_slot_rule(reducer: str, planner: str, world: str, world_host: str) -> None:
     """A sortition slot is the first consensus-native pulse height, frozen at request time.
 
     slot = aligned(max(request_height + delay, highest earlier generation slot + 1), L)
     with the delay and the NPoS epoch length L frozen in the attempt. One pure
     helper aligns, one method derives, both registration paths and the persistence
-    recheck use it, and the executor rejects attempt creation without an NPoS
-    cadence before any write. An election awaiting its pulse has no failure arm,
-    no planner step and no terminal shape: it waits for exactly its slot.
+    recheck use it, and the one attempt-creation function shared by both executors
+    rejects a chain without an NPoS cadence before any write. An election awaiting
+    its pulse has no failure arm, no planner step and no terminal shape: it waits
+    for exactly its slot.
     """
     path = "crates/iroha_core/src/governance/parliament.rs"
     planner_path = "crates/iroha_core/src/governance/parliament/planner.rs"
     world_path = "crates/iroha_core/src/smartcontracts/isi/world.rs"
+    world_host_path = "crates/iroha_core/src/smartcontracts/isi/world_authority_host.rs"
 
     def body(source: str, declaration: str, relative: str) -> str:
         return compact_rust(mask_rust(rust_item(source, declaration, relative)))
@@ -1286,32 +1288,72 @@ def require_sortition_slot_rule(reducer: str, planner: str, world: str) -> None:
         }
     """, "attempt creation must require both committed NPoS signals: the genesis policy and "
          "an Npos schedule epoch ending on a multiple of its length")
-    create_owner = "    impl Execute for gov::CreateParliamentGovernanceAttemptV1 {"
+    # Both attempt executors (the baseline proposal table and the hosted SoraFS
+    # authority proposal) only read, then delegate to one creation function. The
+    # proposal host's writers (`write_status`, `apply_effect`) count as writes.
+    writes = (".put_", ".insert(", ".remove(", ".emit_events(", "_mut(",
+              ".write_status(", ".apply_effect(")
+    create_owner = "    fn create_parliament_host_attempt("
     create = body(world, create_owner, world_path)
     cadence = (
         "letsortition_pulse_epoch_length_blocks="
         "parliament_sortition_pulse_epoch_length_v1(state_transaction)?;"
     )
     require_ordered_once(world_path, create_owner, create, (
+        "letproposal_content_id=iroha_data_model::governance::types::ProposalContentId::new("
+        "host.fingerprint());",
+        "letgovernance_attempt_id=GovernanceAttemptId::derive_v1(proposal_content_id,"
+        "attempt_sequence);",
         cadence,
         "crate::governance::parliament::ParliamentAttemptStateV1::"
-        "try_new_with_randomness_redraws_before_attempt(self.canonical_attempt(risk_tier),"
+        "try_new_with_randomness_redraws_before_attempt("
+        "iroha_data_model::governance::types::GovernanceAttemptV1{id:governance_attempt_id,"
+        "proposal_content_id,sequence:attempt_sequence,risk_tier,"
+        "stage:iroha_data_model::governance::types::GovernanceStageV1::Qualification,"
+        "status:GovernanceAttemptStatusV1::Active,},"
         "randomness_redraws_before_attempt,PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,"
         "(state_transaction.gov.parliament_sortition_pulse_delay_blocks,"
         "sortition_pulse_epoch_length_blocks),effect_preimage_hash,expected_head,required_bodies,)"
         ".map_err(parliament_reducer_error)?;",
-        ".put_governance_proposal(proposal_id,retried_proposal)",
+        "host.write_status(crate::state::GovernanceProposalStatus::Proposed,state_transaction,)?;",
         ".put_parliament_attempt(attempt)",
         ".emit_events(",
     ))
     before_cadence = create[:create.index(cadence)]
-    for write in (".put_", ".insert(", ".remove(", ".emit_events(", "_mut("):
+    for write in writes:
         if write in before_cadence:
             raise RuntimeError(
                 f"{world_path}: the NPoS cadence check must precede every write of attempt "
                 f"creation; found {write!r} before it"
             )
+    for relative, source, owner, delegation in (
+        (world_path, world, "    impl Execute for gov::CreateParliamentGovernanceAttemptV1 {",
+         "create_parliament_host_attempt(ParliamentProposalHost::Baseline(proposal_record),"
+         "self.attempt_sequence,state_transaction,)}}"),
+        (world_host_path, world_host,
+         "impl Execute for iroha_data_model::isi::sorafs_authority::"
+         "CreateSorafsAuthorityParliamentAttemptV1 {",
+         "create_parliament_host_attempt(host,self.attempt_sequence,tx)}}"),
+    ):
+        executor = body(source, owner, relative)
+        if executor.count("create_parliament_host_attempt(") != 1 or not executor.endswith(delegation):
+            raise RuntimeError(
+                f"{relative}: {owner.strip()} must end by delegating to the one attempt creation"
+            )
+        for write in writes:
+            if write in executor[:-len(delegation)]:
+                raise RuntimeError(
+                    f"{relative}: {owner.strip()} must not write before attempt creation checks "
+                    f"the NPoS cadence; found {write!r}"
+                )
     world_code = re.sub(r"\s+", "", production_rust(world))
+    # The definition and the baseline executor; the SoraFS executor in the host.
+    for relative, code, count in (
+        (world_path, world_code, 2),
+        (world_host_path, re.sub(r"\s+", "", production_rust(world_host)), 1),
+    ):
+        if code.count("create_parliament_host_attempt(") != count:
+            raise RuntimeError(f"{relative}: attempt creation must keep its closed caller set")
     for token, count in (
         ("parliament_sortition_pulse_epoch_length_v1(", 2),
         (".next_sortition_generation_pulse_height_v1(request_height,beacon_session_id)"
@@ -1362,7 +1404,10 @@ def require_sortition_slot_rule(reducer: str, planner: str, world: str) -> None:
             "request.id,request.canonical_id()",
         ),
     )
-    for relative, source in ((path, reducer), (planner_path, planner), (world_path, world)):
+    for relative, source in (
+        (path, reducer), (planner_path, planner), (world_path, world),
+        (world_host_path, world_host),
+    ):
         require_substitution_path_absent(relative, source)
 
 
@@ -1544,7 +1589,7 @@ def require_block_start_construction(state: str) -> None:
     # its invocation binds exactly the original four State Cell sources.
     owners = (
         (path, "pub(super) fn construct_acquired_block<'state, R>(", "impl State", (lint,),
-         "original writers and armed continuation", "a7aa2bb68560fab218287ddcec60beb1a4d48e042daddc1a8cfd8f7c712af3db"),
+         "original writers and armed continuation", "620e06ef6c2edb080c87ede36b2070f07cad426e02d464436b065f9692314b4e"),
         (path, "fn finish_state_block_construction<R>(", None, ("#[inline(never)]",),
          "bounded borrowed finish", "aa4f6e7dd39969dd98751ac40f7f1b87bd4664a960a937cd8ccadc99487831b1"),
         (acquisition_path, "macro_rules! runtime_cells", None, (),
@@ -1564,18 +1609,18 @@ def require_block_start_construction(state: str) -> None:
         (hydration_path, "pub(super) fn rewind_da_indexes_to_height_with_releases(", "impl State", (gate,),
          "borrowed original rewind kernel", "39db8f45edd603db73f72e9aba6ff2958f1c3b9497415cf71106afaaad11560a"),
         (state_path, "pub struct StateBlock<'state>", None, (),
-         "original armed State owner", "7e13644044a601096aaeb2925833a17155627e291f47483344d61dd793e0397b"),
+         "original armed State owner", "ee7a37d3566f8a3fad4f005953b388cb00aeb4324a49d8243cfb5c0e755b3cd9"),
         (state_path, "pub struct StateBlockFields<'state>", None, (fields_lint,),
          "original armed State owner fields and paired cfg", "decd4eea8a43b5d0ffbcc519362f3b1e3a0f666199943f3add88b969cf9da76c"),
         (state_path, "fn from_fields(", "impl<'state> StateBlock<'state>", (),
-         "original armed State owner", "a946ab2482fdd67135614e20b672dba30bfd09176105b2d94838ba89ef09eac9"),
+         "original armed State owner", "098683d5a1eef932becc2dc383c875f30a3bea4b6f2dcebb15bc3022b8cd21ce"),
         (state_path, "impl mv::BlockRetirement for StateBlock<'_>", None, (),
          "original armed State owner writer retirement", "2e13183a5b1d2bf71b0e24ebe42df5cecc2f97025d4930b9a9c8f0be410b53e1"),
         (state_path, "impl Drop for StateBlock<'_>", None, (),
          "original armed State owner refund and notice order", "777282508d62d77ce46bdcf1b6bd52824be655d44dab69a9b92940e3e89866ba"),
         (state_path, "fn block_and_revert_with_pristine_carrier_stage_inner<E: std::fmt::Debug>(",
          "impl State", (replacement_lint, gate),
-         "conditional replacement acquisition and handoff", "e9ba6d7f38ccf3bb91b170167ca26774c5db42beca0097cdc907fbccef4a967b"),
+         "conditional replacement acquisition and handoff", "1dd9b60856d1a6696871eb26ebf421ec7f2c48eb86ce99957278649ce63abf2c"),
     )
     for location, declaration, owner, attributes, obligation, expected in owners:
         item = construction_rust_item(sources[location], declaration, location, owner, attributes)
@@ -1589,9 +1634,9 @@ def require_block_start_construction(state: str) -> None:
     # This still trusts the surrounding Rust crate/dependency resolver/compiler;
     # it is not a complete semantic proof of arbitrary Rust programs.
     for location, expected in (
-        (path, "b96dc3daef08021418073b97d9ccb02c101f4883252943a39e08d227caad7204"),
-        (runtime_path, "afeeb9a9d958e10c45088a3147aee39db626a697fe134d629c24f887b54c759b"),
-        (policy_path, "e6211c96f91d57002f2175d6aa057cb3059877e116d7b7437480a2547d1d2e3f"),
+        (path, "d0978756633efb8a930a7eccfdae56bf46b6f564cddffdd33fb444b2005ef99b"),
+        (runtime_path, "e41e1b591e85ae5c2388051a9dc97fbdfc4e953de9352427db6172c7b8525d85"),
+        (policy_path, "95e29efa980f923489f440950d351c69d514b929a0aa52ca687a7b50775cedc8"),
         (acquisition_path, "6a64d3d0231415fc30520a2a1d4466964e5ffd0f7470aff7f375fabc1649223c"),
         (hydration_path, "d2259450d7526a8b5ba4c5ed04ce1a9816ded6e814190c95e7012800377c4615"),
     ):
@@ -1723,7 +1768,7 @@ def require_retired_parliament_release_exposure() -> None:
     startup = rust_item(daemon, "async fn activate_with_runtime_deps(", daemon_path)
     builder = rust_item(startup, "let runtime_deps = (|| {", daemon_path)
     if (compact_rust(mask_rust(startup)).count("letruntime_deps=(||{") != 1
-            or rust_token_digest(builder) != "ec43f619d7824e83260de3ae98f365f2451a161f9cc4e550a9041357c7b690ec"
+            or rust_token_digest(builder) != "53092d37a92397ba664f0b71b4d2668ca574f131d047f7855040198dc322a2d2"
             or not compact_rust(mask_rust(startup[startup.index(builder) + len(builder):])).startswith(")();letqueue_backpressure=")):
         raise RuntimeError(f"{daemon_path}: current Torii dependency construction changed")
 
@@ -1770,15 +1815,27 @@ def require_block_start_phase_call_order(state: str) -> None:
         "        let current_slot =",
         state_path,
     )
-    # This small statement region contains only the original height and the
-    # unconditional calls: private-settlement expiry, SCCP S0, G0 draw, G2a
-    # reconciliation, Parliament enactment, the same returned pause batch's G3
-    # enactment, then G4 lapse cleanup (specs/sccp.md §4.7.2, §4.14.7).
+    # This small statement region contains only the original height, the voted
+    # SoraFS authority term pass (selected by the committed runtime, inside its
+    # own rollback boundary on the same block), and the unconditional calls:
+    # private-settlement expiry, SCCP S0, G0 draw, G2a reconciliation, Parliament
+    # enactment, the same returned pause batch's G3 enactment, then G4 lapse
+    # cleanup (specs/sccp.md §4.7.2, §4.14.7).
     # Ignore comments, but reject hidden conditions,
     # substituted owners/heights, duplicate calls, or swapped execution order.
     phases = strip_rust_comments(phases)
     expected = (
         "let now_h = sb._curr_block.height().get();"
+        "if crate::runtime::sorafs_authority_enabled(sb.world.runtime_selection())"
+        ".map_err(|error| StateBlockStartError::Policy(error.to_string()))?"
+        "&& (sb.world.sorafs_authority_proposals.iter().next().is_some()"
+        "|| sb.world.sorafs_authority_leases.iter().next().is_some())"
+        "{let mut terms = sb.try_transaction()?;"
+        "let result = crate::smartcontracts::isi::sorafs_authority::advance_terms(&mut terms);"
+        "terms.ensure_execution_ready().map_err(StateBlockStartError::ExecutionDeferred)?;"
+        "result.map_err(|error| {"
+        'StateBlockStartError::Policy(format!("authority term execution: {error:?}"))})?;'
+        "terms.apply();}"
         "Self::apply_block_start_private_settlement_expiry(&mut sb, now_h)"
         ".map_err(StateBlockStartError::Storage)?;"
         "crate::smartcontracts::isi::sccp::hook::begin_block(&mut sb)"
@@ -1835,7 +1892,7 @@ def require_block_start_phase_call_order(state: str) -> None:
     # closure, or early successful return around intact call text. Pin the whole
     # reviewed entry bodies with literal-preserving tokens; changes need review.
     if (rust_token_digest(wrapper_source) != "36d421b3f6c6311c4a41af89ad1982e9f9c9647fed5c27659b86b219487c8ca8"
-            or rust_token_digest(constructor) != "93b948646381f39a0b6268f6c3128284667988c880058f0da05c2a8b5e4fed00"):
+            or rust_token_digest(constructor) != "bac6ca196a23e8264863dc8352fac8ffbc6498930eb4334eff9d12b1d46a3a8e"):
         raise RuntimeError(f"{state_path}: start phases changed their reviewed complete entry bodies")
 
 
@@ -2275,8 +2332,12 @@ def require_publication_kura_cleanup(publication: str) -> None:
                '.geometry_cleanup.retire_notices();')
     unwind = ('Err(payload)=>{original.poisoned=true;self.publication=Some(original);'
               'mv::BlockRetirement::release_writers(self);' + notices + 'resume_unwind(payload);}')
+    # Retired keyed versions can wake allocation waiters: they drop only after every
+    # terminal writer is released, and before any original Kura notice.
     terminal = ('letterminal=original.poisoned||original.published;self.publication=Some(original);'
-                'ifterminal{mv::BlockRetirement::release_writers(self);}' + notices + 'result}')
+                'ifterminal{mv::BlockRetirement::release_writers(self);'
+                'drop(self.publication.as_mut().expect("publication").retired_keyed.take(),);}'
+                + notices + 'result}')
     if (engine.count(".retire_notices()") != 2 or engine.count(notices) != 2 or engine.count(unwind) != 1
             or not engine.endswith(terminal) or attempt.count('.retire_notices()') != 0):
         raise RuntimeError(f"{path}: original Kura notices must follow complete State cleanup")
@@ -2528,7 +2589,8 @@ def require_parliament_commit_publication(state: str) -> None:
         "iforiginal.poisoned{self.publication=Some(original);returnStatePublicationOutcome::RecoveryRequired(TransactionsBlockError::PublicationRecoveryRequired,);}",
         "letresult=self.attempt_original_publication(&mutoriginal);",
         "iforiginal.fields_frozen&&!original.irreversible{self.recover_original_publication_fields();self.retire_original_publication_notices();}",
-        "self.publication=Some(original);ifterminal{mv::BlockRetirement::release_writers(self);}"
+        "self.publication=Some(original);ifterminal{mv::BlockRetirement::release_writers(self);"
+        "drop(self.publication.as_mut().expect(\"publication\").retired_keyed.take(),);}"
         "self.publication.as_mut().expect(\"retainedoriginalpublication\").geometry_cleanup.retire_notices();result",
         '#[cfg(feature="telemetry")]lettelemetry_origin=this.committed_telemetry_origin().map_err(|_|TransactionsBlockError::WorldCommitPreparation)?;',
     ))
@@ -2612,13 +2674,22 @@ def require_parliament_commit_publication(state: str) -> None:
     # These are the original destructured inputs and the observed generation.
     # The complete live owner is also pinned below: use counts alone would not
     # reject replacing the source of an otherwise unchanged local binding.
+    # After the frozen keyed cut borrows the original fields, the publication
+    # fields are borrowed again from that same original owner, each by its name.
     require_ordered_once(path, "original capture inputs", preparation_code, (
         "letStatePublication{capture_policy,geometry_cleanup,",
         "refunds:_,}=original;letthis=self;",
         "letstate_ref=this.state_ref;",
-        "}=this.fields.as_mut().expect();",
+        "}=this.fields.as_mut().expect();#[cfg(feature=)]letcommitted_parliament_attempt_counts=",
         "letcurrent_generation=state_ref.state_view_generation();",
+        "*keyed_cut=Some(published);}letStateBlockFields{canonical_runtime,native_execution_tip,"
+        "world,block_hashes,transactions,commit_topology:committed_topology,"
+        "prev_commit_topology:prev_committed_topology,nexus,pending_da_commitments,"
+        "pending_autoscale_lifecycle,#[cfg(feature=)]pending_parliament_telemetry_events,"
+        "pending_public_lane_slash_observability,_curr_block,..}=this.fields.as_mut().expect();",
     ))
+    if preparation_code.count("=this.fields.as_mut().expect();") != 2:
+        raise RuntimeError(f"{path}: original publication must borrow its fields from the original owner only")
     # This exact current lint attribute cannot disable the engine owner. Every
     # other attribute remains visible to the scoped unconditional-owner locator.
     engine_lint = """#[expect(
@@ -2766,7 +2837,7 @@ impl<'state> StateBlock<'state> {
     # Bind the complete reviewed defining owner after the specific explanatory
     # checks. This covers substitutions, shadows and conditional bypasses while
     # retaining literals, typed refusals and the original frozen journal sources.
-    if rust_token_digest(original_attempt) != "6b265ab147262bf0934caed34a96b85d442363fe99634a77d296feb43b3ce512":
+    if rust_token_digest(original_attempt) != "47e8d77c8ff4e89745bf75ef5ecc2e3308f258fb107a29a8c2e1c2247cea3949":
         raise RuntimeError(f"{path}: original publication changed its complete live owner")
 
 
@@ -4398,7 +4469,8 @@ def require_signed_deferred_authority_and_native_fees(
     require(authority_path, shared_authority, (
         "Result<(), Attempt<ValidationFail>>",
         "reject_opaque_committee_operations_with(instructions, &mut visited, 0, &mut |approve|",
-        "live_proposal_instructions_for_approval(state_transaction, approve)",
+        "live_proposal_instructions_for_approval(state_transaction, approve),"
+        "state_transaction.world.runtime_selection.get(),)",
         ".map_err(|error| {error.map_rejection(|error| {ValidationFail::NotPermitted(",
     ))
     refusal = item(fee, "fn transaction_attempt_rejection(", fee_path)
@@ -4427,7 +4499,7 @@ def require_signed_deferred_authority_and_native_fees(
         "if depth > MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH {return Err(OpaqueDeferredAuthorityError::ProposalDepthExceeded.into());}",
         "reject_opaque_committee_operation(instruction, index)?;",
         "MultisigInstructionBox::Propose(proposal)",
-        "reject_opaque_committee_operations_with(proposal.instructions.iter(), visited, depth + 1, resolve,)?;",
+        "reject_opaque_committee_operations_with(proposal.instructions.iter(), visited, depth + 1, resolve, selection,)?;",
         "MultisigInstructionBox::Approve(approval)",
         "Result<(), Attempt<OpaqueDeferredAuthorityError>>",
         "multisig_instruction_decode_attempt(error, |_| ())",
@@ -4435,15 +4507,15 @@ def require_signed_deferred_authority_and_native_fees(
         "Attempt::Rejected(()) => None",
         "let Some((authority, instructions)) = resolve(&approval).map_err(|error| {"
         "error.map_rejection(|error| {OpaqueDeferredAuthorityError::ProposalReadFailed(error.to_string())})})?else",
-        "reject_opaque_committee_operations_with(instructions.iter(), visited, depth + 1, resolve,)?;",
+        "reject_opaque_committee_operations_with(instructions.iter(), visited, depth + 1, resolve, selection,)?;",
         "return Err(OpaqueDeferredAuthorityError::UnresolvedMultisigApproval",
         "if visited.insert(identity)",
         "Executable::Instructions(nested)",
-        "reject_opaque_committee_operations_with(nested.iter(), visited, depth + 1, resolve,)?;",
+        "reject_opaque_committee_operations_with(nested.iter(), visited, depth + 1, resolve, selection,)?;",
         "Executable::IvmProved(proved)",
-        "reject_opaque_committee_operations_with(proved.overlay.iter(), visited, depth + 1, resolve,)?;",
+        "reject_opaque_committee_operations_with(proved.overlay.iter(), visited, depth + 1, resolve, selection,)?;",
         "Executable::Batch(items)",
-        "std::slice::from_ref(instruction), visited, depth + 1, resolve,",
+        "std::slice::from_ref(instruction), visited, depth + 1, resolve, selection,)?;",
     ))
     require(authority_path, re.sub(r"\s+", "", mask_rust(authority)), (
         "const MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH: usize = 64;",
@@ -4570,14 +4642,15 @@ def require_signed_deferred_authority_and_native_fees(
         "state_transaction.defer_execution(reason)",
     ))
     # The accepted entrypoint hands its external signed input to the one signed
-    # execution owner on the same overlay and never finishes a fee itself.
+    # execution owner on the same overlay, marked external, and never finishes a
+    # fee itself.
     accepted = item(transaction, "pub(crate) fn execute_accepted_transaction_in_overlay(", tx_path)
     require(tx_path, accepted, (
         "let signed = match tx.entrypoint() {",
         "TransactionEntrypoint::External(signed) => signed,",
     ))
     delegation = re.sub(r"\s+", "", "Self::execute_signed_transaction_in_overlay(signed,"
-                        "state_transaction, ivm_cache, routing_decision, policy_route, genesis,)}")
+                        "state_transaction, ivm_cache, routing_decision, policy_route, genesis, true,)}")
     if (not accepted.endswith(delegation) or accepted.count("execute_signed_transaction_in_overlay(") != 1
             or "crate::retail_fee::finalize(" in accepted):
         raise RuntimeError(f"{tx_path}: native fee must finish once in the original transaction overlay")
@@ -5123,7 +5196,7 @@ def require_queue_signed_proposal_gas(executable: str, queue: str) -> None:
     # alone cannot prove rejection: Err can be shadowed or recovered with
     # or_else. Pin the complete reviewed prefix instead of interpreting it.
     quote = re.search(r"\blet\s+zk_gas\s*=", admission)
-    if quote is None or rust_token_digest(original_admission[:quote.start()]) != "1d1a06e6d648e7a616754be6ab73be7c32ce02c0cd84ce15fa4d6ba83c7194a4":
+    if quote is None or rust_token_digest(original_admission[:quote.start()]) != "77477cdb08deb99ea3f9a0a82efaa6c9d1cec363874355dbbcaa25b57a034ebf":
         raise RuntimeError(f"{queue_path}: signed proposal gas admission prefix changed")
     literal_admission = re.sub(r"\s+", "", strip_rust_comments(original_admission))
     if not literal_admission.endswith(re.sub(r"\s+", "", tail)):
@@ -5855,7 +5928,7 @@ def main() -> int:
             '"active Parliament TLE key session is not bound to the current commit topology"',
             "let randomness_redraws_before_attempt = previous",
             "ParliamentAttemptStateV1::randomness_redraws_used_v1",
-            "randomness_redraws_before_attempt\n                    >= crate::governance::parliament::MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
+            "randomness_redraws_before_attempt\n                >= crate::governance::parliament::MAX_PARLIAMENT_RANDOMNESS_REDRAWS_V1",
             "ParliamentAttemptStateV1::try_new_with_randomness_redraws_before_attempt(",
         ),
     )
@@ -5964,7 +6037,8 @@ def main() -> int:
         require_all(world_path, branch, bindings)
     require_sortition_registration_guards(world)
     require_sortition_slot_rule(
-        reducer, read("crates/iroha_core/src/governance/parliament/planner.rs"), world
+        reducer, read("crates/iroha_core/src/governance/parliament/planner.rs"), world,
+        read("crates/iroha_core/src/smartcontracts/isi/world_authority_host.rs"),
     )
     for forbidden in (
         "ParliamentLifecycleTransitionV1::ConstructCertificate",
@@ -7037,17 +7111,28 @@ def main() -> int:
         "impl World {",
         state_path,
     )
-    # The derived Parliament indexes are a function of the attempts alone: no stored
-    # pulse can make their rebuild fail.
+    # The derived Parliament indexes are a function of the attempts and of the
+    # hosted SoraFS proposals' height-deadline receipts alone: no stored pulse can
+    # make their rebuild fail. A closed proposal keeps its attempts but loses their
+    # live work, exactly as `close_sorafs_authority_attempt_work` removes it.
     derived_owner = "fn parliament_derived_read_indexes_v1<'a>("
     derived_code = compact_rust(mask_rust(rust_item(state, derived_owner, state_path)))
     if (not derived_code.startswith(
             "fnparliament_derived_read_indexes_v1<'a>(attempts:implIntoIterator<Item="
-            "(&'aGovernanceAttemptId,&'aParliamentAttemptStateV1)>,)"
+            "(&'aGovernanceAttemptId,&'aParliamentAttemptStateV1)>,"
+            "is_closed:implFn(ProposalContentId)->bool,)"
             "->Result<ParliamentDerivedReadIndexesV1,String>{")
             or "global_beacon" in derived_code or "finalized_beacon" in derived_code):
         raise RuntimeError(
             f"{state_path}: Parliament derived indexes must be rebuilt from attempts alone"
+        )
+    if derived_code.count(
+            "forpulse_slotinattempt.required_beacon_pulse_slots_v1().into_iter()"
+            ".filter(|_|!is_closed(attempt.proposal_content_id())){"
+            "required_beacon_pulse_slots.entry(pulse_slot).or_default()"
+            ".insert(*governance_attempt_id);}") != 1:
+        raise RuntimeError(
+            f"{state_path}: Parliament pulse demand must be every open attempt's frozen slots"
         )
     require_all(
         state_path,
@@ -7060,7 +7145,6 @@ def main() -> int:
             "let mut certified_enactments =",
             "attempt.certified_enactment_height_v1()",
             "let mut required_beacon_pulse_slots =",
-            "for pulse_slot in attempt.required_beacon_pulse_slots_v1()",
             "let mut tle_key_session_retention_deadlines =",
             "attempt.tle_key_session_retention_contributions_v1()",
             ".entry(opening_deadline)",
@@ -7080,11 +7164,9 @@ def main() -> int:
             "-> Result<(), String>",
             "self.citizens.view().len() > maximum_citizens",
             "MAX_PARLIAMENT_CITIZENS_V1",
-            "parliament_derived_read_indexes_v1(attempts.iter())?",
             "tle_key_session_selection_intervals_v1(",
             "let reverted_attempts = self.parliament_attempts.block_and_revert()",
             "let reverted_lifecycles = self.tle_key_session_lifecycles.block_and_revert()",
-            "let previous_parliament = parliament_derived_read_indexes_v1(",
             "let previous_tle_key_session_selection_intervals =",
             "let ParliamentDerivedReadIndexesV1 {",
             "self.parliament_timed_ovn_resource_reservations =",
@@ -7096,6 +7178,22 @@ def main() -> int:
             "Ok(())",
         ),
     )
+    # Current and predecessor indexes each take their closure receipts from the
+    # hosted proposal table of the same version as their attempts.
+    rebuilt_code = compact_rust(mask_rust(rebuilt_reservations))
+    require_ordered_once(state_path, "rebuild_governance_read_indexes", rebuilt_code, (
+        "letcurrent_parliament={letattempts=self.parliament_attempts.view();"
+        "lethosted=self.sorafs_authority_proposals.view();"
+        "parliament_derived_read_indexes_v1(attempts.iter(),|content|{hosted.get(content.as_bytes())"
+        ".is_some_and(|r|r.deadline_closure.is_some())})?};",
+        "letreverted_attempts=self.parliament_attempts.block_and_revert();"
+        "letreverted_hosted=self.sorafs_authority_proposals.block_and_revert();",
+        "letprevious_parliament=parliament_derived_read_indexes_v1(reverted_attempts.iter(),"
+        "|content|{reverted_hosted.get(content.as_bytes())"
+        ".is_some_and(|r|r.deadline_closure.is_some())})?;",
+    ))
+    if rebuilt_code.count("parliament_derived_read_indexes_v1(") != 2:
+        raise RuntimeError(f"{state_path}: Parliament derived indexes must be rebuilt exactly twice")
     if rebuilt_reservations.find("parliament_derived_read_indexes_v1(") > rebuilt_reservations.find(
         "self.parliament_timed_ovn_resource_reservations ="
     ):

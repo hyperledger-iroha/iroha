@@ -79,6 +79,17 @@ pub enum ProofInputErrorV1 {
     ProfileIdentity,
 }
 
+impl ProofInputErrorV1 {
+    /// Whether the node could not produce the input (its proof profile or a pinned frame),
+    /// as opposed to the input being invalid. A local failure is never a committed verdict.
+    pub const fn is_local(&self) -> bool {
+        matches!(
+            self,
+            Self::Profile(_) | Self::ProfileIdentity | Self::Codec(_)
+        )
+    }
+}
+
 /// Lossless conversion of a fixed-length data-model value to and from the proof crate's
 /// type of the same bytes.
 pub trait ProofValueV1: Sized {

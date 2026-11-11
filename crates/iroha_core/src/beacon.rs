@@ -1839,19 +1839,6 @@ pub trait GlobalThresholdBeaconPartialSignerV1: Send + Sync {
     > {
         seat_readiness::prove_with_partial_signer(self, session, generation, context)
     }
-
-    /// Return whether the feature-isolated test daemon must corrupt this
-    /// provider's outbound share after signing and before broadcast.
-    ///
-    /// This hook does not exist in ordinary builds. Its sole caller skips
-    /// local reducer admission for the deliberately malformed share so the
-    /// live network exercises receiver-side proof rejection without granting
-    /// the faulty validator a hidden local contribution.
-    #[cfg(feature = "test-network-parliament-signers")]
-    #[doc(hidden)]
-    fn test_network_emit_invalid_outbound_partial_v1(&self) -> bool {
-        false
-    }
 }
 
 /// Non-secret exact-session custody result from an authenticated runtime owner.

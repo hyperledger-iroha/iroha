@@ -1966,14 +1966,25 @@
    "path": "crates/iroha_core/src/state/runtime_configuration.rs",
    "symbol": "pub fn install_node_content(",
    "gates": "Content-bundle hosting policy of [content]: the limits and defaults PublishContentBundle applies to an archive, the publisher allow-list and the default read authorization mode.",
-   "decided_by": "Removed from node configuration. The limits and defaults (bundle, file-count, path and retention caps, chunk size, cache defaults, default stripe layout) are protocol constants: State::install_node_content keeps a node's gateway resources and resets every limit, and the `[content]` schema has no key for them. The publisher allow-list is deleted: who may publish is the executor's admission decision (the Initial executor admits PublishContentBundle in genesis only; an installed executor enforces its own permission). The default read authorization mode is fixed at Public; a publisher that wants gated reads states the mode in its bundle manifest.",
+   "decided_by": "Removed from node configuration, and made chain-settable only through a governed addition. On a root that does not recognize the typed parameter `content_policy_v1` (every root until a governed change set activates it) the limits and defaults (bundle, file-count, path and retention caps, chunk size, cache defaults, default stripe layout) are protocol constants: State::install_node_content keeps a node's gateway resources and resets every limit, the `[content]` schema has no key for them, and the frozen baseline stores the identifier as an opaque custom parameter. The release publishes a Parameter definition for it (runtime::catalog::parameters); a root recognizes it while the definition is active and not Disabled (runtime::committed_policy), the change set that makes it recognized writes the protocol default, SetParameter then admits only a valid policy, and block construction freezes the predecessor's value. A change set that stops recognizing it lapses unless the committed value is back at the default. The publisher allow-list is deleted: who may publish is the executor's admission decision. Under the Initial executor, publishing after genesis is the governed permission CanPublishContentBundle (runtime::content_publish_permission): the release publishes one Permission definition outside the frozen baseline's inventory and nothing else. A root that has not selected it admits PublishContentBundle and RetireContentBundle in genesis only, exactly as the baseline does. A root that selected it admits post-genesis publishing by an authority holding the exact unit permission, directly or through a role, while no Disabled restriction names the definition, and retirement by the bundle's creator; only a CanSetParameters holder grants or revokes the permission, and its holders cannot delegate it. A change set that activates or retires the definition lapses while any account or role holds a permission of that name. An installed executor enforces its own permission. The default read authorization mode is fixed at Public; a publisher that wants gated reads states the mode in its bundle manifest.",
    "attribution": "read",
-   "note": "The execution-policy digest and the `state.content` State cell keep their V1 terms with the fixed values every default chain already encoded (the empty publisher set and Public), so their bytes do not change; a chain whose signed genesis bound other values fails its genesis policy check at startup instead of changing silently. Neither tracked network template sets a `[content]` key. Chain-settable limits are not node-local validity: they need a typed committed parameter published by a release addition and activated by a governed change set (specs/live_runtime_upgrades.md \u00a74), because the frozen baseline stores `content_policy_v1` as an opaque custom parameter.",
+   "note": "The execution-policy digest and the `state.content` State cell keep their V1 terms. Each side of the cell encodes the effective limits of its own parameters and selection versions, so a root that does not recognize the parameter, or recognizes it at the protocol default, keeps the bytes every default chain encoded (with the empty publisher set and Public). Neither tracked network template sets a `[content]` key, and the protocol default equals the former constants, so activation alone changes no committed byte.",
    "tests": [
     {"path": "crates/iroha_config/tests/committed_content_and_settlement_keys.rs", "name": "configuration_file_cannot_set_a_content_limit"},
     {"path": "crates/iroha_config/tests/committed_content_and_settlement_keys.rs", "name": "moved_values_of_a_node_settings_value_are_the_protocol_defaults"},
     {"path": "crates/iroha_core/src/state/authority_registry/content_policy.rs", "name": "publisher_set_and_default_read_mode_are_fixed_protocol_terms"},
-    {"path": "crates/iroha_core/src/sumeragi/genesis_meta.rs", "name": "unselected_policy_parameter_names_stay_opaque_custom_parameters"}
+    {"path": "crates/iroha_core/src/sumeragi/genesis_meta.rs", "name": "unselected_policy_parameter_names_stay_opaque_custom_parameters"},
+    {"path": "crates/iroha_core/src/runtime/committed_policy/tests.rs", "name": "an_unrecognizing_root_stores_either_identifier_opaquely_and_changes_nothing"},
+    {"path": "crates/iroha_core/src/runtime/committed_policy/tests.rs", "name": "activation_overwrites_the_opaque_value_and_the_next_block_applies_the_committed_policy"},
+    {"path": "crates/iroha_core/src/runtime/committed_policy/tests.rs", "name": "retirement_waits_for_the_initial_value_and_reactivation_reinstalls_it"},
+    {"path": "crates/iroha_core/src/runtime/committed_policy/tests.rs", "name": "the_protocol_defaults_are_the_constants_an_unrecognizing_root_applies"},
+    {"path": "crates/iroha_core/src/runtime/catalog/parameters.rs", "name": "each_parameter_is_published_once_outside_the_baseline"},
+    {"path": "crates/iroha_core/src/runtime/content_publish_permission/tests.rs", "name": "the_permission_is_published_once_after_the_frozen_baseline"},
+    {"path": "crates/iroha_core/src/runtime/content_publish_permission/tests.rs", "name": "selection_changes_lapse_while_any_account_or_role_holds_the_name"},
+    {"path": "crates/iroha_core/src/executor_content_publish_permission_tests.rs", "name": "a_root_without_the_definition_keeps_the_frozen_baseline_rules"},
+    {"path": "crates/iroha_core/src/executor_content_publish_permission_tests.rs", "name": "publishing_after_genesis_requires_the_permission_directly_or_through_a_role"},
+    {"path": "crates/iroha_core/src/executor_content_publish_permission_tests.rs", "name": "only_the_parameter_authority_grants_or_revokes_the_permission"},
+    {"path": "crates/iroha_core/src/executor_content_publish_permission_tests.rs", "name": "a_disabled_definition_stops_publishing_and_grants_but_not_revocation_or_retirement"}
    ],
    "removed": [
     {"path": "crates/iroha_config/src/parameters/user.rs", "contains": "defaults::content::MAX_BUNDLE_BYTES\")]"},
@@ -1990,22 +2001,29 @@
    "status": "done",
    "owner": "F.4",
    "path": "crates/iroha_core/src/state/runtime_configuration.rs",
-   "symbol": "pub fn settlement(&self)",
+   "symbol": "pub fn settlement_snapshot(&self)",
    "gates": "Settlement router pricing windows and buffer thresholds.",
-   "decided_by": "Removed from node configuration. The router inputs are protocol constants: the node schema has no `[settlement]` section and State has no settlement installer (State::set_settlement is deleted). F.3 owns the economic invariant.",
+   "decided_by": "Removed from node configuration, and made chain-settable only through a governed addition. On a root that does not recognize the typed parameter `settlement_router_policy_v1` the router inputs are protocol constants: the node schema has no `[settlement]` section and State has no settlement installer (State::set_settlement is deleted). A root that activates the Parameter definition the release publishes recognizes it under the same rules as `content_policy_v1` (runtime::committed_policy); blocks build their settlement engine from the frozen inputs. F.3 owns the economic invariant.",
    "attribution": "read",
-   "note": "No block execution path calls the settlement engine yet (docs/settlement-router.md): the inputs are bound by the execution-policy digest and the `state.settlement` State cell, whose bytes do not change. Neither tracked network template sets a `[settlement.router]` key. Chain-settable inputs are not node-local validity: they need a typed committed parameter published by a release addition and activated by a governed change set (specs/live_runtime_upgrades.md \u00a74), because the frozen baseline stores `settlement_router_policy_v1` as an opaque custom parameter.",
+   "note": "No block execution path calls the settlement engine yet (docs/settlement-router.md): the inputs are bound by the execution-policy digest and the `state.settlement` State cell, whose bytes do not change for a root that does not recognize the parameter or recognizes it at the protocol default. Neither tracked network template sets a `[settlement.router]` key.",
    "tests": [
     {"path": "crates/iroha_config/tests/committed_content_and_settlement_keys.rs", "name": "configuration_file_cannot_set_a_settlement_router_input"},
     {"path": "crates/iroha_core/src/state/runtime_configuration_tests.rs", "name": "settlement_router_inputs_are_protocol_constants_without_an_installer"},
-    {"path": "crates/iroha_core/src/sumeragi/genesis_meta.rs", "name": "unselected_policy_parameter_names_stay_opaque_custom_parameters"}
+    {"path": "crates/iroha_core/src/sumeragi/genesis_meta.rs", "name": "unselected_policy_parameter_names_stay_opaque_custom_parameters"},
+    {"path": "crates/iroha_core/src/runtime/committed_policy/tests.rs", "name": "an_unrecognizing_root_stores_either_identifier_opaquely_and_changes_nothing"},
+    {"path": "crates/iroha_core/src/runtime/committed_policy/tests.rs", "name": "activation_overwrites_the_opaque_value_and_the_next_block_applies_the_committed_policy"},
+    {"path": "crates/iroha_core/src/runtime/committed_policy/tests.rs", "name": "retirement_waits_for_the_initial_value_and_reactivation_reinstalls_it"},
+    {"path": "crates/iroha_core/src/runtime/committed_policy/tests.rs", "name": "the_protocol_defaults_are_the_constants_an_unrecognizing_root_applies"},
+    {"path": "crates/iroha_core/src/runtime/catalog/parameters.rs", "name": "each_parameter_is_published_once_outside_the_baseline"}
    ],
    "removed": [
     {"path": "crates/iroha_config/src/parameters/user.rs", "contains": "pub struct Router"},
     {"path": "crates/iroha_config/src/parameters/user.rs", "contains": "InvalidSettlementConfig"},
     {"path": "crates/iroha_core/src/state/runtime_configuration.rs", "contains": "pub fn set_settlement"}
    ],
-   "sites": []
+   "sites": [
+    ["crates/iroha_core/src/state/state_block_construction.rs", "node_policy_read", "settlement.router.*", 1]
+   ]
   },
   {
    "id": "cfg.execution_policy.digests",
@@ -7031,7 +7049,7 @@
  },
  "summary": {
   "entries": 241,
-  "sites": 1511,
+  "sites": 1512,
   "by_status": {"done": 16, "local_resource": 24, "not_a_gate": 124, "open": 37, "out_of_plan": 21, "unsupported": 19},
   "by_owner": {"-": 145, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }

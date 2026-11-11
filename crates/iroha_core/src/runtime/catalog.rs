@@ -26,7 +26,9 @@
 //! until a governed change set ([`ReleaseCatalog::activation`]) moves the root to them.
 
 pub(crate) mod additions;
+mod kernel_lifecycle;
 pub mod migrations;
+pub(crate) mod parameters;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -124,6 +126,12 @@ pub struct ReleaseCatalog {
     migrations: BTreeMap<DefinitionId, MigrationAddition>,
     /// Exact compiled predecessor implementations and their restricted-read successors.
     pub(super) restricted_read_compositions: BTreeMap<DefinitionId, AdditionDefinitions>,
+    /// The kernel lifecycle addition composed over each compiled predecessor family, by the
+    /// family's services profile (`kernel_lifecycle`).
+    pub(super) runtime_lifecycle_compositions: BTreeMap<DefinitionId, AdditionDefinitions>,
+    /// The typed committed parameters this release adds after the baseline, by Parameter
+    /// definition ([`parameters`]); a root recognizes one only while its selection activates it.
+    parameter_additions: parameters::ParameterAdditions,
     /// Additive Ironwood definitions and the governed successor.
     pub ironwood: Option<super::ironwood::IronwoodCatalog>,
 }
@@ -493,6 +501,8 @@ impl ReleaseCatalog {
             cell_installers: BTreeMap::new(),
             migrations: BTreeMap::new(),
             restricted_read_compositions: BTreeMap::new(),
+            runtime_lifecycle_compositions: BTreeMap::new(),
+            parameter_additions: BTreeMap::new(),
             ironwood: None,
         };
 
@@ -708,6 +718,7 @@ impl ReleaseCatalog {
             interfaces_so_far.extend(published.interfaces.iter().map(|(id, def)| (*id, *def)));
             catalog.additions.push(published);
         }
+        catalog.publish_parameter_additions(parameters::PARAMETERS)?;
         catalog.ironwood = Some(super::ironwood::build_catalog(&mut catalog)?);
         let baseline = catalog.baseline.clone();
         catalog.lifecycle = catalog.lifecycle_successor(&baseline)?;
@@ -715,6 +726,7 @@ impl ReleaseCatalog {
         catalog.compile_lifecycle_compositions()?;
         super::sorafs_authority::compile(&mut catalog)?;
         super::restricted_dataspace_read::compile(&mut catalog)?;
+        catalog.compile_runtime_lifecycle_compositions()?;
         let mut state_fields = Vec::new();
         flatten(
             crate::state::authority_registry::STATE_FIELDS,
@@ -734,6 +746,7 @@ impl ReleaseCatalog {
         ))?;
         catalog.publish(super::keyed_state::descriptor())?;
         catalog.publish(super::state_row_permission::descriptor())?;
+        catalog.publish(super::content_publish_permission::descriptor())?;
         catalog.publish_migrations(migrations)?;
 
         Ok(catalog)
@@ -1163,6 +1176,9 @@ impl ReleaseCatalog {
             .ok_or_else(|| fail("not an addition of this release".to_owned()))?;
         let addition = if module == additions::RESTRICTED_DATASPACE_READ.module {
             selected_addition = super::restricted_dataspace_read::for_selection(self, current)?;
+            &selected_addition
+        } else if module == additions::RUNTIME_LIFECYCLE.module {
+            selected_addition = self.runtime_lifecycle_for(current)?;
             &selected_addition
         } else {
             addition

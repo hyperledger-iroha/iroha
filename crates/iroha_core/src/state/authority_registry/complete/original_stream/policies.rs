@@ -78,11 +78,64 @@ pub(super) fn append(
     }
     immutable!("state.oracle", oracle_policy::borrowed(&fields.oracle));
     immutable!("state.gov", governance_policy::borrowed(&fields.gov));
-    immutable!(
-        "state.settlement",
-        settlement_policy::borrowed(&fields.settlement)
-    );
-    immutable!("state.content", content_policy::borrowed(&fields.content));
+    // The router inputs and the content limits are committed policy of a root that
+    // recognizes them (`runtime::committed_policy`): each side encodes the effective value
+    // of its own parameters and selection versions over the installed constants, so a root
+    // that recognizes neither keeps the constant bytes.
+    let selection = &fields.world.runtime_selection;
+    let (current_selection, before_selection) = output.cell_values(
+        "world.runtime_selection",
+        selection,
+        &fields.state_ref.world.runtime_selection,
+        selection.mode(),
+    )?;
+    let committed_touched = parameters_touched || selection.touched_value().is_some();
+    if !output.skip_cell_projection("state.settlement", source(), committed_touched)? {
+        let current = crate::runtime::committed_policy::effective_settlement(
+            &fields.state_ref.settlement,
+            current_selection,
+            current_parameters,
+        );
+        let before = crate::runtime::committed_policy::effective_settlement(
+            &fields.state_ref.settlement,
+            before_selection,
+            before_parameters,
+        );
+        let (current, before) = (
+            settlement_policy::borrowed(&current),
+            settlement_policy::borrowed(&before),
+        );
+        output.projected_cell(
+            "state.settlement",
+            source(),
+            committed_touched,
+            |writer| bare(&current, writer),
+            |writer| bare(&before, writer),
+        )?;
+    }
+    if !output.skip_cell_projection("state.content", source(), committed_touched)? {
+        let current = crate::runtime::committed_policy::effective_content(
+            &fields.state_ref.content,
+            current_selection,
+            current_parameters,
+        );
+        let before = crate::runtime::committed_policy::effective_content(
+            &fields.state_ref.content,
+            before_selection,
+            before_parameters,
+        );
+        let (current, before) = (
+            content_policy::borrowed(&current),
+            content_policy::borrowed(&before),
+        );
+        output.projected_cell(
+            "state.content",
+            source(),
+            committed_touched,
+            |writer| bare(&current, writer),
+            |writer| bare(&before, writer),
+        )?;
+    }
 
     if !output.skip_cell_projection("state.pipeline", source(), parameters_touched)? {
         let current = pipeline_policy::BorrowedPipelinePolicy::new(

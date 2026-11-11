@@ -17739,6 +17739,10 @@ pub mod isi {
                 // has activated the kernel's lifecycle State (§7.3, §13).
                 crate::runtime::checkpoint::admit_parameter(state_transaction, custom)
                     .map_err(invalid_smart_contract_parameter)?;
+                // The committed content limits and router inputs of a root that recognizes
+                // them (`runtime::committed_policy`).
+                crate::runtime::committed_policy::admit_parameter(state_transaction, custom)
+                    .map_err(invalid_smart_contract_parameter)?;
                 if state_transaction._curr_block.is_genesis()
                     && custom.id() == &iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id()
                 {

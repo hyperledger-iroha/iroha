@@ -14,7 +14,9 @@ mod commitment_observation_tests;
 #[path = "aggregate_stark/joined_trace.rs"]
 pub mod joined_trace;
 use super::privacy_outer_hash::PRIVACY_OUTER_DIGEST_BYTES_V1;
-use super::privacy_outer_hash::{PrivacyOuterDomainPrefixV1, PrivacyOuterLastFieldStreamV1};
+use super::privacy_outer_hash::{
+    PrivacyOuterDomainPrefixV1, PrivacyOuterLastFieldStreamV1, PrivacyOuterPairPrefixV1,
+};
 pub mod retained_commitment;
 #[path = "aggregate_stark/retained_scalar_commitment.rs"]
 pub(crate) mod retained_scalar_commitment;
@@ -1461,7 +1463,11 @@ fn fri_mask_tree_v1(
         &[&lane],
         evaluations.len(),
         32,
-        |row, bytes| bytes.extend_from_slice(&evaluations[row].to_be_bytes()),
+        |first, rows| {
+            for (row, bytes) in (first..).zip(rows.iter_mut()) {
+                bytes.extend_from_slice(&evaluations[row].to_be_bytes());
+            }
+        },
     )
 }
 /// Sample and commit all independent Protocol-2 FRI mask polynomials.
@@ -1641,12 +1647,16 @@ struct RowCommitmentDomainV1<'a> {
 
 /// Serialize bounded private rows into canonical frames and hash them in ordered CPU batches.
 /// The caller fixes the exact ordered non-payload fields; this helper appends one payload.
+///
+/// `serialize_rows(first, rows)` appends the exact payloads of the consecutive rows
+/// `first..first + rows.len()`, one or two, to their own buffers, so a column-major source
+/// reads both rows of a pair from each column in one pass.
 fn commit_serialized_rows_v1(
     domain: RowCommitmentDomainV1<'_>,
     prefix_fields: &[&[u8]],
     rows: usize,
     payload_bytes: usize,
-    serialize_row: impl FnMut(usize, &mut Vec<u8>),
+    serialize_rows: impl Fn(usize, &mut [&mut Vec<u8>]) + Sync,
 ) -> Result<PrivacyOuterMerkleTreeV1, AggregateStarkErrorV1> {
     commit_serialized_rows_with_preparation_limit_v1(
         domain,
@@ -1654,17 +1664,25 @@ fn commit_serialized_rows_v1(
         rows,
         payload_bytes,
         crate::privacy_engines::privacy_outer_hash::MAX_PRIVACY_OUTER_BATCH_FRAMES_V1,
-        serialize_row,
+        serialize_rows,
     )
 }
 
+/// Hash every row leaf of one commitment, one canonical preparation batch at a time.
+///
+/// Each worker serializes two adjacent rows with one call into its own reused, wiped payload
+/// buffers and frames both after the public prefix, which is read into Keccak lanes once per
+/// commitment. Both payloads then share every two-state Keccak permutation, including the
+/// padded final one, with no per-row allocation or scalar sponge. An odd batch tail uses the
+/// scalar sponge. The leaf bytes are exactly the scalar frame of each row. Indexed
+/// collection and a serial reduction keep both the leaf order and the lowest-row error.
 fn commit_serialized_rows_with_preparation_limit_v1(
     domain: RowCommitmentDomainV1<'_>,
     prefix_fields: &[&[u8]],
     rows: usize,
     payload_bytes: usize,
     preparation_frame_limit: usize,
-    mut serialize_row: impl FnMut(usize, &mut Vec<u8>),
+    serialize_rows: impl Fn(usize, &mut [&mut Vec<u8>]) + Sync,
 ) -> Result<PrivacyOuterMerkleTreeV1, AggregateStarkErrorV1> {
     let RowCommitmentDomainV1 {
         context,
@@ -1689,74 +1707,88 @@ fn commit_serialized_rows_with_preparation_limit_v1(
         payload_bytes,
         preparation_frame_limit,
     )?;
+    let prefix =
+        PrivacyOuterDomainPrefixV1::new(leaf_domain).ok_or(AggregateStarkErrorV1::InvalidLayout)?;
+    let stream_error = |error| map_transparent_error_v1(map_digest_stream_error_v1(error));
+    let pair_prefix: PrivacyOuterPairPrefixV1 = prefix.pair_prefix_v1().map_err(stream_error)?;
+    // One serializer call appends every row's exact payload; each length is then checked.
+    let serialize =
+        |rows: &mut [&mut Vec<u8>], first: usize| -> Result<(), AggregateStarkErrorV1> {
+            for bytes in rows.iter_mut() {
+                bytes.clear();
+                bytes
+                    .try_reserve_exact(payload_bytes)
+                    .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
+            }
+            serialize_rows(first, rows);
+            if rows.iter().any(|bytes| bytes.len() != payload_bytes) {
+                return Err(AggregateStarkErrorV1::InvalidLayout);
+            }
+            Ok(())
+        };
+    // Leaves for `first` and, inside the batch, `first + 1`.
+    let leaves_from = |scratch: &mut [zeroize::Zeroizing<Vec<u8>>; 2],
+                       first: usize,
+                       end: usize|
+     -> Result<([PrivacyOuterDigestV1; 2], usize), AggregateStarkErrorV1> {
+        let [left, right] = scratch;
+        let first_index = u64::try_from(first).map_err(|_| AggregateStarkErrorV1::InvalidLayout)?;
+        let mut digests = [PrivacyOuterDigestV1::default(); 2];
+        if first + 1 == end {
+            serialize(&mut [&mut **left], first)?;
+            let mut stream = prefix
+                .last_field_stream_at_with_counter(
+                    first_index,
+                    counter,
+                    prefix_fields,
+                    payload_bytes,
+                )
+                .map_err(stream_error)?;
+            stream.update(left.as_slice()).map_err(stream_error)?;
+            digests[0] = stream.finalize_in_place_v1().map_err(stream_error)?;
+            return Ok((digests, 1));
+        }
+        serialize(&mut [&mut **left, &mut **right], first)?;
+        let second_index = first_index
+            .checked_add(1)
+            .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
+        let pair_error = |(_, error)| stream_error(error);
+        let mut pair = pair_prefix
+            .last_field_pair_at_with_counter_v1(
+                [first_index, second_index],
+                counter,
+                prefix_fields,
+                payload_bytes,
+            )
+            .map_err(pair_error)?;
+        pair.update_v1([left.as_slice(), right.as_slice()])
+            .map_err(pair_error)?;
+        pair.finalize_into_v1(&mut digests).map_err(pair_error)?;
+        Ok((digests, 2))
+    };
     let mut leaves = Vec::new();
     leaves
         .try_reserve_exact(rows)
         .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
     for start in (0..rows).step_by(batch_rows) {
         let end = start.saturating_add(batch_rows).min(rows);
-        let mut payloads = zeroize::Zeroizing::new(Vec::<Vec<u8>>::new());
-        payloads
-            .try_reserve_exact(end - start)
-            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-        for row in start..end {
-            let mut bytes = zeroize::Zeroizing::new(Vec::new());
-            bytes
-                .try_reserve_exact(payload_bytes)
-                .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-            serialize_row(row, &mut bytes);
-            if bytes.len() != payload_bytes {
-                return Err(AggregateStarkErrorV1::InvalidLayout);
-            }
-            payloads.push(core::mem::take(&mut *bytes));
+        let batch = (start..end)
+            .into_par_iter()
+            .step_by(2)
+            .map_init(
+                || {
+                    [
+                        zeroize::Zeroizing::new(Vec::new()),
+                        zeroize::Zeroizing::new(Vec::new()),
+                    ]
+                },
+                |scratch, first| leaves_from(scratch, first, end),
+            )
+            .collect::<Vec<_>>();
+        for pair in batch {
+            let (digests, count) = pair?;
+            leaves.extend_from_slice(&digests[..count]);
         }
-        let mut fields = Vec::new();
-        fields
-            .try_reserve_exact(payloads.len())
-            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-        for payload in payloads.iter() {
-            let mut row_fields = Vec::new();
-            row_fields
-                .try_reserve_exact(
-                    prefix_fields
-                        .len()
-                        .checked_add(1)
-                        .ok_or(AggregateStarkErrorV1::InvalidLayout)?,
-                )
-                .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-            row_fields.extend_from_slice(prefix_fields);
-            row_fields.push(payload.as_slice());
-            fields.push(row_fields);
-        }
-        let mut frames = Vec::new();
-        frames
-            .try_reserve_exact(fields.len())
-            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-        for (local, row_fields) in fields.iter().enumerate() {
-            let domain = context
-                .domain_v1(
-                    &catalog,
-                    leaf_role,
-                    phase,
-                    level,
-                    u64::try_from(start + local)
-                        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?,
-                    counter,
-                )
-                .map_err(map_transparent_error_v1)?;
-            frames.push(
-                crate::privacy_engines::privacy_outer_hash::PrivacyOuterFrameV1::new(
-                    domain, row_fields,
-                )
-                .ok_or(AggregateStarkErrorV1::InvalidLayout)?,
-            );
-        }
-        leaves.extend(
-            frames
-                .par_iter()
-                .map(super::privacy_outer_hash::PrivacyOuterFrameV1::hash)
-                .collect::<Vec<_>>(),
-        );
     }
     PrivacyOuterMerkleTreeV1::from_leaves(leaves, context, node_role)
         .map_err(map_transparent_error_v1)
@@ -1800,12 +1832,39 @@ pub fn row_tree_v1(
         &[&group, &width],
         rows,
         payload_bytes,
-        |row, bytes| {
-            for column in columns {
-                bytes.extend_from_slice(&column[row].0.to_be_bytes());
-            }
-        },
+        |first, rows| append_column_rows_v1(columns, first, rows),
     )
+}
+/// Append rows `first..first + rows.len()` of column-major values, one big-endian word per
+/// column. Each payload is sized once and filled in place, and a pair reads both of its rows
+/// from each column's cache line in a single pass over the columns.
+fn append_column_rows_v1(columns: &[Vec<F>], first: usize, rows: &mut [&mut Vec<u8>]) {
+    match rows {
+        [left, right] => {
+            for ((column, left), right) in columns
+                .iter()
+                .zip(appended_words_v1(left, columns.len()))
+                .zip(appended_words_v1(right, columns.len()))
+            {
+                let pair = &column[first..first + 2];
+                *left = pair[0].0.to_be_bytes();
+                *right = pair[1].0.to_be_bytes();
+            }
+        }
+        rows => {
+            for (row, bytes) in (first..).zip(rows.iter_mut()) {
+                for (column, word) in columns.iter().zip(appended_words_v1(bytes, columns.len())) {
+                    *word = column[row].0.to_be_bytes();
+                }
+            }
+        }
+    }
+}
+/// Extend `bytes` by `words` zeroed eight-byte slots and return them for in-place writes.
+fn appended_words_v1(bytes: &mut Vec<u8>, words: usize) -> &mut [[u8; 8]] {
+    let start = bytes.len();
+    bytes.resize(start + 8 * words, 0);
+    bytes[start..].as_chunks_mut::<8>().0
 }
 /// Root and canonical minimal frontier produced without retaining a Merkle tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3062,9 +3121,11 @@ pub fn composition_tree_v1(
         &[&lane, &width],
         rows,
         payload_bytes,
-        |row, bytes| {
+        |first, rows| {
             for chunk in chunks {
-                bytes.extend_from_slice(&chunk[row].to_be_bytes());
+                for (bytes, value) in rows.iter_mut().zip(&chunk[first..]) {
+                    bytes.extend_from_slice(&value.to_be_bytes());
+                }
             }
         },
     )
@@ -3263,17 +3324,38 @@ fn composition_chunks_from_coefficients_v1(
     Ok(chunks.into_vec_v1())
 }
 /// Split one common-domain quotient codeword into canonical FRI chunks.
+#[cfg(test)]
 pub fn split_composition_evaluations_v1(
     evaluations: &[E],
     parameters: AggregateStarkParametersV1,
     layout: &AggregateProofLayoutV1,
 ) -> Result<Vec<Vec<E>>, AggregateStarkErrorV1> {
+    split_composition_subgroup_evaluations_v1(
+        evaluations,
+        layout.common_lde_log2,
+        parameters,
+        layout,
+    )
+}
+/// Split a quotient given on the common LDE coset's points whose index is a multiple of
+/// `common_lde_size / 2^evaluation_log2` into canonical FRI chunks.
+///
+/// Those points are the coset `shift * <root^stride>`, so their values interpolate the unique
+/// polynomial of degree below their count. A caller passes more points than the degree of the
+/// quotient it constructed; the chunks are then exactly those of the full-domain codeword.
+pub fn split_composition_subgroup_evaluations_v1(
+    evaluations: &[E],
+    evaluation_log2: u8,
+    parameters: AggregateStarkParametersV1,
+    layout: &AggregateProofLayoutV1,
+) -> Result<Vec<Vec<E>>, AggregateStarkErrorV1> {
     layout.validate(parameters)?;
-    let lde_size = layout.common_lde_size();
-    if evaluations.len() != lde_size {
+    if evaluation_log2 > layout.common_lde_log2
+        || evaluations.len() != checked_domain_size_v1(evaluation_log2)?
+    {
         return Err(AggregateStarkErrorV1::InvalidLayout);
     }
-    let coefficients = fp4_coset_coefficients_v1(evaluations, layout.common_lde_log2)?;
+    let coefficients = fp4_coset_coefficients_v1(evaluations, evaluation_log2)?;
     let covered_coefficients = layout
         .fri_degree_cap(parameters)?
         .checked_mul(parameters.composition_degree_chunks)
@@ -3990,10 +4072,12 @@ pub fn fri_tree_v1(
             AggregateFriCommitmentLayoutV1::Scalar => 32,
             AggregateFriCommitmentLayoutV1::Paired => 64,
         },
-        |row, bytes| {
-            bytes.extend_from_slice(&values[row].to_be_bytes());
-            if commitment_layout == AggregateFriCommitmentLayoutV1::Paired {
-                bytes.extend_from_slice(&values[row + leaf_count].to_be_bytes());
+        |first, rows| {
+            for (row, bytes) in (first..).zip(rows.iter_mut()) {
+                bytes.extend_from_slice(&values[row].to_be_bytes());
+                if commitment_layout == AggregateFriCommitmentLayoutV1::Paired {
+                    bytes.extend_from_slice(&values[row + leaf_count].to_be_bytes());
+                }
             }
         },
     )
@@ -7174,6 +7258,73 @@ mod tests {
     }
 
     #[test]
+    fn explicit_commitment_556_column_pairs_match_golden_and_scalar_leaves() {
+        // The APS base geometry: each 4,448-byte payload starts 58 bytes into a rate block.
+        let context = TransparentStarkDigestContextV1::new(
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            b"atomic-private-settlement-stark-profile-v1",
+        );
+        let role = b"atomic-private-settlement-stark-base-leaf-v1";
+        let rows = 32;
+        // Row 17 is the golden row `0..556`; every other row differs in every column.
+        let columns: Vec<Vec<F>> = (0..556_u64)
+            .map(|column| {
+                (0..rows as u64)
+                    .map(|row| {
+                        F(if row == 17 {
+                            column
+                        } else {
+                            column * 1_000 + row + 1
+                        })
+                    })
+                    .collect()
+            })
+            .collect();
+        let leaves = (0..rows)
+            .map(|row| {
+                row_leaf_hash_v1(context, role, 0, row, &row_at_v1(&columns, row).unwrap()).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let expected =
+            PrivacyOuterMerkleTreeV1::from_leaves(leaves, context, DOMAINS.base_node).unwrap();
+        let group = 0_u16.to_be_bytes();
+        let width = 556_u16.to_be_bytes();
+        // Small limits put pairs at odd rows and leave single-row batch tails.
+        for cap in [
+            3,
+            crate::privacy_engines::privacy_outer_hash::MAX_PRIVACY_OUTER_BATCH_FRAMES_V1,
+        ] {
+            let tree = commit_serialized_rows_with_preparation_limit_v1(
+                RowCommitmentDomainV1 {
+                    context,
+                    leaf_role: role,
+                    node_role: DOMAINS.base_node,
+                    phase: b"vector-row-leaf",
+                    level: 0,
+                    counter: 0,
+                },
+                &[&group, &width],
+                rows,
+                4_448,
+                cap,
+                |first, rows| append_column_rows_v1(&columns, first, rows),
+            )
+            .unwrap();
+            // Leaf 17 is the level-0 sibling on row 16's path.
+            assert_eq!(
+                hex::encode(tree.path(16).unwrap()[0].to_bytes()),
+                "4f6c761d9d49dc31ab7502696ff7b9ed82950c3144b4d04073ee51291c6a66e1986465be56e112844de0744330549abf"
+            );
+            assert_eq!(tree.root(), expected.root());
+            for row in 0..rows {
+                assert_eq!(tree.path(row).unwrap(), expected.path(row).unwrap());
+            }
+        }
+        let tree = row_tree_v1(context, role, DOMAINS.base_node, 0, &columns, rows).unwrap();
+        assert_eq!(tree.root(), expected.root());
+    }
+
+    #[test]
     fn explicit_commitment_small_preparation_chunks_preserve_scalar_root_and_paths() {
         let columns: Vec<Vec<F>> = (0..3)
             .map(|column| (0..8).map(|row| F(column * 101 + row * 17)).collect())
@@ -7203,7 +7354,7 @@ mod tests {
             3,
             crate::privacy_engines::privacy_outer_hash::MAX_PRIVACY_OUTER_BATCH_FRAMES_V1,
         ] {
-            let mut serialized = Vec::new();
+            let serialized = std::sync::Mutex::new(Vec::new());
             let tree = commit_serialized_rows_with_preparation_limit_v1(
                 RowCommitmentDomainV1 {
                     context: DOMAINS.digest_context,
@@ -7217,14 +7368,22 @@ mod tests {
                 8,
                 24,
                 cap,
-                |row, bytes| {
-                    serialized.push(row);
+                |first, rows| {
+                    serialized
+                        .lock()
+                        .expect("serialized rows")
+                        .extend(first..first + rows.len());
                     for column in &columns {
-                        bytes.extend_from_slice(&column[row].0.to_be_bytes());
+                        for (bytes, value) in rows.iter_mut().zip(&column[first..]) {
+                            bytes.extend_from_slice(&value.0.to_be_bytes());
+                        }
                     }
                 },
             )
             .unwrap();
+            // Workers serialize rows in any order; every row is serialized exactly once.
+            let mut serialized = serialized.into_inner().expect("serialized rows");
+            serialized.sort_unstable();
             assert_eq!(serialized, (0..8).collect::<Vec<_>>());
             assert_eq!(tree.root(), expected.root());
             for row in 0..8 {
@@ -7375,7 +7534,7 @@ mod tests {
                 &[],
                 2,
                 8,
-                |_, bytes| bytes.push(0)
+                |_, rows| rows.iter_mut().for_each(|bytes| bytes.push(0))
             )
             .is_err()
         );

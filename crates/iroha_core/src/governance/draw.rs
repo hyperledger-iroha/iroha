@@ -17,6 +17,27 @@ const PRIMARY_PARLIAMENT_BODIES_V1: [ParliamentBody; 9] = [
     ParliamentBody::OversightCommittee,
     ParliamentBody::PolicyJury,
 ];
+/// The seat target and alternate count of each body of a draw.
+///
+/// The baseline Parliament reads them from node configuration; the anonymous family from
+/// the policy its attempt froze at admission.
+pub(crate) trait ParliamentDrawSizingV1 {
+    /// Seat target of `body`: the primaries drawn are this many, or every candidate.
+    fn target_seats(&self, body: ParliamentBody) -> usize;
+    /// Alternates drawn behind `body`'s primaries, at most the remaining candidates.
+    fn alternates(&self, body: ParliamentBody) -> usize;
+}
+
+impl ParliamentDrawSizingV1 for Governance {
+    fn target_seats(&self, body: ParliamentBody) -> usize {
+        body_committee_size(self, body)
+    }
+
+    fn alternates(&self, _body: ParliamentBody) -> usize {
+        self.parliament_alternate_size
+    }
+}
+
 /// Deterministic simultaneous body assignment and its binding concentration cap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ParliamentDrawPlan {
@@ -68,6 +89,8 @@ pub(crate) fn derive_attempt_body_plan_v1(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
+    // Every body may invite a citizen once, so a cap of one invitation per body always
+    // admits a plan.
     derive_body_plan(
         gov_cfg,
         network_id,
@@ -75,23 +98,197 @@ pub(crate) fn derive_attempt_body_plan_v1(
         future_beacon,
         &candidates,
         bodies,
+        u32::try_from(bodies.len()).unwrap_or(u32::MAX),
     )
+    .expect("a per-body invitation cap must admit every duplicate-free body plan")
+}
+
+/// Derive a body plan whose cross-body cap is at most `maximum_cap`, from an exact
+/// precommitted candidate snapshot, with the seat counts of `sizing`.
+///
+/// The cap is the smallest under which any allocation exists. At that cap the plan is the
+/// load-balanced selection of [`derive_attempt_body_plan_v1`] when it succeeds; otherwise
+/// every body's invitations are matched together by augmenting paths in rank order, and
+/// each body takes its best-ranked matched candidates as primaries. `None` when no cap up
+/// to `maximum_cap` admits an allocation.
+#[must_use]
+pub(crate) fn derive_bounded_body_plan_v1(
+    sizing: &dyn ParliamentDrawSizingV1,
+    network_id: &NetworkId,
+    pulse_height: u64,
+    future_beacon: &[u8; 32],
+    candidates: &[AccountId],
+    bodies: &[ParliamentBody],
+    maximum_cap: u32,
+) -> Option<ParliamentDrawPlan> {
+    let candidates: Vec<_> = candidates
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let rankings = body_rankings(network_id, pulse_height, future_beacon, &candidates, bodies);
+    bounded_plan_from_rankings(
+        sizing,
+        &candidates,
+        bodies,
+        &rankings,
+        pulse_height,
+        maximum_cap,
+    )
+}
+
+/// The bounded plan of [`derive_bounded_body_plan_v1`] over precomputed `rankings`.
+fn bounded_plan_from_rankings(
+    sizing: &dyn ParliamentDrawSizingV1,
+    candidates: &[AccountId],
+    bodies: &[ParliamentBody],
+    rankings: &BTreeMap<ParliamentBody, Vec<AccountId>>,
+    pulse_height: u64,
+    maximum_cap: u32,
+) -> Option<ParliamentDrawPlan> {
+    let candidate_count = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
+    let minimum_cap = smallest_feasible_assignment_cap(sizing, candidates.len(), bodies);
+    (minimum_cap..=maximum_cap).find_map(|assignment_cap| {
+        try_derive_body_plan_with_cap(
+            sizing,
+            candidates,
+            bodies,
+            rankings,
+            pulse_height,
+            candidate_count,
+            assignment_cap,
+        )
+        .or_else(|| {
+            exact_body_plan_with_cap(
+                sizing,
+                candidates,
+                bodies,
+                rankings,
+                pulse_height,
+                candidate_count,
+                assignment_cap,
+            )
+        })
+    })
+}
+
+/// Every body's ranked candidates.
+fn body_rankings(
+    network_id: &NetworkId,
+    epoch: u64,
+    beacon: &[u8; 32],
+    candidates: &[AccountId],
+    bodies: &[ParliamentBody],
+) -> BTreeMap<ParliamentBody, Vec<AccountId>> {
+    bodies
+        .iter()
+        .map(|body| {
+            (
+                *body,
+                ranked_body_candidates(network_id, epoch, beacon, candidates, *body),
+            )
+        })
+        .collect()
+}
+
+/// Match every body's primaries and alternates together at `assignment_cap`, by augmenting
+/// paths in rank order that prefer less-loaded citizens; each body takes its best-ranked
+/// matched candidates as primaries and the rest as alternates.
+///
+/// A body's invitations are a set of distinct citizens and a citizen holds at most
+/// `assignment_cap` invitations, so this is a bipartite b-matching: a body that finds no
+/// augmenting path never finds one later, and `None` means that no allocation exists at the
+/// cap.
+fn exact_body_plan_with_cap(
+    sizing: &dyn ParliamentDrawSizingV1,
+    candidates: &[AccountId],
+    bodies: &[ParliamentBody],
+    rankings: &BTreeMap<ParliamentBody, Vec<AccountId>>,
+    pulse_height: u64,
+    candidate_count: u32,
+    assignment_cap: u32,
+) -> Option<ParliamentDrawPlan> {
+    let candidate_indices: BTreeMap<_, _> = candidates
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, candidate)| (candidate, index))
+        .collect();
+    let mut ranked_indices = Vec::with_capacity(bodies.len());
+    let mut demands = Vec::with_capacity(bodies.len());
+    for body in bodies {
+        let ranked = rankings
+            .get(body)?
+            .iter()
+            .map(|candidate| candidate_indices.get(candidate).copied())
+            .collect::<Option<Vec<_>>>()?;
+        let primaries = sizing.target_seats(*body).min(candidates.len());
+        let alternates = sizing
+            .alternates(*body)
+            .min(candidates.len().saturating_sub(primaries));
+        demands.push((primaries, primaries.checked_add(alternates)?));
+        ranked_indices.push(ranked);
+    }
+    let unseated = vec![BTreeSet::new(); bodies.len()];
+    let capacities = vec![usize::try_from(assignment_cap).ok()?; candidates.len()];
+    let mut total_loads = vec![0usize; candidates.len()];
+    let mut matching = vec![BTreeSet::<usize>::new(); bodies.len()];
+    for (body_index, (_, demand)) in demands.iter().enumerate() {
+        while matching[body_index].len() < *demand {
+            if !augment_alternate_matching(
+                body_index,
+                &ranked_indices,
+                &unseated,
+                &capacities,
+                &mut total_loads,
+                &mut matching,
+            ) {
+                return None;
+            }
+        }
+    }
+    let mut rosters = BTreeMap::new();
+    for (body_index, body) in bodies.iter().copied().enumerate() {
+        let (primaries, _) = demands[body_index];
+        let matched: Vec<_> = ranked_indices[body_index]
+            .iter()
+            .filter(|candidate| matching[body_index].contains(candidate))
+            .map(|candidate| candidates[*candidate].clone())
+            .collect();
+        let (members, alternates) = matched.split_at(primaries.min(matched.len()));
+        rosters.insert(
+            body,
+            ParliamentDrawRoster {
+                body,
+                pulse_height,
+                candidate_count,
+                members: members.to_vec(),
+                alternates: alternates.to_vec(),
+            },
+        );
+    }
+    Some(ParliamentDrawPlan {
+        rosters,
+        assignment_cap,
+    })
 }
 
 /// Return the smallest feasible simultaneous assignment cap for `bodies`.
 #[must_use]
 fn smallest_feasible_assignment_cap(
-    gov_cfg: &Governance,
+    sizing: &dyn ParliamentDrawSizingV1,
     candidate_count: usize,
     bodies: &[ParliamentBody],
-    alternates_per_body: usize,
 ) -> u32 {
     if candidate_count == 0 || bodies.is_empty() {
         return 0;
     }
     let required_invitations = bodies.iter().fold(0usize, |total, body| {
-        let primary = body_committee_size(gov_cfg, *body).min(candidate_count);
-        let alternates = alternates_per_body.min(candidate_count.saturating_sub(primary));
+        let primary = sizing.target_seats(*body).min(candidate_count);
+        let alternates = sizing
+            .alternates(*body)
+            .min(candidate_count.saturating_sub(primary));
         total.saturating_add(primary.saturating_add(alternates))
     });
     let cap = required_invitations
@@ -100,52 +297,37 @@ fn smallest_feasible_assignment_cap(
     u32::try_from(cap).unwrap_or(u32::MAX)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn derive_body_plan(
-    gov_cfg: &Governance,
+    sizing: &dyn ParliamentDrawSizingV1,
     network_id: &NetworkId,
     epoch: u64,
     beacon: &[u8; 32],
     candidates: &[AccountId],
     bodies: &[ParliamentBody],
-) -> ParliamentDrawPlan {
+    maximum_cap: u32,
+) -> Option<ParliamentDrawPlan> {
     let candidate_count = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
-    let alternates_per_body = gov_cfg.parliament_alternate_size;
-    let mut rankings = BTreeMap::new();
-    for body in bodies {
-        rankings.insert(
-            *body,
-            ranked_body_candidates(network_id, epoch, beacon, candidates, *body),
-        );
-    }
-    let minimum_cap =
-        smallest_feasible_assignment_cap(gov_cfg, candidates.len(), bodies, alternates_per_body);
-    let maximum_cap = u32::try_from(bodies.len()).unwrap_or(u32::MAX);
-    for assignment_cap in minimum_cap..=maximum_cap {
-        if let Some(plan) = try_derive_body_plan_with_cap(
-            gov_cfg,
+    let rankings = body_rankings(network_id, epoch, beacon, candidates, bodies);
+    let minimum_cap = smallest_feasible_assignment_cap(sizing, candidates.len(), bodies);
+    (minimum_cap..=maximum_cap).find_map(|assignment_cap| {
+        try_derive_body_plan_with_cap(
+            sizing,
             candidates,
             bodies,
             &rankings,
             epoch,
-            alternates_per_body,
             candidate_count,
             assignment_cap,
-        ) {
-            return plan;
-        }
-    }
-    unreachable!("a per-body invitation cap must admit every duplicate-free body plan")
+        )
+    })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn try_derive_body_plan_with_cap(
-    gov_cfg: &Governance,
+    sizing: &dyn ParliamentDrawSizingV1,
     candidates: &[AccountId],
     bodies: &[ParliamentBody],
     rankings: &BTreeMap<ParliamentBody, Vec<AccountId>>,
     pulse_height: u64,
-    alternates_per_body: usize,
     candidate_count: u32,
     assignment_cap: u32,
 ) -> Option<ParliamentDrawPlan> {
@@ -156,7 +338,7 @@ fn try_derive_body_plan_with_cap(
         .collect();
     let mut selected: BTreeMap<ParliamentBody, Vec<AccountId>> = BTreeMap::new();
     for body in bodies {
-        let target = body_committee_size(gov_cfg, *body).min(candidates.len());
+        let target = sizing.target_seats(*body).min(candidates.len());
         let ranked = rankings.get(body)?;
         let mut eligible: Vec<_> = ranked
             .iter()
@@ -197,12 +379,12 @@ fn try_derive_body_plan_with_cap(
     }
 
     let alternates = derive_alternates_with_cap(
+        sizing,
         candidates,
         bodies,
         rankings,
         &selected,
         &loads,
-        alternates_per_body,
         assignment_cap,
     )?;
     let mut rosters = BTreeMap::new();
@@ -232,14 +414,13 @@ fn try_derive_body_plan_with_cap(
 /// is feasible. The deterministic alternating-path search below reassigns an
 /// earlier reservation when necessary. Final vectors are restored to their
 /// body-local beacon ranking before they are committed.
-#[allow(clippy::too_many_arguments)]
 fn derive_alternates_with_cap(
+    sizing: &dyn ParliamentDrawSizingV1,
     candidates: &[AccountId],
     bodies: &[ParliamentBody],
     rankings: &BTreeMap<ParliamentBody, Vec<AccountId>>,
     primary: &BTreeMap<ParliamentBody, Vec<AccountId>>,
     primary_loads: &BTreeMap<AccountId, u32>,
-    alternates_per_body: usize,
     assignment_cap: u32,
 ) -> Option<BTreeMap<ParliamentBody, Vec<AccountId>>> {
     let candidate_indices: BTreeMap<_, _> = candidates
@@ -262,8 +443,11 @@ fn derive_alternates_with_cap(
             .iter()
             .map(|candidate| candidate_indices.get(candidate).copied())
             .collect::<Option<BTreeSet<_>>>()?;
-        alternate_targets
-            .push(alternates_per_body.min(candidates.len().saturating_sub(member_indices.len())));
+        alternate_targets.push(
+            sizing
+                .alternates(*body)
+                .min(candidates.len().saturating_sub(member_indices.len())),
+        );
         ranked_indices.push(ranked);
         primary_indices.push(member_indices);
     }
@@ -558,8 +742,35 @@ mod tests {
             &beacon,
             &accounts,
             &PRIMARY_PARLIAMENT_BODIES_V1,
-        );
+            9,
+        )
+        .expect("a cap of one invitation per body admits a plan");
         assert_eq!(plan.assignment_cap, 6);
+        // A bound below the smallest feasible cap admits no plan.
+        assert_eq!(
+            derive_bounded_body_plan_v1(
+                &cfg,
+                &network_id,
+                19,
+                &beacon,
+                &accounts,
+                &PRIMARY_PARLIAMENT_BODIES_V1,
+                5,
+            ),
+            None
+        );
+        assert_eq!(
+            derive_bounded_body_plan_v1(
+                &cfg,
+                &network_id,
+                19,
+                &beacon,
+                &accounts,
+                &PRIMARY_PARLIAMENT_BODIES_V1,
+                6,
+            ),
+            Some(plan.clone())
+        );
         let mut loads: BTreeMap<AccountId, u32> = BTreeMap::new();
         for roster in plan.rosters.values() {
             assert_eq!(roster.members.len(), 2);
@@ -569,6 +780,84 @@ mod tests {
         }
         assert_eq!(loads.values().copied().max(), Some(plan.assignment_cap));
         assert_eq!(loads.values().copied().min(), Some(plan.assignment_cap));
+    }
+
+    /// Fixed seat counts per body for the allocator tests.
+    struct Sizes(BTreeMap<ParliamentBody, (usize, usize)>);
+
+    impl ParliamentDrawSizingV1 for Sizes {
+        fn target_seats(&self, body: ParliamentBody) -> usize {
+            self.0.get(&body).map_or(0, |sizes| sizes.0)
+        }
+
+        fn alternates(&self, body: ParliamentBody) -> usize {
+            self.0.get(&body).map_or(0, |sizes| sizes.1)
+        }
+    }
+
+    #[test]
+    fn a_bounded_plan_exists_whenever_an_allocation_exists_under_the_cap() {
+        // Three citizens ranked alike in every body. The load-balanced selection seats
+        // A, B C, A, B C, A B C, A B C, and then both the Agenda and Review alternates need
+        // A, beyond a cap of five; seating the Interest primary as B leaves room for both.
+        let accounts: Vec<_> = (1..=3)
+            .map(mk_account)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let bodies = [
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::PolicyJury,
+        ];
+        let sizes = Sizes(BTreeMap::from([
+            (ParliamentBody::RulesCommittee, (1, 0)),
+            (ParliamentBody::AgendaCouncil, (2, 1)),
+            (ParliamentBody::InterestPanel, (1, 1)),
+            (ParliamentBody::ReviewPanel, (2, 1)),
+            (ParliamentBody::OversightCommittee, (3, 0)),
+            (ParliamentBody::PolicyJury, (3, 0)),
+        ]));
+        let rankings: BTreeMap<_, _> = bodies
+            .iter()
+            .map(|body| (*body, accounts.clone()))
+            .collect();
+        assert_eq!(
+            try_derive_body_plan_with_cap(&sizes, &accounts, &bodies, &rankings, 7, 3, 5),
+            None
+        );
+        let plan = exact_body_plan_with_cap(&sizes, &accounts, &bodies, &rankings, 7, 3, 5)
+            .expect("an allocation exists at cap five");
+        let mut loads = BTreeMap::<AccountId, u32>::new();
+        for body in bodies {
+            let roster = plan.rosters.get(&body).expect("roster");
+            let (primaries, alternates) = sizes.0[&body];
+            assert_eq!(roster.members.len(), primaries, "{body:?}");
+            assert_eq!(roster.alternates.len(), alternates, "{body:?}");
+            let invited: BTreeSet<_> = roster.members.iter().chain(&roster.alternates).collect();
+            assert_eq!(invited.len(), primaries + alternates, "{body:?}");
+            for member in invited {
+                *loads.entry(member.clone()).or_default() += 1;
+            }
+        }
+        assert!(loads.values().all(|load| *load <= 5));
+        // The bounded plan takes the smallest cap with an allocation: four is too small for
+        // fifteen invitations of three citizens.
+        assert_eq!(
+            bounded_plan_from_rankings(&sizes, &accounts, &bodies, &rankings, 7, 4),
+            None
+        );
+        let bounded = bounded_plan_from_rankings(&sizes, &accounts, &bodies, &rankings, 7, 5)
+            .expect("bounded plan");
+        assert_eq!(bounded.assignment_cap, 5);
+        assert_eq!(bounded, plan);
+        // Where the load-balanced selection succeeds, the bounded plan is exactly it.
+        let generous = bounded_plan_from_rankings(&sizes, &accounts, &bodies, &rankings, 7, 6)
+            .expect("bounded plan");
+        assert_eq!(generous, plan, "cap five already admits an allocation");
     }
 
     #[test]
@@ -691,7 +980,9 @@ mod tests {
             &beacon,
             &accounts,
             &PRIMARY_PARLIAMENT_BODIES_V1,
-        );
+            9,
+        )
+        .expect("a cap of one invitation per body admits a plan");
         assert_eq!(plan.assignment_cap, 1);
         let members: Vec<_> = plan
             .rosters
@@ -757,7 +1048,9 @@ mod tests {
             &beacon,
             &accounts,
             &PRIMARY_PARLIAMENT_BODIES_V1,
-        );
+            9,
+        )
+        .expect("a cap of one invitation per body admits a plan");
         let repeated = derive_body_plan(
             &cfg,
             &network_id,
@@ -765,7 +1058,9 @@ mod tests {
             &beacon,
             &accounts,
             &PRIMARY_PARLIAMENT_BODIES_V1,
-        );
+            9,
+        )
+        .expect("a cap of one invitation per body admits a plan");
 
         assert_eq!(plan, repeated);
         assert_eq!(plan.assignment_cap, 2);

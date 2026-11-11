@@ -1507,4 +1507,6 @@ mod tests {
 
 #[path = "privacy_outer_pair.rs"]
 mod paired_stream;
-pub(crate) use paired_stream::{PrivacyOuterLastFieldPairV1, paired_stream_workspace_bytes_v1};
+pub(crate) use paired_stream::{
+    PrivacyOuterLastFieldPairV1, PrivacyOuterPairPrefixV1, paired_stream_workspace_bytes_v1,
+};

@@ -3005,6 +3005,25 @@ pub mod runtime_governance {
         "operator.runtime.containment.list",
         "/v1/runtime/containments",
     );
+    /// Draft the runtime change set of one step of a migration of this node's release.
+    pub const RUNTIME_MIGRATION_DRAFT: RouteDescriptor = operator_post(
+        "operator.runtime.migration.draft",
+        "/v1/runtime/migrations/draft",
+    );
+    /// The boundaries of the universal root's history: its checkpoint policy, adoption anchor
+    /// and startup floors, and the checkpoints this node holds.
+    pub const RUNTIME_BOUNDARIES: RouteDescriptor =
+        operator_get("operator.runtime.boundary.list", "/v1/runtime/boundaries");
+    /// Sign this node's statement of the adoption record it derives from its own store.
+    pub const RUNTIME_BOUNDARY_ANCHOR_ATTEST: RouteDescriptor = operator_post(
+        "operator.runtime.boundary.anchor.attest",
+        "/v1/runtime/boundaries/anchor/attest",
+    );
+    /// Sign this node's statement of a startup floor at a checkpoint it holds.
+    pub const RUNTIME_BOUNDARY_FLOOR_ATTEST: RouteDescriptor = operator_post(
+        "operator.runtime.boundary.floor.attest",
+        "/v1/runtime/boundaries/floor/attest",
+    );
     /// Draft a ministry agenda proposal for local signing.
     pub const MINISTRY_AGENDA_DRAFT: RouteDescriptor = app_signed_post(
         "ministry.agenda_proposal.draft",
@@ -3220,6 +3239,10 @@ pub mod runtime_governance {
         RUNTIME_UPGRADE_ATTEST,
         RUNTIME_RELEASE,
         RUNTIME_CONTAINMENTS,
+        RUNTIME_MIGRATION_DRAFT,
+        RUNTIME_BOUNDARIES,
+        RUNTIME_BOUNDARY_ANCHOR_ATTEST,
+        RUNTIME_BOUNDARY_FLOOR_ATTEST,
         MINISTRY_AGENDA_DRAFT,
         MINISTRY_AGENDA_GET,
         GOV_PROPOSE_DEPLOY,

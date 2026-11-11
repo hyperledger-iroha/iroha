@@ -584,10 +584,7 @@ impl Observer {
             "unexpected unbounded source traffic"
         );
         for height in next..=height {
-            let proof = client
-                .client()
-                .get_sumeragi_finality_proof_async(NonZeroU64::new(height).unwrap(), root.scope)
-                .await?;
+            let proof = finality_proof(client.client(), height, root.scope).await?;
             let block = self.verifier.verify(&proof)?;
             for (index, entry) in block.block().network_entrypoints().enumerate() {
                 let TransactionEntrypoint::External(signed) = entry else {

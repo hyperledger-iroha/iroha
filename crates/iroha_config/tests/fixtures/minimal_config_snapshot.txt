@@ -1332,7 +1332,6 @@ Root {
         max_path_len: 256,
         max_retention_blocks: 10000,
         chunk_size_bytes: 65536,
-        publish_allow_accounts: [],
         limits: ContentLimits {
             max_requests_per_second: 1000000,
             request_burst: 10000000,
@@ -1342,7 +1341,6 @@ Root {
         default_cache_max_age_secs: 300,
         max_cache_max_age_secs: 86400,
         immutable_bundles: true,
-        default_auth_mode: Public,
         slo: ContentSlo {
             target_p50_latency_ms: 50,
             target_p99_latency_ms: 250,

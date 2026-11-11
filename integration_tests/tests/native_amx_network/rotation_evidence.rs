@@ -17,10 +17,7 @@ pub(super) async fn global_at(root: &amx::Root, height: u64) -> Result<VerifiedS
     let client = root.client(&amx::genesis_key(0));
     let mut last = None;
     for at in verifier.authenticated_height().unwrap_or(0) + 1..=height {
-        let proof = client
-            .client()
-            .get_sumeragi_finality_proof_async(NonZeroU64::new(at).unwrap(), root.scope)
-            .await?;
+        let proof = amx::finality_proof(client.client(), at, root.scope).await?;
         last = Some(verifier.verify(&proof)?);
     }
     last.ok_or_else(|| eyre!("authenticated Global carrier absent"))
@@ -86,14 +83,9 @@ pub(super) fn wait_frozen_obligation(
                 let mut verifier = root.verifier()?;
                 let mut prepared = false;
                 for height in verifier.authenticated_height().unwrap_or(0) + 1..=tip.height() {
-                    let proof = root
-                        .client(&amx::relay(2))
-                        .client()
-                        .get_sumeragi_finality_proof_async(
-                            NonZeroU64::new(height).unwrap(),
-                            root.scope,
-                        )
-                        .await?;
+                    let proof =
+                        amx::finality_proof(root.client(&amx::relay(2)).client(), height, root.scope)
+                            .await?;
                     let block = verifier.verify(&proof)?;
                     for (index, input) in block.block().network_entrypoints().enumerate() {
                         let TransactionEntrypoint::External(signed) = input else {
@@ -434,7 +426,7 @@ pub(super) fn rejected_replay(
             }).await?.blocks;
             ensure!(height <= 128);
             for at in verifier.authenticated_height().unwrap_or(0) + 1..=height {
-                let proof = client.client().get_sumeragi_finality_proof_async(NonZeroU64::new(at).unwrap(), root.scope).await?;
+                let proof = amx::finality_proof(client.client(), at, root.scope).await?;
                 let block = verifier.verify(&proof)?;
                 for (index, entry) in block.block().network_entrypoints().enumerate() {
                     let TransactionEntrypoint::External(signed) = entry else { continue; };
@@ -442,7 +434,13 @@ pub(super) fn rejected_replay(
                     let evidence = amx::proofs::evidence(block.block(), index.try_into()?)?;
                     block.verify_transaction_execution(&root.network.network_id(), &evidence)?;
                     let error = evidence.output.result().as_ref().err().ok_or_else(|| eyre!("already settled old decision was applied again"))?;
-                    let detail = error.to_string();
+                    // A rejection displays only its outer layer ("Validation failed"); the
+                    // decision-authority cause is nested below `InstructionFailed`.
+                    let outermost: &dyn std::error::Error = error;
+                    let detail = std::iter::successors(Some(outermost), |cause| cause.source())
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(": ");
                     ensure!(detail.contains("certified epoch 0 is not tracked") || detail.contains("transaction was already settled"),
                         "replay must fail for retired/settled decision authority, not unrelated fee/clock rejection: {detail}");
                     let fee = evidence.output.result().nexus_fee_receipt().ok_or_else(|| eyre!("replay fee receipt absent"))?;

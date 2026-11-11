@@ -935,12 +935,28 @@ fn activation_change_set_in_catalog(
         .collect();
     require_retained_restrictions(previous, &next)?;
     next.check_closure(&catalog.definitions)?;
-    let publish = catalog
-        .definitions
-        .iter()
-        .filter(|(id, _)| !published.contains_key(id))
-        .map(|(_, value)| value.clone())
-        .collect();
+    // Publish exactly what the successor relies on, as the Taira draft does: its active and
+    // installed definitions, its kernel and profiles, and the identity cutover. A dormant
+    // definition the release also compiles stays out, so the change set's identity does not move
+    // with unrelated additions.
+    let mut needed: std::collections::BTreeSet<DefinitionId> =
+        next.active.iter().copied().collect();
+    needed.extend(next.installed_storage.iter().copied());
+    needed.extend([
+        next.kernel,
+        next.commitment_profile,
+        next.services_profile,
+        extension.migration,
+    ]);
+    let publish = needed
+        .into_iter()
+        .filter(|id| !published.contains_key(id))
+        .map(|id| {
+            catalog.definitions.get(&id).cloned().ok_or_else(|| {
+                CatalogError::Parameters(format!("composition definition {id} is not compiled"))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     selection_change_set(network, height, qualification, previous, &next, publish)
 }
 

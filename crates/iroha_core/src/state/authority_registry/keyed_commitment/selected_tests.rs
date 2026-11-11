@@ -114,23 +114,23 @@ impl KeyedStateCommitment for Selected {
         )
     }
     fn verify_inclusion(
-        s: &StateSchema,
-        r: &KeyedStateRoot,
-        t: &str,
-        k: &[u8],
-        v: &[u8],
-        w: &Witness,
+        schema: &StateSchema,
+        root: &KeyedStateRoot,
+        table: &str,
+        key: &[u8],
+        value: &[u8],
+        witness: &Witness,
     ) -> Result<(), Rejection> {
-        Self::verify_point(s, r, t, k, Some(v), w)
+        Self::verify_point(schema, root, table, key, Some(value), witness)
     }
     fn verify_absence(
-        s: &StateSchema,
-        r: &KeyedStateRoot,
-        t: &str,
-        k: &[u8],
-        w: &Witness,
+        schema: &StateSchema,
+        root: &KeyedStateRoot,
+        table: &str,
+        key: &[u8],
+        witness: &Witness,
     ) -> Result<(), Rejection> {
-        Self::verify_point(s, r, t, k, None, w)
+        Self::verify_point(schema, root, table, key, None, witness)
     }
     fn verify_range(
         s: &StateSchema,

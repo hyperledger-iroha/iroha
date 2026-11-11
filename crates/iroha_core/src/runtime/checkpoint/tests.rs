@@ -318,12 +318,23 @@ fn the_policy_is_read_and_admitted_only_with_the_lifecycle_state() {
     assert_eq!(admit_parameter(&stx, &unrelated), Ok(()));
 }
 
-/// A State that has committed nine blocks, each four seconds after the last, and whose root has
-/// activated the lifecycle State; with the hash of each block by height.
-fn chain() -> (crate::state::State, BTreeMap<u64, [u8; 32]>) {
+/// A State that has committed nine blocks, each four seconds after the last, whose root has
+/// activated the lifecycle State and whose committee holds `keys`; with the hash of each block
+/// by height.
+fn chain(keys: &[KeyPair]) -> (crate::state::State, BTreeMap<u64, [u8; 32]>) {
     let mut state = blank_state();
     crate::runtime::activate_additions_for_testing(&state.world, RUNTIME_LIFECYCLE.module)
         .expect("activate the lifecycle addition");
+    {
+        let mut topology = state.commit_topology.block();
+        topology.clear();
+        topology.extend(
+            committee(keys)
+                .into_iter()
+                .map(iroha_model_base::peer::PeerId::new),
+        );
+        topology.commit();
+    }
     let mut hashes = BTreeMap::new();
     for height in 1..=9_u8 {
         let hash = HashOf::from_untyped_unchecked(Hash::prehashed([height; 32]));
@@ -383,15 +394,11 @@ fn boundary(height: u64, hashes: &BTreeMap<u64, [u8; 32]>) -> Option<UpgradeChec
 #[test]
 fn a_root_ratifies_its_anchor_once_and_raises_its_floor_above_it() {
     let keys = keys();
-    let (state, hashes) = chain();
+    let (state, hashes) = chain(&keys);
     // The executing block is the tenth, committed thirty days after the ninth.
     let now = 30 * DAY_MS;
     let mut block = state.block(header(10, now));
     let mut stx = block.transaction();
-    *stx.commit_topology.get_mut() = keys
-        .iter()
-        .map(|key| iroha_model_base::peer::PeerId::new(key.public_key().clone()))
-        .collect();
     let network = stx.network_id;
     assert_eq!(committed_anchor(&stx.world), None);
     assert_eq!(history_boundary(&stx.world, now), None);
@@ -478,10 +485,6 @@ fn a_root_ratifies_its_anchor_once_and_raises_its_floor_above_it() {
     let later = now + 2 * DAY_MS;
     let mut block = state.block(header(10, later));
     let mut stx = block.transaction();
-    *stx.commit_topology.get_mut() = keys
-        .iter()
-        .map(|key| iroha_model_base::peer::PeerId::new(key.public_key().clone()))
-        .collect();
     let below = floor_at(5);
     assert!(raise_floor(&mut stx, below, floor_statements(&keys, &below)).is_err());
     raise_floor(&mut stx, second, floor_statements(&keys, &second)).expect("raise again");
@@ -498,10 +501,6 @@ fn a_root_ratifies_its_anchor_once_and_raises_its_floor_above_it() {
     let last = later + 2 * DAY_MS;
     let mut block = state.block(header(10, last));
     let mut stx = block.transaction();
-    *stx.commit_topology.get_mut() = keys
-        .iter()
-        .map(|key| iroha_model_base::peer::PeerId::new(key.public_key().clone()))
-        .collect();
     let third = floor_at(9);
     raise_floor(&mut stx, third, floor_statements(&keys, &third)).expect("raise a third time");
     assert_eq!(

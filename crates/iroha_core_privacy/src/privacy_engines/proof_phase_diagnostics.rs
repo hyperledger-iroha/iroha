@@ -10,7 +10,7 @@ use std::{
 };
 
 pub(super) const APS_PROOF_PHASE_TARGET_V1: &str = "iroha_core::aps_proof_phases";
-const NOTE_PROOF_PHASE_TARGET_V1: &str = "iroha_core::proof_managed_note_stark_phases";
+pub(super) const NOTE_PROOF_PHASE_TARGET_V1: &str = "iroha_core::proof_managed_note_stark_phases";
 static PROOF_PHASE_SEQUENCE_V1: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, PartialEq, Eq)]

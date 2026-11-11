@@ -52,6 +52,24 @@ pub use proofs::Observer;
 #[path = "native_amx_harness/owned_task.rs"]
 pub mod owned_task;
 
+/// Longest wait for one finality-proof read, including the node's HTTP 429 query-capacity
+/// refusals. The SDK honours their Retry-After only for a deadline-bounded client, and the
+/// relays read the same bounded query capacity concurrently with the test.
+pub const FINALITY_READ_BOUND: Duration = Duration::from_secs(60);
+
+/// Read one finality proof, backing off on the node's bounded query-capacity refusals.
+pub async fn finality_proof(
+    client: &iroha::client::Client,
+    height: u64,
+    scope: SumeragiRootScope,
+) -> Result<iroha_data_model::sumeragi_finality::SumeragiFinalityProof> {
+    let height = NonZeroU64::new(height).ok_or_else(|| eyre!("finality height must be nonzero"))?;
+    client
+        .with_request_deadline(std::time::Instant::now() + FINALITY_READ_BOUND)
+        .get_sumeragi_finality_proof_async(height, scope)
+        .await
+}
+
 pub fn now_ms() -> Result<u64> {
     Ok(SystemTime::now()
         .duration_since(UNIX_EPOCH)?
@@ -94,13 +112,7 @@ pub fn submit(
                     "bootstrap history unexpectedly grew"
                 );
                 for height in next..=height {
-                    let proof = client
-                        .client()
-                        .get_sumeragi_finality_proof_async(
-                            NonZeroU64::new(height).unwrap(),
-                            scope,
-                        )
-                        .await?;
+                    let proof = finality_proof(client.client(), height, scope).await?;
                     let verified_block = verifier.verify(&proof)?;
                     let index = verified_block.block().network_entrypoints().position(|entry| {
                         matches!(entry, TransactionEntrypoint::External(external) if external.hash() == hash)
@@ -159,17 +171,9 @@ pub fn authenticated_parent_sources(
     // its real H2 successor. Independently verify both before authoring either child.
     let client = global.client(&relay(0));
     let mut parent_verifier = global.verifier()?;
-    let parent_genesis = runtime.block_on(
-        client
-            .client()
-            .get_sumeragi_finality_proof_async(NonZeroU64::new(1).unwrap(), global.scope),
-    )?;
+    let parent_genesis = runtime.block_on(finality_proof(client.client(), 1, global.scope))?;
     let parent_genesis = parent_verifier.verify(&parent_genesis)?;
-    let parent_successor = runtime.block_on(
-        client
-            .client()
-            .get_sumeragi_finality_proof_async(NonZeroU64::new(2).unwrap(), global.scope),
-    )?;
+    let parent_successor = runtime.block_on(finality_proof(client.client(), 2, global.scope))?;
     let parent_successor = parent_verifier.verify(&parent_successor)?;
     ensure!(
         parent_successor.context_id() == successor.context_id(),
@@ -594,7 +598,7 @@ impl Exchange {
                     client.client().status().get().await.map_err(Into::into)
                 }).await?.blocks;
                 for height in verifier.authenticated_height().unwrap_or(0) + 1..=tip {
-                    let proof = client.client().get_sumeragi_finality_proof_async(NonZeroU64::new(height).unwrap(), root.scope).await?;
+                    let proof = finality_proof(client.client(), height, root.scope).await?;
                     let block = verifier.verify(&proof)?;
                     let mut progressed = false;
                     for (index, entry) in block.block().network_entrypoints().enumerate() {

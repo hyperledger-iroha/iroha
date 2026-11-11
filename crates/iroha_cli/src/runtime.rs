@@ -2,6 +2,8 @@
 //! (`specs/live_runtime_upgrades.md` §6).
 use crate::{CliOutputFormat, Run, RunContext};
 use eyre::{Result, WrapErr as _, eyre};
+
+pub mod boundary;
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Runtime ABI helpers
@@ -13,6 +15,12 @@ pub enum Command {
     /// Emergency containment by the runtime emergency panel
     #[command(subcommand)]
     Contain(ContainCommand),
+    /// The boundaries of the root's history: adoption anchor, startup floors and checkpoints
+    #[command(subcommand)]
+    Boundary(boundary::BoundaryCommand),
+    /// Migrations of storage this release compiles
+    #[command(subcommand)]
+    Migration(MigrationCommand),
     /// Show this node's release and whether it executes the committed selection and the
     /// successor of each scheduled change set
     Release,
@@ -27,6 +35,8 @@ impl Run for Command {
             Command::Abi(cmd) => cmd.run(context),
             Command::Upgrade(cmd) => cmd.run(context),
             Command::Contain(cmd) => cmd.run(context),
+            Command::Boundary(cmd) => cmd.run(context),
+            Command::Migration(cmd) => cmd.run(context),
             Command::Release => {
                 let client = context.client_from_config()?;
                 let value = client.get_runtime_release_json()?;
@@ -180,6 +190,70 @@ impl Run for DraftArgs {
         // definitions that release executes (`specs/live_runtime_upgrades.md` §4).
         let draft = client.post_runtime_draft_upgrade_json(
             &self.addition,
+            self.effective_height,
+            &hex::encode(qualification),
+        )?;
+        context.print_data(&drafted_change_set(&draft)?)
+    }
+}
+/// Migrations of storage this release compiles (`specs/live_runtime_upgrades.md` §5.4).
+#[derive(clap::Subcommand, Debug)]
+pub enum MigrationCommand {
+    /// Print the change set the node drafts for one step of a migration of its release
+    Draft(MigrationDraftArgs),
+}
+impl Run for MigrationCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            MigrationCommand::Draft(args) => args.run(context),
+        }
+    }
+}
+/// A step of a migration.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MigrationStepArg {
+    /// Install the successor storage and activate the migration
+    Start,
+    /// Make the successor authoritative and drain the old storage
+    CutOver,
+    /// Retire the drained old storage and deactivate the migration
+    Retire,
+}
+impl MigrationStepArg {
+    /// The step's name on the wire of `POST /v1/runtime/migrations/draft`.
+    const fn wire(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::CutOver => "cut_over",
+            Self::Retire => "retire",
+        }
+    }
+}
+/// Arguments of `migration draft`.
+#[derive(clap::Args, Debug)]
+pub struct MigrationDraftArgs {
+    /// Native module of the migration
+    #[arg(long, value_name = "MODULE")]
+    migration: String,
+    /// The step to draft
+    #[arg(long, value_enum)]
+    step: MigrationStepArg,
+    /// First height executed under the successor selection
+    #[arg(long, value_name = "HEIGHT")]
+    effective_height: u64,
+    /// Digest of the qualification evidence for the successor composition (32-byte hex)
+    #[arg(long, value_name = "HEX")]
+    qualification: String,
+}
+impl Run for MigrationDraftArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let qualification = decode_hex_32("qualification", &self.qualification)?;
+        let client = context.client_from_config()?;
+        // The node drafts from its own release catalog and the committed selection; the change
+        // set is the `--file` input of `upgrade endorse` and `upgrade propose`.
+        let draft = client.post_runtime_draft_migration_json(
+            &self.migration,
+            self.step.wire(),
             self.effective_height,
             &hex::encode(qualification),
         )?;
@@ -603,6 +677,20 @@ mod tests {
         let mut without_change_set = norito::json::Map::new();
         without_change_set.insert("id_hex".into(), norito::json::Value::from(id_hex.as_str()));
         assert!(drafted_change_set(&norito::json::Value::Object(without_change_set)).is_err());
+    }
+
+    #[test]
+    fn migration_steps_name_their_wire_steps() {
+        use clap::ValueEnum as _;
+        let wire: Vec<&str> = MigrationStepArg::value_variants()
+            .iter()
+            .map(|step| step.wire())
+            .collect();
+        assert_eq!(wire, ["start", "cut_over", "retire"]);
+        assert_eq!(
+            MigrationStepArg::from_str("cut-over", false),
+            Ok(MigrationStepArg::CutOver)
+        );
     }
 
     #[test]

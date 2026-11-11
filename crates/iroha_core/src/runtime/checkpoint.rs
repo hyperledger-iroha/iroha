@@ -24,11 +24,10 @@
 //! ratified: it is the only guard on the validity inputs a node still takes from its
 //! configuration. TODO(`status.md`, ZK delivery F.4): commit those inputs, then delete it.
 //!
-//! TODO(§7.3): produce a checkpoint at every height the committed policy names
-//! ([`RuntimeCheckpointPolicyV1::is_checkpoint`]), keep the generations it retains
-//! ([`RuntimeCheckpointPolicyV1::retained`]) in the snapshot maker, and start a node from a
-//! transferred checkpoint without the block bodies below it. The operator routes that have a
-//! node sign a record and relay it are not exposed yet either.
+//! The snapshot maker produces a checkpoint at the heights the committed policy names and keeps
+//! the ones it retains (`crate::snapshot::checkpoint_store`); Torii's runtime boundary routes have
+//! a node sign its statements. TODO(§7.3): start a node from a transferred checkpoint without the
+//! block bodies below it.
 
 use iroha_crypto::{Hash, HashOf, KeyPair, PublicKey};
 use iroha_data_model::{
@@ -93,7 +92,7 @@ pub fn latest_floor(world: &impl WorldReadOnly) -> Option<RuntimeStartupFloorV1>
             RuntimeBoundaryV1::StartupFloor(floor) => Some(floor),
             RuntimeBoundaryV1::AdoptionAnchor(_) => None,
         })
-        .last()
+        .next_back()
         .cloned()
 }
 

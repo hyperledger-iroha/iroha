@@ -509,10 +509,21 @@ impl SuffixPreparationJobV1 {
                 &installed.verifier().scheme().scheme_id(),
             )
         })?;
-        if header.request_id != binding.request_id
-            || header.source_capsule != binding.source_capsule
-            || header.tip_sequence != binding.source_sequence
-            || header.anchor_sequence != binding.anchor_sequence
+        // The released source is the suffix tip, so the header's tip sequence is the
+        // bound source sequence.
+        let selected = (
+            header.request_id,
+            header.source_capsule,
+            header.tip_sequence,
+            header.anchor_sequence,
+        );
+        let bound = (
+            binding.request_id,
+            binding.source_capsule,
+            binding.source_sequence,
+            binding.anchor_sequence,
+        );
+        if selected != bound
             || header.artifact_manifest != installed.verifier().manifest_digest()
             || header.verifier_definition
                 != kagemusha_wallet_suffix_verifier_definition_v1(installed.original())

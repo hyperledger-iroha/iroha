@@ -141,6 +141,7 @@ fn next_payment(
         fail_read: AtomicBool::new(false),
         proof_reads: AtomicUsize::new(0),
         submitted: AtomicBool::new(false),
+        capacity_refusals: AtomicUsize::new(0),
     });
     (request, transaction, source)
 }

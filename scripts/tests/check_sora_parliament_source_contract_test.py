@@ -1704,7 +1704,20 @@ SCCP_RECONCILE_CALL = (
     "            crate::smartcontracts::isi::sccp::governance_clock::advance_reconciliation(&mut sb)?;"
 )
 SCCP_ENACT_CALL = "sccp_pauses.enact(&mut sb)?;"
-START_WRAPPER = "fn block_with_owned_start_stages<'state, E: std::fmt::Debug, T, R>("
+SORAFS_TERM_PASS = (
+    "if crate::runtime::sorafs_authority_enabled(sb.world.runtime_selection())\n"
+    "            .map_err(|error| StateBlockStartError::Policy(error.to_string()))?\n"
+    "            && (sb.world.sorafs_authority_proposals.iter().next().is_some()\n"
+    "                || sb.world.sorafs_authority_leases.iter().next().is_some())\n"
+    "        {\n            let mut terms = sb.try_transaction()?;\n"
+    "            let result = crate::smartcontracts::isi::sorafs_authority::advance_terms(&mut terms);\n"
+    "            terms\n                .ensure_execution_ready()\n"
+    "                .map_err(StateBlockStartError::ExecutionDeferred)?;\n"
+    "            result.map_err(|error| {\n"
+    "                StateBlockStartError::Policy(format!(\"authority term execution: {error:?}\"))\n"
+    "            })?;\n            terms.apply();\n        }"
+)
+START_WRAPPER ="fn block_with_owned_start_stages<'state, E: std::fmt::Debug, T, R>("
 START_CONSTRUCTOR = "fn block_with_owned_start_stages_with_carrier<'state, E: std::fmt::Debug, T, R>("
 
 
@@ -1766,7 +1779,8 @@ def test_block_start_phase_call_order_sccp_owners(call: str, mutation: str) -> N
 @pytest.mark.parametrize("first,second", (
     (SCCP_BEGIN_CALL, SCCP_DRAW_CALL), (SCCP_DRAW_CALL, SCCP_RECONCILE_CALL),
     (SCCP_RECONCILE_CALL, ENACTMENT_CALL), (ENACTMENT_CALL, SCCP_ENACT_CALL),
-    (SCCP_ENACT_CALL, SCCP_LAPSE_CALL),
+    (SCCP_ENACT_CALL, SCCP_LAPSE_CALL), (SORAFS_TERM_PASS, EXPIRY_CALL),
+    (SORAFS_TERM_PASS, ENACTMENT_CALL),
 ))
 def test_block_start_phase_call_order_sccp_order(first: str, second: str) -> None:
     source = guard.read(STATE_PATH)
@@ -1782,6 +1796,11 @@ def test_block_start_phase_call_order_sccp_order(first: str, second: str) -> Non
     (SCCP_ENACT_CALL, "drop(sccp_pauses);"),
     (SCCP_ENACT_CALL, "let sccp_pauses = other_pauses; " + SCCP_ENACT_CALL),
     ("let now_h = sb._curr_block.height().get();", "let now_h = other._curr_block.height().get();"),
+    # The SoraFS term pass keeps its own complete rollback boundary on the same block.
+    ("let mut terms = sb.try_transaction()?;", "let mut terms = other.try_transaction()?;"),
+    ("            terms.apply();\n", "            drop(terms);\n"),
+    (".map_err(StateBlockStartError::ExecutionDeferred)?;\n            result.map_err(",
+     ".ok();\n            result.map_err("),
 ))
 def test_block_start_phase_call_order_batch_and_height(original: str, replacement: str) -> None:
     source = guard.read(STATE_PATH)
@@ -1948,7 +1967,10 @@ CONSTRUCTION_POLICY_PATH = "crates/iroha_core/src/state/canonical_runtime/static
 
 
 @pytest.mark.parametrize("path,original,replacement", (
-    (CONSTRUCTION_PATH, "            self,\n        ));", "            foreign_state,\n        ));"),
+    (CONSTRUCTION_PATH, "            self,\n            &acquired.world,\n        ));",
+     "            foreign_state,\n            &acquired.world,\n        ));"),
+    (CONSTRUCTION_PATH, "            self,\n            &acquired.world,\n        ));",
+     "            self,\n            &foreign.world,\n        ));"),
     (CONSTRUCTION_PATH, "network_signatures_prechecked: false,", "network_signatures_prechecked: true,"),
     (CONSTRUCTION_PATH, "ivm_elections_cache: ivm_elections::SnapshotCache::new(),",
      "ivm_elections_cache: foreign_cache,"),
@@ -1956,13 +1978,18 @@ CONSTRUCTION_POLICY_PATH = "crates/iroha_core/src/state/canonical_runtime/static
      "ivm_zk_roots_cache: foreign_cache,"),
     (CONSTRUCTION_RUNTIME_PATH, "pending.finish(&mut projection, privacy)",
      "pending.finish(&mut projection, foreign_privacy)"),
-    (CONSTRUCTION_RUNTIME_PATH, "static_inputs: StaticExecutionPolicy::capture(state),",
-     "static_inputs: StaticExecutionPolicy::capture(foreign_state),"),
+    (CONSTRUCTION_RUNTIME_PATH, "static_inputs: StaticExecutionPolicy::capture(state, world),",
+     "static_inputs: StaticExecutionPolicy::capture(foreign_state, world),"),
+    (CONSTRUCTION_RUNTIME_PATH, "static_inputs: StaticExecutionPolicy::capture(state, world),",
+     "static_inputs: StaticExecutionPolicy::capture(state, foreign_world),"),
     (CONSTRUCTION_POLICY_PATH, "oracle: state.oracle.clone(),", "oracle: foreign.oracle.clone(),"),
     (CONSTRUCTION_POLICY_PATH, "crypto: state.crypto(),", "crypto: foreign.crypto(),"),
     (CONSTRUCTION_POLICY_PATH, "gov: state.gov.clone(),", "gov: foreign.gov.clone(),"),
-    (CONSTRUCTION_POLICY_PATH, "content: state.content.clone(),", "content: foreign.content.clone(),"),
-    (CONSTRUCTION_POLICY_PATH, "settlement: state.settlement,", "settlement: foreign.settlement,"),
+    (CONSTRUCTION_POLICY_PATH, "                &state.content,", "                &foreign.content,"),
+    (CONSTRUCTION_POLICY_PATH, "                &state.settlement,", "                &foreign.settlement,"),
+    (CONSTRUCTION_POLICY_PATH, "let selection = world.runtime_selection();",
+     "let selection = foreign.runtime_selection();"),
+    (CONSTRUCTION_POLICY_PATH, "let parameters = world.parameters();", "let parameters = foreign.parameters();"),
     (CONSTRUCTION_POLICY_PATH, "\n    _original: (),", "\n    pub _original: (),"),
     (CONSTRUCTION_POLICY_PATH, "pub(super) fn capture(", "pub fn capture("),
 ))
@@ -2976,6 +3003,10 @@ def test_replay_dispatch_preserves_typed_admission_and_channel_refusal(
     ("let state_ref = this.state_ref;", "let state_ref = foreign_state;"),
     ('} = this.fields.as_mut().expect("original executing State");',
      '} = foreign.fields.as_mut().expect("original executing State");'),
+    ('} = this.fields.as_mut().expect("original publication fields");',
+     '} = foreign.fields.as_mut().expect("original publication fields");'),
+    ("            world,\n            block_hashes,\n",
+     "            world: foreign_world,\n            block_hashes,\n"),
     ("if musubi_group_read.as_ref().is_none_or(|plan| !plan.retired)", "if false"),
     ("if musubi_group_read.as_ref().is_none_or(|plan| !plan.retired) {\n"
      "            return Err(TransactionsBlockError::SnapshotObservationChanged);",
@@ -3635,6 +3666,7 @@ def test_native_fee_boundary_finalizes_once_after_runtime_and_triggers_before_se
      "Self::execute_unmetered_signed_transaction(\n            signed,\n"),
     ("            TransactionEntrypoint::External(signed) => signed,",
      "            TransactionEntrypoint::External(_) => foreign_signed,"),
+    ("            genesis,\n            true,\n        )", "            genesis,\n            false,\n        )"),
 ))
 def test_native_fee_boundary_accepted_entrypoint_delegates_to_the_signed_owner(
     original: str, replacement: str,
@@ -4498,7 +4530,8 @@ def test_parliament_pulse_isolation_evidence_accepts_comment_literal_and_layout_
 
 REDUCER_PATH = "crates/iroha_core/src/governance/parliament.rs"
 PLANNER_PATH = "crates/iroha_core/src/governance/parliament/planner.rs"
-SLOT_RULE_PATHS = (REDUCER_PATH, PLANNER_PATH, WORLD_PATH)
+WORLD_HOST_PATH = "crates/iroha_core/src/smartcontracts/isi/world_authority_host.rs"
+SLOT_RULE_PATHS = (REDUCER_PATH, PLANNER_PATH, WORLD_PATH, WORLD_HOST_PATH)
 ALIGNED = "pub const fn aligned_sortition_pulse_height_v1("
 DERIVED = "    fn derived_sortition_generation_pulse_height_v1("
 NEXT_SLOT = "    pub(crate) fn next_sortition_generation_pulse_height_v1("
@@ -4511,7 +4544,21 @@ ELECTION_REGISTRATION = "    pub(crate) fn register_sortition_request("
 FAIL_ELECTION = "    pub fn fail_body_election_no_roster("
 PLAN_DRIVER = "    pub fn plan_driver_v1("
 CADENCE = "    fn parliament_sortition_pulse_epoch_length_v1("
-CREATE_ATTEMPT = "    impl Execute for gov::CreateParliamentGovernanceAttemptV1 {"
+CREATE_ATTEMPT = "    fn create_parliament_host_attempt("
+BASELINE_EXECUTOR = "    impl Execute for gov::CreateParliamentGovernanceAttemptV1 {"
+SORAFS_EXECUTOR = (
+    "impl Execute for iroha_data_model::isi::sorafs_authority::"
+    "CreateSorafsAuthorityParliamentAttemptV1 {"
+)
+BASELINE_DELEGATION = (
+    "            create_parliament_host_attempt(\n"
+    "                ParliamentProposalHost::Baseline(proposal_record),\n"
+)
+SORAFS_DELEGATION = "        create_parliament_host_attempt(host, self.attempt_sequence, tx)\n"
+CREATION_BYPASS = (
+    "    fn bypass(tx: &mut StateTransaction<'_, '_>) -> Result<(), Error> {\n"
+    "        create_parliament_host_attempt(todo!(), 0, tx)\n    }\n\n"
+)
 CONFIRMATION_TEST = (
     "fn narrow_confirmation_request_freezes_exact_current_snapshot_and_schedule() {"
 )
@@ -4520,8 +4567,8 @@ SCHEDULE_FLOOR = (
     "                < MIN_PARLIAMENT_SORTITION_PULSE_EPOCH_LENGTH_BLOCKS_V1\n"
 )
 CADENCE_CALL = (
-    "            let sortition_pulse_epoch_length_blocks =\n"
-    "                parliament_sortition_pulse_epoch_length_v1(state_transaction)?;\n"
+    "        let sortition_pulse_epoch_length_blocks =\n"
+    "            parliament_sortition_pulse_epoch_length_v1(state_transaction)?;\n"
 )
 PLANNER_WAIT_END = (
     "            }\n            // No committed pulse at the frozen slot: nothing is due, at any height."
@@ -4533,6 +4580,7 @@ def _slot_rule_sources() -> dict[str, str]:
         REDUCER_PATH: guard.read_rust_with_includes(REDUCER_PATH),
         PLANNER_PATH: guard.read(PLANNER_PATH),
         WORLD_PATH: guard.read(WORLD_PATH),
+        WORLD_HOST_PATH: guard.read(WORLD_HOST_PATH),
     }
 
 
@@ -4696,20 +4744,44 @@ def test_sortition_slot_rule_baseline_and_entrypoint() -> None:
      "PARLIAMENT_SORTITION_REQUIRES_NPOS_CADENCE_V1.into(),", "String::new().into(),"),
     (WORLD_PATH, CADENCE, "            return Err(no_native_cadence());", "            {}"),
     (WORLD_PATH, CREATE_ATTEMPT, CADENCE_CALL,
-     "            let sortition_pulse_epoch_length_blocks = 3;\n"),
+     "        let sortition_pulse_epoch_length_blocks = 3;\n"),
     (WORLD_PATH, CREATE_ATTEMPT, CADENCE_CALL,
-     "            let sortition_pulse_epoch_length_blocks = state_transaction\n"
-     "                .gov\n                .parliament_sortition_pulse_epoch_length_blocks;\n"),
-    # A write before the cadence rejection.
+     "        let sortition_pulse_epoch_length_blocks = state_transaction\n"
+     "            .gov\n            .parliament_sortition_pulse_epoch_length_blocks;\n"),
+    # A write before the cadence rejection, including the proposal host's own writer.
     (WORLD_PATH, CREATE_ATTEMPT, CADENCE_CALL,
-     "            state_transaction\n                .world\n"
-     "                .put_governance_proposal(proposal_id, proposal_record.clone())\n"
-     "                .map_err(governance_proposal_storage_error)?;\n" + CADENCE_CALL),
+     "        state_transaction\n            .world\n"
+     "            .put_governance_proposal(proposal_id, proposal_record.clone())\n"
+     "            .map_err(governance_proposal_storage_error)?;\n" + CADENCE_CALL),
     (WORLD_PATH, CREATE_ATTEMPT, CADENCE_CALL,
-     "            state_transaction.world.parliament_attempt_counts.get_mut();\n" + CADENCE_CALL),
+     "        state_transaction.world.parliament_attempt_counts.get_mut();\n" + CADENCE_CALL),
+    (WORLD_PATH, CREATE_ATTEMPT, CADENCE_CALL,
+     "        host.clone().write_status(\n"
+     "            crate::state::GovernanceProposalStatus::Proposed,\n"
+     "            state_transaction,\n        )?;\n" + CADENCE_CALL),
     (WORLD_PATH, CREATE_ATTEMPT,
      ".parliament_sortition_pulse_delay_blocks, sortition_pulse_epoch_length_blocks),",
      ".parliament_sortition_pulse_delay_blocks, 3),"),
+    # The created attempt keeps its canonical content-derived identity.
+    (WORLD_PATH, CREATE_ATTEMPT, "id: governance_attempt_id,", "id: foreign_attempt_id,"),
+    (WORLD_PATH, CREATE_ATTEMPT, "ProposalContentId::new(host.fingerprint())",
+     "ProposalContentId::new([0; 32])"),
+    # Both executors only read, then end by delegating to the one creation function.
+    (WORLD_PATH, BASELINE_EXECUTOR, BASELINE_DELEGATION,
+     "            state_transaction\n                .world\n"
+     "                .put_governance_proposal(proposal_id, proposal_record.clone())\n"
+     "                .map_err(governance_proposal_storage_error)?;\n" + BASELINE_DELEGATION),
+    (WORLD_PATH, BASELINE_EXECUTOR, BASELINE_DELEGATION,
+     "            create_unchecked_attempt(\n"
+     "                ParliamentProposalHost::Baseline(proposal_record),\n"),
+    (WORLD_HOST_PATH, SORAFS_EXECUTOR, SORAFS_DELEGATION,
+     "        tx.world.sorafs_authority_proposals.remove(&self.proposal.fingerprint());\n"
+     + SORAFS_DELEGATION),
+    (WORLD_HOST_PATH, SORAFS_EXECUTOR, SORAFS_DELEGATION,
+     "        create_unchecked_attempt(host, self.attempt_sequence, tx)\n"),
+    # Attempt creation keeps its closed caller set.
+    (WORLD_PATH, BASELINE_EXECUTOR, BASELINE_EXECUTOR, CREATION_BYPASS + BASELINE_EXECUTOR),
+    (WORLD_HOST_PATH, SORAFS_EXECUTOR, SORAFS_EXECUTOR, CREATION_BYPASS + SORAFS_EXECUTOR),
     # Both frozen schedule inputs are `u64`: a swapped tuple still compiles.
     (WORLD_PATH, CREATE_ATTEMPT,
      "(state_transaction\n                    .gov\n"
@@ -4861,16 +4933,30 @@ FRESH_SLOT = "    /\\ sortitionPulseHeight' = FreshSortitionPulseSlot\n"
      "fn retired(world: &World) -> usize {\n"
      "    world.parliament_unavailable_beacon_pulse_slots.view().len()\n}\nimpl World {",
      "retired missing-pulse substitution path returned"),
-    (STATE_PATH, "parliament_derived_read_indexes_v1(attempts.iter())?",
-     "parliament_derived_read_indexes_v1(attempts.iter(), &finalized_beacon_pulse_slots)?",
-     "missing modeled source binding"),
+    (STATE_PATH, "            parliament_derived_read_indexes_v1(attempts.iter(), |content| {\n",
+     "            parliament_derived_read_indexes_v1(attempts.iter(), |content| {\n"
+     "                self.global_beacon_pulse_slots.view().iter().next().is_none() ||\n",
+     "rebuild_governance_read_indexes must contain"),
+    # The predecessor indexes take closure receipts from the predecessor table.
+    (STATE_PATH, "                    reverted_hosted\n", "                    hosted\n",
+     "rebuild_governance_read_indexes must contain"),
     (STATE_PATH,
-     "    attempts: impl IntoIterator<Item = (&'a GovernanceAttemptId, &'a ParliamentAttemptStateV1)>,\n"
+     "    is_closed: impl Fn(ProposalContentId) -> bool,\n"
      ") -> Result<ParliamentDerivedReadIndexesV1, String> {",
-     "    attempts: impl IntoIterator<Item = (&'a GovernanceAttemptId, &'a ParliamentAttemptStateV1)>,\n"
+     "    is_closed: impl Fn(ProposalContentId) -> bool,\n"
      "    finalized_beacon_pulse_slots: &BTreeSet<(BeaconSessionId, u64)>,\n"
      ") -> Result<ParliamentDerivedReadIndexesV1, String> {",
      "must be rebuilt from attempts alone"),
+    # Pulse demand is every open attempt's frozen slots, never filtered by a stored pulse.
+    (STATE_PATH,
+     "            .into_iter()\n            .filter(|_| !is_closed(attempt.proposal_content_id()))\n",
+     "            .into_iter()\n",
+     "pulse demand must be every open attempt's frozen slots"),
+    (STATE_PATH,
+     "            .required_beacon_pulse_slots_v1()\n            .into_iter()\n",
+     "            .required_beacon_pulse_slots_v1()\n            .into_iter()\n"
+     "            .filter(|slot| !stored_pulses.contains(slot))\n",
+     "pulse demand must be every open attempt's frozen slots"),
     # Restore never reports a stored pulse as conflicting with governance state.
     (RESTORE_PATH, RESTORE_SLOT_CHECK,
      "        let _waits = world.parliament_attempts.view();\n" + RESTORE_SLOT_CHECK,
@@ -4976,6 +5062,24 @@ def test_production_checker_enforces_pulse_isolation_state_and_model_pins(
 
 
 KURA_RETAINED_PATH = "crates/iroha_core/src/kura/publication_lease/retained.rs"
+RETIRED_KEYED_DROP = (
+    "            drop(\n                self.publication\n                    .as_mut()\n"
+    "                    .expect(\"publication\")\n                    .retired_keyed\n"
+    "                    .take(),\n            );\n"
+)
+TERMINAL_RELEASE = (
+    "        if terminal {\n            mv::BlockRetirement::release_writers(self);\n"
+    "            // Releasing persistent nodes can wake allocation waiters. All publication\n"
+    "            // fences and physical writers must be free before dropping retired versions.\n"
+    + RETIRED_KEYED_DROP + "        }\n"
+)
+TERMINAL_NOTICES = (
+    "        // Every attempt scope has ended; reversible fields recovered above and\n"
+    "        // terminal fields retired here before any original Kura release callback.\n"
+    "        self.publication\n            .as_mut()\n"
+    "            .expect(\"retained original publication\")\n"
+    "            .geometry_cleanup\n            .retire_notices();\n"
+)
 KURA_CALLBACK_TESTS_PATH = "crates/iroha_core/src/state/publication_effect_kura_tests.rs"
 KURA_LEASE_PATH = "crates/iroha_core/src/kura/publication_lease.rs"
 KURA_RAW_CLAIM_PATH = "crates/iroha_core/src/kura/lane_geometry/raw_attempt.rs"
@@ -5080,6 +5184,15 @@ def test_kura_claim_cleanup_live_noop_cannot_hide_behind_disabled_copy(
     (PUBLICATION_PATH, "    fn try_publish_inner(",
      "            .geometry_cleanup\n            .retire_notices();",
      "            .geometry_cleanup.release_writers();"),
+    # Retired keyed versions drop after the terminal writers, before Kura notices.
+    (PUBLICATION_PATH, "    fn try_publish_inner(", TERMINAL_RELEASE,
+     "        if terminal {\n" + RETIRED_KEYED_DROP
+     + "            mv::BlockRetirement::release_writers(self);\n        }\n"),
+    (PUBLICATION_PATH, "    fn try_publish_inner(", TERMINAL_RELEASE,
+     "        if terminal {\n            mv::BlockRetirement::release_writers(self);\n        }\n"),
+    (PUBLICATION_PATH, "    fn try_publish_inner(", TERMINAL_RELEASE + TERMINAL_NOTICES,
+     "        if terminal {\n            mv::BlockRetirement::release_writers(self);\n        }\n"
+     + TERMINAL_NOTICES + RETIRED_KEYED_DROP),
     (KURA_RETAINED_PATH, "impl Drop for Acquisition<'_, '_>",
      "self.fences.release_into(self.releases);", "drop(&mut self.fences);"),
     (KURA_RETAINED_PATH, "impl Drop for KuraPhysicalScope<'_, '_>",
