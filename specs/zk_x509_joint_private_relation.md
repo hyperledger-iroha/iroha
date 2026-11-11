@@ -39,7 +39,7 @@ The consuming protocol stages enforce this order:
 3. Bind both transcript checkpoints, both composition roots and both independent
    FRI-mask roots before deriving one point admissible for every original
    polynomial, native translation and key/digest power map.
-4. Bind both current/next local DEEP records and MAIN's 31 key/digest values.
+4. Bind both current/next local DEEP records and MAIN's 32 key, Projection and digest values.
    Bind the canonical ordered 24 MAIN and 108 CA original auxiliary values into
    both local transcripts before sampling either local DEEP mix.
 5. Include the 24 and 108 supplemental divided differences in each respective
@@ -48,13 +48,13 @@ The consuming protocol stages enforce this order:
 
 The canonical version-one envelope remains exact and rejects trailing bytes,
 truncations, noncanonical Fp4 coordinates and retired terminal frames. X5M1 is
-4 magic bytes, 2 version bytes, 31 Fp4 values and one 4-byte inner length: 1,002
+4 magic bytes, 2 version bytes, 32 Fp4 values and one 4-byte inner length: 1,034
 framing bytes. X5C1 has 4 magic bytes, 2 version bytes and one 4-byte inner
 length: 10 framing bytes. X5S1 has 108 public-header bytes, 132 Fp4 values
 (4,224 bytes) and two 8-byte section headers: 4,348 framing bytes. The header is
 `X5S1 || version:u16be || count:u16be || nonce[32] || consensus_context[32] ||
 governed_ca_root[32] || channel:u32be`. The source-derived MAIN and CA inner maxima are 7,931,808
-and 1,498,816 bytes, yielding 9,435,984 bytes overall with 1,200 bytes remaining
+and 1,498,816 bytes, yielding 9,436,016 bytes overall with 1,168 bytes remaining
 under the unchanged 9,437,184-byte cap. This is a source-derived bound; the actual maximum canonical encoding still requires native validation. The partitioned MAIN section cap is
 7,934,010 bytes; CA keeps its original independent cap. No legacy decoder is
 retained.
@@ -117,11 +117,11 @@ Both base roots precede the shared bus challenges. Both original auxiliary roots
 
 Every Fp4 alpha/mix uses four canonical big-endian u64 coefficients from a uniform 384-bit ideal-oracle response, with rejection instead of reduction; zero is allowed. Attempt identifiers distinguish each of at most sixteen draws. For z the predicate is deterministic and public at the sampling stage. Conditional on success the accepted value is uniform on the admitted set. Exhaustion rejects. This local distribution statement does not treat adaptive Fiat–Shamir calls as fresh interactive coins.
 
-The rejected z count is at most E=1+693*(2^19+2^22)+110*(2^12+2^16)=3,277,643,777. MAIN native subgroups and all 24 translated MAIN multipliers lie in H19, preserving both H19 and generator·H22. The original point and six power2, five power8 and twenty power32 maps have summed degree693. A nonzero scale times X^k has at most k preimages of any forbidden point. CA has two local and 108 translated linear maps. Collisions only reduce the union. SDK independent review confirmed this census. Therefore the sampling support has size at least |Fp4|−E.
+The rejected z count is at most E=1+709*(2^19+2^22)+110*(2^12+2^16)=3,353,141,249. MAIN native subgroups and all 24 translated MAIN multipliers lie in H19, preserving both H19 and generator·H22. The original point and six power2, five power8, one power16 and twenty power32 maps have summed degree709. A nonzero scale times X^k has at most k preimages of any forbidden point. CA has two local and 108 translated linear maps. Collisions only reduce the union. SDK independent review confirmed the census before the power16 map was added. `deep_point_census_counts_the_actual_opening_maps` derives the changed map multiset from the actual plan, and `profile_descriptor_records_the_joint_ledger_values` checks that the profile descriptor records this E; the changed census has had no independent review. Therefore the sampling support has size at least |Fp4|−E.
 
 ## Restored degree and paired configurations
 
-The original local affine batch contains each current and next divided difference, every composition divided difference, and every supplemental divided difference; the independent mask oracle is its affine offset. MAIN has 5,831 original columns, six composition chunks and 55 extra values (31+24), yielding 11,723 independently weighted functions. CA has 823 original columns, four composition chunks and 108 extras, yielding 1,758 independently weighted functions. The mask is one affine offset per batch. These are independent weights, not powers of one batching scalar. The affine FRI commitment term accounts for this batch without a width-dependent scalar-power factor; adding a separate 1/|F| per extra opening would double-count that batching step.
+The original local affine batch contains each current and next divided difference, every composition divided difference, and every supplemental divided difference; the independent mask oracle is its affine offset. MAIN has 5,831 original columns, six composition chunks and 56 extra values (32+24), yielding 11,724 independently weighted functions. CA has 823 original columns, four composition chunks and 108 extras, yielding 1,758 independently weighted functions. The mask is one affine offset per batch. These are independent weights, not powers of one batching scalar. The affine FRI commitment term accounts for this batch without a width-dependent scalar-power factor; adding a separate 1/|F| per extra opening would double-count that batching step.
 
 The accepted FRI coefficient caps are K_MAIN=144*2^12=589,824 and K_CA=144*2^6=9,216. A candidate divided-difference polynomial has degree at most K−1; multiplying its linear denominator and adding its claim restores a polynomial of degree at most K. This is the adversarial recovered degree, not the smaller honest masked-column degree. The actual query evaluator uses the same original f(x) value for both (f(x)−v_current)/(x−z) and (f(x)−v_next)/(x−omega*z), and for every supplemental denominator. It does not query an independently shifted f(omega*x) codeword. On the single common correlated-agreement set, all restored representatives of a given original column therefore coincide; no intersection of shifted agreement sets is assumed. Since that set has more than K points, their differences vanish identically, including repeated or coinciding supplemental points. All fields of each original trace/composition configuration are thus consistent. An original trace codeword is Fp-valued; its recovered polynomial is also over Fp because coefficientwise Frobenius difference vanishes on more than K base-field points.
 
@@ -137,7 +137,7 @@ Let D=589,824 and C=9,216 be the restored degree bounds. All public fixed polyno
 |---|---|---:|---|
 |49 MAIN local AIR registrations|fixed-aware degree at most7, only X and native-root*X|7D|native subgroup in H19|
 |192 terminal links|f(X)−g(X), or f(X)−1|D|one point in H19|
-|12 key blocks|f(X)−g(scale*X^k), k=1,2,8|8D|at most65 distinct points in H19|
+|13 key blocks|f(X)−g(scale*X^k), k=1,2,8,16|16D|at most1,357 distinct points in H19|
 |5 digest blocks|f(X)−sum of four public weights*g(scale_j*X^32)|32D|eight distinct points in H19|
 |2 authoritative CRL digest blocks|f(X)−P7(X), public interpolation of retained-record digest words|D|eight distinct points in H19|
 |2 authoritative CRL timestamp blocks|f(X)−public_timestamp|D|one point in H19|
@@ -198,7 +198,7 @@ Base configuration selection can depend on later bus challenges, so apply the sa
 
 The actual complete fold schedules are MAIN twelve binary folds (sum24) and CA six (sum12). At rate>=1/8, 7/sqrt(rho)*sum(arities)<7*3*24=504<512. Therefore the existing loose FRI terms remain valid: MAIN first<2^-188, second<2^-220; CA combined<2^-199. The new joint<2^-219 term fits with the first two inside MAIN's existing<2^-187 allowance. The final seven exponents are [160,187,160,199,164,165,158]. Their exact dyadic sum is below 2^-157. A minimum-exponent-minus-log(number-of-terms) estimate would unnecessarily lose precision; the held checker performs checked integer addition instead.
 
-This ledger is a candidate interactive algebraic argument. Installing a nonzero certificate pin still requires independent acceptance of the mixed-domain conditional argument and actual round-by-round/ROM proof; none is supplied by native tests or these integer inequalities. The separate joint zero-knowledge proof must compose per-column mask closure,137-coefficient adjacent chunk masks, independent FRI-mask decoupling, adaptive transcript simulation and failure behavior.
+This ledger is a candidate interactive algebraic argument. Installing a nonzero certificate pin still requires independent acceptance of the mixed-domain conditional argument and of the round-by-round/ROM derivation recorded at the end of this document; neither is supplied by native tests or these integer inequalities. The separate joint zero-knowledge proof must compose per-column mask closure,137-coefficient adjacent chunk masks, independent FRI-mask decoupling, adaptive transcript simulation and failure behavior.
 
 The SHA fixed schedule binds the canonical domain header of every framed call,
 its statically positioned field-length headers and protocol constants, and the
@@ -271,14 +271,13 @@ new opening, witness publication, private inverse, auxiliary challenge, or wire
 field. All 16 endpoint equalities are unconditional.
 
 The plan coordinates and public interpolation coefficients precede its alphas in
-the transcript. MAIN's key/digest alpha group has 21 members: the existing 12 key
+the transcript. MAIN's key/digest alpha group has 22 members: the 13 key
 and five private SHA/P256 joins, then two public digest joins and two public
 CRL timestamp joins. Each
 new quotient has degree at most `2^19 + 1815 - 8 = 526095`, below the existing
 2155224 bound. Each divisor divides the existing log19 native vanishing
 polynomial, so the common cleared-denominator degree and admissible-point
-exclusion do not grow. The 31 supplemental key/digest openings and proof size are
-unchanged. Both blocks share the same original SHA segment0/base column0 for all five
+exclusion do not grow. These blocks add no supplemental opening or proof byte. Both blocks share the same original SHA segment0/base column0 for all five
 disclosure shapes. Composition replays that column once and computes the two
 clearing quotients sequentially; earlier RFC/I/O/P256 owners are dropped first,
 keeping the existing bounded clearing allocation allowance.
@@ -288,7 +287,8 @@ establish all DER/RFC/governance semantic links, whole-credential H-cover,
 concrete Fiat–Shamir/Merkle security, joint zero knowledge, or deadline readiness.
 The production `JointSecurityReductionIncomplete` refusal remains. Calls 13–15
 are public governance-record hash computations; their present redundancy is not
-used to justify these private endpoints. Other remaining cross-adapter obligations require their own source audit.
+used to justify these private endpoints. Other remaining cross-adapter obligations require their own source audit;
+the [coverage ledger](zk_x509_relation_coverage.md) records the first read and its open gaps.
 
 
 ## Exact authoritative CRL timestamps
@@ -325,3 +325,213 @@ do not provide a cross-link from the parsed RFC timestamps to the retained recor
 and are not used to justify the new equalities. This correction does not close
 whole-credential H-cover or the outstanding concrete-security and performance
 requirements. `JointSecurityReductionIncomplete` remains the production result.
+
+
+## Projection input join and serial comparison census
+
+Two gaps of the [coverage ledger](zk_x509_relation_coverage.md) are closed by
+relation changes. Both change the relation and profile identity; earlier
+proofs, pins and measurements are not evidence for the changed source.
+
+**Projection inputs.** The RFC `Projection`-role producer bytes are one
+consecutive run of producer rows in channel order: three SPKI slots, the serial
+length and padded serial, then the length and padded value of each disclosed
+attribute, `301 + 264 d` bytes for `d` disclosures. The Projection segment's
+leading input rows mirror that run byte for byte. MAIN's key plan has a
+thirteenth block that equates RFC `BASE_VALUE` on the run with the Projection
+value column on rows `0` through `300 + 264 d`, through the native-root power
+map `X^16` between the log-19 and log-15 domains. The verifier evaluates
+`(V(X) - P(scale X^16)) / product_i (X - x_i)` with one new original opening of
+the Projection value column. Before this block the only equality between the
+two sides was a host check in the MAIN assembler, so the SPKI, serial and
+attribute bytes that Projection frames and hashes were not tied to the parsed
+documents. The raw length bytes are joined, so the Projection length prefix
+inherits the RFC canonical form.
+
+MAIN's key/digest alpha group has 22 members and X5M1 carries 32 original key,
+Projection and digest values. The honest quotient degree is at most
+`16 (2^15 + 1815) - 301 = 553027`; the conservative cleared numerator is 16D
+and stays inside B_MAIN. The Projection value column has one extra opening
+set, so its conditional trace-mask closure `(2 + 1)(136 + 4) <= 1816` holds.
+
+**Serial comparisons.** The comparison slots are a private, group-aligned
+active prefix of a fixed maximum layout. The entry census now runs over them:
+on one row of each slot, the leaf comparison against entry `k` weighs
+`1 + 2^20 k` and the adjacent-order comparison ending at entry `k` weighs
+`-2^20 k`. The census equals the entry count on every serial-source row, which
+follows every entry relation slot and precedes every comparison slot, and
+twice the entry count on the last row. Every count is at most 64, so the
+second equation holds exactly when the active prefix is the complete `2n - 1`
+slots for `n` entries, or empty for none. Active comparison rows are copy
+consumers, so their serial sources and node lookups are forced with them. No
+column or residue is added: the two checks share one residue through disjoint
+fixed gates, and the weight reuses the entry-count fixed column. The compiled
+profile binds the SHA and P-256 fixed schedules by digest but the RFC schedule
+only through the RFC field of the profile descriptor, which records the census;
+binding the RFC schedule by digest is TODO(X.3).
+
+The controls for both changes evaluate plans and residues directly. The
+changed profile was captured from the actual compilers and its pin adopted as
+`cbf1bd12`; the predecessor `f5d2b994` is a rejection fixture. The profile
+descriptor records the serial comparison census in its RFC field and the
+changed point-exclusion bound in its joint fields. Ordinary and maximum
+diagnostic proofs of 9,436,016 bytes verify on one macOS host, with
+independent replay and the wrong-genesis, nonce and tamper controls. Still
+required: a proof forged by a prover that skips the host checks, independent
+review of the changed exclusion census, and qualification under the unchanged
+time and resource limits. `JointSecurityReductionIncomplete` remains the
+production result.
+
+
+## Round-by-round state function and Fiat–Shamir lift
+
+This section puts the candidate ledger above into round-by-round form and lifts
+it to the random-oracle model. It is a derivation recorded for independent
+review, not an accepted certificate. Its three dependencies are listed at the
+end; the activation pin stays zero and `JointSecurityReductionIncomplete`
+remains the production result.
+
+### Rounds
+
+The underlying public-coin protocol has four shared rounds and two FRI tails.
+`verify_zk_x509_credential_subproofs_v1` replays exactly this order.
+
+| Round | Prover messages bound first | Verifier coins | Binding owner |
+|---|---|---|---|
+| 1 | joined MAIN base root, CA base root | the eleven X5B1 challenge families, 272 nonzero Goldilocks lanes | `derive_zk_x509_credential_pre_aux_binding_v1` |
+| 2 | MAIN auxiliary root, CA auxiliary root | every local and link composition coefficient of MAIN and of CA, uniform in Fp4 | `JointAuxiliaryBindingV1` |
+| 3 | both local checkpoints, both composition roots, both FRI-mask roots | one point `z`, uniform on Fp4 minus the E excluded values | `JointOracleCheckpointsV1::derive_point_v1` |
+| 4 | both local DEEP records, MAIN's 32 key, Projection and digest values, the 24 MAIN and 108 CA translated openings | MAIN's 11,724 and CA's 1,758 independent DEEP weights | `JointOriginalOpeningsV1::bind_both_v1` |
+| M1–M12 | root of MAIN FRI layer `i-1` | one fold challenge, uniform in Fp4 | `absorb_fri_root_v1` |
+| M13 | MAIN terminal root, grinding nonce | 136 distinct indices of the 2^22 domain | `query_indices_v1` |
+| C1–C6 | root of CA FRI layer `i-1` | one fold challenge, uniform in Fp4 | `absorb_fri_root_v1` |
+| C7 | CA terminal root, grinding nonce | 136 distinct indices of the 2^16 domain | `query_indices_v1` |
+
+Rounds 1 and 3 draw from one joint hash chain. Rounds 2 and 4 draw MAIN's coins
+from MAIN's chain and CA's from CA's, after both chains absorbed the same joint
+digest of every message of that round. From M1 and C1 onward the two chains no
+longer absorb each other. Every coin is the oracle's answer on a chain state;
+a state determines its whole message prefix unless two oracle answers collide.
+
+The order is pinned by `every_byte_of_every_public_profile_and_base_root_input_is_bound`,
+`all_eleven_family_positions_are_order_bound`,
+`joint_auxiliary_binding_preserves_both_original_roots_and_context`,
+`shared_point_binds_every_oracle_and_both_complete_local_transcript_states`,
+`both_complete_deep_states_and_each_original_opening_precede_each_local_mix` and
+`actual_ca_joint_fri_binds_every_original_supplemental_opening_and_paired_main_record`.
+
+### Exact relation and candidates
+
+Call a statement false when no pair of base polynomial vectors, of degree below
+K_MAIN and K_CA, satisfies the exact relation: every base-only constraint on its
+rows, every key, digest, public-digest and public-time join, and every multiset
+equality that an auxiliary product encodes, inside one adapter, between
+adapters and between MAIN and CA. This is the algebraic statement only. Whether
+it implies the native reference relation is the separate coverage obligation.
+
+For oracle words committed so far, a candidate is a complete vector of
+polynomials below the degree cap that agrees with all of them on one common set
+of density above 7/16. The incidence bound above gives fewer than six candidates
+per domain and at most 64 pairs. A candidate for a longer vector restricts to a
+candidate for every prefix, so the pairs of a later round extend pairs of an
+earlier round.
+
+### State function
+
+For a false statement the transcript starts doomed. It stays doomed after each
+round unless the stated event occurs.
+
+1. After round 1: some candidate base pair violates the exact relation and
+   still admits auxiliary polynomials satisfying every auxiliary and link
+   equation under the sampled lanes. This is the RFC, P256 and SHA collision
+   event taken over all pairs: below 2^-164 + 2^-165 + 2^-158.
+2. After round 2: for some candidate base-and-auxiliary pair the sampled
+   coefficients cancel a nonzero residue modulo its vanishing polynomial. A
+   pair whose nonzero residue lies in MAIN's local or link set needs MAIN's
+   coefficients to cancel it, and one whose residue lies in CA's local set needs
+   CA's: below 64/|F| < 2^-246 on either chain.
+3. After round 3: for some candidate pair extended by composition chunks, the
+   nonzero cleared relation vanishes at `z`: below 64(B_MAIN+B_CA)/(|F|-E) <
+   2^-220.
+4. After round 4, given the openings. If they equal the evaluations of some
+   candidate pair, the verifier's own evaluation of the composition identity
+   fails and the state stays doomed through every later round. Otherwise the
+   restoration argument above shows that the DEEP-quotient vector of at least
+   one domain has no correlated agreement above 7/16; the state leaves doomed
+   only if that domain's batched function is nevertheless that close. Affine
+   batching bounds this by the first commitment term: below 2^-188 for MAIN and
+   2^-200 for CA.
+5. In the tails each domain carries the state of batched FRI. The joint state
+   is doomed while the identity check fails or either tail is doomed. A doomed
+   tail leaves its state in a fold round with at most the first commitment term
+   of its domain, and in its query round with probability below 2^-160, because
+   136 distinct indices all land in a set of density at most
+   sqrt(rho)(1 + 1/6) with rho <= 1/7.
+
+A complete doomed transcript is rejected: the identity check fails, or a
+doomed tail fails a fold, terminal or query check. Acceptance needs both tails.
+
+The largest single-round term is round 1. The seven-term sum
+[160,187,160,199,164,165,158] of the ledger bounds every round at once, so the
+round-by-round error is below 2^-157. The second commitment term of the
+interactive theorem is not needed here and stays in the sum as slack. Grinding
+is not credited.
+
+### Split tails
+
+The event that moves a tail out of its doomed state depends only on the shared
+prefix, that tail's own messages and the coin. All of them are encoded in the
+chain state the coin is drawn from. The same holds for the per-chain events of
+rounds 2 and 4. An oracle answer can therefore move the joint state out of
+doomed only when it is lucky for the state function of its own chain, which has
+probability below 2^-157 for each distinct state. No independence between the
+two tails is used, and conditioning on a completed MAIN tail supplies no CA
+coin.
+
+### Random-oracle bound
+
+With the hash functions modelled as random oracles with at least 256 output
+bits and a classical adversary making at most Q queries, the BCS reduction
+gives adaptive soundness error at most
+
+```text
+Q * 2^-157 + 3(Q^2 + 1) / 2^256
+```
+
+for one proof of one fixed false statement. Chain-state collisions among Q
+answers of a 384-bit digest add at most Q^2 / 2^385 and fit the same slack.
+Dividing by Q is the work-normalized form that
+`checked_transparent_stark_work_security_v1(128, 157, 256, 64)` checks: both
+halves are below 2^-129 for every Q up to 2^64.
+
+### Dependencies and scope
+
+1. The interactive mixed-domain ledger of the preceding sections: restoration,
+   the degree census, the candidate bound and the copy normalization. An
+   independent bounded review accepted it for source15; later source changes
+   need a fresh applicability review.
+2. Batched FRI. Block, Garreta, Katz, Thaler, Tiwari and Zając, *Fiat-Shamir
+   Security of FRI and Related SNARKs*, ASIACRYPT 2023, Theorem 7 gives the
+   round-by-round error `max{(m+1/2)^7 |L0|^2 / (3 rho^(3/2) |F|), (1-delta)^l}`
+   and Corollary 5 the bound above. They are stated for a dyadic degree bound
+   folded to a constant. This profile folds K = 9*2^16 coefficients over 2^22
+   points twelve times, and 9*2^10 over 2^16 six times, to an explicit terminal
+   of degree at most 143 over 2^10 points, with an affine mask offset. The
+   proximity-gap statements behind the theorem hold for every Reed–Solomon
+   rate, and `validate_affine_batched_fri_theorem2_v1` checks the same two
+   terms for these parameters, but the theorem has not been re-derived or
+   independently checked for them.
+3. Commitments and framing. Joined roots, multiproof frontiers, retained cuts
+   and salted leaves are treated as the Merkle commitments of the BCS
+   transformation, and every transcript frame as injective and domain
+   separated. The framing tests named above are the implementation
+   correspondence; they are not a proof of it.
+
+The bound is classical random-oracle soundness of the algebraic statement for
+at most 2^64 queries. It does not cover the quantum random-oracle model,
+several proofs sharing one nonce, concrete hash or entropy guarantees, the
+coverage of the native reference relation, or zero knowledge.
+
+TODO: obtain independent acceptance of dependencies 1–3, complete the coverage
+and hiding arguments, and only then replace the refusal in
+`require_consensus_security_v1`.

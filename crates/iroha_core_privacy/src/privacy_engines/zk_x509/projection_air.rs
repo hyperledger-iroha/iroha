@@ -62,6 +62,25 @@ pub const ZK_X509_PROJECTION_STARK_CONSTRAINT_COUNT_V1: usize =
     242 + 16 * ZK_X509_PROJECTION_COPY_LANES_V1;
 /// Maximum total algebraic degree, including verifier-fixed selectors.
 pub const ZK_X509_PROJECTION_STARK_CONSTRAINT_DEGREE_V1: u8 = 4;
+/// Base column holding the private input byte on every input row.
+pub(crate) const ZK_X509_PROJECTION_INPUT_VALUE_COLUMN_V1: usize = VALUE;
+/// Leading input rows that mirror the RFC `Projection`-role bytes of a shape.
+///
+/// The fixed compiler emits the input rows first and in RFC channel order:
+/// three SPKI slots, the serial length and padded serial, then the length and
+/// padded value of each disclosed attribute. Rows of undisclosed slots follow
+/// and are zero. MAIN joins exactly this run to the RFC producer rows.
+pub(crate) const fn zk_x509_projection_rfc_input_rows_v1(disclosures: usize) -> Option<usize> {
+    if disclosures > ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1 {
+        return None;
+    }
+    Some(
+        ZK_X509_MAX_CHAIN_DEPTH_V1 * ZK_X509_PROJECTION_SPKI_DER_BYTES_V1
+            + 8
+            + ZK_X509_MAX_SERIAL_BYTES_V1
+            + disclosures * (8 + ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1),
+    )
+}
 const VALUE: usize = 0;
 const VALUE_BITS: usize = 1;
 const USED: usize = 9;

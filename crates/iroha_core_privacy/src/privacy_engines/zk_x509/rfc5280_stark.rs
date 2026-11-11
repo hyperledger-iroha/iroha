@@ -103,12 +103,12 @@ mod variable_output;
 use binding::numeric_lookup_event_v1;
 /// Stable identity of the native RFC adapter integrated only through MAIN.
 #[cfg(test)]
-pub const ZK_X509_RFC5280_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-rfc5280-stark-v1-incompatible:native-log19:base285:aux280:fixed147:constraints2145:degree4:source-node-root-kind-active-gated-helper-fixed-eight-equality-and-fifteen-embedded-endpoint-slots-complete-nonempty-original-node-spans-live-prefix-count-typed-copy-domains103-104-affine-one-plus-tuple-for-shared-domains90-98-99-102-103-104-affine-one-plus-tuple-for-shared-profile-domains96-97-optional-slot-canonical-zero-exact-extension-oid-ordinal-ku-document-and-critical-cardinality-eku-canonical-profile-uuid-oids:output-metadata-six-verifier-fixed-equations-certificate-slot-output-producer-and-consumer-fixed-selector-equals-global-activity:five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-big-endian-length-pairs-live-prefix-count-node-continuity-source-start-helper:projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa:max-private-active-rows246673:fixed-public-nonpadding-rows292206:four-copy-lanes:zero-sized-public-shape:constant-registration-transcript:no-private-depth-length-count-or-family-boundary-disclosure:committed-family-active-prefixes-except-verifier-fixed-temporal-basic-constraints-and-complete-copy-slot-census:inactive-rows-canonical-zero:four-fixed-top-document-slots:top-document-max4096:optional-certificate-slot2-boolean-provenance-bound:depth2-slot2-zero-byte-zero-node-dummy:certificate-slot-active-output-channel:source-byte-and-node-private-joined-der-endpoints:canonical-parent-child-tag-ordinal-grammar:closed-leaf-five-ca-four-extension-cardinality-and-ordinal-bound-critical-positions:no-host-role-labels:extension-embedded-exact-copy:algorithm-and-profile-fixed-byte-rows:decimal-calendar-to-unix-arithmetic:gregorian-euclidean-year-quotients-and-exact-leap-bit:utc1970-2049-generalized2050-9999-actual-der-tag-and-raw-year-bound:fixed72-authenticated-document-role-instance-time-slots:complete-der-time-node-census:fixed15-decimal-byte-rows-including-z-and-zero-utc-padding:fixed73-two-phase-relations-with-verifier-public-operands-and-only-next-update-strict:entry-count-equals64-boolean-entry-census:38-bit-nonwrapping-timestamp-and-slack:range-byte-before-after-transition-bound:four-lane-affine-one-plus-tuple-logarithmic-lookup-domains100-101:singular-inverse-zero-and-exact-singular-count:bounded-public-presentation-window:private-certificate-validity-covers-window:private-crl-interval-covers-window:basic-constraints-fixed-three-slots-twelve-rows-original-signed-extension-ordinal3-complete-bytes-eight-canonical-u32-integer-variants-32bit-pathlen-and-nonwrapping-slack-at-least-subordinate-count:ku-eku-bc:serial-positive-max20:complete-crl-max64:fixed-two-phase-serial-comparator-layout:fixed-seven-phase-calendar-copy-layout:max-serial-comparisons127:max-serial-comparator-logical-rows2667:max-serial-comparator-physical-rows5334:max-serial-source-rows5334:leaf-vs-every-entry-nonmembership:adjacent-revoked-serial-strict-increasing-unsigned-magnitude:length-then-byte-lexicographic:active-prefix-count-and-zero-padding:first-magnitude-byte-nonzero:first-difference-range-checked:der-integer-optional-sign-octet-bound:serial-source-node-and-byte-zero-safe-log-lookups-with-singular-count-equality:serial-decimal-relation-to-comparator-calendar-range-four-lane-grand-product:one-compressed-factor-per-physical-row:zero-product-factors-total-no-prover-abort:full-input-affine-degree-audit:issuer-name-and-aki-ski-byte-equality:fixed-five-document-sha-call-sources:fixed-three-certificate-signature-key-slots:depth2-third-tbs-signature-key-canonical-dummy:full-signed-crl-commitment-and-tbs-p256-message-distinct:producer-and-consumer-terminals-enumerated:thirty-nine-relation-four-lane-union-bound-at-least170-bits:canonical-base-fixed-aux-column-provider:eighteen-verifier-fixed-output-role-endpoint-selectors:nine-independent-normalized-producer-and-nine-actual-consumer-four-lane-products:governed-root-spki-and-certificate-slot-active-products-air-bound:four-private-governed-root-consumer-to-original-CA-polynomial-links:private-normalized-producer-to-consumer36-final-equalities:16-native-constant-private-sha-bridge-columns:16-sha-quartic-endpoint-plus4-rfc-quartic-union-main-joins:endpoint-map6,2,2,2,3,3,2,4,3:direction0:instance0:typed-family-role-endpoint-lane-addresses:no-der-public-claim-slots:der-rfc8-private-linear-quotients:verifier-original-polynomial-private-link-replay:no-public-terminal-products:sha-terminal-ca-call-family-lane-addresses-fixed:compact-ca-call-role-and-order-fixed:verifier-committed-sha-terminal-replay:five-p256-witnesses-native-rust-fixed-certificate-crl-wallet-order:p256348-private-products-no-public-codec:p256184-private-linear-links:four-certificate-or-crl-then-wallet-role-order:p256-bus-cross-start-terminal-and-sink-addresses-fixed:canonical-goldilocks-big-endian:verifier-authenticated-p256-private-oods-link-equations:compact-ca-subproof-dedicated-x5c1-x5c2-complete:ca-claim-free-frame10bytes-main-frame1002-joint132-Fp4-openings4224:ca-single-log12-trace4096-base695-aux128-fixed80-constraints1363-degree3-4chunks:ca-local-lde-log16-mask2100-deep52800-fri136-rounds6-terminal1024-degree143-grinding20:shared-x5b1-single-joined-main-base-root-plus-ca-base-root-challenge-schedule:ca-public-profile-and-root-bound:ca-prover-self-verifies-independent-verifier-and-resource-gates:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
+pub const ZK_X509_RFC5280_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-rfc5280-stark-v1-incompatible:native-log19:base285:aux280:fixed147:constraints2145:degree4:source-node-root-kind-active-gated-helper-fixed-eight-equality-and-fifteen-embedded-endpoint-slots-complete-nonempty-original-node-spans-live-prefix-count-typed-copy-domains103-104-affine-one-plus-tuple-for-shared-domains90-98-99-102-103-104-affine-one-plus-tuple-for-shared-profile-domains96-97-optional-slot-canonical-zero-exact-extension-oid-ordinal-ku-document-and-critical-cardinality-eku-canonical-profile-uuid-oids:output-metadata-six-verifier-fixed-equations-certificate-slot-output-producer-and-consumer-fixed-selector-equals-global-activity:five-key-and-five-complete-spki-outputs-der-node-byte-lookups-key-length66-offset1-spki-content89-total91-offset0-nine-variable-tbs-crl-signature-byte-and-canonical-u16-in-eight-byte-big-endian-length-pairs-live-prefix-count-node-continuity-source-start-helper:projection-leaf-serial-magnitude-sign-octet-nonzero-first-byte-big-endian-length-selected-original-subject-oid-value-provenance-with-complete-name-oid-census-three-original-classes-disjoint-document-stride12-keys1through48-six-bit-positive-gaps-uniqueness-nonempty-bounded-rdns-and-complete-original-value-census-country-printable-utf8-dfa:max-private-active-rows246673:fixed-public-nonpadding-rows292206:four-copy-lanes:zero-sized-public-shape:constant-registration-transcript:no-private-depth-length-count-or-family-boundary-disclosure:committed-family-active-prefixes-except-verifier-fixed-temporal-basic-constraints-and-complete-copy-slot-census:inactive-rows-canonical-zero:four-fixed-top-document-slots:top-document-max4096:optional-certificate-slot2-boolean-provenance-bound:depth2-slot2-zero-byte-zero-node-dummy:certificate-slot-active-output-channel:source-byte-and-node-private-joined-der-endpoints:canonical-parent-child-tag-ordinal-grammar:closed-leaf-five-ca-four-extension-cardinality-and-ordinal-bound-critical-positions:no-host-role-labels:extension-embedded-exact-copy:algorithm-and-profile-fixed-byte-rows:decimal-calendar-to-unix-arithmetic:gregorian-euclidean-year-quotients-and-exact-leap-bit:utc1970-2049-generalized2050-9999-actual-der-tag-and-raw-year-bound:fixed72-authenticated-document-role-instance-time-slots:complete-der-time-node-census:fixed15-decimal-byte-rows-including-z-and-zero-utc-padding:fixed73-two-phase-relations-with-verifier-public-operands-and-only-next-update-strict:entry-count-equals64-boolean-entry-census-and-weighted-serial-comparison-census:38-bit-nonwrapping-timestamp-and-slack:range-byte-before-after-transition-bound:four-lane-affine-one-plus-tuple-logarithmic-lookup-domains100-101:singular-inverse-zero-and-exact-singular-count:bounded-public-presentation-window:private-certificate-validity-covers-window:private-crl-interval-covers-window:basic-constraints-fixed-three-slots-twelve-rows-original-signed-extension-ordinal3-complete-bytes-eight-canonical-u32-integer-variants-32bit-pathlen-and-nonwrapping-slack-at-least-subordinate-count:ku-eku-bc:serial-positive-max20:complete-crl-max64:fixed-two-phase-serial-comparator-layout:fixed-seven-phase-calendar-copy-layout:max-serial-comparisons127:max-serial-comparator-logical-rows2667:max-serial-comparator-physical-rows5334:max-serial-source-rows5334:leaf-vs-every-entry-nonmembership-forced-by-entry-census:adjacent-revoked-serial-strict-increasing-unsigned-magnitude:length-then-byte-lexicographic:active-prefix-count-and-zero-padding:first-magnitude-byte-nonzero:first-difference-range-checked:der-integer-optional-sign-octet-bound:serial-source-node-and-byte-zero-safe-log-lookups-with-singular-count-equality:serial-decimal-relation-to-comparator-calendar-range-four-lane-grand-product:one-compressed-factor-per-physical-row:zero-product-factors-total-no-prover-abort:full-input-affine-degree-audit:issuer-name-and-aki-ski-byte-equality:fixed-five-document-sha-call-sources:fixed-three-certificate-signature-key-slots:depth2-third-tbs-signature-key-canonical-dummy:full-signed-crl-commitment-and-tbs-p256-message-distinct:producer-and-consumer-terminals-enumerated:thirty-nine-relation-four-lane-union-bound-at-least170-bits:canonical-base-fixed-aux-column-provider:eighteen-verifier-fixed-output-role-endpoint-selectors:nine-independent-normalized-producer-and-nine-actual-consumer-four-lane-products:governed-root-spki-and-certificate-slot-active-products-air-bound:four-private-governed-root-consumer-to-original-CA-polynomial-links:private-normalized-producer-to-consumer36-final-equalities:16-native-constant-private-sha-bridge-columns:16-sha-quartic-endpoint-plus4-rfc-quartic-union-main-joins:endpoint-map6,2,2,2,3,3,2,4,3:direction0:instance0:typed-family-role-endpoint-lane-addresses:no-der-public-claim-slots:der-rfc8-private-linear-quotients:verifier-original-polynomial-private-link-replay:no-public-terminal-products:sha-terminal-ca-call-family-lane-addresses-fixed:compact-ca-call-role-and-order-fixed:verifier-committed-sha-terminal-replay:five-p256-witnesses-native-rust-fixed-certificate-crl-wallet-order:p256348-private-products-no-public-codec:p256184-private-linear-links:four-certificate-or-crl-then-wallet-role-order:p256-bus-cross-start-terminal-and-sink-addresses-fixed:canonical-goldilocks-big-endian:verifier-authenticated-p256-private-oods-link-equations:compact-ca-subproof-dedicated-x5c1-x5c2-complete:ca-claim-free-frame10bytes-main-frame1034-joint132-Fp4-openings4224:ca-single-log12-trace4096-base695-aux128-fixed80-constraints1363-degree3-4chunks:ca-local-lde-log16-mask2100-deep52800-fri136-rounds6-terminal1024-degree143-grinding20:shared-x5b1-single-joined-main-base-root-plus-ca-base-root-challenge-schedule:ca-public-profile-and-root-bound:ca-prover-self-verifies-independent-verifier-and-resource-gates:integration=complete-via-main-aggregate:standalone-activation=not-applicable";
 /// SHA-256 of [`ZK_X509_RFC5280_STARK_DESCRIPTOR_V1`].
 #[cfg(test)]
 pub const ZK_X509_RFC5280_STARK_DESCRIPTOR_SHA256_V1: [u8; 32] = [
-    0x1e, 0xe8, 0x65, 0xa4, 0x1b, 0x34, 0x1d, 0x25, 0x4f, 0xdc, 0xeb, 0x66, 0x71, 0x21, 0xbc, 0xe5,
-    0x3b, 0xcf, 0x0c, 0xdf, 0x9a, 0x4d, 0xad, 0xa6, 0x7b, 0xd0, 0x83, 0x0a, 0x14, 0x95, 0x51, 0x59,
+    0xd6, 0x8f, 0x47, 0x9b, 0x03, 0xa8, 0xeb, 0x14, 0x7e, 0xcd, 0x98, 0x35, 0xb0, 0x4a, 0x56, 0xae,
+    0x46, 0x00, 0x2e, 0x41, 0xb1, 0xa1, 0x72, 0xd7, 0x74, 0xdb, 0xb6, 0xcb, 0x5d, 0xf9, 0x87, 0xa2,
 ];
 /// Native trace logarithm after the 4 KiB X.509 admission cap.
 pub const ZK_X509_RFC5280_STARK_TRACE_LOG2_V1: u8 = 19;
@@ -300,6 +300,46 @@ const fn serial_comparison_count_v1(crl_entries: usize) -> usize {
 }
 const fn serial_comparison_rows_v1(crl_entries: usize) -> usize {
     serial_comparison_count_v1(crl_entries) * SERIAL_COMPARISON_WIDTH_V1
+}
+/// Separates the leaf-comparison count from the pairing term of the entry
+/// census. Every count is at most `ZK_X509_MAX_CRL_ENTRIES_V1`, so neither
+/// term can reach this scale and no sum wraps the field.
+const SERIAL_CENSUS_SCALE_V1: u64 = 1 << 20;
+const _: () = assert!(
+    (ZK_X509_MAX_CRL_ENTRIES_V1 as u64) < SERIAL_CENSUS_SCALE_V1
+        && SERIAL_CENSUS_SCALE_V1 * (ZK_X509_MAX_CRL_ENTRIES_V1 as u64) < 1 << 32
+);
+/// Entry-census weight of one fixed comparison slot.
+///
+/// The leaf comparison against entry `k` weighs `1 + scale * k` and the
+/// adjacent-order comparison ending at entry `k` weighs `-scale * k`. An
+/// active prefix therefore sums to its number of leaf comparisons exactly
+/// when it does not stop between a leaf comparison and the order comparison
+/// paired with it.
+fn serial_census_weight_v1(comparison: usize) -> Result<F, ZkX509Rfc5280StarkErrorV1> {
+    let (kind, _, right_instance) = serial_comparison_descriptor_v1(comparison)?;
+    // `right_instance` is the one-based logical identifier of entry `k`.
+    let entry = u64::from(right_instance)
+        .checked_sub(1)
+        .ok_or(ZkX509Rfc5280StarkErrorV1::Shape)?;
+    let pairing = F(SERIAL_CENSUS_SCALE_V1 * entry);
+    Ok(match kind {
+        ZkX509Rfc5280SerialComparisonKindV1::LeafNonMembership => F::ONE.add(pairing),
+        ZkX509Rfc5280SerialComparisonKindV1::AdjacentStrictOrder => F::ZERO.sub(pairing),
+    })
+}
+/// Sum of [`serial_census_weight_v1`] over the first `comparisons` slots.
+fn serial_census_prefix_v1(comparisons: usize) -> u64 {
+    if comparisons == 0 {
+        return 0;
+    }
+    let leaf_comparisons = comparisons as u64 / 2 + 1;
+    let unpaired_entry = if comparisons % 2 == 0 {
+        comparisons as u64 / 2
+    } else {
+        0
+    };
+    leaf_comparisons + SERIAL_CENSUS_SCALE_V1 * unpaired_entry
 }
 fn serial_comparison_descriptor_v1(
     comparison: usize,
@@ -3670,6 +3710,74 @@ pub fn zk_x509_rfc_key_join_rows_v1(
     Ok((rows, channels, BASE_VALUE, BASE_CERT2_ACTIVE))
 }
 
+/// Exact producer rows of every `Projection`-role byte, in channel order.
+///
+/// The output topology starts with these channels: three 91-byte SPKI slots,
+/// the 8-byte serial length and padded serial, then the length and padded
+/// value of each disclosed attribute. They are one consecutive run of
+/// producer rows, which the Projection segment's leading input rows mirror
+/// byte for byte. Returns the first producer row, the run length and the
+/// value column.
+pub fn zk_x509_rfc_projection_join_rows_v1(
+    shape: ZkX509Rfc5280StarkShapeV1,
+) -> Result<(usize, usize, usize), ZkX509Rfc5280StarkErrorV1> {
+    const SPKI_DER_BYTES: usize = 91;
+    shape.validate()?;
+    let topology = compile_output_topology_v1(shape)?;
+    if topology.capacity() != topology.len() || topology.len() > FIXED_OUTPUT_ROWS_PER_SIDE_V1 {
+        return Err(ZkX509Rfc5280StarkErrorV1::Resource);
+    }
+    let strict_der = u8::try_from(endpoint_role_code_v1(ZkX509IoSegmentRoleV1::StrictDer)?)
+        .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+    let projection = u8::try_from(endpoint_role_code_v1(ZkX509IoSegmentRoleV1::Projection)?)
+        .map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?;
+    let mut expected = topology.iter();
+    let mut count = 0_usize;
+    let mut channel = 0_u32;
+    let mut check_channel = |byte_len: usize| -> Result<(), ZkX509Rfc5280StarkErrorV1> {
+        for offset in 0..byte_len {
+            let entry = expected.next().ok_or(ZkX509Rfc5280StarkErrorV1::Output)?;
+            if entry.role != ZkX509Rfc5280OutputRoleV1::Projection
+                || entry.channel != channel
+                || entry.offset as usize != offset
+                || entry.producer_endpoint_role != strict_der
+                || entry.consumer_endpoint_role != projection
+                || entry.endpoint_instance != 0
+            {
+                return Err(ZkX509Rfc5280StarkErrorV1::Output);
+            }
+        }
+        count = count
+            .checked_add(byte_len)
+            .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)?;
+        channel = channel
+            .checked_add(1)
+            .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)?;
+        Ok(())
+    };
+    for _ in 0..3 {
+        check_channel(SPKI_DER_BYTES)?;
+    }
+    for byte_len in [8, ZK_X509_MAX_SERIAL_BYTES_V1] {
+        check_channel(byte_len)?;
+    }
+    for _ in 0..shape.disclosed_attribute_count {
+        for byte_len in [8, ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1] {
+            check_channel(byte_len)?;
+        }
+    }
+    // No later topology entry may carry the role: the run is the whole role.
+    if expected.any(|entry| entry.role == ZkX509Rfc5280OutputRoleV1::Projection) {
+        return Err(ZkX509Rfc5280StarkErrorV1::Output);
+    }
+    let producer_start = ZkX509Rfc5280StarkShapeV1::family_counts()
+        [..ZkX509Rfc5280StarkFamilyV1::OutputProducer as usize]
+        .iter()
+        .try_fold(0_usize, |sum, count| sum.checked_add(*count))
+        .ok_or(ZkX509Rfc5280StarkErrorV1::Resource)?;
+    Ok((producer_start, count, BASE_VALUE))
+}
+
 /// Exact required CRL calendar timestamps in the original RFC base polynomial.
 /// Rows are the final phase of fixed temporal slots six and seven, independent
 /// of private certificate depth, entry counts, or selected date encoding.
@@ -3896,6 +4004,14 @@ impl ZkX509Rfc5280StarkFixedScheduleV1 {
             fixed[FIX_EXPECTED + 3] =
                 F(u64::try_from(offset).map_err(|_| ZkX509Rfc5280StarkErrorV1::Resource)?);
             fixed[FIX_EXPECTED + 4] = F(u64::from(offset == 1));
+            // One row of each comparison slot carries its entry-census weight.
+            // The census equation makes the private active prefix cover every
+            // CRL entry; activity alone is not prover-selectable.
+            if offset == 0
+                && ordinal % SERIAL_COMPARISON_PHASES_V1 + 1 == SERIAL_COMPARISON_PHASES_V1
+            {
+                fixed[FIX_ENTRY_CENSUS_WEIGHT] = serial_census_weight_v1(comparison)?;
+            }
         }
         if family == ZkX509Rfc5280StarkFamilyV1::SemanticSource
             && let Some(entry) = self.profile_byte_table.get(ordinal).copied()
@@ -4368,8 +4484,8 @@ const FIX_TIME_THIS_UPDATE: usize = FIX_TIME_VALUE + 1;
 const FIX_NUMERIC_QUERY: usize = FIX_TIME_THIS_UPDATE + 1;
 const FIX_NUMERIC_LEFT: usize = FIX_NUMERIC_QUERY + 1;
 const FIX_NUMERIC_RIGHT: usize = FIX_NUMERIC_LEFT + 1;
-const FIX_NUMERIC_ENTRY_COUNT: usize = FIX_NUMERIC_RIGHT + 1;
-const FIX_TEMPORAL_CONTINUE: usize = FIX_NUMERIC_ENTRY_COUNT + 1;
+const FIX_ENTRY_CENSUS_WEIGHT: usize = FIX_NUMERIC_RIGHT + 1;
+const FIX_TEMPORAL_CONTINUE: usize = FIX_ENTRY_CENSUS_WEIGHT + 1;
 const FIX_RELATION_CONTINUE: usize = FIX_TEMPORAL_CONTINUE + 1;
 const FIX_RANGE_CONTINUE: usize = FIX_RELATION_CONTINUE + 1;
 const FIX_RANGE_LEADING_ZERO: usize = FIX_RANGE_CONTINUE + 1;
@@ -6853,8 +6969,21 @@ impl ZkX509Rfc5280StarkBaseMaterialV1 {
         let entry_start = self.schedule.starts[ZkX509Rfc5280StarkFamilyV1::Relation as usize]
             + 9 * numeric::RELATION_PHASES_V1;
         let before_entries = row.saturating_sub(entry_start) / numeric::RELATION_PHASES_V1;
+        let entries = usize::from(self.private_shape.crl_entries);
+        // Each comparison slot adds its weight on its first right-phase row.
+        let serial_group = SERIAL_COMPARISON_WIDTH_V1 * SERIAL_COMPARISON_PHASES_V1;
+        let first_weight_row = self.schedule.starts
+            [ZkX509Rfc5280StarkFamilyV1::SerialCompare as usize]
+            + SERIAL_COMPARISON_PHASES_V1
+            - 1;
+        let counted_comparisons = if row > first_weight_row {
+            ((row - first_weight_row - 1) / serial_group + 1)
+                .min(serial_comparison_count_v1(entries))
+        } else {
+            0
+        };
         value[BASE_ENTRY_CENSUS] =
-            F(before_entries.min(usize::from(self.private_shape.crl_entries)) as u64);
+            F(before_entries.min(entries) as u64 + serial_census_prefix_v1(counted_comparisons));
         let fixed = self.schedule.fixed_row(row)?;
         populate_degree_normalization_helpers_v1(&mut value, &fixed);
         Ok(value)
@@ -9422,6 +9551,72 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn projection_join_rows_are_the_whole_leading_projection_role_run() {
+        for count in 0..=4 {
+            let mut shape = ZkX509Rfc5280StarkShapeV1 {
+                disclosed_attribute_count: count,
+                ..ZkX509Rfc5280StarkShapeV1::default()
+            };
+            shape.disclosed_attribute_indices = core::array::from_fn(|index| {
+                if index < usize::from(count) {
+                    u8::try_from(index).expect("fixture value fits u8")
+                } else {
+                    0
+                }
+            });
+            let (first, rows, value) = zk_x509_rfc_projection_join_rows_v1(shape).unwrap();
+            assert_eq!(value, BASE_VALUE);
+            assert_eq!(rows, 301 + 264 * usize::from(count));
+            let fixed = compile_zk_x509_rfc5280_stark_fixed_schedule_v1(shape).unwrap();
+            assert_eq!(
+                first,
+                fixed.starts[ZkX509Rfc5280StarkFamilyV1::OutputProducer as usize]
+            );
+            let mut lengths = vec![91, 91, 91, 8, ZK_X509_MAX_SERIAL_BYTES_V1];
+            for _ in 0..count {
+                lengths.extend([8, ZK_X509_MAX_ATTRIBUTE_VALUE_BYTES_V1]);
+            }
+            let mut row = first;
+            for (channel, length) in lengths.into_iter().enumerate() {
+                for offset in 0..length {
+                    let cells = fixed.fixed_row(row).unwrap();
+                    assert_eq!(
+                        cells[ZkX509Rfc5280StarkFamilyV1::OutputProducer as usize],
+                        F::ONE
+                    );
+                    assert_eq!(
+                        cells[FIX_EXPECTED],
+                        F(ZkX509Rfc5280OutputRoleV1::Projection as u64)
+                    );
+                    assert_eq!(cells[FIX_EXPECTED + 1], F(channel as u64));
+                    assert_eq!(cells[FIX_EXPECTED + 4], F(offset as u64));
+                    assert_eq!(cells[FIX_EXPECTED + 5], F::ONE);
+                    assert_eq!(cells[FIX_REQUIRED_ACTIVE], F::ONE);
+                    row += 1;
+                }
+            }
+            assert_eq!(row, first + rows);
+            // The role ends with the run: no later producer row carries it.
+            let producers = fixed.counts[ZkX509Rfc5280StarkFamilyV1::OutputProducer as usize];
+            for later in row..first + producers {
+                let cells = fixed.fixed_row(later).unwrap();
+                assert_ne!(
+                    cells[FIX_EXPECTED],
+                    F(ZkX509Rfc5280OutputRoleV1::Projection as u64)
+                );
+            }
+        }
+        let invalid = ZkX509Rfc5280StarkShapeV1 {
+            disclosed_attribute_count: 5,
+            ..ZkX509Rfc5280StarkShapeV1::default()
+        };
+        assert!(matches!(
+            zk_x509_rfc_projection_join_rows_v1(invalid),
+            Err(ZkX509Rfc5280StarkErrorV1::Shape)
+        ));
+    }
+
     pub(super) fn canonical_trace_v1() -> ZkX509Rfc5280TraceV1 {
         let fixture = fixture();
         build_zk_x509_rfc5280_trace_v1(
@@ -11875,11 +12070,14 @@ mod tests {
                     .fixed_row(start + physical_offset)
                     .expect("verifier-fixed serial row");
                 let current = normalized_row_v1(row, &fixed);
-                let next = if phase + 1 == SERIAL_COMPARISON_PHASES_V1 {
+                let mut next = if phase + 1 == SERIAL_COMPARISON_PHASES_V1 {
                     rows.get(offset + 1).copied().unwrap_or(row)
                 } else {
                     row
                 };
+                // The isolated group starts its entry census at zero.
+                next[BASE_ENTRY_CENSUS] = current[BASE_ENTRY_CENSUS]
+                    .add(fixed[FIX_ENTRY_CENSUS_WEIGHT].mul(current[BASE_ACTIVE]));
                 let (current_aux, next_aux) = serial_comparator_aux_v1(&current);
                 let residues = evaluate_zk_x509_rfc5280_stark_residues_v1(
                     &current,
@@ -11940,6 +12138,150 @@ mod tests {
             Err(ZkX509Rfc5280StarkErrorV1::Semantic),
             "magnitude frames cannot carry a leading zero"
         );
+    }
+    /// Evaluate the entry-census residues on every row that can change them,
+    /// for a prover that keeps `entries` entry relation slots and the first
+    /// `comparisons` serial comparison slots active and claims one entry count.
+    /// The census column itself is forced by its start and recurrence.
+    fn entry_census_is_satisfied_v1(entries: usize, comparisons: usize, claimed: u64) -> bool {
+        let schedule =
+            compile_zk_x509_rfc5280_stark_fixed_schedule_v1(ZkX509Rfc5280StarkShapeV1::default())
+                .expect("fixed schedule");
+        let relation_start = schedule.starts[ZkX509Rfc5280StarkFamilyV1::Relation as usize];
+        let serial_start = schedule.starts[ZkX509Rfc5280StarkFamilyV1::SerialCompare as usize];
+        let serial_end = serial_start + MAX_SERIAL_COMPARISON_PHYSICAL_ROWS_V1;
+        let serial_group = SERIAL_COMPARISON_WIDTH_V1 * SERIAL_COMPARISON_PHASES_V1;
+        let last = ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 - 1;
+        let mut count = F::ZERO;
+        let mut satisfied = true;
+        for row in core::iter::once(0)
+            .chain(relation_start..serial_end)
+            .chain(core::iter::once(last))
+        {
+            let fixed = schedule.fixed_row(row).expect("fixed row");
+            let (family, ordinal) = schedule.family_and_ordinal(row).expect("row family");
+            let active = match family {
+                // Nine certificate and CRL relation slots precede the entry slots.
+                ZkX509Rfc5280StarkFamilyV1::Relation => {
+                    ordinal / numeric::RELATION_PHASES_V1 < 9 + entries
+                }
+                ZkX509Rfc5280StarkFamilyV1::SerialCompare => ordinal / serial_group < comparisons,
+                _ => false,
+            };
+            let mut current = [F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
+            current[BASE_ACTIVE] = F(u64::from(active));
+            current[BASE_ENTRY_COUNT] = F(claimed);
+            current[BASE_ENTRY_CENSUS] = count;
+            let mut next = current;
+            next[BASE_ENTRY_CENSUS] =
+                count.add(fixed[FIX_ENTRY_CENSUS_WEIGHT].mul(current[BASE_ACTIVE]));
+            let mut residues = Vec::new();
+            binding::append_residues_v1(&current, &next, &fixed, &mut residues);
+            assert_eq!(residues.len(), binding::RESIDUES_V1);
+            satisfied &= residues[binding::RESIDUES_V1 - 4..]
+                .iter()
+                .all(|residue| *residue == F::ZERO);
+            count = next[BASE_ENTRY_CENSUS];
+        }
+        satisfied
+    }
+    #[test]
+    fn entry_census_weights_live_only_on_entry_relations_and_serial_comparisons() {
+        let schedule =
+            compile_zk_x509_rfc5280_stark_fixed_schedule_v1(ZkX509Rfc5280StarkShapeV1::default())
+                .expect("fixed schedule");
+        let serial_group = SERIAL_COMPARISON_WIDTH_V1 * SERIAL_COMPARISON_PHASES_V1;
+        let mut entry_rows = Vec::new();
+        let mut serial_rows = Vec::new();
+        let mut source_rows = Vec::new();
+        for row in 0..ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 {
+            let fixed = schedule.fixed_row(row).expect("fixed row");
+            let (family, ordinal) = schedule.family_and_ordinal(row).expect("row family");
+            if family == ZkX509Rfc5280StarkFamilyV1::SerialSource {
+                source_rows.push(row);
+            }
+            let weight = fixed[FIX_ENTRY_CENSUS_WEIGHT];
+            if weight == F::ZERO {
+                continue;
+            }
+            match family {
+                ZkX509Rfc5280StarkFamilyV1::Relation => {
+                    assert_eq!(weight, F::ONE);
+                    entry_rows.push(row);
+                }
+                ZkX509Rfc5280StarkFamilyV1::SerialCompare => {
+                    assert_eq!(
+                        weight,
+                        serial_census_weight_v1(ordinal / serial_group).expect("slot weight")
+                    );
+                    assert_eq!(fixed[FIX_SERIAL_COMPARE_FIRST], F::ONE);
+                    serial_rows.push(row);
+                }
+                other => panic!("family {other:?} must not carry an entry-census weight"),
+            }
+        }
+        assert_eq!(entry_rows.len(), ZK_X509_MAX_CRL_ENTRIES_V1);
+        assert_eq!(serial_rows.len(), MAX_SERIAL_COMPARISONS_V1);
+        assert_eq!(source_rows.len(), MAX_SERIAL_SOURCE_ROWS_V1);
+        // The checkpoint rows separate the two counted families.
+        assert!(entry_rows.last() < source_rows.first());
+        assert!(source_rows.last() < serial_rows.first());
+        assert_ne!(
+            schedule
+                .family_and_ordinal(ZK_X509_RFC5280_STARK_TRACE_SIZE_V1 - 1)
+                .expect("last row family")
+                .0,
+            ZkX509Rfc5280StarkFamilyV1::SerialSource
+        );
+    }
+    #[test]
+    fn serial_census_balances_only_for_the_complete_comparison_prefix() {
+        let mut sum = F::ZERO;
+        for comparisons in 0..=MAX_SERIAL_COMPARISONS_V1 {
+            assert_eq!(sum, F(serial_census_prefix_v1(comparisons)));
+            if comparisons < MAX_SERIAL_COMPARISONS_V1 {
+                sum = sum.add(serial_census_weight_v1(comparisons).expect("slot weight"));
+            }
+        }
+        assert!(serial_census_weight_v1(MAX_SERIAL_COMPARISONS_V1).is_err());
+        for entries in 0..=ZK_X509_MAX_CRL_ENTRIES_V1 {
+            for comparisons in 0..=MAX_SERIAL_COMPARISONS_V1 {
+                assert_eq!(
+                    serial_census_prefix_v1(comparisons) == entries as u64,
+                    comparisons == serial_comparison_count_v1(entries),
+                    "{entries} entries and {comparisons} active comparison slots"
+                );
+            }
+        }
+    }
+    #[test]
+    fn a_revoked_leaf_cannot_deactivate_or_truncate_its_serial_comparisons() {
+        for entries in [0, 1, 2, 3, ZK_X509_MAX_CRL_ENTRIES_V1] {
+            let complete = serial_comparison_count_v1(entries);
+            assert!(
+                entry_census_is_satisfied_v1(entries, complete, entries as u64),
+                "the honest prefix for {entries} entries"
+            );
+            for comparisons in [0, 1, complete.saturating_sub(1), complete + 1] {
+                if comparisons == complete || comparisons > MAX_SERIAL_COMPARISONS_V1 {
+                    continue;
+                }
+                assert!(
+                    !entry_census_is_satisfied_v1(entries, comparisons, entries as u64),
+                    "{comparisons} active comparison slots cannot stand for {entries} entries"
+                );
+                // Claiming the count that the forged prefix balances breaks the
+                // entry-relation checkpoint instead.
+                let balanced = serial_census_prefix_v1(comparisons);
+                if balanced != entries as u64 {
+                    assert!(!entry_census_is_satisfied_v1(
+                        entries,
+                        comparisons,
+                        balanced
+                    ));
+                }
+            }
+        }
     }
     #[test]
     fn dropped_and_reordered_comparators_fail_exact_manifest_and_fixed_schedule() {

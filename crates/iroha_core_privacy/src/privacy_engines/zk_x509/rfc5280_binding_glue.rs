@@ -74,7 +74,7 @@ pub(super) fn populate_fixed_v1(
             fixed[FIX_RELATION_CONTINUE] = F(u64::from(position == 0));
             fixed[FIX_NUMERIC_LEFT] = F(u64::from(position == 0));
             fixed[FIX_NUMERIC_RIGHT] = F(u64::from(position == 1));
-            fixed[FIX_NUMERIC_ENTRY_COUNT] = F(u64::from(
+            fixed[FIX_ENTRY_CENSUS_WEIGHT] = F(u64::from(
                 position == 1 && matches!(slot.activity, numeric::NumericActivityV1::Entry(_)),
             ));
             let operand = if position == 0 { slot.left } else { slot.right };
@@ -375,12 +375,23 @@ pub(super) fn append_residues_v1<A: PolynomialAirFieldV1>(
     for bit in 6..8 {
         residues.push(fixed[FIX_RANGE_HIGH_BITS_ZERO].mul(current[BASE_BYTE_BITS + bit]));
     }
+    // One accumulator counts two things in fixed row order. Entry relation
+    // slots come first; on every serial-source row, which follows them and
+    // precedes every comparison slot, the census equals the entry count. The
+    // weighted serial comparison slots come next, so the final total is twice
+    // the entry count exactly when one leaf comparison per entry is active and
+    // each is followed by its order comparison. The two gates never share a row.
     let count = current[BASE_ENTRY_CENSUS];
-    let delta = fixed[FIX_NUMERIC_ENTRY_COUNT].mul(active);
+    let entries = current[BASE_ENTRY_COUNT];
+    let delta = fixed[FIX_ENTRY_CENSUS_WEIGHT].mul(active);
     residues.push(fixed[FIX_GLOBAL_FIRST].mul(count));
     residues.push(fixed[FIX_CONTINUE].mul(next[BASE_ENTRY_CENSUS].sub(count).sub(delta)));
-    residues.push(fixed[FIX_GLOBAL_LAST].mul(count.add(delta).sub(current[BASE_ENTRY_COUNT])));
-    residues.push(fixed[FIX_CONTINUE].mul(next[BASE_ENTRY_COUNT].sub(current[BASE_ENTRY_COUNT])));
+    residues.push(
+        fixed[ZkX509Rfc5280StarkFamilyV1::SerialSource as usize]
+            .mul(count.sub(entries))
+            .add(fixed[FIX_GLOBAL_LAST].mul(count.add(delta).sub(entries).sub(entries))),
+    );
+    residues.push(fixed[FIX_CONTINUE].mul(next[BASE_ENTRY_COUNT].sub(entries)));
     debug_assert_eq!(residues.len() - start, RESIDUES_V1);
 }
 

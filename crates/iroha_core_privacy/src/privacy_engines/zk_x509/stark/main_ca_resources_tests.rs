@@ -79,7 +79,7 @@ fn joint_ca_owners_fit_only_after_registration_and_keep_the_existing_ceiling() {
     assert!(ca_work < plan.ca_work);
     assert!(MainCaJointBufferPlanV1::metadata_required_v1().unwrap() < plan.metadata);
     assert!(plan.common.selected_replay <= 64 << 20);
-    assert_eq!(super::super::main_key_joins::OPENINGS_V1, 31);
+    assert_eq!(super::super::main_key_joins::OPENINGS_V1, 32);
     #[cfg(target_pointer_width = "64")]
     assert_eq!(
         core::mem::size_of::<aggregate::AggregateSupplementalDeepOpeningV1>(),

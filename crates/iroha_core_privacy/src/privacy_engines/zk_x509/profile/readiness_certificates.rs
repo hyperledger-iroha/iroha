@@ -479,6 +479,38 @@ const JOINT_CONFIGURATION_BOUND_V1: u16 = 8;
 #[cfg(test)]
 const JOINT_PAIRED_CONFIGURATION_BOUND_V1: u16 =
     JOINT_CONFIGURATION_BOUND_V1 * JOINT_CONFIGURATION_BOUND_V1;
+/// Summed degree of the MAIN DEEP point maps: the original point, six power2,
+/// five power8, one power16 (Projection) and twenty power32 maps.
+///
+/// `deep_point_census_counts_the_actual_opening_maps` in the key-join plan
+/// derives the same multiset from the actual openings.
+#[cfg(test)]
+const JOINT_MAIN_POINT_MAP_DEGREE_V1: u64 = 1 + 6 * 2 + 5 * 8 + 16 + 20 * 32;
+/// Two local and 108 translated CA linear point maps.
+#[cfg(test)]
+const JOINT_CA_POINT_MAPS_V1: u64 = 2 + 108;
+/// Cleared degree bounds of the MAIN and CA point identities.
+///
+/// Only the linear digest joins substitute X^32; the key and Projection joins
+/// use lower powers. Other products are local degree<=7, unpowered quartics,
+/// or MAIN(gamma X)*CA(eta X). All MAIN divisors divide X^(2^19)-1; all CA
+/// divisors divide X^(2^12)-1.
+#[cfg(test)]
+fn joint_cleared_degree_bounds_v1(main_degree: u64, ca_degree: u64) -> Option<(u64, u64)> {
+    Some((
+        32_u64.checked_mul(main_degree)?.checked_add(1 << 19)?,
+        4_u64.checked_mul(ca_degree)?.checked_add(1 << 12)?,
+    ))
+}
+/// Rejected joint DEEP points: every power-k map has at most k preimages of
+/// each forbidden MAIN point. The 24 MAIN translations preserve H19 and the
+/// common generator coset.
+#[cfg(test)]
+fn joint_point_exclusions_v1() -> Option<u64> {
+    1_u64
+        .checked_add(JOINT_MAIN_POINT_MAP_DEGREE_V1.checked_mul((1 << 19) + (1 << 22))?)?
+        .checked_add(JOINT_CA_POINT_MAPS_V1.checked_mul((1 << 12) + (1 << 16))?)
+}
 /// Check the algebraic error ledger only. This is not a Fiat-Shamir, qROM,
 /// transcript-simulation, or release-qualification certificate by itself.
 /// The mixed-domain argument and term census are in the joint-relation spec.
@@ -510,19 +542,11 @@ fn joint_relation_error_bits_v1(certificate: ZkX509SoundnessCertificateV1) -> Op
     {
         return None;
     }
-    // Only the linear digest joins substitute X^32. Other products are local
-    // degree<=7, unpowered quartics, or MAIN(gamma X)*CA(eta X).
-    // All MAIN divisors divide X^(2^19)-1; all CA divisors divide X^(2^12)-1.
-    let main_numerator = 32_u64.checked_mul(main_degree)?.checked_add(1 << 19)?;
-    let ca_numerator = 4_u64.checked_mul(ca_degree)?.checked_add(1 << 12)?;
-    // Original point + six power2 + five power8 + twenty power32 maps.
-    // The 24 MAIN translations preserve H19 and the common generator coset.
-    let exclusions = 1_u64
-        .checked_add((1 + 6 * 2 + 5 * 8 + 20 * 32) * ((1 << 19) + (1 << 22)))?
-        .checked_add((2 + 108) * ((1 << 12) + (1 << 16)))?;
+    let (main_numerator, ca_numerator) = joint_cleared_degree_bounds_v1(main_degree, ca_degree)?;
+    let exclusions = joint_point_exclusions_v1()?;
     let point_numerator = u64::from(JOINT_PAIRED_CONFIGURATION_BOUND_V1)
         .checked_mul(main_numerator.checked_add(ca_numerator)?)?;
-    if exclusions != 3_277_643_777 || point_numerator >= 1 << 31 {
+    if exclusions != 3_353_141_249 || point_numerator >= 1 << 31 {
         return None;
     }
     // |F|>2^252 and exclusions<2^64 imply admitted support>2^251.
@@ -1240,6 +1264,45 @@ mod tests {
         wrong.ca_fri.terminal_degree_bound -= 1;
         assert_eq!(joint_relation_error_bits_v1(wrong), None);
         assert_eq!(ZK_X509_SOUNDNESS_CERTIFICATE_SHA256_V1, [0; 32]);
+    }
+
+    #[test]
+    fn profile_descriptor_records_the_joint_ledger_values() {
+        // The compiled profile digest binds these descriptor fields, so each
+        // must equal the value the ledger computes for the current relation.
+        let certificate = canonical_soundness_certificate_v1(TEST_PROFILE_DIGEST);
+        let degree = |fri: AggregateFriTheorem2CertificateV1| {
+            (u64::from(fri.terminal_degree_bound) + 1) << fri.fold_count
+        };
+        let (main, ca) = joint_cleared_degree_bounds_v1(
+            degree(certificate.main_fri),
+            degree(certificate.ca_fri),
+        )
+        .unwrap();
+        let exclusions = joint_point_exclusions_v1().unwrap();
+        assert_eq!(exclusions, 3_353_141_249);
+        let bits = joint_relation_error_bits_v1(certificate).unwrap();
+        let descriptor = core::str::from_utf8(
+            crate::privacy_engines::zk_x509::profile::ZK_X509_STARK_PROFILE_DESCRIPTOR_V1,
+        )
+        .unwrap();
+        let field = |name: &str| {
+            let mut values = descriptor
+                .split('|')
+                .filter_map(|field| field.strip_prefix(name));
+            let value = values.next().unwrap_or_else(|| panic!("{name} is missing"));
+            assert!(values.next().is_none(), "{name} occurs once");
+            value
+        };
+        assert_eq!(
+            field("joint-point-exclusion-bound="),
+            exclusions.to_string()
+        );
+        assert_eq!(
+            field("joint-cleared-degree-bounds="),
+            format!("{main},{ca}")
+        );
+        assert_eq!(field("joint-algebraic-error-bits="), bits.to_string());
     }
 
     #[test]

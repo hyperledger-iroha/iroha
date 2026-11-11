@@ -867,7 +867,7 @@ fn x5m1_main_envelope_is_canonical_bounded_and_adversarially_strict() {
     let aggregate = b"X5S1aggregate";
     let values = core::array::from_fn(|i| E::canonical([i as u64 + 1, 2, 3, 4]).unwrap());
     let encoded = encode_zk_x509_main_proof_envelope_v1(&values, aggregate).unwrap();
-    assert_eq!(encoded.len(), 1002 + aggregate.len());
+    assert_eq!(encoded.len(), 1034 + aggregate.len());
     let decoded = decode_zk_x509_main_proof_envelope_v1(&encoded).unwrap();
     assert_eq!(decoded.key_openings, values);
     assert_eq!(decoded.aggregate_proof, aggregate);
@@ -1478,7 +1478,7 @@ fn main_key_join_opening_codec_is_canonical_exact_and_roundtrips() {
             assert!(decode_zk_x509_main_proof_envelope_v1(&changed).is_err());
         }
     }
-    for cut in 0..=31 * 32 {
+    for cut in 0..=32 * 32 {
         let mut changed = wire.clone();
         changed.drain(MAIN_PROOF_KEY_OPENINGS_OFFSET_V1..MAIN_PROOF_KEY_OPENINGS_OFFSET_V1 + cut);
         assert_eq!(
@@ -1500,7 +1500,7 @@ fn main_key_join_wire_retains_all_coordinates_in_fixed_order_and_exact_count() {
     let encoded = encode_zk_x509_main_proof_envelope_v1(&values, aggregate).unwrap();
     assert_eq!(
         MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1 - MAIN_PROOF_KEY_OPENINGS_OFFSET_V1,
-        31 * 32
+        32 * 32
     );
     for (index, value) in values.iter().enumerate() {
         for (limb, coefficient) in value.coefficients().iter().enumerate() {
@@ -1542,18 +1542,18 @@ fn main_key_join_wire_retains_all_coordinates_in_fixed_order_and_exact_count() {
 
 #[test]
 fn main_claim_free_partition_is_exact_and_rejects_retired_terminal_frames() {
-    assert_eq!(MAIN_KEY_OPENING_COUNT_V1, 31);
+    assert_eq!(MAIN_KEY_OPENING_COUNT_V1, 32);
     assert_eq!(
         MAIN_KEY_OPENING_COUNT_V1,
         main_aggregate::main_key_joins::OPENINGS_V1
     );
     assert_eq!(MAIN_PROOF_KEY_OPENINGS_OFFSET_V1, 6);
-    assert_eq!(MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1, 998);
-    assert_eq!(ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1, 1_002);
+    assert_eq!(MAIN_PROOF_AGGREGATE_LENGTH_OFFSET_V1, 1_030);
+    assert_eq!(ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1, 1_034);
     let aggregate = b"X5S1public partition";
-    let values = [E::ZERO; 31];
+    let values = [E::ZERO; 32];
     let encoded = encode_zk_x509_main_proof_envelope_v1(&values, aggregate).unwrap();
-    assert_eq!(encoded.len(), 1_002 + aggregate.len());
+    assert_eq!(encoded.len(), 1_034 + aggregate.len());
     let decoded = decode_zk_x509_main_proof_envelope_v1(&encoded).unwrap();
     assert_eq!(decoded.key_openings, values);
     assert_eq!(decoded.aggregate_proof, aggregate);
@@ -1575,7 +1575,7 @@ fn main_claim_free_partition_is_exact_and_rejects_retired_terminal_frames() {
     retired_fields[88..90].copy_from_slice(&208_u16.to_be_bytes());
     let mut retired = encoded.clone();
     retired.splice(6..6, retired_fields);
-    assert_eq!(retired.len(), 4_420 + aggregate.len());
+    assert_eq!(retired.len(), 4_452 + aggregate.len());
     assert!(decode_zk_x509_main_proof_envelope_v1(&retired).is_err());
     for (frame, counts) in [
         (8, [0_u16, 3, 4, 5, 80, u16::MAX]),

@@ -1360,6 +1360,18 @@ DEEP point. All joint openings precede local mixing. The
 [joint relation contract](zk_x509_joint_private_relation.md) records the exact
 schedule, geometry and still-conditional algebraic ledger.
 
+A constraint-coverage read of the native reference relation is recorded in the
+[coverage ledger](zk_x509_relation_coverage.md). It found two soundness
+defects, both closed in source: the Projection inputs were not joined to the
+RFC outputs, and the CRL serial comparisons were not forced to cover every
+entry. The key plan now carries a Projection block and the entry census runs
+over the comparison slots. The changed compiled profile is `cbf1bd12`; proofs,
+pins and measurements of its predecessor `f5d2b994` are not evidence for it.
+Its ordinary and maximum diagnostic proofs verify on one macOS host with
+replay and negative controls; that host was loaded, so no time is recorded.
+`FixedByte` address anchoring, signature-scalar provenance, forged-proof
+controls and the segments not yet read remain open.
+
 The public presentation window has one definition, recorded in the
 [interval contract](zk_x509_presentation_interval.md): it starts at or after the
 latest `notBefore` and ends at or before the earliest `notAfter` of every

@@ -25,8 +25,8 @@ def _sources() -> tuple[str, str, str, str, str]:
 def test_current_source_complete_relation_exact_wire_bound() -> None:
     result = SCREEN["screen"](*_sources())
     assert result["proof_cap_bytes"] == 9_437_184
-    assert result["combined_current_max_bytes"] == 9_435_984
-    assert result["headroom_bytes"] == 1_200
+    assert result["combined_current_max_bytes"] == 9_436_016
+    assert result["headroom_bytes"] == 1_168
     assert result["current_trace_columns"] == 5_831
     assert result["current_trace_opening_bytes"] == 6_344_128
     assert result["complete_deep_opening_bytes"] == 426_176
@@ -40,7 +40,7 @@ def test_current_source_complete_relation_exact_wire_bound() -> None:
     assert result["implemented_paired_fri_saving_bytes"] == 867_456
     assert result["current_main_inner_max_bytes"] == 7_931_808
     assert result["current_ca_inner_max_bytes"] == 1_498_816
-    assert result["main_frame_bytes"] == 10 + 31 * 32 == 1_002
+    assert result["main_frame_bytes"] == 10 + 32 * 32 == 1_034
     assert result["ca_frame_bytes"] == 10
     assert result["public_terminal_product_fields"] == 0
 
@@ -74,8 +74,8 @@ def test_candidate_cannot_assume_unimplemented_pair_commitments() -> None:
 def test_source_drift_cannot_silently_reuse_old_component_bound() -> None:
     profile, stark, credential, accumulator, native_test = _sources()
     changed = profile.replace(
-        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_435_984;",
-        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_435_985;",
+        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_436_016;",
+        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_436_017;",
         1,
     )
     assert changed != profile
@@ -135,8 +135,9 @@ def test_calendar_and_projection_sha_bindings_keep_each_column_and_the_same_ceil
     per_column = 136 * 8 + 2 * 32
     added_columns = added_base + added_aux + projection_sha_products
     assert result["current_trace_columns"] == 5_623 + added_columns
-    assert result["combined_current_max_bytes"] == 9_204_362 + added_columns * per_column - 7_532 - 4_718 + 4_224 + 32
-    assert result["headroom_bytes"] == 1_200
+    # The last 32 bytes are the Projection join opening in the MAIN frame.
+    assert result["combined_current_max_bytes"] == 9_204_362 + added_columns * per_column - 7_532 - 4_718 + 4_224 + 32 + 32
+    assert result["headroom_bytes"] == 1_168
 
 
 def test_numeric_constants_accept_public_owner_visibility() -> None:
@@ -180,17 +181,17 @@ def test_required_nonce_cannot_be_omitted_or_repriced() -> None:
 def test_main_frame_must_match_independent_native_codec_accounting() -> None:
     profile, stark, credential, accumulator, native_test = _sources()
     repriced_profile = profile.replace(
-        "ZK_X509_MAIN_FRAME_BYTES_V1: u32 = 1_002;",
-        "ZK_X509_MAIN_FRAME_BYTES_V1: u32 = 1_003;",
+        "ZK_X509_MAIN_FRAME_BYTES_V1: u32 = 1_034;",
+        "ZK_X509_MAIN_FRAME_BYTES_V1: u32 = 1_035;",
         1,
     ).replace(
-        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_435_984;",
-        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_435_985;",
+        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_436_016;",
+        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_436_017;",
         1,
     )
     repriced_native = stark.replace(
-        "assert!(ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1 == 1_002);",
-        "assert!(ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1 == 1_003);",
+        "assert!(ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1 == 1_034);",
+        "assert!(ZK_X509_MAIN_PROOF_ENVELOPE_FIXED_BYTES_V1 == 1_035);",
         1,
     )
     assert repriced_profile != profile

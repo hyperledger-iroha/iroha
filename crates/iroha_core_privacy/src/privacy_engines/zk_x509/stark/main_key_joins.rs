@@ -1,15 +1,36 @@
-//! Verifier-owned RFC key bytes joined to real P256 and `ByteMemory` columns.
+//! Verifier-owned RFC bytes joined to real P256, `ByteMemory` and Projection columns.
 //!
 //! A native-root power map joins a complete consecutive byte block with one
 //! quotient. Derived target evaluations are separately bound to the original
 //! committed column by DEEP; this is not equality of independently masked traces.
+//!
+//! The Projection block carries every RFC `Projection`-role byte: the three
+//! SPKI slots, the serial length and padded serial, and the length and padded
+//! value of each disclosed attribute. Without it the bytes that the Projection
+//! segment frames and hashes are not tied to the parsed documents.
 
 use super::super::super::p256_aggregate_adapter::p256_real_key_input_columns_v1;
-use super::super::super::rfc5280_stark::zk_x509_rfc_key_join_rows_v1;
+use super::super::super::projection_air::{
+    ZK_X509_PROJECTION_INPUT_VALUE_COLUMN_V1, zk_x509_projection_rfc_input_rows_v1,
+};
+use super::super::super::rfc5280_stark::{
+    zk_x509_rfc_key_join_rows_v1, zk_x509_rfc_projection_join_rows_v1,
+};
 use super::*;
 
-const KEY_BLOCKS_V1: usize = 12;
-const KEY_OPENINGS_V1: usize = 11;
+const KEY_BLOCKS_V1: usize = 13;
+const KEY_OPENINGS_V1: usize = 12;
+/// The Projection input block. It is the last block with a derived opening.
+const PROJECTION_BLOCK_V1: usize = KEY_OPENINGS_V1 - 1;
+/// The certificate-slot activity pair. Both ends are native openings.
+const ACTIVITY_BLOCK_V1: usize = KEY_OPENINGS_V1;
+/// Longest admitted block: the Projection run with four disclosures.
+const MAX_BLOCK_ROWS_V1: usize = match zk_x509_projection_rfc_input_rows_v1(
+    iroha_data_model::privacy::ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1,
+) {
+    Some(rows) => rows,
+    None => panic!("maximum disclosure count is admitted"),
+};
 #[path = "main_digest_joins.rs"]
 mod main_digest_joins;
 use main_digest_joins::{DIGEST_BLOCKS_V1, DIGEST_OPENINGS_V1, MainDigestJoinPlanV1};
@@ -23,10 +44,11 @@ use main_public_crl_times::{MainPublicCrlTimePlanV1, PUBLIC_TIME_BLOCKS_V1};
 pub(super) const BLOCKS_V1: usize =
     KEY_BLOCKS_V1 + DIGEST_BLOCKS_V1 + PUBLIC_DIGEST_BLOCKS_V1 + PUBLIC_TIME_BLOCKS_V1;
 pub(in super::super) const OPENINGS_V1: usize = KEY_OPENINGS_V1 + DIGEST_OPENINGS_V1;
-// The current first-release profile fixes eleven key and twenty digest DEEP values.
-const _: () = assert!(OPENINGS_V1 == 31);
+// The current first-release profile fixes eleven key, one Projection and
+// twenty digest DEEP values.
+const _: () = assert!(OPENINGS_V1 == 32);
 const DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:main-key-byte-joins:v1";
-const DESCRIPTOR_V1: &[u8] = b"rfc-producer-to-io5x65+p256-real5x64:selector-io1+activity1:12-key-blocks647-equalities+5-sha-digest-blocks40-u32-equalities+2-authoritative-crl-digest-blocks16-u32-equalities+2-authoritative-crl-time-equalities:root-power2,8,32:original-masks:31-extra-deep-openings:no-private-byte-divisions";
+const DESCRIPTOR_V1: &[u8] = b"rfc-producer-to-io5x65+p256-real5x64:selector-io1+projection-inputs301+264-per-disclosure+activity1:13-key-blocks-of-at-most1357-equalities+5-sha-digest-blocks40-u32-equalities+2-authoritative-crl-digest-blocks16-u32-equalities+2-authoritative-crl-time-equalities:root-power2,8,16,32:original-masks:32-extra-deep-openings:no-private-byte-divisions";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ColumnV1 {
@@ -154,6 +176,41 @@ impl MainKeyJoinPlanV1 {
             scale: F::ONE,
         };
         let mut blocks = [dummy; KEY_BLOCKS_V1];
+        let make = |source_row: usize, target: ColumnV1, target_row: usize, count: usize| {
+            if source_row
+                .checked_add(count)
+                .is_none_or(|n| n > 1 << source.log)
+                || target_row
+                    .checked_add(count)
+                    .is_none_or(|n| n > 1 << target.log)
+            {
+                return Err(ZkX509StarkErrorV1::ProfileMismatch);
+            }
+            let power = 1_u8
+                .checked_shl(u32::from(source.log - target.log))
+                .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+            let start = root.pow(source_row as u128);
+            let target_root =
+                goldilocks_primitive_root_v1(target.log).map_err(map_transparent_error_v1)?;
+            if root.pow(u128::from(power)) != target_root {
+                return Err(ZkX509StarkErrorV1::ProfileMismatch);
+            }
+            let scale = target_root.pow(target_row as u128).mul(
+                start
+                    .pow(u128::from(power))
+                    .inv()
+                    .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?,
+            );
+            Ok(BlockV1 {
+                source,
+                target,
+                start,
+                step: root,
+                count,
+                power,
+                scale,
+            })
+        };
         for index in 0..6 {
             let channel = channels[index];
             let declaration = io
@@ -181,41 +238,6 @@ impl MainKeyJoinPlanV1 {
                             .and_then(|n| sum.checked_add(n))
                             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)
                     })?;
-            let make = |source_row: usize, target: ColumnV1, target_row: usize, count: usize| {
-                if source_row
-                    .checked_add(count)
-                    .is_none_or(|n| n > 1 << source.log)
-                    || target_row
-                        .checked_add(count)
-                        .is_none_or(|n| n > 1 << target.log)
-                {
-                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
-                }
-                let power = 1_u8
-                    .checked_shl(u32::from(source.log - target.log))
-                    .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-                let start = root.pow(source_row as u128);
-                let target_root =
-                    goldilocks_primitive_root_v1(target.log).map_err(map_transparent_error_v1)?;
-                if root.pow(u128::from(power)) != target_root {
-                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
-                }
-                let scale = target_root.pow(target_row as u128).mul(
-                    start
-                        .pow(u128::from(power))
-                        .inv()
-                        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?,
-                );
-                Ok(BlockV1 {
-                    source,
-                    target,
-                    start,
-                    step: root,
-                    count,
-                    power,
-                    scale,
-                })
-            };
             if index < 5 {
                 blocks[2 * index] = make(rows[index], io_value, io_start, 65)?;
                 blocks[2 * index + 1] = make(
@@ -228,7 +250,30 @@ impl MainKeyJoinPlanV1 {
                 blocks[10] = make(rows[index], io_value, io_start, 1)?;
             }
         }
-        blocks[11] = BlockV1 {
+        // Every RFC `Projection`-role producer byte equals the Projection
+        // segment's input byte at the same position of the same run.
+        let (projection_source_row, projection_rows, projection_value_column) =
+            zk_x509_rfc_projection_join_rows_v1(shape)
+                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
+        let projection_registration =
+            layout.registered_segment(SegmentAdapterIdV1::Projection, 0)?;
+        if projection_value_column != value_column
+            || projection_registration.segment.trace_log2 != 15
+            || zk_x509_projection_rfc_input_rows_v1(usize::from(shape.disclosed_attribute_count()))
+                != Some(projection_rows)
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        blocks[PROJECTION_BLOCK_V1] = make(
+            projection_source_row,
+            column(
+                projection_registration,
+                ZK_X509_PROJECTION_INPUT_VALUE_COLUMN_V1,
+            )?,
+            0,
+            projection_rows,
+        )?;
+        blocks[ACTIVITY_BLOCK_V1] = BlockV1 {
             source: column(rfc, activity_column)?,
             target: column(sink(2)?, active_column)?,
             start: F::ONE,
@@ -535,6 +580,9 @@ impl MainKeyJoinPlanV1 {
         for (i, block) in self.blocks[..KEY_OPENINGS_V1].iter().enumerate() {
             if block.target == io_column {
                 visit(i, &io)?;
+            } else if i == PROJECTION_BLOCK_V1 {
+                let target = Self::replay_v1(block.target, layout, polynomials, sources, policy)?;
+                visit(i, &target)?;
             } else {
                 let target = Self::replay_v1(block.target, layout, polynomials, sources, policy)?;
                 visit(i, &target)?;
@@ -566,8 +614,8 @@ impl MainKeyJoinPlanV1 {
     ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
         if source.is_empty()
             || target.is_empty()
-            || !matches!(b.power, 1 | 2 | 8 | 32)
-            || !(1..=65).contains(&b.count)
+            || !matches!(b.power, 1 | 2 | 8 | 16 | 32)
+            || !(1..=if b.power == 16 { MAX_BLOCK_ROWS_V1 } else { 65 }).contains(&b.count)
             || b.scale == F::ZERO
             || b.start == F::ZERO
             || b.step == F::ZERO
@@ -602,6 +650,10 @@ impl MainKeyJoinPlanV1 {
         // Sequential exact division by distinct public factors also checks every
         // individual endpoint. A later nonzero remainder cannot be cancelled by
         // a different block's Fiat-Shamir coefficient.
+        // TODO(X.3): the Projection block divides a 553,329-coefficient numerator
+        // by up to 1,357 factors, about 0.75e9 field steps on one thread. Measure
+        // it on an idle host and replace it with a subquadratic division if it
+        // shows in the proving budget.
         let mut point = b.start;
         for _ in 0..b.count {
             let mut carry = F::ZERO;
@@ -716,6 +768,16 @@ impl MainKeyJoinPlanV1 {
                 }
                 if block.target == io_column {
                     let quotient = Self::quotient_v1(block, &source, &io)?;
+                    for (out, value) in deferred.0.iter_mut().zip(quotient.iter()) {
+                        *out = out.add(alphas[i].mul_base(*value));
+                    }
+                } else if i == PROJECTION_BLOCK_V1 {
+                    // The log15 target and its power16 numerator are smaller
+                    // than the P256 owners this allowance already reserves,
+                    // and both drop before the next block is replayed.
+                    let target =
+                        Self::replay_v1(block.target, layout, polynomials, sources, policy)?;
+                    let quotient = Self::quotient_v1(block, &source, &target)?;
                     for (out, value) in deferred.0.iter_mut().zip(quotient.iter()) {
                         *out = out.add(alphas[i].mul_base(*value));
                     }
@@ -989,8 +1051,34 @@ mod tests {
     fn canonical_public_plan_covers_every_byte_and_both_selectors() {
         for d in 0..=4 {
             let (_, plan) = plan_v1(d);
-            assert_eq!(plan.blocks.len(), 12);
-            assert_eq!(plan.blocks.iter().map(|b| b.count).sum::<usize>(), 647);
+            assert_eq!(plan.blocks.len(), 13);
+            let projection_rows = zk_x509_projection_rfc_input_rows_v1(d).unwrap();
+            assert_eq!(projection_rows, 301 + 264 * d);
+            assert_eq!(
+                plan.blocks.iter().map(|b| b.count).sum::<usize>(),
+                647 + projection_rows
+            );
+            // The Projection block starts at the segment's first row and covers
+            // exactly the RFC `Projection`-role run of this public shape.
+            let projection = plan.blocks[PROJECTION_BLOCK_V1];
+            assert_eq!(projection.count, projection_rows);
+            assert_eq!((projection.source.log, projection.target.log), (19, 15));
+            assert_eq!(projection.power, 16);
+            assert_eq!(projection.source, plan.blocks[0].source);
+            assert_eq!(
+                projection.scale.mul(projection.start.pow(16)),
+                F::ONE,
+                "the first joined target row is Projection row zero"
+            );
+            assert_eq!(
+                plan.opening_v1(PROJECTION_BLOCK_V1, E::ONE).unwrap().0,
+                projection.target
+            );
+            let activity = plan.blocks[ACTIVITY_BLOCK_V1];
+            assert_eq!(
+                (activity.count, activity.power, activity.scale),
+                (1, 1, F::ONE)
+            );
             for b in plan.blocks {
                 let target_root = goldilocks_primitive_root_v1(b.target.log).unwrap();
                 assert_eq!(
@@ -1014,7 +1102,7 @@ mod tests {
         }
         let (_, plan) = plan_v1(0);
         assert_eq!(
-            plan.blocks.map(|b| b.scale.0),
+            core::array::from_fn::<u64, 11, _>(|index| plan.blocks[index].scale.0),
             [
                 7_017_390_190_810_289_357,
                 17_503_853_696_544_898_926,
@@ -1027,13 +1115,12 @@ mod tests {
                 2_572_097_256_420_412_601,
                 3_184_775_124_554_532_950,
                 12_196_860_509_838_602_653,
-                1
             ]
         );
     }
     #[test]
     fn exact_division_preserves_zero_bytes_and_detects_each_endpoint_mutation() {
-        for (power, count) in [(1, 1), (2, 65), (8, 64)] {
+        for (power, count) in [(1, 1), (2, 65), (8, 64), (16, 96)] {
             let (b, source, target, q) = public_block_v1(power, count);
             let quotient = MainKeyJoinPlanV1::quotient_v1(b, &source, &target).unwrap();
             assert_eq!(&quotient[..q.len()], q.as_slice());
@@ -1071,7 +1158,7 @@ mod tests {
     }
     #[test]
     fn arbitrary_fp4_lifting_matches_exact_coefficient_quotient() {
-        for (power, count) in [(1, 1), (2, 65), (8, 64)] {
+        for (power, count) in [(1, 1), (2, 65), (8, 64), (16, 96)] {
             let (b, source, target, q) = public_block_v1(power, count);
             for z in [E::from_base(F(31)), E::canonical([31, 5, 17, 2]).unwrap()] {
                 let mut p = b.start;
@@ -1180,8 +1267,136 @@ mod tests {
     }
 
     #[test]
+    fn deep_point_census_counts_the_actual_opening_maps() {
+        // The joint ledger excludes at most k preimages of every forbidden point
+        // for each power-k opening map (`JOINT_MAIN_POINT_MAP_DEGREE_V1` in
+        // profile/readiness_certificates.rs). Derive each opening's power from
+        // the actual plan: scale*(2z)^k = 2^k * scale*z^k.
+        let z = E::canonical([31, 5, 17, 2]).unwrap();
+        let doubled = z.mul_base(F(2));
+        for d in 0..=4 {
+            let (_, plan) = plan_v1(d);
+            let mut census = std::collections::BTreeMap::new();
+            for index in 0..OPENINGS_V1 {
+                let (_, at_z) = plan.opening_v1(index, z).unwrap();
+                let (_, at_doubled) = plan.opening_v1(index, doubled).unwrap();
+                let power = [1_u32, 2, 8, 16, 32]
+                    .into_iter()
+                    .find(|power| at_doubled == at_z.mul_base(F(1_u64 << power)))
+                    .unwrap_or_else(|| panic!("opening {index} is not a known power map"));
+                *census.entry(power).or_insert(0_u32) += 1;
+            }
+            assert_eq!(
+                census,
+                std::collections::BTreeMap::from([(2, 6), (8, 5), (16, 1), (32, 20)]),
+                "{d} disclosures"
+            );
+            let summed_degree = 1 + census
+                .iter()
+                .map(|(power, count)| power * count)
+                .sum::<u32>();
+            assert_eq!(summed_degree, 709);
+        }
+    }
+
+    #[test]
+    fn projection_block_pairs_each_rfc_byte_with_the_same_projection_input_row() {
+        use crate::privacy_engines::zk_x509::projection_air::{
+            ZkX509ProjectionFixedRowV1 as Row, compile_zk_x509_projection_fixed_trace_v1,
+        };
+        for d in 0..=4 {
+            let statement =
+                crate::privacy_engines::zk_x509::main_io::tests::statement_with_disclosures_v1(d);
+            let fixed = compile_zk_x509_projection_fixed_trace_v1(&statement).unwrap();
+            let rows = zk_x509_projection_rfc_input_rows_v1(d).unwrap();
+            // RFC `Projection`-role channel lengths in topology order.
+            let mut lengths = vec![91_usize, 91, 91, 8, 20];
+            for _ in 0..d {
+                lengths.extend([8, 256]);
+            }
+            assert_eq!(lengths.iter().sum::<usize>(), rows);
+            let mut row = 0;
+            for (channel, length) in lengths.iter().copied().enumerate() {
+                for offset in 0..length {
+                    match (channel, &fixed.rows[row]) {
+                        (
+                            0..=2,
+                            Row::InputSpki {
+                                certificate,
+                                offset: actual,
+                                active,
+                            },
+                        ) => assert_eq!(
+                            (usize::from(*certificate), usize::from(*actual), *active),
+                            (channel, offset, true)
+                        ),
+                        (
+                            3,
+                            Row::InputLength {
+                                input,
+                                byte,
+                                active,
+                                ..
+                            },
+                        ) => assert_eq!((*input, usize::from(*byte), *active), (3, offset, true)),
+                        (
+                            4,
+                            Row::InputByte {
+                                input,
+                                offset: actual,
+                                active,
+                                ..
+                            },
+                        ) => assert_eq!((*input, usize::from(*actual), *active), (3, offset, true)),
+                        (
+                            attribute_length,
+                            Row::InputLength {
+                                input,
+                                byte,
+                                active,
+                                ..
+                            },
+                        ) if attribute_length >= 5 && attribute_length % 2 == 1 => assert_eq!(
+                            (usize::from(*input), usize::from(*byte), *active),
+                            (4 + (attribute_length - 5) / 2, offset, true)
+                        ),
+                        (
+                            attribute_value,
+                            Row::InputByte {
+                                input,
+                                offset: actual,
+                                active,
+                                ..
+                            },
+                        ) if attribute_value >= 6 && attribute_value % 2 == 0 => assert_eq!(
+                            (usize::from(*input), usize::from(*actual), *active),
+                            (4 + (attribute_value - 6) / 2, offset, true)
+                        ),
+                        (channel, other) => {
+                            panic!("RFC channel {channel} offset {offset} faces {other:?}")
+                        }
+                    }
+                    row += 1;
+                }
+            }
+            assert_eq!(row, rows);
+            // The remaining input rows belong to undisclosed slots and are inactive.
+            for later in rows..MAX_BLOCK_ROWS_V1 {
+                assert!(matches!(
+                    fixed.rows[later],
+                    Row::InputLength { active: false, .. } | Row::InputByte { active: false, .. }
+                ));
+            }
+            assert!(!matches!(
+                fixed.rows[MAX_BLOCK_ROWS_V1],
+                Row::InputSpki { .. } | Row::InputLength { .. } | Row::InputByte { .. }
+            ));
+        }
+    }
+
+    #[test]
     fn target_mutations_and_wrong_root_power_cannot_satisfy_a_byte_block() {
-        for (power, count) in [(2, 65), (8, 64)] {
+        for (power, count) in [(2, 65), (8, 64), (16, 96)] {
             let (b, source, target, _) = public_block_v1(power, count);
             let points = (0..count)
                 .map(|j| {
@@ -1230,7 +1445,8 @@ mod tests {
             .iter()
             .filter(|b| b.target != io_column)
             .collect::<Vec<_>>();
-        assert_eq!(streamed.len(), 5);
+        // Five P256 real-byte columns and the Projection value column.
+        assert_eq!(streamed.len(), 6);
         for (i, b) in streamed.iter().enumerate() {
             assert!(streamed[..i].iter().all(|other| other.target != b.target));
         }
@@ -1244,7 +1460,7 @@ mod tests {
             .count();
         assert_eq!(public_replays, 1);
         let composition_replays = 1 + replays_per_opening_phase + 2 + 3 + public_replays + 1;
-        assert_eq!(composition_replays + 2 * replays_per_opening_phase, 26);
+        assert_eq!(composition_replays + 2 * replays_per_opening_phase, 29);
         let n = |log: u8| (1_usize << log) + MASK_DEGREE + 1;
         let divisions: usize = plan
             .blocks
@@ -1254,29 +1470,36 @@ mod tests {
                 numerator * b.count
             })
             .sum();
-        assert_eq!(divisions, 345_046_578);
-        assert_eq!(divisions + 5 * 8 * (32 * (n(16) - 1) + 1), 431_255_898);
+        // The Projection block divides its power16 numerator by one linear
+        // factor per joined byte: 553,329 coefficients for 1,357 bytes.
+        let projection_divisions = ((n(15) - 1) * 16 + 1) * MAX_BLOCK_ROWS_V1;
+        assert_eq!(projection_divisions, 750_867_453);
+        assert_eq!(divisions, 345_046_578 + projection_divisions);
+        assert_eq!(divisions + 5 * 8 * (32 * (n(16) - 1) + 1), 1_182_123_351);
         assert_eq!(
             divisions + 5 * 8 * (32 * (n(16) - 1) + 1) + PUBLIC_DIGEST_BLOCKS_V1 * 8 * n(19),
-            439_673_562
+            1_190_541_015
         );
-        assert_eq!(439_673_562 + PUBLIC_TIME_BLOCKS_V1 * n(19), 440_725_770);
+        assert_eq!(1_190_541_015 + PUBLIC_TIME_BLOCKS_V1 * n(19), 1_191_593_223);
         let evaluation_steps: usize = plan.blocks[..KEY_OPENINGS_V1]
             .iter()
             .map(|b| n(b.target.log))
             .sum();
-        assert_eq!(evaluation_steps, 1_920_520);
+        assert_eq!(evaluation_steps, 1_920_520 + n(15));
         // Opening evaluation plus the DEEP synthetic-division recurrence. No
         // duplicate Horner evaluation is performed in the second phase.
-        assert_eq!(2 * evaluation_steps, 3_841_040);
-        assert_eq!(evaluation_steps + 20 * n(16), 3_267_560);
-        let native_butterflies =
-            2 * ((1 << 19) / 2 * 19) + 3 * ((1 << 18) / 2 * 18) + 16 * ((1 << 16) / 2 * 16);
-        assert_eq!(native_butterflies, 25_427_968);
-        assert_eq!(native_butterflies + 3 * ((1 << 19) / 2 * 19), 40_370_176);
+        assert_eq!(2 * evaluation_steps, 3_910_208);
+        assert_eq!(evaluation_steps + 20 * n(16), 3_302_144);
+        // The Projection value column is replayed once in each of the three phases.
+        let native_butterflies = 2 * ((1 << 19) / 2 * 19)
+            + 3 * ((1 << 18) / 2 * 18)
+            + 16 * ((1 << 16) / 2 * 16)
+            + 3 * ((1 << 15) / 2 * 15);
+        assert_eq!(native_butterflies, 26_165_248);
+        assert_eq!(native_butterflies + 3 * ((1 << 19) / 2 * 19), 41_107_456);
         assert_eq!(
             native_butterflies + (4 + public_replays) * ((1 << 19) / 2 * 19),
-            50_331_648
+            51_068_928
         );
         assert!((n(19) + n(18) + n(16)) * 8 <= 2 * n(19) * 8);
     }
@@ -1301,10 +1524,10 @@ mod tests {
             assert_eq!(
                 &matching[1..],
                 &[
-                    11 + 4 * signature,
-                    12 + 4 * signature,
-                    13 + 4 * signature,
-                    14 + 4 * signature
+                    KEY_OPENINGS_V1 + 4 * signature,
+                    KEY_OPENINGS_V1 + 4 * signature + 1,
+                    KEY_OPENINGS_V1 + 4 * signature + 2,
+                    KEY_OPENINGS_V1 + 4 * signature + 3
                 ]
             );
         }
@@ -1464,7 +1687,10 @@ mod tests {
         const { assert!(8 * ((1 << 16) + MASK_DEGREE) + 1 < 589_687) };
         assert_eq!(MainKeyJoinPlanV1::PRIVATE_BYTES_V1, 99_391_016);
         assert_eq!(MainKeyJoinPlanV1::public_owner_charge_v1(), 8_388_608);
-        assert_eq!(KEY_OPENINGS_V1 * core::mem::size_of::<E>(), 352);
-        assert_eq!(OPENINGS_V1 * core::mem::size_of::<E>(), 992);
+        // The Projection numerator also fits one chunk stride.
+        assert_eq!(16 * ((1 << 15) + MASK_DEGREE) - 301, 553_027);
+        const { assert!(16 * ((1 << 15) + MASK_DEGREE) + 1 < 589_687) };
+        assert_eq!(KEY_OPENINGS_V1 * core::mem::size_of::<E>(), 384);
+        assert_eq!(OPENINGS_V1 * core::mem::size_of::<E>(), 1_024);
     }
 }

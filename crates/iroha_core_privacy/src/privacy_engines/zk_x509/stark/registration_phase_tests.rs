@@ -222,7 +222,7 @@ fn deterministic_projection_proof_roundtrips_and_has_a_protocol_kat() {
     );
     assert_eq!(
         hex::encode(digest),
-        "2a107b1f3240f2d45726d43b332d78e937d54bf4753cf521bb7f3e895fb0d42f",
+        "7fa1dd8900eedddc673841f45baa22496550f7c56ac4cb44fad650ade44dab3b",
         "update only when the canonical projection proof protocol intentionally changes"
     );
 }
@@ -282,7 +282,7 @@ fn deterministic_proof_roundtrips_and_has_unique_post_grinding_queries() {
     eprintln!("zk-x509-native-io-proof-sha256={}", hex::encode(digest));
     assert_eq!(
         hex::encode(digest),
-        "bc1140f7908f5499be43741e34c9a2ffcb9e5f4e5ede8641920c745a34579f43",
+        "418f78f3e318025fc5583371adf6ca11722e35d10e2a891ef0ef16fe340dfa77",
         "update only when the canonical proof protocol intentionally changes"
     );
 }
