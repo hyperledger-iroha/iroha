@@ -997,3 +997,17 @@ check = "cargo test --locked -p iroha_data_model --test bilateral_settlement_sdk
 # Complete Kagami profile bundles are operator-generated release artifacts and are intentionally
 # untracked. Checked-in `.template.json` files are non-signable source references, not generated
 # outputs; production generation requires an externally provisioned public-authority directory.
+
+# The BOI repository owns the Taira tenant registry: its generator renders this
+# bridge selection file from ops/config/tenants.json, and both the header and
+# BOI_REGISTRY_SHA256 pin that input's SHA-256.
+[[generated]]
+name = "boi-taira-tenant-registry"
+kind = "file"
+outputs = ["crates/connect_norito_bridge/src/kagemusha_wallet_ffi/installed/selection/boi_registry.rs"]
+external = true
+provenance = "BOI repository tools/tenant-registry/generate.mjs from ops/config/tenants.json (make registry, architecture.md 2.4)"
+generator = "node \"${BOI_POC_ENV:?set the BOI repository checkout}/tools/tenant-registry/generate.mjs\" --iroha \"$PWD\""
+generator_sources = []
+inputs = []
+check = "node \"${BOI_POC_ENV:?set the BOI repository checkout}/tools/tenant-registry/generate.mjs\" --check --iroha \"$PWD\""
