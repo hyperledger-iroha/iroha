@@ -30,10 +30,15 @@ four points.
   their predecessor slot takes a Receive, Send or Bootstrap proof by its two
   public kind bits. Bootstrap's own relation is a census-sized stand-in: the
   zero state, and its receipt, credential and certificate signatures, all on the
-  comb. Not modelled: the wallet's comb tables (one-time, about 253k
-  constraints), the issuer's and root's own keys, the ledger's activation record,
-  and the wallet state carried from one step to the next
-  (`σ.predecessor = Ω.head`).
+  comb. The wallet's comb tables are derived in-circuit by
+  `nonnative::key_tables` (tested against the native tables), but with them
+  Bootstrap needs 74 witness rows where Receive's layout leaves 64, so the
+  fixed point runs without them (`ZKS_BOOT_TABLES=on` tries them); how the
+  tables are certified is an owner decision (A2-UNIFORM.md, "Bootstrap's key
+  tables"). Not modelled: the wallet's table rows in Send and Receive (they
+  read one key's tables from constant columns), the issuer's and root's own
+  keys, the ledger's activation record, and the wallet state carried from one
+  step to the next (`σ.predecessor = Ω.head`).
 - Spartan proof acceptance alone does not establish deferred-claim validity.
   Both native accumulator checks must hold. Intermediate template-building
   hops deliberately contain false accumulators and are not valid payments.

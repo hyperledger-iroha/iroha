@@ -2356,6 +2356,674 @@ pub fn sample_binding(count: usize) -> (BigUint, BigUint, Vec<u128>) {
     )
 }
 
+// ------------------------------------------------- Bootstrap's key tables
+
+/// The table id of Bootstrap's key points, a witness table: the bases
+/// `B_k` (rows 0..16) and their doubles `2 B_k` (rows 16..32).
+pub const KEY_POINTS_TABLE: u32 = 6;
+
+/// Array offsets of the key-table derivation from `first`.
+pub const KT_DVAL: usize = 0;
+pub const KT_D1: usize = 1;
+pub const KT_D2: usize = 2;
+pub const KT_POINTS: usize = 3;
+pub const KT_IVAL: usize = 4;
+pub const KT_I1: usize = 5;
+pub const KT_I4: usize = 6;
+pub const KT_GSEL: usize = 7;
+pub const KT_GVAL: usize = 8;
+pub const KT_G1: usize = 9;
+pub const KT_G4: usize = 10;
+
+/// The doubling chain `P_(s + 1) = 2 P_s` from `P_0 = Q`: the bases
+/// `B_k = 2^(16 k) Q = P_(16 k)` and their doubles `2 B_k = P_(16 k + 1)`
+/// all lie on it, the last one at `s = 241`.
+pub const KT_DOUBLINGS: usize = 241;
+
+/// Bootstrap's derivation of a wallet's comb tables from its key (Lever 1).
+pub struct KeyTables {
+    pub arrays: Vec<Array<Fp>>,
+    pub tables: Vec<(usize, u32)>,
+    /// The derived tables: `operation::comb_tables(Q, 16)`.
+    pub entries: Vec<Vec<Point>>,
+    /// Per table `j`, the Gray step whose sum is entry `h` (the Gray
+    /// values' instance `(slot << 9) | (j << 8) | step[h]`).
+    pub step_of: Vec<Vec<usize>>,
+    /// Doublings, additions, then the one-, two- and four-product checks.
+    pub counts: [usize; 5],
+}
+
+/// A read of a non-native value by a key-table check: (array, first limb
+/// cell, instance, coefficient).
+type KRead = (usize, usize, usize, i64);
+
+/// One input of a key-table check: reads plus constant values, each with
+/// its coefficient.
+#[derive(Clone, Default)]
+struct KPort {
+    reads: Vec<KRead>,
+    consts: Vec<(BigUint, i64)>,
+}
+
+fn kport(reads: &[KRead]) -> KPort {
+    KPort {
+        reads: reads.to_vec(),
+        consts: Vec::new(),
+    }
+}
+
+/// One key-table check: `sum_i pc_i a_i b_i + lin + cst = 0 (mod p)`.
+#[derive(Clone)]
+struct KCheck {
+    a: Vec<KPort>,
+    b: Vec<KPort>,
+    pc: Vec<i64>,
+    lin: KPort,
+    cst: i64,
+}
+
+/// A reader of one coordinate of a key-table point: its read at a
+/// coefficient.
+type Rd<'a> = &'a dyn Fn(i64) -> KRead;
+
+/// The four checks of an addition `o = a + c` with slope `l`: the chord,
+/// the sum's x and y, then the second slope equation (both points on the
+/// curve), which leaves equal points only the tangent.
+#[allow(clippy::too_many_arguments)]
+fn kt_addition(
+    l: Rd<'_>,
+    ax: Rd<'_>,
+    ay: Rd<'_>,
+    cx: Rd<'_>,
+    cy: Rd<'_>,
+    ox: Rd<'_>,
+    oy: Rd<'_>,
+) -> [KCheck; 4] {
+    [
+        KCheck {
+            a: vec![kport(&[l(1)])],
+            b: vec![kport(&[cx(1), ax(-1)])],
+            pc: vec![1],
+            lin: kport(&[cy(-1), ay(1)]),
+            cst: 0,
+        },
+        KCheck {
+            a: vec![kport(&[l(1)])],
+            b: vec![kport(&[l(1)])],
+            pc: vec![1],
+            lin: kport(&[ax(-1), cx(-1), ox(-1)]),
+            cst: 0,
+        },
+        KCheck {
+            a: vec![kport(&[l(1)])],
+            b: vec![kport(&[ax(1), ox(-1)])],
+            pc: vec![1],
+            lin: kport(&[ay(-1), oy(-1)]),
+            cst: 0,
+        },
+        KCheck {
+            a: vec![
+                kport(&[l(1)]),
+                kport(&[ax(1)]),
+                kport(&[ax(1)]),
+                kport(&[cx(1)]),
+            ],
+            b: vec![
+                kport(&[ay(1), cy(1)]),
+                kport(&[ax(1)]),
+                kport(&[cx(1)]),
+                kport(&[cx(1)]),
+            ],
+            pc: vec![1, -1, -1, -1],
+            lin: KPort::default(),
+            cst: 3,
+        },
+    ]
+}
+
+/// The smallest `rho` with `count <= 2^rho`.
+fn rho_of(count: usize) -> usize {
+    count.max(1).next_power_of_two().trailing_zeros() as usize
+}
+
+/// A value array (three limbs from range-checked chunks per instance); idle
+/// instances (`None`) hold zero.
+fn kt_value_array(name: &'static str, fam: usize, vals: &[Option<BigUint>]) -> Array<Fp> {
+    let rho = rho_of(vals.len());
+    let n = 1usize << rho;
+    let (rows, lookups) = value_template(n);
+    let mut values = vec![vec![Fp::from(0u64); n]; value_cells_count()];
+    for (r, v) in vals.iter().enumerate() {
+        if let Some(v) = v {
+            for (k, cell) in value_cells(v).into_iter().enumerate() {
+                values[k][r] = cell;
+            }
+        }
+    }
+    Array {
+        name,
+        family: fam,
+        rho,
+        r_count: vals.len(),
+        fixed: false,
+        lookups,
+        widths: value_widths(),
+        rows,
+        values,
+    }
+}
+
+/// A check array of `shape` over `checks`, an idle instance (`None`) having
+/// every input zero, which holds trivially. A port's reads are links grouped
+/// by (array, first limb cell, position in the port); `value_of(array,
+/// first, instance)` gives a read's native value.
+fn kt_check_array(
+    name: &'static str,
+    fam: usize,
+    shape: &CheckShape,
+    checks: &[Option<KCheck>],
+    value_of: &dyn Fn(usize, usize, usize) -> BigUint,
+) -> Array<Fp> {
+    let rho = rho_of(checks.len());
+    let n = 1usize << rho;
+    let zero = Fp::from(0u64);
+    let port = |get: &dyn Fn(&KCheck) -> &KPort| -> Port {
+        let width = checks
+            .iter()
+            .flatten()
+            .map(|c| get(c).reads.len())
+            .max()
+            .unwrap_or(0);
+        let mut links = Vec::new();
+        for q in 0..width {
+            let mut groups: Vec<((usize, usize), Vec<Option<usize>>, Vec<Fp>)> = Vec::new();
+            for (r, c) in checks.iter().enumerate() {
+                let Some(c) = c else { continue };
+                let Some(&(a, first, inst, coef)) = get(c).reads.get(q) else {
+                    continue;
+                };
+                let g = match groups.iter().position(|g| g.0 == (a, first)) {
+                    Some(i) => i,
+                    None => {
+                        groups.push(((a, first), vec![None; n], vec![zero; n]));
+                        groups.len() - 1
+                    }
+                };
+                groups[g].1[r] = Some(inst);
+                groups[g].2[r] = fp_i(&BigInt::from(coef));
+            }
+            for ((a, first), map, coef) in groups {
+                links.push((a, first, map, coef));
+            }
+        }
+        let mut consts = [vec![zero; n], vec![zero; n], vec![zero; n]];
+        for (r, c) in checks.iter().enumerate() {
+            let Some(c) = c else { continue };
+            for (x, coef) in &get(c).consts {
+                let l = limbs(x);
+                for k in 0..3 {
+                    consts[k][r] += fp_i(&(BigInt::from(l[k].clone()) * BigInt::from(*coef)));
+                }
+            }
+        }
+        Port { links, consts }
+    };
+    let products = shape.products;
+    let a: Vec<Port> = (0..products).map(|i| port(&|c| &c.a[i])).collect();
+    let b: Vec<Port> = (0..products).map(|i| port(&|c| &c.b[i])).collect();
+    let lin = port(&|c| &c.lin);
+    let mut pc = vec![vec![zero; n]; products];
+    let mut cst = vec![zero; n];
+    for (r, c) in checks.iter().enumerate() {
+        let Some(c) = c else { continue };
+        assert_eq!(c.pc.len(), products, "{name}: one coefficient per product");
+        for i in 0..products {
+            pc[i][r] = fp_i(&BigInt::from(c.pc[i]));
+        }
+        cst[r] = fp_i(&BigInt::from(c.cst));
+    }
+    let (rows, lookups) = shape.template(&a, &b, &pc, &lin, &cst, &vec![0; n], n);
+    let eval = |pt: &KPort| -> [BigInt; 3] {
+        let mut out: [BigInt; 3] = Default::default();
+        for &(a, first, inst, coef) in &pt.reads {
+            let l = limbs(&value_of(a, first, inst));
+            for k in 0..3 {
+                out[k] += BigInt::from(l[k].clone()) * BigInt::from(coef);
+            }
+        }
+        for (x, coef) in &pt.consts {
+            let l = limbs(x);
+            for k in 0..3 {
+                out[k] += BigInt::from(l[k].clone()) * BigInt::from(*coef);
+            }
+        }
+        out
+    };
+    let mut values = vec![vec![zero; n]; shape.cells];
+    let zeros: Vec<[BigInt; 3]> = vec![Default::default(); products];
+    for r in 0..checks.len() {
+        let cells = match &checks[r] {
+            Some(c) => {
+                let av: Vec<[BigInt; 3]> = c.a.iter().map(eval).collect();
+                let bv: Vec<[BigInt; 3]> = c.b.iter().map(eval).collect();
+                shape.witness(&av, &bv, &c.pc, &eval(&c.lin), c.cst, 0)
+            }
+            None => shape.witness(
+                &zeros,
+                &zeros,
+                &vec![0; products],
+                &Default::default(),
+                0,
+                0,
+            ),
+        };
+        for (k, cell) in cells.into_iter().enumerate() {
+            values[k][r] = cell;
+        }
+    }
+    Array {
+        name,
+        family: fam,
+        rho,
+        r_count: checks.len(),
+        fixed: false,
+        lookups,
+        widths: shape.widths(),
+        rows,
+        values,
+    }
+}
+
+/// Bootstrap's derivation of the wallet's comb tables (m = 16) from its key
+/// `Q`, as uniform arrays from index `first` in family `fam` (range lookups
+/// into the circuit's range table):
+///
+/// - the doubling chain (`KT_DOUBLINGS` doublings), with `Q` on the curve:
+///   value slots per step `s` are the slope (`t = x^2` at `s = 0`), `x`, `y`;
+///   each doubling checks `l (2 y) - 3 x^2 + 3 = 0`, `x' = l^2 - 2 x` and
+///   `y' = l (x - x') - y`;
+/// - the key points, a witness table of the bases and their doubles, tied to
+///   the chain;
+/// - per table `j` (bases `8 j..8 j + 8`), the sum `S_j` of its bases by
+///   seven additions (six in the initial array, the seventh at the Gray
+///   walk's step 0): `S_j` is entry 255;
+/// - the Gray walk, steps 1..255: step `t` flips bit `k_t` of the index
+///   (`h_t = gray(t) ^ 255`) and adds `+-2 B_(8 j + k_t)`, so that every
+///   entry `sum_k (2 bit_k(h) - 1) B_(8 j + k)` is one step's sum. The addend
+///   is looked up in the key points by a per-step index; its sign is a
+///   per-step coefficient on its `y`.
+///
+/// Every addition checks both slope equations (the chord and, with both
+/// points on the curve, `l (a.y + c.y) = a.x^2 + a.x c.x + c.x^2 - 3`), so
+/// equal points can only double.
+pub fn key_tables(first: usize, fam: usize, q: &Point) -> KeyTables {
+    let p = p256::p();
+    let at = |k: usize| first + k;
+    // The native chain.
+    let mut dp: Vec<Point> = vec![q.clone()];
+    let mut dl: Vec<BigUint> = vec![&q.x * &q.x % &p];
+    for s in 1..=KT_DOUBLINGS {
+        let prev = dp[s - 1].clone();
+        dl.push(slope(&prev, &prev));
+        dp.push(p256::double(&prev));
+    }
+    let step_of_point = |i: usize| if i < 16 { 16 * i } else { 16 * (i - 16) + 1 };
+    let key_point = |i: usize| dp[step_of_point(i)].clone();
+    // The additions: (the addend c before its sign, the sign, slope, sum),
+    // per table.
+    struct Add {
+        c: Point,
+        sign: i64,
+        lam: BigUint,
+        out: Point,
+    }
+    let add = |a: &Point, c: &Point, sign: i64| -> Add {
+        let cs = if sign < 0 { p256::neg(c) } else { c.clone() };
+        let lam = slope(a, &cs);
+        let out =
+            p256::add_any(Some(a.clone()), Some(cs)).expect("a table entry is not the identity");
+        Add {
+            c: c.clone(),
+            sign,
+            lam,
+            out,
+        }
+    };
+    let mut init: Vec<Vec<Add>> = Vec::new();
+    let mut gray: Vec<Vec<Add>> = Vec::new();
+    let mut gray_row: Vec<Vec<usize>> = Vec::new();
+    let mut entries: Vec<Vec<Point>> = Vec::new();
+    let mut step_of: Vec<Vec<usize>> = Vec::new();
+    for j in 0..2 {
+        let mut cur = key_point(8 * j);
+        let mut iv = Vec::new();
+        for s in 0..6 {
+            let x = add(&cur, &key_point(8 * j + s + 1), 1);
+            cur = x.out.clone();
+            iv.push(x);
+        }
+        let (mut gv, mut rows) = (Vec::new(), Vec::new());
+        let mut table: Vec<Option<Point>> = vec![None; 256];
+        let mut steps = vec![0usize; 256];
+        let (mut h, mut prev_gray) = (255usize, 0usize);
+        for t in 0..256usize {
+            let (row, sign) = if t == 0 {
+                (8 * j + 7, 1)
+            } else {
+                let g = t ^ (t >> 1);
+                let k = (g ^ prev_gray).trailing_zeros() as usize;
+                prev_gray = g;
+                h ^= 1 << k;
+                (16 + 8 * j + k, if h & (1 << k) != 0 { 1 } else { -1 })
+            };
+            let x = add(&cur, &key_point(row), sign);
+            cur = x.out.clone();
+            assert!(table[h].is_none(), "each entry once");
+            table[h] = Some(cur.clone());
+            steps[h] = t;
+            gv.push(x);
+            rows.push(row);
+        }
+        init.push(iv);
+        gray.push(gv);
+        gray_row.push(rows);
+        entries.push(table.into_iter().map(|e| e.expect("every entry")).collect());
+        step_of.push(steps);
+    }
+    assert_eq!(
+        entries,
+        crate::operation::comb_tables(q, 16),
+        "the walk derives the comb tables"
+    );
+    // Native values by (array, first limb cell, instance).
+    let mut native: std::collections::HashMap<(usize, usize, usize), BigUint> =
+        std::collections::HashMap::new();
+    let n_d = 256usize;
+    let mut dvals: Vec<Option<BigUint>> = vec![None; 3 * n_d];
+    for s in 0..=KT_DOUBLINGS {
+        for (slot, x) in [&dl[s], &dp[s].x, &dp[s].y].into_iter().enumerate() {
+            dvals[(slot << 8) | s] = Some(x.clone());
+            native.insert((at(KT_DVAL), 0, (slot << 8) | s), x.clone());
+        }
+    }
+    let mut ivals: Vec<Option<BigUint>> = vec![None; 48];
+    for (j, iv) in init.iter().enumerate() {
+        for (s, x) in iv.iter().enumerate() {
+            for (slot, v) in [&x.lam, &x.out.x, &x.out.y].into_iter().enumerate() {
+                let r = (slot << 4) | (j << 3) | s;
+                ivals[r] = Some(v.clone());
+                native.insert((at(KT_IVAL), 0, r), v.clone());
+            }
+        }
+    }
+    let mut gvals: Vec<Option<BigUint>> = vec![None; 3 << 9];
+    let mut gsel = vec![vec![Fp::from(0u64); 512]; 6];
+    for (j, gv) in gray.iter().enumerate() {
+        for (t, x) in gv.iter().enumerate() {
+            for (slot, v) in [&x.lam, &x.out.x, &x.out.y].into_iter().enumerate() {
+                let r = (slot << 9) | (j << 8) | t;
+                gvals[r] = Some(v.clone());
+                native.insert((at(KT_GVAL), 0, r), v.clone());
+            }
+            let r = (j << 8) | t;
+            let (xl, yl) = (limbs(&x.c.x), limbs(&x.c.y));
+            for k in 0..3 {
+                gsel[k][r] = fp_u(&xl[k]);
+                gsel[3 + k][r] = fp_u(&yl[k]);
+            }
+            native.insert((at(KT_GSEL), 0, r), x.c.x.clone());
+            native.insert((at(KT_GSEL), 3, r), x.c.y.clone());
+        }
+    }
+    let value_of = |a: usize, first: usize, inst: usize| -> BigUint {
+        native
+            .get(&(a, first, inst))
+            .unwrap_or_else(|| panic!("a native value at ({a}, {first}, {inst})"))
+            .clone()
+    };
+    // Reads.
+    let dv = |slot: usize, s: usize, coef: i64| (at(KT_DVAL), 0, (slot << 8) | s, coef);
+    let iv = |slot: usize, j: usize, s: usize, coef: i64| {
+        (at(KT_IVAL), 0, (slot << 4) | (j << 3) | s, coef)
+    };
+    let gv = |slot: usize, j: usize, t: usize, coef: i64| {
+        (at(KT_GVAL), 0, (slot << 9) | (j << 8) | t, coef)
+    };
+    let gs = |cell: usize, j: usize, t: usize, coef: i64| (at(KT_GSEL), cell, (j << 8) | t, coef);
+    // The doubling chain's checks.
+    let mut d1: Vec<Option<KCheck>> = vec![None; 2 * n_d];
+    let mut d2: Vec<Option<KCheck>> = vec![None; n_d];
+    d1[0] = Some(KCheck {
+        a: vec![kport(&[dv(1, 0, 1)])],
+        b: vec![kport(&[dv(1, 0, 1)])],
+        pc: vec![1],
+        lin: kport(&[dv(0, 0, -1)]),
+        cst: 0,
+    });
+    d2[0] = Some(KCheck {
+        a: vec![kport(&[dv(2, 0, 1)]), kport(&[dv(1, 0, 1)])],
+        b: vec![kport(&[dv(2, 0, 1)]), kport(&[dv(0, 0, 1)])],
+        pc: vec![1, -1],
+        lin: KPort {
+            reads: vec![dv(1, 0, 3)],
+            consts: vec![(p256::b(), -1)],
+        },
+        cst: 0,
+    });
+    for s in 1..=KT_DOUBLINGS {
+        let l = dv(0, s, 1);
+        d1[s] = Some(KCheck {
+            a: vec![kport(&[l])],
+            b: vec![kport(&[l])],
+            pc: vec![1],
+            lin: kport(&[dv(1, s - 1, -2), dv(1, s, -1)]),
+            cst: 0,
+        });
+        d1[n_d + s] = Some(KCheck {
+            a: vec![kport(&[l])],
+            b: vec![kport(&[dv(1, s - 1, 1), dv(1, s, -1)])],
+            pc: vec![1],
+            lin: kport(&[dv(2, s - 1, -1), dv(2, s, -1)]),
+            cst: 0,
+        });
+        d2[s] = Some(KCheck {
+            a: vec![kport(&[l]), kport(&[dv(1, s - 1, 1)])],
+            b: vec![kport(&[dv(2, s - 1, 2)]), kport(&[dv(1, s - 1, 3)])],
+            pc: vec![1, -1],
+            lin: KPort::default(),
+            cst: 3,
+        });
+    }
+    // The initial sums: a = B_(8 j) at s = 0, else the previous sum; c =
+    // B_(8 j + s + 1), read from the chain.
+    let mut i1: Vec<Option<KCheck>> = vec![None; 48];
+    let mut i4: Vec<Option<KCheck>> = vec![None; 16];
+    for j in 0..2 {
+        for s in 0..6 {
+            let s0 = step_of_point(8 * j);
+            let a_at = |slot: usize, c: i64| {
+                if s == 0 {
+                    dv(slot, s0, c)
+                } else {
+                    iv(slot, j, s - 1, c)
+                }
+            };
+            let st = step_of_point(8 * j + s + 1);
+            let checks = kt_addition(
+                &|c| iv(0, j, s, c),
+                &|c| a_at(1, c),
+                &|c| a_at(2, c),
+                &|c| dv(1, st, c),
+                &|c| dv(2, st, c),
+                &|c| iv(1, j, s, c),
+                &|c| iv(2, j, s, c),
+            );
+            let [c0, c1, c2, c3] = checks;
+            for (spec, c) in [c0, c1, c2].into_iter().enumerate() {
+                i1[(spec << 4) | (j << 3) | s] = Some(c);
+            }
+            i4[(j << 3) | s] = Some(c3);
+        }
+    }
+    // The Gray walk: a = the last initial sum at t = 0, else the previous
+    // step's sum; c = the selected key point, its y signed per step.
+    let mut g1: Vec<Option<KCheck>> = vec![None; 3 << 9];
+    let mut g4: Vec<Option<KCheck>> = vec![None; 512];
+    for j in 0..2 {
+        for t in 0..256 {
+            let a_at = |slot: usize, c: i64| {
+                if t == 0 {
+                    iv(slot, j, 5, c)
+                } else {
+                    gv(slot, j, t - 1, c)
+                }
+            };
+            let sign = gray[j][t].sign;
+            let checks = kt_addition(
+                &|c| gv(0, j, t, c),
+                &|c| a_at(1, c),
+                &|c| a_at(2, c),
+                &|c| gs(0, j, t, c),
+                &|c| gs(3, j, t, c * sign),
+                &|c| gv(1, j, t, c),
+                &|c| gv(2, j, t, c),
+            );
+            let [c0, c1, c2, c3] = checks;
+            for (spec, c) in [c0, c1, c2].into_iter().enumerate() {
+                g1[(spec << 9) | (j << 8) | t] = Some(c);
+            }
+            g4[(j << 8) | t] = Some(c3);
+        }
+    }
+    // Shapes (modulus p only).
+    let moduli = vec![p.clone()];
+    let s1 = CheckShape::new(
+        &[(sources(1, 1), sources(2, 1))],
+        &sources(3, 2),
+        3,
+        &moduli,
+    );
+    let s2 = CheckShape::new(
+        &[
+            (sources(1, 1), sources(1, 2)),
+            (sources(1, 1), sources(1, 3)),
+        ],
+        &sources(2, 3),
+        3,
+        &moduli,
+    );
+    let s4 = CheckShape::new(
+        &[
+            (sources(1, 1), sources(2, 1)),
+            (sources(1, 1), sources(1, 1)),
+            (sources(1, 1), sources(1, 1)),
+            (sources(1, 1), sources(1, 1)),
+        ],
+        &sources(3, 2),
+        3,
+        &moduli,
+    );
+    // The key points: a witness table (index, x limbs, y limbs), tied to the
+    // chain's values.
+    let one = Fp::from(1u64);
+    let n_k = 32usize;
+    let mut kvals = vec![vec![Fp::from(0u64); n_k]; 7];
+    for i in 0..n_k {
+        let pt = key_point(i);
+        kvals[0][i] = Fp::from(i as u64);
+        let (xl, yl) = (limbs(&pt.x), limbs(&pt.y));
+        for k in 0..3 {
+            kvals[1 + k][i] = fp_u(&xl[k]);
+            kvals[4 + k][i] = fp_u(&yl[k]);
+        }
+    }
+    let chain_map = |slot: usize| -> Vec<Option<usize>> {
+        (0..n_k)
+            .map(|i| Some((slot << 8) | step_of_point(i)))
+            .collect()
+    };
+    let mut krows: Vec<[Lin<Fp>; 3]> = vec![[
+        plus(
+            &own(0, n_k),
+            &constant((0..n_k).map(|i| -Fp::from(i as u64)).collect()),
+        ),
+        constant(vec![one; n_k]),
+        Vec::new(),
+    ]];
+    for (base, slot) in [(1usize, 1usize), (4, 2)] {
+        for k in 0..3 {
+            krows.push([
+                plus(
+                    &own(base + k, n_k),
+                    &link(at(KT_DVAL), k, chain_map(slot), -one),
+                ),
+                constant(vec![one; n_k]),
+                Vec::new(),
+            ]);
+        }
+    }
+    // The Gray walk's addends: looked up in the key points by row.
+    let gs_lookup = {
+        let mut t = vec![constant(
+            (0..512)
+                .map(|r| Fp::from(gray_row[r >> 8][r & 255] as u64))
+                .collect(),
+        )];
+        for k in 0..6 {
+            t.push(own(k, 512));
+        }
+        (KEY_POINTS_TABLE, t)
+    };
+    let arrays = vec![
+        kt_value_array("key-table chain value", fam, &dvals),
+        kt_check_array("key-table chain check 1", fam, &s1, &d1, &value_of),
+        kt_check_array("key-table chain check 2", fam, &s2, &d2, &value_of),
+        Array {
+            name: "key points",
+            family: fam,
+            rho: rho_of(n_k),
+            r_count: n_k,
+            fixed: false,
+            lookups: Vec::new(),
+            widths: vec![5, 88, 88, 80, 88, 88, 80],
+            rows: krows,
+            values: kvals,
+        },
+        kt_value_array("key-table sum value", fam, &ivals),
+        kt_check_array("key-table sum check 1", fam, &s1, &i1, &value_of),
+        kt_check_array("key-table sum check 4", fam, &s4, &i4, &value_of),
+        Array {
+            name: "key-table walk addend",
+            family: fam,
+            rho: 9,
+            r_count: 512,
+            fixed: false,
+            lookups: vec![gs_lookup],
+            widths: vec![88, 88, 80, 88, 88, 80],
+            rows: Vec::new(),
+            values: gsel,
+        },
+        kt_value_array("key-table walk value", fam, &gvals),
+        kt_check_array("key-table walk check 1", fam, &s1, &g1, &value_of),
+        kt_check_array("key-table walk check 4", fam, &s4, &g4, &value_of),
+    ];
+    let count = |v: &[Option<KCheck>]| v.iter().flatten().count();
+    let counts = [
+        KT_DOUBLINGS,
+        2 * (6 + 256),
+        count(&d1) + count(&i1) + count(&g1),
+        count(&d2),
+        count(&i4) + count(&g4),
+    ];
+    KeyTables {
+        arrays,
+        tables: vec![(at(KT_POINTS), KEY_POINTS_TABLE)],
+        entries,
+        step_of,
+        counts,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2641,6 +3309,149 @@ mod tests {
         assert!(
             refused(&c, &inst, &wit, &gens, A_ADD, 2, 3, one),
             "flipped flag"
+        );
+    }
+
+    /// Bootstrap's key tables (m = 16) derived from a key in uniform arrays:
+    /// the walk's sums are the comb tables and sit in the witness, every row
+    /// holds, the matrix evaluation matches the entries, the circuit proves
+    /// and verifies, and a changed walk slope, chain value, addend or key
+    /// point is refused.
+    #[test]
+    fn key_tables_derive_the_comb_tables() {
+        let n = p256::n();
+        let q = p256::mul(
+            &p256::generator(),
+            &p256::scalar_below("key-tables-test", &n),
+        )
+        .unwrap();
+        let first = 1;
+        let kt = key_tables(first, 0, &q);
+        assert_eq!(
+            kt.entries,
+            crate::operation::comb_tables(&q, 16),
+            "the derived tables"
+        );
+        assert_eq!(
+            kt.counts,
+            [
+                KT_DOUBLINGS,
+                524,
+                2 * KT_DOUBLINGS + 1 + 3 * 524,
+                KT_DOUBLINGS + 1,
+                524
+            ],
+            "doublings, additions and checks"
+        );
+        let mut arrays = vec![Array {
+            name: "range table",
+            family: 0,
+            rho: CHUNK,
+            r_count: 1 << CHUNK,
+            fixed: true,
+            lookups: Vec::new(),
+            widths: vec![CHUNK as u16],
+            rows: Vec::new(),
+            values: vec![(0..1u64 << CHUNK).map(Fp::from).collect()],
+        }];
+        let mut tables = vec![(0usize, RANGE_TABLE)];
+        tables.extend(kt.tables.iter().copied());
+        arrays.extend(kt.arrays);
+        let (c, inst, wit) = UniformCircuit::build(
+            "key-tables-test",
+            arrays,
+            vec![0],
+            vec![1],
+            tables,
+            14,
+            4,
+            b"key tables",
+        );
+        for j in 0..2 {
+            for h in [0usize, 1, 128, 200, 255] {
+                let t = kt.step_of[j][h];
+                let e = &kt.entries[j][h];
+                for (slot, v) in [(1usize, &e.x), (2, &e.y)] {
+                    let l = limbs(v);
+                    for k in 0..3 {
+                        assert_eq!(
+                            wit.w[c.cell_index(first + KT_GVAL, k, (slot << 9) | (j << 8) | t)],
+                            fp_u(&l[k]),
+                            "entry ({j}, {h}) in the witness"
+                        );
+                    }
+                }
+            }
+        }
+        let shape = c.shape;
+        let mut rng = SpikeRng::new(b"key tables ch");
+        let ch: Vec<Fp> = vec![rng.scalar(), rng.scalar()];
+        let mut w = wit.w.clone();
+        let rel = c.instantiate(&shape, &ch, Some(&mut w));
+        let z = crate::r1cs::z_vector(&shape, &inst, &Witness { w: w.clone() });
+        let (az, bz, cz) = rel.abc(&shape, &z);
+        let bad: Vec<usize> = (0..1 << shape.sx)
+            .filter(|x| az[*x] * bz[*x] != cz[*x])
+            .collect();
+        assert!(
+            bad.is_empty(),
+            "{} rows fail, first {:?}",
+            bad.len(),
+            &bad[..bad.len().min(5)]
+        );
+        let rx: Vec<Fp> = (0..shape.sx).map(|_| rng.scalar()).collect();
+        let ry: Vec<Fp> = (0..shape.sz()).map(|_| rng.scalar()).collect();
+        let (ex, ey) = (crate::grid::eq_table(&rx), crate::grid::eq_table(&ry));
+        let mut slow = [Fp::ZERO; 3];
+        for &(mat, x, y, v) in &c.entries(&ch) {
+            slow[mat] += ex[x] * ey[y] * v;
+        }
+        assert_eq!(
+            rel.matrix_evals(&shape, &rx, &ry),
+            (slow[0], slow[1], slow[2]),
+            "matrix evaluation matches the entries"
+        );
+        let gens = crate::ipa::Gens::<Vesta>::new(shape.cols());
+        let mut prng = SpikeRng::new(b"key tables prove");
+        let (proof, _) = crate::spartan::prove_circuit(&shape, &gens, &inst, &wit, &mut prng, &c);
+        assert!(
+            crate::spartan::verify_circuit(&shape, &gens, &inst, &proof.to_bytes(), &c).is_ok(),
+            "honest"
+        );
+        let one = Fp::ONE;
+        assert!(
+            refused(
+                &c,
+                &inst,
+                &wit,
+                &gens,
+                first + KT_GVAL,
+                0,
+                (1 << 8) | 77,
+                one
+            ),
+            "changed walk slope"
+        );
+        assert!(
+            refused(
+                &c,
+                &inst,
+                &wit,
+                &gens,
+                first + KT_DVAL,
+                1,
+                (1 << 8) | 40,
+                one
+            ),
+            "changed chain x"
+        );
+        assert!(
+            refused(&c, &inst, &wit, &gens, first + KT_GSEL, 4, 9, one),
+            "changed addend"
+        );
+        assert!(
+            refused(&c, &inst, &wit, &gens, first + KT_POINTS, 2, 20, one),
+            "changed key point"
         );
     }
 }

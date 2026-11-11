@@ -1740,7 +1740,9 @@ blocks could use the empty tails.
    - done: the Bootstrap kind ("The Bootstrap kind" below; owner: "Bootstrap kind"): the genesis flag is gone,
      every chain starts at a Bootstrap proof, and the predecessor slot takes Receive, Send or Bootstrap;
    - next: a Pixel run of the fixed point with all three kinds; the witness at 32 rows (about 65k fewer positions
-     in P-recv; it would also bring S-recv back toward 2^18); Bootstrap's comb tables as uniform arrays;
+     in P-recv; it would also bring S-recv back toward 2^18); the wallet's table rows in Send and Receive, once the
+     owner picks how Bootstrap's tables are certified ("Bootstrap's key tables" below: built, and too large for one
+     proof at Receive's layout);
    - then: general bit maps, 14-round partial blocks, one range table, constants in the first half of the rows.
 
 
@@ -2095,14 +2097,71 @@ Bootstrap starts from the zero state with its own activation.
 
 **Not in it.**
 
-- **The wallet's comb tables** (Lever 1): `operation::bootstrap_cost` derives them from the payment key in 34,939
-  rows and 216,205 range lookups at m = 16 (about 253k constraints), one time. No uniform gadget builds them yet.
-  An estimate of the fit: each range lookup is a first-phase chunk and a second-phase helper. The first phase has
-  room (35 rows, 573k positions, against about 250k more cells). The second phase is tight: P-boot uses 9 rows
-  now, the shared layout leaves Bootstrap 64 − 35 − 5 − 3 = 21, and the tables' helpers need about 13 more, so
-  about 22. Building the gadget would settle it; the fallbacks are a lookup-leaner derivation, or the tables as a
-  one-time proof of their own that Bootstrap verifies or the credential binds.
+- **The wallet's comb tables** (Lever 1): built since, and too large to join Bootstrap in one proof at
+  Receive's layout; see "Bootstrap's key tables" below.
 - **The state from one step to the next** (`σ.predecessor = Ω.head`): the spike's own relations are synthetic, so
   the io carries no head and nothing ties a step's input state to its predecessor's output yet. With that tie,
   Bootstrap's zero state is every chain's first head.
 - The ledger's activation record, and the issuer's and the root's own keys for the credential and the certificate.
+
+## Bootstrap's key tables: built, and too large for one proof at Receive's layout (2026-11-12)
+
+Owner: "Yes, build them" (to see whether the full Bootstrap fits). Code: `nonnative::key_tables` (`KeyTables`,
+`KEY_POINTS_TABLE`, the `KT_*` arrays, `kt_value_array`, `kt_check_array`, `kt_addition`), `full::p_boot(gens,
+tables)` and `BootIdx::key_tables`, `p_boot_at` and `key_tables_fit` in `main.rs`. Test:
+`nonnative::tests::key_tables_derive_the_comb_tables`. Logs: `../../output/kagemusha-100x-20261108/spike/runs/claude-keytables-fp-2.log`
+(the fixed point with the one-time measurement) and `claude-keytables-tests-2.log` (all 45 tests);
+`claude-keytables-fp-1.log` tried the tables at every hop before the measurement became one-time.
+
+**What was built.** The derivation Lever 1 needs at Bootstrap: the wallet's two comb tables (m = 16, 2 × 256
+entries) from its key Q, as uniform arrays with the comb's non-native checks.
+
+- Q on the curve, and one doubling chain `P_(s+1) = 2 P_s` of 241 doublings. Every base `B_k = 2^(16 k) Q` is
+  `P_(16 k)`, and its double `2 B_k` is the next point on the chain, so no doubling is spent twice (the census
+  counted 256).
+- A witness table of the 16 bases and their 16 doubles, tied to the chain.
+- Per table, the sum of its eight bases (seven additions; it is entry 255), then a Gray walk of 255 additions of
+  `±2 B_k`, so that every entry `sum_k (2 bit_k(h) - 1) B_(8j+k)` is one step's sum. Walking from entry 255 needs
+  no negated point. Each addend comes from the witness table by a lookup with a per-step index; its sign is a
+  per-step coefficient on its y.
+- A doubling checks the tangent (two products) and the new x and y. An addition checks both slope equations (the
+  comb's rule: equal points can only double) and the new x and y. In all: 241 doublings and 524 additions; 2,055
+  one-product, 242 two-product and 524 four-product checks.
+- Index maps stay structured (slot × step, shifts by one), as in the comb.
+
+The test derives the tables in-circuit and compares every entry with `operation::comb_tables`: every row holds,
+the matrix evaluation matches its entries, the circuit proves and verifies, and a changed walk slope, chain value,
+addend or key point is refused.
+
+**Does Bootstrap fit with them? No.** Measured once at the last hop, each P-boot at its own layout (rows of 2^14
+columns):
+
+| | P-boot without the tables | P-boot with the tables |
+|---|---:|---:|
+| Constraints | 2^18 (127,095 rows) | 2^19 (387,239 rows) |
+| Witness rows: first, link, second phase, fixed | 12 + 1 + 10 + 2 of 32 | 36 + 1 + 35 + 2 of 128 |
+| Cells | 231,597 | 686,653 (+455,056) |
+| Matrix program (products) | 5,672 | 18,310 |
+| Pixel model, kernels of 11-10 | 0.61 s | 1.35 s |
+
+Receive's layout leaves Bootstrap 2^19 constraints and at most 35 + 5 + 21 + 3 rows. The constraints would fit; the
+witness does not: 36 first-phase rows against 35, and 35 second-phase rows against 21 (each of the tables'
+roughly 210k range lookups needs a helper cell in the second phase). The tables also triple Bootstrap's matrix
+program, which every Send and Receive evaluates natively: their fold evaluates all three kinds at every point of q,
+so the P side's native q work would grow by about half again.
+
+**What this leaves (an owner decision).** Every option needs the wallet's table rows in Send and Receive: today the
+experiment's circuits read one key's tables from constant columns, which a production circuit cannot do.
+
+1. **The issuer certifies the tables' commitment in the credential** (recommended). At enrollment the issuer
+   derives the tables from the payment key natively, as it already checks that key, and signs their commitment;
+   Bootstrap already verifies the credential in-circuit and puts the commitment into the zero state. That is the
+   same trust as the payment-key binding itself, Bootstrap stays as built, and native q pays nothing. The
+   commitment depends on the circuit's table rows, which change only with a new wallet generation.
+2. **A two-step start.** The derivation becomes its own first link (no predecessor), and Bootstrap follows it,
+   verifying it. Everything stays proven, at the cost of a fourth kind (a third selector bit), a Bootstrap with a
+   verifier slot, and the derivation's matrix program in every fold (merging its arrays as the comb does would
+   roughly halve that).
+3. **Verifiers derive the commitment from the public payment key.** Not enough on its own: a receiver can check
+   its payer, but the recursion also relies on the tables of every earlier counterparty, whom later verifiers never
+   see.

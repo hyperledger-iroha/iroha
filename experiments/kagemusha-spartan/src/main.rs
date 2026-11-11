@@ -3400,6 +3400,119 @@ fn report_pair(label: &str, l: &LinkedPair, gens: &full::PairGens) -> (bool, boo
     (hp, hs)
 }
 
+/// Bootstrap with the wallet's key tables, measured once: P-boot without and
+/// with them, each at its natural layout of 2^14-column rows (rows by phase,
+/// cells, constraint rows, the matrix program, the Pixel model), against what
+/// Receive's layout `layout` leaves Bootstrap.
+fn key_tables_fit(gens: &full::PairGens, layout: uniform::Layout) {
+    let clock = Instant::now();
+    let measure = |tables: bool| {
+        let (w, idx) = full::p_boot(gens, tables);
+        let (c, _, wit) = uniform_of!("P-uniform", w, 14, 64, b"p-boot-uniform");
+        let (cells, rows) = c.sizes();
+        let (r, pl) = (c.regions(), c.link_phase_rows());
+        let model = pixel_kern(
+            &c.shape,
+            &c.width_classes(&wit.w),
+            rows,
+            r.0 + pl + r.1 + r.2,
+        );
+        let work = c.template_size().1;
+        (
+            c.shape.sx,
+            c.shape.rows(),
+            r,
+            pl,
+            cells,
+            rows,
+            work,
+            model,
+            idx.key_tables,
+        )
+    };
+    let (sx0, rows0, r0, pl0, cells0, crows0, work0, model0, _) = measure(false);
+    let (sx1, rows1, r1, pl1, cells1, crows1, work1, model1, kt) = measure(true);
+    let [dbl, add, c1, c2, c4] = kt.expect("the tables were derived").1;
+    let free2 = (1usize << layout.row_bits) - layout.p1 - layout.pl - layout.fixed;
+    let fits = sx1 <= layout.sx
+        && r1.0 <= layout.p1
+        && pl1 <= layout.pl
+        && r1.1 <= free2
+        && r1.2 <= layout.fixed;
+    println!(
+        "  Bootstrap's key tables, measured once ({:.1} s): {dbl} doublings and {add} additions; {c1} one-product, {c2} two-product and {c4} four-product checks",
+        clock.elapsed().as_secs_f64()
+    );
+    println!(
+        "    P-boot without them: 2^{sx0} constraints ({crows0} rows), {} + {pl0} + {} + {} of {rows0} witness rows, {cells0} cells, matrix-MLE products {work0}; Pixel model {model0}",
+        r0.0, r0.1, r0.2
+    );
+    println!(
+        "    P-boot with them: 2^{sx1} constraints ({crows1} rows), {} + {pl1} + {} + {} of {rows1} witness rows, {cells1} cells (+{}), matrix-MLE products {work1}; Pixel model {model1}",
+        r1.0,
+        r1.1,
+        r1.2,
+        cells1 - cells0
+    );
+    println!(
+        "    Receive's layout leaves Bootstrap 2^{} constraints and at most {} + {} + {free2} + {} rows (first, link, second phase, fixed): with the tables it {}",
+        layout.sx,
+        layout.p1,
+        layout.pl,
+        layout.fixed,
+        if fits { "FITS" } else { "does NOT fit" }
+    );
+}
+
+/// P-boot at P-recv's layout `layout`, without the wallet's key tables:
+/// they do not fit it (`key_tables_fit`). `ZKS_BOOT_TABLES=on` tries them
+/// first and falls back, saying by how much they miss (the build at a target
+/// layout panics when a circuit does not fit; this catches it and builds the
+/// natural layout to measure).
+#[allow(clippy::type_complexity)]
+fn p_boot_at(
+    gens: &full::PairGens,
+    layout: uniform::Layout,
+) -> (
+    uniform::UniformCircuit<iroha_pasta::Fp>,
+    Instance<iroha_pasta::Fp>,
+    Witness<iroha_pasta::Fp>,
+    full::BootIdx,
+) {
+    let want = std::env::var("ZKS_BOOT_TABLES").is_ok_and(|v| v == "on");
+    if want {
+        let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let (w, idx) = full::p_boot(gens, true);
+            let (c, i, wb) = uniform_at!("P-uniform", w, 14, 64, b"p-boot-uniform", layout);
+            (c, i, wb, idx)
+        }));
+        match built {
+            Ok(b) => return b,
+            Err(_) => {
+                let (w, _) = full::p_boot(gens, true);
+                let (c, _, _) = uniform_of!("P-uniform", w, 14, 64, b"p-boot-uniform");
+                let (r, pl) = (c.regions(), c.link_phase_rows());
+                println!(
+                    "  P-boot with the key tables does NOT fit P-recv's layout (2^{} constraints, {} rows: {} + {} + second phase + {} fixed): on its own it needs 2^{} constraints and {} + {pl} + {} + {} of {} rows; built without the tables",
+                    layout.sx,
+                    1usize << layout.row_bits,
+                    layout.p1,
+                    layout.pl,
+                    layout.fixed,
+                    c.shape.sx,
+                    r.0,
+                    r.1,
+                    r.2,
+                    c.shape.rows()
+                );
+            }
+        }
+    }
+    let (w, idx) = full::p_boot(gens, false);
+    let (c, i, wb) = uniform_at!("P-uniform", w, 14, 64, b"p-boot-uniform", layout);
+    (c, i, wb, idx)
+}
+
 /// The recursion's fixed point over the three kinds (`ZKS_HOPS`, default 4).
 /// Each hop builds the uniform Receive pair (P-recv, S-recv) over the
 /// previous hop's Receive pair (the predecessor) and Send pair (the payer's),
@@ -3468,11 +3581,7 @@ fn run_fixed_point() {
             let (c, i, wu) = uniform_at!("S-uniform", w, 13, 62, b"s-send-uniform", sl);
             (c, i, wu, idx)
         };
-        let boot_p = |gens: &full::PairGens| {
-            let (w, idx) = full::p_boot(gens);
-            let (c, i, wb) = uniform_at!("P-uniform", w, 14, 64, b"p-boot-uniform", pl);
-            (c, i, wb, idx)
-        };
+        let boot_p = |gens: &full::PairGens| p_boot_at(gens, pl);
         let boot_s = |gens: &full::PairGens| {
             let (w, idx) = full::s_boot(gens);
             let (c, i, wv) = uniform_at!("S-uniform", w, 13, 62, b"s-boot-uniform", sl);
@@ -3525,6 +3634,12 @@ fn run_fixed_point() {
                 own.digest_perms.len(),
                 own.insertion_values.map_or(0, |a| cb.arrays[a].r_count)
             );
+        }
+        match bidx.key_tables {
+            Some((_, [dbl, add, c1, c2, c4])) => println!(
+                "  P-boot derives the wallet's comb tables (m = 16, 2 x 256 entries) from its key: {dbl} doublings, {add} additions; checks: {c1} one-product, {c2} two-product, {c4} four-product"
+            ),
+            None => println!("  P-boot without the key tables"),
         }
         println!(
             "  split families: P-recv [{}]; S-recv [{}]; P-send [{}]; S-send [{}]; P-boot [{}]; S-boot [{}]",
@@ -3607,6 +3722,7 @@ fn run_fixed_point() {
                 p_breaks.iter().chain(&s_breaks).all(|b| *b),
                 "Bootstrap's kind and accumulator are pinned"
             );
+            key_tables_fit(&gens, cp.layout());
             {
                 fn tape<S: fs::Scalar>(c: &uniform::UniformCircuit<S>) -> String {
                     let ((muls, scales, ops), (regs, slots)) = (c.plan_stats(), c.plan_registers());
@@ -3712,8 +3828,7 @@ fn wallet_chains(
     println!("  wallet chains from Bootstrap pairs, on the hop's circuits:");
     // Wallet B's Bootstrap: the hop's circuits, its own randomness.
     let clock = Instant::now();
-    let (w, _) = full::p_boot(gens);
-    let (cb, ib, wb) = uniform_at!("P-uniform", w, 14, 64, b"p-boot-uniform", pl);
+    let (cb, ib, wb, _) = p_boot_at(gens, pl);
     let (w, _) = full::s_boot(gens);
     let (cv, iv, wv) = uniform_at!("S-uniform", w, 13, 62, b"s-boot-uniform", sl);
     same("Bootstrap (B)", 2, &cb, &cv);

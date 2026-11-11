@@ -1601,7 +1601,7 @@ mod tests {
             keys_p: None,
             keys_s: None,
         };
-        let (w, bp) = p_boot(&gens);
+        let (w, bp) = p_boot(&gens, false);
         assert!(
             bp.own
                 .as_ref()
@@ -3763,6 +3763,9 @@ pub struct BootIdx {
     pub kind_pin: usize,
     /// The empty claim's pinned cells (its late io array is the one before).
     pub empty: usize,
+    /// The wallet's comb tables, when derived: their first array and the
+    /// counts (doublings, additions, one-, two- and four-product checks).
+    pub key_tables: Option<(usize, [usize; 5])>,
 }
 
 /// Bootstrap's shared values: its own kind, so that the pair binding has a
@@ -3772,12 +3775,13 @@ fn boot_values() -> Vec<u128> {
 }
 
 /// Bootstrap's P circuit, the chain's first link: its own relation
-/// (`Op::BOOTSTRAP`), its kind as public io, the pair binding, and as its
-/// accumulator the empty claim, pinned as late io. It has no predecessor
-/// slot: it verifies no proof, so it has no points or scalar side and no
-/// fold. Built at Receive's layout, so that the predecessor slot of a Send
-/// or a Receive takes it.
-pub fn p_boot(gens: &PairGens) -> (Wiring<Fp>, BootIdx) {
+/// (`Op::BOOTSTRAP`), with `tables` the wallet's comb tables derived from its
+/// key (`nonnative::key_tables`, the key its signatures use), its kind as
+/// public io, the pair binding, and as its accumulator the empty claim,
+/// pinned as late io. It has no predecessor slot: it verifies no proof, so
+/// it has no points or scalar side and no fold. Built at Receive's layout,
+/// so that the predecessor slot of a Send or a Receive takes it.
+pub fn p_boot(gens: &PairGens, tables: bool) -> (Wiring<Fp>, BootIdx) {
     let mut w = Wiring::<Fp>::default();
     let gfam = w.family(0, 1);
     let e_out = w.reserve();
@@ -3785,6 +3789,16 @@ pub fn p_boot(gens: &PairGens) -> (Wiring<Fp>, BootIdx) {
     let mut pool = Pool::new(Fp::from(NODE_DOMAIN));
     let (_, pin) = kind_pin(&mut w, gfam, BOOTSTRAP);
     let own_idx = own_relation(&mut w, &mut pool, e_out, e_zero, gfam, &Op::BOOTSTRAP);
+    let key_tables = tables.then(|| {
+        let n = p256::n();
+        let q = p256::mul(&p256::generator(), &p256::scalar_below("receiver-d", &n))
+            .expect("the wallet key");
+        let first = w.arrays.len();
+        let kt = nonnative::key_tables(first, gfam, &q);
+        w.arrays.extend(kt.arrays);
+        w.tables.extend(kt.tables);
+        (first, kt.counts)
+    });
     let values = boot_values();
     let _ = p_binding(&mut w, gfam, &binding_mu(&values), &values);
     let (_, empty) =
@@ -3801,6 +3815,7 @@ pub fn p_boot(gens: &PairGens) -> (Wiring<Fp>, BootIdx) {
             own: Some(own_idx),
             kind_pin: pin,
             empty,
+            key_tables,
         },
     )
 }
@@ -3844,6 +3859,7 @@ pub fn s_boot(gens: &PairGens) -> (Wiring<crate::verifier::Fq>, BootIdx) {
             own: None,
             kind_pin: pin,
             empty,
+            key_tables: None,
         },
     )
 }
