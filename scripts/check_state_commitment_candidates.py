@@ -30,16 +30,26 @@ Without arguments the script checks the tracked file against the tree:
   relation width and constraints from the register count, the equality of
   in-circuit and native hash counts, the storage model from its constants,
   projection statuses from the recorded values, repetition statistics;
-* the measured schema is the schema the tracked State inventory declares:
+* the measured schema is one schema, the one ``workloads.schema`` names:
   every record names the tables, cells and descriptor digest its process
   read, and every native row counted the entries the workload builds over
   that schema;
 * every committed-proof field is null with its reason.
 
+The schema a comparison measured is the schema the tracked State inventory
+declared when it was refreshed: ``--refresh`` writes nothing from runs that
+read another one. When the inventory later declares another schema, the
+comparison remains the record of what was measured. The check prints the
+difference as a ``note:`` line and does not fail on it; covering the new
+schema takes new runs and ``--refresh``.
+
 ``--reproduce`` additionally rebuilds the comparison from the raw records it
 cites and requires the tracked file to be exactly that. The raw records are
 untracked, so this check runs only where the run directories are present; it
-is how an edited measured number is found.
+is how an edited measured number is found. The full descriptor digest of the
+measured schema is not in the raw records, which name its first eight bytes:
+the rebuild keeps the tracked schema identity when it names what the records
+read.
 
 ``--refresh RUN_DIR... --manifest-sha256 SHA256...`` rebuilds the file from externally
 pinned harness run directories
@@ -1197,6 +1207,65 @@ def inventory_schema(repository: Path) -> dict[str, Any]:
         "descriptor_sha256": hashlib.sha256(bytes(descriptor)).hexdigest(),
         "checked_against_registry_by": "measured_schema_is_the_registry_schema_of_the_actual_state",
     }
+
+
+SCHEMA_IDENTITY = (
+    "class", "source", "tables", "cells", "descriptor_bytes", "descriptor_sha256", "checked_against_registry_by"
+)
+# What tells two schema identities apart; the other keys are this script's text.
+SCHEMA_MEASURES = ("tables", "cells", "descriptor_bytes", "descriptor_sha256")
+
+
+def is_schema_identity(schema: Any) -> bool:
+    """Whether `schema` has the keys `inventory_schema` writes, counts and a full SHA-256."""
+    return (
+        isinstance(schema, dict)
+        and sorted(schema) == sorted(SCHEMA_IDENTITY)
+        and all(
+            isinstance(schema[key], int) and not isinstance(schema[key], bool) and schema[key] >= 0
+            for key in ("tables", "cells", "descriptor_bytes")
+        )
+        and isinstance(schema["descriptor_sha256"], str)
+        and re.fullmatch(r"[0-9a-f]{64}", schema["descriptor_sha256"]) is not None
+    )
+
+
+def named_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """What every record of a run over `schema` names: its counts and the first eight bytes of its digest."""
+    return {
+        "class": "measured_deterministic_count",
+        "tables": schema["tables"],
+        "cells": schema["cells"],
+        "descriptor_bytes": schema["descriptor_bytes"],
+        "descriptor_sha256_prefix": schema["descriptor_sha256"][:16],
+    }
+
+
+def schema_notes(summary: Any, repository: Path) -> list[str]:
+    """How the schema a comparison measured differs from the one the inventory declares now.
+
+    The difference is a note, not an inconsistency: the comparison stays the
+    record of what its runs measured. A schema that is not an identity is an
+    error of `check_summary` and gets no note.
+    """
+    workloads = summary.get("workloads") if isinstance(summary, dict) else None
+    schema = workloads.get("schema") if isinstance(workloads, dict) else None
+    if not is_schema_identity(schema):
+        return []
+    declared = inventory_schema(repository)
+    if all(schema[key] == declared[key] for key in SCHEMA_MEASURES):
+        return []
+
+    def described(identity: dict[str, Any]) -> str:
+        return (
+            f"{identity['tables']} tables, {identity['cells']} cells and a {identity['descriptor_bytes']}-byte "
+            f"descriptor (SHA-256 {identity['descriptor_sha256'][:16]}...)"
+        )
+
+    return [
+        f"workloads.schema: the runs measured {described(schema)}; {INVENTORY} now declares {described(declared)}. "
+        "The comparison covers the schema it measured; new runs and --refresh would cover the current one"
+    ]
 
 
 def find_native(native: list[dict[str, Any]], **tags: Any) -> dict[str, Any] | None:
@@ -2491,22 +2560,18 @@ def check_native(
     }
     if listed != actual:
         errors.append("workloads.combinations_run differs from the measured rows")
-    declared = inventory_schema(repository)
-    if workloads.get("schema") != declared:
+    # The schema identity of the comparison, against what every record named
+    # when it ran. The inventory now is compared in `schema_notes`.
+    schema = workloads.get("schema")
+    if not is_schema_identity(schema):
         errors.append(
-            f"workloads.schema is not the schema {INVENTORY} declares: the measurement no longer covers the inventory"
+            f"workloads.schema is not a schema identity of {INVENTORY}: it needs its tables, cells, "
+            "descriptor bytes and full descriptor SHA-256"
         )
-    # What every record named when it ran, against the inventory now.
-    named = {
-        "class": "measured_deterministic_count",
-        "tables": declared["tables"],
-        "cells": declared["cells"],
-        "descriptor_bytes": declared["descriptor_bytes"],
-        "descriptor_sha256_prefix": declared["descriptor_sha256"][:16],
-    }
-    if workloads.get("schema_recorded_by_the_runs") != named:
+    elif workloads.get("schema_recorded_by_the_runs") != named_schema(schema):
         errors.append(
-            f"workloads.schema_recorded_by_the_runs is not the schema {INVENTORY} declares: the runs read another schema"
+            "workloads.schema_recorded_by_the_runs is not the schema workloads.schema names: the runs read another "
+            f"schema (a refresh records the schema {INVENTORY} declares)"
         )
     comparability_ = summary.get("timing_comparability", {})
     try:
@@ -2752,6 +2817,10 @@ def check_sections(summary: dict[str, Any], repository: Path, errors: list[str])
             errors.append(f"workloads.{key} differs from the checker's table")
     # The measured sections carry this script's classes, units, rules and notes.
     template = _assemble_summary([], repository)
+    # The schema digest is an identity read from the inventory, not text of
+    # this script: `check_native` compares it with what the runs named and
+    # `schema_notes` with the inventory as it is now.
+    template["workloads"]["schema"].pop("descriptor_sha256")
     for key, expected in template.items():
         if key not in STATIC_SECTIONS and key != "projections" and isinstance(expected, dict):
             check_static_text(expected, summary.get(key), key, errors)
@@ -2960,6 +3029,13 @@ def reproduction_errors(summary: dict[str, Any], tracked: str, repository: Path,
         )
     except (ValueError, KeyError, OSError) as error:
         return [f"--reproduce: the cited runs do not build a comparison ({error})"]
+    # A rebuild names the schema the inventory declares now. The records name
+    # the counts and the first eight bytes of the digest of the schema they
+    # read, so the tracked identity stands when it is that schema.
+    workloads = summary.get("workloads") if isinstance(summary.get("workloads"), dict) else {}
+    measured = workloads.get("schema")
+    if is_schema_identity(measured) and rebuilt["workloads"]["schema_recorded_by_the_runs"] == named_schema(measured):
+        rebuilt["workloads"]["schema"] = measured
     if render(rebuilt) == tracked:
         return []
     differing = [key for key in rebuilt if summary.get(key) != rebuilt[key]] or ["its rendering"]
@@ -3043,6 +3119,9 @@ def main(argv: list[str] | None = None) -> int:
     if arguments.reproduce and not errors:
         errors = reproduction_errors(summary, path.read_text(), repository,
             expected_observation_contract=expected_contract, expected_delivery=expected_delivery)
+    notes = schema_notes(summary, repository)
+    for note in notes:
+        print(f"note: {note}", file=sys.stderr)
     for error in errors:
         print(error, file=sys.stderr)
     if errors:
@@ -3051,9 +3130,10 @@ def main(argv: list[str] | None = None) -> int:
     native = len(summary["native"]["rows"])
     circuit = len(summary["in_circuit"]["rows"])
     reproduced = " It is exactly what its cited raw records give." if arguments.reproduce else ""
+    earlier = " They measured an earlier State schema than the inventory declares now (see the note)." if notes else ""
     print(
         f"{SUMMARY}: {native} native rows and {circuit} in-circuit rows are classified and match the tree."
-        f"{reproduced} Inventory consistency only; no construction is selected or qualified."
+        f"{earlier}{reproduced} Inventory consistency only; no construction is selected or qualified."
     )
     return 0
 

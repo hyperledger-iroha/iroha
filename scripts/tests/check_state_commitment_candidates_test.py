@@ -1488,7 +1488,8 @@ class TrackedSummary(unittest.TestCase):
             self.assertEqual(runs[entry["first_run"]], runs[entry["further_run"]])
             self.assertGreater(entry["timed_phases"], 0)
             further.setdefault(entry["first_run"], set()).add(entry["further_run"])
-        self.assertIn("native_blake2b", {entry["test"] for entry in table})
+        # A native timing test was run twice, so native timings have a run-to-run figure.
+        self.assertTrue(any(entry["test"].startswith("native_") for entry in table), table)
         rows = self.tracked["native"]["rows"] + self.tracked["in_circuit"]["rows"]
         for row in rows:
             record = row["record"]
@@ -1598,9 +1599,23 @@ class TrackedSummary(unittest.TestCase):
             "is not the largest measured population",
         )
         self.assert_reported(lambda s: s["workloads"]["combinations_run"].pop(), "differs from the measured rows")
-        self.assert_reported(lambda s: s["workloads"]["schema"].__setitem__("tables", 1), "is not the schema")
+        # The schema identity is the one every run named when it ran.
+        self.assert_reported(lambda s: s["workloads"]["schema"].__setitem__("tables", 1), "the runs read another schema")
         self.assert_reported(
-            lambda s: s["workloads"]["schema"].__setitem__("descriptor_sha256", "0" * 64), "is not the schema"
+            lambda s: s["workloads"]["schema"].__setitem__("descriptor_sha256", "0" * 64), "the runs read another schema"
+        )
+        for malformed in (
+            lambda s: s["workloads"]["schema"].__setitem__("descriptor_sha256", s["workloads"]["schema"]["descriptor_sha256"][:16]),
+            lambda s: s["workloads"]["schema"].__setitem__("descriptor_bytes", -1),
+            lambda s: s["workloads"]["schema"].pop("cells"),
+            lambda s: s["workloads"].__setitem__("schema", None),
+        ):
+            self.assert_reported(malformed, "workloads.schema is not a schema identity")
+        # The class, source and registry test of the identity are the checker's
+        # text; its digest is not (test_a_later_inventory_is_a_note_and_not_drift_of_the_measurement).
+        self.assert_reported(
+            lambda s: s["workloads"]["schema"].__setitem__("source", "specs/other.json"),
+            "workloads.schema.source differs from the checker's text",
         )
         # What the runs themselves named when they ran.
         recorded = self.tracked["workloads"]["schema_recorded_by_the_runs"]
@@ -1762,12 +1777,63 @@ class TrackedSummary(unittest.TestCase):
             errors = CHECKER.check_summary(self.tracked, root)
         self.assertTrue(any("engine `FifthTree` (`fifth-tree/v0`) is not a construction of the comparison" in e for e in errors), errors[:4])
 
-    def test_inventory_and_as_built_source_drift_is_reported(self) -> None:
+    def test_a_later_inventory_is_a_note_and_not_drift_of_the_measurement(self) -> None:
+        """The comparison stays the record of the schema its runs read; the inventory may move on."""
         inventory = json.loads((REPOSITORY / CHECKER.INVENTORY).read_text())
         first = json.dumps(next(field["id"] for field in inventory["fields"] if field["role"] == "canonical"))
-        self.assert_source_drift(
-            CHECKER.INVENTORY, first, json.dumps("zz.renamed_table"), "is not the schema", "the runs read another schema"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_tree(root)
+            (root / CHECKER.SUMMARY).write_text(CHECKER.render(self.tracked))
+            path = root / CHECKER.INVENTORY
+            text = path.read_text()
+            self.assertIn(first, text)
+            path.write_text(text.replace(first, json.dumps("zz.renamed_table")))
+            declared = CHECKER.inventory_schema(root)
+            measured = self.tracked["workloads"]["schema"]
+            self.assertNotEqual(declared["descriptor_sha256"], measured["descriptor_sha256"])
+            # Neither the schema nor its digest is an inconsistency of the comparison.
+            self.assertEqual(CHECKER.check_summary(self.tracked, root), [])
+            (note,) = CHECKER.schema_notes(self.tracked, root)
+            self.assertIn(f"the runs measured {measured['tables']} tables, {measured['cells']} cells", note)
+            self.assertIn(measured["descriptor_sha256"][:16], note)
+            self.assertIn(f"{CHECKER.INVENTORY} now declares {declared['tables']} tables", note)
+            self.assertIn(declared["descriptor_sha256"][:16], note)
+            # The command prints it as a note and passes.
+            output, diagnostics = StringIO(), StringIO()
+            with redirect_stdout(output), redirect_stderr(diagnostics):
+                self.assertEqual(CHECKER.main(["--repository", str(root)]), 0)
+            self.assertEqual(diagnostics.getvalue(), f"note: {note}\n")
+            self.assertIn("earlier State schema than the inventory declares now", output.getvalue())
+
+    def test_the_schema_note_compares_only_what_tells_schemas_apart(self) -> None:
+        declared = CHECKER.inventory_schema(REPOSITORY)
+        self.assertEqual(CHECKER.schema_notes({"workloads": {"schema": dict(declared)}}, REPOSITORY), [])
+        # The text keys of the identity are the checker's text, checked elsewhere.
+        self.assertEqual(
+            CHECKER.schema_notes({"workloads": {"schema": dict(declared, source="elsewhere")}}, REPOSITORY), []
         )
+        earlier = dict(declared, tables=declared["tables"] - 1, descriptor_sha256="ab" * 32)
+        (note,) = CHECKER.schema_notes({"workloads": {"schema": earlier}}, REPOSITORY)
+        self.assertIn(f"the runs measured {earlier['tables']} tables", note)
+        self.assertIn("SHA-256 abababababababab...", note)
+        # A schema that is not an identity is an error of check_summary, not a note.
+        for malformed in (None, "schema", {}, dict(declared, descriptor_sha256="ab"), dict(declared, cells=True)):
+            self.assertEqual(CHECKER.schema_notes({"workloads": {"schema": malformed}}, REPOSITORY), [])
+        self.assertEqual(CHECKER.schema_notes({"workloads": []}, REPOSITORY), [])
+        self.assertEqual(CHECKER.schema_notes([], REPOSITORY), [])
+        self.assertEqual(
+            CHECKER.named_schema(declared),
+            {
+                "class": "measured_deterministic_count",
+                "tables": declared["tables"],
+                "cells": declared["cells"],
+                "descriptor_bytes": declared["descriptor_bytes"],
+                "descriptor_sha256_prefix": declared["descriptor_sha256"][:16],
+            },
+        )
+
+    def test_as_built_and_workload_source_drift_is_reported(self) -> None:
         self.assert_source_drift(
             CHECKER.BLAKE2B_GADGET, "pub const ROW_COUNT: usize = 408;", "pub const ROW_COUNT: usize = 409;", "as_built_blake2b_gadget differs", "its source constant differs"
         )
@@ -1994,6 +2060,67 @@ class Refresh(unittest.TestCase):
                 self.assertIn(fragment, output.getvalue())
                 self.assertIn("not written", output.getvalue())
             self.assertEqual((REPOSITORY / CHECKER.SUMMARY).read_text(), tracked)
+
+    def test_runs_over_another_schema_than_the_inventory_are_not_written(self) -> None:
+        """A refresh records the schema the inventory declares; runs that read another one did not measure it."""
+        other = copy.deepcopy(NATIVE)
+        for entry in other["work_counters"]["entries"]:
+            if entry["label"] == "schema.tables":
+                entry["total_units"] -= 1
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = self.run_directory(root, "native", [other], CHECKER.expected_config(REPOSITORY))
+            summary = CHECKER.build_summary(
+                [run], REPOSITORY, manifest_sha256=self.pins([run]), expected_observation_contract="ordinary_native_v1"
+            )
+            self.assertEqual(summary["workloads"]["schema"], INVENTORY_SCHEMA)
+            self.assertEqual(summary["workloads"]["schema_recorded_by_the_runs"]["tables"], INVENTORY_SCHEMA["tables"] - 1)
+            self.assertTrue(
+                any("the runs read another schema" in error for error in CHECKER.check_summary(summary, REPOSITORY))
+            )
+            tracked = (REPOSITORY / CHECKER.SUMMARY).read_text()
+            output = StringIO()
+            with redirect_stdout(output), redirect_stderr(output):
+                self.assertEqual(
+                    CHECKER.main(["--refresh", str(run), "--manifest-sha256", *self.pins([run]), *ORDINARY_OBSERVATION]), 1
+                )
+            self.assertIn("the runs read another schema", output.getvalue())
+            self.assertIn("not written", output.getvalue())
+            self.assertEqual((REPOSITORY / CHECKER.SUMMARY).read_text(), tracked)
+
+    def test_a_reproduction_keeps_the_measured_schema_after_the_inventory_moves_on(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            copy_tree(root)
+            raw = root / CHECKER.RAW_ROOT
+            raw.mkdir(parents=True)
+            config = CHECKER.expected_config(root)
+            runs = [
+                self.run_directory(raw, "native", [NATIVE, SHARED], config),
+                self.run_directory(raw, "latency", [LATENCY, GADGET], config),
+            ]
+            summary = CHECKER.build_summary(
+                runs, root, manifest_sha256=self.pins(runs), expected_observation_contract="ordinary_native_v1"
+            )
+            text = CHECKER.render(summary)
+            inventory = root / CHECKER.INVENTORY
+            fields = json.loads(inventory.read_text())
+            first = json.dumps(next(field["id"] for field in fields["fields"] if field["role"] == "canonical"))
+            inventory.write_text(inventory.read_text().replace(first, json.dumps("zz.renamed_table")))
+            self.assertNotEqual(CHECKER.inventory_schema(root), summary["workloads"]["schema"])
+            # The records still give the tracked file, measured over the schema they name.
+            self.assertEqual(
+                CHECKER.reproduction_errors(summary, text, root, expected_observation_contract="ordinary_native_v1"), []
+            )
+            # An identity that is not the schema the records read is not kept.
+            edited = copy.deepcopy(summary)
+            edited["workloads"]["schema"]["descriptor_sha256"] = "0" * 64
+            self.assertEqual(
+                CHECKER.reproduction_errors(
+                    edited, CHECKER.render(edited), root, expected_observation_contract="ordinary_native_v1"
+                ),
+                ["--reproduce: the tracked comparison is not what its cited runs give; first difference in `workloads`"],
+            )
 
 
 if __name__ == "__main__":
