@@ -8,7 +8,45 @@ use std::{
     io::{self, Write},
     marker::PhantomData,
     rc::Rc,
+    sync::atomic::{AtomicUsize, Ordering},
 };
+
+/// Bounded work and count scopes currently live on any thread.
+///
+/// Unbounded encoding is the common case. While this is zero no thread has
+/// accounting state, so every codec write skips its thread-local lookups. A
+/// scope on another thread only sends this thread to its own (empty) state.
+static BOUNDED_SCOPES: AtomicUsize = AtomicUsize::new(0);
+
+/// Registration of one live bounded scope in [`BOUNDED_SCOPES`].
+pub(super) struct BoundedScope(());
+impl BoundedScope {
+    pub(super) fn register() -> Self {
+        BOUNDED_SCOPES.fetch_add(1, Ordering::Relaxed);
+        Self(())
+    }
+}
+impl Drop for BoundedScope {
+    fn drop(&mut self) {
+        BOUNDED_SCOPES.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// True when some thread holds a bounded scope. A thread always observes its
+/// own registration, which precedes the installation of its accounting state.
+#[inline]
+pub(super) fn any_bounded_scope() -> bool {
+    BOUNDED_SCOPES.load(Ordering::Relaxed) != 0
+}
+
+/// True when this thread's writes are charged to a bounded work or count scope.
+///
+/// Those scopes fix the charge of every measurement and write, so codec paths
+/// that frame a child from its actual output stay off while one is active.
+#[inline]
+pub(super) fn thread_accounting_active() -> bool {
+    any_bounded_scope() && (ACTIVE.get().is_some() || super::encode_writers::count_budget_active())
+}
 
 /// Explicit finite limits. No default and no reset operation is provided.
 #[derive(Debug, Clone, Copy)]
@@ -116,6 +154,7 @@ thread_local! { static ACTIVE: Cell<Option<State>> = const { Cell::new(None) }; 
 
 pub(super) struct Guard {
     _thread: PhantomData<Rc<()>>,
+    _registered: BoundedScope,
 }
 impl Guard {
     pub(super) fn enter(limits: EncodeWorkLimits) -> Result<Self, BoundedEncodeWorkError> {
@@ -125,6 +164,8 @@ impl Guard {
                 first_refusal().expect("active refusal"),
             ));
         }
+        // Registered before the state it guards, so no charge can miss it.
+        let _registered = BoundedScope::register();
         let bytes = CUMULATIVE.get().map_or(limits.max_byte_visits, |budget| {
             budget.byte_visits.min(limits.max_byte_visits)
         });
@@ -142,6 +183,7 @@ impl Guard {
         }));
         Ok(Self {
             _thread: PhantomData,
+            _registered,
         })
     }
     pub(super) fn check(&self) -> Result<(), super::Error> {
@@ -201,7 +243,14 @@ pub fn refuse_encode_source() -> super::Error {
     super::Error::NonCanonicalEncoding
 }
 /// Refuse before forwarding bytes or touching an output/checksum destination.
+#[inline]
 pub(super) fn charge(bytes: usize) -> io::Result<()> {
+    if !any_bounded_scope() {
+        return Ok(());
+    }
+    charge_bounded(bytes)
+}
+fn charge_bounded(bytes: usize) -> io::Result<()> {
     let Some(mut state) = ACTIVE.get() else {
         return Ok(());
     };
@@ -230,7 +279,17 @@ pub(super) struct ValueGuard {
     _thread: PhantomData<Rc<()>>,
 }
 impl ValueGuard {
+    #[inline]
     pub(super) fn enter() -> Result<Self, super::Error> {
+        if !any_bounded_scope() {
+            return Ok(Self {
+                active: false,
+                _thread: PhantomData,
+            });
+        }
+        Self::enter_bounded()
+    }
+    fn enter_bounded() -> Result<Self, super::Error> {
         charge(0)?;
         let Some(mut state) = ACTIVE.get() else {
             return Ok(Self {

@@ -8,8 +8,12 @@ pub(super) fn string_payload(
     before_utf8: impl FnOnce(&[u8]),
 ) -> Result<(&str, usize), Error> {
     let (length, prefix) = read_len_dyn_slice(bytes)?;
-    let end = prefix.checked_add(length).ok_or(Error::LengthMismatch)?;
-    let raw = bytes.get(prefix..end).ok_or(Error::LengthMismatch)?;
+    let end = prefix
+        .checked_add(length)
+        .ok_or_else(|| Error::LengthMismatch)?;
+    let raw = bytes
+        .get(prefix..end)
+        .ok_or_else(|| Error::LengthMismatch)?;
     before_utf8(raw);
     let value = std::str::from_utf8(raw).map_err(|_| Error::InvalidUtf8)?;
     Ok((value, end))

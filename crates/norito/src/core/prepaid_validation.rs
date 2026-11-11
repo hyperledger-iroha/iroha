@@ -80,7 +80,9 @@ pub fn with_prepaid_validation(
         }
     }
     let previous = PREPAID_VALIDATION.get();
-    let next = previous.checked_add(1).ok_or(Error::LengthMismatch)?;
+    let next = previous
+        .checked_add(1)
+        .ok_or_else(|| Error::LengthMismatch)?;
     PREPAID_VALIDATION.set(next);
     let _guard = Guard(previous);
     context.with(validate)

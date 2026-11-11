@@ -35,7 +35,7 @@ impl CounterOwner {
 /// Deduplicated layers cached in a scope node for constant-time lookup.
 const VISIBLE_LAYERS: usize = 8;
 
-struct ScopeNode<'a> {
+pub(super) struct ScopeNode<'a> {
     previous: Option<&'a ScopeNode<'a>>,
     layers: &'a [ActiveDecodeBudgetLayer],
     prior_count: usize,
@@ -43,11 +43,64 @@ struct ScopeNode<'a> {
     // The complete source-order view, computed once when the immutable chain
     // is installed. Valid when `count <= VISIBLE_LAYERS`; longer chains walk.
     visible: [Option<&'a ActiveDecodeBudgetLayer>; VISIBLE_LAYERS],
+    // The tightest stateless limits of the whole chain, computed with it.
+    tightest: TightestLimits,
 }
 
-thread_local! {
-    static ACTIVE: Cell<*const ScopeNode<'static>> = const { Cell::new(core::ptr::null()) };
+/// The tightest stateless limits across every layer of the active chain.
+///
+/// A field length, sequence length or nesting depth is admitted exactly when
+/// every layer admits it, so a value within these bounds needs no layer walk.
+/// A value outside them takes the ordered walk, which names the refusing
+/// layer. Cumulative element and allocation counters are never summarized.
+#[derive(Clone, Copy)]
+pub(super) struct TightestLimits {
+    /// Largest field body every layer admits.
+    pub(super) field_bytes: u64,
+    /// Largest single sequence every layer admits.
+    pub(super) sequence_elements: u64,
+    /// Deepest absolute nesting depth every layer admits.
+    pub(super) depth_ceiling: usize,
 }
+impl TightestLimits {
+    const UNBOUNDED: Self = Self {
+        field_bytes: u64::MAX,
+        sequence_elements: u64::MAX,
+        depth_ceiling: usize::MAX,
+    };
+
+    fn tightened_by(self, layer: &ActiveDecodeBudgetLayer) -> Self {
+        let limits = layer.budget.limits;
+        Self {
+            field_bytes: self.field_bytes.min(limit_to_u64(limits.max_field_bytes())),
+            sequence_elements: self
+                .sequence_elements
+                .min(limit_to_u64(limits.max_sequence_elements())),
+            // A layer refuses `depth - base_depth > max_nesting_depth`.
+            depth_ceiling: self
+                .depth_ceiling
+                .min(layer.base_depth.saturating_add(limits.max_nesting_depth())),
+        }
+    }
+}
+
+/// Tightest stateless limits of the active chain; unbounded without a scope.
+#[inline]
+pub(super) fn tightest_limits() -> TightestLimits {
+    ACTIVE.with(|slot| tightest_limits_of(slot.get()))
+}
+/// Tightest stateless limits of the chain headed by this thread's active `node`.
+#[inline]
+pub(super) fn tightest_limits_of(node: *const ScopeNode<'static>) -> TightestLimits {
+    // SAFETY: `node` was read from this thread's active slot inside the
+    // synchronous scope that installed it, so it is null or still live, as in
+    // `with_active`. Only a copy of its plain limits is returned.
+    unsafe { node.as_ref() }.map_or(TightestLimits::UNBOUNDED, |node| node.tightest)
+}
+
+/// The innermost installed scope node of this thread, kept with the rest of
+/// the decoder state so a field decode reads its limits without another lookup.
+static ACTIVE: DecodeCell<*const ScopeNode<'static>> = DecodeCell(|tls| &tls.budget);
 
 /// Borrowed source-order view; each original counter is charged once even when
 /// a lazy context is reapplied inside the same context.
@@ -207,12 +260,20 @@ fn chained_node<'a>(
                 .expect("live layer slice count fits usize");
         }
     }
+    // Every supplied layer tightens the summary, including one the view hides
+    // as a duplicate counter. The summary is then never looser than the view,
+    // and a value it turns away still reaches the exact ordered walk.
+    let tightest = layers.iter().fold(
+        parent.map_or(TightestLimits::UNBOUNDED, |parent| parent.tightest),
+        TightestLimits::tightened_by,
+    );
     ScopeNode {
         previous: parent,
         layers,
         prior_count: prior.len(),
         count,
         visible,
+        tightest,
     }
 }
 
@@ -256,6 +317,87 @@ mod tests {
             first.with(|| visible.push(assert_cached_view_matches_walk()));
             nest(rest, visible);
         });
+    }
+
+    /// Recompute the summary from the visible layers of the active chain.
+    fn walked_tightest_limits() -> (u64, u64, usize) {
+        with_active(|layers| {
+            layers.iter().fold(
+                (u64::MAX, u64::MAX, usize::MAX),
+                |(field, sequence, depth), layer| {
+                    let limits = layer.budget.limits;
+                    (
+                        field.min(limit_to_u64(limits.max_field_bytes())),
+                        sequence.min(limit_to_u64(limits.max_sequence_elements())),
+                        depth.min(layer.base_depth.saturating_add(limits.max_nesting_depth())),
+                    )
+                },
+            )
+        })
+    }
+
+    fn assert_tightest_limits_match_walk() {
+        let cached = tightest_limits();
+        assert_eq!(
+            (
+                cached.field_bytes,
+                cached.sequence_elements,
+                cached.depth_ceiling
+            ),
+            walked_tightest_limits()
+        );
+    }
+
+    #[test]
+    fn tightest_limits_summarize_every_layer_and_restore_with_the_scope() {
+        assert_tightest_limits_match_walk();
+        assert_eq!(tightest_limits().field_bytes, u64::MAX);
+        let wide = DecodeBudgetContext::new(DecodeLimits::new(100, 4_096, 1_000, 1 << 20, 9));
+        let narrow_field = DecodeBudgetContext::new(DecodeLimits::new(500, 64, 1_000, 1 << 20, 30));
+        let narrow_sequence =
+            DecodeBudgetContext::new(DecodeLimits::new(7, 8_192, 1_000, 1 << 20, 3));
+        wide.with(|| {
+            assert_tightest_limits_match_walk();
+            assert_eq!(tightest_limits().field_bytes, 4_096);
+            assert_eq!(tightest_limits().depth_ceiling, 9);
+            narrow_field.with(|| {
+                assert_tightest_limits_match_walk();
+                assert_eq!(tightest_limits().field_bytes, 64);
+                assert_eq!(tightest_limits().sequence_elements, 100);
+                narrow_sequence.with(|| {
+                    assert_tightest_limits_match_walk();
+                    assert_eq!(tightest_limits().field_bytes, 64);
+                    assert_eq!(tightest_limits().sequence_elements, 7);
+                    assert_eq!(tightest_limits().depth_ceiling, 3);
+                    // A wider layer entered inside cannot relax the chain.
+                    wide.with(assert_tightest_limits_match_walk);
+                });
+                assert_eq!(tightest_limits().sequence_elements, 100);
+            });
+            assert_eq!(tightest_limits().field_bytes, 4_096);
+        });
+        assert_eq!(tightest_limits().depth_ceiling, usize::MAX);
+        // An unbounded layer saturates instead of wrapping its depth ceiling.
+        let unbounded = DecodeBudgetContext::new(DecodeLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+        ));
+        let nested = DecodeBudgetContext::new(DecodeLimits::new(1, 1, 1, 1, 1));
+        nested.with(|| {
+            let _depth = DecodeDepthGuard::enter().expect("one level fits");
+            let inner = DecodeBudgetContext::new(DecodeLimits::new(
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+            ));
+            inner.with(assert_tightest_limits_match_walk);
+        });
+        unbounded.with(|| assert_eq!(tightest_limits().depth_ceiling, usize::MAX));
     }
 
     #[test]

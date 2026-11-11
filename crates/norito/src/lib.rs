@@ -57,7 +57,6 @@ mod json_from_value_fast;
 #[path = "../tests/json_parse_string_allocations.rs"]
 mod json_parse_string_allocations;
 use std::{
-    cell::Cell,
     collections::{BTreeMap, HashMap},
     io::{Read, Write},
     sync::OnceLock,
@@ -246,8 +245,10 @@ pub mod codec {
         expected: &[u8],
     ) -> Result<(), Error> {
         let _context = core::EncodeContextGuard::enter();
-        let mut exact = core::ExactSliceWriter::new(expected);
-        let result = encode_adaptive_into(value, &mut exact);
+        let (result, exact) = {
+            let _flags = core::DecodeFlagsGuard::enter(core::default_encode_flags());
+            core::compare_payload(value, expected)
+        };
         if exact.mismatched() {
             return Err(Error::NonCanonicalEncoding);
         }
@@ -2095,7 +2096,7 @@ pub mod json {
     fn try_decode_vec_with_capacity<T>(entries: usize) -> Result<Vec<T>, Error> {
         let requested_bytes = entries
             .checked_mul(core::mem::size_of::<T>())
-            .ok_or(Error::DecodeResourceLimit)?;
+            .ok_or_else(|| Error::DecodeResourceLimit)?;
         crate::core::reserve_decode_allocation(requested_bytes)
             .map_err(Error::from_decode_resource)?;
         exact_string::allocate(entries)
@@ -4630,12 +4631,13 @@ pub mod json {
                             0xF0..=0xF4 => 4,
                             _ => return Err(Error::InvalidUtf8),
                         };
-                        let scalar_end =
-                            scalar_start.checked_add(width).ok_or(Error::InvalidUtf8)?;
+                        let scalar_end = scalar_start
+                            .checked_add(width)
+                            .ok_or_else(|| Error::InvalidUtf8)?;
                         let scalar_bytes = self
                             .s
                             .get(scalar_start..scalar_end)
-                            .ok_or(Error::InvalidUtf8)?;
+                            .ok_or_else(|| Error::InvalidUtf8)?;
                         debug_assert!(std::str::from_utf8(scalar_bytes).is_ok());
                         self.i = scalar_end;
                         width
@@ -9485,7 +9487,7 @@ fn checked_frame_payload_with_archive_limit<'a, T: NoritoSerialize>(
     let padding = core::payload_alignment_padding_for::<T>();
     let slice = bytes
         .get(core::Header::SIZE..)
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     let payload = core::payload_without_leading_padding_exact(slice, payload_len, padding)?;
     if core::hardware_crc64(payload) != header.checksum {
         return Err(Error::ChecksumMismatch);
@@ -9636,8 +9638,8 @@ pub fn verify_exact_frame<T>(value: &T, expected: &[u8]) -> Result<(), Error>
 where
     T: NoritoSerialize,
 {
-    let mut exact = core::ExactSliceWriter::new(expected);
-    let encode_result = core::write_frame_to_writer(value, &mut exact);
+    let base_flags = core::effective_decode_flags().unwrap_or_else(core::default_encode_flags);
+    let (encode_result, exact) = core::compare_typed_frame::<T, T>(value, expected, base_flags);
     if exact.mismatched() {
         return Err(Error::NonCanonicalEncoding);
     }
@@ -9660,8 +9662,8 @@ pub fn verify_exact_canonical_frame<T>(value: &T, expected: &[u8]) -> Result<(),
 where
     T: NoritoSerialize,
 {
-    let mut exact = core::ExactSliceWriter::new(expected);
-    let encode_result = core::write_canonical_to_writer(value, &mut exact);
+    let (encode_result, exact) =
+        core::compare_typed_frame::<T, T>(value, expected, core::default_encode_flags());
     if exact.mismatched() {
         return Err(Error::NonCanonicalEncoding);
     }
@@ -10061,20 +10063,7 @@ where
 {
     catch_decode_panic(std::any::type_name::<T>(), f)
 }
-/// Run a type-erased field decoder with the same panic policy as [`guarded_try_deserialize`].
-///
-/// Keeping this executor non-generic lets field decoding share the panic and
-/// error machinery while retaining the concrete type name in diagnostics.
-#[inline(never)]
-pub(crate) fn guarded_try_deserialize_erased(
-    type_name: &'static str,
-    decode: &mut dyn FnMut() -> Result<(), Error>,
-) -> Result<(), Error> {
-    catch_decode_panic(type_name, decode)
-}
-thread_local! {
-    static DECODE_PANIC_DEPTH: Cell<u32> = const { Cell::new(0) };
-}
+use crate::core::DECODE_PANIC_DEPTH;
 struct DecodePanicGuard;
 impl DecodePanicGuard {
     fn enter() -> Self {
@@ -10122,7 +10111,7 @@ pub fn decode_panic_suppressed() -> bool {
 }
 #[cfg(test)]
 thread_local! {
-    static SUPPRESSED_DECODE_PANICS: Cell<usize> = const { Cell::new(0) };
+    static SUPPRESSED_DECODE_PANICS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 fn install_decode_panic_hook() {
     static HOOK: OnceLock<()> = OnceLock::new();
@@ -10240,7 +10229,7 @@ where
         |len| {
             let bytes = len
                 .checked_mul(std::mem::size_of::<T>())
-                .ok_or(Error::LengthMismatch)?;
+                .ok_or_else(|| Error::LengthMismatch)?;
             core::reserve_decode_allocation(bytes)?;
             let mut values = Vec::new();
             values
@@ -10272,7 +10261,7 @@ where
         |len| {
             let bytes = len
                 .checked_mul(std::mem::size_of::<T>())
-                .ok_or(Error::LengthMismatch)?;
+                .ok_or_else(|| Error::LengthMismatch)?;
             core::reserve_decode_allocation(bytes)?;
             let mut values = VecDeque::new();
             values
@@ -10324,7 +10313,7 @@ where
         |len| {
             let bytes = len
                 .checked_mul(std::mem::size_of::<T>())
-                .ok_or(Error::LengthMismatch)?;
+                .ok_or_else(|| Error::LengthMismatch)?;
             core::reserve_decode_allocation(bytes)?;
             let mut values = HashSet::new();
             values
@@ -10416,7 +10405,7 @@ where
     ) -> Result<(), Error> {
         let new_remaining = remaining
             .checked_sub(buf.len())
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         reader.read_exact(buf)?;
         *remaining = new_remaining;
         Ok(())
@@ -10471,10 +10460,12 @@ where
     } else {
         8usize
     };
-    let per_entry = len_bytes.checked_mul(2).ok_or(Error::LengthMismatch)?;
+    let per_entry = len_bytes
+        .checked_mul(2)
+        .ok_or_else(|| Error::LengthMismatch)?;
     let min_headers = entries
         .checked_mul(per_entry)
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     if min_headers > remaining {
         return Err(Error::LengthMismatch);
     }
@@ -10544,7 +10535,7 @@ where
         |entries| {
             let bytes = entries
                 .checked_mul(std::mem::size_of::<(K, V)>())
-                .ok_or(Error::LengthMismatch)?;
+                .ok_or_else(|| Error::LengthMismatch)?;
             core::reserve_decode_allocation(bytes)?;
             let mut map = HashMap::new();
             map.try_reserve(entries)
@@ -10781,7 +10772,7 @@ where
                 let tail = match self
                     .payload_len
                     .checked_sub(reader.consumed())
-                    .ok_or(Error::LengthMismatch)
+                    .ok_or_else(|| Error::LengthMismatch)
                     .and_then(|remaining| self.len_decoder.finish(&mut reader, remaining))
                 {
                     Ok(()) => reader,
@@ -10832,7 +10823,7 @@ where
                         match self
                             .payload_len
                             .checked_sub(reader.consumed())
-                            .ok_or(Error::LengthMismatch)
+                            .ok_or_else(|| Error::LengthMismatch)
                             .and_then(|remaining| self.len_decoder.finish(&mut reader, remaining))
                         {
                             Ok(()) => {
@@ -10883,7 +10874,7 @@ where
                         let available = self
                             .payload_len
                             .checked_sub(reader.consumed())
-                            .ok_or(Error::LengthMismatch)?;
+                            .ok_or_else(|| Error::LengthMismatch)?;
                         if len > available {
                             return Err(Error::LengthMismatch);
                         }
@@ -10898,7 +10889,7 @@ where
                 let remaining = self
                     .payload_len
                     .checked_sub(reader.consumed())
-                    .ok_or(Error::LengthMismatch)?;
+                    .ok_or_else(|| Error::LengthMismatch)?;
                 self.len_decoder.finish(&mut reader, remaining)?;
                 Self::finalize(reader, self.payload_len, self.checksum)?;
             }
@@ -10928,7 +10919,7 @@ fn try_resize_decode_buffer(buffer: &mut Vec<u8>, length: usize) -> Result<(), E
     if length > buffer.capacity() {
         let additional = length
             .checked_sub(buffer.len())
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         core::reserve_decode_allocation(additional)?;
         buffer
             .try_reserve(additional)
@@ -10953,7 +10944,7 @@ where
     ) -> Result<(), Error> {
         let new_remaining = remaining
             .checked_sub(buf.len())
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         reader.read_exact(buf)?;
         digest.update(buf);
         *remaining = new_remaining;
@@ -11084,7 +11075,7 @@ where
         ) -> Result<(), Error> {
             let new_remaining = remaining
                 .checked_sub(dst.len())
-                .ok_or(Error::LengthMismatch)?;
+                .ok_or_else(|| Error::LengthMismatch)?;
             src.read_exact(dst)?;
             d.update(dst);
             *remaining = new_remaining;
@@ -11110,10 +11101,12 @@ where
         } else {
             8usize
         };
-        let per_entry = len_bytes.checked_mul(2).ok_or(Error::LengthMismatch)?;
+        let per_entry = len_bytes
+            .checked_mul(2)
+            .ok_or_else(|| Error::LengthMismatch)?;
         let min_headers = entries
             .checked_mul(per_entry)
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         if min_headers > remaining {
             return Err(Error::LengthMismatch);
         }

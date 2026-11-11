@@ -96,16 +96,19 @@ impl SequencePayloadLength {
 
     // Arithmetic only; deliberately private so callers cannot supply fabricated measured lengths.
     fn checked_append(&self, measured: usize) -> Result<Self, Error> {
-        let count = self.count.checked_add(1).ok_or(Error::LengthMismatch)?;
+        let count = self
+            .count
+            .checked_add(1)
+            .ok_or_else(|| Error::LengthMismatch)?;
         u64::try_from(count).map_err(|_| Error::LengthMismatch)?;
         u64::try_from(measured).map_err(|_| Error::LengthMismatch)?;
         let len = self
             .len
             .checked_add(
                 len_prefixed_payload_len_with_flags(measured, self.flags)
-                    .ok_or(Error::LengthMismatch)?,
+                    .ok_or_else(|| Error::LengthMismatch)?,
             )
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         Ok(Self {
             flags: self.flags,
             count,

@@ -1453,8 +1453,9 @@ fn write_len_prefixed_rejects_a_changed_second_pass() {
     let value = HostileGrowingSecondPass(std::cell::Cell::new(0));
     let mut out = Vec::with_capacity(32);
     let initial_capacity = out.capacity();
+    // A streaming destination measures the field, then bounds its write.
     let error = {
-        let mut encoder = Encoder::for_buffer(&mut out);
+        let mut encoder = Encoder::new(&mut out);
         write_len_prefixed(&mut encoder, &value).expect_err("second-pass growth must fail")
     };
     assert!(matches!(error, Error::LengthMismatch));
@@ -1463,6 +1464,25 @@ fn write_len_prefixed_rejects_a_changed_second_pass() {
     assert_eq!(declared, 1);
     assert_eq!(&out[header_bytes..], &[0x11]);
     assert_eq!(out.capacity(), initial_capacity);
+}
+#[test]
+fn write_len_prefixed_frames_a_buffer_field_from_its_single_pass() {
+    let value = HostileGrowingSecondPass(std::cell::Cell::new(0));
+    let mut out = Vec::new();
+    write_len_prefixed(&mut Encoder::for_buffer(&mut out), &value).expect("single pass");
+    assert_eq!(value.0.get(), 1);
+    assert_eq!(out, [1, 0x11]);
+    // The next visit writes the grown payload; its prefix widens to match.
+    let mut grown = Vec::new();
+    write_len_prefixed(&mut Encoder::for_buffer(&mut grown), &value).expect("single pass");
+    assert_eq!(value.0.get(), 2);
+    let payload_len = 1 + HOSTILE_GROWTH_WRITES * HOSTILE_GROWTH_CHUNK_BYTES;
+    let (declared, header_bytes) = read_len_from_slice(&grown).expect("declared field length");
+    assert_eq!(declared, payload_len);
+    assert_eq!(header_bytes, varint_len_prefix_len(payload_len));
+    assert_eq!(grown.len(), header_bytes + payload_len);
+    assert_eq!(grown[header_bytes], 0x11);
+    assert!(grown[header_bytes + 1..].iter().all(|byte| *byte == 0x22));
 }
 #[test]
 fn serialize_to_writer_exact_rejects_growth_before_forwarding_it() {
@@ -2893,16 +2913,17 @@ fn fixed_u64_length_respects_usize_limits() {
             read_seq_len_slice(&buf),
             Err(Error::LengthMismatch)
         ));
-        let result = unsafe { try_read_len_ptr_unchecked(buf.as_ptr()) };
-        assert!(matches!(result, Err(Error::LengthMismatch)));
+        assert!(matches!(
+            read_len_from_slice_with_flags(&buf, 0),
+            Err(Error::LengthMismatch)
+        ));
     } else {
         let len = 42u64;
         let buf = len.to_le_bytes();
         let (value, used) = read_seq_len_slice(&buf).expect("fixed len");
         assert_eq!(value, 42usize);
         assert_eq!(used, 8);
-        let result = unsafe { try_read_len_ptr_unchecked(buf.as_ptr()) };
-        let (value, used) = result.expect("fixed len ptr");
+        let (value, used) = read_len_from_slice_with_flags(&buf, 0).expect("fixed field len");
         assert_eq!(value, 42usize);
         assert_eq!(used, 8);
     }

@@ -338,11 +338,18 @@ fn stateful_serialization_is_an_observation_not_a_later_byte_certificate() {
         assert_eq!(calls.get(), 2);
         let mut actual = Vec::new();
         assert!(matches!(
-            codec::serialize_to_buffer(&vec![Growing(&calls)], &mut actual),
+            codec::serialize_to_writer(&vec![Growing(&calls)], &mut actual),
             Err(Error::LengthMismatch)
         ));
         assert_eq!(measured, snapshot);
         assert_eq!(calls.get(), 4);
+        // A buffer frames the bytes of its single visit, which already differ
+        // from the earlier observation.
+        let mut framed = Vec::new();
+        codec::serialize_to_buffer(&vec![Growing(&calls)], &mut framed).unwrap();
+        assert_eq!(calls.get(), 5);
+        assert_ne!(framed.len(), measured.len());
+        assert_eq!(measured, snapshot);
     }
 }
 

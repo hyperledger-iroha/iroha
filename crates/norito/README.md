@@ -107,6 +107,14 @@ compression, and columnar-layout micro-benchmarks.
 - `ncb_sink_vs_vec`: compares NCB encoders using a simple `Vec<u8>` growth pattern vs the internal `ByteSink` with aligned growth and coalesced writes.
   Run: `cargo bench -p norito --bench ncb_sink_vs_vec`.
 
+`examples/codec_cpu_profile.rs` reports binary encode, decode and
+`decode_canonical` cost per operation in thread CPU time, which stays
+meaningful on a loaded machine where wall-clock benchmarks do not. It covers a
+flat record, a small record with a 128-bit field, a nested block of signed
+records and a block whose transactions carry instructions as nested frames,
+the way `InstructionBox` does.
+Run: `cargo run --release -p norito --example codec_cpu_profile`.
+
 ## Codec features
 
 The shipping `node-codec` aggregate includes compression, columnar encoding,

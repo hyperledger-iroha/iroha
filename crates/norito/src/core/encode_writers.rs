@@ -15,16 +15,23 @@ thread_local! {
 pub(super) struct CountBudgetGuard {
     previous: Option<CountBudget>,
     initial: usize,
+    _registered: super::encode_work::BoundedScope,
 }
 impl CountBudgetGuard {
     pub(super) fn enter(maximum: usize) -> Self {
+        // Registered before the budget it guards, so no charge can miss it.
+        let _registered = super::encode_work::BoundedScope::register();
         let previous = ACTIVE_COUNT_BUDGET.get();
         let initial = previous.map_or(maximum, |budget| maximum.min(budget.remaining));
         ACTIVE_COUNT_BUDGET.set(Some(CountBudget {
             remaining: initial,
             rejected: previous.is_some_and(|budget| budget.rejected),
         }));
-        Self { previous, initial }
+        Self {
+            previous,
+            initial,
+            _registered,
+        }
     }
     pub(super) fn check(&self) -> Result<(), super::Error> {
         if ACTIVE_COUNT_BUDGET
@@ -50,7 +57,18 @@ impl Drop for CountBudgetGuard {
         ACTIVE_COUNT_BUDGET.set(previous);
     }
 }
+/// True when this thread counts under a finite allowance.
+pub(super) fn count_budget_active() -> bool {
+    ACTIVE_COUNT_BUDGET.get().is_some()
+}
+#[inline]
 pub(super) fn charge_counted_bytes(bytes: usize) -> io::Result<()> {
+    if !super::encode_work::any_bounded_scope() {
+        return Ok(());
+    }
+    charge_counted_bytes_bounded(bytes)
+}
+fn charge_counted_bytes_bounded(bytes: usize) -> io::Result<()> {
     let Some(mut budget) = ACTIVE_COUNT_BUDGET.get() else {
         return Ok(());
     };
@@ -186,23 +204,51 @@ impl<'a> ExactSliceWriter<'a> {
     pub(crate) const fn is_complete(&self) -> bool {
         !self.mismatched && self.offset == self.expected.len()
     }
-}
 
-impl Write for ExactSliceWriter<'_> {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+    /// The expected bytes not yet compared.
+    pub(super) fn remaining(&self) -> &'a [u8] {
+        self.expected.get(self.offset..).unwrap_or_default()
+    }
+
+    /// Record a difference found without writing the differing bytes.
+    pub(super) fn mark_mismatch(&mut self) {
+        self.mismatched = true;
+    }
+
+    /// Advance over `len` bytes already proven equal to the expected bytes.
+    pub(super) fn skip_matched(&mut self, len: usize) {
+        match self.offset.checked_add(len) {
+            Some(end) if end <= self.expected.len() => self.offset = end,
+            _ => {
+                self.mismatched = true;
+                self.offset = self.expected.len();
+            }
+        }
+    }
+
+    /// Compare `bytes` with the next expected bytes. A difference, including
+    /// running past the expected end, is recorded and never reported as an
+    /// I/O error, so the serializer always runs to completion.
+    pub(super) fn compare(&mut self, bytes: &[u8]) {
         let Some(end) = self.offset.checked_add(bytes.len()) else {
             self.mismatched = true;
-            return Ok(bytes.len());
+            return;
         };
         let Some(expected) = self.expected.get(self.offset..end) else {
             self.mismatched = true;
             self.offset = self.expected.len();
-            return Ok(bytes.len());
+            return;
         };
         if expected != bytes {
             self.mismatched = true;
         }
         self.offset = end;
+    }
+}
+
+impl Write for ExactSliceWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.compare(bytes);
         Ok(bytes.len())
     }
 

@@ -95,8 +95,9 @@ impl SerializePayload for Growing {
     let value = Box::new(Growing(Cell::new(0)));
     let mut buf = Vec::with_capacity(32);
     let initial_capacity = buf.capacity();
+    // A streaming destination measures the payload, then bounds its write.
     assert!(matches!(
-        serialize_to_buffer(&value, &mut buf),
+        serialize_to_writer(&value, &mut buf),
         Err(Error::LengthMismatch)
     ));
     assert_eq!(value.0.get(), 2);
@@ -104,5 +105,13 @@ impl SerializePayload for Growing {
     assert_eq!(used, buf.len());
     assert_eq!(payload, &[0x11]);
     assert_eq!(buf.capacity(), initial_capacity);
+    // A buffer serializes once and frames exactly the bytes written.
+    let value = Box::new(Growing(Cell::new(0)));
+    let mut framed = Vec::new();
+    serialize_to_buffer(&value, &mut framed).expect("single-pass owned payload");
+    assert_eq!(value.0.get(), 1);
+    let (payload, used) = parse_owned_payload(&framed).expect("parse owned payload");
+    assert_eq!(used, framed.len());
+    assert_eq!(payload, &[0x11]);
     reset_decode_state();
 }

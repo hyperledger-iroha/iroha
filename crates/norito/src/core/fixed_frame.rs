@@ -61,7 +61,7 @@ impl<T: NoritoSerialize> FixedFrameLayout<T> {
         let frame_len = Header::SIZE
             .checked_add(padding)
             .and_then(|len| len.checked_add(payload_len))
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         let payload_len_u64 = u64::try_from(payload_len).map_err(|_| Error::LengthMismatch)?;
         payload_len_to_usize(payload_len_u64)?;
         Ok(Self {

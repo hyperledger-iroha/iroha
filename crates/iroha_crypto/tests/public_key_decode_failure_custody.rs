@@ -431,11 +431,21 @@ fn fresh_thread_byte_sequence_relations_allocate_zero() {
 fn arbitrary_decoder_hook_has_separate_cold_process_custody() {
     const CHILD: &str = "IROHA_TEST_PUBLIC_KEY_HOOK_CHILD";
     if std::env::var_os(CHILD).is_some() {
-        let (cold, cold_calls) = observe(|| norito::core::decode_field_canonical::<u8>(&[0x41]));
-        assert_eq!(cold.unwrap(), (0x41, 1));
+        // A fixed-width scalar field is decoded in place. No arbitrary decoder
+        // runs for it, so even a cold process installs no panic hook.
+        let (scalar, scalar_calls) =
+            observe(|| norito::core::decode_field_canonical::<u8>(&[0x41]));
+        assert_eq!(scalar.unwrap(), (0x41, 1));
+        assert_eq!(scalar_calls, 0);
+        // Any other field type runs an arbitrary decoder under the hook, whose
+        // process-lived box is the single cold allocation.
+        let (cold, cold_calls) =
+            observe(|| norito::core::decode_field_canonical::<Option<u8>>(&[0]));
+        assert_eq!(cold.unwrap(), (None, 1));
         assert_eq!(cold_calls, 1);
-        let (warm, warm_calls) = observe(|| norito::core::decode_field_canonical::<u8>(&[0x41]));
-        assert_eq!(warm.unwrap(), (0x41, 1));
+        let (warm, warm_calls) =
+            observe(|| norito::core::decode_field_canonical::<Option<u8>>(&[0]));
+        assert_eq!(warm.unwrap(), (None, 1));
         assert_eq!(warm_calls, 0);
         return;
     }

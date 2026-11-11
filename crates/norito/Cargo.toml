@@ -238,5 +238,9 @@ chunks_exact_to_as_chunks = "allow"
 explicit_counter_loop = "allow"
 for_kv_map = "allow"
 question_mark = "allow"
+# Deliberate, not a pending fix: `ok_or_else(|| Error::..)` keeps the error
+# off the success path. `ok_or(Error::..)` builds an `Error` for every `Some`
+# and then drops it through an out-of-line call, which was measurable in
+# every decoded field.
 unnecessary_lazy_evaluations = "allow"
 unnecessary_sort_by = "allow"

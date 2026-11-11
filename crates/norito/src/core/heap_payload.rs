@@ -40,7 +40,7 @@ pub(super) fn serialize<T: SerializePayload + Ord>(
     let allocation_bytes = heap
         .len()
         .checked_mul(core::mem::size_of::<&T>())
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     reserve_decode_allocation(allocation_bytes)?;
     items
         .try_reserve_exact(heap.len())
@@ -66,7 +66,7 @@ pub(super) fn serialize<T: SerializePayload + Ord>(
             let start = arena_bytes;
             arena_bytes = arena_bytes
                 .checked_add(length)
-                .ok_or(Error::LengthMismatch)?;
+                .ok_or_else(|| Error::LengthMismatch)?;
             keys.push(TiePayload {
                 index,
                 start,
@@ -130,5 +130,5 @@ pub(super) fn serialize<T: SerializePayload + Ord>(
     )?;
     (next_key == keys.len())
         .then_some(())
-        .ok_or(Error::LengthMismatch)
+        .ok_or_else(|| Error::LengthMismatch)
 }

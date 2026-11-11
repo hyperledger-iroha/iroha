@@ -261,12 +261,37 @@ encoding:
 - Every other sequence element is `[len][payload]`, with `len` encoded per
   `COMPACT_LEN`.
 
-Encoders compute length-delimited fields with a real counting pass, then stream
-payloads directly into the destination. They do not retain a second copy of the
-encoded payload. The write pass verifies every counted length and fails with a
-length mismatch if a stateful serializer changes between passes.
-Allocation failures in temporary codec buffers are returned as errors rather
-than using infallible `Vec` growth. These rules do not change the v1 bytes.
+Encoders never trust a declared length and never retain a second copy of the
+encoded payload. How a length-delimited field obtains its length depends on the
+destination:
+
+- A byte buffer (`to_bytes`, `encode_canonical`, bare payload buffers) reserves
+  the prefix, serializes the child once and writes the length of the bytes that
+  child produced. A compact prefix reserves one byte; a child of 128 bytes or
+  more moves up once to admit its wider varint. The length cannot disagree with
+  the payload, and nesting depth does not multiply the work.
+- A length-only destination adds the child's bytes to its own total and then
+  the prefix they require, again in one pass.
+- An exact comparison (`decode_canonical`, `verify_exact_frame`,
+  `verify_exact_canonical_frame`, `codec::verify_exact_payload`, prepared and
+  nominal-text frame checks, and the canonical field fallback) reads each
+  child's length from the expected bytes instead of measuring the child. The
+  child is then compared within exactly that length. The bytes match exactly
+  when the declared prefix decodes canonically to `L`, the child writes exactly
+  `L` bytes, and those bytes match; canonical varint decoding admits only the
+  shortest encoding, so this is the measured path's verdict without its
+  measuring pass. A top-level frame compares its payload first, then the header
+  those payload bytes determine. Comparison allocates nothing.
+- Any other streaming destination (a writer or a checksum) must emit the length
+  first. It measures the child with a counting pass, then constrains the write
+  to that length and fails with a length mismatch if a stateful serializer
+  changes between the two passes.
+- A bounded work or count scope (`with_bounded_encode_work`,
+  `encoded_payload_len_bounded`) fixes the charge of every measurement and
+  write, so every destination measures first while one is active.
+
+All of these produce identical bytes and verdicts. Allocation failures in temporary codec
+buffers are returned as errors rather than using infallible `Vec` growth.
 The field writer takes only its destination and value. Generated serializers
 and manual callers do not construct per-field scratch buffers.
 
@@ -291,9 +316,17 @@ writers retain their checked count/write behavior and all v1 bytes are unchanged
 Embedded instruction frames retain the counting destination through a
 codec-owned prefix writer. A size-only pass measures the concrete payload and
 adds the fixed header/alignment overhead; it does not construct a checksum writer.
-Actual frame output still computes and checks length, checksum, and finalized
-flags across its two passes. The tuple prefix runs in the enclosing layout
-context. `ConstVec` retains individually framed byte elements; `SmallVec`
+A byte buffer appends the payload once, reads its length, checksum and layout
+flags from those bytes, appends the prefix, header and padding, and rotates them
+in front of the payload without scratch storage. An exact comparison counts the
+payload once, compares the prefix and header (a matching payload's checksum is
+the checksum of the expected bytes it must match), then compares the payload
+within its counted length. Other streaming output still computes and checks
+length, checksum, and finalized flags across two passes. The prefix runs in the
+enclosing layout context and receives the frame's destination; it is
+higher-ranked over that destination's lifetime, so it can swap in only a
+`'static` destination, and a swapped destination fails the frame with
+`NonCanonicalEncoding`. `ConstVec` retains individually framed byte elements; `SmallVec`
 retains fixed-width element length prefixes.
 
 Buffered frame encoders compute the payload CRC64 once over the finished bytes;
@@ -334,8 +367,10 @@ layout:
 
 ### Counted length framing and encode depth
 
-Every length-delimited field is sized by running its serializer against a
-counting sink. Norito then emits that measured length and constrains the output
+A streaming destination sizes every length-delimited field by running its
+serializer against a counting sink (buffers and length-only destinations frame
+each child from its actual output instead; see [Length Prefixes](#length-prefixes)).
+Norito then emits that measured length and constrains the output
 pass to the same byte count. Nested counted children share the original encoder
 and an active exact-length scope: successful writes advance one offset, and
 scopes enforce the smaller child/enclosing end before forwarding bytes. This
@@ -343,7 +378,7 @@ avoids routing each emitted byte through a separate writer for every ancestor.
 Overruns remain sticky even when a serializer suppresses an I/O error; short
 successful writes fail the final exact-length check. The arbitrary-writer
 `serialize_to_writer_exact` seam still verifies actual output separately.
-`codec::verify_exact_payload` streams the fixed V1 bare encoding over retained
+`codec::verify_exact_payload` compares the fixed V1 bare encoding with retained
 source bytes and rejects byte drift, overrun and trailing suffixes. It creates no
 second output buffer and restores the ambient encode context. Custom serializers
 still own their scratch allocations. Native lane batch decoding borrows its
@@ -365,6 +400,13 @@ Use `canonical_frame_len` to count the exact uncompressed V1 frame emitted by
 Both ignore ambient layout guards and restore the caller's guard on return.
 The lower-level `core::encoded_frame_len` follows the active layout, matching
 the corresponding layout-aware encoder.
+
+Fixed-width scalar fields (`u8`..`u128`, `i8`..`i128`, `usize`, `isize`,
+`bool`, `char`, `f32`, `f64`, and the `NonZero` integers) are decoded in place
+from their declared span. The decoder applies the same per-field ceiling,
+nesting-level check, exact-width requirement and access record as the general
+field decoder, in the same order, without installing a nested payload context.
+A differential test holds the two decoders to identical results and errors.
 
 Derive-generated serializers and length diagnostics also enforce
 `MAX_VALUE_NESTING_DEPTH`. Recursive in-memory values therefore return a

@@ -51,7 +51,7 @@ pub fn decode_byte_element_sequence_into(
 
 /// The scalar relation shared by u8 slice, archived and element decoding.
 pub(super) fn read_byte_value(bytes: &[u8]) -> Result<u8, Error> {
-    bytes.first().copied().ok_or(Error::LengthMismatch)
+    bytes.first().copied().ok_or_else(|| Error::LengthMismatch)
 }
 
 /// Little-endian fixed-width length one; its first byte is also the compact varint `1`.
@@ -214,12 +214,14 @@ pub fn visit_binary_sequence_with_count(
     }
     validate_binary_sequence_reservation(bytes, flags, count)?;
     for _ in 0..count {
-        let tail = bytes.get(offset..).ok_or(Error::LengthMismatch)?;
+        let tail = bytes.get(offset..).ok_or_else(|| Error::LengthMismatch)?;
         let (elem_len, header_len) = read_len_from_slice_with_flags(tail, flags)?;
         let start = offset
             .checked_add(header_len)
-            .ok_or(Error::LengthMismatch)?;
-        let end = start.checked_add(elem_len).ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
+        let end = start
+            .checked_add(elem_len)
+            .ok_or_else(|| Error::LengthMismatch)?;
         if end > bytes.len() {
             return Err(Error::LengthMismatch);
         }

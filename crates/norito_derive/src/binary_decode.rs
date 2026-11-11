@@ -30,15 +30,14 @@ fn sequential_deserialize_value(
         );
         quote! {
             (|| -> ::core::result::Result<#ty, norito::core::Error> {
-                let (base, total) = norito::core::payload_ctx()
-                    .ok_or(norito::core::Error::MissingPayloadContext)?;
-                let start = (ptr as usize).saturating_sub(base);
-                let payload = unsafe {
-                    std::slice::from_raw_parts(base as *const u8, total)
+                // The codec bounds this record's bytes against the active
+                // payload; no pointer arithmetic or `unsafe` is generated.
+                let field_data = match norito::core::payload_slice_from_ptr(ptr)?.get(offset..) {
+                    ::core::option::Option::Some(field_data) => field_data,
+                    ::core::option::Option::None => {
+                        return ::core::result::Result::Err(norito::core::Error::LengthMismatch);
+                    }
                 };
-                let field_data = payload
-                    .get(start + offset..)
-                    .ok_or(norito::core::Error::LengthMismatch)?;
                 let (value, consumed) =
                     <#ty as norito::core::DecodeFromSlice>::decode_from_slice(field_data)?;
                 offset += consumed;

@@ -1,5 +1,8 @@
 //! Serialization destinations used by the Norito core codec.
-use super::{ByteSink, Error, encode_writers::LengthCountingWriter};
+use super::{
+    ByteSink, Error,
+    encode_writers::{ExactSliceWriter, LengthCountingWriter},
+};
 use std::io::{self, Write};
 /// Non-generic destination used by [`super::NoritoSerialize`] implementations.
 ///
@@ -17,7 +20,72 @@ enum EncoderSink<'a> {
     ByteSink(&'a mut ByteSink),
     Writer(&'a mut dyn Write),
     Counting(&'a mut LengthCountingWriter),
+    /// Compares every byte with an expected encoding instead of storing it.
+    Compare(Comparison<'a>),
 }
+/// Expected bytes under comparison and the innermost length they declared.
+struct Comparison<'a> {
+    exact: ExactSliceWriter<'a>,
+    /// End, in exact-scope coordinates, of the innermost child whose length
+    /// was read from the expected bytes. Writing past it is a byte mismatch,
+    /// whereas writing past a measured bound is the serializer's own error.
+    claimed_end: Option<usize>,
+}
+/// Width of a fixed little-endian `u64` length prefix.
+const FIXED_PREFIX_LEN: usize = 8;
+
+#[inline]
+fn reserve_prefix(buffer: &mut Vec<u8>, compact: bool) {
+    if compact {
+        buffer.push(0);
+    } else {
+        buffer.extend_from_slice(&[0; FIXED_PREFIX_LEN]);
+    }
+}
+
+/// Fill the prefix reserved at `prefix_at` with the length of the bytes after it.
+///
+/// A compact prefix reserves one byte, which covers every payload shorter than
+/// 128 bytes. A longer payload moves up once to admit its wider varint.
+#[inline]
+fn patch_prefix(
+    buffer: &mut Vec<u8>,
+    prefix_at: usize,
+    reserved: usize,
+    compact: bool,
+) -> Result<(), Error> {
+    let body_at = prefix_at
+        .checked_add(reserved)
+        .filter(|body_at| *body_at <= buffer.len())
+        .ok_or_else(|| Error::LengthMismatch)?;
+    let length = buffer.len() - body_at;
+    if compact && length < 0x80 {
+        buffer[prefix_at] = length as u8;
+        return Ok(());
+    }
+    patch_wide_prefix(buffer, prefix_at, body_at, compact)
+}
+fn patch_wide_prefix(
+    buffer: &mut Vec<u8>,
+    prefix_at: usize,
+    body_at: usize,
+    compact: bool,
+) -> Result<(), Error> {
+    let body_end = buffer.len();
+    let length = u64::try_from(body_end - body_at).map_err(|_| Error::LengthMismatch)?;
+    if !compact {
+        buffer[prefix_at..body_at].copy_from_slice(&length.to_le_bytes());
+        return Ok(());
+    }
+    let mut varint = [0_u8; super::MAX_VARINT_BYTES];
+    let used = super::encode_varint(length, &mut varint);
+    let widened = used - (body_at - prefix_at);
+    buffer.resize(body_end + widened, 0);
+    buffer.copy_within(body_at..body_end, body_at + widened);
+    buffer[prefix_at..prefix_at + used].copy_from_slice(&varint[..used]);
+    Ok(())
+}
+
 // The only scoped state is the active bound. Actual successful writes and an
 // observed overrun survive errors and unwind, including errors a child ignores.
 struct ExactLengthScope<'scope, 'sink> {
@@ -27,6 +95,21 @@ struct ExactLengthScope<'scope, 'sink> {
 impl Drop for ExactLengthScope<'_, '_> {
     fn drop(&mut self) {
         self.encoder.limit = self.previous_limit;
+    }
+}
+// A child whose length the expected bytes declared: restores the enclosing
+// bound and claimed end on return and unwind.
+struct ClaimedLengthScope<'scope, 'sink> {
+    encoder: &'scope mut Encoder<'sink>,
+    previous_limit: Option<usize>,
+    previous_claimed_end: Option<usize>,
+}
+impl Drop for ClaimedLengthScope<'_, '_> {
+    fn drop(&mut self) {
+        self.encoder.limit = self.previous_limit;
+        if let EncoderSink::Compare(comparison) = &mut self.encoder.sink {
+            comparison.claimed_end = self.previous_claimed_end;
+        }
     }
 }
 impl<'a> Encoder<'a> {
@@ -62,6 +145,74 @@ impl<'a> Encoder<'a> {
         matches!(self.sink, EncoderSink::Counting(_))
     }
 
+    /// Run `body` against an encoder that compares with `expected`.
+    ///
+    /// Returns the body's result and the comparison, whose verdict is that of
+    /// serializing into an [`ExactSliceWriter`] over `expected`.
+    pub(super) fn compare_against<R>(
+        expected: &'a [u8],
+        body: impl FnOnce(&mut Encoder<'a>) -> R,
+    ) -> (R, ExactSliceWriter<'a>) {
+        let mut encoder = Self::with_sink(EncoderSink::Compare(Comparison {
+            exact: ExactSliceWriter::new(expected),
+            claimed_end: None,
+        }));
+        let result = body(&mut encoder);
+        let exact = match encoder.sink {
+            EncoderSink::Compare(comparison) => comparison.exact,
+            _ => {
+                let mut exact = ExactSliceWriter::new(expected);
+                exact.mark_mismatch();
+                exact
+            }
+        };
+        (result, exact)
+    }
+
+    /// Whether this encoder compares with expected bytes, outside any bounded
+    /// work or count scope, with no overrun observed.
+    pub(super) fn compares_in_place(&self) -> bool {
+        matches!(self.sink, EncoderSink::Compare(_))
+            && !self.rejected_write
+            && !super::encode_work::thread_accounting_active()
+    }
+
+    /// The `len` expected bytes that follow the next `skip`, when present.
+    pub(super) fn compare_upcoming(&self, skip: usize, len: usize) -> Option<&[u8]> {
+        let EncoderSink::Compare(comparison) = &self.sink else {
+            return None;
+        };
+        let start = skip;
+        comparison
+            .exact
+            .remaining()
+            .get(start..start.checked_add(len)?)
+    }
+
+    /// Record a byte difference found without writing the differing bytes.
+    pub(super) fn mark_compare_mismatch(&mut self) {
+        if let EncoderSink::Compare(comparison) = &mut self.sink {
+            comparison.exact.mark_mismatch();
+        }
+    }
+
+    /// The owned buffer this encoder appends to, when bytes may be placed in
+    /// it after the fact: no exact-length scope bounds the writes, no overrun
+    /// was observed, and no bounded work or count scope fixes their charges.
+    pub(super) fn in_place_buffer(&mut self) -> Option<&mut Vec<u8>> {
+        if self.limit.is_some()
+            || self.rejected_write
+            || super::encode_work::thread_accounting_active()
+        {
+            return None;
+        }
+        match &mut self.sink {
+            EncoderSink::Buffer(buffer) => Some(buffer),
+            EncoderSink::ByteSink(sink) => Some(&mut sink.buf),
+            EncoderSink::Writer(_) | EncoderSink::Counting(_) | EncoderSink::Compare(_) => None,
+        }
+    }
+
     #[cold]
     fn reject_overrun(&mut self) -> io::Error {
         self.rejected_write = true;
@@ -86,6 +237,12 @@ impl<'a> Encoder<'a> {
             return Err(self.reject_overrun());
         };
         if self.limit.is_some_and(|limit| end > limit) {
+            if let EncoderSink::Compare(comparison) = &mut self.sink
+                && comparison.claimed_end.is_some_and(|claimed| end > claimed)
+            {
+                // The child outgrew the length the expected bytes declared.
+                comparison.exact.mark_mismatch();
+            }
             return Err(self.reject_overrun());
         }
         Ok(end)
@@ -127,7 +284,171 @@ impl<'a> Encoder<'a> {
         result?;
         (scope.encoder.written == expected_end)
             .then_some(())
-            .ok_or(Error::LengthMismatch)
+            .ok_or_else(|| Error::LengthMismatch)
+    }
+
+    /// Frame `value` as `[len][payload]` from the bytes it actually writes.
+    ///
+    /// A buffer destination reserves the prefix, serializes the child once and
+    /// patches the prefix with the written length. A counting destination adds
+    /// the child's bytes to its own total and then the prefix they require.
+    /// Neither measures the child in a separate pass, so nesting depth no
+    /// longer multiplies the work, and a length can never disagree with the
+    /// bytes it frames. The emitted bytes equal the measured path's.
+    ///
+    /// Returns `Ok(false)` without writing when the caller must use the
+    /// measured path: a streaming destination needs the length before the
+    /// payload, an exact-length scope bounds each write as it happens, and a
+    /// bounded work or count scope fixes the charge of every measurement.
+    ///
+    /// # Errors
+    /// Propagates the child's error. The destination then holds the reserved
+    /// prefix and a payload prefix, which the caller must discard.
+    pub(super) fn write_framed_child(
+        &mut self,
+        value: &dyn super::SerializePayload,
+        prefix: super::LengthPrefix,
+    ) -> Result<bool, Error> {
+        if self.rejected_write || super::encode_work::thread_accounting_active() {
+            return Ok(false);
+        }
+        let compact = match prefix {
+            super::LengthPrefix::Layout(flags) => super::compact_len_enabled_for_flags(flags),
+            super::LengthPrefix::Fixed => false,
+        };
+        if matches!(self.sink, EncoderSink::Compare(_)) {
+            self.compare_framed_child(value, compact)?;
+            return Ok(true);
+        }
+        if self.limit.is_some() {
+            return Ok(false);
+        }
+        let reserved = if compact { 1 } else { FIXED_PREFIX_LEN };
+        let prefix_at = match &mut self.sink {
+            EncoderSink::Buffer(buffer) => {
+                let at = buffer.len();
+                reserve_prefix(buffer, compact);
+                at
+            }
+            EncoderSink::ByteSink(sink) => {
+                let at = sink.buf.len();
+                sink.ensure_capacity(reserved);
+                reserve_prefix(&mut sink.buf, compact);
+                at
+            }
+            EncoderSink::Counting(counter) => counter.len,
+            EncoderSink::Writer(_) | EncoderSink::Compare(_) => return Ok(false),
+        };
+        value.serialize(self)?;
+        if self.rejected_write {
+            return Err(Error::LengthMismatch);
+        }
+        match &mut self.sink {
+            EncoderSink::Buffer(buffer) => patch_prefix(buffer, prefix_at, reserved, compact)?,
+            EncoderSink::ByteSink(sink) => {
+                patch_prefix(&mut sink.buf, prefix_at, reserved, compact)?;
+            }
+            EncoderSink::Counting(counter) => {
+                let length = counter
+                    .len
+                    .checked_sub(prefix_at)
+                    .ok_or_else(|| Error::LengthMismatch)?;
+                let prefix_len = if compact {
+                    super::varint_encoded_len(
+                        u64::try_from(length).map_err(|_| Error::LengthMismatch)?,
+                    )
+                } else {
+                    FIXED_PREFIX_LEN
+                };
+                counter.add(prefix_len)?;
+            }
+            EncoderSink::Writer(_) | EncoderSink::Compare(_) => return Err(Error::LengthMismatch),
+        }
+        if compact {
+            super::note_compact_len_emitted();
+        }
+        Ok(true)
+    }
+
+    /// Compare `[len][payload]` with the expected bytes in one pass.
+    ///
+    /// The expected bytes declare the length. The verdict equals that of the
+    /// measured path: its output matches exactly when the declared prefix is
+    /// the canonical prefix of a length `L`, the child writes exactly `L`
+    /// bytes, and those bytes match. Canonical varint decoding admits only the
+    /// shortest encoding, so a matching prefix is byte-identical to the one
+    /// the measured path would write.
+    ///
+    /// # Errors
+    /// Reports a difference as [`Error::NonCanonicalEncoding`] with the
+    /// mismatch recorded; propagates the child's own errors.
+    fn compare_framed_child(
+        &mut self,
+        value: &dyn super::SerializePayload,
+        compact: bool,
+    ) -> Result<(), Error> {
+        let EncoderSink::Compare(comparison) = &mut self.sink else {
+            return Err(Error::LengthMismatch);
+        };
+        let remaining = comparison.exact.remaining();
+        let declared = if compact {
+            super::decode_varint_from_slice(remaining).ok()
+        } else {
+            remaining
+                .first_chunk::<FIXED_PREFIX_LEN>()
+                .map(|prefix| (u64::from_le_bytes(*prefix), FIXED_PREFIX_LEN))
+        };
+        let Some((length, prefix_len)) =
+            declared.and_then(|(length, used)| Some((usize::try_from(length).ok()?, used)))
+        else {
+            // No canonical prefix of any length is there.
+            comparison.exact.mark_mismatch();
+            return Err(Error::NonCanonicalEncoding);
+        };
+        // The declared prefix stands for the bytes the measured path writes.
+        if self.limit.is_some() {
+            self.written = self.admitted_end(prefix_len)?;
+        }
+        if let EncoderSink::Compare(comparison) = &mut self.sink {
+            comparison.exact.skip_matched(prefix_len);
+        }
+        if compact {
+            super::note_compact_len_emitted();
+        }
+        let previous_limit = self.limit;
+        if previous_limit.is_none() {
+            // Each outermost child starts a fresh relative coordinate system.
+            self.written = 0;
+        }
+        let end = match self.written.checked_add(length) {
+            Some(end) if previous_limit.is_none_or(|limit| end <= limit) => end,
+            // The declared child extends past its enclosing value.
+            _ => {
+                self.mark_compare_mismatch();
+                return Err(Error::NonCanonicalEncoding);
+            }
+        };
+        let previous_claimed_end = match &mut self.sink {
+            EncoderSink::Compare(comparison) => comparison.claimed_end.replace(end),
+            _ => None,
+        };
+        self.limit = Some(end);
+        let scope = ClaimedLengthScope {
+            encoder: self,
+            previous_limit,
+            previous_claimed_end,
+        };
+        let result = value.serialize(scope.encoder);
+        if scope.encoder.rejected_write {
+            return Err(Error::LengthMismatch);
+        }
+        result?;
+        if scope.encoder.written != end {
+            // The child is shorter than the declared length.
+            scope.encoder.mark_compare_mismatch();
+            return Err(Error::NonCanonicalEncoding);
+        }
+        Ok(())
     }
 
     // Only codec helpers which have themselves measured this child may use this.
@@ -182,7 +503,35 @@ impl<'a> Encoder<'a> {
             }
             EncoderSink::Writer(writer) => writer.write_all(bytes),
             EncoderSink::Counting(counter) => counter.write_all(bytes),
+            EncoderSink::Compare(comparison) => {
+                comparison.exact.compare(bytes);
+                Ok(())
+            }
         }
+    }
+    /// Write a fixed-width value, such as a little-endian scalar.
+    ///
+    /// The constant width lets a buffer destination store the bytes inline
+    /// instead of calling a general copy for a few bytes. Accounting, bounds
+    /// and every other destination behave exactly as in [`Self::write_all`].
+    #[inline]
+    pub fn write_array<const N: usize>(&mut self, bytes: &[u8; N]) -> io::Result<()> {
+        if self.limit.is_none() && !self.rejected_write && !super::encode_work::any_bounded_scope()
+        {
+            match &mut self.sink {
+                EncoderSink::Buffer(buffer) => {
+                    buffer.extend_from_slice(bytes);
+                    return Ok(());
+                }
+                EncoderSink::ByteSink(sink) => {
+                    sink.ensure_capacity(N);
+                    sink.buf.extend_from_slice(bytes);
+                    return Ok(());
+                }
+                EncoderSink::Writer(_) | EncoderSink::Counting(_) | EncoderSink::Compare(_) => {}
+            }
+        }
+        self.write_all(bytes)
     }
     fn write_all_bounded(&mut self, mut bytes: &[u8]) -> io::Result<()> {
         let end = self.admitted_end(bytes.len())?;
@@ -197,6 +546,10 @@ impl<'a> Encoder<'a> {
             }
             EncoderSink::Counting(counter) => {
                 counter.write_all(bytes)?;
+                self.written = end;
+            }
+            EncoderSink::Compare(comparison) => {
+                comparison.exact.compare(bytes);
                 self.written = end;
             }
             EncoderSink::Writer(_) => {
@@ -228,6 +581,10 @@ impl<'a> Encoder<'a> {
             }
             EncoderSink::Writer(writer) => writer.write(bytes)?,
             EncoderSink::Counting(counter) => counter.write(bytes)?,
+            EncoderSink::Compare(comparison) => {
+                comparison.exact.compare(bytes);
+                bytes.len()
+            }
         };
         if written > bytes.len() {
             return Err(self.reject_overrun());
@@ -259,6 +616,10 @@ impl Write for Encoder<'_> {
             }
             EncoderSink::Writer(writer) => writer.write(bytes),
             EncoderSink::Counting(counter) => counter.write(bytes),
+            EncoderSink::Compare(comparison) => {
+                comparison.exact.compare(bytes);
+                Ok(bytes.len())
+            }
         }
     }
     fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
@@ -267,7 +628,10 @@ impl Write for Encoder<'_> {
     fn flush(&mut self) -> io::Result<()> {
         super::encode_work::charge(0)?;
         match &mut self.sink {
-            EncoderSink::Buffer(_) | EncoderSink::ByteSink(_) | EncoderSink::Counting(_) => Ok(()),
+            EncoderSink::Buffer(_)
+            | EncoderSink::ByteSink(_)
+            | EncoderSink::Counting(_)
+            | EncoderSink::Compare(_) => Ok(()),
             EncoderSink::Writer(writer) => writer.flush(),
         }
     }

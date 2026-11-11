@@ -8,7 +8,7 @@ pub(super) fn option_payload_prefix(
     bytes: &[u8],
     invalid_tag: fn(u8) -> Error,
 ) -> Result<(Option<&[u8]>, usize), Error> {
-    let tag = *bytes.first().ok_or(Error::LengthMismatch)?;
+    let tag = *bytes.first().ok_or_else(|| Error::LengthMismatch)?;
     record_slice_access(bytes, 1);
     match tag {
         0 => Ok((None, 1)),

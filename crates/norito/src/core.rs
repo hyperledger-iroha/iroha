@@ -49,6 +49,7 @@ pub use encode_work::{
 mod fixed_frame;
 mod heap_payload;
 mod nominal_text;
+pub(crate) use encode_frames::compare_typed_frame;
 use encode_frames::write_frame_to_writer_with_flags;
 #[doc(hidden)]
 pub use encode_frames::{write_canonical_payload_with_identity, write_frame_with_prefix};
@@ -96,6 +97,9 @@ pub use payload_ref::PayloadRef;
 #[path = "core/byte_element_tests.rs"]
 mod byte_element_tests;
 #[cfg(test)]
+#[path = "core/compare_tests.rs"]
+mod compare_tests;
+#[cfg(test)]
 #[path = "core/counting_tests.rs"]
 mod counting_tests;
 #[cfg(test)]
@@ -111,6 +115,9 @@ mod payload_decode_tests;
 #[cfg(test)]
 #[path = "core/payload_tests.rs"]
 mod payload_tests;
+#[cfg(test)]
+#[path = "core/scalar_field_tests.rs"]
+mod scalar_field_tests;
 pub mod simd_crc64;
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub use simd_crc64::crc64_neon;
@@ -200,17 +207,13 @@ fn serialize_owned<T: SerializePayload>(writer: &mut Encoder<'_>, value: &T) -> 
     } else {
         Some(DecodeFlagsGuard::enter(default_encode_flags()))
     };
-    let flags = effective_layout_flags();
-    // Count a real serialization pass instead of trusting an optional length
-    // hint or retaining a second payload-sized `Vec`. The counted write below
-    // also detects a stateful serializer that changes between passes.
-    let exact_len = encoded_payload_len(value)?;
-    let len = u64::try_from(exact_len).map_err(|_| Error::LengthMismatch)?;
-    write_len_with_flags(writer, len, flags)?;
-    // An error from this point leaves the prefix and at most `exact_len`
-    // payload bytes in `writer`; the caller propagates it and discards the
-    // incomplete enclosing serialization.
-    write_counted_payload(value, writer, exact_len)
+    // An error leaves the prefix and a payload prefix in `writer`; the caller
+    // propagates it and discards the incomplete enclosing serialization.
+    write_framed_payload(
+        writer,
+        value,
+        LengthPrefix::Layout(effective_layout_flags()),
+    )
 }
 #[cfg(test)]
 mod serialize_owned_tests {
@@ -218,10 +221,10 @@ mod serialize_owned_tests {
 }
 fn owned_bytes_from_ctx<A>(archived: &Archived<A>) -> Result<&[u8], Error> {
     let ptr = archived as *const _ as *const u8;
-    let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
+    let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
     let offset = (ptr as usize)
         .checked_sub(base)
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     if offset > total {
         return Err(Error::LengthMismatch);
     }
@@ -232,7 +235,7 @@ fn parse_owned_payload(bytes: &[u8]) -> Result<(&[u8], usize), Error> {
     // The wrapper decoder borrows this field directly and charges only the
     // allocation it actually constructs (`Box`, `Rc`, or `Arc`) below.
     let (len, hdr) = inspect_len_from_slice(bytes)?;
-    let end = hdr.checked_add(len).ok_or(Error::LengthMismatch)?;
+    let end = hdr.checked_add(len).ok_or_else(|| Error::LengthMismatch)?;
     if end > bytes.len() {
         return Err(Error::LengthMismatch);
     }
@@ -302,7 +305,7 @@ pub(crate) fn payload_without_leading_padding_exact(
 ) -> Result<&[u8], Error> {
     let expected = padding
         .checked_add(payload_len)
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     if slice.len() != expected {
         return Err(Error::LengthMismatch);
     }
@@ -468,7 +471,7 @@ fn sanitize_layout_flags(flags: u8) -> u8 {
 pub const fn default_encode_flags() -> u8 {
     header_flags::COMPACT_LEN
 }
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct PayloadCtxState {
     base: usize,
     len: usize,
@@ -478,17 +481,265 @@ struct PayloadCtxState {
     flags_active: bool,
 }
 // Decode context managed per-thread; set based on header flags.
-thread_local! {
-    static DECODE_FLAGS: Cell<u8> = const { Cell::new(0) };
+/// Explicit layout flags of the current thread and whether they are in force.
+#[derive(Clone, Copy)]
+struct DecodeFlags {
+    flags: u8,
+    active: bool,
+}
+/// Decoder state of the current thread.
+///
+/// One thread-local holds every cell, so decoding a field reaches all of its
+/// state through a single lookup instead of one lookup per guard. The cells
+/// keep their individual save/restore discipline; only their storage is shared.
+struct DecodeTls {
+    flags: Cell<DecodeFlags>,
+    payload: Cell<Option<PayloadCtxState>>,
+    root_span: Cell<Option<(usize, usize)>>,
+    boundary: Cell<FieldDecodeBoundary>,
+    nesting_depth: Cell<usize>,
+    budget: Cell<*const budget_scope::ScopeNode<'static>>,
+    panic_depth: Cell<u32>,
 }
 thread_local! {
-    static DECODE_FLAGS_ACTIVE: Cell<bool> = const { Cell::new(false) };
+    static DECODE: DecodeTls = const {
+        DecodeTls {
+            flags: Cell::new(DecodeFlags {
+                flags: 0,
+                active: false,
+            }),
+            payload: Cell::new(None),
+            root_span: Cell::new(None),
+            boundary: Cell::new(FieldDecodeBoundary::Canonical),
+            nesting_depth: Cell::new(0),
+            budget: Cell::new(core::ptr::null()),
+            panic_depth: Cell::new(0),
+        }
+    };
+}
+/// One cell of [`DECODE`], with the access shape of a thread-local key.
+pub(crate) struct DecodeCell<T: 'static>(fn(&DecodeTls) -> &Cell<T>);
+impl<T: 'static> DecodeCell<T> {
+    #[inline]
+    pub(crate) fn with<R>(&'static self, body: impl FnOnce(&Cell<T>) -> R) -> R {
+        DECODE.with(|tls| body((self.0)(tls)))
+    }
+    #[inline]
+    fn get(&'static self) -> T
+    where
+        T: Copy,
+    {
+        self.with(Cell::get)
+    }
+    #[inline]
+    fn set(&'static self, value: T) {
+        self.with(|cell| cell.set(value));
+    }
+}
+static DECODE_FLAGS: DecodeCell<DecodeFlags> = DecodeCell(|tls| &tls.flags);
+static DECODE_PAYLOAD_CTX: DecodeCell<Option<PayloadCtxState>> = DecodeCell(|tls| &tls.payload);
+static DECODE_ROOT_SPAN: DecodeCell<Option<(usize, usize)>> = DecodeCell(|tls| &tls.root_span);
+static FIELD_DECODE_BOUNDARY: DecodeCell<FieldDecodeBoundary> = DecodeCell(|tls| &tls.boundary);
+static DECODE_NESTING_DEPTH: DecodeCell<usize> = DecodeCell(|tls| &tls.nesting_depth);
+/// Depth of nested decodes whose panics are reported as decode errors.
+pub(crate) static DECODE_PANIC_DEPTH: DecodeCell<u32> = DecodeCell(|tls| &tls.panic_depth);
+
+impl PayloadCtxState {
+    /// Extend this payload's recorded access by what a nested payload read.
+    #[inline]
+    fn absorb_nested_access(&mut self, base: usize, len: usize, accessed: usize) {
+        if accessed == 0 {
+            return;
+        }
+        if base == self.base && len == self.len {
+            if accessed > self.max_access {
+                self.max_access = accessed;
+            }
+        } else if base >= self.base && base < self.base + self.len {
+            let end = (base - self.base).saturating_add(accessed);
+            if end > self.max_access {
+                self.max_access = self.len.min(end);
+            }
+        }
+    }
+}
+/// Payload context and layout flags displaced by one installed payload.
+struct PayloadFrame {
+    previous: Option<PayloadCtxState>,
+    previous_flags: Option<DecodeFlags>,
+}
+impl DecodeTls {
+    /// Layout flags in force: an explicit selection, else the payload's own.
+    #[inline]
+    fn effective_flags(&self) -> Option<u8> {
+        let explicit = self.flags.get();
+        if explicit.active {
+            Some(explicit.flags)
+        } else {
+            self.payload
+                .get()
+                .and_then(|state| state.flags_active.then_some(state.flags))
+        }
+    }
+    /// Select `flags` as the explicit layout, returning the displaced selection.
+    #[inline]
+    fn select_flags(&self, flags: u8) -> DecodeFlags {
+        #[cfg(debug_assertions)]
+        if crate::debug_trace_enabled() {
+            eprintln!("DecodeFlagsGuard::enter flags=0x{flags:02x}");
+        }
+        self.flags.replace(DecodeFlags {
+            flags: sanitize_layout_flags(flags),
+            active: true,
+        })
+    }
+    /// Install `bytes` as the active payload, keeping the active schema.
+    ///
+    /// An explicit layout selection is authoritative over a restored outer
+    /// payload, so nested field decoders never revert to stale layout flags.
+    #[inline]
+    fn enter_inherited_payload(&self, bytes: &[u8], logical_len: usize) -> PayloadFrame {
+        let schema = self.payload.get().and_then(|state| state.schema);
+        self.enter_payload(bytes, logical_len, schema, self.effective_flags())
+    }
+    /// Install `bytes` as the active payload. `flags`, when given and not
+    /// already the explicit selection, become it until the frame is left.
+    #[inline]
+    fn enter_payload(
+        &self,
+        bytes: &[u8],
+        logical_len: usize,
+        schema: Option<[u8; 16]>,
+        flags: Option<u8>,
+    ) -> PayloadFrame {
+        let previous = self.payload.replace(Some(PayloadCtxState {
+            base: bytes.as_ptr() as usize,
+            len: logical_len.min(bytes.len()),
+            schema,
+            max_access: 0,
+            flags: flags.unwrap_or(0),
+            flags_active: flags.is_some(),
+        }));
+        let previous_flags = flags
+            .filter(|flags| {
+                let explicit = self.flags.get();
+                !explicit.active || explicit.flags != *flags
+            })
+            .map(|flags| self.select_flags(flags));
+        PayloadFrame {
+            previous,
+            previous_flags,
+        }
+    }
+    /// Restore the payload displaced by `frame`, widening its recorded access
+    /// by whatever the nested payload read inside it.
+    #[inline]
+    fn leave_payload(&self, frame: &PayloadFrame) {
+        // Restore the layout selection before reconciling the payload stack.
+        if let Some(previous_flags) = frame.previous_flags {
+            self.flags.set(previous_flags);
+        }
+        let restored = match (frame.previous, self.payload.take()) {
+            (Some(mut merged), Some(nested)) => {
+                merged.absorb_nested_access(nested.base, nested.len, nested.max_access);
+                Some(merged)
+            }
+            (previous, _) => previous,
+        };
+        self.payload.set(restored);
+    }
+    /// Widen the active payload's recorded access by `accessed` bytes read
+    /// from a nested payload at `base`, exactly as leaving that payload does.
+    #[inline]
+    fn absorb_nested_access(&self, base: *const u8, len: usize, accessed: usize) {
+        if let Some(mut state) = self.payload.get() {
+            state.absorb_nested_access(base as usize, len, accessed);
+            self.payload.set(Some(state));
+        }
+    }
+    /// Record that `len` bytes at `ptr` of the active payload were read.
+    #[inline]
+    fn record_access(&self, ptr: *const u8, len: usize) {
+        if len == 0 {
+            return;
+        }
+        let Some(mut state) = self.payload.get() else {
+            return;
+        };
+        let address = ptr as usize;
+        if address < state.base {
+            return;
+        }
+        let end = (address - state.base).saturating_add(len);
+        // A read past the payload end marks the whole payload as consumed.
+        let reached = if end > state.len {
+            state.len
+        } else if end > state.max_access {
+            end
+        } else {
+            return;
+        };
+        state.max_access = reached;
+        self.payload.set(Some(state));
+    }
+    /// The active payload from `ptr` to its end.
+    #[inline]
+    fn payload_from(&self, ptr: *const u8) -> Result<&'static [u8], Error> {
+        let Some(state) = self.payload.get() else {
+            return Err(Error::MissingPayloadContext);
+        };
+        let Some(base_end) = state.base.checked_add(state.len) else {
+            return Err(Error::LengthMismatch);
+        };
+        let address = ptr as usize;
+        if address < state.base || address > base_end {
+            return Err(Error::LengthMismatch);
+        }
+        // SAFETY: `base..base_end` is the installed payload, which stays live
+        // while its context is installed, and `address` lies inside it.
+        let payload = unsafe { core::slice::from_raw_parts(state.base as *const u8, state.len) };
+        Ok(&payload[address - state.base..])
+    }
+    /// Tightest stateless budget limits of this thread's active scopes.
+    #[inline]
+    fn tightest_limits(&self) -> budget_scope::TightestLimits {
+        budget_scope::tightest_limits_of(self.budget.get())
+    }
+    /// Check a field body against every active layer's per-field ceiling.
+    #[inline]
+    fn check_field_length(&self, length: u64) -> Result<(), Error> {
+        if length <= self.tightest_limits().field_bytes {
+            return Ok(());
+        }
+        refuse_decode_field_length(length)
+    }
+    /// Enter one nested value, returning the depth to restore on exit.
+    #[inline]
+    fn enter_depth(&self) -> Result<usize, Error> {
+        let previous = self.nesting_depth.get();
+        let depth = match previous.checked_add(1) {
+            Some(depth) if depth <= self.tightest_limits().depth_ceiling => depth,
+            // The ordered walk reports the refusing layer or the overflow.
+            _ => checked_decode_depth(1)?,
+        };
+        self.nesting_depth.set(depth);
+        Ok(previous)
+    }
+}
+/// Encode-pass state: whether a pass is active and whether it emitted a
+/// compact length. One cell, so recording a prefix is a single lookup.
+#[derive(Clone, Copy)]
+struct EncodeContext {
+    active: bool,
+    compact_len_used: bool,
 }
 thread_local! {
-    static ENCODE_CONTEXT_ACTIVE: Cell<bool> = const { Cell::new(false) };
-}
-thread_local! {
-    static ENCODE_COMPACT_LEN_USED: Cell<bool> = const { Cell::new(false) };
+    static ENCODE_CONTEXT: Cell<EncodeContext> = const {
+        Cell::new(EncodeContext {
+            active: false,
+            compact_len_used: false,
+        })
+    };
 }
 thread_local! {
     static ENCODE_VALUE_NESTING_DEPTH: Cell<usize> = const { Cell::new(0) };
@@ -608,7 +859,7 @@ impl DecodeBudgetContext {
         let depth = self
             .depth
             .checked_add(prefix)
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         if depth.saturating_sub(self.layer.base_depth) > maximum {
             return Err(Error::NestingDepthExceeded {
                 depth,
@@ -683,9 +934,6 @@ impl DecodeBudgetContext {
             Ok(())
         })
     }
-}
-thread_local! {
-    static DECODE_NESTING_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 impl DecodeBudgetContext {
     /// Install this original context only for a synchronous physical operation.
@@ -825,11 +1073,16 @@ pub(crate) fn checked_decode_depth(additional_depth: usize) -> Result<usize, Err
     let depth = DECODE_NESTING_DEPTH
         .with(Cell::get)
         .checked_add(additional_depth)
-        .ok_or(Error::NestingDepthExceeded {
+        .ok_or_else(|| Error::NestingDepthExceeded {
             depth: usize::MAX,
             limit: usize::MAX,
             context: "decode budget",
         })?;
+    // Every layer admits a depth within the chain's ceiling; only a depth
+    // beyond it needs the ordered walk that names the refusing layer.
+    if depth <= budget_scope::tightest_limits().depth_ceiling {
+        return Ok(depth);
+    }
     budget_scope::with_active(|layers| {
         for (index, layer) in decode_attempt::layers_in_order(layers) {
             let relative_depth = depth.saturating_sub(layer.base_depth);
@@ -968,6 +1221,14 @@ pub(crate) fn enforce_decode_sequence_length(length: u64) -> Result<(), Error> {
 }
 #[inline]
 pub(crate) fn check_decode_sequence_length(length: u64) -> Result<(), Error> {
+    if length <= budget_scope::tightest_limits().sequence_elements {
+        return Ok(());
+    }
+    refuse_decode_sequence_length(length)
+}
+/// Ordered layer walk for a sequence length beyond the chain's tightest limit.
+#[cold]
+fn refuse_decode_sequence_length(length: u64) -> Result<(), Error> {
     budget_scope::with_active(|layers| {
         for (index, layer) in decode_attempt::layers_in_order(layers) {
             let limit = limit_to_u64(layer.budget.limits.max_sequence_elements());
@@ -989,6 +1250,14 @@ pub(crate) fn enforce_decode_field_length(length: u64) -> Result<(), Error> {
 }
 #[inline]
 pub(crate) fn check_decode_field_length(length: u64) -> Result<(), Error> {
+    if length <= budget_scope::tightest_limits().field_bytes {
+        return Ok(());
+    }
+    refuse_decode_field_length(length)
+}
+/// Ordered layer walk for a field length beyond the chain's tightest limit.
+#[cold]
+fn refuse_decode_field_length(length: u64) -> Result<(), Error> {
     budget_scope::with_active(|layers| {
         for (index, layer) in decode_attempt::layers_in_order(layers) {
             let limit = limit_to_u64(layer.budget.limits.max_field_bytes());
@@ -1053,37 +1322,29 @@ fn reserve_decode_allocation_u64(length: u64) -> Result<(), Error> {
     })
 }
 pub(crate) struct EncodeContextGuard {
-    prev_active: bool,
-    prev_compact_len_used: bool,
+    previous: EncodeContext,
 }
 impl EncodeContextGuard {
     pub(crate) fn enter() -> Self {
-        let prev_active = ENCODE_CONTEXT_ACTIVE.with(|cell| {
-            let prev = cell.get();
-            cell.set(true);
-            prev
+        let previous = ENCODE_CONTEXT.replace(EncodeContext {
+            active: true,
+            compact_len_used: false,
         });
-        let prev_compact_len_used = ENCODE_COMPACT_LEN_USED.with(|cell| {
-            let prev = cell.get();
-            cell.set(false);
-            prev
-        });
-        Self {
-            prev_active,
-            prev_compact_len_used,
-        }
+        Self { previous }
     }
 }
 impl Drop for EncodeContextGuard {
     fn drop(&mut self) {
-        ENCODE_CONTEXT_ACTIVE.with(|cell| cell.set(self.prev_active));
-        ENCODE_COMPACT_LEN_USED.with(|cell| cell.set(self.prev_compact_len_used));
+        ENCODE_CONTEXT.set(self.previous);
     }
 }
+#[inline]
 fn mark_compact_len_used_if_encoding() {
-    ENCODE_CONTEXT_ACTIVE.with(|active| {
-        if active.get() {
-            ENCODE_COMPACT_LEN_USED.with(|flag| flag.set(true));
+    ENCODE_CONTEXT.with(|context| {
+        let mut state = context.get();
+        if state.active && !state.compact_len_used {
+            state.compact_len_used = true;
+            context.set(state);
         }
     });
 }
@@ -1094,12 +1355,12 @@ pub fn note_compact_len_emitted() {
     if crate::debug_trace_enabled() {
         eprintln!(
             "note_compact_len_emitted compact_len_used={}",
-            ENCODE_COMPACT_LEN_USED.with(|flag| flag.get())
+            ENCODE_CONTEXT.get().compact_len_used
         );
     }
 }
 pub(crate) fn compact_len_used() -> bool {
-    ENCODE_COMPACT_LEN_USED.with(|flag| flag.get())
+    ENCODE_CONTEXT.get().compact_len_used
 }
 #[inline]
 pub(crate) fn finalized_encode_flags(base_flags: u8, compact_len_used: bool) -> u8 {
@@ -1112,8 +1373,6 @@ pub(crate) fn finalized_encode_flags(base_flags: u8, compact_len_used: bool) -> 
 }
 // Thread-local payload context: base pointer, length, and optional schema hash.
 thread_local! {
-    static DECODE_PAYLOAD_CTX: RefCell<Option<PayloadCtxState>> = const { RefCell::new(None) };
-    static DECODE_ROOT_SPAN: RefCell<Option<(usize, usize)>> = const { RefCell::new(None) };
     static OWNED_VALUE_DECODE_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 struct OwnedValueDecodeDepthGuard;
@@ -1143,15 +1402,15 @@ impl Drop for OwnedValueDecodeDepthGuard {
 }
 /// Record the root payload span for the current thread.
 pub fn set_decode_root(bytes: &[u8]) {
-    DECODE_ROOT_SPAN.with(|slot| *slot.borrow_mut() = Some((bytes.as_ptr() as usize, bytes.len())));
+    DECODE_ROOT_SPAN.set(Some((bytes.as_ptr() as usize, bytes.len())));
 }
 /// Clear the root payload span for the current thread.
 pub fn clear_decode_root() {
-    DECODE_ROOT_SPAN.with(|slot| *slot.borrow_mut() = None);
+    DECODE_ROOT_SPAN.set(None);
 }
 /// Fetch the currently recorded root payload span, if any.
 pub fn payload_root_span() -> Option<(usize, usize)> {
-    DECODE_ROOT_SPAN.with(|slot| *slot.borrow())
+    DECODE_ROOT_SPAN.get()
 }
 // Per-thread payload context (base pointer, length, and optional schema hash).
 fn set_payload_ctx_state(bytes: &[u8], schema: Option<[u8; 16]>, flags: Option<u8>) {
@@ -1164,17 +1423,14 @@ fn set_payload_ctx_state_with_len(
     flags: Option<u8>,
 ) {
     let len = len.min(bytes.len());
-    DECODE_PAYLOAD_CTX.with(|c| {
-        let flags_value = flags.unwrap_or(0);
-        *c.borrow_mut() = Some(PayloadCtxState {
-            base: bytes.as_ptr() as usize,
-            len,
-            schema,
-            max_access: 0,
-            flags: flags_value,
-            flags_active: flags.is_some(),
-        });
-    });
+    DECODE_PAYLOAD_CTX.set(Some(PayloadCtxState {
+        base: bytes.as_ptr() as usize,
+        len,
+        schema,
+        max_access: 0,
+        flags: flags.unwrap_or(0),
+        flags_active: flags.is_some(),
+    }));
 }
 /// Set the current payload context for slice-based decoders.
 pub fn set_payload_ctx(bytes: &[u8]) {
@@ -1182,7 +1438,7 @@ pub fn set_payload_ctx(bytes: &[u8]) {
 }
 /// Clear the payload context.
 pub fn clear_payload_ctx() {
-    DECODE_PAYLOAD_CTX.with(|c| *c.borrow_mut() = None);
+    DECODE_PAYLOAD_CTX.set(None);
 }
 pub fn payload_ctx() -> Option<(usize, usize)> {
     payload_ctx_state().map(|state| (state.base, state.len))
@@ -1205,14 +1461,9 @@ fn enter_field_codec_flags() -> Option<DecodeFlagsGuard> {
     Some(DecodeFlagsGuard::enter(flags))
 }
 
+#[inline]
 fn payload_ctx_state() -> Option<PayloadCtxState> {
-    DECODE_PAYLOAD_CTX.with(|c| c.borrow().clone())
-}
-fn payload_ctx_state_mut<R>(f: impl FnOnce(&mut PayloadCtxState) -> R) -> Option<R> {
-    DECODE_PAYLOAD_CTX.with(|c| {
-        let mut guard = c.borrow_mut();
-        guard.as_mut().map(f)
-    })
+    DECODE_PAYLOAD_CTX.get()
 }
 struct DecodeStateSnapshot {
     flags: u8,
@@ -1235,8 +1486,8 @@ impl DecodeStateSnapshot {
         set_decode_flags_raw(self.flags);
         set_decode_flags_active(self.flags_active);
         FIELD_DECODE_BOUNDARY.with(|slot| slot.set(self.field_boundary));
-        DECODE_PAYLOAD_CTX.with(|slot| *slot.borrow_mut() = self.payload_ctx);
-        DECODE_ROOT_SPAN.with(|slot| *slot.borrow_mut() = self.root_span);
+        DECODE_PAYLOAD_CTX.set(self.payload_ctx);
+        DECODE_ROOT_SPAN.set(self.root_span);
     }
 }
 pub(crate) struct IsolatedDecodeGuard {
@@ -1264,20 +1515,7 @@ fn record_payload_access(ptr: *const u8, len: usize) {
     if len == 0 {
         return;
     }
-    payload_ctx_state_mut(|state| {
-        let base = state.base;
-        let ptr_us = ptr as usize;
-        if ptr_us < base {
-            return;
-        }
-        let rel = ptr_us - base;
-        let end = rel.saturating_add(len);
-        if end > state.len {
-            state.max_access = state.len;
-        } else if end > state.max_access {
-            state.max_access = end;
-        }
-    });
+    DECODE.with(|tls| tls.record_access(ptr, len));
 }
 pub(crate) fn payload_ctx_max_access() -> Option<usize> {
     payload_ctx_state().map(|state| state.max_access)
@@ -1301,9 +1539,11 @@ pub fn note_payload_access(bytes: &[u8], len: usize) {
 }
 #[inline]
 fn payload_bytes_with_offset(ptr: *const u8) -> Result<(&'static [u8], usize), Error> {
-    let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
+    let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
     let ptr_us = ptr as usize;
-    let base_end = base.checked_add(total).ok_or(Error::LengthMismatch)?;
+    let base_end = base
+        .checked_add(total)
+        .ok_or_else(|| Error::LengthMismatch)?;
     if ptr_us >= base && ptr_us <= base_end {
         let offset = ptr_us - base;
         let payload = unsafe { core::slice::from_raw_parts(base as *const u8, total) };
@@ -1323,13 +1563,33 @@ pub fn payload_slice_from_ptr(ptr: *const u8) -> Result<&'static [u8], Error> {
 #[doc(hidden)]
 #[inline]
 pub fn payload_range_from_ptr(ptr: *const u8, len: usize) -> Result<&'static [u8], Error> {
-    let (payload, offset) = payload_bytes_with_offset(ptr)?;
-    let end = offset.checked_add(len).ok_or(Error::LengthMismatch)?;
-    if end > payload.len() {
-        return Err(Error::LengthMismatch);
-    }
-    record_payload_access(ptr, len);
-    Ok(&payload[offset..end])
+    // One context lookup bounds the range and records its access.
+    DECODE_PAYLOAD_CTX.with(|cell| {
+        let mut state = cell.get().ok_or_else(|| Error::MissingPayloadContext)?;
+        let base_end = state
+            .base
+            .checked_add(state.len)
+            .ok_or_else(|| Error::LengthMismatch)?;
+        let address = ptr as usize;
+        if address < state.base || address > base_end {
+            return Err(Error::LengthMismatch);
+        }
+        let offset = address - state.base;
+        let end = offset
+            .checked_add(len)
+            .ok_or_else(|| Error::LengthMismatch)?;
+        if end > state.len {
+            return Err(Error::LengthMismatch);
+        }
+        if len != 0 && end > state.max_access {
+            state.max_access = end;
+            cell.set(Some(state));
+        }
+        // SAFETY: `base..base + len` is the active payload, and
+        // `offset..end` was just checked to lie inside it.
+        let payload = unsafe { core::slice::from_raw_parts(state.base as *const u8, state.len) };
+        Ok(&payload[offset..end])
+    })
 }
 #[inline]
 fn ensure_len_within_remaining(len: usize, remaining: usize) -> Result<(), Error> {
@@ -1379,9 +1639,11 @@ fn btreemap_entry_slices<'a>(
 /// Read a dynamic length header at a given pointer using the current payload context.
 /// Returns (value, bytes_consumed).
 fn read_len_dyn_at_ptr(ptr: *const u8) -> Result<(usize, usize), Error> {
-    let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
+    let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
     let ptr_us = ptr as usize;
-    let base_end = base.checked_add(total).ok_or(Error::LengthMismatch)?;
+    let base_end = base
+        .checked_add(total)
+        .ok_or_else(|| Error::LengthMismatch)?;
     if ptr_us < base || ptr_us >= base_end {
         #[cfg(debug_assertions)]
         if crate::debug_trace_enabled() {
@@ -1425,7 +1687,7 @@ unsafe fn alloc_checked(layout: Layout) -> Result<(*mut u8, bool), Error> {
 fn reserve_decode_sequence_storage<T>(capacity: usize) -> Result<usize, Error> {
     let bytes = capacity
         .checked_mul(core::mem::size_of::<T>())
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     reserve_decode_allocation(bytes)?;
     Ok(bytes)
 }
@@ -1441,8 +1703,7 @@ fn try_decode_vec_with_capacity<T>(capacity: usize) -> Result<Vec<T>, Error> {
 }
 /// RAII guard to set and restore the current payload context.
 pub struct PayloadCtxGuard {
-    prev: Option<PayloadCtxState>,
-    flags_guard: Option<DecodeFlagsGuard>,
+    frame: PayloadFrame,
 }
 impl PayloadCtxGuard {
     fn install(
@@ -1451,30 +1712,22 @@ impl PayloadCtxGuard {
         schema: Option<[u8; 16]>,
         flags: Option<u8>,
     ) -> Self {
-        let prev = payload_ctx_state();
-        set_payload_ctx_state_with_len(bytes, logical_len, schema, flags);
-        let flags_guard = flags
-            .filter(|flags| !decode_flags_active() || get_decode_flags() != *flags)
-            .map(DecodeFlagsGuard::enter);
-        PayloadCtxGuard { prev, flags_guard }
+        let frame = DECODE.with(|tls| tls.enter_payload(bytes, logical_len, schema, flags));
+        PayloadCtxGuard { frame }
+    }
+    /// Install `bytes` with the schema and layout flags already in force.
+    fn inherit(bytes: &[u8], logical_len: usize) -> Self {
+        let frame = DECODE.with(|tls| tls.enter_inherited_payload(bytes, logical_len));
+        PayloadCtxGuard { frame }
     }
 
     pub fn enter(bytes: &[u8]) -> Self {
-        let prev = payload_ctx_state();
-        let schema = prev.as_ref().and_then(|state| state.schema);
-        // An explicit decode guard is authoritative over a restored outer
-        // payload context. This matches `effective_decode_flags()` and avoids
-        // silently reverting nested field decoders to stale layout flags.
-        let flags = current_decode_flags_effective();
-        Self::install(bytes, bytes.len(), schema, flags)
+        Self::inherit(bytes, bytes.len())
     }
     /// Install a payload context with an explicit logical length while preserving
     /// any active schema/flag state from the current decode context.
     pub fn enter_with_len(bytes: &[u8], logical_len: usize) -> Self {
-        let prev = payload_ctx_state();
-        let schema = prev.as_ref().and_then(|state| state.schema);
-        let flags = current_decode_flags_effective();
-        Self::install(bytes, logical_len, schema, flags)
+        Self::inherit(bytes, logical_len)
     }
     pub fn enter_with_schema(bytes: &[u8], schema: [u8; 16]) -> Self {
         Self::install(bytes, bytes.len(), Some(schema), None)
@@ -1493,81 +1746,52 @@ impl PayloadCtxGuard {
 }
 impl Drop for PayloadCtxGuard {
     fn drop(&mut self) {
-        // Drop the decode flags guard first so the previous decode state is restored before
-        // we reconcile the payload context stack.
-        self.flags_guard.take();
-        DECODE_PAYLOAD_CTX.with(|cell| {
-            let mut slot = cell.borrow_mut();
-            let current = slot.take();
-            let restored = match (&self.prev, current) {
-                (Some(prev_state), Some(curr_state)) => {
-                    let mut merged = prev_state.clone();
-                    if curr_state.max_access > 0 {
-                        if curr_state.base == merged.base && curr_state.len == merged.len {
-                            if curr_state.max_access > merged.max_access {
-                                merged.max_access = curr_state.max_access;
-                            }
-                        } else if curr_state.base >= merged.base
-                            && curr_state.base < merged.base + merged.len
-                        {
-                            let rel = curr_state.base - merged.base;
-                            let end = rel.saturating_add(curr_state.max_access);
-                            if end > merged.max_access {
-                                merged.max_access = merged.len.min(end);
-                            }
-                        }
-                    }
-                    Some(merged)
-                }
-                (prev, _) => prev.clone(),
-            };
-            *slot = restored;
-        });
+        DECODE.with(|tls| tls.leave_payload(&self.frame));
     }
 }
 /// Set decode flags for the current thread.
 fn set_decode_flags_raw(flags: u8) {
-    DECODE_FLAGS.with(|c| c.set(sanitize_layout_flags(flags)));
+    DECODE_FLAGS.with(|cell| {
+        cell.set(DecodeFlags {
+            flags: sanitize_layout_flags(flags),
+            ..cell.get()
+        });
+    });
 }
 fn set_decode_flags_active(active: bool) {
-    DECODE_FLAGS_ACTIVE.with(|c| c.set(active));
+    DECODE_FLAGS.with(|cell| {
+        cell.set(DecodeFlags {
+            active,
+            ..cell.get()
+        });
+    });
 }
 pub fn set_decode_flags(flags: u8) {
-    set_decode_flags_raw(flags);
-    set_decode_flags_active(true);
+    DECODE_FLAGS.set(DecodeFlags {
+        flags: sanitize_layout_flags(flags),
+        active: true,
+    });
 }
 /// Get decode flags for the current thread.
 pub fn get_decode_flags() -> u8 {
-    DECODE_FLAGS.with(|c| c.get())
+    DECODE_FLAGS.get().flags
 }
 pub(crate) fn decode_flags_active() -> bool {
-    DECODE_FLAGS_ACTIVE.with(|c| c.get())
+    DECODE_FLAGS.get().active
 }
 /// RAII guard to restore previous decode flags.
 pub struct DecodeFlagsGuard {
-    prev_flags: u8,
-    prev_active: bool,
+    previous: DecodeFlags,
 }
 impl DecodeFlagsGuard {
     pub fn enter(flags: u8) -> Self {
-        let prev_flags = get_decode_flags();
-        let prev_active = decode_flags_active();
-        #[cfg(debug_assertions)]
-        if crate::debug_trace_enabled() {
-            eprintln!("DecodeFlagsGuard::enter flags=0x{flags:02x}");
-        }
-        set_decode_flags_raw(flags);
-        set_decode_flags_active(true);
-        Self {
-            prev_flags,
-            prev_active,
-        }
+        let previous = DECODE.with(|tls| tls.select_flags(flags));
+        Self { previous }
     }
 }
 impl Drop for DecodeFlagsGuard {
     fn drop(&mut self) {
-        set_decode_flags_raw(self.prev_flags);
-        set_decode_flags_active(self.prev_active);
+        DECODE_FLAGS.set(self.previous);
     }
 }
 /// Convenience: reset both decode flags and payload context.
@@ -1595,9 +1819,11 @@ pub(crate) fn prepare_header_decode(flags: u8, require_match: bool) -> Result<()
     reset_decode_state();
     Ok(())
 }
+#[inline]
 fn current_decode_flags_effective() -> Option<u8> {
-    if decode_flags_active() {
-        Some(get_decode_flags())
+    let explicit = DECODE_FLAGS.get();
+    if explicit.active {
+        Some(explicit.flags)
     } else {
         payload_ctx_flags()
     }
@@ -1640,7 +1866,9 @@ impl SequenceSpan {
     #[doc(hidden)]
     #[inline]
     pub fn get<'a>(&self, bytes: &'a [u8]) -> Result<&'a [u8], Error> {
-        bytes.get(self.start..self.end).ok_or(Error::LengthMismatch)
+        bytes
+            .get(self.start..self.end)
+            .ok_or_else(|| Error::LengthMismatch)
     }
     /// Length of the planned element payload.
     #[doc(hidden)]
@@ -1714,10 +1942,10 @@ fn validate_binary_sequence_reservation(
     };
     let minimum_body = count
         .checked_mul(minimum_prefix)
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     let minimum_end = offset
         .checked_add(minimum_body)
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     if minimum_end > bytes.len() {
         return Err(Error::LengthMismatch);
     }
@@ -1749,10 +1977,10 @@ pub fn validate_current_map_reservation(bytes: &[u8], count: usize) -> Result<()
     let minimum_body = count
         .checked_mul(prefix)
         .and_then(|bytes| bytes.checked_mul(2))
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     let minimum_end = offset
         .checked_add(minimum_body)
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     if minimum_end > bytes.len() {
         return Err(Error::LengthMismatch);
     }
@@ -1801,24 +2029,63 @@ pub fn write_len_to_vec_with_flags(out: &mut Vec<u8>, value: u64, flags: u8) {
         out.extend_from_slice(&value.to_le_bytes());
     }
 }
-/// Count a value, then write its length prefix and serialize it directly.
+/// Length prefix that frames one child payload.
+#[derive(Clone, Copy)]
+pub(crate) enum LengthPrefix {
+    /// Compact varint or fixed `u64`, as the layout flags select.
+    Layout(u8),
+    /// Fixed little-endian `u64` regardless of the layout flags.
+    Fixed,
+}
+/// Write `value` as `[len][payload]` with the selected prefix encoding.
 ///
-/// The helper measures the actual payload before emitting its length. An output destination
-/// receives the checked payload directly, while a counting destination consumes the measured
-/// size without traversing the payload again. No field-sized staging buffer is retained.
+/// Buffer and counting destinations frame the child from the bytes it actually
+/// writes, in a single pass (see [`Encoder::write_framed_child`]). A streaming
+/// destination, an active exact-length scope and a bounded work or count scope
+/// instead measure the child, emit the length and constrain the payload write
+/// to it, which reports a serializer that changes between the two passes.
 ///
-/// A stateful second-pass mismatch returns [`Error::LengthMismatch`]. The prefix and an admitted
-/// payload prefix may already have been emitted, but a payload overrun cannot grow the destination
-/// beyond the declared length. Callers must discard the incomplete destination after any error.
+/// # Errors
+/// Returns measurement and write errors. Discard the destination after any error.
+fn write_framed_payload(
+    writer: &mut Encoder<'_>,
+    value: &dyn SerializePayload,
+    prefix: LengthPrefix,
+) -> Result<(), Error> {
+    // Measuring a child validates the layout it is measured under.
+    validate_header_flags(match prefix {
+        LengthPrefix::Layout(flags) => flags,
+        LengthPrefix::Fixed => effective_layout_flags(),
+    })?;
+    if writer.write_framed_child(value, prefix)? {
+        return Ok(());
+    }
+    let measured_len = encoded_payload_len(value)?;
+    let length = u64::try_from(measured_len).map_err(|_| Error::LengthMismatch)?;
+    match prefix {
+        LengthPrefix::Layout(flags) => write_len_with_flags(writer, length, flags)?,
+        LengthPrefix::Fixed => writer.write_all(&length.to_le_bytes())?,
+    }
+    write_counted_payload(value, writer, measured_len)
+}
+/// Write a value's length prefix and payload.
+///
+/// The prefix follows the active layout and always equals the payload bytes
+/// emitted. No field-sized staging buffer is retained.
+///
+/// On error the prefix and a payload prefix may already have been emitted;
+/// callers must discard the incomplete destination. A streaming destination
+/// additionally returns [`Error::LengthMismatch`] when a stateful serializer
+/// changes between its measurement and its write.
 pub fn write_len_prefixed(
     writer: &mut Encoder<'_>,
     value: &dyn SerializePayload,
 ) -> Result<(), Error> {
-    let flags = effective_layout_flags();
-    let exact_len = encoded_payload_len(value)?;
-    let len = u64::try_from(exact_len).map_err(|_| Error::LengthMismatch)?;
-    write_len_with_flags(writer, len, flags)?;
-    write_counted_payload(value, writer, exact_len)
+    write_framed_payload(
+        writer,
+        value,
+        LengthPrefix::Layout(effective_layout_flags()),
+    )
 }
 /// Measure and write a payload with a fixed-width u64 length prefix.
 ///
@@ -1833,10 +2100,7 @@ pub fn write_fixed_len_prefixed(
     writer: &mut Encoder<'_>,
     value: &dyn SerializePayload,
 ) -> Result<(), Error> {
-    let length = encoded_payload_len(value)?;
-    let prefix = u64::try_from(length).map_err(|_| Error::LengthMismatch)?;
-    writer.write_all(&prefix.to_le_bytes())?;
-    write_counted_payload(value, writer, length)
+    write_framed_payload(writer, value, LengthPrefix::Fixed)
 }
 /// Write a compact varint length prefix regardless of layout flags.
 pub fn write_varint_len<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
@@ -1855,13 +2119,7 @@ fn write_sequence_payload(
     value: &dyn SerializePayload,
     flags: u8,
 ) -> Result<(), Error> {
-    let encoded_len = encoded_payload_len(value)?;
-    write_len_with_flags(
-        writer,
-        u64::try_from(encoded_len).map_err(|_| Error::LengthMismatch)?,
-        flags,
-    )?;
-    write_counted_payload(value, writer, encoded_len)
+    write_framed_payload(writer, value, LengthPrefix::Layout(flags))
 }
 
 fn encode_seq_payloads<T, I>(writer: &mut Encoder<'_>, items: I) -> Result<(), Error>
@@ -1916,7 +2174,9 @@ where
         count += 1;
     }
     framer.flush(writer)?;
-    (count == len).then_some(()).ok_or(Error::LengthMismatch)
+    (count == len)
+        .then_some(())
+        .ok_or_else(|| Error::LengthMismatch)
 }
 
 /// One-byte elements collected before [`ByteElementFramer`] frames them in one write.
@@ -2048,7 +2308,9 @@ where
         write_payload(item, writer, flags)?;
         count += 1;
     }
-    (count == len).then_some(()).ok_or(Error::LengthMismatch)
+    (count == len)
+        .then_some(())
+        .ok_or_else(|| Error::LengthMismatch)
 }
 fn encode_slice_payloads<T>(writer: &mut Encoder<'_>, slice: &[T]) -> Result<(), Error>
 where
@@ -2189,18 +2451,14 @@ where
             return Err(Error::LengthMismatch);
         }
         for item in [key as &dyn SerializePayload, value as &dyn SerializePayload] {
-            let encoded_len = encoded_payload_len(item)?;
-            write_len_with_flags(
-                writer,
-                u64::try_from(encoded_len).map_err(|_| Error::LengthMismatch)?,
-                flags,
-            )?;
-            write_counted_payload(item, writer, encoded_len)?;
+            write_framed_payload(writer, item, LengthPrefix::Layout(flags))?;
         }
         previous = Some(key);
         count += 1;
     }
-    (count == len).then_some(()).ok_or(Error::LengthMismatch)
+    (count == len)
+        .then_some(())
+        .ok_or_else(|| Error::LengthMismatch)
 }
 /// Emit a length prefix honoring the `COMPACT_LEN` layout flag.
 ///
@@ -2345,45 +2603,6 @@ fn read_seq_len_slice_impl(bytes: &[u8], account: bool) -> Result<(usize, usize)
     let len = len_u64_to_usize(raw_len)?;
     Ok((len, 8))
 }
-/// Pointer-based length read without relying on a global payload context.
-///
-/// # Safety
-/// `ptr` must be valid for reading up to the maximum header size
-/// (8 bytes for fixed `u64` length or up to 10 bytes for compact varint).
-/// Callers must ensure the pointer is within the validated payload.
-#[inline]
-pub unsafe fn read_len_ptr_unchecked(ptr: *const u8) -> (usize, usize) {
-    match unsafe { try_read_len_ptr_unchecked(ptr) } {
-        Ok(res) => res,
-        Err(err) => {
-            panic!("read_len_ptr_unchecked: invalid length header ({err:?})");
-        }
-    }
-}
-/// Fallible variant of [`read_len_ptr_unchecked`] that returns an error if a
-/// compact-varint length exceeds 10 bytes (malformed input).
-///
-/// # Safety
-/// Same as [`read_len_ptr_unchecked`].
-#[inline]
-pub unsafe fn try_read_len_ptr_unchecked(ptr: *const u8) -> Result<(usize, usize), Error> {
-    if use_compact_len() {
-        let (value, used) = unsafe { decode_varint_from_ptr(ptr)? };
-        record_payload_access(ptr, used);
-        enforce_decode_field_length(value)?;
-        let len = usize::try_from(value).map_err(|_| Error::LengthMismatch)?;
-        Ok((len, used))
-    } else {
-        let mut lb = [0u8; 8];
-        let header = unsafe { core::slice::from_raw_parts(ptr, 8) };
-        lb.copy_from_slice(header);
-        record_payload_access(ptr, 8);
-        let value = u64::from_le_bytes(lb);
-        enforce_decode_field_length(value)?;
-        let len = len_u64_to_usize(value)?;
-        Ok((len, 8))
-    }
-}
 #[inline]
 fn encode_varint(mut value: u64, out: &mut [u8; MAX_VARINT_BYTES]) -> usize {
     let mut i = 0;
@@ -2402,9 +2621,10 @@ fn encode_varint(mut value: u64, out: &mut [u8; MAX_VARINT_BYTES]) -> usize {
     i
 }
 #[inline]
-fn varint_encoded_len(value: u64) -> usize {
-    let mut buf = [0u8; MAX_VARINT_BYTES];
-    encode_varint(value, &mut buf)
+const fn varint_encoded_len(value: u64) -> usize {
+    // Seven payload bits per byte; zero still occupies one byte.
+    let significant_bits = (u64::BITS - (value | 1).leading_zeros()) as usize;
+    significant_bits.div_ceil(7)
 }
 pub(crate) fn varint_encoded_len_u64(value: u64) -> usize {
     varint_encoded_len(value)
@@ -2435,12 +2655,6 @@ fn decode_varint_from_slice(bytes: &[u8]) -> Result<(u64, usize), Error> {
     }
     Err(Error::LengthMismatch)
 }
-#[inline]
-unsafe fn decode_varint_from_ptr(ptr: *const u8) -> Result<(u64, usize), Error> {
-    let (payload, offset) = payload_bytes_with_offset(ptr)?;
-    let slice = &payload[offset..];
-    decode_varint_from_slice(slice)
-}
 /// Read a top-level sequence length header at a raw pointer (fixed u64).
 /// Returns (value, bytes consumed).
 ///
@@ -2448,7 +2662,7 @@ unsafe fn decode_varint_from_ptr(ptr: *const u8) -> Result<(u64, usize), Error> 
 /// `ptr` must be valid for reading up to 10 bytes (varint) or 8 bytes (u64).
 #[inline]
 pub unsafe fn read_seq_len_ptr(ptr: *const u8) -> Result<(usize, usize), Error> {
-    let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
+    let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
     let ptr_us = ptr as usize;
     if ptr_us < base || ptr_us >= base + total {
         return Err(Error::LengthMismatch);
@@ -2486,13 +2700,13 @@ impl<'a> DecodeFromSlice<'a> for u8 {
 }
 impl<'a> DecodeFromSlice<'a> for i8 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let b = *bytes.first().ok_or(Error::LengthMismatch)? as i8;
+        let b = *bytes.first().ok_or_else(|| Error::LengthMismatch)? as i8;
         Ok((b, 1))
     }
 }
 impl<'a> DecodeFromSlice<'a> for bool {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let b = *bytes.first().ok_or(Error::LengthMismatch)?;
+        let b = *bytes.first().ok_or_else(|| Error::LengthMismatch)?;
         match b {
             0 => Ok((false, 1)),
             1 => Ok((true, 1)),
@@ -2569,21 +2783,21 @@ impl<'a> DecodeFromSlice<'a> for f64 {
 impl<'a> DecodeFromSlice<'a> for NonZeroU16 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (v, used) = <u16 as DecodeFromSlice>::decode_from_slice(bytes)?;
-        let nz = NonZeroU16::new(v).ok_or(Error::InvalidNonZero)?;
+        let nz = NonZeroU16::new(v).ok_or_else(|| Error::InvalidNonZero)?;
         Ok((nz, used))
     }
 }
 impl<'a> DecodeFromSlice<'a> for NonZeroU32 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (v, used) = <u32 as DecodeFromSlice>::decode_from_slice(bytes)?;
-        let nz = NonZeroU32::new(v).ok_or(Error::InvalidNonZero)?;
+        let nz = NonZeroU32::new(v).ok_or_else(|| Error::InvalidNonZero)?;
         Ok((nz, used))
     }
 }
 impl<'a> DecodeFromSlice<'a> for NonZeroU64 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (v, used) = <u64 as DecodeFromSlice>::decode_from_slice(bytes)?;
-        let nz = NonZeroU64::new(v).ok_or(Error::InvalidNonZero)?;
+        let nz = NonZeroU64::new(v).ok_or_else(|| Error::InvalidNonZero)?;
         Ok((nz, used))
     }
 }
@@ -2683,17 +2897,21 @@ fn decode_element_framed_byte_array_by_element<const N: usize>(
     let mut tmp = [0u8; N];
     let mut offset = 0usize;
     for slot in &mut tmp {
-        let remaining = bytes.get(offset..).ok_or(Error::LengthMismatch)?;
+        let remaining = bytes.get(offset..).ok_or_else(|| Error::LengthMismatch)?;
         // Each byte is copied directly into the final stack array.
         // Its borrowed element prefix checks length without a heap charge.
         let (elem_len, elem_hdr) = inspect_len_from_slice(remaining)?;
-        offset = offset.checked_add(elem_hdr).ok_or(Error::LengthMismatch)?;
+        offset = offset
+            .checked_add(elem_hdr)
+            .ok_or_else(|| Error::LengthMismatch)?;
         if elem_len != 1 {
             return Err(Error::LengthMismatch);
         }
         let byte_pos = offset;
-        offset = offset.checked_add(elem_len).ok_or(Error::LengthMismatch)?;
-        let byte = *bytes.get(byte_pos).ok_or(Error::LengthMismatch)?;
+        offset = offset
+            .checked_add(elem_len)
+            .ok_or_else(|| Error::LengthMismatch)?;
+        let byte = *bytes.get(byte_pos).ok_or_else(|| Error::LengthMismatch)?;
         *slot = byte;
     }
     record_slice_access(bytes, offset);
@@ -2711,14 +2929,20 @@ where
     // `Vec<u8>` is encoded as `len(u64)` + raw bytes for efficiency. Generic
     // sequence containers use `decode_element_sequence_from_slice_with`
     // instead so this storage optimization never changes their wire layout.
-    if core::any::type_name::<T>() == "u8" {
+    // The byte-element hooks identify `u8` through the type system. A type's
+    // printed name is neither unique nor stable, so it must never justify
+    // reinterpreting one vector as another.
+    if T::__norito_byte_elements(&[]).is_some() {
         let (len, offset) = read_seq_len_slice(bytes)?;
-        let end = offset.checked_add(len).ok_or(Error::LengthMismatch)?;
-        // SAFETY: we verified `T == u8` via `type_name`.
-        let slice = bytes.get(offset..end).ok_or(Error::LengthMismatch)?;
+        let end = offset
+            .checked_add(len)
+            .ok_or_else(|| Error::LengthMismatch)?;
+        let slice = bytes
+            .get(offset..end)
+            .ok_or_else(|| Error::LengthMismatch)?;
         let mut raw = try_decode_vec_with_capacity::<u8>(len)?;
         raw.extend_from_slice(slice);
-        let out = unsafe { std::mem::transmute::<Vec<u8>, Vec<T>>(raw) };
+        let out = T::__norito_from_byte_elements(raw).map_err(|_| Error::LengthMismatch)?;
         record_slice_access(bytes, end);
         return Ok((out, end));
     }
@@ -2762,8 +2986,8 @@ where
 impl<'a> DecodeFromSlice<'a> for &'a [u8] {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (len, hdr) = read_seq_len_slice(bytes)?;
-        let end = hdr.checked_add(len).ok_or(Error::LengthMismatch)?;
-        let data = bytes.get(hdr..end).ok_or(Error::LengthMismatch)?;
+        let end = hdr.checked_add(len).ok_or_else(|| Error::LengthMismatch)?;
+        let data = bytes.get(hdr..end).ok_or_else(|| Error::LengthMismatch)?;
         record_slice_access(data, len);
         Ok((data, end))
     }
@@ -2786,15 +3010,23 @@ impl<'a, T: DecodeFromSlice<'a> + 'static, const N: usize> DecodeFromSlice<'a> f
         }
         let mut offset = 0usize;
         let out = try_decode_array(|| {
-            let remaining = bytes.get(offset..).ok_or(Error::LengthMismatch)?;
+            let remaining = bytes.get(offset..).ok_or_else(|| Error::LengthMismatch)?;
             // The fixed array is initialized directly in its final stack
             // storage; the element decoder accounts for any owned children.
             let (len, hdr) = inspect_len_from_slice(remaining)?;
-            offset = offset.checked_add(hdr).ok_or(Error::LengthMismatch)?;
-            let end = offset.checked_add(len).ok_or(Error::LengthMismatch)?;
-            let field = bytes.get(offset..end).ok_or(Error::LengthMismatch)?;
-            let start = offset.checked_sub(hdr).ok_or(Error::LengthMismatch)?;
-            let consumed = hdr.checked_add(len).ok_or(Error::LengthMismatch)?;
+            offset = offset
+                .checked_add(hdr)
+                .ok_or_else(|| Error::LengthMismatch)?;
+            let end = offset
+                .checked_add(len)
+                .ok_or_else(|| Error::LengthMismatch)?;
+            let field = bytes
+                .get(offset..end)
+                .ok_or_else(|| Error::LengthMismatch)?;
+            let start = offset
+                .checked_sub(hdr)
+                .ok_or_else(|| Error::LengthMismatch)?;
+            let consumed = hdr.checked_add(len).ok_or_else(|| Error::LengthMismatch)?;
             record_slice_access(&bytes[start..], consumed);
             let _depth = DecodeDepthGuard::enter()?;
             let (val, used) = T::decode_from_slice(field)?;
@@ -2816,7 +3048,7 @@ where
         validate_current_sequence_reservation(bytes, len)?;
         let allocation_bytes = len
             .checked_mul(core::mem::size_of::<T>())
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         reserve_decode_allocation(allocation_bytes)?;
         let mut deque = VecDeque::new();
         deque
@@ -2857,7 +3089,7 @@ where
         validate_current_sequence_reservation(bytes, len)?;
         let allocation_bytes = len
             .checked_mul(core::mem::size_of::<T>())
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         reserve_decode_allocation(allocation_bytes)?;
         let mut heap = BinaryHeap::new();
         heap.try_reserve(len).map_err(|_| Error::AllocationFailed {
@@ -2931,8 +3163,12 @@ where
     let (len, mut offset) = read_seq_len_slice(bytes)?;
     for _ in 0..len {
         let (key_len, key_hdr) = read_len_dyn_slice(&bytes[offset..])?;
-        offset = offset.checked_add(key_hdr).ok_or(Error::LengthMismatch)?;
-        let key_end = offset.checked_add(key_len).ok_or(Error::LengthMismatch)?;
+        offset = offset
+            .checked_add(key_hdr)
+            .ok_or_else(|| Error::LengthMismatch)?;
+        let key_end = offset
+            .checked_add(key_len)
+            .ok_or_else(|| Error::LengthMismatch)?;
         if key_end > bytes.len() {
             return Err(Error::LengthMismatch);
         }
@@ -2944,8 +3180,12 @@ where
         }
         offset = key_end;
         let (value_len, value_hdr) = read_len_dyn_slice(&bytes[offset..])?;
-        offset = offset.checked_add(value_hdr).ok_or(Error::LengthMismatch)?;
-        let value_end = offset.checked_add(value_len).ok_or(Error::LengthMismatch)?;
+        offset = offset
+            .checked_add(value_hdr)
+            .ok_or_else(|| Error::LengthMismatch)?;
+        let value_end = offset
+            .checked_add(value_len)
+            .ok_or_else(|| Error::LengthMismatch)?;
         if value_end > bytes.len() {
             return Err(Error::LengthMismatch);
         }
@@ -3029,10 +3269,10 @@ where
     }
     fn try_deserialize(archived: &'a Archived<BTreeMap<K, V>>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
-        let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
+        let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
         let offset = (ptr as usize)
             .checked_sub(base)
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         if offset > total {
             return Err(Error::LengthMismatch);
         }
@@ -3053,7 +3293,7 @@ where
         let allocation_bytes = self
             .len()
             .checked_mul(core::mem::size_of::<(&K, &V)>())
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         reserve_decode_allocation(allocation_bytes)?;
         entries
             .try_reserve_exact(self.len())
@@ -3082,10 +3322,10 @@ where
     }
     fn try_deserialize(archived: &'a Archived<HashMap<K, V>>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
-        let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
+        let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
         let offset = (ptr as usize)
             .checked_sub(base)
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         if offset > total {
             return Err(Error::LengthMismatch);
         }
@@ -3120,10 +3360,10 @@ where
     }
     fn try_deserialize(archived: &'a Archived<BTreeSet<T>>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
-        let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
+        let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
         let offset = (ptr as usize)
             .checked_sub(base)
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         if offset > total {
             return Err(Error::LengthMismatch);
         }
@@ -3143,7 +3383,7 @@ where
         let allocation_bytes = self
             .len()
             .checked_mul(core::mem::size_of::<&T>())
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         reserve_decode_allocation(allocation_bytes)?;
         items
             .try_reserve_exact(self.len())
@@ -3171,10 +3411,10 @@ where
     }
     fn try_deserialize(archived: &'a Archived<HashSet<T>>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
-        let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
+        let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
         let offset = (ptr as usize)
             .checked_sub(base)
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         if offset > total {
             return Err(Error::LengthMismatch);
         }
@@ -3250,11 +3490,11 @@ macro_rules! impl_decode_tuple_from_slice {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
                 let mut offset = 0usize;
                 $(
-                    let remaining = bytes.get(offset..).ok_or(Error::LengthMismatch)?;
+                    let remaining = bytes.get(offset..).ok_or_else(|| Error::LengthMismatch)?;
                     let (len, hdr) = read_len_dyn_slice(remaining)?;
-                    offset = offset.checked_add(hdr).ok_or(Error::LengthMismatch)?;
-                    let end = offset.checked_add(len).ok_or(Error::LengthMismatch)?;
-                    let field = bytes.get(offset..end).ok_or(Error::LengthMismatch)?;
+                    offset = offset.checked_add(hdr).ok_or_else(|| Error::LengthMismatch)?;
+                    let end = offset.checked_add(len).ok_or_else(|| Error::LengthMismatch)?;
+                    let field = bytes.get(offset..end).ok_or_else(|| Error::LengthMismatch)?;
                     let _depth = DecodeDepthGuard::enter()?;
                     let ($var, used) = $name::decode_from_slice(field)?;
                     if used != len {
@@ -3305,13 +3545,15 @@ where
 }
 impl<'a, T: DecodeFromSlice<'a>, E: DecodeFromSlice<'a>> DecodeFromSlice<'a> for Result<T, E> {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
-        let tag = *bytes.first().ok_or(Error::LengthMismatch)?;
+        let tag = *bytes.first().ok_or_else(|| Error::LengthMismatch)?;
         record_slice_access(bytes, 1);
         match tag {
             0 => {
                 let (len, hdr) = read_len_dyn_slice(&bytes[1..])?;
                 let start = 1 + hdr;
-                let end = start.checked_add(len).ok_or(Error::LengthMismatch)?;
+                let end = start
+                    .checked_add(len)
+                    .ok_or_else(|| Error::LengthMismatch)?;
                 if end > bytes.len() {
                     return Err(Error::LengthMismatch);
                 }
@@ -3326,7 +3568,9 @@ impl<'a, T: DecodeFromSlice<'a>, E: DecodeFromSlice<'a>> DecodeFromSlice<'a> for
             1 => {
                 let (len, hdr) = read_len_dyn_slice(&bytes[1..])?;
                 let start = 1 + hdr;
-                let end = start.checked_add(len).ok_or(Error::LengthMismatch)?;
+                let end = start
+                    .checked_add(len)
+                    .ok_or_else(|| Error::LengthMismatch)?;
                 if end > bytes.len() {
                     return Err(Error::LengthMismatch);
                 }
@@ -3998,7 +4242,7 @@ pub fn serialize_to_writer_exact<W: Write>(
     result?;
     (exact.written_len() == expected_len)
         .then_some(())
-        .ok_or(Error::LengthMismatch)
+        .ok_or_else(|| Error::LengthMismatch)
 }
 // Call only after this codec path has measured this same value. The public
 // serialize_to_writer_exact seam deliberately always validates actual bytes:
@@ -4080,6 +4324,32 @@ pub trait DeserializePayload<'a>: Sized {
     #[inline]
     fn __norito_from_byte_elements(bytes: Vec<u8>) -> Result<Vec<Self>, Vec<u8>> {
         Err(bytes)
+    }
+
+    /// Codec-internal payload width of a fixed-width scalar.
+    ///
+    /// `Some(width)` declares that every canonical payload of this type is
+    /// exactly `width` bytes and that [`Self::__norito_scalar`] reconstructs it
+    /// from those bytes alone, exactly as [`Self::try_deserialize`] does and
+    /// without panicking. Field framing then decodes it in place instead of
+    /// installing a nested payload context. Only the codec's own scalars set
+    /// this; every other implementation must keep `None`.
+    #[doc(hidden)]
+    const __NORITO_SCALAR_WIDTH: Option<usize> = None;
+
+    /// Codec-internal reconstruction from exactly [`Self::__NORITO_SCALAR_WIDTH`] bytes.
+    #[doc(hidden)]
+    #[inline]
+    fn __norito_scalar(_payload: &[u8]) -> Result<Self, Error> {
+        Err(Error::LengthMismatch)
+    }
+}
+/// The exact bytes of a fixed-width scalar payload.
+#[inline]
+fn scalar_payload<const N: usize>(payload: &[u8]) -> Result<[u8; N], Error> {
+    match payload.first_chunk::<N>() {
+        Some(bytes) if payload.len() == N => Ok(*bytes),
+        _ => Err(Error::LengthMismatch),
     }
 }
 /// Opaque address marker for the archived bytes of `T`.
@@ -4354,7 +4624,7 @@ where
     let _payload = PayloadCtxGuard::enter_with_len(prepared.bytes(), prepared.logical_len());
     let _boundary = FieldDecodeBoundaryGuard::enter(FieldDecodeBoundary::Prefix);
     let value = T::try_deserialize(prepared.archived::<T>())?;
-    let used = payload_ctx_max_access().ok_or(Error::MissingPayloadContext)?;
+    let used = payload_ctx_max_access().ok_or_else(|| Error::MissingPayloadContext)?;
     if used > prepared.logical_len() {
         return Err(Error::LengthMismatch);
     }
@@ -4363,7 +4633,7 @@ where
 
 impl SerializePayload for u8 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        writer.write_all(&[*self])?;
+        writer.write_array(&[*self])?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4385,6 +4655,11 @@ impl<'a> DeserializePayload<'a> for u8 {
     fn try_deserialize(archived: &'a Archived<u8>) -> Result<Self, Error> {
         byte_sequence::read_byte_value(&try_read_archived_bytes::<_, 1>(archived)?)
     }
+    const __NORITO_SCALAR_WIDTH: Option<usize> = Some(1);
+    #[inline]
+    fn __norito_scalar(payload: &[u8]) -> Result<Self, Error> {
+        byte_sequence::read_byte_value(&scalar_payload::<1>(payload)?)
+    }
     #[inline]
     fn __norito_from_byte_elements(bytes: Vec<u8>) -> Result<Vec<Self>, Vec<u8>> {
         Ok(bytes)
@@ -4393,7 +4668,7 @@ impl<'a> DeserializePayload<'a> for u8 {
 
 impl SerializePayload for i8 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        writer.write_all(&[*self as u8])?;
+        writer.write_array(&[*self as u8])?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4411,11 +4686,16 @@ impl<'a> DeserializePayload<'a> for i8 {
     fn try_deserialize(archived: &'a Archived<i8>) -> Result<Self, Error> {
         try_read_archived_bytes(archived).map(i8::from_le_bytes)
     }
+    const __NORITO_SCALAR_WIDTH: Option<usize> = Some(1);
+    #[inline]
+    fn __norito_scalar(payload: &[u8]) -> Result<Self, Error> {
+        scalar_payload(payload).map(i8::from_le_bytes)
+    }
 }
 
 impl SerializePayload for u16 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        writer.write_all(&self.to_le_bytes())?;
+        writer.write_array(&self.to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4432,6 +4712,11 @@ impl<'a> DeserializePayload<'a> for u16 {
     }
     fn try_deserialize(archived: &'a Archived<u16>) -> Result<Self, Error> {
         try_read_archived_bytes(archived).map(u16::from_le_bytes)
+    }
+    const __NORITO_SCALAR_WIDTH: Option<usize> = Some(2);
+    #[inline]
+    fn __norito_scalar(payload: &[u8]) -> Result<Self, Error> {
+        scalar_payload(payload).map(u16::from_le_bytes)
     }
 }
 
@@ -4456,13 +4741,19 @@ impl<'a> DeserializePayload<'a> for NonZeroU16 {
     fn try_deserialize(archived: &'a Archived<NonZeroU16>) -> Result<Self, Error> {
         let val_arch: &Archived<u16> = archived.cast();
         let value = <u16 as DeserializePayload>::try_deserialize(val_arch)?;
-        NonZeroU16::new(value).ok_or(Error::InvalidNonZero)
+        NonZeroU16::new(value).ok_or_else(|| Error::InvalidNonZero)
+    }
+    const __NORITO_SCALAR_WIDTH: Option<usize> = Some(2);
+    #[inline]
+    fn __norito_scalar(payload: &[u8]) -> Result<Self, Error> {
+        let value = <u16 as DeserializePayload>::__norito_scalar(payload)?;
+        NonZeroU16::new(value).ok_or_else(|| Error::InvalidNonZero)
     }
 }
 
 impl SerializePayload for i16 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        writer.write_all(&self.to_le_bytes())?;
+        writer.write_array(&self.to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4480,11 +4771,16 @@ impl<'a> DeserializePayload<'a> for i16 {
     fn try_deserialize(archived: &'a Archived<i16>) -> Result<Self, Error> {
         try_read_archived_bytes(archived).map(i16::from_le_bytes)
     }
+    const __NORITO_SCALAR_WIDTH: Option<usize> = Some(2);
+    #[inline]
+    fn __norito_scalar(payload: &[u8]) -> Result<Self, Error> {
+        scalar_payload(payload).map(i16::from_le_bytes)
+    }
 }
 
 impl SerializePayload for u32 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        writer.write_all(&self.to_le_bytes())?;
+        writer.write_array(&self.to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4501,6 +4797,11 @@ impl<'a> DeserializePayload<'a> for u32 {
     }
     fn try_deserialize(archived: &'a Archived<u32>) -> Result<Self, Error> {
         try_read_archived_bytes(archived).map(u32::from_le_bytes)
+    }
+    const __NORITO_SCALAR_WIDTH: Option<usize> = Some(4);
+    #[inline]
+    fn __norito_scalar(payload: &[u8]) -> Result<Self, Error> {
+        scalar_payload(payload).map(u32::from_le_bytes)
     }
 }
 
@@ -4525,13 +4826,19 @@ impl<'a> DeserializePayload<'a> for NonZeroU32 {
     fn try_deserialize(archived: &'a Archived<NonZeroU32>) -> Result<Self, Error> {
         let val_arch: &Archived<u32> = archived.cast();
         let value = <u32 as DeserializePayload>::try_deserialize(val_arch)?;
-        NonZeroU32::new(value).ok_or(Error::InvalidNonZero)
+        NonZeroU32::new(value).ok_or_else(|| Error::InvalidNonZero)
+    }
+    const __NORITO_SCALAR_WIDTH: Option<usize> = Some(4);
+    #[inline]
+    fn __norito_scalar(payload: &[u8]) -> Result<Self, Error> {
+        let value = <u32 as DeserializePayload>::__norito_scalar(payload)?;
+        NonZeroU32::new(value).ok_or_else(|| Error::InvalidNonZero)
     }
 }
 
 impl SerializePayload for bool {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        writer.write_all(&[*self as u8])?;
+        writer.write_array(&[*self as u8])?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4547,17 +4854,29 @@ impl<'a> DeserializePayload<'a> for bool {
         Self::try_deserialize(archived).expect("invalid bool")
     }
     fn try_deserialize(archived: &'a Archived<bool>) -> Result<Self, Error> {
-        match <u8 as DeserializePayload>::try_deserialize(archived.cast())? {
-            0 => Ok(false),
-            1 => Ok(true),
-            tag => Err(Error::invalid_tag("bool", tag)),
-        }
+        bool_from_tag(<u8 as DeserializePayload>::try_deserialize(
+            archived.cast(),
+        )?)
+    }
+    const __NORITO_SCALAR_WIDTH: Option<usize> = Some(1);
+    #[inline]
+    fn __norito_scalar(payload: &[u8]) -> Result<Self, Error> {
+        bool_from_tag(<u8 as DeserializePayload>::__norito_scalar(payload)?)
+    }
+}
+/// The canonical boolean for a wire tag; only `0` and `1` are values.
+#[inline]
+fn bool_from_tag(tag: u8) -> Result<bool, Error> {
+    match tag {
+        0 => Ok(false),
+        1 => Ok(true),
+        tag => Err(Error::invalid_tag("bool", tag)),
     }
 }
 
 impl SerializePayload for char {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        writer.write_all(&(*self as u32).to_le_bytes())?;
+        writer.write_array(&(*self as u32).to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4574,13 +4893,24 @@ impl<'a> DeserializePayload<'a> for char {
         char::from_u32(v).expect("invalid char")
     }
     fn try_deserialize(archived: &'a Archived<char>) -> Result<Self, Error> {
-        let value = <u32 as DeserializePayload>::try_deserialize(archived.cast())?;
-        char::from_u32(value).ok_or_else(|| {
-            prepaid_validation_error("invalid Unicode scalar value", || {
-                Error::Message(format!("invalid Unicode scalar value {value:#x}"))
-            })
-        })
+        char_from_scalar(<u32 as DeserializePayload>::try_deserialize(
+            archived.cast(),
+        )?)
     }
+    const __NORITO_SCALAR_WIDTH: Option<usize> = Some(4);
+    #[inline]
+    fn __norito_scalar(payload: &[u8]) -> Result<Self, Error> {
+        char_from_scalar(<u32 as DeserializePayload>::__norito_scalar(payload)?)
+    }
+}
+/// The character for a wire value; surrogates and out-of-range values are rejected.
+#[inline]
+fn char_from_scalar(value: u32) -> Result<char, Error> {
+    char::from_u32(value).ok_or_else(|| {
+        prepaid_validation_error("invalid Unicode scalar value", || {
+            Error::Message(format!("invalid Unicode scalar value {value:#x}"))
+        })
+    })
 }
 
 impl SerializePayload for () {
@@ -4620,7 +4950,7 @@ impl<'a, T> DecodeFromSlice<'a> for PhantomData<T> {
 
 impl SerializePayload for i32 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        writer.write_all(&self.to_le_bytes())?;
+        writer.write_array(&self.to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4638,11 +4968,16 @@ impl<'a> DeserializePayload<'a> for i32 {
     fn try_deserialize(archived: &'a Archived<i32>) -> Result<Self, Error> {
         try_read_archived_bytes(archived).map(i32::from_le_bytes)
     }
+    const __NORITO_SCALAR_WIDTH: Option<usize> = Some(4);
+    #[inline]
+    fn __norito_scalar(payload: &[u8]) -> Result<Self, Error> {
+        scalar_payload(payload).map(i32::from_le_bytes)
+    }
 }
 
 impl SerializePayload for u64 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        writer.write_all(&self.to_le_bytes())?;
+        writer.write_array(&self.to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4659,6 +4994,11 @@ impl<'a> DeserializePayload<'a> for u64 {
     }
     fn try_deserialize(archived: &'a Archived<u64>) -> Result<Self, Error> {
         try_read_archived_bytes(archived).map(u64::from_le_bytes)
+    }
+    const __NORITO_SCALAR_WIDTH: Option<usize> = Some(8);
+    #[inline]
+    fn __norito_scalar(payload: &[u8]) -> Result<Self, Error> {
+        scalar_payload(payload).map(u64::from_le_bytes)
     }
 }
 
@@ -4683,13 +5023,19 @@ impl<'a> DeserializePayload<'a> for NonZeroU64 {
     fn try_deserialize(archived: &'a Archived<NonZeroU64>) -> Result<Self, Error> {
         let val_arch: &Archived<u64> = archived.cast();
         let value = <u64 as DeserializePayload>::try_deserialize(val_arch)?;
-        NonZeroU64::new(value).ok_or(Error::InvalidNonZero)
+        NonZeroU64::new(value).ok_or_else(|| Error::InvalidNonZero)
+    }
+    const __NORITO_SCALAR_WIDTH: Option<usize> = Some(8);
+    #[inline]
+    fn __norito_scalar(payload: &[u8]) -> Result<Self, Error> {
+        let value = <u64 as DeserializePayload>::__norito_scalar(payload)?;
+        NonZeroU64::new(value).ok_or_else(|| Error::InvalidNonZero)
     }
 }
 
 impl SerializePayload for i64 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        writer.write_all(&self.to_le_bytes())?;
+        writer.write_array(&self.to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4707,11 +5053,16 @@ impl<'a> DeserializePayload<'a> for i64 {
     fn try_deserialize(archived: &'a Archived<i64>) -> Result<Self, Error> {
         try_read_archived_bytes(archived).map(i64::from_le_bytes)
     }
+    const __NORITO_SCALAR_WIDTH: Option<usize> = Some(8);
+    #[inline]
+    fn __norito_scalar(payload: &[u8]) -> Result<Self, Error> {
+        scalar_payload(payload).map(i64::from_le_bytes)
+    }
 }
 
 impl SerializePayload for usize {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        writer.write_all(&(*self as u64).to_le_bytes())?;
+        writer.write_array(&(*self as u64).to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4730,11 +5081,17 @@ impl<'a> DeserializePayload<'a> for usize {
         let value = u64::from_le_bytes(try_read_archived_bytes(archived)?);
         usize::try_from(value).map_err(|_| Error::LengthMismatch)
     }
+    const __NORITO_SCALAR_WIDTH: Option<usize> = Some(8);
+    #[inline]
+    fn __norito_scalar(payload: &[u8]) -> Result<Self, Error> {
+        let value = u64::from_le_bytes(scalar_payload(payload)?);
+        usize::try_from(value).map_err(|_| Error::LengthMismatch)
+    }
 }
 
 impl SerializePayload for isize {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        writer.write_all(&(*self as i64).to_le_bytes())?;
+        writer.write_array(&(*self as i64).to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4753,11 +5110,17 @@ impl<'a> DeserializePayload<'a> for isize {
         let value = i64::from_le_bytes(try_read_archived_bytes(archived)?);
         isize::try_from(value).map_err(|_| Error::LengthMismatch)
     }
+    const __NORITO_SCALAR_WIDTH: Option<usize> = Some(8);
+    #[inline]
+    fn __norito_scalar(payload: &[u8]) -> Result<Self, Error> {
+        let value = i64::from_le_bytes(scalar_payload(payload)?);
+        isize::try_from(value).map_err(|_| Error::LengthMismatch)
+    }
 }
 
 impl SerializePayload for u128 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        writer.write_all(&self.to_le_bytes())?;
+        writer.write_array(&self.to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4775,11 +5138,16 @@ impl<'a> DeserializePayload<'a> for u128 {
     fn try_deserialize(archived: &'a Archived<u128>) -> Result<Self, Error> {
         try_read_archived_bytes(archived).map(u128::from_le_bytes)
     }
+    const __NORITO_SCALAR_WIDTH: Option<usize> = Some(16);
+    #[inline]
+    fn __norito_scalar(payload: &[u8]) -> Result<Self, Error> {
+        scalar_payload(payload).map(u128::from_le_bytes)
+    }
 }
 
 impl SerializePayload for i128 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        writer.write_all(&self.to_le_bytes())?;
+        writer.write_array(&self.to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4797,11 +5165,16 @@ impl<'a> DeserializePayload<'a> for i128 {
     fn try_deserialize(archived: &'a Archived<i128>) -> Result<Self, Error> {
         try_read_archived_bytes(archived).map(i128::from_le_bytes)
     }
+    const __NORITO_SCALAR_WIDTH: Option<usize> = Some(16);
+    #[inline]
+    fn __norito_scalar(payload: &[u8]) -> Result<Self, Error> {
+        scalar_payload(payload).map(i128::from_le_bytes)
+    }
 }
 
 impl SerializePayload for f32 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        writer.write_all(&self.to_bits().to_le_bytes())?;
+        writer.write_array(&self.to_bits().to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4819,11 +5192,16 @@ impl<'a> DeserializePayload<'a> for f32 {
     fn try_deserialize(archived: &'a Archived<f32>) -> Result<Self, Error> {
         <u32 as DeserializePayload>::try_deserialize(archived.cast()).map(Self::from_bits)
     }
+    const __NORITO_SCALAR_WIDTH: Option<usize> = Some(4);
+    #[inline]
+    fn __norito_scalar(payload: &[u8]) -> Result<Self, Error> {
+        <u32 as DeserializePayload>::__norito_scalar(payload).map(Self::from_bits)
+    }
 }
 
 impl SerializePayload for f64 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        writer.write_all(&self.to_bits().to_le_bytes())?;
+        writer.write_array(&self.to_bits().to_le_bytes())?;
         Ok(())
     }
     fn encoded_len_hint(&self) -> Option<usize> {
@@ -4840,6 +5218,11 @@ impl<'a> DeserializePayload<'a> for f64 {
     }
     fn try_deserialize(archived: &'a Archived<f64>) -> Result<Self, Error> {
         <u64 as DeserializePayload>::try_deserialize(archived.cast()).map(Self::from_bits)
+    }
+    const __NORITO_SCALAR_WIDTH: Option<usize> = Some(8);
+    #[inline]
+    fn __norito_scalar(payload: &[u8]) -> Result<Self, Error> {
+        <u64 as DeserializePayload>::__norito_scalar(payload).map(Self::from_bits)
     }
 }
 
@@ -4868,9 +5251,11 @@ impl<'a> DeserializePayload<'a> for String {
     }
     fn try_deserialize(archived: &'a Archived<String>) -> Result<Self, Error> {
         let ptr = std::ptr::from_ref(archived).cast::<u8>();
-        let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
+        let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
         let ptr_us = ptr as usize;
-        let base_end = base.checked_add(total).ok_or(Error::LengthMismatch)?;
+        let base_end = base
+            .checked_add(total)
+            .ok_or_else(|| Error::LengthMismatch)?;
         if ptr_us < base || ptr_us >= base_end {
             return Err(Error::LengthMismatch);
         }
@@ -4907,14 +5292,14 @@ impl<'a> DeserializePayload<'a> for &'a str {
     }
     fn try_deserialize(archived: &'a Archived<&'a str>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
-        let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
+        let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
         let ptr_us = ptr as usize;
         if ptr_us < base || ptr_us >= base + total {
             return Err(Error::LengthMismatch);
         }
         let (len, hdr) = read_len_dyn_at_ptr(ptr)?;
         let off = (ptr_us - base) + hdr;
-        let end = off.checked_add(len).ok_or(Error::LengthMismatch)?;
+        let end = off.checked_add(len).ok_or_else(|| Error::LengthMismatch)?;
         if end > total {
             return Err(Error::LengthMismatch);
         }
@@ -4938,8 +5323,8 @@ impl<'a> DecodeFromSlice<'a> for String {
 impl<'a> DecodeFromSlice<'a> for &'a str {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (len, hdr) = read_len_dyn_slice(bytes)?;
-        let end = hdr.checked_add(len).ok_or(Error::LengthMismatch)?;
-        let data = bytes.get(hdr..end).ok_or(Error::LengthMismatch)?;
+        let end = hdr.checked_add(len).ok_or_else(|| Error::LengthMismatch)?;
+        let data = bytes.get(hdr..end).ok_or_else(|| Error::LengthMismatch)?;
         let s = std::str::from_utf8(data).map_err(|_| {
             prepaid_validation_error("invalid utf8", || Error::Message("invalid utf8".into()))
         })?;
@@ -5133,11 +5518,11 @@ impl<T: SerializePayload> SerializePayload for Option<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         match self {
             Some(value) => {
-                writer.write_all(&[1])?;
+                writer.write_array(&[1])?;
                 write_len_prefixed(writer, value)?;
             }
             None => {
-                writer.write_all(&[0])?;
+                writer.write_array(&[0])?;
             }
         }
         Ok(())
@@ -5195,11 +5580,11 @@ impl<T: SerializePayload, E: SerializePayload> SerializePayload for Result<T, E>
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         match self {
             Ok(value) => {
-                writer.write_all(&[0])?;
+                writer.write_array(&[0])?;
                 write_len_prefixed(writer, value)?;
             }
             Err(err) => {
-                writer.write_all(&[1])?;
+                writer.write_array(&[1])?;
                 write_len_prefixed(writer, err)?;
             }
         }
@@ -5243,13 +5628,18 @@ where
     fn try_deserialize(archived: &'a Archived<Result<T, E>>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
         let payload = payload_slice_from_ptr(ptr)?;
-        let tag = *payload.first().ok_or(Error::LengthMismatch)?;
-        let (len, hdr) = read_len_dyn_slice(payload.get(1..).ok_or(Error::LengthMismatch)?)?;
-        let data_start = 1usize.checked_add(hdr).ok_or(Error::LengthMismatch)?;
-        let data_end = data_start.checked_add(len).ok_or(Error::LengthMismatch)?;
+        let tag = *payload.first().ok_or_else(|| Error::LengthMismatch)?;
+        let (len, hdr) =
+            read_len_dyn_slice(payload.get(1..).ok_or_else(|| Error::LengthMismatch)?)?;
+        let data_start = 1usize
+            .checked_add(hdr)
+            .ok_or_else(|| Error::LengthMismatch)?;
+        let data_end = data_start
+            .checked_add(len)
+            .ok_or_else(|| Error::LengthMismatch)?;
         let field = payload
             .get(data_start..data_end)
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         match tag {
             0 => {
                 let _depth = DecodeDepthGuard::enter()?;
@@ -5271,13 +5661,7 @@ impl<T: SerializePayload, const N: usize> SerializePayload for [T; N] {
             return write_byte_element_array(writer, bytes, flags);
         }
         for item in self {
-            let encoded_len = encoded_payload_len(item)?;
-            write_len_with_flags(
-                writer,
-                u64::try_from(encoded_len).map_err(|_| Error::LengthMismatch)?,
-                flags,
-            )?;
-            write_counted_payload(item, writer, encoded_len)?;
+            write_framed_payload(writer, item, LengthPrefix::Layout(flags))?;
         }
         Ok(())
     }
@@ -5319,13 +5703,13 @@ impl<'a, T: DeserializePayload<'a> + SerializePayload + 'static, const N: usize>
     fn try_deserialize(archived: &'a Archived<[T; N]>) -> Result<Self, Error> {
         if TypeId::of::<T>() == TypeId::of::<u8>() {
             let ptr = archived as *const _ as *const u8;
-            let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
+            let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
             if ptr as usize > base + total {
                 return Err(Error::LengthMismatch);
             }
             let start = (ptr as usize)
                 .checked_sub(base)
-                .ok_or(Error::LengthMismatch)?;
+                .ok_or_else(|| Error::LengthMismatch)?;
             let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
             let slice = &payload[start..];
             let (value_u8, used) = <[u8; N] as DecodeFromSlice>::decode_from_slice(slice)?;
@@ -5342,22 +5726,28 @@ impl<'a, T: DeserializePayload<'a> + SerializePayload + 'static, const N: usize>
         }
         let ptr = archived as *const _ as *const u8;
         let mut offset = 0usize;
-        let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
+        let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
         let start = (ptr as usize)
             .checked_sub(base)
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         if start > total {
             return Err(Error::LengthMismatch);
         }
         let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
         let bytes = &payload[start..];
         let out = try_decode_array(|| {
-            let remaining = bytes.get(offset..).ok_or(Error::LengthMismatch)?;
+            let remaining = bytes.get(offset..).ok_or_else(|| Error::LengthMismatch)?;
             // The prefix and element are borrowed in place; no copy is charged.
             let (elem_len, hdr) = inspect_len_from_slice(remaining)?;
-            offset = offset.checked_add(hdr).ok_or(Error::LengthMismatch)?;
-            let end = offset.checked_add(elem_len).ok_or(Error::LengthMismatch)?;
-            let field = bytes.get(offset..end).ok_or(Error::LengthMismatch)?;
+            offset = offset
+                .checked_add(hdr)
+                .ok_or_else(|| Error::LengthMismatch)?;
+            let end = offset
+                .checked_add(elem_len)
+                .ok_or_else(|| Error::LengthMismatch)?;
+            let field = bytes
+                .get(offset..end)
+                .ok_or_else(|| Error::LengthMismatch)?;
             let _depth = DecodeDepthGuard::enter()?;
             record_slice_access(field, elem_len);
             let _child = PayloadCtxGuard::enter(field);
@@ -5466,7 +5856,7 @@ pub mod stream {
         while let Some(elem_len) = len_decoder.next_len(&mut payload)? {
             let available = payload_len
                 .checked_sub(payload.consumed)
-                .ok_or(Error::LengthMismatch)?;
+                .ok_or_else(|| Error::LengthMismatch)?;
             if elem_len > available {
                 return Err(Error::LengthMismatch);
             }
@@ -5501,7 +5891,7 @@ pub mod stream {
         }
         let remaining_tail = payload_len
             .checked_sub(payload.consumed)
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         len_decoder.finish(&mut payload, remaining_tail)?;
         let _ = payload.finalize(payload_len, header.checksum)?;
         Ok(acc)
@@ -5720,7 +6110,7 @@ pub mod stream {
             let total = u64_to_usize(len)?;
             let remaining_payload = payload_len
                 .checked_sub(reader.consumed())
-                .ok_or(Error::LengthMismatch)?;
+                .ok_or_else(|| Error::LengthMismatch)?;
             let prefix_bytes = if (flags & header_flags::COMPACT_LEN) != 0 {
                 1usize
             } else {
@@ -5728,7 +6118,7 @@ pub mod stream {
             };
             let minimum_headers = total
                 .checked_mul(prefix_bytes)
-                .ok_or(Error::LengthMismatch)?;
+                .ok_or_else(|| Error::LengthMismatch)?;
             if minimum_headers > remaining_payload {
                 return Err(Error::LengthMismatch);
             }
@@ -5799,10 +6189,10 @@ where
     }
     fn try_deserialize(archived: &'a Archived<VecDeque<T>>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
-        let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
+        let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
         let offset = (ptr as usize)
             .checked_sub(base)
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         if offset > total {
             return Err(Error::LengthMismatch);
         }
@@ -5834,10 +6224,10 @@ where
     }
     fn try_deserialize(archived: &'a Archived<LinkedList<T>>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
-        let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
+        let (base, total) = payload_ctx().ok_or_else(|| Error::MissingPayloadContext)?;
         let offset = (ptr as usize)
             .checked_sub(base)
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         if offset > total {
             return Err(Error::LengthMismatch);
         }
@@ -5879,18 +6269,24 @@ where
         let mut offset = hdr;
         let output_bytes = len
             .checked_mul(core::mem::size_of::<T>())
-            .ok_or(Error::LengthMismatch)?;
+            .ok_or_else(|| Error::LengthMismatch)?;
         reserve_decode_allocation(output_bytes)?;
         let mut out = BinaryHeap::new();
         out.try_reserve(len).map_err(|_| Error::AllocationFailed {
             bytes: limit_to_u64(output_bytes),
         })?;
         for _ in 0..len {
-            let remaining = payload.get(offset..).ok_or(Error::LengthMismatch)?;
+            let remaining = payload.get(offset..).ok_or_else(|| Error::LengthMismatch)?;
             let (elem_len, hdr) = read_len_dyn_slice(remaining)?;
-            offset = offset.checked_add(hdr).ok_or(Error::LengthMismatch)?;
-            let end = offset.checked_add(elem_len).ok_or(Error::LengthMismatch)?;
-            let field = payload.get(offset..end).ok_or(Error::LengthMismatch)?;
+            offset = offset
+                .checked_add(hdr)
+                .ok_or_else(|| Error::LengthMismatch)?;
+            let end = offset
+                .checked_add(elem_len)
+                .ok_or_else(|| Error::LengthMismatch)?;
+            let field = payload
+                .get(offset..end)
+                .ok_or_else(|| Error::LengthMismatch)?;
             let _depth = DecodeDepthGuard::enter()?;
             // Each element is borrowed in place under its own exact context.
             out.push(decode_borrowed_child::<T>(field)?);
@@ -5921,22 +6317,21 @@ impl SerializePayload for &[u8] {
 
 impl<T: SerializePayload> SerializePayload for Vec<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        if core::any::type_name::<T>() == "u8" {
-            // SAFETY: we verified `T == u8` via `type_name`.
-            let bytes =
-                unsafe { core::slice::from_raw_parts(self.as_ptr().cast::<u8>(), self.len()) };
+        // `Vec<u8>` is the raw-byte layout. The hook borrows the bytes through
+        // the type system instead of casting on the strength of a type name.
+        if let Some(bytes) = T::__norito_byte_elements(self) {
             return bytes.serialize(writer);
         }
         encode_slice_payloads(writer, self)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        if core::any::type_name::<T>() == "u8" {
+        if T::__norito_byte_elements(&[]).is_some() {
             return self.len().checked_add(8);
         }
         sequence_encoded_len_hint(self.iter())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
-        if core::any::type_name::<T>() == "u8" {
+        if T::__norito_byte_elements(&[]).is_some() {
             return self.len().checked_add(8);
         }
         sequence_encoded_len_exact(self.iter())
@@ -5951,14 +6346,7 @@ where
         Self::try_deserialize(archived).expect("Vec decode")
     }
     fn try_deserialize(archived: &'a Archived<Vec<T>>) -> Result<Self, Error> {
-        let ptr = archived as *const _ as *const u8;
-        let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
-        let offset = (ptr as usize).saturating_sub(base);
-        if offset > total {
-            return Err(Error::LengthMismatch);
-        }
-        let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-        let bytes = &payload[offset..];
+        let bytes = payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
         let (vec, _used) = decode_vec_from_slice_with::<T, _>(bytes, |_, _, _| Ok(None))?;
         Ok(vec)
     }
@@ -6027,11 +6415,11 @@ impl<'a, $( $name: DeserializePayload<'a> ),+> DeserializePayload<'a> for ( $( $
                 let payload = payload_slice_from_ptr(ptr)?;
                 let mut offset = 0usize;
                 $(
-                    let remaining = payload.get(offset..).ok_or(Error::LengthMismatch)?;
+                    let remaining = payload.get(offset..).ok_or_else(|| Error::LengthMismatch)?;
                     let (elem_len, hdr) = read_len_dyn_slice(remaining)?;
-                    offset = offset.checked_add(hdr).ok_or(Error::LengthMismatch)?;
-                    let end = offset.checked_add(elem_len).ok_or(Error::LengthMismatch)?;
-                    let field = payload.get(offset..end).ok_or(Error::LengthMismatch)?;
+                    offset = offset.checked_add(hdr).ok_or_else(|| Error::LengthMismatch)?;
+                    let end = offset.checked_add(elem_len).ok_or_else(|| Error::LengthMismatch)?;
+                    let field = payload.get(offset..end).ok_or_else(|| Error::LengthMismatch)?;
                     let _depth = DecodeDepthGuard::enter()?;
                     let $var = decode_borrowed_child::<$name>(field)?;
                     drop(_depth);
@@ -6241,11 +6629,13 @@ pub fn encoded_frame_len_bounded<T: NoritoSerialize>(
 ) -> Result<usize, Error> {
     let framing = Header::SIZE
         .checked_add(payload_alignment_padding_for::<T>())
-        .ok_or(Error::LengthMismatch)?;
-    let payload_maximum = maximum.checked_sub(framing).ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
+    let payload_maximum = maximum
+        .checked_sub(framing)
+        .ok_or_else(|| Error::LengthMismatch)?;
     framing
         .checked_add(encoded_payload_len_bounded(value, payload_maximum)?)
-        .ok_or(Error::LengthMismatch)
+        .ok_or_else(|| Error::LengthMismatch)
 }
 /// Return the exact framed length under the active layout without allocating an output buffer.
 ///
@@ -6259,12 +6649,12 @@ pub fn encoded_frame_len_bounded<T: NoritoSerialize>(
 pub fn encoded_frame_len<T: NoritoSerialize>(value: &T) -> Result<usize, Error> {
     let framing = Header::SIZE
         .checked_add(payload_alignment_padding_for::<T>())
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     // A framed child contributes header bytes even when its payload is empty.
     encode_writers::charge_counted_bytes(framing)?;
     framing
         .checked_add(encoded_payload_len(value)?)
-        .ok_or(Error::LengthMismatch)
+        .ok_or_else(|| Error::LengthMismatch)
 }
 include!("core/exact_byte_vec.rs");
 /// Serialize one canonical frame without allowing the output buffer to grow
@@ -6295,10 +6685,10 @@ pub fn to_bytes_bounded<T: NoritoSerialize>(
     let padding = payload_alignment_padding_for::<T>();
     let headroom = Header::SIZE
         .checked_add(padding)
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     let expected_payload_len = encoded_bytes
         .checked_sub(headroom)
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     let header_payload_len =
         u64::try_from(expected_payload_len).map_err(|_| Error::LengthMismatch)?;
     let mut out = exact_byte_vec_with_capacity(encoded_bytes)?;
@@ -6616,7 +7006,7 @@ pub fn frame_bare_with_header_flags<T: NoritoSerialize>(
     let frame_len = Header::SIZE
         .checked_add(padding)
         .and_then(|len| len.checked_add(payload.len()))
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     let mut out = Vec::with_capacity(frame_len);
     write_bare_frame_with_header_flags::<T, _>(&mut out, payload, flags)?;
     Ok(out)
@@ -7288,10 +7678,6 @@ enum FieldDecodeBoundary {
     Canonical,
     Prefix,
 }
-thread_local! {
-    static FIELD_DECODE_BOUNDARY: Cell<FieldDecodeBoundary> =
-        const { Cell::new(FieldDecodeBoundary::Canonical) };
-}
 struct FieldDecodeBoundaryGuard {
     previous: FieldDecodeBoundary,
 }
@@ -7313,13 +7699,30 @@ trait ErasedFieldSlot {
     unsafe fn try_decode(&mut self, archived: *const u8) -> Result<(), Error>;
     fn canonical_match(&self, expected: &[u8], require_complete: bool) -> Result<usize, Error>;
 }
+/// Compare `value`'s payload, serialized under the active layout, with the
+/// start of `expected`, as serializing it into an [`ExactSliceWriter`] does.
+///
+/// Outside a bounded work or count scope each length-prefixed child is
+/// compared against the length the expected bytes declare instead of being
+/// measured first, so nesting does not multiply the work; the verdict is the
+/// same. Inside such a scope the measured path keeps its fixed charges.
+pub(crate) fn compare_payload<'e>(
+    value: &dyn SerializePayload,
+    expected: &'e [u8],
+) -> (Result<(), Error>, ExactSliceWriter<'e>) {
+    if encode_work::thread_accounting_active() {
+        let mut exact = ExactSliceWriter::new(expected);
+        let result = serialize_to_writer(value, &mut exact);
+        return (result, exact);
+    }
+    Encoder::compare_against(expected, |encoder| value.serialize(encoder))
+}
 fn match_canonical_payload(
     value: &dyn SerializePayload,
     expected: &[u8],
     require_complete: bool,
 ) -> Result<usize, Error> {
-    let mut exact = ExactSliceWriter::new(expected);
-    let encode_result = serialize_to_writer(value, &mut exact);
+    let (encode_result, exact) = compare_payload(value, expected);
     if exact.mismatched() {
         return Err(Error::LengthMismatch);
     }
@@ -7340,10 +7743,10 @@ impl<T> TypedFieldSlot<T> {
         self.take_value()
     }
     pub(crate) fn take_value(&mut self) -> Result<T, Error> {
-        self.value.take().ok_or(Error::LengthMismatch)
+        self.value.take().ok_or_else(|| Error::LengthMismatch)
     }
     pub(crate) fn value(&self) -> Result<&T, Error> {
-        self.value.as_ref().ok_or(Error::LengthMismatch)
+        self.value.as_ref().ok_or_else(|| Error::LengthMismatch)
     }
 }
 impl<T> ErasedFieldSlot for TypedFieldSlot<T>
@@ -7366,17 +7769,9 @@ where
         Ok(())
     }
     fn canonical_match(&self, expected: &[u8], require_complete: bool) -> Result<usize, Error> {
-        let value = self.value.as_ref().ok_or(Error::LengthMismatch)?;
+        let value = self.value.as_ref().ok_or_else(|| Error::LengthMismatch)?;
         match_canonical_payload(value, expected, require_complete)
     }
-}
-fn invoke_erased_field_decoder(
-    slot: &mut dyn ErasedFieldSlot,
-    archived: *const u8,
-) -> Result<(), Error> {
-    let type_name = slot.type_name();
-    let mut decode = || unsafe { slot.try_decode(archived) };
-    crate::guarded_try_deserialize_erased(type_name, &mut decode)
 }
 fn resolve_erased_field_used(
     boundary: FieldDecodeBoundary,
@@ -7414,63 +7809,241 @@ fn resolve_erased_field_used(
         }
     }
 }
+/// Thread state displaced while one field decodes, restored on return and unwind.
+struct FieldScope<'tls> {
+    tls: &'tls DecodeTls,
+    depth: usize,
+    root_installed: bool,
+    flags: Option<DecodeFlags>,
+    boundary: Option<FieldDecodeBoundary>,
+}
+impl Drop for FieldScope<'_> {
+    fn drop(&mut self) {
+        if let Some(boundary) = self.boundary {
+            self.tls.boundary.set(boundary);
+        }
+        if let Some(flags) = self.flags {
+            self.tls.flags.set(flags);
+        }
+        if self.root_installed {
+            self.tls.root_span.set(None);
+        }
+        self.tls.nesting_depth.set(self.depth);
+    }
+}
+/// The field's payload context, left before its consumption is resolved.
+struct FieldPayload<'tls> {
+    tls: &'tls DecodeTls,
+    frame: PayloadFrame,
+}
+impl Drop for FieldPayload<'_> {
+    fn drop(&mut self) {
+        self.tls.leave_payload(&self.frame);
+    }
+}
+/// Panic-suppression depth held while one field decoder runs.
+struct SuppressedPanics<'tls>(&'tls Cell<u32>);
+impl Drop for SuppressedPanics<'_> {
+    fn drop(&mut self) {
+        self.0.set(self.0.get().saturating_sub(1));
+    }
+}
+impl DecodeTls {
+    /// Run a type-erased field decoder with the panic policy of
+    /// [`crate::guarded_try_deserialize`]. One non-generic body serves every
+    /// field type while keeping the concrete type name in diagnostics.
+    fn invoke_field_decoder(
+        &self,
+        slot: &mut dyn ErasedFieldSlot,
+        archived: *const u8,
+    ) -> Result<(), Error> {
+        crate::install_decode_panic_hook();
+        self.panic_depth
+            .set(self.panic_depth.get().saturating_add(1));
+        let _suppressed = SuppressedPanics(&self.panic_depth);
+        // SAFETY: the caller passes the marker address of the field it installed.
+        let decode = std::panic::AssertUnwindSafe(|| unsafe { slot.try_decode(archived) });
+        match std::panic::catch_unwind(decode) {
+            Ok(result) => result,
+            Err(panic) => Err(crate::suppressed_decode_panic(slot.type_name(), &*panic)),
+        }
+    }
+    /// Borrow the length-prefixed field at `offset` of the payload from `ptr`.
+    ///
+    /// Framing borrows the original payload; it owns no body or alignment
+    /// buffer. Concrete child decoders charge the storage they construct.
+    fn take_length_prefixed_field(
+        &self,
+        ptr: *const u8,
+        offset: usize,
+    ) -> Result<(&'static [u8], usize), Error> {
+        let payload = self.payload_from(ptr)?;
+        let Some(remaining) = payload.get(offset..) else {
+            return Err(Error::LengthMismatch);
+        };
+        let flags = self.effective_flags().unwrap_or_else(default_encode_flags);
+        let (length, header_len) = if compact_len_enabled_for_flags(flags) {
+            decode_varint_from_slice(remaining)?
+        } else {
+            let Some(prefix) = remaining.first_chunk::<8>() else {
+                return Err(Error::LengthMismatch);
+            };
+            (u64::from_le_bytes(*prefix), 8)
+        };
+        self.record_access(remaining.as_ptr(), header_len);
+        self.check_field_length(length)?;
+        let Ok(field_len) = usize::try_from(length) else {
+            return Err(Error::LengthMismatch);
+        };
+        let Some(data_start) = offset.checked_add(header_len) else {
+            return Err(Error::LengthMismatch);
+        };
+        let Some(data_end) = data_start.checked_add(field_len) else {
+            return Err(Error::LengthMismatch);
+        };
+        let Some(field) = payload.get(data_start..data_end) else {
+            return Err(Error::LengthMismatch);
+        };
+        Ok((field, data_end))
+    }
+    /// Admit the canonical field `bytes` of a `width`-byte scalar.
+    ///
+    /// These are the checks [`Self::decode_field`] makes before a scalar
+    /// reads its bytes, in the same order: the per-field ceiling, the nesting
+    /// level the field occupies and a body of at least `width` bytes. A
+    /// scalar neither recurses nor frames children, so the level is checked
+    /// without being entered and no nested context or layout is installed.
+    #[inline]
+    fn admit_scalar_field(
+        &self,
+        bytes: &[u8],
+        width: usize,
+        length_admitted: bool,
+    ) -> Result<(), Error> {
+        if !length_admitted {
+            self.check_field_length(
+                u64::try_from(bytes.len()).map_err(|_| Error::LengthMismatch)?,
+            )?;
+        }
+        match self.nesting_depth.get().checked_add(1) {
+            Some(depth) if depth <= self.tightest_limits().depth_ceiling => {}
+            // The ordered walk reports the refusing layer or the overflow.
+            _ => {
+                checked_decode_depth(1)?;
+            }
+        }
+        if bytes.len() < width {
+            return Err(Error::LengthMismatch);
+        }
+        Ok(())
+    }
+    /// Settle a scalar field whose first `width` bytes were just decoded.
+    ///
+    /// The enclosing payload records those bytes as read. A field longer than
+    /// its scalar is not canonical; a value error, reported by the caller,
+    /// takes precedence over that, as it does in [`Self::decode_field`].
+    #[inline]
+    fn settle_scalar_field(&self, bytes: &[u8], width: usize, decoded: bool) -> Result<(), Error> {
+        if decoded && bytes.len() == width {
+            self.record_access(bytes.as_ptr(), width);
+            return Ok(());
+        }
+        self.absorb_nested_access(bytes.as_ptr(), bytes.len(), width);
+        if decoded {
+            return Err(Error::LengthMismatch);
+        }
+        Ok(())
+    }
+    /// Decode one field payload through `slot`; see [`decode_field_erased`].
+    ///
+    /// `length_admitted` records that the caller already checked this exact
+    /// field length against the active per-field ceilings.
+    fn decode_field(
+        &self,
+        bytes: &[u8],
+        boundary: FieldDecodeBoundary,
+        slot: &mut dyn ErasedFieldSlot,
+        length_admitted: bool,
+    ) -> Result<usize, Error> {
+        if matches!(boundary, FieldDecodeBoundary::Canonical) && !length_admitted {
+            // The canonical field slice is borrowed. Check its wire-size ceiling
+            // here; concrete decoders charge only buffers and owned values they
+            // actually allocate.
+            self.check_field_length(
+                u64::try_from(bytes.len()).map_err(|_| Error::LengthMismatch)?,
+            )?;
+        }
+        let mut scope = FieldScope {
+            tls: self,
+            depth: self.enter_depth()?,
+            root_installed: false,
+            flags: None,
+            boundary: None,
+        };
+        if bytes.is_empty() {
+            if slot.archived_size() != 0 {
+                return Err(Error::LengthMismatch);
+            }
+            let _payload = FieldPayload {
+                tls: self,
+                frame: self.enter_inherited_payload(&[], 0),
+            };
+            let dangling = slot.dangling_archived();
+            self.invoke_field_decoder(slot, dangling)?;
+            return Ok(0);
+        }
+        if self.root_span.get().is_none() {
+            self.root_span
+                .set(Some((bytes.as_ptr() as usize, bytes.len())));
+            scope.root_installed = true;
+        }
+        if !self.flags.get().active {
+            let flags = self.effective_flags().unwrap_or_else(default_encode_flags);
+            scope.flags = Some(self.select_flags(flags));
+        }
+        if crate::debug_trace_enabled() && matches!(boundary, FieldDecodeBoundary::Canonical) {
+            eprintln!(
+                "decode_field_canonical::<{}> len={}",
+                slot.type_name(),
+                bytes.len()
+            );
+        }
+        // `Archived<T>` is a byte-aligned marker and every decoder reads through
+        // the bounds-checked payload context, so the original field is borrowed in
+        // place at any address. No alignment copy is allocated or charged.
+        let payload = FieldPayload {
+            tls: self,
+            frame: self.enter_inherited_payload(bytes, bytes.len()),
+        };
+        scope.boundary = Some(self.boundary.replace(boundary));
+        self.invoke_field_decoder(slot, bytes.as_ptr())?;
+        let used_ctx = self.payload.get().map(|state| state.max_access);
+        drop(payload);
+        let used = resolve_erased_field_used(boundary, slot, bytes, used_ctx)?;
+        // Scalar decoders may not record an access at all. Record the resolved
+        // canonical consumption against the original field.
+        self.record_access(bytes.as_ptr(), used.min(bytes.len()));
+        Ok(used)
+    }
+}
 #[inline(never)]
 fn decode_field_erased(
     bytes: &[u8],
     boundary: FieldDecodeBoundary,
     slot: &mut dyn ErasedFieldSlot,
 ) -> Result<usize, Error> {
-    if matches!(boundary, FieldDecodeBoundary::Canonical) {
-        // The canonical field slice is borrowed. Check its wire-size ceiling
-        // here; concrete decoders charge only buffers and owned values they
-        // actually allocate.
-        check_decode_field_length(u64::try_from(bytes.len()).map_err(|_| Error::LengthMismatch)?)?;
-    }
-    let _depth = DecodeDepthGuard::enter()?;
-    if bytes.is_empty() {
-        if slot.archived_size() != 0 {
-            return Err(Error::LengthMismatch);
-        }
-        let _guard = PayloadCtxGuard::enter(&[]);
-        let dangling = slot.dangling_archived();
-        invoke_erased_field_decoder(slot, dangling)?;
-        return Ok(0);
-    }
-    struct RootGuard(bool);
-    impl Drop for RootGuard {
-        fn drop(&mut self) {
-            if self.0 {
-                clear_decode_root();
-            }
-        }
-    }
-    let _root_guard = if payload_root_span().is_none() {
-        set_decode_root(bytes);
-        Some(RootGuard(true))
-    } else {
-        None
-    };
-    let _flags_guard = enter_field_codec_flags();
-    if crate::debug_trace_enabled() && matches!(boundary, FieldDecodeBoundary::Canonical) {
-        eprintln!(
-            "decode_field_canonical::<{}> len={}",
-            slot.type_name(),
-            bytes.len()
-        );
-    }
-    // `Archived<T>` is a byte-aligned marker and every decoder reads through
-    // the bounds-checked payload context, so the original field is borrowed in
-    // place at any address. No alignment copy is allocated or charged.
-    let payload_guard = PayloadCtxGuard::enter(bytes);
-    let _boundary_guard = FieldDecodeBoundaryGuard::enter(boundary);
-    invoke_erased_field_decoder(slot, bytes.as_ptr())?;
-    let used_ctx = payload_ctx_max_access();
-    drop(payload_guard);
-    let used = resolve_erased_field_used(boundary, slot, bytes, used_ctx)?;
-    // Scalar decoders may not record an access at all. Record the resolved
-    // canonical consumption against the original field.
-    note_payload_access(bytes, used);
-    Ok(used)
+    DECODE.with(|tls| tls.decode_field(bytes, boundary, slot, false))
+}
+/// Payload width of `T` when field framing may decode it as a fixed-width scalar.
+///
+/// Tracing reports every field through the general decoder, so it turns this off.
+#[inline]
+fn scalar_field_width<T>() -> Option<usize>
+where
+    T: for<'de> DeserializePayload<'de>,
+{
+    <T as DeserializePayload<'static>>::__NORITO_SCALAR_WIDTH
+        .filter(|_| !crate::debug_trace_enabled())
 }
 /// Decode into one caller-retained value slot, returning no large owned temporary through
 /// the framing and resource-scope stack. The slot owns cleanup on every failure or unwind.
@@ -7495,6 +8068,14 @@ pub fn decode_field_canonical<T>(bytes: &[u8]) -> Result<(T, usize), Error>
 where
     T: for<'de> crate::DeserializePayload<'de> + crate::SerializePayload,
 {
+    if let Some(width) = scalar_field_width::<T>() {
+        return DECODE.with(|tls| {
+            tls.admit_scalar_field(bytes, width, false)?;
+            let value = <T as DeserializePayload<'static>>::__norito_scalar(&bytes[..width]);
+            tls.settle_scalar_field(bytes, width, value.is_ok())?;
+            Ok((value?, bytes.len()))
+        });
+    }
     let mut slot = TypedFieldSlot::<T>::new();
     let used = decode_field_erased(bytes, FieldDecodeBoundary::Canonical, &mut slot)?;
     Ok((slot.into_value()?, used))
@@ -7520,8 +8101,12 @@ fn take_context_field(
     len: usize,
 ) -> Result<(&'static [u8], usize), Error> {
     let payload = payload_slice_from_ptr(ptr)?;
-    let end = offset.checked_add(len).ok_or(Error::LengthMismatch)?;
-    let field = payload.get(offset..end).ok_or(Error::LengthMismatch)?;
+    let end = offset
+        .checked_add(len)
+        .ok_or_else(|| Error::LengthMismatch)?;
+    let field = payload
+        .get(offset..end)
+        .ok_or_else(|| Error::LengthMismatch)?;
     Ok((field, end))
 }
 #[inline(never)]
@@ -7529,22 +8114,22 @@ fn take_length_prefixed_context_field(
     ptr: *const u8,
     offset: usize,
 ) -> Result<(&'static [u8], usize), Error> {
-    take_length_prefixed_field(payload_slice_from_ptr(ptr)?, offset)
+    DECODE.with(|tls| tls.take_length_prefixed_field(ptr, offset))
 }
 fn take_length_prefixed_field(payload: &[u8], offset: usize) -> Result<(&[u8], usize), Error> {
-    let remaining = payload.get(offset..).ok_or(Error::LengthMismatch)?;
+    let remaining = payload.get(offset..).ok_or_else(|| Error::LengthMismatch)?;
     // Framing borrows the original payload; it owns no body or alignment buffer.
     // Concrete child decoders charge the storage they actually construct.
     let (field_len, header_len) = inspect_len_from_slice(remaining)?;
     let data_start = offset
         .checked_add(header_len)
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     let data_end = data_start
         .checked_add(field_len)
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     let field = payload
         .get(data_start..data_end)
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     Ok((field, data_end))
 }
 /// Decode one length-prefixed field relative to an active payload context.
@@ -7558,14 +8143,46 @@ pub fn decode_context_field_canonical<T>(ptr: *const u8, offset: &mut usize) -> 
 where
     T: for<'de> crate::DeserializePayload<'de> + crate::SerializePayload,
 {
-    let (field, next_offset) = take_length_prefixed_context_field(ptr, *offset)?;
+    if let Some(width) = scalar_field_width::<T>() {
+        return DECODE.with(|tls| {
+            let (field, next_offset) = tls.take_length_prefixed_field(ptr, *offset)?;
+            // Framing admitted this exact length against the per-field ceilings.
+            tls.admit_scalar_field(field, width, true)?;
+            let value = <T as DeserializePayload<'static>>::__norito_scalar(&field[..width]);
+            tls.settle_scalar_field(field, width, value.is_ok())?;
+            let value = value?;
+            *offset = next_offset;
+            Ok(value)
+        });
+    }
     // Retain one decoded owner here instead of propagating `(T, usize)` through
     // another generic return frame. Fixed arrays can make each such temporary
     // several KiB, accumulated at every nested record field in debug builds.
     let mut slot = TypedFieldSlot::<T>::new();
-    decode_field_canonical_into_slot(field, &mut slot)?;
-    *offset = next_offset;
+    decode_context_field_into(ptr, offset, &mut slot)?;
     slot.into_value()
+}
+/// Frame and canonically decode the field at `offset` into `slot`.
+///
+/// Framing, the per-field ceiling, the child's context and its exact
+/// consumption share one lookup of the thread's decoder state, and one
+/// non-generic body serves every field type.
+#[inline(never)]
+fn decode_context_field_into(
+    ptr: *const u8,
+    offset: &mut usize,
+    slot: &mut dyn ErasedFieldSlot,
+) -> Result<(), Error> {
+    DECODE.with(|tls| {
+        let (field, next_offset) = tls.take_length_prefixed_field(ptr, *offset)?;
+        // Framing admitted this exact length against the per-field ceilings.
+        let used = tls.decode_field(field, FieldDecodeBoundary::Canonical, slot, true)?;
+        if used != field.len() {
+            return Err(Error::LengthMismatch);
+        }
+        *offset = next_offset;
+        Ok(())
+    })
 }
 /// Copy one fixed-width byte-array field relative to an active payload context.
 ///
@@ -7607,15 +8224,16 @@ pub fn decode_context_framed_byte_array<const N: usize>(
 #[doc(hidden)]
 #[inline(never)]
 pub fn finish_context_fields(ptr: *const u8, offset: usize) -> Result<(), Error> {
-    let payload = payload_slice_from_ptr(ptr)?;
-    let boundary = FIELD_DECODE_BOUNDARY.with(Cell::get);
-    if offset > payload.len()
-        || (boundary == FieldDecodeBoundary::Canonical && offset != payload.len())
-    {
-        return Err(Error::LengthMismatch);
-    }
-    note_payload_access(payload, offset);
-    Ok(())
+    DECODE.with(|tls| {
+        let payload = tls.payload_from(ptr)?;
+        if offset > payload.len()
+            || (tls.boundary.get() == FieldDecodeBoundary::Canonical && offset != payload.len())
+        {
+            return Err(Error::LengthMismatch);
+        }
+        tls.record_access(payload.as_ptr(), offset);
+        Ok(())
+    })
 }
 /// Decode a field using its `DecodeFromSlice` implementation, ensuring full
 /// consumption without re-encoding for canonical byte checks.

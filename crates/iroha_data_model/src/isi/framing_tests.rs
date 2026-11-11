@@ -126,8 +126,11 @@ fn instruction_box_and_const_vec_measure_each_instruction_once() {
         let _flags = DecodeFlagsGuard::enter(flags);
         let boxed = InstructionBox::from_boxed(Box::new(CountedInstruction(0xa5)));
         let sequence = ConstVec::from(vec![boxed.clone()]);
+        // A buffer places each instruction frame around its single payload
+        // pass. A stream needs every length first: the frame keeps its two
+        // checked passes, and a sequence element is also measured.
         let cases: [(&dyn SerializePayload, usize); 2] = [(&boxed, 2), (&sequence, 3)];
-        for (value, output_visits) in cases {
+        for (value, streamed_visits) in cases {
             SERIALIZE_VISITS.with(|visits| visits.set(0));
             let length = encoded_payload_len(value).expect("measure instruction payload");
             assert_eq!(
@@ -141,8 +144,18 @@ fn instruction_box_and_const_vec_measure_each_instruction_once() {
             assert_eq!(bytes.len(), length);
             assert_eq!(
                 SERIALIZE_VISITS.with(Cell::get),
-                output_visits,
-                "actual output added a redundant frame-length pass, flags {flags:#x}"
+                1,
+                "buffer output replayed the framed instruction, flags {flags:#x}"
+            );
+            SERIALIZE_VISITS.with(|visits| visits.set(0));
+            let mut streamed = Vec::new();
+            norito::core::serialize_to_writer(value, &mut streamed)
+                .expect("stream checked instruction payload");
+            assert_eq!(streamed, bytes);
+            assert_eq!(
+                SERIALIZE_VISITS.with(Cell::get),
+                streamed_visits,
+                "streamed output added a redundant frame-length pass, flags {flags:#x}"
             );
         }
     }

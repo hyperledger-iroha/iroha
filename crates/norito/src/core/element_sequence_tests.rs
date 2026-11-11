@@ -52,6 +52,14 @@ fn projected_sequences_measure_each_leaf_once_and_preserve_tuple_wire() {
         let mut actual = Vec::new();
         serialize_to_buffer(&projected, &mut actual).unwrap();
         assert_eq!(measured, actual.len());
+        // A buffer frames each child from the bytes it wrote: one visit per leaf.
+        assert_eq!(visits.get(), entries.len() * 2, "flags {flags:#x}");
+        // A streaming destination needs every length before its payload: each
+        // entry is measured, then both of its leaves are measured and written.
+        visits.set(0);
+        let mut streamed = Vec::new();
+        serialize_to_writer(&projected, &mut streamed).unwrap();
+        assert_eq!(streamed, actual, "streamed tuple sequence flags {flags:#x}");
         assert_eq!(visits.get(), entries.len() * 6, "flags {flags:#x}");
         let mut expected = Vec::new();
         serialize_to_buffer(&entries.to_vec(), &mut expected).unwrap();
@@ -178,11 +186,12 @@ fn projected_sequences_reject_real_output_growth_and_shrinkage() {
                 visits: Cell::new(0),
                 fail_on: None,
             };
+            // A streaming destination measures the element, then writes it.
             let mut bytes = Vec::with_capacity(32);
             let capacity = bytes.capacity();
             assert!(matches!(
                 write_element_sequence::<PayloadView<'_>, _>(
-                    &mut Encoder::for_buffer(&mut bytes),
+                    &mut Encoder::new(&mut bytes),
                     std::iter::once(&item).map(PayloadView),
                 ),
                 Err(Error::LengthMismatch)
@@ -195,6 +204,25 @@ fn projected_sequences_reject_real_output_growth_and_shrinkage() {
                 "growth or shrinkage escaped bounds, {flags:#x}"
             );
             assert_eq!(bytes.capacity(), capacity);
+
+            // A buffer has no second pass to disagree with: the element is
+            // visited once and its prefix is the length of the bytes written.
+            let single = ChangingPayload {
+                first: &payload[..first],
+                second: &payload[..second],
+                visits: Cell::new(0),
+                fail_on: None,
+            };
+            let mut framed = Vec::new();
+            write_element_sequence::<PayloadView<'_>, _>(
+                &mut Encoder::for_buffer(&mut framed),
+                std::iter::once(&single).map(PayloadView),
+            )
+            .unwrap();
+            assert_eq!(single.visits.get(), 1);
+            let mut expected = element_prefix(first, flags);
+            expected.extend_from_slice(&payload[..first]);
+            assert_eq!(framed, expected, "single-pass framing, {flags:#x}");
         }
     }
 }
@@ -213,7 +241,7 @@ fn projected_sequences_preserve_measurement_and_emission_errors() {
             let mut bytes = Vec::new();
             assert!(matches!(
                 write_element_sequence::<PayloadView<'_>, _>(
-                    &mut Encoder::for_buffer(&mut bytes),
+                    &mut Encoder::new(&mut bytes),
                     std::iter::once(&item).map(PayloadView),
                 ),
                 Err(Error::NonCanonicalEncoding)
@@ -229,6 +257,21 @@ fn projected_sequences_preserve_measurement_and_emission_errors() {
                 "child error changed partial output, flags {flags:#x}"
             );
         }
+        // A buffer serializes the child once and returns its error unchanged.
+        let item = ChangingPayload {
+            first: &[0x11],
+            second: &[0x11],
+            visits: Cell::new(0),
+            fail_on: Some(1),
+        };
+        assert!(matches!(
+            write_element_sequence::<PayloadView<'_>, _>(
+                &mut Encoder::for_buffer(&mut Vec::new()),
+                std::iter::once(&item).map(PayloadView),
+            ),
+            Err(Error::NonCanonicalEncoding)
+        ));
+        assert_eq!(item.visits.get(), 1);
     }
 }
 
@@ -247,8 +290,14 @@ fn generalized_payload_helpers_preserve_map_columns_and_counting() {
         visits.set(0);
         let mut actual = Vec::new();
         serialize_to_buffer(&map, &mut actual).unwrap();
-        assert_eq!(visits.get(), entries.len() * 2);
+        // A buffer visits each value once; a stream measures, then writes it.
+        assert_eq!(visits.get(), entries.len());
         assert_eq!(length, actual.len());
+        visits.set(0);
+        let mut streamed = Vec::new();
+        serialize_to_writer(&map, &mut streamed).unwrap();
+        assert_eq!(visits.get(), entries.len() * 2);
+        assert_eq!(streamed, actual);
         let mut expected = 2_u64.to_le_bytes().to_vec();
         for (key, value) in entries {
             for field in [key, value] {

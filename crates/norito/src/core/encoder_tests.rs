@@ -706,7 +706,7 @@ fn actual_sequence_rejects_second_pass_growth_even_when_leaf_suppresses_error() 
             }];
             let mut actual = Vec::new();
             assert!(matches!(
-                serialize_to_buffer(&value, &mut actual),
+                serialize_to_writer(&value, &mut actual),
                 Err(Error::LengthMismatch)
             ));
             let mut expected = 1_u64.to_le_bytes().to_vec();
@@ -723,6 +723,30 @@ fn actual_sequence_rejects_second_pass_growth_even_when_leaf_suppresses_error() 
 }
 
 #[test]
+fn buffer_sequence_frames_the_bytes_a_stateful_leaf_actually_wrote() {
+    for flags in [0, header_flags::COMPACT_LEN] {
+        for (first, second) in [(&[1_u8][..], &[1_u8, 2][..]), (&[1, 2][..], &[1][..])] {
+            let _layout = DecodeFlagsGuard::enter(flags);
+            let calls = Cell::new(0);
+            let value = vec![Changes {
+                calls: &calls,
+                first,
+                second,
+                suppress: false,
+            }];
+            let mut actual = Vec::new();
+            serialize_to_buffer(&value, &mut actual).unwrap();
+            // One visit: there is no second pass for the length to disagree with.
+            assert_eq!(calls.get(), 1);
+            let mut expected = 1_u64.to_le_bytes().to_vec();
+            write_len_with_flags(&mut expected, first.len() as u64, flags).unwrap();
+            expected.extend_from_slice(first);
+            assert_eq!(actual, expected);
+        }
+    }
+}
+
+#[test]
 fn actual_sequence_rejects_second_pass_shrink() {
     for flags in [0, header_flags::COMPACT_LEN] {
         let _layout = DecodeFlagsGuard::enter(flags);
@@ -734,7 +758,7 @@ fn actual_sequence_rejects_second_pass_shrink() {
             suppress: false,
         }];
         assert!(matches!(
-            serialize_to_buffer(&value, &mut Vec::new()),
+            serialize_to_writer(&value, &mut Vec::new()),
             Err(Error::LengthMismatch)
         ));
         assert_eq!(calls.get(), 2);

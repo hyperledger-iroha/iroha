@@ -661,12 +661,8 @@ fn compare_prepared_frame<T: NoritoSerialize, D: SerializePayload>(
     bytes: &[u8],
     value: &D,
 ) -> Result<(), Error> {
-    let mut exact = ExactSliceWriter::new(bytes);
-    let encoded = encode_frames::write_typed_payload_frame::<T, D, _>(
-        value,
-        &mut exact,
-        default_encode_flags(),
-    );
+    let (encoded, exact) =
+        encode_frames::compare_typed_frame::<T, D>(value, bytes, default_encode_flags());
     if exact.mismatched() {
         return Err(Error::NonCanonicalEncoding);
     }

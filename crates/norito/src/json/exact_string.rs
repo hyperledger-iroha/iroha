@@ -8,6 +8,6 @@ pub(super) fn allocate<T>(length: usize) -> Result<Vec<T>, Error> {
     // SAFETY: `layout` is non-zero and exact. The caller charges the complete
     // `length * size_of::<T>()` layout before entry; null is rejected before ownership.
     let allocation = unsafe { std::alloc::alloc(layout) };
-    let allocation = core::ptr::NonNull::new(allocation).ok_or(Error::AllocationFailed)?;
+    let allocation = core::ptr::NonNull::new(allocation).ok_or_else(|| Error::AllocationFailed)?;
     Ok(unsafe { Vec::from_raw_parts(allocation.as_ptr().cast::<T>(), 0, length) })
 }

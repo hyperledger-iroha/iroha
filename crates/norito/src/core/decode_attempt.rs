@@ -352,11 +352,16 @@ pub(super) fn note_fresh_budget(counters: &CounterOwner) {
 pub(super) fn layers_in_order<'a>(
     layers: budget_scope::BudgetLayers<'a>,
 ) -> impl Iterator<Item = (usize, &'a ActiveDecodeBudgetLayer)> {
-    let split = OBSERVER.with(|slot| {
-        slot.borrow()
-            .as_ref()
-            .map_or(0, |observer| observer.protocol_start.min(layers.len()))
-    });
+    // Rotating zero or one layer cannot reorder it, so skip the observer lookup.
+    let split = if layers.len() <= 1 {
+        0
+    } else {
+        OBSERVER.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .map_or(0, |observer| observer.protocol_start.min(layers.len()))
+        })
+    };
     layers
         .iter()
         .enumerate()

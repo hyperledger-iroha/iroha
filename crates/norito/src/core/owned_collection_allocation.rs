@@ -169,10 +169,10 @@ fn checked_rust_struct_layout_upper_bound(
     debug_assert!(max_alignment.is_power_of_two());
     let padding = field_count
         .checked_mul(max_alignment.saturating_sub(1))
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     field_bytes
         .checked_add(padding)
-        .ok_or(Error::LengthMismatch)
+        .ok_or_else(|| Error::LengthMismatch)
 }
 /// Bytes reserved by all `LinkedList<T>` nodes created for `elements`.
 fn linked_list_node_allocation_bytes<T>(elements: usize) -> Result<usize, Error> {
@@ -180,12 +180,12 @@ fn linked_list_node_allocation_bytes<T>(elements: usize) -> Result<usize, Error>
     let field_bytes = pointer_bytes
         .checked_mul(2)
         .and_then(|bytes| bytes.checked_add(core::mem::size_of::<T>()))
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     let max_alignment = core::mem::align_of::<T>().max(core::mem::align_of::<usize>());
     let node_bytes = checked_rust_struct_layout_upper_bound(field_bytes, 3, max_alignment)?;
     elements
         .checked_mul(node_bytes)
-        .ok_or(Error::LengthMismatch)
+        .ok_or_else(|| Error::LengthMismatch)
 }
 /// Maximum live B-tree nodes while inserting `entries` distinct keys into one
 /// standard-library B-tree.
@@ -202,7 +202,7 @@ fn btree_maps_node_count_upper_bound(maps: usize, entries: usize) -> Result<usiz
     let remaining_entries = entries.saturating_sub(non_empty_maps);
     non_empty_maps
         .checked_add(remaining_entries / STD_BTREE_NODE_MIN_ENTRIES)
-        .ok_or(Error::LengthMismatch)
+        .ok_or_else(|| Error::LengthMismatch)
 }
 /// Bytes reserved by all `BTreeMap<K, V>` nodes created for `entries`.
 ///
@@ -220,7 +220,7 @@ pub fn owned_btree_allocation_bytes<K, V>(entries: usize) -> Result<usize, Error
     let node_bytes = btree_node_allocation_bytes::<K, V>()?;
     owned_btree_node_count_upper_bound(entries)?
         .checked_mul(node_bytes)
-        .ok_or(Error::LengthMismatch)
+        .ok_or_else(|| Error::LengthMismatch)
 }
 /// Bytes reserved by `maps` owned B-trees containing `entries` in aggregate.
 ///
@@ -235,7 +235,7 @@ pub fn owned_btree_maps_allocation_bytes<K, V>(
     let node_bytes = btree_node_allocation_bytes::<K, V>()?;
     btree_maps_node_count_upper_bound(maps, entries)?
         .checked_mul(node_bytes)
-        .ok_or(Error::LengthMismatch)
+        .ok_or_else(|| Error::LengthMismatch)
 }
 // Rust 1.93.1 alloc/src/collections/btree/node.rs: one leaf has five
 // Rust-layout fields (parent, parent index, length, keys and values). The
@@ -252,7 +252,7 @@ fn btree_leaf_allocation_bytes<K, V>() -> Result<usize, Error> {
         .and_then(|bytes| {
             bytes.checked_add(core::mem::size_of::<V>().checked_mul(STD_BTREE_NODE_CAPACITY)?)
         })
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     let alignment = core::mem::align_of::<K>()
         .max(core::mem::align_of::<V>())
         .max(core::mem::align_of::<usize>());
@@ -262,20 +262,20 @@ fn btree_node_allocation_bytes<K, V>() -> Result<usize, Error> {
     let pointer_bytes = core::mem::size_of::<usize>();
     let keys_bytes = core::mem::size_of::<K>()
         .checked_mul(STD_BTREE_NODE_CAPACITY)
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     let values_bytes = core::mem::size_of::<V>()
         .checked_mul(STD_BTREE_NODE_CAPACITY)
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     let edges_bytes = pointer_bytes
         .checked_mul(STD_BTREE_INTERNAL_EDGE_CAPACITY)
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     let field_bytes = pointer_bytes
         .checked_add(core::mem::size_of::<u16>())
         .and_then(|bytes| bytes.checked_add(core::mem::size_of::<u16>()))
         .and_then(|bytes| bytes.checked_add(keys_bytes))
         .and_then(|bytes| bytes.checked_add(values_bytes))
         .and_then(|bytes| bytes.checked_add(edges_bytes))
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     let max_alignment = core::mem::align_of::<K>()
         .max(core::mem::align_of::<V>())
         .max(core::mem::align_of::<usize>());
@@ -311,11 +311,11 @@ fn hash_table_bucket_count<T>(entries: usize) -> Result<usize, Error> {
     }
     let adjusted_capacity = entries
         .checked_mul(STD_HASH_TABLE_LOAD_DENOMINATOR)
-        .ok_or(Error::LengthMismatch)?
+        .ok_or_else(|| Error::LengthMismatch)?
         / STD_HASH_TABLE_LOAD_NUMERATOR;
     adjusted_capacity
         .checked_next_power_of_two()
-        .ok_or(Error::LengthMismatch)
+        .ok_or_else(|| Error::LengthMismatch)
 }
 /// Bytes requested by the standard hash table for `entries` values of `T`.
 ///
@@ -331,16 +331,16 @@ pub fn owned_hash_table_allocation_bytes<T>(entries: usize) -> Result<usize, Err
     let buckets = hash_table_bucket_count::<T>(entries)?;
     let bucket_bytes = buckets
         .checked_mul(core::mem::size_of::<T>())
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     let control_alignment = core::mem::align_of::<T>().max(STD_HASH_TABLE_CONTROL_GROUP_BYTES);
     let control_offset = bucket_bytes
         .checked_add(control_alignment - 1)
-        .ok_or(Error::LengthMismatch)?
+        .ok_or_else(|| Error::LengthMismatch)?
         & !(control_alignment - 1);
     let allocation_bytes = control_offset
         .checked_add(buckets)
         .and_then(|bytes| bytes.checked_add(STD_HASH_TABLE_CONTROL_GROUP_BYTES))
-        .ok_or(Error::LengthMismatch)?;
+        .ok_or_else(|| Error::LengthMismatch)?;
     if allocation_bytes > isize::MAX as usize - (control_alignment - 1) {
         return Err(Error::LengthMismatch);
     }

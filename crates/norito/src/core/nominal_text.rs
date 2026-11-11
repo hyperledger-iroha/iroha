@@ -5,8 +5,8 @@
 //! separate obligations: canonical framing alone does not validate an identity.
 
 use super::{
-    Error, ExactSliceWriter, NoritoSerialize, PayloadCtxGuard, default_encode_flags,
-    from_bytes_view, inspect_len_from_slice, payload_alignment_padding_for,
+    Error, NoritoSerialize, PayloadCtxGuard, default_encode_flags, from_bytes_view,
+    inspect_len_from_slice, payload_alignment_padding_for,
 };
 
 /// A nominal wire type whose payload is exactly one UTF-8 string field.
@@ -36,8 +36,12 @@ pub fn borrow_text_payload(
 ) -> Result<(&str, usize), Error> {
     let (length, prefix) = inspect_len_from_slice(bytes)?;
     check_length(length)?;
-    let end = prefix.checked_add(length).ok_or(Error::LengthMismatch)?;
-    let raw = bytes.get(prefix..end).ok_or(Error::LengthMismatch)?;
+    let end = prefix
+        .checked_add(length)
+        .ok_or_else(|| Error::LengthMismatch)?;
+    let raw = bytes
+        .get(prefix..end)
+        .ok_or_else(|| Error::LengthMismatch)?;
     let value = std::str::from_utf8(raw).map_err(|_| Error::InvalidUtf8)?;
     super::note_payload_access(bytes, end);
     Ok((value, end))
@@ -58,7 +62,7 @@ pub fn borrow_text_payload(
 /// is a schema error and is never resolved by allocating a schema name.
 pub fn borrow_canonical_text<T: NominalText>(bytes: &[u8]) -> Result<&str, Error> {
     // Restrict this allocation-free operation to its declared literal identity.
-    T::static_frame_name().ok_or(Error::SchemaMismatch)?;
+    T::static_frame_name().ok_or_else(|| Error::SchemaMismatch)?;
     let view = from_bytes_view(bytes)?;
     if view.schema != crate::schema::identity::frame_hash::<T>() {
         return Err(Error::SchemaMismatch);
@@ -80,12 +84,8 @@ pub fn borrow_canonical_text<T: NominalText>(bytes: &[u8]) -> Result<&str, Error
         })?
     };
     super::validate_decode_consumption(view.bytes, used)?;
-    let mut exact = ExactSliceWriter::new(bytes);
-    let result = super::encode_frames::write_typed_payload_frame::<T, _, _>(
-        &text,
-        &mut exact,
-        default_encode_flags(),
-    );
+    let (result, exact) =
+        super::encode_frames::compare_typed_frame::<T, _>(&text, bytes, default_encode_flags());
     if exact.mismatched() {
         return Err(Error::NonCanonicalEncoding);
     }
