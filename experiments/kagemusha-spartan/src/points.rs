@@ -433,23 +433,55 @@ where
                 u128::from_le_bytes(repr[16..].try_into().unwrap()),
             ]
         };
+        // The pair link's word, right after the first phase's rows (all of a
+        // toy proof's): the first proof squeezes d and absorbs rho, the second
+        // absorbs d and squeezes rho. The absorbed word arrives as two shared
+        // limbs.
+        let mut link_word = |me: &mut Self, pool: &mut Pool<C::Base>, sp: &mut Sp<C::Base>| {
+            if let Some((first, _, other, _)) = tr.link {
+                if first {
+                    let _ = challenge(me, pool, sp);
+                }
+                let o = sm.other.expect("the other word's limbs");
+                absorb_words(
+                    me,
+                    pool,
+                    sp,
+                    vec![Word::V(o[0]), Word::V(o[1])],
+                    Some(limbs_of(other)),
+                );
+                if !first {
+                    let _ = challenge(me, pool, sp);
+                }
+            }
+        };
         let io_w = words(self, full_base);
         absorb_words(self, pool, &mut sp, io_w, None);
         let rows: Vec<(PtRef, C)> = match &tr.circuit {
-            None => proof
-                .rows
-                .iter()
-                .map(|r| self.input(pool, &mut sp, r))
-                .collect(),
+            None => {
+                let out = proof
+                    .rows
+                    .iter()
+                    .map(|r| self.input(pool, &mut sp, r))
+                    .collect();
+                link_word(self, pool, &mut sp);
+                out
+            }
             Some(ct) => {
-                // A circuit proof: the first phase's rows, the second-phase
-                // challenges, the late io's digest (two shared limbs), then
-                // the second phase's rows and the fixed rows (constants).
+                // A circuit proof: the first phase's rows, the pair link's
+                // word, the link phase's rows, the second-phase challenges,
+                // the late io's digest (two shared limbs), then the second
+                // phase's rows and the fixed rows (constants).
                 let all: Vec<Aff<C>> = proof.rows.iter().chain(&ct.fixed).copied().collect();
                 let mut out: Vec<(PtRef, C)> = all[..ct.p1]
                     .iter()
                     .map(|r| self.input(pool, &mut sp, r))
                     .collect();
+                link_word(self, pool, &mut sp);
+                for r in &all[ct.p1..ct.p1 + ct.pl] {
+                    let pt = self.input(pool, &mut sp, r);
+                    out.push(pt);
+                }
                 for _ in 0..ct.phase2.len() {
                     let _ = challenge(self, pool, &mut sp);
                 }
@@ -469,7 +501,7 @@ where
                         "the proof's key is one of the slot's"
                     );
                 }
-                for (k, r) in all.iter().enumerate().skip(ct.p1) {
+                for (k, r) in all.iter().enumerate().skip(ct.p1 + ct.pl) {
                     let pt = self.input(pool, &mut sp, r);
                     if k >= first_fixed {
                         if let (PtRef::Input(i), _) = pt {
@@ -486,21 +518,8 @@ where
                 out
             }
         };
-        if let Some((first, _, other, r)) = tr.link {
-            if first {
-                let _ = challenge(self, pool, &mut sp);
-            }
-            let o = sm.other.expect("the other word's limbs");
-            absorb_words(
-                self,
-                pool,
-                &mut sp,
-                vec![Word::V(o[0]), Word::V(o[1])],
-                Some(limbs_of(other)),
-            );
-            if !first {
-                let _ = challenge(self, pool, &mut sp);
-            }
+        // The link's R, after every row.
+        if let Some((_, _, _, r)) = tr.link {
             let rl = sm.r.expect("R's limbs");
             absorb_words(
                 self,

@@ -1488,15 +1488,15 @@ where
     let mut tau_feed: Vec<[Option<Feed>; 3]> = vec![[None; 3]; n_s];
     let mut glue_feed: Vec<(usize, Feed)> = Vec::new();
     let mut u_feed: Vec<Feed> = Vec::new();
-    // A circuit proof's second-phase challenges come first (after its first
-    // phase's rows), then the pair link.
+    // The pair link's word comes first (right after the first phase's rows),
+    // then a circuit proof's second-phase challenges.
+    if tr.link.is_some() {
+        let _link = take(Kind::Full);
+    }
     if let Some(ct) = &tr.circuit {
         for k in 0..ct.phase2.len() {
             glue_feed.push((scalar::PH0 + k, Feed::Raw(shared_at[take(Kind::Raw)])));
         }
-    }
-    if tr.link.is_some() {
-        let _link = take(Kind::Full);
     }
     if lean {
         let i = take(Kind::Full);
@@ -2842,10 +2842,11 @@ pub fn late_limb<C: iroha_pasta::PastaCurve>(
     io_limb(tr, base) + 18 + 4 * claims.len()
 }
 
-/// Shared slots before a proof's pair-link challenge: a circuit proof's
-/// second-phase challenges come first.
-pub fn link_word_at<C: iroha_pasta::PastaCurve>(tr: &crate::verifier::Trace<C>) -> usize {
-    tr.circuit.as_ref().map_or(0, |c| c.phase2.len())
+/// Shared slots before a proof's pair-link challenge: none, since the link's
+/// word follows the first phase's rows (all of a toy proof's), before any
+/// other challenge.
+pub fn link_word_at<C: iroha_pasta::PastaCurve>(_tr: &crate::verifier::Trace<C>) -> usize {
+    0
 }
 
 pub fn io_limb<C: iroha_pasta::PastaCurve>(tr: &crate::verifier::Trace<C>, base: usize) -> usize {

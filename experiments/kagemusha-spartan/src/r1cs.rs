@@ -181,6 +181,37 @@ pub trait Circuit<F: Scalar>: Sync {
     fn late_values(&self, _w: &[F]) -> Vec<F> {
         Vec::new()
     }
+    /// Hyrax rows committed after the pair link's word and before the
+    /// second-phase challenges (the link phase): values that follow the
+    /// link's rho, such as the cross-circuit binding chain. 0 without one.
+    fn link_rows(&self, _shape: &Shape) -> usize {
+        0
+    }
+    /// The link's io: the io slots the link word rho fills, as this circuit
+    /// reads it. Prover and verifier both set them from the transcript, so
+    /// proofs do not carry them; they lie past the header's io.
+    fn link_io(&self, _rho: &[u8; 32]) -> Vec<(usize, F)> {
+        Vec::new()
+    }
+    /// Fills the link phase's cells of `w` once rho is known.
+    fn fill_link(&self, _rho: &[u8; 32], _w: &mut [F]) {}
+    /// The binding value R the circuit computed (from its late io): the
+    /// verifier requires it to be the R the link absorbs. None without one.
+    fn binding_r(&self, _late: &[F]) -> Option<[u8; 32]> {
+        None
+    }
+}
+
+/// `io` with the link's io slots set.
+pub fn io_with_link<S: Scalar>(io: &[S], link: &[(usize, S)]) -> Vec<S> {
+    let mut out = io.to_vec();
+    for &(s, v) in link {
+        if out.len() <= s {
+            out.resize(s + 1, S::ZERO);
+        }
+        out[s] = v;
+    }
+    out
 }
 
 pub struct ToyCircuit;

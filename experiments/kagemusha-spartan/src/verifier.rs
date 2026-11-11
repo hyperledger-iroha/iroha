@@ -725,16 +725,45 @@ pub struct Trace<C: PastaCurve> {
     pub circuit: Option<CircuitTrace<C>>,
 }
 
-/// What a circuit proof's transcript adds: the first phase's rows, then the
-/// second-phase challenges, the late io's digest, then the second phase's rows
-/// and the fixed rows (the verification key's commitments, last).
+/// What a circuit proof's transcript adds: the first phase's rows, the pair
+/// link's word, the link phase's rows, then the second-phase challenges, the
+/// late io's digest, then the second phase's rows and the fixed rows (the
+/// verification key's commitments, last); the link's R after them.
 pub struct CircuitTrace<C: PastaCurve> {
     pub p1: usize,
+    /// The link phase's rows (after the link's word).
+    pub pl: usize,
+    /// The link's io (slots rho fills, set from the transcript).
+    pub link_io: Vec<(usize, F<C>)>,
     pub phase2: Vec<F<C>>,
     pub late_digest: Option<F<C>>,
     pub fixed: Vec<Aff<C>>,
-    /// The io with the late values at their slots.
+    /// The io with the link's and the late values at their slots.
     pub io_full: Vec<F<C>>,
+}
+
+/// The pair link's word in a trace (see `spartan::link_word`): (first proof?,
+/// the squeezed word, the absorbed word).
+fn traced_link_word<C: PastaCurve>(
+    t: &mut Transcript<C>,
+    ch: &mut impl FnMut(&mut Transcript<C>, Kind) -> F<C>,
+    link: &Link,
+) -> Option<(bool, [u8; 32], [u8; 32])> {
+    match link {
+        Link::None => None,
+        Link::First { rho, .. } => {
+            let _ = ch(t, Kind::Full);
+            let d = t.last_word().to_repr();
+            t.word_limbs(b"pair/rho", rho);
+            Some((true, d, *rho))
+        }
+        Link::Second { d, .. } => {
+            t.word_limbs(b"pair/d", d);
+            let _ = ch(t, Kind::Full);
+            let rho = t.last_word().to_repr();
+            Some((false, rho, *d))
+        }
+    }
 }
 
 pub fn trace<C: PastaCurve>(
@@ -823,16 +852,26 @@ fn trace_with<C: PastaCurve>(
     let mut io_full = inst.io.clone();
     let mut rel: Option<Box<dyn r1cs::Rel<F<C>> + '_>> = None;
     let mut ctrace = None;
-    match circuit {
+    let word = match circuit {
         None => {
             for row in &rows {
                 t.point(b"row", row);
             }
+            traced_link_word(&mut t, &mut ch, link)
         }
         Some((c, fixed)) => {
             rows.extend(fixed.iter().copied());
             let p1 = c.phase1_rows(shape);
             for row in &rows[..p1] {
+                t.point(b"row", row);
+            }
+            let word = traced_link_word(&mut t, &mut ch, link);
+            // rho: absorbed by the first proof, squeezed by the second.
+            let link_io = word.map_or(Vec::new(), |(first, squeezed, absorbed)| {
+                c.link_io(if first { &absorbed } else { &squeezed })
+            });
+            let pl = c.link_rows(shape);
+            for row in &rows[p1..p1 + pl] {
                 t.point(b"row", row);
             }
             let phase2: Vec<F<C>> = (0..c.phase2_challenges())
@@ -843,37 +882,36 @@ fn trace_with<C: PastaCurve>(
             if let Some(d) = late_digest {
                 t.scalar(b"late", &d);
             }
-            io_full = spartan::io_with_late(&inst.io, &c.late_slots(), &proof.late);
-            for row in &rows[p1..] {
+            io_full = spartan::io_with_late(
+                &r1cs::io_with_link(&inst.io, &link_io),
+                &c.late_slots(),
+                &proof.late,
+            );
+            for row in &rows[p1 + pl..] {
                 t.point(b"row", row);
             }
             ctrace = Some(CircuitTrace {
                 p1,
+                pl,
+                link_io,
                 phase2,
                 late_digest,
                 fixed: fixed.to_vec(),
                 io_full: io_full.clone(),
             });
-        }
-    }
-    let link_words = match link {
-        Link::None => None,
-        Link::First { rho, r } => {
-            let _ = ch(&mut t, Kind::Full);
-            let d = t.last_word().to_repr();
-            t.word_limbs(b"pair/rho", rho);
-            t.word_limbs(b"pair/R", r);
-            Some((true, d, *rho, *r))
-        }
-        Link::Second { d, rlc } => {
-            t.word_limbs(b"pair/d", d);
-            let _ = ch(&mut t, Kind::Full);
-            let rho = t.last_word().to_repr();
-            let r = rlc(&rho);
-            t.word_limbs(b"pair/R", &r);
-            Some((false, rho, *d, r))
+            word
         }
     };
+    // The link's R, after every row.
+    let link_words = word.map(|(first, squeezed, absorbed)| {
+        let r = match link {
+            Link::None => unreachable!("a link word without a link"),
+            Link::First { r, .. } => *r,
+            Link::Second { rlc, .. } => rlc(&squeezed),
+        };
+        t.word_limbs(b"pair/R", &r);
+        (first, squeezed, absorbed, r)
+    });
     let tau: Vec<F<C>> = if lean {
         powers2(ch(&mut t, Kind::Full), shape.sx)
     } else {

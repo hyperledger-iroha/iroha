@@ -197,26 +197,57 @@ pub enum Link<'a> {
     },
 }
 
-/// Applies a link after the rows; returns the squeezed word (d or rho) and R.
-fn apply_link<C: PastaCurve>(t: &mut Transcript<C>, link: &Link) -> Option<([u8; 32], [u8; 32])> {
+/// The link's word, right after the first phase's rows: the first proof
+/// squeezes d and absorbs rho, the second absorbs d and squeezes rho. Returns
+/// (the squeezed word, rho). A circuit's link phase follows it. (A proof whose
+/// rows are all first-phase rows, as the toy's, takes the word after all of
+/// them, as before the link phase existed.)
+fn link_word<C: PastaCurve>(t: &mut Transcript<C>, link: &Link) -> Option<([u8; 32], [u8; 32])> {
     match link {
         Link::None => None,
-        Link::First { rho, r } => {
+        Link::First { rho, .. } => {
             let _ = t.challenge_full(b"pair/d");
             let d = t.last_word().to_repr();
             t.word_limbs(b"pair/rho", rho);
-            t.word_limbs(b"pair/R", r);
-            Some((d, *r))
+            Some((d, *rho))
         }
-        Link::Second { d, rlc } => {
+        Link::Second { d, .. } => {
             t.word_limbs(b"pair/d", d);
             let _ = t.challenge_full(b"pair/rho");
             let rho = t.last_word().to_repr();
-            let r = rlc(&rho);
-            t.word_limbs(b"pair/R", &r);
-            Some((rho, r))
+            Some((rho, rho))
         }
     }
+}
+
+/// The link's R, absorbed after every row: the first proof is given R; the
+/// second takes its circuit's binding value when it has one (`rlc` of rho
+/// otherwise; a verifier's `rlc` returns the R it was given). The verifier
+/// (`check`) requires a circuit's binding value to be that R. Returns (the
+/// squeezed word, R).
+fn link_r<C: PastaCurve>(
+    t: &mut Transcript<C>,
+    link: &Link,
+    word: Option<([u8; 32], [u8; 32])>,
+    binding: Option<[u8; 32]>,
+    check: bool,
+) -> Result<Option<([u8; 32], [u8; 32])>, String> {
+    let Some((squeezed, rho)) = word else {
+        return Ok(None);
+    };
+    let r = match link {
+        Link::None => unreachable!("a link word without a link"),
+        Link::First { r, .. } => *r,
+        Link::Second { rlc, .. } => match (check, binding) {
+            (false, Some(b)) => b,
+            _ => rlc(&rho),
+        },
+    };
+    if check && binding.is_some_and(|b| b != r) {
+        return Err("the circuit's binding value is not the link's R".into());
+    }
+    t.word_limbs(b"pair/R", &r);
+    Ok(Some((squeezed, r)))
 }
 
 /// The first proof's phase-1 digest d (header and rows), as its verifier
@@ -1221,6 +1252,19 @@ fn prove_inner<C: PastaCurve>(
     for row in &rows {
         t.point(b"row", row);
     }
+    // The link's word, then the link phase (values that follow rho).
+    let word = link_word(&mut t, link);
+    let link_io = word.map_or(Vec::new(), |(_, rho)| circuit.link_io(&rho));
+    let pl = circuit.link_rows(shape);
+    if pl > 0 {
+        let (_, rho) = word.expect("a link phase needs a link");
+        circuit.fill_link(&rho, &mut w);
+        let rows_l = commit(&w, p1..p1 + pl, false);
+        for row in &rows_l {
+            t.point(b"row", row);
+        }
+        rows.extend(rows_l);
+    }
     let ch2: Vec<F<C>> = (0..circuit.phase2_challenges())
         .map(|_| t.challenge(b"phase2"))
         .collect();
@@ -1234,19 +1278,24 @@ fn prove_inner<C: PastaCurve>(
         t.scalar(b"late", &crate::fs::io_digest(&late));
     }
     let inst_full = Instance {
-        io: io_with_late(&inst.io, &circuit.late_slots(), &late),
+        io: io_with_late(
+            &r1cs::io_with_link(&inst.io, &link_io),
+            &circuit.late_slots(),
+            &late,
+        ),
     };
     let inst = &inst_full;
     (timings.helpers, timings.matrices) = *crate::sparse::LAST_BUILD.lock().unwrap();
     let rows2 = crate::prof::time("c.phase2", || {
-        commit(&w, p1..rows_c, circuit.phase2_challenges() > 0)
+        commit(&w, p1 + pl..rows_c, circuit.phase2_challenges() > 0)
     });
     for row in rows2.iter().chain(fixed) {
         t.point(b"row", row);
     }
     rows.extend(rows2);
     rows.extend(fixed.iter().copied());
-    let link_out = apply_link(&mut t, link);
+    let link_out = link_r(&mut t, link, word, circuit.binding_r(&late), false)
+        .expect("the prover does not check its binding value");
     timings.commit = clock.elapsed().as_secs_f64() - timings.instantiate;
     timings.split = *COMMIT_SPLIT.lock().unwrap();
 
@@ -1625,6 +1674,15 @@ fn verify_inner<C: PastaCurve>(
     for row in &proof.rows[..p1] {
         t.point(b"row", row);
     }
+    let word = link_word(&mut t, link);
+    let link_io = word.map_or(Vec::new(), |(_, rho)| circuit.link_io(&rho));
+    let pl = circuit.link_rows(shape);
+    if pl > 0 && word.is_none() {
+        return Err("a link phase needs a link".into());
+    }
+    for row in &proof.rows[p1..p1 + pl] {
+        t.point(b"row", row);
+    }
     let ch2: Vec<F<C>> = (0..circuit.phase2_challenges())
         .map(|_| t.challenge(b"phase2"))
         .collect();
@@ -1632,11 +1690,11 @@ fn verify_inner<C: PastaCurve>(
     if !proof.late.is_empty() {
         t.scalar(b"late", &crate::fs::io_digest(&proof.late));
     }
-    let io_full = io_with_late(&inst.io, &slots, &proof.late);
-    for row in &proof.rows[p1..] {
+    let io_full = io_with_late(&r1cs::io_with_link(&inst.io, &link_io), &slots, &proof.late);
+    for row in &proof.rows[p1 + pl..] {
         t.point(b"row", row);
     }
-    let link_out = apply_link(&mut t, link);
+    let link_out = link_r(&mut t, link, word, circuit.binding_r(&proof.late), true)?;
     let tau: Vec<F<C>> = tau_challenges(&mut t, shape);
     let mut rx = Vec::new();
     for (commitment, &k) in proof.outer.iter().zip(&shape.outer_blocks()) {
