@@ -156,7 +156,7 @@ pub async fn audit(root: &Root, height: u64, deadline: tokio::time::Instant) -> 
     .map_err(|_| eyre!("fee audit deadline exceeded for root {} at expected height {height}", root.index))?
 }
 
-/// Bound on waiting out a node's complete-World capacity refusals for one read.
+/// Bound on waiting out a node's transient complete-World refusals for one read.
 const WORLD_CUT_READ_BOUND: Duration = Duration::from_secs(60);
 
 // Reuse the existing signed full-ledger read owner. Only its complete World hash
@@ -164,20 +164,24 @@ const WORLD_CUT_READ_BOUND: Duration = Duration::from_secs(60);
 // finality authority. The fixture deliberately grants this read capability in genesis.
 //
 // A node answers 429 while its bounded complete-World capacity is in use, by
-// admission design. Only that refusal is retried, inside one finite bound, and
+// admission design, and 503 while a loaded node cannot capture one consistent
+// cut in time. Only those refusals are retried, inside one finite bound, and
 // every attempt is a fresh signed request with its own nonce and challenge.
 pub async fn world_cut(root: &Root) -> Result<NativeResourceNamesStateV1> {
     let deadline = tokio::time::Instant::now() + WORLD_CUT_READ_BOUND;
     loop {
         match world_cut_once(root).await? {
             WorldCutReadV1::Cut(cut) => return Ok(*cut),
-            WorldCutReadV1::Busy(retry_after) => {
+            WorldCutReadV1::Busy {
+                status,
+                retry_after,
+            } => {
                 let wait = retry_after
                     .unwrap_or(Duration::from_secs(1))
                     .min(Duration::from_secs(5));
                 ensure!(
                     tokio::time::Instant::now() + wait < deadline,
-                    "fee World cut unavailable: 429 Too Many Requests throughout {WORLD_CUT_READ_BOUND:?}"
+                    "fee World cut unavailable: {status} until the end of {WORLD_CUT_READ_BOUND:?}"
                 );
                 tokio::time::sleep(wait).await;
             }
@@ -187,8 +191,11 @@ pub async fn world_cut(root: &Root) -> Result<NativeResourceNamesStateV1> {
 
 enum WorldCutReadV1 {
     Cut(Box<NativeResourceNamesStateV1>),
-    /// The node's capacity refusal, with its `Retry-After` hint when present.
-    Busy(Option<Duration>),
+    /// A transient capacity or cut-capture refusal, with its `Retry-After` hint.
+    Busy {
+        status: reqwest::StatusCode,
+        retry_after: Option<Duration>,
+    },
 }
 
 async fn world_cut_once(root: &Root) -> Result<WorldCutReadV1> {
@@ -236,14 +243,20 @@ async fn world_cut_once(root: &Root) -> Result<WorldCutReadV1> {
         .timeout(Duration::from_secs(30))
         .send()
         .await?;
-    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+    let status = response.status();
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+    {
         let retry_after = response
             .headers()
             .get(reqwest::header::RETRY_AFTER)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.parse::<u64>().ok())
             .map(Duration::from_secs);
-        return Ok(WorldCutReadV1::Busy(retry_after));
+        return Ok(WorldCutReadV1::Busy {
+            status,
+            retry_after,
+        });
     }
     ensure!(
         response.status().is_success(),
