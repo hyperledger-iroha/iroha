@@ -164,19 +164,27 @@ const WORLD_CUT_READ_BOUND: Duration = Duration::from_secs(60);
 // finality authority. The fixture deliberately grants this read capability in genesis.
 //
 // Only an active committee member signs a cut: a peer that a rotation left
-// outside the committee, or that abstains, answers 503 (`not_active`). A node
-// also answers 429 while its bounded complete-World capacity is in use, and 503
-// while it cannot capture one consistent cut in time. Attempts therefore ask
-// each validator of the root in turn and wait only after every one refused,
-// inside one finite bound. Every attempt is a fresh signed request with its own
-// nonce and challenge, and every cut is verified independently of its server.
+// outside the committee, or that abstains, answers 503 (`not_active`). After a
+// 4→7→4 rotation the signing committee can consist of the supplementary
+// committee validators alone. A node also answers 429 while its bounded
+// complete-World capacity is in use, and 503 while it cannot capture one
+// consistent cut in time. Attempts therefore ask every original and
+// supplementary validator of the root in turn and wait only after every one
+// refused, inside one finite bound. Every attempt is a fresh signed request
+// with its own nonce and challenge, and every cut is verified independently of
+// the peer that served it.
 pub async fn world_cut(root: &Root) -> Result<NativeResourceNamesStateV1> {
     let deadline = tokio::time::Instant::now() + WORLD_CUT_READ_BOUND;
-    let validators = root.network.validators();
+    let validators = root
+        .network
+        .validators()
+        .iter()
+        .chain(root.network.committee_validators())
+        .collect::<Vec<_>>();
     ensure!(!validators.is_empty(), "fee World cut needs a validator");
     let mut next = 0_usize;
     loop {
-        let (refusal, retry_after) = match world_cut_once(root, &validators[next]).await {
+        let (refusal, retry_after) = match world_cut_once(root, validators[next]).await {
             Ok(WorldCutReadV1::Cut(cut)) => return Ok(*cut),
             Ok(WorldCutReadV1::Busy {
                 status,
