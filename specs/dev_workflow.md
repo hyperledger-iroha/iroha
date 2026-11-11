@@ -114,6 +114,7 @@ new patches follow the same default gates.
   source: every file that names FHE, RAM-LFE or the RAM-LFE HKDF backend, one
   owner per reusable ring-arithmetic primitive with its production callers, and
   one owner for every function of the BFV, RAM-LFE and ZK-AMS owner files.
+  Recorded validation evidence under `docs/validation/` is not scanned.
   After changing a listed file run `make refresh-fhe-ownership`; it recomputes
   the derived facts and leaves new files and functions for you to classify.
   The pull-request workflow runs the same check.

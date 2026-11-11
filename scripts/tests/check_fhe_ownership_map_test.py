@@ -103,6 +103,7 @@ def scan_header() -> dict:
     return {
         "patterns": list(CHECKER.PATTERN_IDS),
         "excluded_paths": list(CHECKER.EXCLUDED_PATHS),
+        "excluded_prefixes": list(CHECKER.EXCLUDED_PREFIXES),
         "markdown_patterns": list(CHECKER.MARKDOWN_PATTERNS),
         "generated_registry": CHECKER.GENERATED_REGISTRY,
     }
@@ -254,21 +255,26 @@ class TreeCase(unittest.TestCase):
 
 
 class FileWalkTest(TreeCase):
-    """The non-Git source snapshot sees the same captured source paths."""
+    """The Git listing and the directory walk give the scan the same contract."""
 
-    def test_fallback_keeps_nested_capture_build_directories(self) -> None:
+    def test_recorded_validation_evidence_is_not_scanned_by_either_listing(self) -> None:
         captures = [
+            "docs/validation/rehearsal/receipt.json",
             "docs/validation/rehearsal/build/Cargo.lock.template",
             "docs/validation/rehearsal/capture/source/target/reference.py.template",
             "docs/validation/rehearsal/capture/dist/source.rs.template",
         ]
         for path in captures:
-            self.write(path, "ntt")
-        found = CHECKER.list_repository_files(self.root)
-        self.assertTrue(set(captures).issubset(found))
-        scanned = CHECKER.scan_tree(CHECKER.Tree(self.root))
+            self.write(path, f"fn ntt_forward() {{}}\nconst TAG: &str = \"{TAG}\";\n")
+        walked = CHECKER.scan_tree(CHECKER.Tree(self.root))
+        # A Git listing names captures below build-directory names as well.
+        listed = CHECKER.scan_tree(CHECKER.Tree(self.root, CHECKER.list_repository_files(self.root) + captures))
         for path in captures:
-            self.assertEqual(scanned[path], ["ntt"])
+            self.assertTrue(CHECKER.is_excluded(path), path)
+            self.assertNotIn(path, walked)
+            self.assertNotIn(path, listed)
+        self.assertEqual(walked, listed)
+        self.assertEqual(walked[RING], ["ntt", "rns"])
 
     def test_fallback_still_skips_ordinary_generated_output_directories(self) -> None:
         outputs = ["target/generated.rs", "dist/result.json", "crates/low/target/cache.rs"]
@@ -336,11 +342,15 @@ class ScanTest(unittest.TestCase):
                      "multiply_ciphertexts_registered_rns_basis_extension_exact", "apply_galois_automorphism_ciphertext"):
             self.assertTrue(CHECKER.is_kernel_name(name), name)
 
-    def test_only_the_inventory_checker_and_plan_ledger_are_excluded(self) -> None:
+    def test_only_the_inventory_checker_plan_ledger_and_recorded_evidence_are_excluded(self) -> None:
         for path in CHECKER.EXCLUDED_PATHS:
             self.assertTrue(CHECKER.is_excluded(path), path)
         self.assertIn(CHECKER.DEFAULT_MAP, CHECKER.EXCLUDED_PATHS)
-        for path in ("specs/plan.md", "specs/inventory.tsv", "docs/notes.json", "crates/x/src/lib.rs", "crates/x/README.md"):
+        self.assertEqual(CHECKER.EXCLUDED_PREFIXES, ("docs/validation/",))
+        for path in ("docs/validation/run/receipt.json", "docs/validation/run/capture/src/lib.rs.template"):
+            self.assertTrue(CHECKER.is_excluded(path), path)
+        for path in ("specs/plan.md", "specs/inventory.tsv", "docs/notes.json", "docs/validation.md",
+                     "crates/x/src/lib.rs", "crates/x/README.md", "crates/x/tests/fixtures/validation/receipt.json"):
             self.assertFalse(CHECKER.is_excluded(path), path)
 
 
@@ -826,6 +836,41 @@ class ReachTest(TreeCase):
         self.assertEqual(CHECKER.find_callers(tree, RING, "RnsChain::product", scope, []), ({RING: ["through_constant"]}, True))
         self.assertEqual(CHECKER.find_callers(tree, RING, "Other::product", scope, []), ({RING: ["through_static"]}, True))
 
+    def test_method_receiver_can_be_a_typed_field_of_self(self) -> None:
+        self.append(RING, (
+            "/// Other.\npub struct Other;\n"
+            "impl Other {\n    /// Product.\n    pub fn product(&self) -> u64 {\n        1\n    }\n}\n"
+            "/// Holder.\npub struct Holder {\n    chain: RnsChain,\n    other: Other,\n    nested: Box<RnsChain>,\n}\n"
+            "impl Holder {\n"
+            "    fn through_field(&self) -> u64 {\n        self.chain.product()\n    }\n"
+            "    fn through_other_field(&self) -> u64 {\n        self.other.product()\n    }\n"
+            "    fn through_unknown_field(&self) -> u64 {\n        self.nested.product()\n    }\n"
+            "}\n"
+        ))
+        tree = CHECKER.Tree(self.root)
+        source = tree.rust(RING)
+        offset = source.masked.index("self.chain.product") + len("self.chain.")
+        self.assertEqual(CHECKER._typed_self_field(source, offset, "chain", "Holder"), "RnsChain")
+        self.assertIsNone(CHECKER._typed_self_field(source, offset, "chain", None))
+        self.assertIsNone(CHECKER._typed_self_field(source, offset, "chain", "Other"))
+        scope = CHECKER.caller_scope(tree, RING, [RING], "pub")
+        # `Box<RnsChain>` names no method owner, so that call stays unattributed.
+        self.assertEqual(
+            CHECKER.find_callers(tree, RING, "RnsChain::product", scope, []), ({RING: ["Holder::through_field"]}, False),
+        )
+        self.assertEqual(
+            CHECKER.find_callers(tree, RING, "Other::product", scope, []), ({RING: ["Holder::through_other_field"]}, False),
+        )
+        self.assertEqual(CHECKER.attribute_callers(tree, RING, "Other::product", scope, [])[2], {RING})
+        self.replace(RING, "        self.nested.product()\n", "        1\n")
+        tree = CHECKER.Tree(self.root)
+        self.assertEqual(
+            CHECKER.find_callers(tree, RING, "RnsChain::product", scope, []), ({RING: ["Holder::through_field"]}, True),
+        )
+        self.assertEqual(
+            CHECKER.find_callers(tree, RING, "Other::product", scope, []), ({RING: ["Holder::through_other_field"]}, True),
+        )
+
     def test_manifest_dependencies_and_development_features(self) -> None:
         tree = CHECKER.Tree(self.root)
         self.assertEqual(CHECKER.manifest_dependencies(tree, "crates/high"), {"low"})
@@ -904,6 +949,10 @@ class MapTest(TreeCase):
         document = valid_map()
         document["scan"]["excluded_paths"].append("specs/")
         self.assert_error(document, "scan must restate")
+        for prefixes in ([], ["docs/validation/", "crates/"]):
+            document = valid_map()
+            document["scan"]["excluded_prefixes"] = prefixes
+            self.assert_error(document, "scan must restate")
         document = valid_map()
         document["task"] = "C.2"
         self.assert_error(document, "task must be C.1")
@@ -915,6 +964,21 @@ class MapTest(TreeCase):
     def test_new_source_file_must_be_listed(self) -> None:
         self.write("crates/high/src/extra.rs", "fn rns_helper() {}\n")
         self.assert_error(valid_map(), "crates/high/src/extra.rs matches ['rns'] but the map does not list it")
+
+    def test_recorded_validation_evidence_is_neither_required_nor_accepted_in_the_map(self) -> None:
+        # Captured receipts and sources quote the backend tag, kernels and dependency names of a
+        # finished run; they are frozen, so R.6 must not edit them and the map does not list them.
+        receipt = "docs/validation/run/receipt.json"
+        self.write(receipt, f'{{"backend": "RamLfeBackend::HkdfSha3_512PrfV1", "tag": "{TAG}", "bfv": 1}}\n')
+        self.write("docs/validation/run/capture/ring.rs.template", "fn ntt_forward() {}\nstruct RnsChain;\n")
+        self.assertEqual(self.errors(valid_map()), [])
+        document = valid_map()
+        document["file_groups"].append({"id": "evidence", "role": "documentation", "summary": "Run records.",
+                                         "files": [{"path": receipt, "patterns": ["bfv", "hkdf", "hkdf_ram_lfe"]}]})
+        self.assert_error(document, f"{receipt} is listed but no longer matches a detection pattern")
+        # The same text anywhere else is in scope.
+        self.write("docs/run_receipt.json", (self.root / receipt).read_text(encoding="utf-8"))
+        self.assert_error(valid_map(), "docs/run_receipt.json names the RAM-LFE HKDF backend but hkdf.ram_lfe_backend.users does not list it")
 
     def test_new_specification_file_must_be_listed(self) -> None:
         self.write("specs/sibling_inventory.json", '{"anchor": "RamLfeBackend::HkdfSha3_512PrfV1"}\n')
@@ -1909,10 +1973,19 @@ class RepositoryTest(unittest.TestCase):
             ("rns.rs", "decompose"): ("crates/iroha_crypto/src/fhe_bfv.rs", "BfvRnsModulusChain::decompose_polynomial"),
             ("rns.rs", "modulus_product_bit_len"): ("crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe.rs", "modulus_product_bit_len"),
         }
+        features = CHECKER.declared_development_features(self.document)
+        listed = CHECKER.listed_files(self.document)
         for key, (path, function) in expected.items():
             record = callers[key]
-            self.assertTrue(record["callers_exhaustive"], key)
             self.assertIn(function, record["callers"].get(path, []), key)
+            # Every call outside the shared crate is attributed. Inside it, a chained receiver such as
+            # `precision.fixed().canonicalize_i64(..)` has no declared type and may stay unattributed.
+            item = self.tree.rust(record["path"]).resolve(key[1])[0]
+            scope = CHECKER.caller_scope(self.tree, record["path"], listed, item.visibility)
+            found, exhaustive, gaps = CHECKER.attribute_callers(self.tree, record["path"], key[1], scope, features)
+            self.assertEqual((found, exhaustive), (record["callers"], record["callers_exhaustive"]), key)
+            self.assertEqual({file for file in gaps if not file.startswith("crates/iroha_fhe/")}, set(), key)
+            self.assertEqual(exhaustive, not gaps, key)
         references = {entry["id"]: entry for entry in self.document["test_only_references"]}
         self.assertNotIn("bootle_lantern.test_gated_adapters", references)
         self.assertEqual(references["shared.avx2_lane_model"]["path"], "crates/iroha_fhe/src/accel/avx2_model.rs")

@@ -44,11 +44,18 @@ Limits of the check:
   macro expansion creates are invisible, and only functions and inline test
   modules are assigned one by one: types, constants and statics are anchored
   where an entry names them.
-* Callers are attributed without type inference. Where the receiver type of a
-  method call or the definition behind a bare call cannot be established, the
-  occurrence is not counted and the record is marked `callers_exhaustive: false`.
+* Callers are attributed without type inference: a receiver is typed only by a
+  declaration the file shows (a parameter, an annotated local, a `const` or
+  `static`, or a named field of `self` in the enclosing impl's struct). Where the
+  receiver type of a method call or the definition behind a bare call cannot be
+  established, the occurrence is not counted and the record is marked
+  `callers_exhaustive: false`.
 * Arithmetic outside the arithmetic scopes that matches no detection pattern is
   not inventoried (other proof fields, curves, signatures, erasure coding).
+* Recorded validation evidence under docs/validation/ (captured sources,
+  lockfiles, receipts, reports and logs of completed runs) is not scanned. It
+  quotes paths, hashes and dependency names of the run it records and owns or
+  consumes no FHE, RAM-LFE or HKDF code; it must not change with the code.
 
 Maintainer modes (the default run changes nothing):
 * `--print-scan` prints the fresh file-to-pattern scan as JSON.
@@ -587,14 +594,7 @@ def list_repository_files(root: Path) -> list[str]:
             return sorted(name for name in set(names) if (root / name).is_file())
     names = []
     for directory, subdirectories, files in os.walk(root):
-        # Evidence captures are source inputs even when their recorded paths
-        # contain build-directory names. Keep the Git and directory-walk scan
-        # contracts equal for every file under docs/validation.
-        relative = Path(directory).relative_to(root)
-        evidence_capture = relative.parts[:2] == ("docs", "validation")
-        subdirectories[:] = sorted(
-            name for name in subdirectories if evidence_capture or name not in _WALK_SKIP
-        )
+        subdirectories[:] = sorted(name for name in subdirectories if name not in _WALK_SKIP)
         for name in files:
             names.append((Path(directory) / name).relative_to(root).as_posix())
     return sorted(names)
@@ -953,10 +953,14 @@ class CrateModules:
 # ---------------------------------------------------------------------------
 
 # The inventory itself, this checker and the plan ledger quote identifiers
-# without consuming them. Every other file is scanned, including the specs/ and
-# docs/ trees. Markdown is prose: a Markdown file is listed only when it names
-# the RAM-LFE HKDF backend that task R.6 retires, because that text must change
-# with the code.
+# without consuming them. Recorded validation evidence (docs/validation/) holds
+# captured sources, lockfiles, receipts and logs of completed runs: it quotes
+# the paths, hashes and dependency names of the run it records, owns and consumes
+# nothing, and stays frozen when the code changes, so it is not scanned either.
+# Every other file is scanned, including the rest of the specs/ and docs/ trees.
+# Markdown is prose: a Markdown file is listed only when it names the RAM-LFE
+# HKDF backend that task R.6 retires, because that text must change with the
+# code.
 EXCLUDED_PATHS = (
     "scripts/check_fhe_ownership_map.py",
     "scripts/tests/check_fhe_ownership_map_test.py",
@@ -966,6 +970,7 @@ EXCLUDED_PATHS = (
     "specs/zk_delivery_reconciliation.json",
     "todo_list.txt",
 )
+EXCLUDED_PREFIXES = ("docs/validation/",)
 MARKDOWN_SUFFIXES = (".md",)
 MARKDOWN_PATTERNS = ("hkdf", "hkdf_ram_lfe")
 MARKDOWN_TRIGGER = "hkdf_ram_lfe"
@@ -1008,7 +1013,7 @@ def registered_generated_outputs(tree: Tree) -> set[str]:
 
 def is_excluded(path: str) -> bool:
     """Return whether the scan ignores a path."""
-    return path in EXCLUDED_PATHS
+    return path in EXCLUDED_PATHS or path.startswith(EXCLUDED_PREFIXES)
 
 
 def scan_tree(tree: Tree) -> dict[str, list[str]]:
@@ -1265,6 +1270,37 @@ def _typed_constant(source: RustSource, receiver: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+_SELF_FIELD_PREFIX = re.compile(r"(?<![A-Za-z0-9_.])self\s*\.\s*\Z")
+
+
+def _typed_self_field(source: RustSource, offset: int, receiver: str, enclosing_type: Optional[str]) -> Optional[str]:
+    """Return the declared type of the receiver `self.<receiver>` of a method call, if the file shows it.
+
+    Only a direct named field of `self` is resolved, and only from a struct of the
+    enclosing impl's name defined in the same file. Any other receiver, and a field
+    whose struct lives elsewhere, stays unknown.
+    """
+    if enclosing_type is None:
+        return None
+    before = source.masked[max(0, offset - 160) : offset].rstrip()
+    if not before.endswith(".") or before.endswith(".."):
+        return None
+    head = before[:-1].rstrip()
+    if not head.endswith(receiver) or not _SELF_FIELD_PREFIX.search(head[: len(head) - len(receiver)]):
+        return None
+    for item in source.resolve(enclosing_type):
+        if item.kind != "struct" or item.body_start is None:
+            continue
+        match = re.search(
+            r"(?<![A-Za-z0-9_])" + re.escape(receiver)
+            + r"\s*:\s*(?:&\s*)?(?:'[A-Za-z_]+\s+)?(?:mut\s+)?(?:[A-Za-z_][A-Za-z0-9_]*\s*::\s*)*([A-Za-z_][A-Za-z0-9_]*)",
+            source.masked[item.body_start : item.end],
+        )
+        if match:
+            return match.group(1)
+    return None
+
+
 def renamed_imports(source: RustSource, name: str, modules: set[str]) -> tuple[dict[str, str], set[str]]:
     """Return the local names a file gives to `name` and to its defining modules by `use ... as`.
 
@@ -1314,10 +1350,22 @@ def find_callers(tree: Tree, path: str, symbol: str, scope: Iterable[str],
                  development_features: Iterable[str]) -> tuple[dict[str, list[str]], bool]:
     """Return the production functions that call a callee and whether that list is exhaustive.
 
+    See `attribute_callers`, which also names the files of unattributed occurrences.
+    """
+    callers, exhaustive, _ = attribute_callers(tree, path, symbol, scope, development_features)
+    return callers, exhaustive
+
+
+def attribute_callers(tree: Tree, path: str, symbol: str, scope: Iterable[str],
+                      development_features: Iterable[str]) -> tuple[dict[str, list[str]], bool, set[str]]:
+    """Return the callers of a callee, whether that list is exhaustive, and the files it is not exhaustive in.
+
     An occurrence counts only as a call, a path expression or a function value;
     a local variable, field or binding that shares the callee's name does not.
     A method (`Type::name`) is attributed when the receiver is `self` inside an
-    impl of the type, when the receiver is declared with the type, when the
+    impl of the type, when the receiver is declared with the type (a parameter,
+    an annotated local, a `const` or `static` of the file, or a named field of
+    `self` declared by the enclosing impl's struct in the same file), when the
     path names the type, or when the calling function names the type and no
     other type in the scope defines the same method. A free function is
     attributed in its own file unless the use is a path through another module,
@@ -1333,7 +1381,8 @@ def find_callers(tree: Tree, path: str, symbol: str, scope: Iterable[str],
     defines its own function of that name calls that function, not the callee.
 
     The list is exhaustive when exactly one production definition matches and
-    no occurrence was left unattributed for lack of type information.
+    no occurrence was left unattributed for lack of type information; the third
+    result holds the files of the unattributed occurrences.
     """
     parts = symbol.split("::")
     name = parts[-1]
@@ -1366,6 +1415,7 @@ def find_callers(tree: Tree, path: str, symbol: str, scope: Iterable[str],
     own_modules = _module_names(path)
     other_modules = {module for file in other_free for module in _module_names(file)} - own_modules
     exhaustive = len(matching) == 1
+    unattributed: set[str] = set()
     for candidate, source in candidates:
         own_free = any(file == candidate and kind is None for file, kind in definitions)
         if owner is None:
@@ -1402,9 +1452,13 @@ def find_callers(tree: Tree, path: str, symbol: str, scope: Iterable[str],
                     else:
                         verdict = False
                 else:
-                    declared = _typed_binding(source, function, detail) if detail not in ("?", "self") else None
-                    if declared is None and detail not in ("?", "self"):
-                        declared = _typed_constant(source, detail)
+                    declared = None
+                    if detail not in ("?", "self"):
+                        declared = _typed_self_field(source, offset, detail, enclosing_type)
+                        if declared is None:
+                            declared = _typed_binding(source, function, detail)
+                        if declared is None:
+                            declared = _typed_constant(source, detail)
                     if declared == "Self":
                         declared = enclosing_type
                     text = source.masked[function.start : function.end]
@@ -1457,6 +1511,7 @@ def find_callers(tree: Tree, path: str, symbol: str, scope: Iterable[str],
                 callers.setdefault(candidate, set()).add(qualified_name(function))
             elif verdict is None:
                 exhaustive = False
+                unattributed.add(candidate)
         # Calls through `use module::callee as alias`: the callee's own identifier appears
         # only in the `use` declaration, so each alias is searched like the name itself.
         for alias, qualifier in sorted(item_aliases.items()):
@@ -1474,7 +1529,8 @@ def find_callers(tree: Tree, path: str, symbol: str, scope: Iterable[str],
                 elif qualifier not in other_modules:
                     # The alias may rename this callee or another function of the same name.
                     exhaustive = False
-    return {key: sorted(value) for key, value in sorted(callers.items())}, exhaustive
+                    unattributed.add(candidate)
+    return {key: sorted(value) for key, value in sorted(callers.items())}, exhaustive, unattributed
 
 
 def production_kernel_functions(tree: Tree, path: str, development_features: Iterable[str]) -> list[str]:
@@ -1852,6 +1908,7 @@ class MapChecker:
         expected = {
             "patterns": list(PATTERN_IDS),
             "excluded_paths": list(EXCLUDED_PATHS),
+            "excluded_prefixes": list(EXCLUDED_PREFIXES),
             "markdown_patterns": list(MARKDOWN_PATTERNS),
             "generated_registry": GENERATED_REGISTRY,
         }

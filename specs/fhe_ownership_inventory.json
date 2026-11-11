@@ -19,7 +19,7 @@
    "generated_consumers": "Schemas, fixtures and inventories with a generator or reader as evidence.",
    "file_groups": "Every file the scan finds, classified by component and role."
   },
-  "scan_scope": "Every tracked or unignored file is scanned except the paths under scan.excluded_paths (this file, its checker and the plan ledger). A Markdown file is listed only when it names the RAM-LFE HKDF backend. Outside the arithmetic scopes, arithmetic that matches no detection pattern is not inventoried: other proof-field arithmetic (Pasta, BN254, the remaining Goldilocks owners that specs/fastpq/shared_backend_inventory.json lists), signature and curve arithmetic, and erasure coding.",
+  "scan_scope": "Every tracked or unignored file is scanned except the paths under scan.excluded_paths (this file, its checker and the plan ledger) and under scan.excluded_prefixes (recorded validation evidence in docs/validation/: captured sources, lockfiles, receipts and logs of completed runs, which quote paths, hashes and dependency names, own and consume nothing and stay frozen when the code changes). A Markdown file is listed only when it names the RAM-LFE HKDF backend. Outside the arithmetic scopes, arithmetic that matches no detection pattern is not inventoried: other proof-field arithmetic (Pasta, BN254, the remaining Goldilocks owners that specs/fastpq/shared_backend_inventory.json lists), signature and curve arithmetic, and erasure coding.",
   "C.4": "Adds offline trusted-dealer sharing, canonical in-place subset weighting and local consumed-subset opening under one trusted co-located owner. Opening uses existing NTT/RNS arithmetic without reconstructing a full key or exporting partial decryptions, bounds retained shares and scratch, and returns original unchanged owners on refusal. No distributed opening, reusable online custody, DKG, malicious-party proof, retry-security or qualified parameter claim."
  },
  "observed": {
@@ -44,6 +44,7 @@
    "specs/zk_delivery_reconciliation.json",
    "todo_list.txt"
   ],
+  "excluded_prefixes": ["docs/validation/"],
   "markdown_patterns": ["hkdf", "hkdf_ram_lfe"],
   "generated_registry": "generated-files.toml"
  },
@@ -63,10 +64,15 @@
   {"name": "fastpq_isi", "path": "crates/fastpq_isi", "depends_on": []},
   {"name": "soranet_pq", "path": "crates/soranet_pq", "depends_on": []},
   {"name": "iroha_fhe", "path": "crates/iroha_fhe", "depends_on": []},
+  {"name": "iroha_execution_stark", "path": "crates/iroha_execution_stark", "depends_on": []},
   {"name": "iroha_crypto", "path": "crates/iroha_crypto", "depends_on": ["fastpq_isi", "soranet_pq", "iroha_fhe"]},
   {"name": "iroha_zkp_halo2", "path": "crates/iroha_zkp_halo2", "depends_on": ["fastpq_isi", "iroha_fhe", "iroha_crypto"]},
   {"name": "iroha_data_model", "path": "crates/iroha_data_model", "depends_on": ["fastpq_isi", "iroha_crypto"]},
-  {"name": "fastpq_prover", "path": "crates/fastpq_prover", "depends_on": ["fastpq_isi", "iroha_fhe", "iroha_crypto", "iroha_zkp_halo2", "iroha_data_model"]},
+  {
+   "name": "fastpq_prover",
+   "path": "crates/fastpq_prover",
+   "depends_on": ["fastpq_isi", "iroha_fhe", "iroha_crypto", "iroha_zkp_halo2", "iroha_data_model"]
+  },
   {
    "name": "iroha_core_zk",
    "path": "crates/iroha_core_zk",
@@ -75,7 +81,7 @@
   {
    "name": "iroha_core_privacy",
    "path": "crates/iroha_core_privacy",
-   "depends_on": ["fastpq_isi", "soranet_pq", "iroha_fhe", "iroha_crypto", "iroha_zkp_halo2", "iroha_data_model", "fastpq_prover"]
+   "depends_on": ["fastpq_isi", "soranet_pq", "iroha_fhe", "iroha_execution_stark", "iroha_crypto", "iroha_zkp_halo2", "iroha_data_model", "fastpq_prover"]
   },
   {
    "name": "iroha_core",
@@ -412,16 +418,9 @@
      "role": "canonical",
      "callers_exhaustive": true,
      "callers": {
-      "crates/fastpq_prover/src/gadgets/rns_chain_air.rs": [
-       "Builder::reconstruct",
-       "compile"
-      ],
-      "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs": [
-       "compile_extension"
-      ],
-      "crates/iroha_core_privacy/src/privacy_engines/jindo/security.rs": [
-       "check_prime_difference_classes_v1"
-      ],
+      "crates/fastpq_prover/src/gadgets/rns_chain_air.rs": ["Builder::reconstruct", "compile"],
+      "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs": ["compile_extension"],
+      "crates/iroha_core_privacy/src/privacy_engines/jindo/security.rs": ["check_prime_difference_classes_v1"],
       "crates/iroha_crypto/src/fhe_bfv.rs": [
        "add_plain_scalar_bounded_noise",
        "decrypt_bfv_full_bootstrap_raw_extracted_sample_scaled_v1",
@@ -433,29 +432,12 @@
        "validate_bounded_noise_key_switch_entry_residuals",
        "validate_key_switch_entry_residuals"
       ],
-      "crates/iroha_fhe/src/accel.rs": [
-       "mul_mod_assign_scalar",
-       "mul_scalar_mod_scalar"
-      ],
-      "crates/iroha_fhe/src/bgv/profile.rs": [
-       "BgvProfile::new"
-      ],
-      "crates/iroha_fhe/src/modular.rs": [
-       "WordModulus::mul",
-       "is_prime_u64",
-       "reduce_be_bytes_mod_u64"
-      ],
-      "crates/iroha_fhe/src/ntt.rs": [
-       "cyclic_ntt_in_place_scalar",
-       "negacyclic_multiply_ntt_in_place"
-      ],
-      "crates/iroha_fhe/src/rns.rs": [
-       "basis_extend_target_limbs",
-       "reconstruct_coefficient"
-      ],
-      "crates/iroha_fhe/src/rns_chain.rs": [
-       "RnsBasis::conversion_target"
-      ]
+      "crates/iroha_fhe/src/accel.rs": ["mul_mod_assign_scalar", "mul_scalar_mod_scalar"],
+      "crates/iroha_fhe/src/bgv/profile.rs": ["BgvProfile::new"],
+      "crates/iroha_fhe/src/modular.rs": ["WordModulus::mul", "is_prime_u64", "reduce_be_bytes_mod_u64"],
+      "crates/iroha_fhe/src/ntt.rs": ["cyclic_ntt_in_place_scalar", "negacyclic_multiply_ntt_in_place"],
+      "crates/iroha_fhe/src/rns.rs": ["basis_extend_target_limbs", "reconstruct_coefficient"],
+      "crates/iroha_fhe/src/rns_chain.rs": ["RnsBasis::conversion_target"]
      }
     },
     {
@@ -507,26 +489,12 @@
      "role": "canonical",
      "callers_exhaustive": true,
      "callers": {
-      "crates/fastpq_prover/src/gadgets/rns_chain_air.rs": [
-       "RnsScaleDownPlan::new"
-      ],
-      "crates/iroha_crypto/src/fhe_bfv.rs": [
-       "encode_packed_plaintext_slots"
-      ],
-      "crates/iroha_fhe/src/ntt.rs": [
-       "negacyclic_multiply_ntt_in_place",
-       "transform_parameters"
-      ],
-      "crates/iroha_fhe/src/ntt_plan.rs": [
-       "NegacyclicPlan::new"
-      ],
-      "crates/iroha_fhe/src/rns.rs": [
-       "basis_extend_target_limbs"
-      ],
-      "crates/iroha_fhe/src/rns_chain.rs": [
-       "CongruentScaleDown::new",
-       "RnsBasis::new"
-      ]
+      "crates/fastpq_prover/src/gadgets/rns_chain_air.rs": ["RnsScaleDownPlan::new"],
+      "crates/iroha_crypto/src/fhe_bfv.rs": ["encode_packed_plaintext_slots"],
+      "crates/iroha_fhe/src/ntt.rs": ["negacyclic_multiply_ntt_in_place", "transform_parameters"],
+      "crates/iroha_fhe/src/ntt_plan.rs": ["NegacyclicPlan::new"],
+      "crates/iroha_fhe/src/rns.rs": ["basis_extend_target_limbs"],
+      "crates/iroha_fhe/src/rns_chain.rs": ["CongruentScaleDown::new", "RnsBasis::new"]
      }
     },
     {
@@ -1603,29 +1571,13 @@
      "role": "canonical",
      "callers_exhaustive": true,
      "callers": {
-      "crates/fastpq_prover/src/gadgets/rns_chain_air.rs": [
-       "RnsScaleDownPlan::build_witness"
-      ],
-      "crates/iroha_fhe/src/bgv/profile.rs": [
-       "BgvProfile::new"
-      ],
-      "crates/iroha_fhe/src/bgv/upper_digits/compiler.rs": [
-       "Compiler::constant"
-      ],
-      "crates/iroha_fhe/src/constant_time.rs": [
-       "FixedModulus::is_consistent"
-      ],
-      "crates/iroha_fhe/src/ntt_plan.rs": [
-       "NegacyclicPlan::new"
-      ],
-      "crates/iroha_fhe/src/prime_power.rs": [
-       "PrimePowerContext::at_precision",
-       "PrimePowerContext::new"
-      ],
-      "crates/iroha_fhe/src/rns_chain.rs": [
-       "RnsBasis::conversion_target",
-       "basis_prime"
-      ]
+      "crates/fastpq_prover/src/gadgets/rns_chain_air.rs": ["RnsScaleDownPlan::build_witness"],
+      "crates/iroha_fhe/src/bgv/profile.rs": ["BgvProfile::new"],
+      "crates/iroha_fhe/src/bgv/upper_digits/compiler.rs": ["Compiler::constant"],
+      "crates/iroha_fhe/src/constant_time.rs": ["FixedModulus::is_consistent"],
+      "crates/iroha_fhe/src/ntt_plan.rs": ["NegacyclicPlan::new"],
+      "crates/iroha_fhe/src/prime_power.rs": ["PrimePowerContext::at_precision", "PrimePowerContext::new"],
+      "crates/iroha_fhe/src/rns_chain.rs": ["RnsBasis::conversion_target", "basis_prime"]
      }
     },
     {
@@ -1671,7 +1623,7 @@
      "path": "crates/iroha_fhe/src/constant_time.rs",
      "symbol": "FixedModulus::add_canonical",
      "role": "canonical",
-     "callers_exhaustive": false,
+     "callers_exhaustive": true,
      "callers": {
       "crates/iroha_core_privacy/src/privacy_engines/bootle_lantern/ring.rs": ["ApplicationPolynomialV1::add", "ProofPolynomialV1::add"],
       "crates/iroha_fhe/src/bgv/cipher.rs": ["PublicKey::encrypt_from_coins"],
@@ -1680,6 +1632,7 @@
       "crates/iroha_fhe/src/bgv/threshold.rs": ["DealerKeyShares::take_share"],
       "crates/iroha_fhe/src/constant_time.rs": ["CenteredCrt3::reconstruct_mod_target", "FixedModulus::add"],
       "crates/iroha_fhe/src/ntt_plan.rs": ["NegacyclicPlan::forward", "NegacyclicPlan::inverse", "NegacyclicPlan::pointwise_mul_add_assign"],
+      "crates/iroha_fhe/src/prime_power.rs": ["PreparationArithmetic::add"],
       "crates/iroha_fhe/src/rns_chain.rs": ["RnsBasis::digits_to_target"]
      }
     },
@@ -1687,7 +1640,7 @@
      "path": "crates/iroha_fhe/src/constant_time.rs",
      "symbol": "FixedModulus::sub_canonical",
      "role": "canonical",
-     "callers_exhaustive": false,
+     "callers_exhaustive": true,
      "callers": {
       "crates/iroha_core_privacy/src/privacy_engines/bootle_lantern/ring.rs": ["ApplicationPolynomialV1::sub", "ProofPolynomialV1::multiply_by_monomial", "ProofPolynomialV1::sub"],
       "crates/iroha_fhe/src/bgv/keys.rs": ["masked_error"],
@@ -1695,6 +1648,7 @@
       "crates/iroha_fhe/src/bgv/threshold.rs": ["ThresholdSelection::coefficient"],
       "crates/iroha_fhe/src/constant_time.rs": ["CenteredCrt3::reconstruct_mod_target", "FixedModulus::canonicalize_i64", "FixedModulus::sub"],
       "crates/iroha_fhe/src/ntt_plan.rs": ["NegacyclicPlan::forward", "NegacyclicPlan::inverse"],
+      "crates/iroha_fhe/src/prime_power.rs": ["PreparationArithmetic::sub"],
       "crates/iroha_fhe/src/rns_chain.rs": ["CongruentScaleDown::apply", "RnsBasis::digits_to_target"]
      }
     },
@@ -1713,41 +1667,17 @@
      "path": "crates/iroha_fhe/src/constant_time.rs",
      "symbol": "FixedModulus::multiply",
      "role": "canonical",
-     "callers_exhaustive": false,
+     "callers_exhaustive": true,
      "callers": {
-      "crates/fastpq_prover/src/gadgets/rns_chain_air.rs": [
-       "RnsScaleDownPlan::build_witness"
-      ],
-      "crates/iroha_core_privacy/src/privacy_engines/bootle_lantern/ring.rs": [
-       "ApplicationPolynomialV1::scale_centered",
-       "ProofPolynomialV1::scale_canonical_unchecked",
-       "multiply_negacyclic_crt_ntt_v1"
-      ],
-      "crates/iroha_fhe/src/accel.rs": [
-       "mul_scalar_mod_with"
-      ],
-      "crates/iroha_fhe/src/bgv/cipher.rs": [
-       "PublicKey::encrypt_from_coins"
-      ],
-      "crates/iroha_fhe/src/bgv/keys.rs": [
-       "SwitchingKey::from_coins",
-       "masked_error"
-      ],
-      "crates/iroha_fhe/src/bgv/threshold.rs": [
-       "DealerKeyShares::take_share",
-       "SecretKeyShare::try_into_subset_additive",
-       "ThresholdSelection::coefficient"
-      ],
-      "crates/iroha_fhe/src/constant_time.rs": [
-       "CenteredCrt3::reconstruct_mod_target",
-       "FixedModulus::mul",
-       "FixedModulus::power"
-      ],
-      "crates/iroha_fhe/src/ntt_plan.rs": [
-       "NegacyclicPlan::new",
-       "NegacyclicPlan::pointwise_mul_add_assign",
-       "NegacyclicPlan::pointwise_mul_assign"
-      ]
+      "crates/fastpq_prover/src/gadgets/rns_chain_air.rs": ["RnsScaleDownPlan::build_witness"],
+      "crates/iroha_core_privacy/src/privacy_engines/bootle_lantern/ring.rs": ["ApplicationPolynomialV1::scale_centered", "ProofPolynomialV1::scale_canonical_unchecked", "multiply_negacyclic_crt_ntt_v1"],
+      "crates/iroha_fhe/src/accel.rs": ["mul_scalar_mod_with"],
+      "crates/iroha_fhe/src/bgv/cipher.rs": ["PublicKey::encrypt_from_coins"],
+      "crates/iroha_fhe/src/bgv/keys.rs": ["SwitchingKey::from_coins", "masked_error"],
+      "crates/iroha_fhe/src/bgv/threshold.rs": ["DealerKeyShares::take_share", "SecretKeyShare::try_into_subset_additive", "ThresholdSelection::coefficient"],
+      "crates/iroha_fhe/src/constant_time.rs": ["CenteredCrt3::reconstruct_mod_target", "FixedModulus::mul", "FixedModulus::power"],
+      "crates/iroha_fhe/src/ntt_plan.rs": ["NegacyclicPlan::new", "NegacyclicPlan::pointwise_mul_add_assign", "NegacyclicPlan::pointwise_mul_assign"],
+      "crates/iroha_fhe/src/prime_power.rs": ["PreparationArithmetic::mul"]
      }
     },
     {
@@ -1755,7 +1685,11 @@
      "symbol": "FixedModulus::power",
      "role": "canonical",
      "callers_exhaustive": false,
-     "callers": {"crates/iroha_fhe/src/bgv/threshold.rs": ["ThresholdSelection::coefficient"], "crates/iroha_fhe/src/constant_time.rs": ["FixedModulus::pow"]}
+     "callers": {
+      "crates/iroha_fhe/src/bgv/threshold.rs": ["ThresholdSelection::coefficient"],
+      "crates/iroha_fhe/src/constant_time.rs": ["FixedModulus::pow"],
+      "crates/iroha_fhe/src/prime_power.rs": ["PreparationArithmetic::power"]
+     }
     },
     {
      "path": "crates/iroha_fhe/src/constant_time.rs",
@@ -2264,7 +2198,13 @@
       "crates/iroha_fhe/src/natural.rs": ["Natural::div_ceil_u64"]
      }
     },
-    {"path": "crates/iroha_fhe/src/natural.rs", "symbol": "Natural::bit_len", "role": "canonical", "callers_exhaustive": false, "callers": {}},
+    {
+     "path": "crates/iroha_fhe/src/natural.rs",
+     "symbol": "Natural::bit_len",
+     "role": "canonical",
+     "callers_exhaustive": false,
+     "callers": {"crates/iroha_fhe/src/bgv/plan.rs": ["CiphertextShape::bound_bits"]}
+    },
     {
      "path": "crates/iroha_fhe/src/natural.rs",
      "symbol": "Natural::checked_sub",
@@ -2552,14 +2492,17 @@
      "symbol": "CongruentScaleDown::apply",
      "role": "canonical",
      "callers_exhaustive": false,
-     "callers": {"crates/iroha_fhe/src/bgv/eval.rs": ["BgvProfile::key_switch", "BgvProfile::switch_down"]}
+     "callers": {
+      "crates/fastpq_prover/src/gadgets/rns_chain_air.rs": ["RnsScaleDownPlan::build_witness"],
+      "crates/iroha_fhe/src/bgv/eval.rs": ["BgvProfile::key_switch", "BgvProfile::switch_down"]
+     }
     },
     {
      "path": "crates/iroha_fhe/src/rns_chain.rs",
      "symbol": "CongruentScaleDown::dropped",
      "role": "canonical",
-     "callers_exhaustive": false,
-     "callers": {}
+     "callers_exhaustive": true,
+     "callers": {"crates/fastpq_prover/src/gadgets/rns_chain_air.rs": ["RnsScaleDownPlan::build_witness"]}
     },
     {
      "path": "crates/iroha_fhe/src/rns_chain.rs",
@@ -2580,14 +2523,7 @@
      "symbol": "CongruentScaleDown::new",
      "role": "canonical",
      "callers_exhaustive": true,
-     "callers": {
-      "crates/fastpq_prover/src/gadgets/rns_chain_air.rs": [
-       "RnsScaleDownPlan::new"
-      ],
-      "crates/iroha_fhe/src/bgv/profile.rs": [
-       "BgvProfile::new"
-      ]
-     }
+     "callers": {"crates/fastpq_prover/src/gadgets/rns_chain_air.rs": ["RnsScaleDownPlan::new"], "crates/iroha_fhe/src/bgv/profile.rs": ["BgvProfile::new"]}
     },
     {
      "path": "crates/iroha_fhe/src/rns_chain.rs",
@@ -2609,15 +2545,9 @@
      "role": "canonical",
      "callers_exhaustive": true,
      "callers": {
-      "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs": [
-       "RnsCenteredExtensionPlan::new"
-      ],
-      "crates/iroha_fhe/src/bgv/profile.rs": [
-       "BgvProfile::new"
-      ],
-      "crates/iroha_fhe/src/rns_chain.rs": [
-       "CongruentScaleDown::new"
-      ]
+      "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs": ["RnsCenteredExtensionPlan::new"],
+      "crates/iroha_fhe/src/bgv/profile.rs": ["BgvProfile::new"],
+      "crates/iroha_fhe/src/rns_chain.rs": ["CongruentScaleDown::new"]
      }
     },
     {
@@ -2639,7 +2569,11 @@
      "symbol": "RnsBasis::convert_centered",
      "role": "canonical",
      "callers_exhaustive": false,
-     "callers": {"crates/iroha_fhe/src/bgv/cipher.rs": ["decode_inner_product"], "crates/iroha_fhe/src/bgv/eval.rs": ["BgvProfile::key_switch"]}
+     "callers": {
+      "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs": ["RnsCenteredExtensionPlan::build_witness"],
+      "crates/iroha_fhe/src/bgv/cipher.rs": ["decode_inner_product"],
+      "crates/iroha_fhe/src/bgv/eval.rs": ["BgvProfile::key_switch"]
+     }
     },
     {
      "path": "crates/iroha_fhe/src/rns_chain.rs",
@@ -2654,10 +2588,8 @@
      "role": "canonical",
      "callers_exhaustive": false,
      "callers": {
-      "crates/iroha_fhe/src/rns_chain.rs": [
-       "CongruentScaleDown::apply",
-       "RnsBasis::convert"
-      ]
+      "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs": ["RnsCenteredExtensionPlan::build_witness"],
+      "crates/iroha_fhe/src/rns_chain.rs": ["CongruentScaleDown::apply", "RnsBasis::convert"]
      }
     },
     {
@@ -2673,13 +2605,8 @@
      "role": "canonical",
      "callers_exhaustive": false,
      "callers": {
-      "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs": [
-       "RnsCenteredExtensionPlan::new"
-      ],
-      "crates/iroha_fhe/src/rns_chain.rs": [
-       "RnsBasis::is_empty",
-       "RnsBasis::new"
-      ]
+      "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs": ["RnsCenteredExtensionPlan::new"],
+      "crates/iroha_fhe/src/rns_chain.rs": ["RnsBasis::is_empty", "RnsBasis::new"]
      }
     },
     {
@@ -2688,17 +2615,12 @@
      "role": "canonical",
      "callers_exhaustive": false,
      "callers": {
-      "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs": [
-       "RnsCenteredExtensionPlan::new"
-      ],
-      "crates/iroha_fhe/src/bgv/eval.rs": [
-       "BgvProfile::key_switch"
-      ],
-      "crates/iroha_fhe/src/bgv/profile.rs": [
-       "BgvProfile::new"
-      ],
+      "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs": ["RnsCenteredExtensionPlan::new"],
+      "crates/iroha_fhe/src/bgv/eval.rs": ["BgvProfile::key_switch"],
+      "crates/iroha_fhe/src/bgv/profile.rs": ["BgvProfile::new"],
       "crates/iroha_fhe/src/rns_chain.rs": [
        "CongruentScaleDown::apply",
+       "CongruentScaleDown::dropped_len",
        "CongruentScaleDown::new",
        "RnsBasis::conversion_target",
        "RnsBasis::convert",
@@ -2714,11 +2636,8 @@
      "role": "canonical",
      "callers_exhaustive": false,
      "callers": {
-      "crates/iroha_fhe/src/rns_chain.rs": [
-       "CongruentScaleDown::apply",
-       "RnsBasis::convert",
-       "RnsBasis::reconstruct_canonical"
-      ]
+      "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs": ["RnsCenteredExtensionPlan::build_witness"],
+      "crates/iroha_fhe/src/rns_chain.rs": ["CongruentScaleDown::apply", "RnsBasis::convert", "RnsBasis::reconstruct_canonical"]
      }
     },
     {
@@ -2727,15 +2646,9 @@
      "role": "canonical",
      "callers_exhaustive": true,
      "callers": {
-      "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs": [
-       "RnsCenteredExtensionPlan::new"
-      ],
-      "crates/iroha_fhe/src/bgv/profile.rs": [
-       "BgvProfile::new"
-      ],
-      "crates/iroha_fhe/src/rns_chain.rs": [
-       "CongruentScaleDown::new"
-      ]
+      "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs": ["RnsCenteredExtensionPlan::new"],
+      "crates/iroha_fhe/src/bgv/profile.rs": ["BgvProfile::new"],
+      "crates/iroha_fhe/src/rns_chain.rs": ["CongruentScaleDown::new"]
      }
     },
     {
@@ -2982,6 +2895,21 @@
     {"path": "crates/iroha_crypto/src/fhe_bfv.rs", "symbol": "bfv_full_bootstrap_goldilocks_reduce_le_bytes_v1"},
     {"path": "crates/iroha_crypto/src/fhe_bfv.rs", "symbol": "BFV_FULL_BOOTSTRAP_NATIVE_STARK_GOLDILOCKS_MODULUS_V1"},
     {"path": "crates/iroha_core_zk/src/stark.rs", "symbol": "Fq::reduce"}
+   ]
+  },
+  {
+   "id": "execution_stark.goldilocks_transforms",
+   "owner": {"crate": "iroha_execution_stark", "path": "crates/iroha_execution_stark/src/ntt.rs"},
+   "tasks": ["B.1", "B.2", "B.3"],
+   "reason": "Radix-2 Goldilocks transforms of the bounded-integer execution STARK that RaceV1 proves on: the bit-reversal permutation, the stage tables and decimation-in-time butterflies, and the subgroup and coset transforms of its trace and low-degree extension. They transform STARK columns over the proof field, not an RLWE ring, so they do not move to iroha_fhe. specs/fastpq/shared_backend_inventory.json records the crate as a FASTPQ-style duplicate owner whose consolidation onto the shared proof backend B.3 decides.",
+   "symbols": [
+    {"path": "crates/iroha_execution_stark/src/ntt.rs", "symbol": "bit_reverse_permute"},
+    {"path": "crates/iroha_execution_stark/src/ntt.rs", "symbol": "stage_tables"},
+    {"path": "crates/iroha_execution_stark/src/ntt.rs", "symbol": "dit"},
+    {"path": "crates/iroha_execution_stark/src/ntt.rs", "symbol": "Domain::forward"},
+    {"path": "crates/iroha_execution_stark/src/ntt.rs", "symbol": "Domain::inverse"},
+    {"path": "crates/iroha_execution_stark/src/ntt.rs", "symbol": "Domain::forward_on_coset"},
+    {"path": "crates/iroha_execution_stark/src/ntt.rs", "symbol": "Domain::inverse_on_coset"}
    ]
   }
  ],
@@ -3922,10 +3850,7 @@
    "id": "shared.rns_chain_air",
    "scheme": "shared_arithmetic",
    "component": "FastPQ canonical RNS conversion/division relations with one shared private kernel and separate public diagnostic bindings",
-   "tasks": [
-    "C.8",
-    "B.2"
-   ],
+   "tasks": ["C.8", "B.2"],
    "executes": [],
    "path": "crates/fastpq_prover/src/gadgets/rns_chain_air.rs",
    "symbols": [],
@@ -3935,10 +3860,7 @@
    "id": "shared.rns_chain_air_integer",
    "scheme": "shared_arithmetic",
    "component": "Private bounded integer polynomial gates shared by both FastPQ RNS conversion/division relations",
-   "tasks": [
-    "C.8",
-    "B.2"
-   ],
+   "tasks": ["C.8", "B.2"],
    "executes": [],
    "path": "crates/fastpq_prover/src/gadgets/rns_chain_air/integer.rs",
    "symbols": [],
@@ -3948,10 +3870,7 @@
    "id": "shared.rns_chain_air_centered_extension",
    "scheme": "shared_arithmetic",
    "component": "Canonical centered RNS basis-extension relation using the shared word/gate/comparator owner",
-   "tasks": [
-    "C.8",
-    "B.2"
-   ],
+   "tasks": ["C.8", "B.2"],
    "executes": [],
    "path": "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs",
    "symbols": [],
@@ -4549,6 +4468,107 @@
   }
  ],
  "function_assignment": [
+  {
+   "path": "crates/fastpq_prover/src/gadgets/rns_chain_air.rs",
+   "production": {
+    "shared.rns_chain_air": [
+     "Builder::constant",
+     "Builder::equal",
+     "Builder::gate",
+     "Builder::reconstruct",
+     "Builder::word",
+     "Geometry::admit",
+     "Geometry::new",
+     "RnsChainWitness::drop",
+     "RnsChainWitness::fmt",
+     "RnsChainWitness::row",
+     "RnsChainWitness::row_mut",
+     "RnsChainWitness::rows",
+     "RnsChainWitness::width",
+     "RnsChainWitness::zeroize",
+     "RnsKernel::evaluate_row",
+     "RnsKernel::fill_row",
+     "RnsScaleDownAir::evaluate",
+     "RnsScaleDownAir::plan",
+     "RnsScaleDownAir::public_columns",
+     "RnsScaleDownAir::public_value",
+     "RnsScaleDownAir::schema",
+     "RnsScaleDownAir::statement_bytes",
+     "RnsScaleDownPlan::bind",
+     "RnsScaleDownPlan::build_witness",
+     "RnsScaleDownPlan::check_input",
+     "RnsScaleDownPlan::evaluate_row",
+     "RnsScaleDownPlan::kernel",
+     "RnsScaleDownPlan::new",
+     "RnsScaleDownPlan::requirements",
+     "RnsScaleDownPlan::schema",
+     "add",
+     "check_input",
+     "compile",
+     "evaluate_reference",
+     "limit",
+     "multiply",
+     "native_heap_bytes",
+     "put_word",
+     "semantic_error",
+     "word_view"
+    ]
+   },
+   "test_gated": {"shared.rns_chain_air_unit_tests": ["mod retirement_tests"]}
+  },
+  {
+   "path": "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs",
+   "production": {
+    "shared.rns_chain_air_centered_extension": [
+     "RnsCenteredExtensionAir::evaluate",
+     "RnsCenteredExtensionAir::plan",
+     "RnsCenteredExtensionAir::public_columns",
+     "RnsCenteredExtensionAir::public_value",
+     "RnsCenteredExtensionAir::schema",
+     "RnsCenteredExtensionAir::statement_bytes",
+     "RnsCenteredExtensionPlan::bind",
+     "RnsCenteredExtensionPlan::build_witness",
+     "RnsCenteredExtensionPlan::evaluate_row",
+     "RnsCenteredExtensionPlan::kernel",
+     "RnsCenteredExtensionPlan::new",
+     "RnsCenteredExtensionPlan::requirements",
+     "RnsCenteredExtensionPlan::schema",
+     "compile_extension",
+     "extension_counts",
+     "extension_native_heap_bytes"
+    ]
+   },
+   "test_gated": {}
+  },
+  {
+   "path": "crates/fastpq_prover/src/gadgets/rns_chain_air/integer.rs",
+   "production": {
+    "shared.rns_chain_air_integer": [
+     "ClearingAdd::drop",
+     "GateKind::binary",
+     "GateKind::layout",
+     "IntegerError::fmt",
+     "Residues::bits",
+     "Residues::push",
+     "check_geometry",
+     "emit_add",
+     "emit_canonical",
+     "emit_product",
+     "emit_sum",
+     "evaluate",
+     "fill",
+     "fill_add_carries",
+     "fill_canonical",
+     "fill_product",
+     "fill_sum_carries",
+     "pack",
+     "public_word",
+     "word",
+     "write_bits"
+    ]
+   },
+   "test_gated": {"shared.rns_chain_air_integer_unit_tests": ["mod tests"]}
+  },
   {
    "path": "crates/iroha_core_privacy/src/privacy_engines/bootle_lantern/ring.rs",
    "production": {
@@ -6018,6 +6038,20 @@
    "test_gated": {}
   },
   {
+   "path": "crates/iroha_crypto/src/ram_lfe/bgv_input.rs",
+   "production": {
+    "ram_lfe.bgv_input_construction": [
+     "RamLfeBgvPackedInputV1::add_plain_retaining_input",
+     "RamLfeBgvPackedInputV1::ciphertext",
+     "RamLfeBgvPackedInputV1::encrypt",
+     "RamLfeBgvPackedInputV1::fmt",
+     "RamLfeBgvPackedInputV1::preflight",
+     "RamLfeBgvPackedInputV1::shape"
+    ]
+   },
+   "test_gated": {"ram_lfe.inline_unit_tests": ["mod tests"]}
+  },
+  {
    "path": "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear.rs",
    "production": {
     "ram_lfe.bgv_nonlinear_evaluation": [
@@ -6146,20 +6180,6 @@
     ]
    },
    "test_gated": {}
-  },
-  {
-   "path": "crates/iroha_crypto/src/ram_lfe/bgv_input.rs",
-   "production": {
-    "ram_lfe.bgv_input_construction": [
-     "RamLfeBgvPackedInputV1::add_plain_retaining_input",
-     "RamLfeBgvPackedInputV1::ciphertext",
-     "RamLfeBgvPackedInputV1::encrypt",
-     "RamLfeBgvPackedInputV1::fmt",
-     "RamLfeBgvPackedInputV1::preflight",
-     "RamLfeBgvPackedInputV1::shape"
-    ]
-   },
-   "test_gated": {"ram_lfe.inline_unit_tests": ["mod tests"]}
   },
   {
    "path": "crates/iroha_crypto/src/ram_lfe/canonical.rs",
@@ -11940,115 +11960,6 @@
      "zk_ams_mkhe_cks_statement_digest_v1"
     ]
    }
-  },
-  {
-   "path": "crates/fastpq_prover/src/gadgets/rns_chain_air.rs",
-   "production": {
-    "shared.rns_chain_air": [
-     "Builder::constant",
-     "Builder::equal",
-     "Builder::gate",
-     "Builder::reconstruct",
-     "Builder::word",
-     "Geometry::admit",
-     "Geometry::new",
-     "RnsChainWitness::drop",
-     "RnsChainWitness::fmt",
-     "RnsChainWitness::row",
-     "RnsChainWitness::row_mut",
-     "RnsChainWitness::rows",
-     "RnsChainWitness::width",
-     "RnsChainWitness::zeroize",
-     "RnsKernel::evaluate_row",
-     "RnsKernel::fill_row",
-     "RnsScaleDownAir::evaluate",
-     "RnsScaleDownAir::plan",
-     "RnsScaleDownAir::public_columns",
-     "RnsScaleDownAir::public_value",
-     "RnsScaleDownAir::schema",
-     "RnsScaleDownAir::statement_bytes",
-     "RnsScaleDownPlan::bind",
-     "RnsScaleDownPlan::build_witness",
-     "RnsScaleDownPlan::check_input",
-     "RnsScaleDownPlan::evaluate_row",
-     "RnsScaleDownPlan::kernel",
-     "RnsScaleDownPlan::new",
-     "RnsScaleDownPlan::requirements",
-     "RnsScaleDownPlan::schema",
-     "add",
-     "check_input",
-     "compile",
-     "evaluate_reference",
-     "limit",
-     "multiply",
-     "native_heap_bytes",
-     "put_word",
-     "semantic_error",
-     "word_view"
-    ]
-   },
-   "test_gated": {
-    "shared.rns_chain_air_unit_tests": [
-     "mod retirement_tests"
-    ]
-   }
-  },
-  {
-   "path": "crates/fastpq_prover/src/gadgets/rns_chain_air/integer.rs",
-   "production": {
-    "shared.rns_chain_air_integer": [
-     "ClearingAdd::drop",
-     "GateKind::binary",
-     "GateKind::layout",
-     "IntegerError::fmt",
-     "Residues::bits",
-     "Residues::push",
-     "check_geometry",
-     "emit_add",
-     "emit_canonical",
-     "emit_product",
-     "emit_sum",
-     "evaluate",
-     "fill",
-     "fill_add_carries",
-     "fill_canonical",
-     "fill_product",
-     "fill_sum_carries",
-     "pack",
-     "public_word",
-     "word",
-     "write_bits"
-    ]
-   },
-   "test_gated": {
-    "shared.rns_chain_air_integer_unit_tests": [
-     "mod tests"
-    ]
-   }
-  },
-  {
-   "path": "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs",
-   "production": {
-    "shared.rns_chain_air_centered_extension": [
-     "RnsCenteredExtensionAir::evaluate",
-     "RnsCenteredExtensionAir::plan",
-     "RnsCenteredExtensionAir::public_columns",
-     "RnsCenteredExtensionAir::public_value",
-     "RnsCenteredExtensionAir::schema",
-     "RnsCenteredExtensionAir::statement_bytes",
-     "RnsCenteredExtensionPlan::bind",
-     "RnsCenteredExtensionPlan::build_witness",
-     "RnsCenteredExtensionPlan::evaluate_row",
-     "RnsCenteredExtensionPlan::kernel",
-     "RnsCenteredExtensionPlan::new",
-     "RnsCenteredExtensionPlan::requirements",
-     "RnsCenteredExtensionPlan::schema",
-     "compile_extension",
-     "extension_counts",
-     "extension_native_heap_bytes"
-    ]
-   },
-   "test_gated": {}
   }
  ],
  "hkdf": {
@@ -12360,186 +12271,6 @@
      "kind": "test",
      "literals": ["registered_hkdf_identifier_app"],
      "test_only": true
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/artifacts/openapi/torii.json.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of artifacts/openapi/torii.json kept by the parliament_ballot_beacon_borrow_guard validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/artifacts/openapi/versions/current/torii.json.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of artifacts/openapi/versions/current/torii.json kept by the parliament_ballot_beacon_borrow_guard validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/crates/iroha_core/src/state/tests.rs.template",
-     "kind": "documentation",
-     "literals": ["HkdfSha3_512PrfV1"],
-     "note": "Frozen capture of crates/iroha_core/src/state/tests.rs kept by the parliament_ballot_beacon_borrow_guard validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/crates/iroha_torii/assets/openapi/torii.json.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of crates/iroha_torii/assets/openapi/torii.json kept by the parliament_ballot_beacon_borrow_guard validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/javascript/iroha_js/index.d.ts.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of javascript/iroha_js/index.d.ts kept by the parliament_ballot_beacon_borrow_guard validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/artifacts/openapi/torii.json.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of artifacts/openapi/torii.json kept by the parliament_ballot_daemon_startup_guard validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/artifacts/openapi/versions/current/torii.json.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of artifacts/openapi/versions/current/torii.json kept by the parliament_ballot_daemon_startup_guard validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/crates/iroha_core/src/state/tests.rs.template",
-     "kind": "documentation",
-     "literals": ["HkdfSha3_512PrfV1"],
-     "note": "Frozen capture of crates/iroha_core/src/state/tests.rs kept by the parliament_ballot_daemon_startup_guard validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/crates/iroha_torii/assets/openapi/torii.json.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of crates/iroha_torii/assets/openapi/torii.json kept by the parliament_ballot_daemon_startup_guard validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/javascript/iroha_js/index.d.ts.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of javascript/iroha_js/index.d.ts kept by the parliament_ballot_daemon_startup_guard validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/artifacts/openapi/torii.json.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of artifacts/openapi/torii.json kept by the parliament_ballot_execution_result_guard validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/artifacts/openapi/versions/current/torii.json.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of artifacts/openapi/versions/current/torii.json kept by the parliament_ballot_execution_result_guard validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/crates/iroha_core/src/state/tests.rs.template",
-     "kind": "documentation",
-     "literals": ["HkdfSha3_512PrfV1"],
-     "note": "Frozen capture of crates/iroha_core/src/state/tests.rs kept by the parliament_ballot_execution_result_guard validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/crates/iroha_torii/assets/openapi/torii.json.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of crates/iroha_torii/assets/openapi/torii.json kept by the parliament_ballot_execution_result_guard validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/javascript/iroha_js/index.d.ts.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of javascript/iroha_js/index.d.ts kept by the parliament_ballot_execution_result_guard validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/artifacts/openapi/torii.json.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of artifacts/openapi/torii.json kept by the parliament_ballot_post_merge_source_check validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/artifacts/openapi/versions/current/torii.json.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of artifacts/openapi/versions/current/torii.json kept by the parliament_ballot_post_merge_source_check validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/crates/iroha_core/src/state/tests.rs.template",
-     "kind": "documentation",
-     "literals": ["HkdfSha3_512PrfV1"],
-     "note": "Frozen capture of crates/iroha_core/src/state/tests.rs kept by the parliament_ballot_post_merge_source_check validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/crates/iroha_torii/assets/openapi/torii.json.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of crates/iroha_torii/assets/openapi/torii.json kept by the parliament_ballot_post_merge_source_check validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/javascript/iroha_js/index.d.ts.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of javascript/iroha_js/index.d.ts kept by the parliament_ballot_post_merge_source_check validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/artifacts/openapi/torii.json.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of artifacts/openapi/torii.json kept by the parliament_ballot_source_guard_regressions validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/artifacts/openapi/versions/current/torii.json.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of artifacts/openapi/versions/current/torii.json kept by the parliament_ballot_source_guard_regressions validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/crates/iroha_core/src/state/tests.rs.template",
-     "kind": "documentation",
-     "literals": ["HkdfSha3_512PrfV1"],
-     "note": "Frozen capture of crates/iroha_core/src/state/tests.rs kept by the parliament_ballot_source_guard_regressions validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/crates/iroha_torii/assets/openapi/torii.json.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of crates/iroha_torii/assets/openapi/torii.json kept by the parliament_ballot_source_guard_regressions validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/javascript/iroha_js/index.d.ts.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of javascript/iroha_js/index.d.ts kept by the parliament_ballot_source_guard_regressions validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/artifacts/openapi/torii.json.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of artifacts/openapi/torii.json kept by the parliament_ballot_torii_release_guard validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/artifacts/openapi/versions/current/torii.json.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of artifacts/openapi/versions/current/torii.json kept by the parliament_ballot_torii_release_guard validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/crates/iroha_core/src/state/tests.rs.template",
-     "kind": "documentation",
-     "literals": ["HkdfSha3_512PrfV1"],
-     "note": "Frozen capture of crates/iroha_core/src/state/tests.rs kept by the parliament_ballot_torii_release_guard validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/crates/iroha_torii/assets/openapi/torii.json.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of crates/iroha_torii/assets/openapi/torii.json kept by the parliament_ballot_torii_release_guard validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/javascript/iroha_js/index.d.ts.template",
-     "kind": "documentation",
-     "literals": ["hkdf-sha3-512-prf-v1"],
-     "note": "Frozen capture of javascript/iroha_js/index.d.ts kept by the parliament_ballot_torii_release_guard validation bundle, which records its digest. It records that revision and imports nothing; R.6 leaves it unchanged and does not count it as a current user."
     }
    ],
    "consumer_evidence": [
@@ -12617,7 +12348,7 @@
   },
   "unrelated_preserve": {
    "disposition": "preserve",
-   "summary": "HKDF key derivation unrelated to RAM-LFE, the dependency entries that carry it, and frozen validation records that name the hkdf crate or capture such a derivation. R.6 must not remove any of it.",
+   "summary": "HKDF key derivation unrelated to RAM-LFE, the dependency entries that carry it, and the frozen lockfile of the rejected FAEST cross-verification build that names the hkdf crate. R.6 must not remove any of it.",
    "entries": [
     {"path": "contracts/evm/sccp/test/sccp_v1_model.js", "purpose": "Independent SCCP BLS KeyGen reference using HKDF-SHA-256."},
     {"path": "crates/iroha_sccp/tests/reference_support/bls_support.rs", "purpose": "Independent SCCP BLS KeyGen reference using HKDF-SHA-256."},
@@ -12709,398 +12440,6 @@
     {
      "path": "crates/iroha_zkp_vole/tests/fixtures/faest_v3_0_2/cross_verification_evidence/rejected_publication/build-root-Cargo.lock.template",
      "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_adapter_bound/report.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_adapter_source_recovery/receipt.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_adapter_source_recovery/source/Cargo.lock.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_adapter_source_recovery/validated/receipt.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_adapter_source_recovery/validated/source/Cargo.lock.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_allocation_trace/Cargo.lock.build.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_allocation_trace/build-receipt.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_allocation_trace/build-source-after.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_allocation_trace/build-source.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_allocation_trace/campaign-1/report.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_allocation_trace/dependency-metadata.json",
-     "purpose": "Frozen Cargo metadata of a recorded validation build; it lists the hkdf package."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_allocation_trace/failed-build-1/Cargo.lock.build.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_allocation_trace/failed-build-1/build-receipt.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_allocation_trace/failed-build-1/build-source.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_allocation_trace/failed-build-1/dependency-metadata.json",
-     "purpose": "Frozen Cargo metadata of a recorded validation build; it lists the hkdf package."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_allocation_trace/failed-build-1/generated-source/Cargo.lock.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_allocation_trace/failed-build-1/generated-source/root-Cargo.lock.template.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_allocation_trace/generated-source/Cargo.lock.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_allocation_trace/generated-source/root-Cargo.lock.template.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_allocation_trace/initial-preparation/dependency-metadata.json",
-     "purpose": "Frozen Cargo metadata of a recorded validation build; it lists the hkdf package."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_arena_sufficiency/oracle-Cargo.lock.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_arena_sufficiency/oracle-clippy.txt",
-     "purpose": "Frozen compiler log of a recorded validation build; it shows the hkdf crate being built."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_arena_sufficiency/oracle-test.txt",
-     "purpose": "Frozen compiler log of a recorded validation build; it shows the hkdf crate being built."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_arena_sufficiency/post-build-Cargo.lock.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_b6/android-build-accel.txt",
-     "purpose": "Frozen compiler log of a recorded validation build; it shows the hkdf crate being built."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_b6/current-resource-Cargo.lock.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_b6/current-resource-coherence.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_b6/ios-bridge-host-tests-accel.txt",
-     "purpose": "Frozen compiler log of a recorded validation build; it shows the hkdf crate being built."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_b6/ios_host_template/bridge/Cargo.lock.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_b6/measured-root-Cargo.lock.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_b6/qualification-root-Cargo.lock.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_b6/source-framing-coherence.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/crates/iroha_crypto/src/threshold_bls.rs.template",
-     "purpose": "Frozen capture of crates/iroha_crypto/src/threshold_bls.rs: the threshold BLS beacon seed and checkpoint key HKDF-SHA256 derivation that the live file keeps. Not the RAM-LFE backend."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_current_candidate/build-v2/Cargo.lock.build.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_current_candidate/build-v2/build-receipt.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_current_candidate/build-v2/build-source.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_current_candidate/build-v2/dependency-metadata.json",
-     "purpose": "Frozen Cargo metadata of a recorded validation build; it lists the hkdf package."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_current_candidate/build-v2/generated-source/Cargo.lock.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_current_candidate/build-v2/generated-source/root-Cargo.lock.template.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_current_candidate/campaign/report.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_current_candidate/fatal-output/report.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_current_candidate/preparation-v1/dependency-metadata.json",
-     "purpose": "Frozen Cargo metadata of a recorded validation build; it lists the hkdf package."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_current_candidate/stack/receipt.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_current_correspondence/analysis/report.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/crates/iroha_crypto/src/threshold_bls.rs.template",
-     "purpose": "Frozen capture of crates/iroha_crypto/src/threshold_bls.rs: the threshold BLS beacon seed and checkpoint key HKDF-SHA256 derivation that the live file keeps. Not the RAM-LFE backend."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/crates/iroha_crypto/src/threshold_bls.rs.template",
-     "purpose": "Frozen capture of crates/iroha_crypto/src/threshold_bls.rs: the threshold BLS beacon seed and checkpoint key HKDF-SHA256 derivation that the live file keeps. Not the RAM-LFE backend."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_fatal_control/backpressure-fixed-v2/report.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_fatal_control/backpressure-fixed/report.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_fatal_control/build/Cargo.lock.build.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_fatal_control/build/build-receipt.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_fatal_control/build/build-source.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_fatal_control/build/dependency-metadata.json",
-     "purpose": "Frozen Cargo metadata of a recorded validation build; it lists the hkdf package."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_fatal_control/build/generated-source/Cargo.lock.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_fatal_control/build/generated-source/root-Cargo.lock.template.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_fatal_control/campaign/report.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_fatal_stack/receipt.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_fatal_stack_eon/receipt.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_frontend_bound/analysis/report.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_memory_entry/Cargo.lock.build.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_memory_entry/build-receipt.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_memory_entry/build-source.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_memory_entry/campaign/report.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_memory_entry/dependency-metadata.json",
-     "purpose": "Frozen Cargo metadata of a recorded validation build; it lists the hkdf package."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_memory_entry/generated-source/Cargo.lock.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_memory_entry/generated-source/root-Cargo.lock.template.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_native_probe/Cargo.lock.build.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_native_probe/attempts/initial-lint/build-receipt.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_native_probe/attempts/initial-lint/build-source.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_native_probe/attempts/initial-lint/dependency-metadata.json",
-     "purpose": "Frozen Cargo metadata of a recorded validation build; it lists the hkdf package."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_native_probe/attempts/initial-lint/portable-clippy.txt",
-     "purpose": "Frozen compiler log of a recorded validation build; it shows the hkdf crate being built."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_native_probe/build-receipt.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_native_probe/build-source.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_native_probe/campaign/report.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_native_probe/dependency-metadata.json",
-     "purpose": "Frozen Cargo metadata of a recorded validation build; it lists the hkdf package."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_native_probe/generated/Cargo.lock.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_native_probe/generated/root-Cargo.lock.template.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_opaque_field_bound/capture/analysis.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_opaque_field_bound/capture/pytest-tmp/test_cli_qualification_refusal0/qualified.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_opaque_field_bound/capture/refusal.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/crates/iroha_crypto/src/threshold_bls.rs.template",
-     "purpose": "Frozen capture of crates/iroha_crypto/src/threshold_bls.rs: the threshold BLS beacon seed and checkpoint key HKDF-SHA256 derivation that the live file keeps. Not the RAM-LFE backend."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_profile_bound/analysis/report.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_prover_lifecycle/attempts/initial-clippy.txt",
-     "purpose": "Frozen compiler log of a recorded validation build; it shows the hkdf crate being built."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_prover_lifecycle/attempts/initial-portable-test.txt",
-     "purpose": "Frozen compiler log of a recorded validation build; it shows the hkdf crate being built."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_prover_lifecycle/attempts/source-drift-during-accel/build-Cargo.lock.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_prover_lifecycle/supplemental/build-Cargo.lock.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_prover_lifecycle/test-campaign/build-Cargo.lock.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_qualification_dispatch/sources/validated/Cargo.lock.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_qualification_dispatch/sources/validated/docs/validation/parliament_ballot_b6/ios_host_template/bridge/Cargo.lock.template.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_qualification_dispatch/sources/validated/external-bridge/Cargo.lock.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_resource_contract/build-Cargo.lock.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_resource_contract/dependency-change/root-Cargo.lock.after.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_resource_contract/dependency-change/root-Cargo.lock.before.template",
-     "purpose": "Frozen lockfile of a recorded validation build; the hkdf crate is a dependency entry."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/crates/iroha_crypto/src/threshold_bls.rs.template",
-     "purpose": "Frozen capture of crates/iroha_crypto/src/threshold_bls.rs: the threshold BLS beacon seed and checkpoint key HKDF-SHA256 derivation that the live file keeps. Not the RAM-LFE backend."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/crates/iroha_crypto/src/threshold_bls.rs.template",
-     "purpose": "Frozen capture of crates/iroha_crypto/src/threshold_bls.rs: the threshold BLS beacon seed and checkpoint key HKDF-SHA256 derivation that the live file keeps. Not the RAM-LFE backend."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_typed_decoder_bound/analysis/report.json",
-     "purpose": "Recorded validation receipt or report; it hashes the hkdf crate's registry sources among the build inputs."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_node_representation/resume-20261020/core-merge-diagnostic.log.txt",
-     "purpose": "Historical Cargo compile/check transcript naming the hkdf dependency; it contains no executable HKDF call and is not a RAM-LFE backend."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_node_representation/resume-20261020/model-initial.log.txt",
-     "purpose": "Historical Cargo compile/check transcript naming the hkdf dependency; it contains no executable HKDF call and is not a RAM-LFE backend."
-    },
-    {
-     "path": "docs/validation/parliament_ballot_node_representation/resume-20261020/node-check-initial.log.txt",
-     "purpose": "Historical Cargo compile/check transcript naming the hkdf dependency; it contains no executable HKDF call and is not a RAM-LFE backend."
     },
     {
      "path": "vendor/boringssl-swiftpm/UPSTREAM.json",
@@ -13317,6 +12656,12 @@
    "registered": false,
    "purpose": "Frozen generated runtime interface baseline, including FHE and RAM-LFE identities. Its canonical generator and source-pinned comparison live in Core's catalog tests; this entry does not regenerate the installed baseline.",
    "evidence": {"path": "crates/iroha_core/src/runtime/catalog/tests.rs", "literal": "fn regenerate_runtime_baseline_catalog()"}
+  },
+  {
+   "path": "specs/runtime_baseline_instruction_layouts.tsv",
+   "registered": false,
+   "purpose": "Pinned payload layout of every baseline instruction wire ID, the RAM-LFE program-policy and SoraCloud FHE policy instructions among them. iroha_data_model's print_baseline_instruction_layouts test prints it and baseline_instruction_layouts_stay_frozen refuses a changed layout under an unchanged wire ID; this entry does not re-pin it.",
+   "evidence": {"path": "crates/iroha_data_model/src/isi/registry.rs", "literal": "fn baseline_instruction_layouts_stay_frozen()"}
   },
   {
    "path": "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
@@ -13680,8 +13025,11 @@
    "component": "specs",
    "role": "generated_artifact",
    "tasks": ["F.4", "V.1"],
-   "summary": "Generated installed-interface baseline definitions name FHE and RAM-LFE policies and operations. This file owns no arithmetic; inventory registration neither regenerates nor qualifies the frozen runtime baseline.",
-   "files": [{"path": "specs/runtime_baseline_catalog.json", "patterns": ["fhe", "ram_lfe"]}]
+   "summary": "Generated installed-interface baseline definitions and the pinned payload layout of every baseline instruction name FHE and RAM-LFE policies and operations. These files own no arithmetic; inventory registration neither regenerates nor qualifies the frozen runtime baseline.",
+   "files": [
+    {"path": "specs/runtime_baseline_catalog.json", "patterns": ["fhe", "ram_lfe"]},
+    {"path": "specs/runtime_baseline_instruction_layouts.tsv", "patterns": ["fhe", "ram_lfe"]}
+   ]
   },
   {
    "id": "hkdf.unrelated",
@@ -15782,12 +15130,55 @@
    ]
   },
   {
+   "id": "execution_stark.goldilocks_ntt",
+   "component": "iroha_execution_stark",
+   "role": "distinct_arithmetic",
+   "tasks": ["B.1", "B.2", "B.3"],
+   "summary": "Goldilocks proof-field transforms of the bounded-integer execution STARK (src/ntt.rs) and the crate root, FRI, prover and verifier that declare or call them. STARK trace and low-degree-extension transforms, not FHE ring arithmetic; distinct_arithmetic execution_stark.goldilocks_transforms records the owner.",
+   "files": [
+    {"path": "crates/iroha_execution_stark/src/fri.rs", "patterns": ["ntt"]},
+    {"path": "crates/iroha_execution_stark/src/lib.rs", "patterns": ["ntt"]},
+    {"path": "crates/iroha_execution_stark/src/ntt.rs", "patterns": ["ntt"]},
+    {"path": "crates/iroha_execution_stark/src/prover.rs", "patterns": ["ntt"]},
+    {"path": "crates/iroha_execution_stark/src/verifier.rs", "patterns": ["ntt"]}
+   ]
+  },
+  {
    "id": "pasta.field_comment",
    "component": "iroha_pasta",
    "role": "incidental",
    "tasks": [],
    "summary": "The Pasta prime-field macro, listed only because a comment on its always-inlined CIOS multiply names the NTT loops that call it. The file owns Pasta proof-field arithmetic, which this inventory does not track (see guide.scan_scope); it holds no transform or FHE ring kernel.",
    "files": [{"path": "crates/iroha_pasta/src/field/mod.rs", "patterns": ["ntt"], "evidence": "out-of-line call in the NTT"}]
+  },
+  {
+   "id": "execution_proofs.race_profile_sources",
+   "component": "iroha_core_privacy",
+   "role": "incidental",
+   "tasks": [],
+   "summary": "The RaceV1 execution-proof profile, listed only because its committed source inventory (RACE_PROFILE_SOURCES_V1) embeds the bytes of crates/iroha_execution_stark/src/ntt.rs under that path. It runs no transform and holds no FHE code.",
+   "files": [
+    {
+     "path": "crates/iroha_core_privacy/src/execution_proofs/proof.rs",
+     "patterns": ["ntt"],
+     "evidence": "\"crates/iroha_execution_stark/src/ntt.rs\""
+    }
+   ]
+  },
+  {
+   "id": "ivm.gas_bench_policy_comment",
+   "component": "ivm",
+   "role": "incidental",
+   "tasks": [],
+   "summary": "Benchmark-only selection of the IVM acceleration policy, listed only because its module comment says it does not control the independent dispatch of the FHE libraries. It holds no FHE code.",
+   "files": [
+    {
+     "path": "crates/ivm/benches/support/gas_policy.rs",
+     "patterns": ["fhe"],
+     "test_only": true,
+     "evidence": "control Ed25519, FHE or other libraries' independent dispatch"
+    }
+   ]
   },
   {
    "id": "core_zk.ram_lfe_and_bfv_relations",
@@ -16125,6 +15516,14 @@
    "files": [{"path": "integration_tests/tests/sumeragi_localnet_smoke.rs", "patterns": ["bfv", "ram_lfe"], "test_only": true}]
   },
   {
+   "id": "integration.soracloud_cli",
+   "component": "integration_tests",
+   "role": "consumer",
+   "tasks": ["C.6", "C.7", "C.9"],
+   "summary": "CLI SoraCloud lifecycle test. It drops the FHE-ciphertext state binding from the shared service manifest fixture, because native execution refuses the unavailable FHE profile (tested in Core), and checks that client-encrypted state stays without activating FHE.",
+   "files": [{"path": "integration_tests/tests/iroha_cli.rs", "patterns": ["fhe"], "test_only": true}]
+  },
+  {
    "id": "generator.kotlin_fixture_gen",
    "component": "tools/kotlin-fixture-gen",
    "role": "generator",
@@ -16458,7 +15857,7 @@
    "component": "scripts",
    "role": "tooling",
    "tasks": ["V.1"],
-   "summary": "Source guards, estimators and feature-hygiene checks that name BFV, FHE, RAM-LFE or MKHE identifiers, the scanner image's FHE fixture build guidance, the workflow and Makefile entries that run this inventory's checker, and the registry of generated files, which names the two generated RNS-BGV vector files.",
+   "summary": "Source guards, estimators and feature-hygiene checks that name BFV, FHE, RAM-LFE or MKHE identifiers, the scanner image's FHE fixture build guidance, the workflow and Makefile entries that run this inventory's checker, the CI lane selection test that expects iroha_fhe in the foundation lane, and the registry of generated files, which names the two generated RNS-BGV vector files.",
    "files": [
     {"path": ".github/workflows/platform_native.yml", "patterns": ["fhe", "rns"]},
     {"path": "scripts/tests/zk_resource_harness_public_delivery_test.py", "patterns": ["bgv", "fhe"], "test_only": true},
@@ -16492,7 +15891,8 @@
     {"path": "scripts/tests/soracloud_fhe_proof_validation_matrix_source_test.py", "patterns": ["bfv", "fhe"], "test_only": true},
     {"path": "scripts/tests/soracloud_full_bootstrap_proof_case_matrix_source_test.py", "patterns": ["bfv", "fhe"], "test_only": true},
     {"path": "scripts/zk_ams_prefix_nonzero_vectors_v1.py", "patterns": ["mkhe", "rns"]},
-    {"path": "scripts/zk_ams_security_estimator_v1.py", "patterns": ["mkhe"]}
+    {"path": "scripts/zk_ams_security_estimator_v1.py", "patterns": ["mkhe"]},
+    {"path": "pytests/scripts/rust_ci_test.py", "patterns": ["fhe"], "test_only": true}
    ]
   },
   {
@@ -16662,699 +16062,16 @@
    ]
   },
   {
-   "id": "validation.captured_sources",
-   "component": "docs/validation",
+   "id": "vole.faest_rejected_publication",
+   "component": "iroha_zkp_vole",
    "role": "documentation",
    "tasks": [],
-   "summary": "`.template` captures, kept by the parliament ballot validation bundles under docs/validation, of earlier revisions of Core, Torii, configuration, data-model, crypto, OpenAPI, JavaScript typing, CI workflow and status files. Their bundles record each listed capture's digest, so they are frozen records of the validated revision: no Cargo package compiles them, no Rust item embeds them, they own and consume nothing, and they are not edited to follow the live sources.",
-   "files": [
-    {
-     "path": "docs/validation/parliament_ballot_b6/pre-source-framing-documents/status.md.template",
-     "patterns": ["bgv", "fhe", "ntt", "ram_lfe", "rns"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/artifacts/openapi/torii.json.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/artifacts/openapi/versions/current/torii.json.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/crates/iroha_config/src/parameters/actual.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/crates/iroha_config/src/parameters/defaults.rs.template",
-     "patterns": ["bfv"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/crates/iroha_config/src/parameters/user.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/crates/iroha_core/src/smartcontracts/isi/world.rs.template",
-     "patterns": ["fhe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/crates/iroha_core/src/state.rs.template",
-     "patterns": ["ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/crates/iroha_core/src/state/deserialize_world.rs.template",
-     "patterns": ["fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/crates/iroha_core/src/state/tests.rs.template",
-     "patterns": ["fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/crates/iroha_crypto/src/threshold_bls.rs.template",
-     "patterns": ["hkdf"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/crates/iroha_data_model/src/isi/registry.rs.template",
-     "patterns": ["ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/crates/iroha_data_model/src/isi/registry/wire_ids.rs.template",
-     "patterns": ["fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/crates/iroha_torii/assets/openapi/torii.json.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/crates/iroha_torii/src/lib.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/crates/iroha_torii/src/routing.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/crates/iroha_torii_shared/src/route_catalog.rs.template",
-     "patterns": ["fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/javascript/iroha_js/index.d.ts.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_construction_guard/sources/crates/iroha_core/src/smartcontracts/isi/world.rs.template",
-     "patterns": ["fhe"]
-    },
-    {"path": "docs/validation/parliament_ballot_construction_guard/sources/crates/iroha_core/src/state.rs.template", "patterns": ["ram_lfe"]},
-    {
-     "path": "docs/validation/parliament_ballot_construction_guard/sources/crates/iroha_core/src/state/deserialize_world.rs.template",
-     "patterns": ["fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_construction_guard/sources/crates/iroha_torii/src/lib.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/artifacts/openapi/torii.json.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/artifacts/openapi/versions/current/torii.json.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/crates/iroha_config/src/parameters/actual.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/crates/iroha_config/src/parameters/defaults.rs.template",
-     "patterns": ["bfv"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/crates/iroha_config/src/parameters/user.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/crates/iroha_core/src/smartcontracts/isi/world.rs.template",
-     "patterns": ["fhe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/crates/iroha_core/src/state.rs.template",
-     "patterns": ["ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/crates/iroha_core/src/state/deserialize_world.rs.template",
-     "patterns": ["fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/crates/iroha_core/src/state/tests.rs.template",
-     "patterns": ["fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/crates/iroha_crypto/src/threshold_bls.rs.template",
-     "patterns": ["hkdf"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/crates/iroha_data_model/src/isi/registry.rs.template",
-     "patterns": ["ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/crates/iroha_data_model/src/isi/registry/wire_ids.rs.template",
-     "patterns": ["fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/crates/iroha_torii/assets/openapi/torii.json.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/crates/iroha_torii/src/lib.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/crates/iroha_torii/src/routing.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/crates/iroha_torii_shared/src/route_catalog.rs.template",
-     "patterns": ["fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/javascript/iroha_js/index.d.ts.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/.github/workflows/pr.yml.template",
-     "patterns": ["bgv", "fhe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/artifacts/openapi/torii.json.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/artifacts/openapi/versions/current/torii.json.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/crates/iroha_config/src/parameters/actual.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/crates/iroha_config/src/parameters/defaults.rs.template",
-     "patterns": ["bfv"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/crates/iroha_config/src/parameters/user.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/crates/iroha_core/src/smartcontracts/isi/world.rs.template",
-     "patterns": ["fhe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/crates/iroha_core/src/state.rs.template",
-     "patterns": ["ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/crates/iroha_core/src/state/deserialize_world.rs.template",
-     "patterns": ["fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/crates/iroha_core/src/state/tests.rs.template",
-     "patterns": ["fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/crates/iroha_crypto/src/threshold_bls.rs.template",
-     "patterns": ["hkdf"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/crates/iroha_data_model/src/isi/registry.rs.template",
-     "patterns": ["ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/crates/iroha_data_model/src/isi/registry/wire_ids.rs.template",
-     "patterns": ["fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/crates/iroha_torii/assets/openapi/torii.json.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/crates/iroha_torii/src/lib.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/crates/iroha_torii/src/routing.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/crates/iroha_torii_shared/src/route_catalog.rs.template",
-     "patterns": ["fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/javascript/iroha_js/index.d.ts.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/.github/workflows/pr.yml.template",
-     "patterns": ["bgv", "fhe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/artifacts/openapi/torii.json.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/artifacts/openapi/versions/current/torii.json.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/crates/iroha_config/src/parameters/actual.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/crates/iroha_config/src/parameters/defaults.rs.template",
-     "patterns": ["bfv"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/crates/iroha_config/src/parameters/user.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/crates/iroha_core/src/smartcontracts/isi/world.rs.template",
-     "patterns": ["fhe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/crates/iroha_core/src/state.rs.template",
-     "patterns": ["ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/crates/iroha_core/src/state/deserialize_world.rs.template",
-     "patterns": ["fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/crates/iroha_core/src/state/tests.rs.template",
-     "patterns": ["fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/crates/iroha_crypto/src/threshold_bls.rs.template",
-     "patterns": ["hkdf"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/crates/iroha_data_model/src/isi/registry.rs.template",
-     "patterns": ["ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/crates/iroha_data_model/src/isi/registry/wire_ids.rs.template",
-     "patterns": ["fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/crates/iroha_torii/assets/openapi/torii.json.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/crates/iroha_torii/src/lib.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/crates/iroha_torii/src/routing.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/crates/iroha_torii_shared/src/route_catalog.rs.template",
-     "patterns": ["fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/javascript/iroha_js/index.d.ts.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/prior-sources/crates/iroha_core/src/state/deserialize_world.rs.template",
-     "patterns": ["fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_post_merge_source_check/prior-sources/crates/iroha_torii/src/routing.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {"path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/.github/workflows/pr.yml.template", "patterns": ["bgv", "fhe"]},
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/artifacts/openapi/torii.json.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/artifacts/openapi/versions/current/torii.json.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/crates/iroha_config/src/parameters/actual.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/crates/iroha_config/src/parameters/defaults.rs.template",
-     "patterns": ["bfv"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/crates/iroha_config/src/parameters/user.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/crates/iroha_core/src/smartcontracts/isi/world.rs.template",
-     "patterns": ["fhe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/crates/iroha_core/src/state.rs.template",
-     "patterns": ["ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/crates/iroha_core/src/state/deserialize_world.rs.template",
-     "patterns": ["fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/crates/iroha_core/src/state/tests.rs.template",
-     "patterns": ["fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/crates/iroha_crypto/src/threshold_bls.rs.template",
-     "patterns": ["hkdf"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/crates/iroha_data_model/src/isi/registry.rs.template",
-     "patterns": ["ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/crates/iroha_data_model/src/isi/registry/wire_ids.rs.template",
-     "patterns": ["fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/crates/iroha_torii/assets/openapi/torii.json.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/crates/iroha_torii/src/lib.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/crates/iroha_torii/src/routing.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/crates/iroha_torii_shared/src/route_catalog.rs.template",
-     "patterns": ["fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_source_guard_regressions/sources/full/javascript/iroha_js/index.d.ts.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/artifacts/openapi/torii.json.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/artifacts/openapi/versions/current/torii.json.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/crates/iroha_config/src/parameters/actual.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/crates/iroha_config/src/parameters/defaults.rs.template",
-     "patterns": ["bfv"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/crates/iroha_config/src/parameters/user.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/crates/iroha_core/src/smartcontracts/isi/world.rs.template",
-     "patterns": ["fhe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/crates/iroha_core/src/state.rs.template",
-     "patterns": ["ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/crates/iroha_core/src/state/deserialize_world.rs.template",
-     "patterns": ["fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/crates/iroha_core/src/state/tests.rs.template",
-     "patterns": ["fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/crates/iroha_crypto/src/threshold_bls.rs.template",
-     "patterns": ["hkdf"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/crates/iroha_data_model/src/isi/registry.rs.template",
-     "patterns": ["ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/crates/iroha_data_model/src/isi/registry/wire_ids.rs.template",
-     "patterns": ["fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/crates/iroha_torii/assets/openapi/torii.json.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/crates/iroha_torii/src/lib.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/crates/iroha_torii/src/routing.rs.template",
-     "patterns": ["bfv", "fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/crates/iroha_torii_shared/src/route_catalog.rs.template",
-     "patterns": ["fhe", "ram_lfe"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/javascript/iroha_js/index.d.ts.template",
-     "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "ram_lfe"]
-    }
-   ]
-  },
-  {
-   "id": "validation.dependency_records",
-   "component": "docs/validation",
-   "role": "documentation",
-   "tasks": [],
-   "summary": "Dependency manifests and lockfiles, Cargo metadata, build and source receipts, reports and compiler logs of recorded validation runs (the parliament ballot bundles and the rejected FAEST cross-verification publication of crates/iroha_zkp_vole). They name the hkdf crate, the iroha_fhe package and the bfv-accel and bfv-test-fixtures features only as dependency facts of the recorded build; they record completed runs and implement or invoke nothing.",
+   "summary": "Root build lockfile captured in the rejected FAEST v3.0.2 cross-verification publication, a test fixture of crates/iroha_zkp_vole. It names the hkdf crate and the iroha_fhe package only as dependency facts of the recorded build; it implements or invokes nothing.",
    "files": [
     {
      "path": "crates/iroha_zkp_vole/tests/fixtures/faest_v3_0_2/cross_verification_evidence/rejected_publication/build-root-Cargo.lock.template",
      "patterns": ["fhe", "hkdf"],
      "test_only": true
-    },
-    {"path": "docs/validation/parliament_ballot_adapter_bound/report.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_adapter_source_recovery/receipt.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_adapter_source_recovery/source/Cargo.lock.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_adapter_source_recovery/validated/receipt.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_adapter_source_recovery/validated/source/Cargo.lock.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_allocation_trace/Cargo.lock.build.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_allocation_trace/Cargo.toml.build.template", "patterns": ["bfv", "bgv", "fhe"]},
-    {"path": "docs/validation/parliament_ballot_allocation_trace/build-receipt.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_allocation_trace/build-source-after.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_allocation_trace/build-source.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_allocation_trace/campaign-1/report.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_allocation_trace/dependency-metadata.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_allocation_trace/failed-build-1/Cargo.lock.build.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_allocation_trace/failed-build-1/Cargo.toml.build.template", "patterns": ["bfv", "bgv", "fhe"]},
-    {"path": "docs/validation/parliament_ballot_allocation_trace/failed-build-1/build-receipt.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_allocation_trace/failed-build-1/build-source.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_allocation_trace/failed-build-1/dependency-metadata.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_allocation_trace/failed-build-1/generated-source/Cargo.lock.template", "patterns": ["hkdf"]},
-    {
-     "path": "docs/validation/parliament_ballot_allocation_trace/failed-build-1/generated-source/root-Cargo.lock.template.template",
-     "patterns": ["fhe", "hkdf"]
-    },
-    {"path": "docs/validation/parliament_ballot_allocation_trace/generated-source/Cargo.lock.template", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_allocation_trace/generated-source/root-Cargo.lock.template.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_allocation_trace/initial-preparation/dependency-metadata.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_arena_sufficiency/oracle-Cargo.lock.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_arena_sufficiency/oracle-clippy.txt", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_arena_sufficiency/oracle-test.txt", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_arena_sufficiency/post-build-Cargo.lock.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_b6/android-build-accel.txt", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_b6/current-resource-Cargo.lock.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_b6/current-resource-coherence.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_b6/ios-bridge-host-tests-accel.txt", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_b6/ios_host_template/bridge/Cargo.lock.template", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_b6/measured-root-Cargo.lock.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_b6/qualification-root-Cargo.lock.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_b6/source-framing-coherence.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_beacon_borrow_guard/captured-sources/crates/iroha_core/Cargo.toml.template", "patterns": ["bfv"]},
-    {"path": "docs/validation/parliament_ballot_current_candidate/build-v2/Cargo.lock.build.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_current_candidate/build-v2/Cargo.toml.build.template", "patterns": ["bfv", "bgv", "fhe"]},
-    {"path": "docs/validation/parliament_ballot_current_candidate/build-v2/build-receipt.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_current_candidate/build-v2/build-source.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_current_candidate/build-v2/dependency-metadata.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_current_candidate/build-v2/generated-source/Cargo.lock.template", "patterns": ["hkdf"]},
-    {
-     "path": "docs/validation/parliament_ballot_current_candidate/build-v2/generated-source/root-Cargo.lock.template.template",
-     "patterns": ["fhe", "hkdf"]
-    },
-    {"path": "docs/validation/parliament_ballot_current_candidate/campaign/report.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_current_candidate/fatal-output/report.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_current_candidate/preparation-v1/dependency-metadata.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_current_candidate/stack/receipt.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_current_correspondence/analysis/report.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_daemon_startup_guard/captured-sources/crates/iroha_core/Cargo.toml.template", "patterns": ["bfv"]},
-    {"path": "docs/validation/parliament_ballot_execution_result_guard/captured-sources/crates/iroha_core/Cargo.toml.template", "patterns": ["bfv"]},
-    {"path": "docs/validation/parliament_ballot_fatal_control/backpressure-fixed-v2/report.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_fatal_control/backpressure-fixed/report.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_fatal_control/build/Cargo.lock.build.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_fatal_control/build/Cargo.toml.build.template", "patterns": ["bfv", "bgv", "fhe"]},
-    {"path": "docs/validation/parliament_ballot_fatal_control/build/build-receipt.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_fatal_control/build/build-source.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_fatal_control/build/dependency-metadata.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_fatal_control/build/generated-source/Cargo.lock.template", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_fatal_control/build/generated-source/root-Cargo.lock.template.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_fatal_control/campaign/report.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_fatal_stack/receipt.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_fatal_stack_eon/receipt.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_frontend_bound/analysis/report.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_memory_entry/Cargo.lock.build.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_memory_entry/Cargo.toml.build.template", "patterns": ["bfv", "bgv", "fhe"]},
-    {"path": "docs/validation/parliament_ballot_memory_entry/build-receipt.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_memory_entry/build-source.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_memory_entry/campaign/report.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_memory_entry/dependency-metadata.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_memory_entry/generated-source/Cargo.lock.template", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_memory_entry/generated-source/root-Cargo.lock.template.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_native_probe/Cargo.lock.build.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_native_probe/Cargo.toml.build.template", "patterns": ["bfv", "bgv", "fhe"]},
-    {"path": "docs/validation/parliament_ballot_native_probe/attempts/initial-lint/build-receipt.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_native_probe/attempts/initial-lint/build-source.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_native_probe/attempts/initial-lint/dependency-metadata.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_native_probe/attempts/initial-lint/portable-clippy.txt", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_native_probe/build-receipt.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_native_probe/build-source.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_native_probe/campaign/report.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_native_probe/dependency-metadata.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_native_probe/generated/Cargo.lock.template", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_native_probe/generated/root-Cargo.lock.template.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_node_representation/resume-20261020/core-merge-diagnostic.log.txt", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_node_representation/resume-20261020/model-initial.log.txt", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_node_representation/resume-20261020/node-check-initial.log.txt", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_opaque_field_bound/capture/analysis.json", "patterns": ["hkdf"]},
-    {
-     "path": "docs/validation/parliament_ballot_opaque_field_bound/capture/pytest-tmp/test_cli_qualification_refusal0/qualified.json",
-     "patterns": ["hkdf"]
-    },
-    {"path": "docs/validation/parliament_ballot_opaque_field_bound/capture/refusal.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_post_merge_source_check/captured-sources/crates/iroha_core/Cargo.toml.template", "patterns": ["bfv"]},
-    {"path": "docs/validation/parliament_ballot_profile_bound/analysis/report.json", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_prover_lifecycle/attempts/initial-clippy.txt", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_prover_lifecycle/attempts/initial-portable-test.txt", "patterns": ["hkdf"]},
-    {
-     "path": "docs/validation/parliament_ballot_prover_lifecycle/attempts/source-drift-during-accel/build-Cargo.lock.template",
-     "patterns": ["fhe", "hkdf"]
-    },
-    {"path": "docs/validation/parliament_ballot_prover_lifecycle/supplemental/build-Cargo.lock.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_prover_lifecycle/test-campaign/build-Cargo.lock.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_qualification_dispatch/sources/validated/Cargo.lock.template", "patterns": ["fhe", "hkdf"]},
-    {
-     "path": "docs/validation/parliament_ballot_qualification_dispatch/sources/validated/docs/validation/parliament_ballot_b6/ios_host_template/bridge/Cargo.lock.template.template",
-     "patterns": ["hkdf"]
-    },
-    {"path": "docs/validation/parliament_ballot_qualification_dispatch/sources/validated/external-bridge/Cargo.lock.template", "patterns": ["hkdf"]},
-    {"path": "docs/validation/parliament_ballot_resource_contract/build-Cargo.lock.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_resource_contract/dependency-change/root-Cargo.lock.after.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_resource_contract/dependency-change/root-Cargo.lock.before.template", "patterns": ["fhe", "hkdf"]},
-    {"path": "docs/validation/parliament_ballot_torii_release_guard/captured-sources/crates/iroha_core/Cargo.toml.template", "patterns": ["bfv"]},
-    {"path": "docs/validation/parliament_ballot_typed_decoder_bound/analysis/report.json", "patterns": ["hkdf"]}
-   ]
-  },
-  {
-   "id": "validation.ideal_machine_models",
-   "component": "docs/validation",
-   "role": "documentation",
-   "tasks": [],
-   "summary": "Captured Python models, tests and review scripts of the parliament ballot ideal machine. `CrtReconstruction` XORs public GF(2) CRT, tree and gate matrices into the ballot circuit's VOLE reconstruction; it is not RNS basis conversion of an FHE ring, has no counterpart outside these frozen captures and is no production arithmetic.",
-   "files": [
-    {
-     "path": "docs/validation/parliament_ballot_component_families/record/capture/source/target/parliament-ideal-machine-stage/crt_machine.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_component_families/record/capture/source/target/parliament-ideal-machine-stage/machine.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_component_families/record/capture/source/target/parliament-ideal-machine-stage/request_generator.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_component_families/record/capture/source/target/parliament-ideal-machine-stage/test_crt_machine.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_component_families/record/capture/source/target/parliament-ideal-machine-stage/test_opening_reconstruction.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_component_families/record/capture/source/target/parliament-ideal-machine-stage/test_vole_reconstruction.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_component_families/record/capture/source/target/parliament-ideal-machine-stage/vole_reconstruction.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_family_domains/source/target/parliament-ideal-machine-stage/request_generator.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_lifetime_ledger/capture/source-snapshots/target/parliament-ideal-machine-stage/crt_machine.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_lifetime_ledger/capture/source-snapshots/target/parliament-ideal-machine-stage/request_generator.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_lifetime_ledger/capture/source-snapshots/target/parliament-ideal-machine-stage/vole_reconstruction.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_request_machine/capture/source/target/parliament-ideal-machine-stage/crt_machine.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_request_machine/capture/source/target/parliament-ideal-machine-stage/machine.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_request_machine/capture/source/target/parliament-ideal-machine-stage/request_generator.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_request_machine/capture/source/target/parliament-ideal-machine-stage/test_crt_machine.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_request_machine/capture/source/target/parliament-ideal-machine-stage/test_opening_reconstruction.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_request_machine/capture/source/target/parliament-ideal-machine-stage/test_vole_reconstruction.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_request_machine/capture/source/target/parliament-ideal-machine-stage/vole_reconstruction.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_request_machine/reviews/domains/attempt-1-review_domains.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {"path": "docs/validation/parliament_ballot_request_machine/reviews/domains/review_domains.py.template", "patterns": ["basis_conversion"]},
-    {
-     "path": "docs/validation/parliament_ballot_sequence_composition/capture/source/target/parliament-ideal-machine-stage/crt_machine.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_sequence_composition/capture/source/target/parliament-ideal-machine-stage/machine.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_sequence_composition/capture/source/target/parliament-ideal-machine-stage/request_generator.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_sequence_composition/capture/source/target/parliament-ideal-machine-stage/test_crt_machine.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_sequence_composition/capture/source/target/parliament-ideal-machine-stage/test_opening_reconstruction.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_sequence_composition/capture/source/target/parliament-ideal-machine-stage/test_vole_reconstruction.py.template",
-     "patterns": ["basis_conversion"]
-    },
-    {
-     "path": "docs/validation/parliament_ballot_sequence_composition/capture/source/target/parliament-ideal-machine-stage/vole_reconstruction.py.template",
-     "patterns": ["basis_conversion"]
     }
    ]
   },
@@ -17448,97 +16165,34 @@
    "id": "fastpq.rns_chain_air",
    "component": "fastpq_prover",
    "role": "distinct_arithmetic",
-   "tasks": [
-    "C.8",
-    "B.2"
-   ],
+   "tasks": ["C.8", "B.2"],
    "summary": "Canonical FastPQ RNS congruent-scale-down and centered-extension relations with one private integer/kernel/comparator/clearing owner. Native arithmetic remains with iroha_fhe; diagnostic wrappers are uncommitted and intentionally publish endpoints.",
    "files": [
-    {
-     "path": "crates/fastpq_prover/src/gadgets/rns_chain_air.rs",
-     "patterns": [
-      "bgv",
-      "fhe",
-      "ntt",
-      "rns"
-     ]
-    },
-    {
-     "path": "crates/fastpq_prover/src/gadgets/rns_chain_air/integer.rs",
-     "patterns": [
-      "fhe",
-      "rns"
-     ]
-    },
-    {
-     "path": "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs",
-     "patterns": [
-      "fhe",
-      "rns"
-     ]
-    },
-    {
-     "path": "crates/fastpq_prover/src/gadgets/mod.rs",
-     "patterns": [
-      "rns"
-     ]
-    }
+    {"path": "crates/fastpq_prover/src/gadgets/rns_chain_air.rs", "patterns": ["bgv", "fhe", "ntt", "rns"]},
+    {"path": "crates/fastpq_prover/src/gadgets/rns_chain_air/integer.rs", "patterns": ["fhe", "rns"]},
+    {"path": "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs", "patterns": ["fhe", "rns"]},
+    {"path": "crates/fastpq_prover/src/gadgets/mod.rs", "patterns": ["rns"]}
    ]
   },
   {
    "id": "fastpq.rns_chain_air_tests",
    "component": "fastpq_prover",
    "role": "fhe_test_reference",
-   "tasks": [
-    "C.8",
-    "B.2"
-   ],
+   "tasks": ["C.8", "B.2"],
    "summary": "Preserved scale-down integration tests plus independent centered conversion oracles and actual BGV digit-layout correspondence; component source classification only, no committed proof or qualification.",
    "files": [
-    {
-     "path": "crates/fastpq_prover/tests/rns_chain_air.rs",
-     "patterns": [
-      "bgv",
-      "rns"
-     ],
-     "test_only": true
-    },
-    {
-     "path": "crates/fastpq_prover/tests/rns_chain_air/extension_cases.rs",
-     "patterns": [
-      "rns"
-     ],
-     "test_only": true
-    },
-    {
-     "path": "crates/fastpq_prover/tests/rns_chain_air/bgv_digit_cases.rs",
-     "patterns": [
-      "bgv",
-      "fhe",
-      "rns"
-     ],
-     "test_only": true
-    }
+    {"path": "crates/fastpq_prover/tests/rns_chain_air.rs", "patterns": ["bgv", "rns"], "test_only": true},
+    {"path": "crates/fastpq_prover/tests/rns_chain_air/extension_cases.rs", "patterns": ["rns"], "test_only": true},
+    {"path": "crates/fastpq_prover/tests/rns_chain_air/bgv_digit_cases.rs", "patterns": ["bgv", "fhe", "rns"], "test_only": true}
    ]
   },
   {
    "id": "fastpq.rns_chain_air_manifest",
    "component": "fastpq_prover",
    "role": "build_manifest",
-   "tasks": [
-    "C.8",
-    "B.2"
-   ],
+   "tasks": ["C.8", "B.2"],
    "summary": "Ordinary acyclic FastPQ to iroha_fhe dependency and explicit integration-test registration for the canonical RNS relation.",
-   "files": [
-    {
-     "path": "crates/fastpq_prover/Cargo.toml",
-     "patterns": [
-      "fhe",
-      "rns"
-     ]
-    }
-   ]
+   "files": [{"path": "crates/fastpq_prover/Cargo.toml", "patterns": ["fhe", "rns"]}]
   }
  ]
 }
