@@ -876,14 +876,20 @@ def test_kotlin_ships_only_the_kagemusha_wallet_v1_surface():
         ),
         f"{wallet}/androidTest/java/{offline}/wallet/KagemushaProbeActivityBinding.kt",
         f"{wallet}/androidTest/java/{offline}/wallet/KagemushaProbeActivityObservationTest.kt",
+        f"{wallet}/main/java/{offline}/wallet/KagemushaSpartanWalletV1.kt",
+        f"{wallet}/test/kotlin/{offline}/wallet/KagemushaSpartanWalletV1Test.kt",
+        f"{wallet}/androidTest/java/{offline}/wallet/KagemushaSpartanHardwareProbeTest.kt",
+        f"{wallet}/androidTest/java/{offline}/wallet/KagemushaSpartanRuntimeDeviceTest.kt",
         *(f"{wallet}/main/java/{offline}/wallet/KagemushaWallet{name}V1.kt" for name in (
             "CallObservation", "DeferredArchive", "ExchangeCall", "ExchangeLifetime", "Exchange",
-            "FoldProgress", "InvalidReason", "ReviewExecutionCleanup", "WorkerMetrics",
+            "FoldProgress", "InvalidReason", "ReviewExecutionCleanup", "SuffixUnload",
+            "SuffixUnloadProjection", "SuffixUnloadReply", "SuffixUnloadReview", "WorkerMetrics",
         )),
         *(f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWallet{name}V1Test.kt" for name in (
             "CallObservation", "DeferredArchive", "ExchangeLifetime", "FoldProgress",
-            "InvalidReason", "RequestBoundReview", "ReviewExecutionCleanup",
-            "StorageObservation", "WorkerMetrics",
+            "InvalidReason", "RequestBoundReview", "RetainedPreparingHostNative",
+            "ReviewExecutionCleanup", "StorageObservation", "SuffixUnload",
+            "SuffixUnloadHostNative", "WorkerMetrics",
         )),
         *(f"{wallet}/test/kotlin/{offline}/wallet/Kagemusha{name}Test.kt" for name in (
             "EnrollmentProbeStage", "ProbeActivityControl", "ProbeReviewCustody",
@@ -930,6 +936,8 @@ def test_kotlin_ships_only_the_kagemusha_wallet_v1_surface():
         "KagemushaWalletSnapshotReplyV1",
         "KagemushaWalletObservationNativeV1",
         "KagemushaWalletObservationReplyV1",
+        "KagemushaWalletSuffixUnloadReplyV1",
+        "KagemushaSpartanReplyV1",
     }
     for rules in (
         "client-android/consumer-rules.pro",
@@ -1020,12 +1028,18 @@ def test_swift_ships_no_old_kagemusha_surface():
         "Sources/IrohaSwift/KagemushaWalletExchangeV1.swift",
         "Sources/IrohaSwift/KagemushaWalletFoldProgressV1.swift",
         "Sources/IrohaSwift/KagemushaWalletLedgerFinalitySyncV1.swift",
+        "Sources/IrohaSwift/KagemushaSpartanWalletV1.swift",
         "Sources/IrohaSwift/KagemushaWalletReviewedExecutionV1.swift",
+        "Sources/IrohaSwift/KagemushaWalletSuffixUnloadNativeV1.swift",
+        "Sources/IrohaSwift/KagemushaWalletSuffixUnloadReviewV1.swift",
+        "Sources/IrohaSwift/KagemushaWalletSuffixUnloadV1.swift",
         "Tests/IrohaSwiftTests/KagemushaWalletDeferredArchiveV1Tests.swift",
         "Tests/IrohaSwiftTests/KagemushaWalletExchangeLifetimeV1Tests.swift",
         "Tests/IrohaSwiftTests/KagemushaWalletFoldProgressV1Tests.swift",
         "Tests/IrohaSwiftTests/KagemushaWalletLedgerFinalitySyncV1Tests.swift",
+        "Tests/IrohaSwiftTests/KagemushaSpartanWalletV1Tests.swift",
         "Tests/IrohaSwiftTests/KagemushaWalletReviewedExecutionV1Tests.swift",
+        "Tests/IrohaSwiftTests/KagemushaWalletSuffixUnloadV1Tests.swift",
     }
     assert kagemusha_named_files(swift, ("Sources", "Tests")) == kept
     for relative in (
@@ -1050,7 +1064,11 @@ def test_javascript_ships_no_old_kagemusha_surface():
     package = json.loads((js_root / "package.json").read_text(encoding="utf-8"))
     assert "./kagemusha" not in package["exports"]
     assert "kagemusha" not in package["typesVersions"]["*"]
-    assert re.search(r"(?i)kagemusha", json.dumps(package)) is None
+    # The V1 wallet read declarations are the one KAGEMUSHA module the package ships.
+    shipped = {name for name in package["files"] if re.search(r"(?i)kagemusha", name)}
+    assert shipped == {"kagemusha-wallet-read.d.ts"}
+    rest = {key: value for key, value in package.items() if key != "files"}
+    assert re.search(r"(?i)kagemusha", json.dumps(rest)) is None
     for relative in ("src/index.js", "src/browser.js", "index.d.ts", "browser.d.ts"):
         source = (js_root / relative).read_text(encoding="utf-8")
         assert re.search(r"\bKagemusha(?:V1)?\b|\./kagemusha\.js", source) is None, relative
