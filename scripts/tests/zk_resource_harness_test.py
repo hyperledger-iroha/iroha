@@ -1370,8 +1370,17 @@ class NativeRunTests(unittest.TestCase):
             self.assertEqual(status, 1)
             self.assertEqual(line["reasons"], ["process_observation_failed:executable_image_differs"])
             _, report = self.report(line)
-            self.assertEqual(report["process"]["sampled"],
-                             {"state": "failed", "reason": "executable_image_differs"})
+            # The baseline observation itself refused the image; the report keeps
+            # that exception's stage and type, never its text.
+            self.assertEqual(report["process"]["sampled"], {
+                "state": "failed",
+                "reason": "executable_image_differs",
+                "observation_exceptions": [{
+                    "stage": "baseline",
+                    "type": "private_settlement_process_observer.ProcessObservationError",
+                    "errno": None,
+                }],
+            })
             # Another observer failure while the process stays alive is reported
             # under its own fixed reason, not as an early exit.
             other = harness.observer.ProcessObservationError("native process accounting unavailable")
@@ -2486,6 +2495,14 @@ class StaticSafetyTests(unittest.TestCase):
 
 class ObservationExceptionRetentionTests(unittest.TestCase):
     """Keep original failure facts across cleanup and reap without accepting lost image continuity."""
+
+    def setUp(self):
+        # These cases inject observer failures into a fake child. On Darwin the
+        # owned-child monitor would otherwise register that fake pid for real and
+        # fail first, so the injected failure would never be reached.
+        patcher = mock.patch.object(harness, '_owned_child_monitor', return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def run_failure(self, error, after_baseline=True, close_error=None):
         usage = SimpleNamespace(ru_utime=1.0, ru_stime=1.0, ru_maxrss=1024)
