@@ -163,29 +163,48 @@ const WORLD_CUT_READ_BOUND: Duration = Duration::from_secs(60);
 // preimages are needed; neither the HTTP publisher nor its reported tip grants
 // finality authority. The fixture deliberately grants this read capability in genesis.
 //
-// A node answers 429 while its bounded complete-World capacity is in use, by
-// admission design, and 503 while a loaded node cannot capture one consistent
-// cut in time. Only those refusals are retried, inside one finite bound, and
-// every attempt is a fresh signed request with its own nonce and challenge.
+// Only an active committee member signs a cut: a peer that a rotation left
+// outside the committee, or that abstains, answers 503 (`not_active`). A node
+// also answers 429 while its bounded complete-World capacity is in use, and 503
+// while it cannot capture one consistent cut in time. Attempts therefore ask
+// each validator of the root in turn and wait only after every one refused,
+// inside one finite bound. Every attempt is a fresh signed request with its own
+// nonce and challenge, and every cut is verified independently of its server.
 pub async fn world_cut(root: &Root) -> Result<NativeResourceNamesStateV1> {
     let deadline = tokio::time::Instant::now() + WORLD_CUT_READ_BOUND;
+    let validators = root.network.validators();
+    ensure!(!validators.is_empty(), "fee World cut needs a validator");
+    let mut next = 0_usize;
     loop {
-        match world_cut_once(root).await? {
-            WorldCutReadV1::Cut(cut) => return Ok(*cut),
-            WorldCutReadV1::Busy {
+        let (refusal, retry_after) = match world_cut_once(root, &validators[next]).await {
+            Ok(WorldCutReadV1::Cut(cut)) => return Ok(*cut),
+            Ok(WorldCutReadV1::Busy {
                 status,
                 retry_after,
-            } => {
-                let wait = retry_after
-                    .unwrap_or(Duration::from_secs(1))
-                    .min(Duration::from_secs(5));
-                ensure!(
-                    tokio::time::Instant::now() + wait < deadline,
-                    "fee World cut unavailable: {status} until the end of {WORLD_CUT_READ_BOUND:?}"
-                );
-                tokio::time::sleep(wait).await;
+            }) => (status.to_string(), retry_after),
+            // A stopped or unreachable peer is passed over like a refusing one.
+            Err(error)
+                if error
+                    .downcast_ref::<reqwest::Error>()
+                    .is_some_and(|error| error.is_connect() || error.is_timeout()) =>
+            {
+                (format!("transport failure ({error})"), None)
             }
-        }
+            Err(error) => return Err(error),
+        };
+        next = (next + 1) % validators.len();
+        let wait = if next == 0 {
+            retry_after
+                .unwrap_or(Duration::from_secs(1))
+                .min(Duration::from_secs(5))
+        } else {
+            Duration::ZERO
+        };
+        ensure!(
+            tokio::time::Instant::now() + wait < deadline,
+            "fee World cut unavailable: {refusal} from every validator until the end of {WORLD_CUT_READ_BOUND:?}"
+        );
+        tokio::time::sleep(wait).await;
     }
 }
 
@@ -198,16 +217,17 @@ enum WorldCutReadV1 {
     },
 }
 
-async fn world_cut_once(root: &Root) -> Result<WorldCutReadV1> {
+async fn world_cut_once(
+    root: &Root,
+    peer: &iroha_test_network::NetworkPeer,
+) -> Result<WorldCutReadV1> {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let nonce = format!("amx-fee-audit-{}", NONCE.fetch_add(1, Ordering::Relaxed));
     let challenge: [u8; 32] = Sha256::digest(nonce.as_bytes()).into();
     let challenge_hex = hex::encode(challenge);
     let url: reqwest::Url = format!(
         "{}{NATIVE_RESOURCE_NAMES_STATE_ROUTE_PREFIX_V1}{challenge_hex}",
-        root.network.validators()[0]
-            .torii_url()
-            .trim_end_matches('/')
+        peer.torii_url().trim_end_matches('/')
     )
     .parse()?;
     let timestamp = now_ms()?;
