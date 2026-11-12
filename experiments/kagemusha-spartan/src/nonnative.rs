@@ -49,6 +49,21 @@ pub const POINT_TABLE: u32 = 1;
 /// The wallet key's comb tables: a witness table, the wallet row.
 pub const WALLET_TABLE: u32 = 7;
 
+/// The lookup table holding one signature family's public key multiples.
+/// Families for different keys must use different table ids, distinct from
+/// every other table in their circuit. The range and generator tables remain
+/// shared.
+#[derive(Clone, Copy, Debug)]
+pub enum KeyTable {
+    /// Witness values. The caller must authenticate the table commitment,
+    /// as the wallet row does; this choice alone does not authenticate a key.
+    Witness { id: u32 },
+    /// Circuit constants, authenticated by the circuit's verification key.
+    /// Changing this public key changes that circuit; this is not a mechanism
+    /// for accepting a newly certified issuer in an existing circuit.
+    Fixed { id: u32 },
+}
+
 pub(crate) fn pow2(k: usize) -> BigUint {
     BigUint::one() << k
 }
@@ -968,10 +983,10 @@ fn extra_checks(c: &Point) -> Vec<CheckSpec> {
 }
 
 /// The comb's arrays (family `fam`, one instance per signature): value, the
-/// wallet key's selections, one-product checks, four-product checks, digits
+/// public key's selections, one-product checks, four-product checks, digits
 /// and integer additions; then the range table and G's point table (global
-/// family `gfam`), G's selections, and the wallet table (global, a witness
-/// table: the wallet row).
+/// family `gfam`), G's selections, and the public-key table (global; a
+/// witness table for the wallet row or explicitly fixed circuit material).
 pub struct Comb {
     pub arrays: Vec<Array<Fp>>,
     pub tables: Vec<(usize, u32)>,
@@ -994,6 +1009,7 @@ pub const A_ADD: usize = 5;
 pub const A_RANGE: usize = 6;
 pub const A_TABLE: usize = 7;
 pub const A_SELG: usize = 8;
+/// The family's public-key table; the default comb uses the wallet row.
 pub const A_WTABLE: usize = 9;
 
 /// The wallet table's cells per row: the row (`256 t + index`), then x's and
@@ -1027,8 +1043,10 @@ fn acc_limb(k: usize) -> usize {
     (16 * k) / L
 }
 
-/// Builds the comb from array index `first` for `(Q, z, r, s)` per signature
-/// (one wallet key per family: its tables are constant columns here).
+/// Builds the wallet comb from array index `first` for `(Q, z, r, s)` per
+/// signature, using the wallet witness table (`WALLET_TABLE`). The caller
+/// authenticates its commitment. Every input in this family has the same
+/// public key.
 pub fn comb(
     first: usize,
     fam: usize,
@@ -1036,6 +1054,43 @@ pub fn comb(
     gfam: usize,
     inputs: &[(Point, BigUint, BigUint, BigUint)],
 ) -> Comb {
+    comb_with_key_table(
+        first,
+        fam,
+        pi,
+        gfam,
+        inputs,
+        KeyTable::Witness { id: WALLET_TABLE },
+    )
+}
+
+/// Builds one signature family with its own public-key table. Compose
+/// separate families with distinct table ids to check signatures from
+/// different keys in the same circuit. This does not check a signer
+/// certificate or bind a witness table to an authority; the caller must do
+/// so before using a witness table for issuer or root signatures.
+pub fn comb_with_key_table(
+    first: usize,
+    fam: usize,
+    pi: usize,
+    gfam: usize,
+    inputs: &[(Point, BigUint, BigUint, BigUint)],
+    key_table: KeyTable,
+) -> Comb {
+    assert!(
+        !inputs.is_empty(),
+        "a comb family needs at least one signature"
+    );
+    let (key_table_id, key_table_fixed) = match key_table {
+        KeyTable::Witness { id } => (id, false),
+        KeyTable::Fixed { id } => (id, true),
+    };
+    assert!(
+        key_table_id != RANGE_TABLE
+            && key_table_id != POINT_TABLE
+            && key_table_id < crate::uniform::COPY_TABLE,
+        "a public-key table must not alias a shared or reserved table"
+    );
     let p = p256::p();
     let nn = p256::n();
     let m = 16usize;
@@ -1069,7 +1124,7 @@ pub fn comb(
     let gt = crate::operation::comb_tables(&p256::generator(), m);
     let qt = crate::operation::comb_tables(&inputs[0].0, m);
     for (q, _, _, _) in inputs {
-        assert_eq!(q, &inputs[0].0, "one wallet key per comb family");
+        assert_eq!(q, &inputs[0].0, "one public key per comb family");
     }
     let tables: Vec<&Vec<Point>> = vec![&qt[0], &qt[1], &gt[0], &gt[1]];
     let selg_a = at(A_SELG);
@@ -1593,7 +1648,7 @@ pub fn comb(
             rho: rho_s,
             r_count: 2 * STEPS,
             fixed: false,
-            lookups: vec![sel_lookup(0, WALLET_TABLE)],
+            lookups: vec![sel_lookup(0, key_table_id)],
             widths: vec![88, 88, 80, 88, 88, 80],
             rows: Vec::new(),
             values: sel,
@@ -1676,11 +1731,15 @@ pub fn comb(
             values: selg,
         },
         Array {
-            name: "wallet table",
+            name: if key_table_id == WALLET_TABLE && !key_table_fixed {
+                "wallet table"
+            } else {
+                "public-key table"
+            },
             family: gfam,
             rho: 9,
             r_count: WALLET_ROWS,
-            fixed: false,
+            fixed: key_table_fixed,
             lookups: Vec::new(),
             widths: vec![9, 88, 88, 80, 88, 88, 80],
             rows: Vec::new(),
@@ -1692,7 +1751,7 @@ pub fn comb(
         tables: vec![
             (at(A_RANGE), RANGE_TABLE),
             (at(A_TABLE), POINT_TABLE),
-            (at(A_WTABLE), WALLET_TABLE),
+            (at(A_WTABLE), key_table_id),
         ],
         results,
         offset,
@@ -3154,6 +3213,103 @@ mod tests {
         );
         assert_eq!(s1.widths().len(), s1.cells);
         assert_eq!(s4.widths().len(), s4.cells);
+    }
+
+    fn keyed_input(label: &str) -> (Point, BigUint, BigUint, BigUint) {
+        let n = p256::n();
+        let d = p256::scalar_below(label, &n);
+        let q = p256::mul(&p256::generator(), &d).unwrap();
+        let z = p256::scalar_below(&format!("{label}-message"), &pow2(256));
+        let nonce = p256::scalar_below(&format!("{label}-nonce"), &n);
+        let sig = p256::sign(&d, &z, &nonce);
+        (q, z, sig.r, sig.s)
+    }
+
+    #[test]
+    fn custom_witness_key_table_routes_its_lookups() {
+        let input = keyed_input("witness-key-table");
+        let id = 8;
+        let family = comb_with_key_table(10, 0, 1, 1, &[input], KeyTable::Witness { id });
+        assert_eq!(family.arrays[A_SEL].lookups[0].0, id);
+        assert!(family.tables.contains(&(10 + A_WTABLE, id)));
+        assert!(!family.arrays[A_WTABLE].fixed);
+        assert_eq!(family.arrays[A_SELG].lookups[0].0, POINT_TABLE);
+    }
+
+    #[test]
+    #[should_panic(expected = "must not alias a shared or reserved table")]
+    fn key_table_rejects_a_shared_table_id() {
+        let inputs = sample_inputs(1);
+        let _ = comb_with_key_table(0, 0, 1, 1, &inputs, KeyTable::Fixed { id: POINT_TABLE });
+    }
+
+    /// Two different authority keys use distinct lookup families. Their
+    /// fixed tables are authenticated by the circuit key: an honest proof
+    /// cannot be verified after swapping the two keys' tables. This tests
+    /// the generic fixed-table mechanism, not a certificate trust chain.
+    #[test]
+    fn distinct_fixed_key_tables_prove_and_reject_swaps() {
+        let inputs = [keyed_input("issuer-comb"), keyed_input("root-comb")];
+        assert_ne!(inputs[0].0, inputs[1].0);
+        let build = |swap_tables: bool| {
+            let mut arrays = Vec::new();
+            let mut tables = Vec::new();
+            for fam in 0..inputs.len() {
+                let input = &inputs[if swap_tables { 1 - fam } else { fam }];
+                let first = arrays.len();
+                let id = 8 + fam as u32;
+                let family = comb_with_key_table(
+                    first,
+                    fam,
+                    1,
+                    2,
+                    std::slice::from_ref(input),
+                    KeyTable::Fixed { id },
+                );
+                assert_eq!(family.arrays[A_SEL].lookups[0].0, id);
+                assert!(family.arrays[A_WTABLE].fixed);
+                arrays.extend(family.arrays);
+                for table in family.tables {
+                    if !tables.iter().any(|&(_, id)| id == table.1) {
+                        tables.push(table);
+                    }
+                }
+            }
+            let (c, inst, wit) = UniformCircuit::build(
+                "distinct-key-tables",
+                arrays,
+                vec![1, 1, 0],
+                vec![1, 1, 1],
+                tables,
+                14,
+                4,
+                b"distinct-key-tables",
+            );
+            (c, inst, wit)
+        };
+        let (c, inst, wit) = build(false);
+        let gens = crate::ipa::Gens::<Vesta>::new(c.shape.cols());
+        let mut rng = SpikeRng::new(b"distinct key tables prove");
+        let (proof, _) = crate::spartan::prove_circuit(&c.shape, &gens, &inst, &wit, &mut rng, &c);
+        assert!(
+            crate::spartan::verify_circuit(&c.shape, &gens, &inst, &proof.to_bytes(), &c).is_ok(),
+            "signatures under both distinct fixed keys verify"
+        );
+        let (swapped, swapped_inst, _) = build(true);
+        assert_eq!(c.shape.sx, swapped.shape.sx);
+        assert_eq!(c.shape.rows(), swapped.shape.rows());
+        assert_eq!(c.shape.cols(), swapped.shape.cols());
+        assert!(
+            crate::spartan::verify_circuit(
+                &swapped.shape,
+                &gens,
+                &swapped_inst,
+                &proof.to_bytes(),
+                &swapped
+            )
+            .is_err(),
+            "swapping the issuer and root tables changes the authenticated circuit"
+        );
     }
 
     /// Proves a witness with one cell changed (array, cell, instance).

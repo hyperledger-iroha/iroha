@@ -2232,5 +2232,54 @@ were part of the verification key: one key per circuit. A production circuit ser
 
 - The credential's and the certificate's own keys: Bootstrap's three signatures still use the comb over the
   wallet's own tables as a stand-in (the issuer's and the root's keys need tables of their own).
-- The state carried from one step to the next (`σ.predecessor = Ω.head`), as before; the table commitment is the
-  one piece of it the circuits now carry.
+- The exact monetary state carried from one step to the next; the head-binding
+  boundary is implemented below, but its statement still uses synthetic values.
+
+## Research predecessor-head continuity (2026-11-12)
+
+The recursive relation now binds its own signed statement to the head of its
+verified predecessor. Previously the predecessor proof and own relation could
+both be valid while describing unrelated states.
+
+- Public P io index `HEAD_IO = 4`, previously filler, holds lane 0 of the own
+  statement's final sponge permutation. The other two lanes stay private.
+- The third statement permutation absorbs a private predecessor-head value and
+  the operation kind through the copy argument. Every signature is over a later
+  digest of that same chain, so generating a fresh valid signature does not
+  bypass the predecessor binding. The kind is constrained to the circuit kind.
+- Send and Receive equate that predecessor value to `HEAD_IO` in proof 0's
+  authenticated scalar-verifier io fold. Receive's payer is proof 1 and cannot
+  substitute its head for the wallet's predecessor.
+- Bootstrap pins the predecessor value to zero. Its constrained signed digest
+  becomes the first head, and its existing table-commitment absorption remains.
+- The fixed-point runner checks the binding and its mutation refusals through
+  every Send/Receive order after Bootstrap, Send and Receive. No new public io
+  slots or proof bytes are added: index 4 replaces an existing filler field.
+
+Regression tests are `signed_head_digest_and_bootstrap_predecessor_are_constrained`
+and `signed_wrong_parent_is_refused_by_recursive_head_binding`. The latter uses
+real verified incoming proofs and regenerates the own statement, signatures and
+proof for each proposed predecessor. An isolated own statement with the wrong
+head proves successfully; attaching it to the original predecessor must fail.
+It tests both Send with one input proof and Receive with two input proofs,
+including substitution of the actual incoming payer proof's head. Run this recursive test with
+`ZKS_SCHEDULE=lean cargo test --locked --offline --release -- --include-ignored`;
+the recursive matrix-fold construction requires the lean transcript schedule.
+
+This is the research boundary corresponding to `σ.predecessor = Ω.head`, not a
+production implementation of that rule. TODO: replace the synthetic statement
+with canonical `CoreHead` and statement encodings and constrain the complete
+balance, counter, authorization and map transitions. The issuer/root signatures
+and ledger activation checks also remain outside this patch. Existing timing
+figures above predate this change; they are not new phone measurements.
+
+Validation on 2026-11-12: the combined lean suite passed all 55 tests; after
+extending the signed wrong-parent regression to a real two-input Receive, that
+expanded test passed as well. The release binary's eight-hop fixed point kept
+all six matrices equal from hop 4 to 5 onward. Two wallets starting at Bootstrap
+passed every Send/Receive order with both final accumulators true, while changed
+kind bits and table commitments were refused. The head-binding assertions and
+mutation checks passed in each order. Proof sizes remain 5,024 + 4,928 bytes.
+Logs are in `output/kagemusha-100x-20261108/spike/runs/codex-20261112/` from the
+repository root. This verifies the research circuits on the development host;
+it is not a phone performance result or a production monetary-protocol release.

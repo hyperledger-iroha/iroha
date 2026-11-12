@@ -21,6 +21,10 @@ use crate::fs::{SpikeRng, Transcript};
 pub type F<C> = <C as PastaCurve>::ScalarExt;
 pub type Aff<C> = <C as PastaCurve>::AffineExt;
 
+/// Domain of the experiment's public commitment bases. Changing it changes
+/// every commitment and the relation; it is not a production parameter ID.
+pub const GENERATOR_DOMAIN: &str = "kagemusha-zks-spike/gens";
+
 pub struct Gens<C: PastaCurve> {
     pub g: Vec<Aff<C>>,
     pub h: Aff<C>,
@@ -44,11 +48,14 @@ pub fn old_kernels() -> bool {
 }
 
 impl<C: PastaCurve> Gens<C> {
+    /// Derive `g[i] = H_curve(GENERATOR_DOMAIN, LE64(i))`, with `h` at `n`
+    /// and `u` at `n + 1`. The full capacity therefore identifies the
+    /// blinding bases, even when only a prefix of `g` is used.
     pub fn new(n: usize) -> Self {
         let points: Vec<C> = (0..n + 2)
             .into_par_iter()
             .map(|i| {
-                C::hash_to_curve("kagemusha-zks-spike/gens", &(i as u64).to_le_bytes())
+                C::hash_to_curve(GENERATOR_DOMAIN, &(i as u64).to_le_bytes())
                     .expect("hash to curve")
             })
             .collect();
@@ -62,7 +69,8 @@ impl<C: PastaCurve> Gens<C> {
         }
     }
 
-    /// The same generators without built tables.
+    /// The same generators without built tables. Preserve the parent set's
+    /// `h` and `u`: `Gens::new(n)` would select different blinding bases.
     pub fn prefix(&self, n: usize) -> Self {
         Self {
             g: self.g[..n].to_vec(),
@@ -397,4 +405,75 @@ pub fn verify<C: PastaCurve>(
         return Err("ipa: identity commitment".into());
     }
     Ok((us, b[0]))
+}
+
+#[cfg(test)]
+mod generator_tests {
+    use super::*;
+    use group::{Curve, GroupEncoding};
+    use iroha_pasta::{Ep as Pallas, Eq as Vesta};
+
+    fn encoded<C: PastaCurve>(point: Aff<C>) -> String {
+        point
+            .to_bytes()
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
+    #[test]
+    fn generator_vectors() {
+        let vectors = [
+            (
+                0_u64,
+                "92d4370a0545d7e6af93c9172cff147530b173ce0be081858559d4f2d967d61a",
+                "3ae1888e2e0bec26037e0a130a4471c685c00c553636aba8746723d2bfd63cb4",
+            ),
+            (
+                1,
+                "94d34b5f192429be9a6aeccf60e185818e22f9a860ce45faf5878f9e07e4a43b",
+                "00d65619dbe240ab5601d6b97ac12d572095b95e0cfbb1de36f046cb5cdf1a9f",
+            ),
+            (
+                3583,
+                "1d4173991307201e60fa5a4807b81a25edf5090d9d802f1be17efb290c64828a",
+                "33887a6805c24219d6d797cb37866261003598b987b96b18e35fdefa9cae53a3",
+            ),
+            (
+                65536,
+                "f4beed75aa29b2699a1c8af3dfd45e3555a18f2987a95868cb59e519f266200b",
+                "662b108da0f453bc9f75e4407b5e54c5b3b087e5dbb78e5d0bc142afbd62be06",
+            ),
+            (
+                65537,
+                "afa3051ff0191066f7ffa561736759908bd5ed34b352236fff9152b14258bbb6",
+                "267c6fe8131a8571bc649e5ad693fb7e0406bfdd34342001e157c69983020187",
+            ),
+        ];
+        for (index, expected_p, expected_v) in vectors {
+            let p = Pallas::hash_to_curve(GENERATOR_DOMAIN, &index.to_le_bytes()).unwrap();
+            let v = Vesta::hash_to_curve(GENERATOR_DOMAIN, &index.to_le_bytes()).unwrap();
+            assert_eq!(
+                encoded::<Pallas>(p.to_affine()),
+                expected_p,
+                "Pallas {index}"
+            );
+            assert_eq!(encoded::<Vesta>(v.to_affine()), expected_v, "Vesta {index}");
+        }
+    }
+
+    #[test]
+    fn prefix_keeps_the_parent_blinding_bases() {
+        let parent = Gens::<Vesta>::new(8);
+        let prefix = parent.prefix(4);
+        let independent = Gens::<Vesta>::new(4);
+        assert_eq!(prefix.g, independent.g);
+        assert_eq!(prefix.h, parent.h);
+        assert_eq!(prefix.u, parent.u);
+        assert_ne!(prefix.h, independent.h);
+        assert_ne!(prefix.u, independent.u);
+        assert_ne!(prefix.h, prefix.u);
+        assert!(prefix.g.iter().all(|g| *g != prefix.h && *g != prefix.u));
+    }
 }

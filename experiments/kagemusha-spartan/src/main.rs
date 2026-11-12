@@ -3866,32 +3866,52 @@ fn wallet_chains(
                   seed: &str,
                   key: &full::WalletKey| {
         let clock = Instant::now();
-        let ((cp, ip, wp), (cs, is, ws), kind_at, coords, tables) = if kind == full::RECEIVE {
-            let (w, idx) = full::p_recv(gens, inputs, key);
-            let p = uniform_of!("P-uniform", w, 14, 64, b"p-recv-uniform");
-            let (w, sidx) = full::s_recv(gens, inputs);
-            let s = uniform_of!("S-uniform", w, 13, 62, b"s-recv-uniform");
-            (
-                p,
-                s,
-                (idx.shared, sidx.shared, idx.kind_at, sidx.kind_at),
-                (idx.defer.fold.coords, sidx.defer.fold.coords),
-                (idx.tables[0], sidx.tables[0]),
-            )
-        } else {
-            let (w, idx) = full::p_send(gens, &inputs[0], key);
-            let p = uniform_at!("P-uniform", w, 14, 64, b"p-send-uniform", pl);
-            let (w, sidx) = full::s_send(gens, &inputs[0]);
-            let s = uniform_at!("S-uniform", w, 13, 62, b"s-send-uniform", sl);
-            (
-                p,
-                s,
-                (idx.shared, sidx.shared, idx.kind_at, sidx.kind_at),
-                (idx.defer.fold.coords, sidx.defer.fold.coords),
-                (idx.tables[0], sidx.tables[0]),
-            )
-        };
+        let ((cp, ip, wp), (cs, is, ws), kind_at, coords, tables, head_context) =
+            if kind == full::RECEIVE {
+                let (w, idx) = full::p_recv(gens, inputs, key);
+                let head_context = idx.own.head.as_ref().expect("Receive's head").context;
+                let p = uniform_of!("P-uniform", w, 14, 64, b"p-recv-uniform");
+                let (w, sidx) = full::s_recv(gens, inputs);
+                let s = uniform_of!("S-uniform", w, 13, 62, b"s-recv-uniform");
+                (
+                    p,
+                    s,
+                    (idx.shared, sidx.shared, idx.kind_at, sidx.kind_at),
+                    (idx.defer.fold.coords, sidx.defer.fold.coords),
+                    (idx.tables[0], sidx.tables[0]),
+                    head_context,
+                )
+            } else {
+                let (w, idx) = full::p_send(gens, &inputs[0], key);
+                let head_context = idx.own.head.as_ref().expect("Send's head").context;
+                let p = uniform_at!("P-uniform", w, 14, 64, b"p-send-uniform", pl);
+                let (w, sidx) = full::s_send(gens, &inputs[0]);
+                let s = uniform_at!("S-uniform", w, 13, 62, b"s-send-uniform", sl);
+                (
+                    p,
+                    s,
+                    (idx.shared, sidx.shared, idx.kind_at, sidx.kind_at),
+                    (idx.defer.fold.coords, sidx.defer.fold.coords),
+                    (idx.tables[0], sidx.tables[0]),
+                    head_context,
+                )
+            };
         same(label, kind, &cp, &cs);
+        assert_eq!(
+            wp.w[cp.cell_index(head_context, 0, 0)],
+            inputs[0].inst_p.io[full::HEAD_IO],
+            "{label}: the signed own statement consumes the predecessor's head"
+        );
+        assert_ne!(
+            ip.io[full::HEAD_IO],
+            inputs[0].inst_p.io[full::HEAD_IO],
+            "{label}: the successor exposes its newly signed statement digest"
+        );
+        let head_breaks = row_breaks(&cp, &ip, &wp, &[(head_context, 0, 0), (head_context, 0, 1)]);
+        assert!(
+            head_breaks.iter().all(|b| *b),
+            "{label}: predecessor and kind are constrained"
+        );
         // The predecessor's table commitment: P ties its shared limbs to the
         // predecessor's io and to its own table io, S pins the
         // predecessor's wallet row to them.
