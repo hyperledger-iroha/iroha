@@ -2177,11 +2177,13 @@ impl<F: Scalar> UniformCircuit<F> {
                 eprintln!("row {r:3}: {n:6} present cells, bound {}", bounds[r]);
             }
         }
-        let mut rng = SpikeRng::new(seed);
-        let mut io = vec![F::ONE];
-        while io.len() < io_len {
-            io.push(rng.below(64));
+        // Reserved ordinary IO has one deterministic reconstruction. Concrete
+        // relation outputs below replace their declared slots.
+        let mut io = vec![F::ZERO; io_len];
+        if !io.is_empty() {
+            io[0] = F::ONE;
         }
+        let _ = seed;
         // Early io arrays (not late io): their values are public inputs at
         // their io indices.
         let late_slots: HashSet<usize> = late_io.iter().map(|x| x.0).collect();
