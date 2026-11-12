@@ -17828,6 +17828,17 @@ pub mod isi {
                         ));
                     }
                 }
+                // Owner-signed dataspace retirement is consumed by its native handler and never
+                // stored; its protected cumulative record is never caller-writable.
+                if let Some(outcome) =
+                    crate::state::dataspace_retirement::execute_reserved_parameter(
+                        custom,
+                        authority,
+                        state_transaction,
+                    )
+                {
+                    return outcome;
+                }
                 validate_alias_dataspace_bootstrap_grant(custom, state_transaction)?;
                 // The admitted parameter successor below validates ZK/fraud/pipeline
                 // structure and pending confidential transitions. Decoding here
@@ -17847,6 +17858,10 @@ pub mod isi {
                                 policy.fixed.iter().map(|lane| lane.dataspace).chain(
                                     policy.autoscale.iter().map(|autoscale| autoscale.dataspace),
                                 ),
+                            )?;
+                            crate::state::dataspace_retirement::ensure_native_policy_preserves_retirements(
+                                &state_transaction.world,
+                                &policy,
                             )?;
                             crate::sumeragi::lanes::step::validate_policy(&policy)
                         })

@@ -355,6 +355,7 @@ mod committed_hash_journal;
 #[cfg(test)]
 mod committed_transaction_context;
 mod da_hydration;
+pub(crate) mod dataspace_retirement;
 mod exec_witness_capture;
 mod kagemusha_load_entrypoint;
 pub(crate) mod parliament_candidate_testing;
@@ -37682,6 +37683,8 @@ pub(crate) fn consensus_owned_custom_parameter_ids()
         DaIngestAdmissionPolicyV1::parameter_id(),
         NexusRuntimeCatalogV1::parameter_id(),
         NexusCatalogTransitionV1::parameter_id(),
+        iroha_data_model::nexus::DataSpaceRetirementRequestV1::parameter_id(),
+        iroha_data_model::nexus::DataSpaceRetirementsV1::parameter_id(),
         LaneLifecycleParameterV1::parameter_id(),
         ValidatorCommitteeOperationV1::parameter_id(),
         HijiriParametersV1::parameter_id(),
@@ -37731,6 +37734,8 @@ pub(crate) fn is_consensus_owned_custom_parameter(
             DaIngestAdmissionPolicyV1::PARAMETER_ID_STR,
             NexusRuntimeCatalogV1::PARAMETER_ID_STR,
             NexusCatalogTransitionV1::PARAMETER_ID_STR,
+            iroha_data_model::nexus::DataSpaceRetirementRequestV1::PARAMETER_ID_STR,
+            iroha_data_model::nexus::DataSpaceRetirementsV1::PARAMETER_ID_STR,
             LaneLifecycleParameterV1::PARAMETER_ID_STR,
             "validator_committee_operation_v1",
             HijiriParametersV1::PARAMETER_ID_STR,
@@ -37803,6 +37808,8 @@ mod consensus_owned_parameter_tests {
             "ivm_gas_units_per_gas",
             "iroha:da_ingest_admission_policy_v1",
             "nexus_runtime_catalog_v1",
+            "nexus_dataspace_retirement_v1",
+            "nexus_dataspace_retirements_v1",
             "parliament_candidate_testing_v1",
         ] {
             let id: CustomParameterId = name.parse().expect("parameter identifier");
@@ -42944,6 +42951,11 @@ impl StateTransaction<'_, '_> {
                 actual: actual_incarnation_root,
             });
         }
+        dataspace_retirement::ensure_lane_lifecycle_preserves_retirements(
+            &self.world,
+            &payload.plan,
+        )
+        .map_err(runtime_catalog_invalid)?;
         let block_height = self.block_height();
         ensure_lane_lifecycle_compliance_ready(
             &self.nexus,

@@ -435,3 +435,171 @@ fn private_profile_resource_refusal_retains_instruction_attempt_and_invalid_does
     assert!(transaction.borrow_execution_deferral().is_none());
     assert!(transaction.world.private_dataspaces().records().is_empty());
 }
+
+fn catalogued_parent() -> State {
+    State::new_with_nexus_for_testing(
+        world(Some(SumeragiRootScope::Global), Some(policy())),
+        crate::state::dataspace_retirement::tests::nexus(),
+        LiveQueryStore::start_test(),
+    )
+}
+
+fn retire(generation: u64) -> SetParameter {
+    SetParameter::new(Parameter::Custom(
+        iroha_data_model::nexus::DataSpaceRetirementRequestV1 {
+            version: 1,
+            dataspace_id: crate::sns::dataspace_id_for_sns_alias("acme").unwrap(),
+            alias: "acme".into(),
+            owner: authority(1),
+            expected_ownership_generation: generation,
+            lanes: vec![iroha_model_base::topology::LaneId::new(1)],
+        }
+        .into_custom_parameter()
+        .unwrap(),
+    ))
+}
+
+#[test]
+fn retired_catalog_identity_is_readmitted_only_by_its_retiring_owner_in_a_later_block() {
+    let parent = catalogued_parent();
+    let (_, register) = registration(&parent);
+    let id = crate::sns::dataspace_id_for_sns_alias("acme").unwrap();
+    let mut block = parent.block(header(2));
+    // The parent still executes the catalogued dataspace: no private root may claim it.
+    let error = execute(&mut block, &authority(1), register.clone()).unwrap_err();
+    assert!(
+        error.to_string().contains("locally configured dataspace"),
+        "{error}"
+    );
+    execute(&mut block, &authority(1), retire(1)).unwrap();
+    // The retirement block itself cannot also admit the child.
+    let error = execute(&mut block, &authority(1), register.clone()).unwrap_err();
+    assert!(error.to_string().contains("later block"), "{error}");
+    assert!(block.world.private_dataspaces().records().is_empty());
+    block.commit_world_overlay_for_testing().unwrap();
+
+    let mut block = parent.block(header(3));
+    for (signer, message) in [
+        (authority(2), "authority"),
+        (authority(3), "not registered"),
+    ] {
+        let error = execute(&mut block, &signer, register.clone()).unwrap_err();
+        assert!(error.to_string().contains(message), "{message}: {error}");
+    }
+    execute(&mut block, &authority(1), register.clone()).unwrap();
+    assert!(block.world.private_dataspaces().get(id).is_some());
+    // Once registered, parent execution policies remain separate from the child root.
+    let error = ensure_parent_execution_separate(&block.world, [id]).unwrap_err();
+    assert!(error.contains("registered private root"), "{error}");
+}
+
+#[test]
+fn retirement_does_not_transfer_to_a_later_sns_ownership_generation() {
+    let parent = catalogued_parent();
+    let (_, register) = registration(&parent);
+    let mut block = parent.block(header(2));
+    execute(&mut block, &authority(1), retire(1)).unwrap();
+    block.commit_world_overlay_for_testing().unwrap();
+
+    let mut block = parent.block(header(3));
+    {
+        let mut transaction = block.transaction();
+        let renewed = NameRecordV1 {
+            ownership_generation: 2,
+            ..lease(&authority(1))
+        };
+        transaction.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&renewed.selector),
+            renewed.encode(),
+        );
+        transaction.apply();
+    }
+    let error = execute(
+        &mut block,
+        &authority(1),
+        RegisterPrivateDataspace {
+            expected_ownership_generation: 2,
+            ..register
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("retiring SNS owner and generation"),
+        "{error}"
+    );
+    assert!(block.world.private_dataspaces().records().is_empty());
+}
+
+#[test]
+fn certified_parent_retires_readmits_and_replays_the_same_results() {
+    use crate::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+    use iroha_crypto::{Algorithm, KeyPair};
+
+    let config = || {
+        let nexus = crate::state::dataspace_retirement::tests::nexus();
+        let mut config = TestChainConfig::new(world(None, Some(policy())), 1_000);
+        config.lane_manifests = Some(std::sync::Arc::new(
+            crate::governance::manifest::LaneManifestRegistry::from_config(
+                &nexus.lane_catalog,
+                &nexus.governance,
+                &nexus.registry,
+            ),
+        ));
+        config.nexus = Some(nexus);
+        config
+    };
+    let mut chain = CertifiedTestChain::start(config()).unwrap();
+    let (_, register) = registration(chain.state());
+    let id = crate::sns::dataspace_id_for_sns_alias("acme").unwrap();
+    let owner = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
+    let outsider = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
+    // Block 2 predates any retirement: the catalogued identity still collides and the
+    // feature leaves no trace in committed State.
+    let early = chain.sign(&owner, [register.clone().into()], 1_999);
+    assert_eq!(chain.commit_at(2_000, vec![early]), vec![false]);
+    assert!(!crate::state::dataspace_retirement::has_retirements(
+        chain.state().view().world()
+    ));
+    // The owner holds no CanSetParameters: the request is authorized by SNS ownership alone.
+    let forged = chain.sign(&outsider, [retire(1).into()], 2_997);
+    let stale = chain.sign(&owner, [retire(2).into()], 2_998);
+    let retirement = chain.sign(&owner, [retire(1).into()], 2_999);
+    assert_eq!(
+        chain.commit_at(3_000, vec![forged, stale, retirement]),
+        vec![false, false, true]
+    );
+    let admit = chain.sign(&owner, [register.into()], 3_999);
+    assert_eq!(chain.commit_at(4_000, vec![admit]), vec![true]);
+    {
+        let view = chain.state().view();
+        let record = crate::state::dataspace_retirement::retirements(view.world().parameters())
+            .unwrap()
+            .unwrap();
+        let retired = record.get(id).unwrap();
+        assert_eq!(retired.retirement_height, 3);
+        assert_eq!(retired.owner, authority(1));
+        assert!(view.world().private_dataspaces().get(id).is_some());
+        // The physical catalog keeps the retired descriptor and its lane identity.
+        assert!(view.nexus().dataspace_catalog.by_id(id).is_some());
+        assert!(
+            view.nexus()
+                .lane_catalog
+                .lanes()
+                .iter()
+                .any(|lane| lane.dataspace_id == id)
+        );
+    }
+    // Startup replay of the certified blocks reproduces every certified result.
+    let mut replayed = CertifiedTestChain::start(config()).unwrap();
+    replayed.replay_from(&chain).unwrap();
+    assert_eq!(
+        replayed.state().view().world().parameters(),
+        chain.state().view().world().parameters()
+    );
+    assert_eq!(
+        replayed.state().view().world().private_dataspaces().get(id),
+        chain.state().view().world().private_dataspaces().get(id)
+    );
+}

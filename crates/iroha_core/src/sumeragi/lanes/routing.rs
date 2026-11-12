@@ -183,6 +183,11 @@ impl<W: WorldReadOnly> RoutingInputs<'_, W> {
             if self.dataspaces.by_id(dataspace).is_none() {
                 return Ok(None);
             }
+            // A retired dataspace keeps its catalog descriptor, so its namespace still
+            // resolves here, but it has no parent execution route.
+            if crate::state::dataspace_retirement::routing_retired(self.world, dataspace)? {
+                return Ok(None);
+            }
             // Physical dataspace routing selects its first admitted fixed lane. The
             // policy binds that lane's exact committee and its record pins the scope.
             let Some(policy) = self.policy else {
