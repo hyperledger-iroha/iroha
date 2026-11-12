@@ -502,6 +502,16 @@ and verified on the Mac:
   - The wallet state format changes, so it ships with the Path 2 wallet generation.
   - Implementations still re-verify until they adopt the new rule.
 
+- **Issuer-certified key tables (2026-11-12): decided and applied** (spec change committed with
+  `SPEC-CHANGE-key-table-commitment.md`; owner: "Issuer certifies them", "Yes, draft it", then "Apply and commit").
+  - The credential carries `key_table_commitment`, the commitment to the payment key's comb tables. The issuer
+    computes it from the attested key, and the wallet recomputes it at enrollment.
+  - Every lineage proof checks payment-key signatures against those tables, so one set of circuits serves every
+    wallet. Deriving the tables in Bootstrap does not fit (`d21de32e26`); the certified wallet row keeps Send and
+    Receive at 1.55 s and 2.21 s per pair (`d39841bd20`).
+  - The credential format changes, so it ships with the Path 2 wallet generation.
+  - Open: the issuer's and the root's keys need certified tables of their own.
+
 - **Path 2, inherited claims: decided 2026-11-08, fold in clear.** Relayed by b04a57: the owner
   first chose "Keep unlinkable", then wrote "we don't really care about linkable/unlinkable tbh";
   the later message stands. Anyone holding two proofs can link which payment fed which; balances

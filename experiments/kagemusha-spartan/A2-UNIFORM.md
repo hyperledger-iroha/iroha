@@ -2224,11 +2224,13 @@ were part of the verification key: one key per circuit. A production circuit ser
   Bootstrap kind").
 - **The issuer's work** is the tables (about 780 point operations) and one MSM over 3,584 values per enrollment.
 
+**The spec.** The credential now carries the payment key's table commitment, `key_table_commitment` (R10; owner:
+"Apply and commit", 2026-11-12). The rationale and the edits are in
+[`research/SPEC-CHANGE-key-table-commitment.md`](research/SPEC-CHANGE-key-table-commitment.md).
+
 **Still open.**
 
 - The credential's and the certificate's own keys: Bootstrap's three signatures still use the comb over the
   wallet's own tables as a stand-in (the issuer's and the root's keys need tables of their own).
-- The spec: the credential would carry the payment key's table commitment (R10). That is a spec change, drafted only
-  on the owner's word.
 - The state carried from one step to the next (`σ.predecessor = Ω.head`), as before; the table commitment is the
   one piece of it the circuits now carry.

@@ -47,6 +47,12 @@ the expiry and the Send time span (B7, B8, §3.3). The owner decision of 2026-10
 replaces B6: the account blacklist is local-only (§3.3). The data model, shared vectors and Kotlin/Swift consumers implement this layout.
 Proof-relation integration and qualification remain separate G3 work; §7 records open items.
 
+**Issuer-certified key tables (owner decision 2026-11-12).** The credential carries
+`key_table_commitment`, the commitment to its payment key's comb tables (§3.1), and
+every lineage proof takes it as a public input (§3.2). The data model, vectors and
+SDKs do not implement it yet: it changes the credential format, so it ships with the
+Path 2 wallet generation.
+
 Notation: `‖` is concatenation; `LE16`…`LE128` are little-endian unsigned
 integers; every name without a width is a raw 32-byte digest, identifier, nonce or
 σ-field value, and all-zero means "none"; `key` is a 65-byte uncompressed SEC1 P-256
@@ -121,7 +127,7 @@ SHA-256 roles do not exist):
 | Signed body | Signing domain `d` | Transcript bytes | Signer | Object digest |
 |---|---|---:|---|---|
 | certificate (§3.1) | `kgwcert1` | 108 | scheme root | `P(kgwocrt1, ·)` |
-| credential (§3.1) | `kgwcred1` | 468 | Enrollment | `P(kgwocrd1, ·)` |
+| credential (§3.1) | `kgwcred1` | 532 | Enrollment | `P(kgwocrd1, ·)` |
 | renewal challenge (§3.1) | `kgwrnch1` | 130 | payment key | none |
 | renewal key binding (§3.1) | `kgwrnkb1` | 163 | payment key | none |
 | artifact manifest (§3.1) | `kgwartf1` | 290 | Artifact | `H("artifact-manifest", m ‖ sig)` |
@@ -303,7 +309,8 @@ is the body's fields in the order shown.
 | Issuer-retained evidence (E6, frame only) | `IssuerEvidenceV1`: Android `{certificates: [der]}`; Apple `{attestation, key_binding_assertion}` | Issuer-to-wallet exchange only. The issuer returns, byte for byte, the E5 originals it verified; the credential's evidence digest is recomputed from them before delivery and again at the wallet's E6 intake. It adds no issuer-acquired item. The Android arm changes at the proposal §9.1 cutover. |
 | Evidence record (inline, 56) | `digest ‖ LE64 time_ms ‖ LE32 facts ‖ LE32 os_patch_level ‖ LE32 vendor_patch_level ‖ LE32 boot_patch_level` | Fact bits below; `digest` nonzero. |
 | Regulatory policy (inline, 12) | `LE32 permitted_controls ‖ LE64 time_anchor_max_response_ms` | Controls: bit 0 QUOTAS, 1 ATTESTATION_LEASE; others zero. `time_anchor_max_response_ms > 0` iff bit 0 or bit 1. The policy is fixed for the incarnation; with bit 0 every quota window a wallet installs is longer than `time_anchor_max_response_ms` (B8, §3.3). |
-| Credential (signed under `kgwcred1`) | `LE16 version ‖ scheme_id ‖ asset_digest ‖ wallet_id ‖ account_digest ‖ payment_key(key) ‖ provider_contract ‖ tag evidence_kind ‖ enrollment_evidence(56) ‖ fresh_evidence(56) ‖ app_policy ‖ regulatory_policy(12) ‖ enrollment_id ‖ LE64 issued_at_ms ‖ LE32 renewal_sequence ‖ LE64 lease_expires_at_ms ‖ issuer_certificate` | Enrollment-role signer. Nonzero bindings; V1 provider contract even without a scheme; `wallet_id` recomputes. Renewal 0 requires `fresh_evidence = enrollment_evidence`; later renewals require `fresh.time_ms ≥ enrollment.time_ms`. `lease_expires_at_ms ≠ 0` iff the lease is permitted. A replacement changes only `fresh_evidence`, `issued_at_ms`, `lease_expires_at_ms` and `issuer_certificate`, and `renewal_sequence` is the predecessor's plus one. |
+| Key-table commitment (inline, 64) | `x(C) ‖ y(C)`: the affine coordinates of a Vesta (Eq) point `C`, each 32 bytes, little-endian and canonical (below the Vesta base-field modulus); in circuit, their four 128-bit halves `x_lo, x_hi, y_lo, y_hi` | Commits to the comb tables of the payment key `Q` (proposal R10, §3.2). The bases are `B_k = 2^(16k) Q` for `k < 16`; table `t ∈ {0, 1}` has the 256 entries `T_t[e] = Σ_(j<8) (2 bit_j(e) − 1) · B_(8t+j)`, none of them the identity. Table row `r = 256t + e` (`r < 512`) holds seven σ-field cells: `r`, then the 88-bit limbs `x mod 2^88`, `⌊x / 2^88⌋ mod 2^88` and `⌊x / 2^176⌋` of the entry's affine x, then the same of its y. `C = Σ_(c<7) Σ_(r<512) cell_c(r) · G_(512c + r)` without blinding, where `G_j` is the j-th Vesta commitment generator of the scheme's relation, pinned by its artifact set (the research construction derives `G_j` by `hash_to_curve` under `kagemusha-zks-spike/gens` over `LE64(j)`). `C` is on Vesta and is not the identity. It depends only on `Q` and the relation, so every credential of an incarnation carries the same value. Computing it takes about 780 P-256 point operations and one 3,584-term Vesta MSM. |
+| Credential (signed under `kgwcred1`) | `LE16 version ‖ scheme_id ‖ asset_digest ‖ wallet_id ‖ account_digest ‖ payment_key(key) ‖ key_table_commitment(64) ‖ provider_contract ‖ tag evidence_kind ‖ enrollment_evidence(56) ‖ fresh_evidence(56) ‖ app_policy ‖ regulatory_policy(12) ‖ enrollment_id ‖ LE64 issued_at_ms ‖ LE32 renewal_sequence ‖ LE64 lease_expires_at_ms ‖ issuer_certificate` | Enrollment-role signer. Nonzero bindings; V1 provider contract even without a scheme; `wallet_id` recomputes. `key_table_commitment` recomputes from `payment_key` under the scheme's relation (the Key-table commitment row): the issuer computes it before signing and checks it again before delivery, and the wallet recomputes it at E6 intake and rejects a credential whose value differs. Renewal 0 requires `fresh_evidence = enrollment_evidence`; later renewals require `fresh.time_ms ≥ enrollment.time_ms`. `lease_expires_at_ms ≠ 0` iff the lease is permitted. A replacement changes only `fresh_evidence`, `issued_at_ms`, `lease_expires_at_ms` and `issuer_certificate`, and `renewal_sequence` is the predecessor's plus one. |
 | Renewal transcripts | renewal challenge and `renewal-assertion`: `LE16 1 ‖ scheme_id ‖ wallet_id ‖ credential_digest ‖ challenge`; renewal key binding: `LE16 1 ‖ scheme_id ‖ wallet_id ‖ challenge ‖ new_attested_key` | The payment key signs the renewal challenge under `kgwrnch1` (possession) and, on Android, the key binding under `kgwrnkb1` (§1). The App Attest renewal assertion's client data is `H("renewal-assertion", ·)`. |
 | Renewal request (frame only) | `{version, scheme_id, wallet_id, credential_digest, challenge, possession_signature, evidence}` | Evidence: Android 1 `{new_attested_key, key_binding_signature, chain: [{der}]}` or Apple 2 `{assertion}` within the §2 bounds, on the credential's platform. Issuer verification of the chain or assertion is TODO(G5). |
 | Artifact manifest (signed under `kgwartf1`) | `LE16 version ‖ network_id ‖ relation_id ‖ eq_protocol_digest ‖ ep_protocol_digest ‖ native_profile_digest ‖ verifying_key_set_digest ‖ artifact_inventory_digest ‖ provider_contract ‖ signer_certificate` | Artifact-role signer. Bindings nonzero; `relation_id` recomputes from the five bindings; network, relation and provider contract equal the scheme's. |
@@ -767,6 +774,10 @@ carries no Payment digest. `ArchiveSent` uses the Credited digest, a `P_bytes` v
   payment_key(key) ‖ tag lifecycle ‖ LE64 policy_epoch ‖ LE32 enabled_controls ‖
   LE128 burned_total ‖ pending_outgoing_root ‖ credit_digest_root`; identities
   nonzero, the head and both roots nonzero canonical values, defined control bits only.
+  The proof also takes the wallet's `key_table_commitment` (§3.1) as a public input
+  that the frame does not carry and the credential digest binds: a verifier supplies
+  it from the credential it verifies for Ω's wallet, whose `payment_key` must be Ω's
+  (proposal §3.2).
   The Ω bytes are that transcript followed by the proof, so `proof_digest` and the
   Payment digest bind every exposed value; `lineage_digest = P_bytes(kgwlin_1, Ω bytes)`
   identifies byte-identical reuse. A head has at most one recorded Ω, carried unchanged
@@ -1198,6 +1209,9 @@ identities and caps, pinned object frames, the enum tag table, and:
   leaf, node and root over entries whose unsigned byte order differs
   from their limb order, the quota-window leaf, empty slot, node and root, and the
   verifying-key allowlist transcript and digest.
+- `key_tables`: for two fixed payment keys, the 512 table entries, the 3,584 cells in
+  commitment order and `key_table_commitment` as 64 bytes and as four 128-bit limbs,
+  with the first and last of the 3,584 generators; the credential vectors carry it.
 
 The vectors are self-consistent: the vectored relation identity and artifact
 manifest bind the computed `verifying_key_set_digest` of the vectored allowlist, so that
