@@ -1007,8 +1007,12 @@ fn private_settlement_promotion_counts_only_three_exact_acknowledgements_after_o
     let recorded = snapshots.clone();
     let endpoints = request.0.endpoints.clone();
     let expected = certificates.clone();
+    // Each leg's four promotion requests must be in flight together; legs stay sequential.
+    let overlap = Arc::new(crate::client::private_settlement::tests::CommitteeOverlap::default());
+    let entered = Arc::clone(&overlap);
     let result = with_mock_http(move |http| {
         assert!(http.url.path().ends_with("/legs"), "a sufficient initial promotion set needs no rehydration or new certificate");
+        entered.enter("promotion")?;
         let upload: PrivateSettlementLegUploadRequestV1 = norito::json::from_slice(&http.body)?;
         let ordinal = upload.payload.statement.leg_ordinal;
         let index = endpoints[usize::from(ordinal)].iter()

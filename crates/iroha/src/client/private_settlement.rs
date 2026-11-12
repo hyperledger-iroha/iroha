@@ -254,12 +254,12 @@ fn collect_private_settlement_availability_shares_v1(
     Ok(shares)
 }
 
-/// Issue one Prepare request per committee member and join every initiated worker.
+/// Issue one independent request per committee member and join every initiated worker.
 ///
 /// Results retain roster order, including ordinary request rejections. A local
 /// worker launch or panic is a fatal orchestration error, never an unavailable
 /// validator vote. No response is consumed until all initiated requests finish.
-fn collect_private_settlement_prepare_responses_v1<T, F>(request: F) -> Result<Vec<Result<T>>>
+fn collect_private_settlement_committee_responses_v1<T, F>(request: F) -> Result<Vec<Result<T>>>
 where
     T: Send,
     F: Fn(usize) -> Result<T> + Sync,
@@ -269,7 +269,7 @@ where
         let request = &request;
         let children: [_; REQUESTS] = std::array::from_fn(|index| {
             std::thread::Builder::new()
-                .name(format!("aps-prepare-{index}"))
+                .name(format!("aps-committee-{index}"))
                 .spawn_scoped(scope, move || request(index))
         });
         // Array::map completes every join before Result collection can return
@@ -279,13 +279,13 @@ where
             child.map_or_else(
                 |_| {
                     Err(eyre!(
-                        "private-settlement Prepare request worker could not start"
+                        "private-settlement committee request worker could not start"
                     ))
                 },
                 |child| {
                     child
                         .join()
-                        .map_err(|_| eyre!("private-settlement Prepare request worker panicked"))
+                        .map_err(|_| eyre!("private-settlement committee request worker panicked"))
                 },
             )
         });
@@ -1340,6 +1340,16 @@ impl Client {
         endpoint: &Url,
         material: &PrivateSettlementProvisionalLegMaterialV1,
     ) -> Result<PrivateSettlementAvailabilityShareResponseV1> {
+        let body = self.encode_private_settlement_availability_request_v1(material)?;
+        self.send_private_settlement_availability_request_v1(endpoint, material, body)
+    }
+
+    // Encoding is independent of endpoint identity. One committee can share this exact
+    // immutable body while every request keeps a fresh endpoint-bound nonce/signature.
+    fn encode_private_settlement_availability_request_v1(
+        &self,
+        material: &PrivateSettlementProvisionalLegMaterialV1,
+    ) -> Result<Vec<u8>> {
         material
             .validate()
             .map_err(|_| eyre!(PrivateSettlementAvailabilityFailureV1::InvalidMaterial))?;
@@ -1351,8 +1361,16 @@ impl Client {
         let request = PrivateSettlementAvailabilityShareRequestV1 {
             material: material.clone(),
         };
-        let body = norito::json::to_vec(&request)
-            .map_err(|_| eyre!(PrivateSettlementAvailabilityFailureV1::RequestEncoding))?;
+        norito::json::to_vec(&request)
+            .map_err(|_| eyre!(PrivateSettlementAvailabilityFailureV1::RequestEncoding))
+    }
+
+    fn send_private_settlement_availability_request_v1(
+        &self,
+        endpoint: &Url,
+        material: &PrivateSettlementProvisionalLegMaterialV1,
+        body: Vec<u8>,
+    ) -> Result<PrivateSettlementAvailabilityShareResponseV1> {
         let url = join_torii_url(
             endpoint,
             "v1/nexus/private-settlements/legs/availability-shares",
@@ -1401,21 +1419,26 @@ impl Client {
         committee_endpoints: &[Url],
         material: &PrivateSettlementProvisionalLegMaterialV1,
     ) -> Result<PrivateSettlementSidecarAvailabilityV1> {
-        material
-            .validate()
-            .map_err(|_| eyre!("private-settlement provisional leg is invalid"))?;
+        let body = self.encode_private_settlement_availability_request_v1(material)?;
         if committee_endpoints.len() != material.committee_authority.validators.len() {
             return Err(eyre!(
                 "private-settlement availability endpoints must match the four-validator roster"
             ));
         }
+        let responses = collect_private_settlement_committee_responses_v1(|index| {
+            self.send_private_settlement_availability_request_v1(
+                &committee_endpoints[index],
+                material,
+                body.clone(),
+            )
+        })?;
+        let mut responses = responses.into_iter();
         let shares = collect_private_settlement_availability_shares_v1(
             &material.committee_authority,
-            |index| {
-                self.request_private_settlement_availability_share_v1(
-                    &committee_endpoints[index],
-                    material,
-                )
+            |_| {
+                responses
+                    .next()
+                    .ok_or_else(|| eyre!("missing committee response"))?
             },
         )?;
         let selected = canonical_availability_share_quorum_v1(&shares)?;
@@ -1588,10 +1611,14 @@ impl Client {
         )?;
         let mut recovered: Option<PrivateSettlementPhaseCertificateV1> = None;
         let mut valid_responses = 0_usize;
-        for endpoint in committee_endpoints {
-            let response = match self
-                .private_settlement_phase_certificates_from_v1(endpoint, payload_digest)
-            {
+        let responses = collect_private_settlement_committee_responses_v1(|index| {
+            self.private_settlement_phase_certificates_from_v1(
+                &committee_endpoints[index],
+                payload_digest,
+            )
+        })?;
+        for response in responses {
+            let response = match response {
                 Ok(response) => response,
                 Err(_) => continue,
             };
@@ -1786,7 +1813,7 @@ impl Client {
         // requests. Later roster members may stage before an earlier identity
         // rejection is observed; every request is joined before that rejection
         // returns, and no QC handoff starts until the ordered checks succeed.
-        let responses = collect_private_settlement_prepare_responses_v1(|index| {
+        let responses = collect_private_settlement_committee_responses_v1(|index| {
             self.request_private_settlement_prepare_vote_v1(
                 &committee_endpoints[index],
                 manifest,
@@ -1815,14 +1842,20 @@ impl Client {
         } else {
             aggregate_phase_votes_v1(&body, ordinal, authority, selected)?
         };
-        for index in responders {
-            let endpoint = &committee_endpoints[index];
+        let persisted = collect_private_settlement_committee_responses_v1(|index| {
+            if !responders.contains(&index) {
+                return Ok(());
+            }
             self.persist_private_settlement_phase_certificate_v1(
-                endpoint,
+                &committee_endpoints[index],
                 manifest,
                 payload_digest,
                 &certificate,
             )?;
+            Ok(())
+        })?;
+        for result in persisted {
+            result?;
         }
         if verify_durable_handoff {
             let confirmed = self
@@ -2109,13 +2142,16 @@ impl Client {
         )?;
         let mut votes = Vec::with_capacity(authority.validators.len());
         let mut responders = Vec::with_capacity(authority.validators.len());
-        for (index, endpoint) in committee_endpoints.iter().enumerate() {
-            let Ok(response) = self.request_private_settlement_commit_vote_v1(
-                endpoint,
+        let responses = collect_private_settlement_committee_responses_v1(|index| {
+            self.request_private_settlement_commit_vote_v1(
+                &committee_endpoints[index],
                 payload_digest,
                 barrier,
                 authority,
-            ) else {
+            )
+        })?;
+        for (index, response) in responses.into_iter().enumerate() {
+            let Ok(response) = response else {
                 continue;
             };
             if response.vote.signer != authority.validators[index] {
@@ -2133,14 +2169,20 @@ impl Client {
         } else {
             aggregate_phase_votes_v1(&body, ordinal, authority, selected)?
         };
-        for index in responders {
-            let endpoint = &committee_endpoints[index];
+        let persisted = collect_private_settlement_committee_responses_v1(|index| {
+            if !responders.contains(&index) {
+                return Ok(());
+            }
             self.persist_private_settlement_phase_certificate_v1(
-                endpoint,
+                &committee_endpoints[index],
                 &barrier.manifest,
                 payload_digest,
                 &certificate,
             )?;
+            Ok(())
+        })?;
+        for result in persisted {
+            result?;
         }
         if verify_durable_handoff {
             let confirmed = self
@@ -2673,8 +2715,11 @@ impl Client {
             let mut promoted = 0;
             let mut first_failure = None;
             let mut failed = Vec::with_capacity(n);
-            for (index, endpoint) in endpoints.iter().enumerate() {
-                match self.upload_private_settlement_leg_to_v1(endpoint, &request) {
+            let uploaded = collect_private_settlement_committee_responses_v1(|index| {
+                self.upload_private_settlement_leg_to_v1(&endpoints[index], &request)
+            })?;
+            for (index, response) in uploaded.into_iter().enumerate() {
+                match response {
                     Ok(response) => {
                         promoted += 1;
                         responses.push(response);
@@ -2690,22 +2735,22 @@ impl Client {
                 // Rehydrate only failed endpoints, with the exact original material,
                 // at most once per replica in this call. A verified new share confirms
                 // its identity/custody but is never selected into a new certificate.
-                for index in failed {
+                let rehydrated = collect_private_settlement_committee_responses_v1(|index| {
+                    if !failed.contains(&index) {
+                        return Ok(None);
+                    }
                     let endpoint = &endpoints[index];
                     let hydrated =
-                        self.request_private_settlement_availability_share_v1(endpoint, material);
-                    let Ok(hydrated) = hydrated else {
-                        continue;
-                    };
+                        self.request_private_settlement_availability_share_v1(endpoint, material)?;
                     if hydrated.share.signer != material.committee_authority.validators[index] {
-                        continue;
+                        return Ok(None);
                     }
-                    if let Ok(response) =
-                        self.upload_private_settlement_leg_to_v1(endpoint, &request)
-                    {
-                        promoted += 1;
-                        responses.push(response);
-                    }
+                    self.upload_private_settlement_leg_to_v1(endpoint, &request)
+                        .map(Some)
+                })?;
+                for response in rehydrated.into_iter().flatten().flatten() {
+                    promoted += 1;
+                    responses.push(response);
                 }
             }
             if promoted < required {
@@ -2900,13 +2945,16 @@ impl Client {
         }
 
         let mut candidates = Vec::with_capacity(committee_endpoints.len());
-        for (endpoint_index, endpoint) in committee_endpoints.iter().enumerate() {
-            let Ok(response) = self.private_settlement_auditor_capsule_from_v1(
-                endpoint,
+        let responses = collect_private_settlement_committee_responses_v1(|index| {
+            self.private_settlement_auditor_capsule_from_v1(
+                &committee_endpoints[index],
                 payload_digest,
                 request,
                 auditor_signer,
-            ) else {
+            )
+        })?;
+        for (endpoint_index, response) in responses.into_iter().enumerate() {
+            let Ok(response) = response else {
                 continue;
             };
             let mut canonical_view = response.view_digest_material();
@@ -3108,13 +3156,16 @@ impl Client {
             request,
         )?;
         let mut candidates = Vec::with_capacity(committee_endpoints.len());
-        for (endpoint_index, endpoint) in committee_endpoints.iter().enumerate() {
-            let Ok(response) = self.submit_private_settlement_audit_approval_to_v1(
-                endpoint,
+        let responses = collect_private_settlement_committee_responses_v1(|index| {
+            self.submit_private_settlement_audit_approval_to_v1(
+                &committee_endpoints[index],
                 payload_digest,
                 auditor_signer,
                 request,
-            ) else {
+            )
+        })?;
+        for (endpoint_index, response) in responses.into_iter().enumerate() {
+            let Ok(response) = response else {
                 continue;
             };
             let mut canonical_view = response.acknowledgement_digest_material();
@@ -3317,6 +3368,7 @@ mod tests {
     use crate::client::evidence_http_tests::{
         SnapshotStore, base_url, client_with_base_url, respond_with, with_mock_http,
     };
+    use crate::client::tests::assert_canonical_account_signed_request;
     use iroha_data_model::nexus::PrivateSettlementRouteV1;
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_test_samples::private_settlement::{
@@ -3327,8 +3379,38 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
+    /// Requires every four requests of one phase to be in flight together.
+    #[derive(Default)]
+    pub(super) struct CommitteeOverlap {
+        entered: Mutex<BTreeMap<&'static str, usize>>,
+        changed: std::sync::Condvar,
+        timed_out: std::sync::atomic::AtomicBool,
+    }
+    impl CommitteeOverlap {
+        // A bounded gate makes sequential dispatch fail instead of deadlocking the suite.
+        pub(super) fn enter(&self, phase: &'static str) -> Result<()> {
+            let mut entered = self.entered.lock().expect("committee overlap count");
+            let count = entered.entry(phase).or_default();
+            *count += 1;
+            let target = count.div_ceil(4) * 4;
+            self.changed.notify_all();
+            let (entered, _) = self
+                .changed
+                .wait_timeout_while(entered, Duration::from_secs(5), |entered| {
+                    entered[phase] < target
+                })
+                .expect("committee overlap wait");
+            if entered[phase] < target {
+                self.timed_out
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                return Err(eyre!("all four {phase} requests must overlap"));
+            }
+            Ok(())
+        }
+    }
+
     #[test]
-    fn prepare_request_fanout_overlaps_and_restores_reverse_completion_order() {
+    fn committee_request_fanout_overlaps_and_restores_reverse_completion_order() {
         use std::sync::mpsc;
         let (started_tx, started_rx) = mpsc::channel();
         let (finished_tx, finished_rx) = mpsc::channel();
@@ -3350,7 +3432,7 @@ mod tests {
                     );
                 }
             });
-            let responses = collect_private_settlement_prepare_responses_v1(|index| {
+            let responses = collect_private_settlement_committee_responses_v1(|index| {
                 started_tx.send(index).expect("controller exists");
                 release_rx[index]
                     .lock()
@@ -3383,7 +3465,7 @@ mod tests {
     }
 
     #[test]
-    fn prepare_request_fanout_joins_every_worker_after_an_early_panic() {
+    fn committee_request_fanout_joins_every_worker_after_an_early_panic() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         struct Finished<'a>(&'a AtomicUsize, usize);
         impl Drop for Finished<'_> {
@@ -3392,7 +3474,7 @@ mod tests {
             }
         }
         let finished = AtomicUsize::new(0);
-        let result = collect_private_settlement_prepare_responses_v1(|index| {
+        let result = collect_private_settlement_committee_responses_v1(|index| {
             let _finished = Finished(&finished, index);
             assert_ne!(index, 0, "intentional request-worker panic");
             Ok(index)
@@ -3484,9 +3566,20 @@ mod tests {
             let handed_off = Arc::new(Mutex::new(Vec::new()));
             let recorded = Arc::clone(&handed_off);
             let endpoints = committee_endpoint_fixture_v1();
+            let overlap = CommitteeOverlap::default();
             let result = with_mock_http(
                 move |snapshot| {
                     let index = usize::from(snapshot.url.port().expect("fixture port") - 24_000);
+                    if case == 0 || case == 4 {
+                        let phase = if snapshot.url.path().ends_with("/prepare-votes") {
+                            "vote"
+                        } else if snapshot.url.path().ends_with("/phases/certificates") {
+                            "persist"
+                        } else {
+                            "recover"
+                        };
+                        overlap.enter(phase)?;
+                    }
                     if snapshot.url.path().ends_with("/prepare-votes") {
                         observed.lock().expect("event log").push(("vote", index));
                         if (case == 1 && index == 1) || (case == 3 && index == 3) {
@@ -3553,13 +3646,13 @@ mod tests {
                         .contains("three valid committee responses")
                 );
                 assert_eq!(
-                    *events,
-                    vec![
+                    events.iter().copied().collect::<BTreeSet<_>>(),
+                    BTreeSet::from([
                         ("recover", 0),
                         ("recover", 1),
                         ("recover", 2),
                         ("recover", 3)
-                    ]
+                    ])
                 );
                 assert!(handed_off.lock().expect("handoffs").is_empty());
                 continue;
@@ -3588,8 +3681,6 @@ mod tests {
             }
             let expected_responders = if case == 1 {
                 vec![0, 2, 3]
-            } else if case == 5 {
-                vec![0, 1, 2]
             } else {
                 vec![0, 1, 2, 3]
             };
@@ -3597,8 +3688,8 @@ mod tests {
                 events
                     .iter()
                     .filter_map(|(phase, index)| (*phase == "persist").then_some(*index))
-                    .collect::<Vec<_>>(),
-                expected_responders
+                    .collect::<BTreeSet<_>>(),
+                expected_responders.into_iter().collect::<BTreeSet<_>>()
             );
             if case == 5 {
                 assert!(
@@ -3607,7 +3698,7 @@ mod tests {
                         .to_string()
                         .contains("acknowledgement is substituted")
                 );
-                assert_eq!(events.len(), 7);
+                assert_eq!(events.len(), 8, "all initiated QC handoffs are joined");
                 continue;
             }
             let certificate = result.expect("complete exact quorum and handoff");
@@ -3632,14 +3723,105 @@ mod tests {
             );
             if case == 4 {
                 assert_eq!(certificate, recovered, "preserve recovered aggregate bytes");
-                let recovery = vec![
+                let recovery = BTreeSet::from([
                     ("recover", 0),
                     ("recover", 1),
                     ("recover", 2),
                     ("recover", 3),
-                ];
-                assert_eq!(&events[..4], recovery.as_slice());
-                assert_eq!(&events[12..], recovery.as_slice());
+                ]);
+                assert_eq!(
+                    events[..4].iter().copied().collect::<BTreeSet<_>>(),
+                    recovery
+                );
+                assert_eq!(
+                    events[12..].iter().copied().collect::<BTreeSet<_>>(),
+                    recovery
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn commit_fanout_preserves_original_qc_and_joins_failed_handoffs() {
+        for reject_handoff in [false, true] {
+            let client = client_with_base_url(base_url());
+            let (barrier, certificates) = finalization_fixture_v1(&client);
+            let (authority, keys) = finalization_authority_v1(barrier.manifest.legs[0].route, 0);
+            let payload_digest = barrier.manifest.legs[0].payload_digest;
+            let expected = certificates[0].clone();
+            let votes = phase_votes_v1(&authority, &keys, &expected.body, &[0, 1, 2, 3]);
+            let recovery = PrivateSettlementPhaseCertificatesResponseV1 {
+                bundle_id: barrier.manifest.bundle_id,
+                payload_digest,
+                leg_ordinal: 0,
+                lifecycle: PrivateSettlementLifecycleDtoV1::CommitCertified,
+                prepare_certificate: Some(barrier.prepare_certificates[0].clone()),
+                commit_certificate: Some(expected.clone()),
+            };
+            let overlap = CommitteeOverlap::default();
+            let persisted = Arc::new(Mutex::new(BTreeSet::new()));
+            let recorded = Arc::clone(&persisted);
+            let original = expected.clone();
+            let result = with_mock_http(
+                move |snapshot| {
+                    let index = usize::from(snapshot.url.port().expect("fixture port") - 24_000);
+                    let body = if snapshot.url.path().ends_with("/commit-votes") {
+                        overlap.enter("commit")?;
+                        norito::json::to_vec(&PrivateSettlementPhaseVoteResponseV1 {
+                            bundle_id: recovery.bundle_id,
+                            payload_digest,
+                            leg_ordinal: 0,
+                            vote: votes[index].clone(),
+                        })?
+                    } else if snapshot.url.path().ends_with("/phases/certificates") {
+                        overlap.enter("persist")?;
+                        let request: PrivateSettlementPhaseCertificateRequestV1 =
+                            norito::json::from_slice(&snapshot.body)?;
+                        assert_eq!(request.certificate, original);
+                        recorded.lock().expect("persisted roster").insert(index);
+                        if reject_handoff && index == 0 {
+                            return Err(eyre!("original handoff unavailable"));
+                        }
+                        norito::json::to_vec(&PrivateSettlementPhaseCertificateResponseV1 {
+                            bundle_id: recovery.bundle_id,
+                            payload_digest,
+                            leg_ordinal: 0,
+                            phase: PrivateSettlementPhaseV1::Commit,
+                            lifecycle: PrivateSettlementLifecycleDtoV1::CommitCertified,
+                        })?
+                    } else {
+                        assert!(snapshot.url.path().ends_with("/phase-certificates"));
+                        overlap.enter("recover")?;
+                        norito::json::to_vec(&recovery)?
+                    };
+                    Ok(Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", APPLICATION_JSON)
+                        .body(body)?)
+                },
+                |transport| {
+                    client
+                        .clone()
+                        .with_test_http_transport(transport)
+                        .recover_or_certify_private_settlement_commit_v1(
+                            &committee_endpoint_fixture_v1(),
+                            payload_digest,
+                            &barrier,
+                            &authority,
+                        )
+                },
+            );
+            assert_eq!(
+                *persisted.lock().expect("all handoffs joined"),
+                BTreeSet::from([0, 1, 2, 3])
+            );
+            if reject_handoff {
+                assert!(
+                    format!("{:#}", result.expect_err("handoff failure must refuse"))
+                        .contains("original handoff unavailable")
+                );
+            } else {
+                assert_eq!(result.expect("exact original Commit QC"), expected);
             }
         }
     }
@@ -3665,6 +3847,92 @@ mod tests {
                     .expect("committee endpoint fixture is valid")
             })
             .collect()
+    }
+
+    #[test]
+    fn auditor_reads_and_approvals_overlap_but_unavailable_quorum_never_succeeds() {
+        use iroha_data_model::nexus::{
+            PrivateSettlementAuditApprovalBodyV1, PrivateSettlementAuditApprovalV1,
+        };
+        let client = client_with_base_url(base_url());
+        let (material, _) = availability_material_fixture_v1(&client.network_id, &client.account);
+        let auditor = KeyPair::from_seed(vec![0xE1; 32], Algorithm::Ed25519);
+        let signer = BorrowedKeyPairIdentityRequestSignerV1::new(&auditor);
+        let body = PrivateSettlementAuditApprovalBodyV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            network_id: client.network_id,
+            bundle_id: material.manifest.bundle_id,
+            leg_ordinal: 0,
+            dataspace_id: material.statement.route.dataspace_id,
+            auditor_id: AccountId::new(auditor.public_key().clone()),
+            audit_policy_digest: material.audit_policy.policy_digest,
+            audit_key_epoch: material.audit_policy.body.key_epoch,
+            proof_digest: Hash::new(b"structural audit fanout proof"),
+            capsule_digest: material.statement.audit_capsule_digest,
+            delta_digest: material.manifest.legs[0].delta_digest,
+            old_root: material.delta.old_root,
+            new_root: material.delta.new_root,
+            expiry_height: material.manifest.expiry_height,
+        };
+        let approval = PrivateSettlementAuditApprovalRequestV1 {
+            audit_policy: material.audit_policy.clone(),
+            approval: PrivateSettlementAuditApprovalV1 {
+                signature: iroha_crypto::SignatureOf::try_new(auditor.private_key(), &body)
+                    .expect("signed fixture approval"),
+                body,
+            },
+        };
+        let capsule = PrivateSettlementAuditorCapsuleRequestV1 {
+            audit_policy: material.audit_policy.clone(),
+        };
+        for is_approval in [false, true] {
+            let overlap = Arc::new(CommitteeOverlap::default());
+            let entered = Arc::clone(&overlap);
+            let result = with_mock_http(
+                move |snapshot| {
+                    assert!(snapshot.url.path().ends_with(if is_approval {
+                        "/audit-approvals"
+                    } else {
+                        "/audit-capsule"
+                    }));
+                    entered.enter("auditor")?;
+                    Ok(Response::builder()
+                        .status(StatusCode::SERVICE_UNAVAILABLE)
+                        .header("Content-Type", APPLICATION_JSON)
+                        .body(Vec::new())?)
+                },
+                |transport| {
+                    let client = client.clone().with_test_http_transport(transport);
+                    if is_approval {
+                        client
+                            .submit_private_settlement_audit_approval_quorum_for_authority_v1(
+                                &committee_endpoint_fixture_v1(),
+                                &material.committee_authority,
+                                material.payload_digest().unwrap(),
+                                &signer,
+                                &approval,
+                            )
+                            .map(|_| ())
+                    } else {
+                        client
+                            .private_settlement_auditor_capsule_quorum_for_authority_v1(
+                                &committee_endpoint_fixture_v1(),
+                                &material.committee_authority,
+                                material.payload_digest().unwrap(),
+                                &capsule,
+                                &signer,
+                            )
+                            .map(|_| ())
+                    }
+                },
+            );
+            assert!(
+                result.is_err(),
+                "parallel transport grants no authority without a quorum"
+            );
+            assert_eq!(overlap.entered.lock().unwrap()["auditor"], 4);
+            assert!(!overlap.timed_out.load(std::sync::atomic::Ordering::SeqCst));
+        }
     }
 
     #[test]
@@ -5115,8 +5383,30 @@ mod tests {
         .expect_err("all four HTTP rejections prevent quorum");
         let requests = snapshots.lock().expect("snapshot lock");
         assert_eq!(requests.len(), 4);
-        for (index, request) in requests.iter().enumerate() {
-            assert_eq!(request.url.host_str(), endpoints[index].host_str());
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.url.host_str())
+                .collect::<BTreeSet<_>>(),
+            endpoints.iter().map(Url::host_str).collect::<BTreeSet<_>>()
+        );
+        let expected_body = norito::json::to_vec(&PrivateSettlementAvailabilityShareRequestV1 {
+            material: material.clone(),
+        })
+        .unwrap();
+        let mut nonces = BTreeSet::new();
+        for request in requests.iter() {
+            assert_eq!(request.body, expected_body);
+            assert_canonical_account_signed_request(&client, request);
+            let nonce = request
+                .headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(HEADER_NONCE))
+                .unwrap();
+            assert!(
+                nonces.insert(nonce.1.clone()),
+                "each endpoint request retains its own nonce"
+            );
             assert_eq!(
                 request.url.path(),
                 "/v1/nexus/private-settlements/legs/availability-shares"
@@ -5139,6 +5429,58 @@ mod tests {
     }
 
     #[test]
+    fn availability_encoding_rejects_invalid_material_and_sponsor_before_any_request() {
+        let client = client_with_base_url(base_url());
+        let foreign_sponsor = iroha_test_samples::gen_account_in("foreign-availability-sponsor").0;
+        for invalid_material in [false, true] {
+            // Either this client's own invalid original, or a valid original that another
+            // account sponsors. A client context cannot hold an account its key does not own.
+            let sponsor = if invalid_material {
+                &client.account
+            } else {
+                &foreign_sponsor
+            };
+            let (mut material, _) = availability_material_fixture_v1(&client.network_id, sponsor);
+            if invalid_material {
+                material.availability_body.payload_bytes = 0;
+            }
+            let selected_client = client.clone();
+            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let error = with_mock_http(
+                respond_with(
+                    &snapshots,
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .body(Vec::new())
+                        .unwrap(),
+                ),
+                |transport| {
+                    selected_client
+                        .with_test_http_transport(transport)
+                        .certify_private_settlement_leg_availability_v1(
+                            &availability_endpoints_fixture_v1(),
+                            &material,
+                        )
+                },
+            )
+            .expect_err("invalid original cannot dispatch any request");
+            assert!(snapshots.lock().unwrap().is_empty());
+            let cause = error.downcast_ref::<PrivateSettlementAvailabilityFailureV1>();
+            if invalid_material {
+                assert!(matches!(
+                    cause,
+                    Some(PrivateSettlementAvailabilityFailureV1::InvalidMaterial)
+                ));
+            } else {
+                assert!(matches!(
+                    cause,
+                    Some(PrivateSettlementAvailabilityFailureV1::SponsorRequired)
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn availability_public_certifier_tolerates_one_http_failure_and_verifies_three_real_shares() {
         let client = client_with_base_url(base_url());
         let (material, shares) =
@@ -5153,8 +5495,10 @@ mod tests {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&snapshots);
         let response_endpoints = endpoints.clone();
+        let overlap = CommitteeOverlap::default();
         let certificate = with_mock_http(
             move |request| {
+                overlap.enter("availability")?;
                 let index = response_endpoints
                     .iter()
                     .position(|endpoint| endpoint.host_str() == request.url.host_str())

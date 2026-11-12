@@ -511,6 +511,13 @@ returns require a future consensus-owned cumulative allowance.
 settlement materials, durable workflow storage, caller-key
 `FilePrivateSettlementFinality` custody and an independently rooted verifier.
 It owns their durable submission/recovery workflow.
+Independent requests to the four members of one private-settlement committee run
+concurrently. Every started request joins before roster-ordered response checks,
+quorum selection or phase handoff. Availability, promotion, Prepare, Commit,
+recovery and auditor calls retain the same exact certificate and quorum rules;
+legs remain sequential so fanout never multiplies by the number of participants.
+Availability validates and encodes one immutable payload per committee, while
+transport retains a separate owned body and fresh signature for every endpoint.
 Genuine native wallet/prover/sealer orchestration belongs to the separate internal
 [`iroha_private_settlement`](../iroha_private_settlement) crate. Construct its
 `OneCallPrivateSettlementOperation::new(account, request, storage, artifacts,
