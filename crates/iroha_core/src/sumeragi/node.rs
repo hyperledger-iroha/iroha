@@ -621,6 +621,10 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
     } else {
         prepare_restored(inputs, restored, None)?
     };
+    let restore_elapsed = replay_started.elapsed();
+    let mut body_read_elapsed = Duration::ZERO;
+    let mut execution_elapsed = Duration::ZERO;
+    let mut retirement_elapsed = Duration::ZERO;
     // Replay republishes the context record of every block Kura holds. The archive makes
     // the ones it only rechecks durable together, once, when the replay completes.
     prepared.native_context_archive.begin_startup_replay();
@@ -632,6 +636,7 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
     // Replay what Kura holds above the applied tip.
     let stored = blocks.height();
     for height in restored.max(GENESIS_HEIGHT).saturating_add(1)..=stored {
+        let phase_started = std::time::Instant::now();
         let (body, commit_qc) = blocks
             .committed_body(height)
             .map_err(|error| NodeError::Replay {
@@ -642,44 +647,74 @@ pub fn prepare(inputs: PrepareInputs) -> Result<Prepared, NodeError> {
                 height,
                 reason: ReplayError::MissingBody,
             })?;
+        body_read_elapsed += phase_started.elapsed();
+        let phase_started = std::time::Instant::now();
         executor
             .replay(&body, &commit_qc)
             .map_err(|reason| NodeError::Replay {
                 height,
                 reason: ReplayError::Execution(reason),
             })?;
+        execution_elapsed += phase_started.elapsed();
+        let phase_started = std::time::Instant::now();
         // No lane runner reconciles retirement during replay; release the stores of
         // incarnations the replayed block retired, as the runner does once it starts.
         let lanes = state.view().world().sumeragi_lanes().clone();
         lane_stores.release_retired(&lanes);
+        retirement_elapsed += phase_started.elapsed();
         if height.is_multiple_of(128) || height == stored {
             iroha_logger::info!(
                 height,
                 stored_height = stored,
                 restored_height = restored,
                 elapsed_ms = replay_started.elapsed().as_millis(),
+                restore_ms = restore_elapsed.as_millis(),
+                body_read_ms = body_read_elapsed.as_millis(),
+                execution_ms = execution_elapsed.as_millis(),
+                retirement_ms = retirement_elapsed.as_millis(),
                 "Strict startup replay progress"
             );
         }
     }
+    let phase_started = std::time::Instant::now();
     prepared
         .native_context_archive
         .finish_startup_replay()
         .map_err(|error| NodeError::Input(error.to_string()))?;
+    let archive_barrier_elapsed = phase_started.elapsed();
     // Compare the replayed publication with a cold capture under its selected commitment.
     // The terminal cut is checked even when Kura has no successor.
+    let phase_started = std::time::Instant::now();
     state
         .verify_replayed_state_commitment()
         .map_err(|reason| NodeError::Replay {
             height: stored.max(GENESIS_HEIGHT),
             reason: ReplayError::StateRoot(reason),
         })?;
+    let state_root_elapsed = phase_started.elapsed();
+    let phase_started = std::time::Instant::now();
     admit_window(state, crypto, stored.max(GENESIS_HEIGHT)).map_err(NodeError::Input)?;
+    let admission_elapsed = phase_started.elapsed();
+    let phase_started = std::time::Instant::now();
     if let Err(error) = derived_replay.finish() {
         // This derived local projection has always been best-effort. Its failed
         // baseline stays invalid so the next publication captures the full World.
         iroha_logger::warn!(%error, "tiered-state: failed to persist final startup snapshot");
     }
+    iroha_logger::info!(
+        stored_height = stored,
+        restored_height = restored,
+        elapsed_ms = replay_started.elapsed().as_millis(),
+        restore_ms = restore_elapsed.as_millis(),
+        body_read_ms = body_read_elapsed.as_millis(),
+        execution_ms = execution_elapsed.as_millis(),
+        retirement_ms = retirement_elapsed.as_millis(),
+        archive_barrier_ms = archive_barrier_elapsed.as_millis(),
+        state_root_ms = state_root_elapsed.as_millis(),
+        admission_ms = admission_elapsed.as_millis(),
+        derived_persistence_ms = phase_started.elapsed().as_millis(),
+        "Strict startup replay complete"
+    );
     Ok(prepared)
 }
 
