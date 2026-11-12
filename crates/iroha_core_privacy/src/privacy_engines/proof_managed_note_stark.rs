@@ -643,6 +643,7 @@ pub fn derive_note_copy_challenges_v1(
     }
     Ok(NoteCopyChallengesV1 { lanes })
 }
+#[cfg(test)]
 fn columns_to_rows_v1(
     columns: &[Vec<F>],
     rows: usize,
@@ -727,19 +728,17 @@ pub fn build_note_copy_aux_columns_v1(
     {
         return Err(ProofManagedNoteStarkErrorV1::InvalidTrace);
     }
-    let base_rows = ZeroizingBaseFieldMatrixV1::from(columns_to_rows_v1(base_columns, trace_size)?);
-    let fixed_rows = columns_to_rows_v1(fixed_columns, trace_size)?;
+    // The copy chip reads only its eight base cells and identity/sigma labels. Keep the
+    // full input shape checks above, but never transpose unrelated witness/profile columns.
     let mut rows =
         ZeroizingBaseFieldMatrixV1::from(vec![vec![F::ZERO; NOTE_COPY_AUX_WIDTH_V1]; trace_size]);
     let mut running_numerator = [F::ONE; NOTE_COPY_LANES_V1];
     let mut running_denominator = [F::ONE; NOTE_COPY_LANES_V1];
     for row_index in 0..trace_size {
-        let base = &base_rows[row_index];
-        let fixed = &fixed_rows[row_index];
         let row = &mut rows[row_index];
         for cell in 0..NOTE_COPY_WIDTH_V1 {
-            let value =
-                u8::try_from(base[cell].0).map_err(|_| ProofManagedNoteStarkErrorV1::Copy)?;
+            let value = u8::try_from(base_columns[cell][row_index].0)
+                .map_err(|_| ProofManagedNoteStarkErrorV1::Copy)?;
             for bit in 0..8 {
                 row[COPY_AUX_BITS_OFFSET + cell * 8 + bit] = F(u64::from((value >> bit) & 1));
             }
@@ -751,13 +750,17 @@ pub fn build_note_copy_aux_columns_v1(
             row[lane_offset + COPY_DENOMINATOR_BEFORE] = running_denominator[lane];
             let numerator = core::array::from_fn(|cell| {
                 copy_factor_v1(
-                    base[cell],
-                    fixed[COPY_FIXED_IDENTITY_OFFSET + cell],
+                    base_columns[cell][row_index],
+                    fixed_columns[COPY_FIXED_IDENTITY_OFFSET + cell][row_index],
                     challenge,
                 )
             });
             let denominator = core::array::from_fn(|cell| {
-                copy_factor_v1(base[cell], fixed[COPY_FIXED_SIGMA_OFFSET + cell], challenge)
+                copy_factor_v1(
+                    base_columns[cell][row_index],
+                    fixed_columns[COPY_FIXED_SIGMA_OFFSET + cell][row_index],
+                    challenge,
+                )
             });
             write_product_tree_v1(row, lane_offset + COPY_NUMERATOR_PAIRS, numerator);
             write_product_tree_v1(row, lane_offset + COPY_DENOMINATOR_PAIRS, denominator);
@@ -1135,14 +1138,19 @@ impl NoteRowBlockV1 {
             rows: 0,
         })
     }
-    /// Gather the rows `current[k]` and their successor rows `next[k]`.
+    /// Gather trace rows and their successors, with independently indexed fixed-policy rows.
+    /// Composition evaluates fixed policy on its smaller quotient subgroup.
     fn gather(
         &mut self,
         (base, aux, fixed): NoteLdeColumnsV1<'_>,
         current: &[usize],
         next: &[usize],
+        fixed_current: &[usize],
     ) -> Result<(), ProofManagedNoteStarkErrorV1> {
-        if current.len() != next.len() || current.len() > NOTE_ROW_BLOCK_V1 {
+        if current.len() != next.len()
+            || current.len() != fixed_current.len()
+            || current.len() > NOTE_ROW_BLOCK_V1
+        {
             return Err(ProofManagedNoteStarkErrorV1::Internal);
         }
         let (base_width, aux_width, fixed_width) = self.widths;
@@ -1151,7 +1159,7 @@ impl NoteRowBlockV1 {
         transpose_rows_v1(base, base_width, next, &mut self.next_base)?;
         transpose_rows_v1(aux, aux_width, current, &mut self.current_aux)?;
         transpose_rows_v1(aux, aux_width, next, &mut self.next_aux)?;
-        transpose_rows_v1(fixed, fixed_width, current, &mut self.fixed)?;
+        transpose_rows_v1(fixed, fixed_width, fixed_current, &mut self.fixed)?;
         self.rows = current.len();
         Ok(())
     }
@@ -1857,7 +1865,12 @@ fn validate_native_constraints_v1<A: ProofManagedNoteStarkAdapterV1>(
                     .saturating_add(NOTE_ROW_BLOCK_V1)
                     .min(prepared.trace_size);
                 let (current, next, count) = block_rows_v1(first, last, 1, 1, prepared.trace_size);
-                block.gather(columns, &current[..count], &next[..count])?;
+                block.gather(
+                    columns,
+                    &current[..count],
+                    &next[..count],
+                    &current[..count],
+                )?;
                 for row in 0..count {
                     let residues = block.residues(
                         row,
@@ -1896,7 +1909,9 @@ fn composition_lanes_v1<A: ProofManagedNoteStarkAdapterV1>(
     let lde_size = prepared.layout.common_lde_size();
     canonical_columns_v1(base_lde, prepared.base_width, lde_size)?;
     canonical_columns_v1(aux_lde, prepared.aux_width, lde_size)?;
-    canonical_columns_v1(fixed_lde, prepared.fixed_width, lde_size)?;
+    let evaluation_log2 = quotient_evaluation_log2_v1(prepared)?;
+    let evaluation_size = checked_trace_size_v1(evaluation_log2)?;
+    canonical_columns_v1(fixed_lde, prepared.fixed_width, evaluation_size)?;
     let inverse_vanishing_period = aggregate::trace_vanishing_inverse_period_v1(
         prepared.trace_log2,
         prepared.layout.common_lde_log2(),
@@ -1912,8 +1927,6 @@ fn composition_lanes_v1<A: ProofManagedNoteStarkAdapterV1>(
         .map_err(map_aggregate_error_v1)?;
     // The quotient is a polynomial of degree at most `maximum_quotient_degree_v1`, so its
     // values on the LDE points whose index is a multiple of `stride` determine every chunk.
-    let evaluation_log2 = quotient_evaluation_log2_v1(prepared)?;
-    let evaluation_size = checked_trace_size_v1(evaluation_log2)?;
     let stride = lde_size / evaluation_size;
     let mut lanes = ZeroizingExtensionFieldMatrixV1::from(
         (0..PROOF_MANAGED_NOTE_SECURITY_LANES_V1)
@@ -1942,7 +1955,13 @@ fn composition_lanes_v1<A: ProofManagedNoteStarkAdapterV1>(
                     let last = first.saturating_add(NOTE_ROW_BLOCK_V1).min(batch_end);
                     let (current, next, count) =
                         block_rows_v1(first, last, stride, next_stride, lde_size);
-                    block.gather(lde_columns, &current[..count], &next[..count])?;
+                    let fixed_current = current.map(|index| index / stride);
+                    block.gather(
+                        lde_columns,
+                        &current[..count],
+                        &next[..count],
+                        &fixed_current[..count],
+                    )?;
                     let mut values = Vec::new();
                     values
                         .try_reserve_exact(count)
@@ -2375,8 +2394,13 @@ pub fn prove_proof_managed_note_stark_v1_with_rng<A: ProofManagedNoteStarkAdapte
         )
         .map_err(map_aggregate_error_v1)?;
         let alphas = derive_constraint_alphas_v1(&mut transcript, prepared.constraint_count)?;
-        let fixed_lde =
-            fixed_lde_columns_v1(&prepared.fixed_columns, prepared.trace_log2, lde_log2)?;
+        // Fixed policy has no commitment or opening on the full LDE. Evaluate only the
+        // subgroup consumed by the quotient; its point i equals full-domain point i * stride.
+        let fixed_lde = fixed_lde_columns_v1(
+            &prepared.fixed_columns,
+            prepared.trace_log2,
+            quotient_evaluation_log2_v1(&prepared)?,
+        )?;
         phases.advance(ProofPhaseV1::CompositionValues);
         let compositions = ZeroizingExtensionFieldCubeV1::from(composition_lanes_v1(
             adapter,
@@ -2386,6 +2410,7 @@ pub fn prove_proof_managed_note_stark_v1_with_rng<A: ProofManagedNoteStarkAdapte
             &profile_challenges,
             &alphas,
         )?);
+        drop(fixed_lde);
         phases.advance(ProofPhaseV1::CompositionCommitments);
         let mut composition_trees = Vec::with_capacity(PROOF_MANAGED_NOTE_SECURITY_LANES_V1);
         let mut composition_roots = Vec::with_capacity(PROOF_MANAGED_NOTE_SECURITY_LANES_V1);
@@ -3965,6 +3990,13 @@ mod tests {
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
+        let evaluation_log2 = quotient_evaluation_log2_v1(&prepared).expect("quotient subgroup");
+        let evaluation_size = 1_usize << evaluation_log2;
+        let stride = lde_size / evaluation_size;
+        let fixed_subgroup = fixed_lde
+            .iter()
+            .map(|column| column.iter().step_by(stride).copied().collect::<Vec<_>>())
+            .collect::<Vec<_>>();
         let run = |threads| {
             rayon::ThreadPoolBuilder::new()
                 .num_threads(threads)
@@ -3974,7 +4006,7 @@ mod tests {
                     composition_lanes_v1(
                         &adapter,
                         &prepared,
-                        (&base_lde, &aux_lde, &fixed_lde),
+                        (&base_lde, &aux_lde, &fixed_subgroup),
                         copy_challenges,
                         &(),
                         &alphas,
@@ -3990,9 +4022,6 @@ mod tests {
             .expect("composition next-row stride");
         // Synthetic columns are not low degree, so the serial oracle evaluates the same
         // quotient subgroup as the driver; full-domain equality is checked on a genuine trace.
-        let evaluation_log2 = quotient_evaluation_log2_v1(&prepared).expect("quotient subgroup");
-        let evaluation_size = 1_usize << evaluation_log2;
-        let stride = lde_size / evaluation_size;
         let mut serial_lanes = (0..PROOF_MANAGED_NOTE_SECURITY_LANES_V1)
             .map(|_| Vec::with_capacity(evaluation_size))
             .collect::<Vec<_>>();
@@ -4083,6 +4112,20 @@ mod tests {
         let fixed_lde =
             fixed_lde_columns_v1(&prepared.fixed_columns, prepared.trace_log2, lde_log2)
                 .expect("fixed LDE");
+        let fixed_subgroup = fixed_lde_columns_v1(
+            &prepared.fixed_columns,
+            prepared.trace_log2,
+            evaluation_log2,
+        )
+        .expect("quotient-subgroup fixed LDE");
+        let stride = lde_size / (1_usize << evaluation_log2);
+        for (full, selected) in fixed_lde.iter().zip(&fixed_subgroup) {
+            assert_eq!(
+                selected,
+                &full.iter().step_by(stride).copied().collect::<Vec<_>>(),
+                "fixed-policy subgroup values match the full-domain oracle exactly",
+            );
+        }
         let alphas = vec![
             (0..prepared.constraint_count)
                 .map(|constraint| {
@@ -4100,7 +4143,7 @@ mod tests {
         let subgroup = composition_lanes_v1(
             &adapter,
             &prepared,
-            (&base_lde, &aux_lde, &fixed_lde),
+            (&base_lde, &aux_lde, &fixed_subgroup),
             copy_challenges,
             &(),
             &alphas,
@@ -4530,6 +4573,135 @@ mod tests {
             assert_eq!(next[column_index], materialized[1]);
         }
     }
+    // Frozen pre-optimization row-matrix algorithm, kept only as an equivalence oracle.
+    fn transposed_copy_aux_reference_v1(
+        base_columns: &[Vec<F>],
+        fixed_columns: &[Vec<F>],
+        challenges: NoteCopyChallengesV1,
+        trace_size: usize,
+    ) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
+        if base_columns.len() < NOTE_COPY_WIDTH_V1
+            || fixed_columns.len() < NOTE_COPY_FIXED_WIDTH_V1
+            || base_columns.iter().any(|column| column.len() != trace_size)
+            || fixed_columns
+                .iter()
+                .any(|column| column.len() != trace_size)
+        {
+            return Err(ProofManagedNoteStarkErrorV1::InvalidTrace);
+        }
+        let base_rows =
+            ZeroizingBaseFieldMatrixV1::from(columns_to_rows_v1(base_columns, trace_size)?);
+        let fixed_rows = columns_to_rows_v1(fixed_columns, trace_size)?;
+        let mut rows = ZeroizingBaseFieldMatrixV1::from(vec![
+            vec![F::ZERO; NOTE_COPY_AUX_WIDTH_V1];
+            trace_size
+        ]);
+        let mut running_numerator = [F::ONE; NOTE_COPY_LANES_V1];
+        let mut running_denominator = [F::ONE; NOTE_COPY_LANES_V1];
+        for row_index in 0..trace_size {
+            let base = &base_rows[row_index];
+            let fixed = &fixed_rows[row_index];
+            let row = &mut rows[row_index];
+            for cell in 0..NOTE_COPY_WIDTH_V1 {
+                let value =
+                    u8::try_from(base[cell].0).map_err(|_| ProofManagedNoteStarkErrorV1::Copy)?;
+                for bit in 0..8 {
+                    row[COPY_AUX_BITS_OFFSET + cell * 8 + bit] = F(u64::from((value >> bit) & 1));
+                }
+            }
+            for (lane, challenge) in challenges.lanes.iter().copied().enumerate() {
+                let lane_offset =
+                    COPY_AUX_PRODUCTS_OFFSET + lane * NOTE_COPY_PRODUCT_COLUMNS_PER_LANE_V1;
+                row[lane_offset + COPY_NUMERATOR_BEFORE] = running_numerator[lane];
+                row[lane_offset + COPY_DENOMINATOR_BEFORE] = running_denominator[lane];
+                let numerator = core::array::from_fn(|cell| {
+                    copy_factor_v1(
+                        base[cell],
+                        fixed[COPY_FIXED_IDENTITY_OFFSET + cell],
+                        challenge,
+                    )
+                });
+                let denominator = core::array::from_fn(|cell| {
+                    copy_factor_v1(base[cell], fixed[COPY_FIXED_SIGMA_OFFSET + cell], challenge)
+                });
+                write_product_tree_v1(row, lane_offset + COPY_NUMERATOR_PAIRS, numerator);
+                write_product_tree_v1(row, lane_offset + COPY_DENOMINATOR_PAIRS, denominator);
+                running_numerator[lane] =
+                    running_numerator[lane].mul(row[lane_offset + COPY_NUMERATOR_TOTAL]);
+                running_denominator[lane] =
+                    running_denominator[lane].mul(row[lane_offset + COPY_DENOMINATOR_TOTAL]);
+                row[lane_offset + COPY_NUMERATOR_AFTER] = running_numerator[lane];
+                row[lane_offset + COPY_DENOMINATOR_AFTER] = running_denominator[lane];
+            }
+        }
+        if running_numerator != running_denominator {
+            return Err(ProofManagedNoteStarkErrorV1::Copy);
+        }
+        let columns =
+            ZeroizingBaseFieldMatrixV1::from(rows_to_columns_v1(&rows, NOTE_COPY_AUX_WIDTH_V1)?);
+        Ok(columns.into_inner())
+    }
+
+    #[test]
+    fn copy_aux_direct_columns_match_transposed_reference_and_refusals() {
+        let adapter = MockAdapterV1::default();
+        let prepared = prepare_note_profile_v1(&adapter).expect("profile");
+        let mut base = mock_base_columns_v1();
+        let mut fixed = prepared.fixed_columns.clone();
+        // Unrelated profile columns remain shape-checked but cannot influence the copy chip.
+        base.extend((0..16).map(|index| vec![F(index + 257); prepared.trace_size]));
+        fixed.extend((0..4).map(|index| vec![F(index + 521); prepared.trace_size]));
+        let challenges = NoteCopyChallengesV1 {
+            lanes: std::array::from_fn(|lane| NoteCopyLaneChallengesV1 {
+                beta: F(u64::try_from(lane + 2).expect("small beta")),
+                gamma: F(u64::try_from(lane + 11).expect("small gamma")),
+            }),
+        };
+        let compare = |base: &[Vec<F>], fixed: &[Vec<F>], challenges| {
+            let actual =
+                build_note_copy_aux_columns_v1(base, fixed, challenges, prepared.trace_size);
+            assert_eq!(
+                actual,
+                transposed_copy_aux_reference_v1(base, fixed, challenges, prepared.trace_size),
+            );
+            actual
+        };
+        compare(&base, &fixed, challenges).expect("same exact auxiliary matrix");
+        let mut collision = challenges;
+        collision.lanes[0].gamma = F::ZERO.sub(
+            base[0][0].add(
+                collision.lanes[0]
+                    .beta
+                    .mul(fixed[COPY_FIXED_IDENTITY_OFFSET][0]),
+            ),
+        );
+        compare(&base, &fixed, collision).expect("same total zero-factor behavior");
+        let mut bad_base = base.clone();
+        bad_base[0][0] = F(256);
+        assert_eq!(
+            compare(&bad_base, &fixed, challenges),
+            Err(ProofManagedNoteStarkErrorV1::Copy)
+        );
+        let mut bad_fixed = fixed.clone();
+        bad_fixed[COPY_FIXED_SIGMA_OFFSET][0] = bad_fixed[COPY_FIXED_SIGMA_OFFSET][0].add(F::ONE);
+        assert_eq!(
+            compare(&base, &bad_fixed, challenges),
+            Err(ProofManagedNoteStarkErrorV1::Copy)
+        );
+        bad_base = base.clone();
+        bad_base.last_mut().expect("unrelated base column").pop();
+        assert_eq!(
+            compare(&bad_base, &fixed, challenges),
+            Err(ProofManagedNoteStarkErrorV1::InvalidTrace)
+        );
+        bad_fixed = fixed;
+        bad_fixed.last_mut().expect("unrelated fixed column").pop();
+        assert_eq!(
+            compare(&base, &bad_fixed, challenges),
+            Err(ProofManagedNoteStarkErrorV1::InvalidTrace)
+        );
+    }
+
     #[test]
     fn copy_schedule_and_residues_are_exact() {
         let adapter = MockAdapterV1::default();

@@ -287,7 +287,9 @@ pub fn prove_atomic_private_settlement_intent_v1(
 #[cfg(test)]
 pub(super) mod phase_test_support {
     use super::APS_PROOF_PHASE_TARGET_V1;
-    use crate::privacy_engines::proof_phase_diagnostics::NOTE_PROOF_PHASE_TARGET_V1;
+    use crate::privacy_engines::proof_phase_diagnostics::{
+        NOTE_PROOF_PHASE_TARGET_V1, test_support::with_capture_subscriber_v1,
+    };
     use std::{
         collections::{BTreeMap, BTreeSet},
         fmt,
@@ -426,7 +428,7 @@ pub(super) mod phase_test_support {
             self
         }
         pub(crate) fn with_default<R>(&self, run: impl FnOnce() -> R) -> R {
-            tracing::subscriber::with_default(
+            with_capture_subscriber_v1(
                 CaptureSubscriberV1 {
                     enabled: self.enabled,
                     events: Arc::clone(&self.events),

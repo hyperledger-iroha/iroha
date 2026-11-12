@@ -263,7 +263,7 @@ pub mod test_support {
     use std::{
         collections::{BTreeMap, BTreeSet},
         fmt,
-        sync::{Arc, Mutex},
+        sync::{Arc, Mutex, OnceLock},
     };
     use tracing::{
         Event, Metadata, Subscriber,
@@ -272,6 +272,22 @@ pub mod test_support {
         span::{Attributes, Id, Record},
         subscriber::Interest,
     };
+
+    /// Keep capture callsites independent of which test thread first registers them.
+    ///
+    /// Tracing's single-dispatcher shortcut asks the registering thread's default subscriber.
+    /// Another test running without a subscriber can therefore cache `Interest::never()` for
+    /// a callsite that this thread's capture enables. A second, non-emitting registered dispatch
+    /// keeps registration on the registry path; each capture still filters its own events.
+    pub(crate) fn with_capture_subscriber_v1<S: Subscriber + Send + Sync + 'static, T>(
+        subscriber: S,
+        run: impl FnOnce() -> T,
+    ) -> T {
+        static REGISTRY_ANCHOR: OnceLock<tracing::Dispatch> = OnceLock::new();
+        REGISTRY_ANCHOR
+            .get_or_init(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::new()));
+        tracing::subscriber::with_default(subscriber, run)
+    }
 
     #[derive(Clone, Debug, PartialEq, Eq)]
     enum ValueV1 {
@@ -370,7 +386,7 @@ pub mod test_support {
             }
         }
         pub(crate) fn with_default<T>(&self, run: impl FnOnce() -> T) -> T {
-            tracing::subscriber::with_default(self.clone(), run)
+            with_capture_subscriber_v1(self.clone(), run)
         }
         pub(crate) fn events(&self) -> Vec<CapturedEventV1> {
             self.events.lock().expect("phase capture").clone()
@@ -520,6 +536,26 @@ mod tests {
         let capture = CaptureV1::new(false, true);
         capture.with_default(complete_note_invocation);
         capture.assert_note_prefix(16, "succeeded", 0);
+    }
+
+    #[test]
+    fn capture_accepts_a_callsite_first_registered_by_an_unsubscribed_thread() {
+        // This fresh callsite is first reached on the foreign thread. Before the registry
+        // anchor, running this test alone permanently disabled its later captured event.
+        fn emit() {
+            tracing::debug!(target: NOTE_PROOF_PHASE_TARGET_V1, "foreign_registration_probe");
+        }
+        let capture = CaptureV1::new(false, true);
+        capture.with_default(|| {
+            std::thread::spawn(emit)
+                .join()
+                .expect("foreign callsite registration");
+            assert!(capture.note_events().is_empty());
+            emit();
+        });
+        let events = capture.note_events();
+        assert_eq!(events.len(), 1, "only the subscribed thread emits a record");
+        assert_eq!(events[0].target, NOTE_PROOF_PHASE_TARGET_V1);
     }
 
     #[test]
