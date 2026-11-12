@@ -156,6 +156,8 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(crate::isi::game_partition::ImportGameUnitV1 => "iroha.game_partition.import.v1", register, tolerant),
     // Added after the frozen baseline by the `iroha.account.signing_key.v1` addition.
     built_in_wire_id!(crate::isi::account_signing_key::SetAccountSigningKeyV1 => "iroha.account.signing_key.set.v1", register, tolerant),
+    // Added after the frozen baseline by the `iroha.governance.parliament.anonymous.v1` addition.
+    built_in_wire_id!(crate::governance::anonymous_ballot::RegisterParliamentCredentialV1 => "iroha.governance.parliament.credential.register.v1", register, tolerant),
     // Added after the frozen baseline by the `iroha.runtime.lifecycle.v1` addition.
     built_in_wire_id!(crate::isi::runtime_obligation::RegisterRuntimeObligationV1 => "iroha.runtime.obligation.register.v1", register, tolerant),
     built_in_wire_id!(crate::isi::runtime_obligation::CompleteRuntimeObligationV1 => "iroha.runtime.obligation.complete.v1", register, tolerant),

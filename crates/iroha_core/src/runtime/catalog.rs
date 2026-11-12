@@ -686,6 +686,7 @@ impl ReleaseCatalog {
                 == additions::SORAFS_REPAIR.module
                 || addition.module == additions::SORAFS_AUTHORITY.module
                 || addition.module == additions::RESTRICTED_DATASPACE_READ.module
+                || addition.module == additions::PARLIAMENT_ANONYMOUS.module
                 || addition.module == additions::RUNTIME_LIFECYCLE.module
             {
                 independent_interfaces = catalog

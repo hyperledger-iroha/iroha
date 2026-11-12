@@ -2002,8 +2002,11 @@ activatable only after the fourth.
   verifies `pi_reg`, and records the acceptance and the compact credential in
   one step. The record keeps `(C, auth)` and the locator of the signed input
   (height, input position, instruction position, entrypoint hash); the proof
-  stays in that input. A refusal the node cannot decide (an unavailable
-  verifier, for example) is local and never committed as a rejection.
+  stays in that input. The executor arms the input's one-use original right
+  before the instruction runs; contracts, callbacks, user executors and
+  batches never arm it, so the instruction is refused there. A refusal the
+  node cannot decide (an unavailable verifier, for example) defers the input
+  and is never committed as a rejection.
 - **Seal.** `CloseInvitations` of a binding jury asks the election's ledger to
   seal exactly the seated assignments: an accepted alternate who is not seated
   contributes nothing. The seal's `(R, S, profile_id)` enters the roster root,
@@ -2019,14 +2022,26 @@ activatable only after the fourth.
   the occurrence or the attempt) or refusal is what execution records for the
   same credentials. A node that meets a local failure does not plan the item.
 - **Tables.** `world.parliament_anonymous_attempts` maps an attempt to its
-  State; `world.parliament_anonymous_registrations` maps `(election,
-  assignment)` to its credential record; `world.parliament_anonymous_boards`
-  maps a ballot scope to its board record. Restore validates each attempt,
+  State; `world.parliament_anonymous_registrations` maps an accepted
+  assignment, whose identifier binds its election and member, to its
+  credential record; `world.parliament_anonymous_boards` maps a ballot scope to
+  its board record. Restore validates each attempt,
   rebuilds each election's ledger (uniqueness is checked again), requires
   exactly one credential for every accepted binding assignment and exactly one
-  board for every sealed binding jury, and rebuilds every board, whose body
-  instance, roster root and registration mapping must be the ones its attempt
-  and the stored credentials give.
+  board for every sealed binding jury, and rebuilds every board, which must be
+  stored under its own scope and whose body instance, roster root and
+  registration mapping must be the ones its attempt and the stored credentials
+  give. Each credential must name the sole instruction of an input executed
+  between its election's draw and its close, at or below the cut's height. A
+  credential or board that belongs to no attempt, or any row of a selection
+  that does not install the family, is refused. Restore checks the current cut
+  and its predecessor; a seal or board the node cannot rebuild defers the
+  restore instead of refusing the tables.
+- **Addition.** The `iroha.governance.parliament.anonymous.v1` release
+  addition holds the credential interface and the three tables, and its
+  dependencies are exactly the frozen baseline. The release publishes it, but
+  it stays unactivated until the fourth slice, and a root that runs the
+  kernel's lifecycle services profile needs a composition for it first.
 
 ## 13. Required validation
 

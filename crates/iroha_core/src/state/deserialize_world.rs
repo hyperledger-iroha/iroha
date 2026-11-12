@@ -9109,6 +9109,18 @@ fn decode_world_fields(
         take_required(&mut map, "sorafs_authority_heads")?;
     let sorafs_authority_leases: Storage<[u8; 32], SorafsAuthorityLeaseV1> =
         take_required(&mut map, "sorafs_authority_leases")?;
+    let parliament_anonymous_attempts: Storage<
+        iroha_data_model::governance::types::GovernanceAttemptId,
+        crate::governance::parliament_anonymous::AnonymousParliamentAttemptStateV1,
+    > = take_required(&mut map, "parliament_anonymous_attempts")?;
+    let parliament_anonymous_registrations: Storage<
+        iroha_data_model::governance::types::AssignmentId,
+        iroha_data_model::governance::anonymous_ballot::ParliamentCredentialRecordV1,
+    > = take_required(&mut map, "parliament_anonymous_registrations")?;
+    let parliament_anonymous_boards: Storage<
+        iroha_data_model::governance::anonymous_ballot::BallotScopeV1,
+        iroha_data_model::governance::anonymous_ballot::ParliamentBallotBoardRecordV1,
+    > = take_required(&mut map, "parliament_anonymous_boards")?;
     let nft_sale_offers = take_optional(&mut map, "nft_sale_offers")?.unwrap_or_default();
     let nft_custody_records = take_optional(&mut map, "nft_custody_records")?.unwrap_or_default();
 
@@ -9210,6 +9222,9 @@ fn decode_world_fields(
         sorafs_authority_proposals,
         sorafs_authority_heads,
         sorafs_authority_leases,
+        parliament_anonymous_attempts,
+        parliament_anonymous_registrations,
+        parliament_anonymous_boards,
         nft_sale_offers,
         nft_custody_records,
         nft_custody_by_nft: Storage::default(),
@@ -10178,6 +10193,42 @@ fn validate_sorafs_authority_attempt_history(cut: &impl WorldReadOnly) -> Result
     Ok(())
 }
 
+// Both original cuts must hold anonymous Parliament tables the reducer produces: a coherent
+// current cut cannot authorize a corrupted predecessor after rollback. A seal or board the
+// node cannot rebuild defers the restore; it is never a verdict on the tables.
+fn validate_parliament_anonymous_tables(
+    world: &World,
+    network: &iroha_data_model::NetworkId,
+    height: u64,
+    budget: &iroha_allocation::AllocationBudget,
+) -> Result<(), MergeLedgerCommitError> {
+    use super::parliament_anonymous_tables::{AnonymousTablesRestoreError, validate_cut};
+    let refused = |cut: &'static str| {
+        move |error| match error {
+            AnonymousTablesRestoreError::Invalid(reason) => {
+                MergeLedgerCommitError::ExecutionStatePublication(format!(
+                    "restored {cut} anonymous Parliament tables: {reason}"
+                ))
+            }
+            AnonymousTablesRestoreError::Local(error) => {
+                iroha_logger::warn!(
+                    %error,
+                    cut,
+                    "restore defers: the node cannot rebuild an anonymous Parliament seal or board"
+                );
+                MergeLedgerCommitError::ExecutionDeferred(
+                    ivm::error::ExecutionDeferral::VerifierArtifactsUnavailable.into(),
+                )
+            }
+        }
+    };
+    validate_cut(&world.view(), network, height).map_err(refused("current"))?;
+    let previous = world
+        .try_block_and_revert(budget)
+        .map_err(StateStorageAdmissionError::World)?;
+    validate_cut(&previous, network, height.saturating_sub(1)).map_err(refused("predecessor"))
+}
+
 // Both original cuts must retain voted receipts and revision tombstones. A coherent
 // current projection cannot authorize a corrupted predecessor after rollback.
 fn validate_sorafs_authority_versions(
@@ -10617,6 +10668,62 @@ mod sorafs_authority_restore_tests {
     }
 }
 
+#[cfg(test)]
+mod parliament_anonymous_restore_tests {
+    use super::*;
+    use iroha_data_model::governance::{
+        anonymous_ballot::{
+            CredentialCommitmentV1, ParliamentCredentialRecordV1, ParliamentCredentialSourceV1,
+            RegistrationAuthorizationV1,
+        },
+        types::AssignmentId,
+    };
+
+    #[test]
+    fn a_corrupted_predecessor_cut_refuses_the_restore() {
+        let world = World::default();
+        crate::runtime::activate_additions_for_testing(
+            &world,
+            crate::runtime::catalog::additions::PARLIAMENT_ANONYMOUS.module,
+        )
+        .unwrap();
+        let network = iroha_data_model::NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0x41; 32])),
+        );
+        let budget = world.sccp_committee_generations.allocation_budget().clone();
+        validate_parliament_anonymous_tables(&world, &network, 1, &budget).unwrap();
+        // A credential no attempt accepted, committed in one block and removed in the next.
+        let assignment = AssignmentId::new([0x42; 32]);
+        let mut registrations = world.parliament_anonymous_registrations.block();
+        registrations.insert(
+            assignment,
+            ParliamentCredentialRecordV1 {
+                commitment: CredentialCommitmentV1::new([0x43; 128]),
+                authorization: RegistrationAuthorizationV1::new([0x44; 64]),
+                source: ParliamentCredentialSourceV1 {
+                    height: 1,
+                    input_index: 0,
+                    instruction_index: 0,
+                    entrypoint_hash: iroha_crypto::HashOf::from_untyped_unchecked(
+                        iroha_crypto::Hash::prehashed([0x45; 32]),
+                    ),
+                },
+            },
+        );
+        registrations.commit();
+        let error = validate_parliament_anonymous_tables(&world, &network, 2, &budget).unwrap_err();
+        assert!(error.to_string().contains("current"), "{error}");
+        let mut registrations = world.parliament_anonymous_registrations.block();
+        registrations.remove(assignment);
+        registrations.commit();
+        let error = validate_parliament_anonymous_tables(&world, &network, 3, &budget).unwrap_err();
+        assert!(error.to_string().contains("predecessor"), "{error}");
+        // A later block leaves both cuts clean.
+        world.parliament_anonymous_registrations.block().commit();
+        validate_parliament_anonymous_tables(&world, &network, 4, &budget).unwrap();
+    }
+}
+
 fn build_state(
     inputs: BuildStateInputs,
     allow_durable_recovery: bool,
@@ -10703,6 +10810,7 @@ fn build_state(
         })?;
     }
     validate_sorafs_authority_versions(&world, &network_id, restored_height, &execution_budget)?;
+    validate_parliament_anonymous_tables(&world, &network_id, restored_height, &execution_budget)?;
     if !emergency_fast {
         validate_tle_ovn_snapshot_network_v1(&world, &network_id)
             .map_err(MergeLedgerCommitError::ExecutionStatePublication)?;

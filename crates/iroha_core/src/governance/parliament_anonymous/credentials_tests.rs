@@ -2,14 +2,15 @@
 //! genuine registration proofs. Binding juries here seat three and keep one alternate, so
 //! the four invited seats need four proofs, made once per test binary.
 
-use std::sync::OnceLock;
+use std::{collections::BTreeSet, sync::OnceLock};
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     governance::{
         anonymous_ballot::{
-            BallotBodyContextV1, CredentialRegistrationV1, ParliamentCredentialSourceV1,
-            RegisterParliamentCredentialV1, SealedCredentialListPublishedV1,
+            BallotBodyContextV1, BallotScopeV1, CredentialRegistrationV1,
+            ParliamentCredentialSourceV1, RegisterParliamentCredentialV1,
+            SealedCredentialListPublishedV1,
         },
         types::{AssignmentId, BodyElectionAttemptId},
     },
@@ -35,10 +36,10 @@ use super::{
 
 use AnonymousParliamentErrorV1 as Error;
 
-const JURY: ParliamentBody = ParliamentBody::PolicyJury;
+pub(super) const JURY: ParliamentBody = ParliamentBody::PolicyJury;
 
 /// A driver whose binding juries seat three and keep one alternate, drawn at its slot.
-fn drawn_small_jury() -> Driver {
+pub(super) fn drawn_small_jury() -> Driver {
     let mut parameters = lifecycle_parameters();
     for sizing in &mut parameters.body_sizes {
         if BodyDecisionModeV1::of(sizing.body) == BodyDecisionModeV1::AnonymousBallot {
@@ -60,7 +61,9 @@ fn drawn_small_jury() -> Driver {
 }
 
 /// The jury's election and its invited seats in rank order: primaries, then alternates.
-fn jury_invitations(driver: &Driver) -> (BodyElectionAttemptId, Vec<(AssignmentId, AccountId)>) {
+pub(super) fn jury_invitations(
+    driver: &Driver,
+) -> (BodyElectionAttemptId, Vec<(AssignmentId, AccountId)>) {
     let (generation, election) = driver
         .state
         .active_election(JURY)
@@ -76,7 +79,7 @@ fn jury_invitations(driver: &Driver) -> (BodyElectionAttemptId, Vec<(AssignmentI
 }
 
 /// The genuine registration of invited seat `index`, proved once per test binary.
-fn registration(index: usize) -> CredentialRegistrationV1 {
+pub(super) fn registration(index: usize) -> CredentialRegistrationV1 {
     static REGISTRATIONS: OnceLock<Vec<CredentialRegistrationV1>> = OnceLock::new();
     REGISTRATIONS.get_or_init(|| {
         let driver = drawn_small_jury();
@@ -111,7 +114,7 @@ fn source(index: u8) -> ParliamentCredentialSourceV1 {
 }
 
 /// The registration input of invited seat `index`.
-fn input(driver: &Driver, index: usize) -> RegisterParliamentCredentialV1 {
+pub(super) fn input(driver: &Driver, index: usize) -> RegisterParliamentCredentialV1 {
     RegisterParliamentCredentialV1 {
         governance_attempt_id: driver.id(),
         election_attempt_id: jury_invitations(driver).0,
@@ -120,7 +123,7 @@ fn input(driver: &Driver, index: usize) -> RegisterParliamentCredentialV1 {
 }
 
 /// Register the invited seats `indices` in the current block, keeping their records.
-fn register(
+pub(super) fn register(
     driver: &mut Driver,
     records: &mut AnonymousElectionCredentialsV1,
     indices: impl IntoIterator<Item = usize>,
@@ -128,6 +131,11 @@ fn register(
     let (_, invited) = jury_invitations(driver);
     for index in indices {
         let (assignment, member) = &invited[index];
+        // Registered in the current block.
+        let source = ParliamentCredentialSourceV1 {
+            height: driver.height,
+            ..source(u8::try_from(index).expect("small index"))
+        };
         let (accepted, record) = driver
             .state
             .register_credential(
@@ -135,18 +143,24 @@ fn register(
                 member,
                 &input(driver, index),
                 records,
-                source(u8::try_from(index).expect("small index")),
+                source,
                 driver.now_ms,
             )
             .expect("register the seat's credential");
         assert_eq!(accepted, *assignment);
+        assert!(
+            driver
+                .state
+                .accepted_assignments(jury_invitations(driver).0)
+                .is_ok_and(|accepted_set| accepted_set.contains(assignment))
+        );
         assert_eq!(record.commitment, registration(index).commitment);
         records.push((accepted, record));
     }
 }
 
 /// Every public body of the initial generation accepts its primaries.
-fn answer_public_bodies(driver: &mut Driver) {
+pub(super) fn answer_public_bodies(driver: &mut Driver) {
     for body in pipeline() {
         if BodyDecisionModeV1::of(body) == BodyDecisionModeV1::PublicFinding {
             driver.answer(body, Answer::Primaries);
@@ -162,15 +176,15 @@ fn close_ms(driver: &Driver) -> u64 {
 /// Plan the block of the invitation close, apply the same items with the same credentials,
 /// and check the plan predicted every outcome; returns the outcomes. Only the jury's close
 /// may ask for credentials.
-fn close_invitations(
+pub(super) fn close_invitations(
     driver: &mut Driver,
     records: &AnonymousElectionCredentialsV1,
 ) -> Vec<AnonymousItemOutcomeV1> {
     let (jury_election, _) = jury_invitations(driver);
-    let credentials = |election| {
+    let credentials = |election, _: &BTreeSet<AssignmentId>| {
         assert_eq!(
             election, jury_election,
-            "only a binding jury's close asks for credentials"
+            "only a binding jury's seal asks for credentials"
         );
         records.clone()
     };
@@ -214,7 +228,7 @@ fn close_invitations(
 }
 
 /// The jury's effect among `outcomes`.
-fn jury_effect(outcomes: &[AnonymousItemOutcomeV1]) -> &AnonymousItemEffectV1 {
+pub(super) fn jury_effect(outcomes: &[AnonymousItemOutcomeV1]) -> &AnonymousItemEffectV1 {
     let boards: Vec<_> = outcomes
         .iter()
         .filter_map(|outcome| match outcome {
@@ -459,8 +473,11 @@ fn a_binding_jury_seals_exactly_its_seated_credentials_and_the_plan_predicts_it(
     assert!(board.board.entries.is_empty() && board.board.closure.is_none());
     BallotBoardV1::restore(board.board.clone()).expect("a stored board restores");
     driver.assert_restores();
-    // Restore binds the stored credentials and the board to the State.
-    let credentials = |id| {
+    // Restore binds the stored credentials and the board, under its scope, to the State.
+    let scope = *BallotBoardV1::restore(board.board.clone())
+        .expect("a stored board restores")
+        .scope();
+    let credentials = |id, _: &BTreeSet<AssignmentId>| {
         if id == election {
             records.clone()
         } else {
@@ -468,36 +485,58 @@ fn a_binding_jury_seals_exactly_its_seated_credentials_and_the_plan_predicts_it(
         }
     };
     assert_eq!(
-        driver
-            .state
-            .validate_credentials(&network(), credentials, [&board.board]),
+        driver.state.validate_credentials(
+            &network(),
+            driver.height,
+            credentials,
+            [(&scope, &board.board)]
+        ),
         Ok(())
     );
     assert_eq!(
-        driver
-            .state
-            .validate_credentials(&network(), credentials, std::iter::empty()),
+        driver.state.validate_credentials(
+            &network(),
+            driver.height,
+            credentials,
+            std::iter::empty()
+        ),
         Err(Error::Restore { field: "boards" })
     );
     let mut moved = board.board.clone();
     moved.sealed_timestamp_ms += 1;
     assert_eq!(
-        driver
-            .state
-            .validate_credentials(&network(), credentials, [&moved]),
+        driver.state.validate_credentials(
+            &network(),
+            driver.height,
+            credentials,
+            [(&scope, &moved)]
+        ),
         Err(Error::Restore { field: "boards" })
     );
-    let lost_one = |id| {
-        let mut records = credentials(id);
+    let other_scope = BallotScopeV1::new([0x7a; 64]);
+    assert_eq!(
+        driver.state.validate_credentials(
+            &network(),
+            driver.height,
+            credentials,
+            [(&other_scope, &board.board)]
+        ),
+        Err(Error::Restore { field: "boards" })
+    );
+    let lost_one = |id, accepted: &BTreeSet<AssignmentId>| {
+        let mut records = credentials(id, accepted);
         if !records.is_empty() {
             records.remove(0);
         }
         records
     };
     assert_eq!(
-        driver
-            .state
-            .validate_credentials(&network(), lost_one, [&board.board]),
+        driver.state.validate_credentials(
+            &network(),
+            driver.height,
+            lost_one,
+            [(&scope, &board.board)]
+        ),
         Err(Error::CredentialStore)
     );
 }
@@ -591,14 +630,14 @@ fn incomplete_credentials_refuse_the_seal_and_the_plan_reports_the_refusal() {
             &network(),
             jury_close,
             anchor(driver.height + 1, 0, close_ms),
-            |_| missing.clone(),
+            |_, _| missing.clone(),
         ),
         Err(Error::CredentialStore)
     );
     assert_eq!(driver.state, before, "a refused seal changes nothing");
     let plan = driver
         .state
-        .plan_due_items(&network(), driver.height + 1, close_ms, 0, |_| {
+        .plan_due_items(&network(), driver.height + 1, close_ms, 0, |_, _| {
             missing.clone()
         })
         .expect("a deterministic refusal is planned");

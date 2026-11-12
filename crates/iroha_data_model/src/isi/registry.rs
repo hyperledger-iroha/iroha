@@ -495,14 +495,14 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        // The 410 baseline instructions and nineteen additions: six game partition,
+        // The 410 baseline instructions and twenty additions: six game partition,
         // three Ironwood, the endorsed runtime-upgrade proposal, account signing keys,
-        // the Taira repair and activation, two SoraFS authority instructions, and the
-        // four of the kernel's lifecycle State: the registration and completion of an
+        // the Taira repair and activation, two SoraFS authority instructions, the four
+        // of the kernel's lifecycle State (the registration and completion of an
         // obligation, the ratification of the adoption anchor and the raising of the
-        // startup floor.
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 429;
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 429;
+        // startup floor) and the anonymous Parliament credential registration.
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 430;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 430;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -646,6 +646,7 @@ mod tests {
                 "iroha.game_partition.install.v1",
                 "iroha.game_partition.register_peer.v1",
                 "iroha.game_partition.seed.v1",
+                crate::governance::anonymous_ballot::RegisterParliamentCredentialV1::WIRE_ID,
                 "iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal",
                 privacy::BootstrapPrivacyIronwoodPoolV1::WIRE_ID,
                 privacy::SchedulePrivacyIronwoodLimitsUpdateV1::WIRE_ID,

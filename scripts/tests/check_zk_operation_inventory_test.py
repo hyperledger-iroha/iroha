@@ -348,9 +348,12 @@ class Status(Base):
         self.assert_fails(errors, "operations[kaigi::JoinKaigi]: test_evidence `none` needs test_note")
 
         def only_ignored(inventory: dict) -> None:
+            # Its only reaching test, recorded as ignored, is no default evidence.
             item = operation(inventory, "game::VerifyExecutionProofV1")
-            self.assertEqual(item["test_evidence"], "not_default")
-            item["test_evidence"] = "default"
+            self.assertEqual(item["test_evidence"], "default")
+            for test in item["tests"]:
+                if not test.get("covers"):
+                    test["ignored"] = True
         self.assert_fails(run("check_registry", edited(only_ignored)),
                           "operations[game::VerifyExecutionProofV1]: test_evidence is `not_default`")
 
@@ -2070,7 +2073,7 @@ class Maintenance(Base):
     def test_main_exit_codes(self) -> None:
         code, out, err, written = self.call_main(["--no-compile"], [])
         self.assertEqual((code, written), (0, []))
-        self.assertIn("94 operations (82 registered instructions)", out)
+        self.assertIn("95 operations (83 registered instructions)", out)
         code, out, err, _ = self.call_main(["--no-compile"], ["operations[x]: wrong", "routes[y]: wrong"])
         self.assertEqual(code, 1)
         self.assertIn("operations[x]: wrong", err)

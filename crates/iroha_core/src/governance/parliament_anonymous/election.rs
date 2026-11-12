@@ -178,6 +178,12 @@ impl AnonymousElectionV1 {
         self.closed.as_ref()
     }
 
+    /// The assignments that accepted their invitation, primaries and alternates.
+    #[must_use]
+    pub const fn accepted(&self) -> &BTreeSet<AssignmentId> {
+        &self.accepted
+    }
+
     /// The seats a close at this moment applies: accepted primaries in rank order, then
     /// accepted alternates in rank order, up to the request's target.
     pub(super) fn seated(&self) -> Vec<ParliamentSeatAssignmentV1> {

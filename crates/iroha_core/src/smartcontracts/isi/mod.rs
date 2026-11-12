@@ -44,6 +44,8 @@ pub mod nft_custody;
 pub mod nft_market;
 /// Oracle feed admission and aggregation instruction handlers.
 pub mod oracle;
+/// Credential registration of the anonymous Parliament family.
+pub mod parliament_anonymous;
 /// Canonical first-release privacy governance and proof admission.
 pub mod privacy;
 /// Atomic private cross-dataspace settlement carrier execution.
@@ -421,6 +423,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::game_partition::ExportGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::game_partition::ImportGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::account_signing_key::SetAccountSigningKeyV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::governance::anonymous_ballot::RegisterParliamentCredentialV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     // Registering or ending an obligation changes no balance: its terminal effects are ordinary
     // instructions the owner issues, each with its own asset checks.
     dispatch_instruction::<iroha_data_model::isi::runtime_obligation::RegisterRuntimeObligationV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],

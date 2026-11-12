@@ -26,7 +26,7 @@ use iroha_data_model::{
     governance::{
         GovernanceAnchorV1,
         anonymous_ballot::{
-            BallotBodyContextV1, Digest512, ParliamentBallotBoardRecordV1,
+            BallotBodyContextV1, BallotScopeV1, Digest512, ParliamentBallotBoardRecordV1,
             ParliamentCredentialRecordV1, ParliamentCredentialSourceV1,
             RegisterParliamentCredentialV1, SealedCredentialListPublishedV1,
             anonymous_body_instance_id_v1,
@@ -40,8 +40,8 @@ use iroha_parliament_ballot::board::{
 };
 
 use super::{
-    AnonymousInvitationCloseV1, AnonymousLifecycleItemV1, AnonymousParliamentAttemptStateV1,
-    AnonymousParliamentErrorV1 as Error, is_binding,
+    AnonymousGenerationStatusV1, AnonymousInvitationCloseV1, AnonymousLifecycleItemV1,
+    AnonymousParliamentAttemptStateV1, AnonymousParliamentErrorV1 as Error, is_binding,
 };
 
 /// The compact credential records of one binding election, as World keeps them.
@@ -145,8 +145,12 @@ impl AnonymousParliamentAttemptStateV1 {
             .ok_or(Error::UnknownElection)
     }
 
-    /// The accepted assignments of the election `election_attempt_id`.
-    fn accepted_assignments(
+    /// The accepted assignments of the election `election_attempt_id`, primaries and
+    /// alternates.
+    ///
+    /// # Errors
+    /// [`Error::UnknownElection`] for an election that is not this attempt's.
+    pub fn accepted_assignments(
         &self,
         election_attempt_id: BodyElectionAttemptId,
     ) -> Result<&BTreeSet<AssignmentId>, Error> {
@@ -278,15 +282,18 @@ impl AnonymousParliamentAttemptStateV1 {
     /// The seal of `item`, the `CloseInvitations` of the binding jury `body`, at `at`, with
     /// the board it starts, computed before the item changes anything; `None` when the close
     /// seals no roster. The occurrence and anchor are checked first, so a passed item
-    /// lapses as it would without credentials.
-    fn prepare_binding_seal(
+    /// lapses as it would without credentials, and `credentials` is asked only for a seal.
+    fn prepare_binding_seal<F>(
         &self,
         network_id: &NetworkId,
         item: AnonymousLifecycleItemV1,
         body: ParliamentBody,
         at: GovernanceAnchorV1,
-        records: &[(AssignmentId, ParliamentCredentialRecordV1)],
-    ) -> Result<Option<(SealedRosterV1, AnonymousSealedBoardV1)>, Error> {
+        credentials: &F,
+    ) -> Result<Option<(SealedRosterV1, AnonymousSealedBoardV1)>, Error>
+    where
+        F: Fn(BodyElectionAttemptId, &BTreeSet<AssignmentId>) -> AnonymousElectionCredentialsV1,
+    {
         self.check_occurrence(item)?;
         self.check_anchor(at)?;
         let seating = self.seating(body, at.timestamp_ms)?;
@@ -304,10 +311,11 @@ impl AnonymousParliamentAttemptStateV1 {
             .iter()
             .map(|seat| seat.assignment_id)
             .collect();
+        let accepted = self.accepted_assignments(seating.election_attempt_id)?;
         let roster = election_ledger(
             context,
-            self.accepted_assignments(seating.election_attempt_id)?,
-            records,
+            accepted,
+            &credentials(seating.election_attempt_id, accepted),
         )?
         .seal(&seated)
         .map_err(|error| Error::Seal(Box::new(error)))?;
@@ -329,9 +337,9 @@ impl AnonymousParliamentAttemptStateV1 {
     }
 
     /// Apply the lifecycle `item` at `at`, sealing a binding jury from its credentials:
-    /// `credentials` returns the records World keeps for an election and is asked only for
-    /// a binding jury's close. The seal and its board are built before the item changes
-    /// anything, so a refused item changes nothing.
+    /// `credentials` returns the records World keeps for the accepted assignments of an
+    /// election and is asked only for a binding jury's seal. The seal and its board are built
+    /// before the item changes anything, so a refused item changes nothing.
     ///
     /// # Errors
     /// As [`Self::apply_lifecycle_item`], and the error of the seal or the board.
@@ -343,11 +351,11 @@ impl AnonymousParliamentAttemptStateV1 {
         credentials: F,
     ) -> Result<AnonymousItemEffectV1, Error>
     where
-        F: Fn(BodyElectionAttemptId) -> AnonymousElectionCredentialsV1,
+        F: Fn(BodyElectionAttemptId, &BTreeSet<AssignmentId>) -> AnonymousElectionCredentialsV1,
     {
         let prepared = match item {
-            AnonymousLifecycleItemV1::CloseInvitations { body, election } if is_binding(body) => {
-                self.prepare_binding_seal(network_id, item, body, at, &credentials(election))?
+            AnonymousLifecycleItemV1::CloseInvitations { body, .. } if is_binding(body) => {
+                self.prepare_binding_seal(network_id, item, body, at, &credentials)?
             }
             _ => None,
         };
@@ -381,7 +389,7 @@ impl AnonymousParliamentAttemptStateV1 {
         credentials: F,
     ) -> Result<Vec<AnonymousPlannedItemV1>, Error>
     where
-        F: Fn(BodyElectionAttemptId) -> AnonymousElectionCredentialsV1,
+        F: Fn(BodyElectionAttemptId, &BTreeSet<AssignmentId>) -> AnonymousElectionCredentialsV1,
     {
         let mut state = self.clone();
         let mut position = first_position;
@@ -413,11 +421,15 @@ impl AnonymousParliamentAttemptStateV1 {
     }
 
     /// Check the credentials and boards World keeps for this attempt (design §12.3,
-    /// slice 2): every election of a binding jury holds exactly one credential per
-    /// accepted assignment and the credentials rebuild its ledger, an election of a public
+    /// slice 2) in a cut at committed `height`, where `credentials` returns the records World
+    /// keeps for the accepted assignments of an election: every election of a binding jury
+    /// holds exactly one credential per accepted assignment and the credentials rebuild its
+    /// ledger, each credential names the sole instruction of an input executed from the
+    /// election's draw until its close and no later than `height`, an election of a public
     /// body holds none, every sealed binding jury's seal is the one its credentials give,
-    /// and `boards` are exactly one board per sealed binding jury, whose seal-time facts
-    /// are the ones this State and its seal give.
+    /// and `boards`, each with the scope it is stored under, are exactly one board per
+    /// sealed binding jury, stored under its own scope, whose seal-time facts are the ones
+    /// this State and its seal give.
     ///
     /// # Errors
     /// [`Error::CredentialStore`] for credentials that are not their election's,
@@ -426,36 +438,54 @@ impl AnonymousParliamentAttemptStateV1 {
     pub fn validate_credentials<'b, F, B>(
         &self,
         network_id: &NetworkId,
+        height: u64,
         credentials: F,
         boards: B,
     ) -> Result<(), Error>
     where
-        F: Fn(BodyElectionAttemptId) -> AnonymousElectionCredentialsV1,
-        B: IntoIterator<Item = &'b ParliamentBallotBoardRecordV1>,
+        F: Fn(BodyElectionAttemptId, &BTreeSet<AssignmentId>) -> AnonymousElectionCredentialsV1,
+        B: IntoIterator<Item = (&'b BallotScopeV1, &'b ParliamentBallotBoardRecordV1)>,
     {
-        for election in self
-            .generations
-            .iter()
-            .flat_map(|generation| &generation.elections)
-        {
-            let records = credentials(election.id());
-            if !is_binding(election.body()) {
-                if !records.is_empty() {
+        for generation in &self.generations {
+            let drawn_at = match &generation.status {
+                AnonymousGenerationStatusV1::Drawn(draw) => Some(draw.at.height),
+                _ => None,
+            };
+            for election in &generation.elections {
+                let records = credentials(election.id(), &election.accepted);
+                if !is_binding(election.body()) {
+                    if !records.is_empty() {
+                        return Err(Error::CredentialStore);
+                    }
+                    continue;
+                }
+                // A registration executes after the draw's block-start item and before the
+                // close's, as the sole instruction of its input.
+                let closed_at = election.closed.as_ref().map(|closed| closed.at.height);
+                if records.iter().any(|(_, record)| {
+                    let source = record.source;
+                    source.instruction_index != 0
+                        || source.height > height
+                        || drawn_at.is_none_or(|drawn| source.height < drawn)
+                        || closed_at.is_some_and(|closed| source.height >= closed)
+                }) {
                     return Err(Error::CredentialStore);
                 }
-                continue;
+                let context = BallotBodyContextV1 {
+                    network_id: *network_id,
+                    governance_attempt_id: self.attempt.id,
+                    election_attempt_id: election.id(),
+                    body_role: election.body(),
+                };
+                election_ledger(context, &election.accepted, &records)?;
             }
-            let context = BallotBodyContextV1 {
-                network_id: *network_id,
-                governance_attempt_id: self.attempt.id,
-                election_attempt_id: election.id(),
-                body_role: election.body(),
-            };
-            election_ledger(context, &election.accepted, &records)?;
         }
         let mut stored = BTreeMap::new();
-        for board in boards {
-            if stored.insert(board.body_instance_id, board).is_some() {
+        for (scope, board) in boards {
+            if stored
+                .insert(board.body_instance_id, (scope, board))
+                .is_some()
+            {
                 return Err(restore("boards"));
             }
         }
@@ -472,10 +502,11 @@ impl AnonymousParliamentAttemptStateV1 {
             };
             let seated: Vec<AssignmentId> =
                 state.seats.iter().map(|seat| seat.assignment_id).collect();
+            let accepted = self.accepted_assignments(sealed.election_attempt_id)?;
             let roster = election_ledger(
                 context,
-                self.accepted_assignments(sealed.election_attempt_id)?,
-                &credentials(sealed.election_attempt_id),
+                accepted,
+                &credentials(sealed.election_attempt_id, accepted),
             )?
             .seal(&seated)
             .map_err(|error| Error::Seal(Box::new(error)))?;
@@ -491,17 +522,18 @@ impl AnonymousParliamentAttemptStateV1 {
                     state.sealed_at.timestamp_ms,
                 )?
                 .board;
-            let board = stored
+            let (scope, board) = stored
                 .remove(&sealed.body_instance_id)
                 .ok_or_else(|| restore("boards"))?;
-            BallotBoardV1::restore(board.clone()).map_err(|error| {
+            let restored = BallotBoardV1::restore(board.clone()).map_err(|error| {
                 if error.is_local() {
                     Error::Board(Box::new(error))
                 } else {
                     restore("boards")
                 }
             })?;
-            if board.purpose != expected.purpose
+            if restored.scope() != scope
+                || board.purpose != expected.purpose
                 || board.context != expected.context
                 || board.proposal_content_id != expected.proposal_content_id
                 || board.roster_root != expected.roster_root

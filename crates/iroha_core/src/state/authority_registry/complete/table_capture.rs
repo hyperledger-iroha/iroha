@@ -291,6 +291,21 @@ capture_world_table_once!(
     "world.sorafs_authority_leases"
 );
 capture_world_table_once!(
+    capture_parliament_anonymous_attempts_once,
+    parliament_anonymous_attempts,
+    "world.parliament_anonymous_attempts"
+);
+capture_world_table_once!(
+    capture_parliament_anonymous_registrations_once,
+    parliament_anonymous_registrations,
+    "world.parliament_anonymous_registrations"
+);
+capture_world_table_once!(
+    capture_parliament_anonymous_boards_once,
+    parliament_anonymous_boards,
+    "world.parliament_anonymous_boards"
+);
+capture_world_table_once!(
     capture_nft_sale_offers_once,
     nft_sale_offers,
     "world.nft_sale_offers"
@@ -911,6 +926,9 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     capture_sorafs_authority_proposals_once::MATERIALIZER,
     capture_sorafs_authority_heads_once::MATERIALIZER,
     capture_sorafs_authority_leases_once::MATERIALIZER,
+    capture_parliament_anonymous_attempts_once::MATERIALIZER,
+    capture_parliament_anonymous_registrations_once::MATERIALIZER,
+    capture_parliament_anonymous_boards_once::MATERIALIZER,
     capture_nft_sale_offers_once::MATERIALIZER,
     capture_nft_custody_records_once::MATERIALIZER,
     capture_vpn_leases_once::MATERIALIZER,
@@ -1373,6 +1391,9 @@ mod tests {
             "world.sorafs_authority_proposals",
             "world.sorafs_authority_heads",
             "world.sorafs_authority_leases",
+            "world.parliament_anonymous_attempts",
+            "world.parliament_anonymous_registrations",
+            "world.parliament_anonymous_boards",
             "world.nft_sale_offers",
             "world.nft_custody_records",
             "world.vpn_leases",

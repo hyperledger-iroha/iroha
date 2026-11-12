@@ -18,6 +18,7 @@ pub use crate::sumeragi::evidence::record::{
 
 use crate::governance::manifest::lane_uses_reserved_autoscale_metadata;
 use crate::governance::parliament::{ParliamentDecisionModeV1, ParliamentReducerErrorV1};
+use crate::governance::parliament_anonymous::AnonymousParliamentAttemptStateV1;
 /// Canonical parameter MV value with inseparable validated pipeline fee and limit policies.
 pub use crate::pipeline_gas_policy::{
     LegacyGenesisPolicies, ParameterIngressError, ParameterRetentionError, RetainedStateParameters,
@@ -54,6 +55,12 @@ use iroha_data_model::events::pipeline::PipelineEventBox;
 use iroha_data_model::execution_proofs::{ExecutionProofProfileV1, ExecutionProofVerificationV1};
 use iroha_data_model::game::GameSessionRecordV1;
 use iroha_data_model::game_partition::GamePartitionStateV1;
+use iroha_data_model::governance::{
+    anonymous_ballot::{
+        BallotScopeV1, ParliamentBallotBoardRecordV1, ParliamentCredentialRecordV1,
+    },
+    types::AssignmentId,
+};
 #[cfg(test)]
 use iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT;
 use iroha_data_model::nft_market::{NftCustodyRecordV1, NftSaleRecordV1};
@@ -357,6 +364,7 @@ mod committed_transaction_context;
 mod da_hydration;
 mod exec_witness_capture;
 mod kagemusha_load_entrypoint;
+pub(crate) mod parliament_anonymous_tables;
 pub(crate) mod parliament_candidate_testing;
 pub(crate) mod parliament_registration;
 mod privacy_transaction_intent;
@@ -1261,6 +1269,9 @@ macro_rules! with_world_overlay_fields {
             sorafs_authority_proposals,
             sorafs_authority_heads,
             sorafs_authority_leases,
+            parliament_anonymous_attempts,
+            parliament_anonymous_registrations,
+            parliament_anonymous_boards,
             nft_sale_offers,
             nft_custody_records,
             nft_custody_by_nft,
@@ -4288,6 +4299,15 @@ pub struct WorldData {
     pub(crate) sorafs_authority_heads: Storage<[u8; 32], SorafsAuthorityHeadV1>,
     /// Retained two-vote lease mandates and exact execution receipts.
     pub(crate) sorafs_authority_leases: Storage<[u8; 32], SorafsAuthorityLeaseV1>,
+    /// State of each anonymous Parliament attempt
+    /// (`iroha.governance.parliament.anonymous.v1` addition).
+    pub(crate) parliament_anonymous_attempts:
+        Storage<GovernanceAttemptId, AnonymousParliamentAttemptStateV1>,
+    /// Credential of each accepted binding assignment.
+    pub(crate) parliament_anonymous_registrations:
+        Storage<AssignmentId, ParliamentCredentialRecordV1>,
+    /// Board of each sealed binding jury, by ballot scope.
+    pub(crate) parliament_anonymous_boards: Storage<BallotScopeV1, ParliamentBallotBoardRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: Storage<Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -5335,6 +5355,15 @@ pub struct WorldBlockFields<'world> {
     pub(crate) sorafs_authority_heads: StorageField<'world, [u8; 32], SorafsAuthorityHeadV1>,
     /// Retained two-vote lease mandates and exact execution receipts.
     pub(crate) sorafs_authority_leases: StorageField<'world, [u8; 32], SorafsAuthorityLeaseV1>,
+    /// State of each anonymous Parliament attempt.
+    pub(crate) parliament_anonymous_attempts:
+        StorageField<'world, GovernanceAttemptId, AnonymousParliamentAttemptStateV1>,
+    /// Credential of each accepted binding assignment.
+    pub(crate) parliament_anonymous_registrations:
+        StorageField<'world, AssignmentId, ParliamentCredentialRecordV1>,
+    /// Board of each sealed binding jury, by ballot scope.
+    pub(crate) parliament_anonymous_boards:
+        StorageField<'world, BallotScopeV1, ParliamentBallotBoardRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageField<'world, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -6552,6 +6581,9 @@ impl WorldBlock<'_> {
             sorafs_authority_proposals,
             sorafs_authority_heads,
             sorafs_authority_leases,
+            parliament_anonymous_attempts,
+            parliament_anonymous_registrations,
+            parliament_anonymous_boards,
             nft_sale_offers,
             nft_custody_records,
             nft_custody_by_nft,
@@ -7130,6 +7162,15 @@ pub struct WorldTransaction<'block, 'world> {
     /// Retained two-vote lease mandates and exact execution receipts.
     pub(crate) sorafs_authority_leases:
         StorageTransaction<'block, [u8; 32], SorafsAuthorityLeaseV1>,
+    /// State of each anonymous Parliament attempt.
+    pub(crate) parliament_anonymous_attempts:
+        StorageTransaction<'block, GovernanceAttemptId, AnonymousParliamentAttemptStateV1>,
+    /// Credential of each accepted binding assignment.
+    pub(crate) parliament_anonymous_registrations:
+        StorageTransaction<'block, AssignmentId, ParliamentCredentialRecordV1>,
+    /// Board of each sealed binding jury, by ballot scope.
+    pub(crate) parliament_anonymous_boards:
+        StorageTransaction<'block, BallotScopeV1, ParliamentBallotBoardRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageTransaction<'block, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -9404,6 +9445,15 @@ pub struct WorldView<'world> {
     pub(crate) sorafs_authority_heads: StorageView<'world, [u8; 32], SorafsAuthorityHeadV1>,
     /// Retained two-vote lease mandates and exact execution receipts.
     pub(crate) sorafs_authority_leases: StorageView<'world, [u8; 32], SorafsAuthorityLeaseV1>,
+    /// State of each anonymous Parliament attempt.
+    pub(crate) parliament_anonymous_attempts:
+        StorageView<'world, GovernanceAttemptId, AnonymousParliamentAttemptStateV1>,
+    /// Credential of each accepted binding assignment.
+    pub(crate) parliament_anonymous_registrations:
+        StorageView<'world, AssignmentId, ParliamentCredentialRecordV1>,
+    /// Board of each sealed binding jury, by ballot scope.
+    pub(crate) parliament_anonymous_boards:
+        StorageView<'world, BallotScopeV1, ParliamentBallotBoardRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageView<'world, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -21569,6 +21619,12 @@ macro_rules! world_ro_accessors {
             storage sorafs_authority_heads: [u8; 32] => SorafsAuthorityHeadV1;
             /// Retained two-vote lease mandates and exact execution receipts.
             storage sorafs_authority_leases: [u8; 32] => SorafsAuthorityLeaseV1;
+            /// State of each anonymous Parliament attempt.
+            storage parliament_anonymous_attempts: GovernanceAttemptId => AnonymousParliamentAttemptStateV1;
+            /// Credential of each accepted binding assignment.
+            storage parliament_anonymous_registrations: AssignmentId => ParliamentCredentialRecordV1;
+            /// Board of each sealed binding jury, by ballot scope.
+            storage parliament_anonymous_boards: BallotScopeV1 => ParliamentBallotBoardRecordV1;
             /// Immutable native NFT sale terms and permanent terminal decisions.
             storage nft_sale_offers: Hash => NftSaleRecordV1;
             /// Permanent non-signing custody records shared by native NFT protocols.
@@ -25478,6 +25534,9 @@ impl WorldTransaction<'_, '_> {
             sorafs_authority_proposals: _,
             sorafs_authority_heads: _,
             sorafs_authority_leases: _,
+            parliament_anonymous_attempts: _,
+            parliament_anonymous_registrations: _,
+            parliament_anonymous_boards: _,
             nft_sale_offers: _,
             nft_custody_records: _,
             nft_custody_by_nft: _,
@@ -25940,6 +25999,9 @@ impl WorldTransaction<'_, '_> {
         self.sorafs_authority_proposals.apply();
         self.sorafs_authority_heads.apply();
         self.sorafs_authority_leases.apply();
+        self.parliament_anonymous_attempts.apply();
+        self.parliament_anonymous_registrations.apply();
+        self.parliament_anonymous_boards.apply();
         self.nft_sale_offers.apply();
         self.nft_custody_records.apply();
         self.nft_custody_by_nft.apply();

@@ -41,11 +41,12 @@
 //!   the pass applies, and the restore check binds the stored credentials and boards to
 //!   the State.
 //!
-//! Nothing dispatches this reducer yet: no instruction is registered and no State table
-//! holds it.
+//! World keeps the attempts, the credentials and the boards in the three tables of the
+//! `iroha.governance.parliament.anonymous.v1` release addition
+//! (`crate::state::parliament_anonymous_tables`), and `RegisterParliamentCredentialV1`
+//! drives [`AnonymousParliamentAttemptStateV1::register_credential`]. No selection activates
+//! the addition yet, and nothing creates an attempt or applies its scheduled items.
 //!
-//! TODO(E2, design §12.3 slice 2): the three World tables, their restore checks and the
-//! release addition that publishes them with the family's interfaces.
 //! TODO(E2, slice 3): the positioned pass drives the scheduled items, the ballot openings
 //! and closures ([`AnonymousParliamentAttemptStateV1::close_ballot`]) and the enactment
 //! item.
@@ -1527,3 +1528,5 @@ mod lifecycle_tests;
 mod test_driver;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod world_tests;

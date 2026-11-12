@@ -20,8 +20,9 @@
 //!
 //! Like the baseline bundle, an addition declares a conservative superset of dependencies: every
 //! storage definition and interface of the baseline and of the additions before it. Additions are
-//! therefore activated in declaration order, except the explicitly independent repair and
-//! authority additions whose dependencies are exactly the baseline. Published dependency
+//! therefore activated in declaration order, except the explicitly independent additions (the
+//! repair, authority, restricted-read, anonymous Parliament and runtime lifecycle additions)
+//! whose dependencies are exactly the baseline. Published dependency
 //! descriptors never change after a selection contains them.
 
 use crate::state::WorldTransaction;
@@ -93,7 +94,9 @@ pub const ADDITIONS: &[Addition] = &[
     SORAFS_REPAIR,
     SORAFS_AUTHORITY,
     RESTRICTED_DATASPACE_READ,
-    // Independent of every addition before it, like the three above; it stays last so no
+    // Independent of every addition before it, like the three above.
+    PARLIAMENT_ANONYMOUS,
+    // Independent of every addition before it, like the four above; it stays last so no
     // ordered addition declares its tables.
     RUNTIME_LIFECYCLE,
 ];
@@ -225,6 +228,30 @@ pub const ACCOUNT_SIGNING_KEYS: Addition = Addition {
     storage: &[
         StorageAddition::Table("world.account_signing_keys"),
         StorageAddition::Table("world.account_signing_key_reservations"),
+    ],
+};
+
+/// The anonymous Parliament family (`crate::governance::parliament_anonymous`,
+/// `specs/parliament_private_ballot_design.md` §12.3): `RegisterParliamentCredentialV1`
+/// accepts a binding seat together with its verified credential. Its tables are
+/// `world.parliament_anonymous_attempts`, the State of each attempt,
+/// `world.parliament_anonymous_registrations`, the credential of each accepted binding
+/// assignment, and `world.parliament_anonymous_boards`, the board of each sealed binding jury.
+/// Until a change set activates it the instruction stays inactive and the tables stay empty
+/// and out of snapshots. Its dependencies are exactly the frozen baseline.
+///
+/// TODO(`specs/parliament_private_ballot_design.md` §12.3): the family is activatable only
+/// after its fourth slice (the positioned block-start pass and signerless ballots), and on a
+/// root that runs the kernel's lifecycle services profile only with a composition for it.
+/// Governance must not activate it on a network before then.
+pub const PARLIAMENT_ANONYMOUS: Addition = Addition {
+    module: "iroha.governance.parliament.anonymous.v1",
+    instructions: &["iroha.governance.parliament.credential.register.v1"],
+    rebinds: &[],
+    storage: &[
+        StorageAddition::Table("world.parliament_anonymous_attempts"),
+        StorageAddition::Table("world.parliament_anonymous_registrations"),
+        StorageAddition::Table("world.parliament_anonymous_boards"),
     ],
 };
 

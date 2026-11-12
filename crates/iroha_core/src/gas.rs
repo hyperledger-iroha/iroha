@@ -85,6 +85,9 @@ const PER_BYTE_PARLIAMENT: u64 = 5;
 const PARLIAMENT_PROOF_UNIT: u64 = 250_000;
 /// Fixed charge for one bounded timed-OVN registration proof verification.
 const PARLIAMENT_REGISTRATION_VERIFY: u64 = 750_000;
+/// Fixed charge for verifying one anonymous Parliament credential registration proof
+/// (`pi_reg`, 160,148 bytes on the candidate row).
+const PARLIAMENT_ANONYMOUS_REGISTRATION_VERIFY: u64 = 750_000;
 /// Fixed charge for a bounded timed-OVN ballot OR-proof chunk verification.
 const PARLIAMENT_BALLOT_OR_VERIFY: u64 = 750_000;
 /// Fixed charge for validating a final threshold release.
@@ -249,6 +252,22 @@ fn kaigi_create_record_gas(create: &dm_isi::kaigi::CreateKaigi) -> u64 {
     KAIGI_RECORD_READ_ESCROW.saturating_add(
         PER_BYTE_JSON.saturating_mul(u64::try_from(create.call.encode().len()).unwrap_or(u64::MAX)),
     )
+}
+
+/// The proof work of one anonymous credential registration: one proof suite and its
+/// verification. Rebuilding the election's ledger is bounded by the jury's seats and
+/// alternates and is small beside it.
+const fn parliament_anonymous_registration_proof_gas() -> u64 {
+    PARLIAMENT_PROOF_UNIT.saturating_add(PARLIAMENT_ANONYMOUS_REGISTRATION_VERIFY)
+}
+
+/// Gas of an anonymous credential registration: its encoded bytes and its proof work, charged
+/// whether or not the registration is accepted.
+fn gas_for_parliament_credential_registration(
+    registration: &iroha_data_model::governance::anonymous_ballot::RegisterParliamentCredentialV1,
+) -> u64 {
+    parliament_encoded_input_gas(registration.encode().len())
+        .saturating_add(parliament_anonymous_registration_proof_gas())
 }
 
 fn parliament_max_cached_record_gas() -> u64 {
@@ -702,6 +721,11 @@ fn meter_instruction_without_proof_attachment(
     {
         return gas_for_parliament_transition(transition);
     }
+    if let Some(registration) = any.downcast_ref::<
+        iroha_data_model::governance::anonymous_ballot::RegisterParliamentCredentialV1,
+    >() {
+        return gas_for_parliament_credential_registration(registration);
+    }
     if let Some(gas) = sccp_instruction_gas(any) {
         return gas;
     }
@@ -779,6 +803,9 @@ fn confidential_gas_cost_without_proof_attachment(
         any.downcast_ref::<dm_isi::governance::SubmitParliamentLifecycleTransitionV1>()
     {
         return parliament_transition_confidential_work_gas(&transition.transition);
+    }
+    if any.is::<iroha_data_model::governance::anonymous_ballot::RegisterParliamentCredentialV1>() {
+        return parliament_anonymous_registration_proof_gas();
     }
     0
 }
@@ -1192,6 +1219,45 @@ mod tests {
         if usize::BITS == u64::BITS {
             assert_eq!(maximum_host_length, u64::MAX);
         }
+    }
+    #[test]
+    fn anonymous_credential_registration_pays_for_its_bytes_and_proof() {
+        use iroha_data_model::governance::{
+            anonymous_ballot::{
+                CredentialCommitmentV1, CredentialRegistrationV1, RegisterParliamentCredentialV1,
+                RegistrationAuthorizationV1, RegistrationProofBytesV1,
+            },
+            types::BodyElectionAttemptId,
+        };
+        let registration = RegisterParliamentCredentialV1 {
+            governance_attempt_id: GovernanceAttemptId::new([0x38; 32]),
+            election_attempt_id: BodyElectionAttemptId::new([0x39; 32]),
+            registration: CredentialRegistrationV1 {
+                commitment: CredentialCommitmentV1::new([0x3a; 128]),
+                authorization: RegistrationAuthorizationV1::new([0x3b; 64]),
+                proof: RegistrationProofBytesV1::new(vec![0x3c; RegistrationProofBytesV1::LENGTH])
+                    .expect("fixed-length proof bytes"),
+            },
+        };
+        let proof_work = PARLIAMENT_PROOF_UNIT + PARLIAMENT_ANONYMOUS_REGISTRATION_VERIFY;
+        let expected = parliament_encoded_input_gas(registration.encode().len()) + proof_work;
+        let instruction = InstructionBox::from(registration);
+        assert_eq!(
+            meter_instruction(&instruction, &DEFAULT_ZK_GAS)
+                .expect("gas attempt must complete in this fixture"),
+            expected
+        );
+        // Every proof byte is paid for, beside the fixed verification charge.
+        assert!(
+            expected
+                > PER_BYTE_PARLIAMENT * u64::try_from(RegistrationProofBytesV1::LENGTH).unwrap()
+                    + proof_work
+        );
+        assert_eq!(
+            confidential_gas_cost(&instruction, &DEFAULT_ZK_GAS)
+                .expect("confidential gas attempt must complete in this fixture"),
+            proof_work
+        );
     }
     #[test]
     fn timed_ovn_registration_gas_covers_proof_and_max_committed_roster_scan() {

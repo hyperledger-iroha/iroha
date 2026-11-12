@@ -61,8 +61,8 @@ pub(crate) fn founded_selection() -> Result<RootSelectionV1, CatalogError> {
 /// Activate this release's additions on `world`'s universal root, in declaration order, up to and
 /// including `through`, as their governed change sets do at block start: publish each addition's
 /// definitions, install its storage (a cell at its published initial value) and move the
-/// selection. The independent authority and restricted-read additions activate alone. An addition already active
-/// stays as it is.
+/// selection. The independent authority, restricted-read, anonymous Parliament and runtime
+/// lifecycle additions activate alone. An addition already active stays as it is.
 ///
 /// Fixtures only. A network activates an addition through a governed change set
 /// (`specs/runtime_upgrades.md`); no production World is founded on one.
@@ -87,6 +87,7 @@ pub fn activate_additions_for_testing(
     let mut block = world.block();
     let additions = if through == catalog::additions::SORAFS_AUTHORITY.module
         || through == catalog::additions::RESTRICTED_DATASPACE_READ.module
+        || through == catalog::additions::PARLIAMENT_ANONYMOUS.module
         || through == catalog::additions::RUNTIME_LIFECYCLE.module
     {
         &catalog.additions[last..=last]

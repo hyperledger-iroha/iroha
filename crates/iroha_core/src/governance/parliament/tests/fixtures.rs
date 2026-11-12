@@ -552,31 +552,6 @@ fn candidates(first_tag: u8, count: u32) -> Vec<AccountId> {
     candidates
 }
 
-/// Reducer-derived, still-open invitation; no ballot, certificate or enactment fixture.
-pub(crate) fn credential_registration_invitation_fixture()
--> (ParliamentAttemptStateV1, BodyElectionAttemptId, KeyPair) {
-    let (mut state, election, request) = policy_election_awaiting_slot_20(beacon_session(13));
-    let id = state.attempt.id;
-    consume_sortition(
-        &mut state,
-        id,
-        vec![request],
-        beacon_session(13),
-        20,
-        pulse_id(14),
-    )
-    .expect("actual deterministic draw");
-    state
-        .begin_invitation_acceptance(id, election, 20, 10)
-        .expect("open invitations without sealing");
-    let member = &state.election(&election).unwrap().primary_assignments()[0].member;
-    let key = (0x90..=0x92)
-        .map(|tag| KeyPair::try_from_seed(vec![tag; 32], Algorithm::Ed25519).unwrap())
-        .find(|key| &AccountId::new(key.public_key().clone()) == member)
-        .unwrap();
-    (state, election, key)
-}
-
 #[expect(
     clippy::too_many_arguments,
     reason = "test helper mirrors the immutable request preimage"

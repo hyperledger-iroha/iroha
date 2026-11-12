@@ -9977,16 +9977,26 @@ fn enrollment_expiry_domains_bind_records_without_state_authority() {
 /// their fixtures may name the model without creating that owner. A new canonical ballot
 /// table or cell requires review of its corpus, roster and result commitments.
 ///
-/// The node links `iroha_parliament_ballot` for one reviewed purpose: candidate registration
-/// preparation in `parliament_registration.rs` verifies a proof from the direct signed
-/// original against the supplied authority and a context read from Parliament attempts. It
-/// persists no digest in State and writes no authoritative table. It has no production caller,
-/// so every tag above keeps its record role. Another node use of a ballot crate, a State write
-/// in that module or its first production caller requires this review again.
+/// The node links `iroha_parliament_ballot` for the anonymous family alone (design §12.3,
+/// slice 2): its reducer drives the board's registration ledger and seal, and the
+/// `iroha.governance.parliament.anonymous.v1` addition keeps its attempts, credentials and
+/// boards in exactly three tables. Every tag above hashes one record or message those tables
+/// keep as content (a roster, a registration mapping, a corpus entry, a closure); none
+/// computes a State commitment, which remains the World root, so every tag keeps its record
+/// role. The registration custody in `parliament_registration.rs` writes no State and has one
+/// consumer, the credential handler. Ballot State outside those three tables, another node
+/// use of a ballot crate, a State write in the custody or another consumer requires this
+/// review again.
 #[test]
-fn anonymous_ballot_tags_hash_records_without_an_authoritative_state_owner() {
+fn anonymous_ballot_tags_hash_records_the_anonymous_tables_keep() {
     const MODULE: &str = "crates/iroha_data_model/src/governance/anonymous_ballot";
-    const PREPARATION: &str = "crates/iroha_core/src/state/parliament_registration.rs";
+    const CUSTODY: &str = "crates/iroha_core/src/state/parliament_registration.rs";
+    const HANDLER: &str = "crates/iroha_core/src/smartcontracts/isi/parliament_anonymous.rs";
+    const TABLES: [&str; 3] = [
+        "world.parliament_anonymous_attempts",
+        "world.parliament_anonymous_boards",
+        "world.parliament_anonymous_registrations",
+    ];
     const REVIEW: &str = "review the anonymous-ballot tag classification";
     let record = DomainOwner::Other(Use::Record);
     let fixture_use = DomainOwner::Other(Use::Test);
@@ -10060,26 +10070,28 @@ fn anonymous_ballot_tags_hash_records_without_an_authoritative_state_owner() {
     ));
     let mut fields = Vec::new();
     flatten(STATE_FIELDS, &mut fields);
+    let mut ballot_fields = Vec::new();
     for field in fields {
         let schemas = match field.role {
             Role::Canonical(Canonical::Table { key, value }) => vec![key, value],
             Role::Canonical(Canonical::Cell(value)) => vec![value],
             _ => continue,
         };
-        assert!(
-            !field.id.contains("ballot"),
-            "{} introduces ballot State: classify its corpus, roster and result commitments",
-            field.id,
-        );
-        for schema in schemas {
-            let identity = codec_identity(field.id, schema).expect("the registry is complete");
-            assert!(
-                !names_ballot_schema(&identity),
-                "{} retains ballot schema {identity}: review the anonymous-ballot commitments",
-                field.id,
-            );
+        let names_ballot = field.id.contains("ballot")
+            || schemas.into_iter().any(|schema| {
+                names_ballot_schema(
+                    &codec_identity(field.id, schema).expect("the registry is complete"),
+                )
+            });
+        if names_ballot {
+            ballot_fields.push(field.id);
         }
     }
+    ballot_fields.sort_unstable();
+    assert_eq!(
+        ballot_fields, TABLES,
+        "ballot State outside the anonymous family's tables: classify its corpus, roster and result commitments"
+    );
     let manifest = source("crates/iroha_core/Cargo.toml");
     assert_eq!(
         manifest
@@ -10106,7 +10118,7 @@ fn anonymous_ballot_tags_hash_records_without_an_authoritative_state_owner() {
         })
         .collect();
     // The anonymous family's reducer drives the board's registration ledger and seal
-    // (design §12.3, slice 2); it writes no State of its own.
+    // (design §12.3, slice 2); the node verifies registrations only through it.
     assert_eq!(
         node_uses,
         [
@@ -10118,39 +10130,36 @@ fn anonymous_ballot_tags_hash_records_without_an_authoritative_state_owner() {
                 "crates/iroha_core/src/governance/parliament_anonymous/credentials.rs",
                 "use iroha_parliament_ballot::board::{"
             ),
-            (
-                PREPARATION,
-                "use iroha_parliament_ballot::registration::{RegistrationErrorV1, verify_registration_v1};"
-            ),
         ],
         "the node uses a ballot crate differently: {REVIEW}"
     );
-    let preparation = &node_sources
+    let custody = &node_sources
         .iter()
-        .find(|(path, _)| path == PREPARATION)
-        .expect("the reviewed preparation source")
+        .find(|(path, _)| path == CUSTODY)
+        .expect("the reviewed custody source")
         .1;
     for write in [".insert(", ".remove(", ".get_mut(", ".set("] {
         assert!(
-            !preparation.contains(write),
-            "registration preparation may write State through {write}: {REVIEW}"
+            !custody.contains(write),
+            "registration custody may write State through {write}: {REVIEW}"
         );
     }
-    let callers: Vec<(&str, usize)> = node_sources
+    // The definition and its one consumer.
+    let consumers: Vec<(&str, usize)> = node_sources
         .iter()
         .map(|(path, code)| {
             (
                 path.as_str(),
-                code.matches("prepare_candidate_parliament_registration")
+                code.matches("consume_direct_parliament_registration(")
                     .count(),
             )
         })
         .filter(|(_, count)| *count != 0)
         .collect();
     assert_eq!(
-        callers,
-        [(PREPARATION, 1)],
-        "registration preparation gained a production caller: {REVIEW}"
+        consumers,
+        [(HANDLER, 1), (CUSTODY, 1)],
+        "the registration original gained another consumer: {REVIEW}"
     );
 }
 

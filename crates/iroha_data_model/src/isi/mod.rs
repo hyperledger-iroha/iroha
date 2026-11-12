@@ -288,6 +288,7 @@ impl_direct_instruction_box!(crate::isi::asset_fi_context::AssertAssetFiTransfer
 impl_direct_instruction_box!(crate::isi::retail_daily_limit::BindRetailIdentityV1);
 impl_direct_instruction_box!(crate::isi::retail_daily_limit::RetailMonetaryMovementV1);
 impl_direct_instruction_box!(crate::isi::account_signing_key::SetAccountSigningKeyV1);
+impl_direct_instruction_box!(crate::governance::anonymous_ballot::RegisterParliamentCredentialV1);
 impl_direct_instruction_box!(
     crate::isi::runtime_obligation::RegisterRuntimeObligationV1,
     crate::isi::runtime_obligation::CompleteRuntimeObligationV1,

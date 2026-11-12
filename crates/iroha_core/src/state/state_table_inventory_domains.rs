@@ -91,7 +91,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Name,
-        reason: "Reserved additive wire name of anonymous Parliament credential registration; no current registry or selection activates it.",
+        reason: "Exact wire identity of the anonymous Parliament credential registration, including its built-in dispatch entry. It selects the instruction layout; neither the identifier nor its registration computes a digest or grants the instruction authority",
         literals: &[r"iroha.governance.parliament.credential.register.v1"],
     },
     OtherDomains {
@@ -1560,6 +1560,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha.events.data.ironwood.v1",
             r"iroha.events.data.v1",
             r"iroha.game_partition.v1",
+            r"iroha.governance.parliament.anonymous.v1",
             r"iroha.ironwood.identity-cutover.v1",
             r"iroha.ironwood.v1",
             r"iroha.kernel.v1",

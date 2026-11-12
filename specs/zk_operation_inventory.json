@@ -768,6 +768,19 @@
    "owner_tasks": ["P.8"]
   },
   {
+   "id": "voting.parliament_credential_registration",
+   "family": "VOLE-in-the-head, experimental candidate row",
+   "status": "implemented",
+   "guarantee": "Registration of an anonymous Parliament binding seat's credential: `pi_reg` proves that one secret opens the commitment `C` and produces the authorization value `auth` for the statement of the seat's body context, network, signing account and assignment (specs/parliament_private_ballot_design.md section 3.2). Core derives the assignment from the signer's open invitation and checks seat and commitment freshness before it verifies. No profile is qualified (PARLIAMENT_BALLOT_QUALIFICATION_V1 = None); independent review of the construction is open.",
+   "verifier": {"path": "crates/iroha_parliament_ballot/src/registration.rs", "symbol": "pub fn verify_registration_v1("},
+   "tests": [
+    {"path": "crates/iroha_parliament_ballot/src/registration.rs", "test": "an_honest_registration_verifies_through_the_typed_inputs"},
+    {"path": "crates/iroha_parliament_ballot/src/registration.rs", "test": "a_registration_is_bound_to_every_statement_input"}
+   ],
+   "test_evidence": "default",
+   "owner_tasks": ["P.8"]
+  },
+  {
    "id": "wg.witness_assertion",
    "family": "none",
    "status": "absent",
@@ -832,6 +845,30 @@
    "game_partition": {
     "scope": "out",
     "reason": "Native independent-root game units execute directly in IVM. Imports authenticate Sumeragi-certified source blocks and write-set membership through the native AMX tracker (crates/iroha_core/src/smartcontracts/isi/game_partition.rs), not a ZK or FHE relation."
+   },
+   "anonymous_ballot": {
+    "scope": "full",
+    "reason": "Instructions of the anonymous Parliament family (specs/parliament_private_ballot_design.md section 12.3): the credential registration verifies `pi_reg`."
+   },
+   "runtime_obligation": {
+    "scope": "out",
+    "reason": "Kernel registration and completion of runtime obligations, the `iroha.runtime.lifecycle.v1` addition (crates/iroha_core/src/smartcontracts/isi/runtime_obligation.rs, specs/live_runtime_upgrades.md section 7.2). An owner commits the exact instructions that complete its obligation; it verifies no proof and carries no ZK or FHE relation."
+   },
+   "runtime_boundary": {
+    "scope": "out",
+    "reason": "Ratification of the adoption anchor and raising of the startup floor, the `iroha.runtime.lifecycle.v1` addition (crates/iroha_core/src/smartcontracts/isi/runtime_boundary.rs, specs/live_runtime_upgrades.md sections 7.3 and 13). Each carries every validator's signed statement; it verifies no proof and carries no ZK or FHE relation."
+   },
+   "sorafs_authority": {
+    "scope": "out",
+    "reason": "Parliament-owned SoraFS authority proposals and their Parliament attempts, the `iroha.sorafs.authority_governance.v1` addition (crates/iroha_core/src/smartcontracts/isi/world_authority_host.rs). Governance records decided by Parliament; no proof and no ZK or FHE relation."
+   },
+   "sorafs_repair": {
+    "scope": "out",
+    "reason": "The one-time owner-authorized Taira SoraFS initialization, the `iroha.sorafs.bootstrap.repair.v1` addition (crates/iroha_core/src/smartcontracts/isi/sorafs_bootstrap.rs, specs/sorafs/taira_repair_v1.md), authenticated by all four scheduled validators; no proof and no ZK or FHE relation."
+   },
+   "taira_activation": {
+    "scope": "out",
+    "reason": "The owner-authorized Taira certificate that schedules the compiled Time and Ironwood change set (crates/iroha_core/src/runtime/taira_activation.rs, specs/runtime/taira_time_ironwood_v1.md). It authenticates signatures, not a proof; the Ironwood pool it later authorizes is admitted by its own bootstrap operation."
    },
    "account_signing_key": {
     "scope": "out",
@@ -4938,9 +4975,79 @@
     "missing": "Credential-linked ballot and closed-corpus tally relations (P.8); a client path for timed-OVN casting: the Torii casting-context, casting-proof, partial-release and release-context routes, the CLI ballot commands and their SDK clients were removed (3be383b0e7, b88f6f5445), so no route, CLI command or SDK function in the tree builds a casting proof or requests a partial release any more; one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.8"],
-   "note": "Carries Parliament private ballots (timed OVN, threshold BLS release); Core replays every pulse, roster, corpus, release and certificate. specs/parliament_private_ballot_design.md section 12.1 retires timed OVN for the anonymous ballot: its client routes are already removed, while this handler, `iroha_core_timed_ovn` and the node TLE release runtime remain. The anonymous-ballot layer (crates/iroha_parliament_ballot; PARLIAMENT_BALLOT_QUALIFICATION_V1 = None) is used by no Core, Torii or SDK code at this revision.",
+   "note": "Carries Parliament private ballots (timed OVN, threshold BLS release); Core replays every pulse, roster, corpus, release and certificate. specs/parliament_private_ballot_design.md section 12.1 retires timed OVN for the anonymous ballot: its client routes are already removed, while this handler, `iroha_core_timed_ovn` and the node TLE release runtime remain. The anonymous-ballot layer (crates/iroha_parliament_ballot; PARLIAMENT_BALLOT_QUALIFICATION_V1 = None) reaches Core only through the anonymous family's reducer and its credential registration (operation anonymous_ballot::RegisterParliamentCredentialV1), which no selection activates at this revision.",
    "native_bridges": [],
    "torii": ["crates/iroha_torii/src/gov.rs"]
+  },
+  {
+   "id": "anonymous_ballot::RegisterParliamentCredentialV1",
+   "product": "voting",
+   "role": "proof_effect",
+   "isi": {
+    "type": "crate::governance::anonymous_ballot::RegisterParliamentCredentialV1",
+    "wire_id": "iroha.governance.parliament.credential.register.v1",
+    "defined_in": {
+     "path": "crates/iroha_data_model/src/governance/anonymous_ballot/registration_input.rs",
+     "symbol": "pub struct RegisterParliamentCredentialV1"
+    }
+   },
+   "handler": {"path": "crates/iroha_core/src/smartcontracts/isi/parliament_anonymous.rs", "symbol": "impl Execute for RegisterParliamentCredentialV1"},
+   "verifier_path": [
+    {"path": "crates/iroha_core/src/smartcontracts/isi/parliament_anonymous.rs", "symbol": "impl Execute for RegisterParliamentCredentialV1"},
+    {"path": "crates/iroha_core/src/governance/parliament_anonymous/credentials.rs", "symbol": "pub fn register_credential("},
+    {"path": "crates/iroha_parliament_ballot/src/board.rs", "symbol": "pub fn register("}
+   ],
+   "relation": "voting.parliament_credential_registration",
+   "authority": [
+    {
+     "path": "crates/iroha_core/src/smartcontracts/isi/parliament_anonymous.rs",
+     "symbol": "register_credential",
+     "what": "Reducer step taken as the signer: the reducer accepts it only for the signer's own open invitation, and the proof binds the signer's account."
+    }
+   ],
+   "kotodama": {"binding": "none"},
+   "routes": [],
+   "sdk": {
+    "rust": [],
+    "kotlin_java_android": [
+     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "via": ["wire_id"]}
+    ],
+    "swift": [],
+    "javascript": [],
+    "python": [],
+    "csharp": []
+   },
+   "tests": [
+    {
+     "path": "crates/iroha_core/src/governance/parliament_anonymous/world_tests.rs",
+     "test": "a_registration_records_the_acceptance_and_the_credential_together",
+     "reaches": [
+      {"path": "crates/iroha_core/src/smartcontracts/isi/parliament_anonymous.rs", "symbol": "impl Execute for RegisterParliamentCredentialV1"},
+      {"path": "crates/iroha_core/src/governance/parliament_anonymous/credentials.rs", "symbol": "pub fn register_credential("},
+      {"path": "crates/iroha_parliament_ballot/src/board.rs", "symbol": "pub fn register("}
+     ]
+    },
+    {
+     "path": "crates/iroha_core/src/governance/parliament_anonymous/world_tests.rs",
+     "test": "the_executor_runs_a_registration_only_as_the_sole_instruction_of_its_input",
+     "reaches": [
+      {"path": "crates/iroha_core/src/smartcontracts/isi/parliament_anonymous.rs", "symbol": "impl Execute for RegisterParliamentCredentialV1"},
+      {"path": "crates/iroha_core/src/governance/parliament_anonymous/credentials.rs", "symbol": "pub fn register_credential("},
+      {"path": "crates/iroha_parliament_ballot/src/board.rs", "symbol": "pub fn register("}
+     ]
+    }
+   ],
+   "test_evidence": "default",
+   "status": {
+    "presence": "registered",
+    "verification": "implemented",
+    "state_effects": "gated",
+    "delivery": "not_delivered",
+    "missing": "Activation of the `iroha.governance.parliament.anonymous.v1` release addition, which waits for the positioned block-start pass and signerless ballots (specs/parliament_private_ballot_design.md section 12.3, slices 3 and 4); a qualified proof profile (PARLIAMENT_BALLOT_QUALIFICATION_V1 = None); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+   },
+   "owner_tasks": ["P.8"],
+   "note": "Executes only as the sole instruction of a direct signed input under the network's candidate-testing selection; a certified test chain commits it through the executor, which arms the input's original, and refuses it beside another instruction. The credential record keeps `(C, auth)` and the locator of that input; the 160,148-byte proof stays in the input. Until a change set activates the addition the wire ID resolves as `definition_inactive`.",
+   "native_bridges": []
   },
   {
    "id": "governance::CastZkBallot",
@@ -5615,7 +5722,16 @@
    ],
    "kotodama": {"binding": "none"},
    "routes": [],
-   "sdk": {"rust": [], "kotlin_java_android": [], "swift": [], "javascript": [], "python": [], "csharp": []},
+   "sdk": {
+    "rust": [],
+    "kotlin_java_android": [
+     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "via": ["wire_id"]}
+    ],
+    "swift": [],
+    "javascript": [],
+    "python": [],
+    "csharp": []
+   },
    "status": {
     "presence": "registered",
     "verification": "not_applicable",
@@ -5646,7 +5762,16 @@
    ],
    "kotodama": {"binding": "none"},
    "routes": [],
-   "sdk": {"rust": [], "kotlin_java_android": [], "swift": [], "javascript": [], "python": [], "csharp": []},
+   "sdk": {
+    "rust": [],
+    "kotlin_java_android": [
+     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "via": ["wire_id"]}
+    ],
+    "swift": [],
+    "javascript": [],
+    "python": [],
+    "csharp": []
+   },
    "status": {
     "presence": "registered",
     "verification": "not_applicable",
@@ -5695,7 +5820,16 @@
    ],
    "kotodama": {"binding": "none"},
    "routes": [],
-   "sdk": {"rust": [], "kotlin_java_android": [], "swift": [], "javascript": [], "python": [], "csharp": []},
+   "sdk": {
+    "rust": [],
+    "kotlin_java_android": [
+     {"path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/InstructionWireIdsV1.kt", "via": ["wire_id"]}
+    ],
+    "swift": [],
+    "javascript": [],
+    "python": [],
+    "csharp": []
+   },
    "tests": [
     {
      "path": "crates/iroha_core/src/smartcontracts/isi/privacy/ironwood_execution_tests.rs",
@@ -7631,6 +7765,10 @@
     {
      "prefix": "/v1/sorafs/",
      "reason": "SoraFS storage, moderation ballots, PoR/PDP/PoP and reserve proofs; owned by the SoraFS closure (registry.modules.sorafs)."
+    },
+    {
+     "prefix": "/v1/runtime/boundaries/",
+     "reason": "Runtime boundary statements: a validator signs its statement of the adoption anchor or a startup floor from its own certified store (registry.modules.runtime_boundary); signatures, not a proof admission."
     },
     {
      "prefix": "/v1/da/",
@@ -10219,6 +10357,7 @@
     "zk::FinalizeElection",
     "governance::CastZkBallot",
     "governance::SubmitParliamentLifecycleTransitionV1",
+    "anonymous_ballot::RegisterParliamentCredentialV1",
     "identifier::ClaimIdentifier",
     "bridge::SubmitBridgeProof",
     "private_settlement::RegisterAtomicPrivateSettlementPrepareV1",
@@ -10243,6 +10382,7 @@
     {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub fn validate_private_settlement_prepare_barrier_v1("},
     {"path": "crates/iroha_core/src/private_settlement/protocol.rs", "symbol": "pub fn verify_private_settlement_receipt_v1("},
     {"path": "crates/iroha_core_timed_ovn/src/evidence.rs", "symbol": "pub fn finalize_release("},
+    {"path": "crates/iroha_parliament_ballot/src/board.rs", "symbol": "pub fn register("},
     {"path": "crates/iroha_core/src/pipeline/overlay.rs", "symbol": "pub(crate) fn verify_ivm_proved_execution<R>("},
     {"path": "crates/iroha_core/src/executor.rs", "symbol": "let replay_result = crate::pipeline::overlay::verify_ivm_proved_execution("},
     {
@@ -10276,7 +10416,7 @@
    ]
   },
   "restore": {
-   "what": "World restore re-validates, for the products of this plan: RAM-LFE program policies; the six AXT counter, incarnation, budget and replay ledgers; the privacy consensus policy at the committed height; the optional per-protocol resource policies at the committed height; the persisted privacy state (PGC accounts, nullifiers, commitments, roots) and its public reserve dependencies; the persisted atomic-settlement state; the canonical current/predecessor proof-tag lists and their rebuilt inverse index, and the verifying-key index; identifier claims; the timed-OVN and Parliament records; and the SoraCloud service history, which pins FHE policy records to their admission events. State construction rebuilds the proof-status index and validates standalone election state and the rebuilt Kaigi indexes. Restore verifies no proof. A verifying-key record's content is validated when a proof is dispatched or the host hydrates it; restore validates only the circuit-and-version index over the records. Authenticated checkpoint restore does not exist (plan: first-release rules).",
+   "what": "World restore re-validates, for the products of this plan: RAM-LFE program policies; the six AXT counter, incarnation, budget and replay ledgers; the privacy consensus policy at the committed height; the optional per-protocol resource policies at the committed height; the persisted privacy state (PGC accounts, nullifiers, commitments, roots) and its public reserve dependencies; the persisted atomic-settlement state; the canonical current/predecessor proof-tag lists and their rebuilt inverse index, and the verifying-key index; identifier claims; the timed-OVN and Parliament records, including the anonymous family's attempts, credentials and boards; and the SoraCloud service history, which pins FHE policy records to their admission events. State construction rebuilds the proof-status index and validates standalone election state and the rebuilt Kaigi indexes. Restore verifies no proof. A verifying-key record's content is validated when a proof is dispatched or the host hydrates it; restore validates only the circuit-and-version index over the records. Authenticated checkpoint restore does not exist (plan: first-release rules).",
    "sites": [
     {"path": "crates/iroha_core/src/state/deserialize_core.rs", "symbol": "pub(super) fn validate_ram_lfe_program_policies("},
     {
@@ -10320,6 +10460,16 @@
      "symbol": "fn validate_parliament_attempt_encoded_size_bounds_v1(world: &World) -> Result<(), json::Error> {"
     },
     {"path": "crates/iroha_core/src/state/deserialize_world.rs", "symbol": "validate_parliament_randomness_redraw_lineage_v1("},
+    {
+     "path": "crates/iroha_core/src/state/deserialize_world.rs",
+     "symbol": "crate::governance::parliament::validate_ordered_parliament_randomness_redraw_lineage_v1(",
+     "what": "Check the redraw lineage of a SoraFS authority proposal's ordered Parliament attempt history at restore."
+    },
+    {
+     "path": "crates/iroha_core/src/state/deserialize_world.rs",
+     "symbol": "validate_parliament_anonymous_tables(&world, &network_id, restored_height, &execution_budget)?;",
+     "what": "Check the anonymous Parliament attempts, credentials and boards of the current and predecessor cuts; restore verifies no registration proof."
+    },
     {"path": "crates/iroha_core/src/state/deserialize_world.rs", "symbol": "fn validate_no_standalone_governance_state_for_typed_proposals_v1("},
     {"path": "crates/iroha_core/src/state/deserialize_world.rs", "symbol": "fn validate_soracloud_service_deployment_history("},
     {
@@ -10630,6 +10780,25 @@
      "what": "The timed-OVN final release verifier."
     },
     {
+     "id": "parliament_registration",
+     "needle": "verify_registration_v1",
+     "pattern": "\\bverify_registration_v1\\s*\\(",
+     "roots": [
+      "crates/iroha_core/src",
+      "crates/iroha_core_privacy/src",
+      "crates/iroha_core_zk/src",
+      "crates/iroha_core_timed_ovn/src",
+      "crates/iroha_torii/src",
+      "crates/iroha_genesis/src",
+      "crates/irohad/src",
+      "crates/fastpq_prover/src",
+      "crates/iroha_data_model/src",
+      "crates/iroha_p2p/src",
+      "crates/iroha_parliament_ballot/src"
+     ],
+     "what": "The anonymous Parliament credential registration verifier, in the node crates and the ballot crate that defines it."
+    },
+    {
      "id": "settlement_leg",
      "needle": "private_settlement",
      "pattern": "\\b(?:validate_private_settlement_leg_v1|verify_atomic_private_settlement_v1)\\s*\\(",
@@ -10825,6 +10994,14 @@
      "note": "Restart recovery of the lane producer (`FastpqWitnessJob::recover_next`): the node re-verifies an artifact it persisted itself in Kura against freshly prepared expectations before advancing its cursor; it admits no external proof."
     },
     {
+     "token": "parliament_registration",
+     "path": "crates/iroha_parliament_ballot/src/board.rs",
+     "count": 1,
+     "route": "direct_protocol_instructions",
+     "note": "The registration ledger verifies `pi_reg` after its freshness checks; Core reaches it only through the credential registration handler."
+    },
+    {"token": "parliament_registration", "path": "crates/iroha_parliament_ballot/src/registration.rs", "count": 1, "route": "definition"},
+    {
      "token": "pgc_bootstrap",
      "path": "crates/iroha_core/src/executor/attachment_custody/pgc_bootstrap.rs",
      "count": 1,
@@ -10945,6 +11122,20 @@
      "name": "validate_no_standalone_governance_state_for_typed_proposals_v1",
      "path": "crates/iroha_core/src/state/deserialize_world.rs",
      "count": 2,
+     "route": "restore"
+    },
+    {
+     "token": "restore_validator",
+     "name": "validate_ordered_parliament_randomness_redraw_lineage_v1",
+     "path": "crates/iroha_core/src/state/deserialize_world.rs",
+     "count": 1,
+     "route": "restore"
+    },
+    {
+     "token": "restore_validator",
+     "name": "validate_parliament_anonymous_tables",
+     "path": "crates/iroha_core/src/state/deserialize_world.rs",
+     "count": 1,
      "route": "restore"
     },
     {

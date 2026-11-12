@@ -52,6 +52,12 @@ impl_id_key_codec!(
     crate::governance::types::BallotAttemptId,
     crate::governance::types::TleKeySessionId,
 );
+// The anonymous Parliament family keys a credential by its assignment and a ballot board by
+// its scope; both spell exactly their lowercase hexadecimal bytes.
+impl_id_key_codec!(
+    crate::governance::types::AssignmentId,
+    crate::governance::anonymous_ballot::BallotScopeV1,
+);
 // Musubi uses structural, versioned keys whose complete typed JSON form is
 // embedded into the surrounding storage object's string key. This avoids
 // delimiter ambiguity for nested package/account identities while keeping
@@ -471,7 +477,10 @@ mod tests {
     }
     use crate::account::AccountId;
     use crate::{
-        governance::types::{BallotAttemptId, GovernanceAttemptId, TleKeySessionId},
+        governance::{
+            anonymous_ballot::BallotScopeV1,
+            types::{AssignmentId, BallotAttemptId, GovernanceAttemptId, TleKeySessionId},
+        },
         musubi::{
             ArchiveId, MusubiInviteIdV1, MusubiMaintainerDirectoryKeyV1, MusubiPackageIdV1,
             MusubiPackageScopeV1, MusubiProviderBundleAttestationKeyV1,
@@ -511,6 +520,35 @@ mod tests {
         check(&GovernanceAttemptId::new([0xab; 32]));
         check(&BallotAttemptId::new([0xbc; 32]));
         check(&TleKeySessionId::new([0xcd; 32]));
+        check(&AssignmentId::new([0xde; 32]));
+    }
+    #[test]
+    fn anonymous_ballot_scopes_are_canonical_json_storage_keys() {
+        let scope = BallotScopeV1::new([0xef; 64]);
+        let mut encoded = String::new();
+        scope.encode_json_key(&mut encoded);
+        let mut parser = Parser::new(&encoded);
+        let raw = parser
+            .parse_string()
+            .expect("parse ballot scope storage key");
+        assert_eq!(
+            raw,
+            "ef".repeat(64),
+            "a scope key is its 64 lowercase hex bytes"
+        );
+        assert_eq!(
+            BallotScopeV1::decode_json_key(&raw).expect("decode ballot scope storage key"),
+            scope
+        );
+        for invalid in [
+            raw.to_uppercase(),
+            format!("0x{raw}"),
+            raw[..126].to_owned(),
+            format!("{raw}00"),
+            "zz".repeat(64),
+        ] {
+            assert!(BallotScopeV1::decode_json_key(&invalid).is_err());
+        }
     }
     #[test]
     fn account_storage_keys_preserve_original_refusal_fields_scope_and_retry() {

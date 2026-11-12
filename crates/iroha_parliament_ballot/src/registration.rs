@@ -6,8 +6,8 @@
 //! body context, the network, the registering account's authority binding, the assignment,
 //! the attempt identifiers, the role, `B` and `C`; `D_reg` is recomputed by the proof crate
 //! with the candidate descriptor. The proof shows that one secret opens `C` and produces
-//! `auth`. It does not show authority, invitation, eligibility, freshness or uniqueness,
-//! which the pending Core integration must check independently.
+//! `auth`. It does not show authority, invitation, eligibility, freshness or uniqueness:
+//! Core checks them independently when it registers the credential (design §3.2).
 
 use iroha_data_model::{
     account::AccountId,

@@ -530,18 +530,23 @@ passes.
   implemented; unfinished node paths return local unavailability. The node
   ballot board (`iroha_parliament_ballot::board`: registration ledger, seal,
   casting clock, block execution, closure and the admission and block-execution
-  state adapters) is implemented in the typed protocol crate; Core neither
-  stores nor calls it yet. Under the live-upgrade foundation the ballot ships
+  state adapters) is implemented in the typed protocol crate; Core drives its
+  registration ledger and seal through the anonymous family's reducer. Under
+  the live-upgrade foundation the ballot ships
   as its own definition family of release additions, and the frozen baseline
   keeps timed-OVN until governance retires it
   ([design section 12.3](specs/parliament_private_ballot_design.md#123-shipping-under-the-live-upgrade-foundation)).
-  The family's first slice is in Core with nothing dispatching it: its
-  fact-and-intent payloads, certificate and reducer
-  (`iroha_core::governance::parliament_anonymous`), whose election and
-  deliberation machines run on the governance clock of
+  The family's first two slices are in Core: its fact-and-intent payloads,
+  certificate and reducer (`iroha_core::governance::parliament_anonymous`),
+  whose election and deliberation machines run on the governance clock of
   [design section 8.1](specs/parliament_private_ballot_design.md#81-anonymous-family-lifecycle-scheduling)
-  and report their positioned items. Its World tables, credential
-  registration, positioned pass and signerless execution do not exist yet. The real
+  and report their positioned items; and the `iroha.governance.parliament.anonymous.v1`
+  release addition with three World tables (attempts, credentials, boards), the
+  credential registration (`RegisterParliamentCredentialV1`, the sole
+  instruction of a direct signed input under the candidate-testing selection),
+  the credential-aware seal with its planner, and the snapshot restore check of
+  both cuts. No selection activates the addition; the positioned pass and
+  signerless execution do not exist yet. The real
   typed protocol is available for local testing with
   `scripts/test_parliament_ballot_local.sh` (or `--full`); its fixture board
   covers registration, voting, admission/execution, closure, replay and canonical
