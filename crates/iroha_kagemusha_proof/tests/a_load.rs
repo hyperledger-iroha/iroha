@@ -24,7 +24,9 @@ fn load_policy_requires_fixed_nonzero_provider_and_finite_root() {
 #[test]
 fn genuine_load_sigma_signed_objects_and_recovery_share_exact_roots() {
     let (circuit, sigma) = fixture();
-    assert_eq!(sigma.len(), 3296);
+    // 107 PIPA-R messages of 32 bytes (46 points, 61 scalars): k12, degree 8 from the
+    // norm-factor lookup, three permutation sets over seven equality columns.
+    assert_eq!(sigma.len(), 3424);
     assert!(
         check_circuit(&circuit, 16, &circuit.public(), CheckMode::Strict)
             .unwrap()

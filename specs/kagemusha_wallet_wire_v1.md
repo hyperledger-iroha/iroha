@@ -121,7 +121,7 @@ chunk boundaries, and every value (§5).
   (96-byte body), an artifact digest that no relation recomputes. A signature confers only
   its signer role's authority; decoding or validating grants no monetary authority.
 
-Signed bodies (16; the transcript of each is in the section named, and the `-body`
+Signed bodies (15; the transcript of each is in the section named, and the `-body`
 SHA-256 roles do not exist):
 
 | Signed body | Signing domain `d` | Transcript bytes | Signer | Object digest |
@@ -1180,15 +1180,15 @@ The message bound was 10,000 bytes until the reset after r12. On 2026-10-19 the 
 ## 5. Vectors
 
 `fixtures/kagemusha/wallet_v1_vectors.json` holds the prefix and digest rule, one
-digest vector per SHA-256 role (21: body, preimage, digest), 17 signature vectors, each
+digest vector per SHA-256 role (21: body, preimage, digest), 16 signature vectors, each
 with its transcript, signing domain and 32-byte message `m`, and their high-S twins
 (`codec_ok` false, `verify_ok` true), the low-S boundary scalars (`s = floor(n/2)`
-accepted; `floor(n/2) + 1`, `r` or `s` zero or `n` rejected), nine envelope vectors
+accepted; `floor(n/2) + 1`, `r` or `s` zero or `n` rejected), seven envelope vectors
 (header fields, padding, CRC, canonical bytes, `kgm1:` text and bound), the frame
 identities and caps, pinned object frames, the enum tag table, and:
 
-- `field_encodings`: the modulus, the element, Poseidon and packing rules, the 59
-  Poseidon domains (33 general domains, 16 signing domains and 10 object-digest domains), the element lists
+- `field_encodings`: the modulus, the element, Poseidon and packing rules, the 58
+  Poseidon domains (33 general domains, 15 signing domains and 10 object-digest domains), the element lists
   of every map value and the credit-digest value, a `send_chain` append from the empty
   chain and a `recv_chain` append with their chain values, a Send and a Receive
   statement with their σ digests, a Receive successor state's core and rest elements,
@@ -1228,7 +1228,7 @@ byte for byte; `IROHA_UPDATE_KAGEMUSHA_WALLET_VECTORS=1` rewrites it (test-only)
 The Kotlin (`KagemushaWalletVectorsV1Test`) and Swift (`KagemushaWalletVectorsV1Tests`)
 consumers recompute all 21 SHA-256 role digests, including the NEW policy identities,
 with every retired role rejected, and mirror
-the 16 signing domains with their transcript lengths, verify every signature vector over
+the 15 signing domains with their transcript lengths, verify every signature vector over
 its pinned 32-byte message `m` after the low-S rule (and reject it over the transcript),
 validate envelope headers and per-kind bounds, and round-trip `kgm1:` text. They
 re-derive the element lists (statements, state core and rest with the named
@@ -1245,8 +1245,8 @@ byte-linking tests of `src/bytes` for the packing, every large-input digest and 
 signing message) reproduce them natively and in circuit.
 
 **Canonical third-set coverage.** The vectors carry 21 SHA-256 role
-vectors (the consumers reject retired roles), 59 Poseidon domains (33 general,
-16 signing and 10 signed-object domains), every object, certificate-set, package, operation and
+vectors (the consumers reject retired roles), 58 Poseidon domains (33 general,
+15 signing and 10 signed-object domains), every object, certificate-set, package, operation and
 nullifier digest as a `P` vector, the 26-element statement and the 24-element
 `credit_id`, the 29-element core and 6-element rest with their named
 positions, the new map-value element counts, and the quota-usage padding leaf and
