@@ -441,6 +441,106 @@ impl WalletKey {
 /// 128-bit limbs (x low, x high, y low, y high).
 pub const TABLE_IO: usize = 56;
 
+/// Public P io for the research head: the own relation's final signed
+/// statement-sponge digest. TODO: replace the synthetic statement with the
+/// canonical monetary state encoding before production integration.
+pub const HEAD_IO: usize = 4;
+
+/// The own relation's predecessor and exposed successor head.
+pub struct HeadIdx {
+    /// Private context: predecessor head at row 0, operation kind at row 1.
+    pub context: usize,
+    /// One public field element at `HEAD_IO`.
+    pub head: usize,
+}
+
+/// The signed context of a research transition. Bootstrap has no
+/// predecessor and pins that value to zero; other kinds bind it to their
+/// verified predecessor below. The operation kind is always constrained.
+fn head_context(w: &mut Wiring<Fp>, gfam: usize, op: &Op, predecessor: Fp) -> (usize, usize) {
+    let one = Fp::ONE;
+    let kind = Fp::from(op.kind as u64);
+    let mut rows = vec![[
+        plus(&own(0, 2), &constant(vec![Fp::ZERO, -kind])),
+        constant(vec![Fp::ZERO, one]),
+        Vec::new(),
+    ]];
+    if op.kind == BOOTSTRAP {
+        rows.push([own(0, 2), constant(vec![one, Fp::ZERO]), Vec::new()]);
+    }
+    let a = w.push(Array {
+        name: "head predecessor and kind",
+        family: gfam,
+        rho: 1,
+        r_count: 2,
+        fixed: false,
+        lookups: Vec::new(),
+        widths: vec![255],
+        rows,
+        values: vec![vec![predecessor, kind]],
+    });
+    let e = w.export(a, vec![own(0, 2)]);
+    (a, e)
+}
+
+/// Exposes exactly lane 0 of the signed statement's final permutation.
+/// The other two lanes are private witnesses in the copy opening.
+fn head_output(
+    w: &mut Wiring<Fp>,
+    gfam: usize,
+    e_out: usize,
+    last: usize,
+    value: [Fp; 3],
+) -> usize {
+    let head = w.push(Array {
+        name: "head io",
+        family: gfam,
+        rho: 0,
+        r_count: 1,
+        fixed: false,
+        lookups: Vec::new(),
+        widths: vec![255],
+        rows: Vec::new(),
+        values: vec![vec![value[0]]],
+    });
+    w.io_arrays.push((head, HEAD_IO));
+    let opening = w.push(Array {
+        name: "head sponge opening",
+        family: gfam,
+        rho: 0,
+        r_count: 1,
+        fixed: false,
+        lookups: Vec::new(),
+        widths: vec![255; 3],
+        rows: vec![[
+            plus(&own(0, 1), &link(head, 0, vec![Some(0)], -Fp::ONE)),
+            constant(vec![Fp::ONE]),
+            Vec::new(),
+        ]],
+        values: value.into_iter().map(|v| vec![v]).collect(),
+    });
+    w.import(
+        opening,
+        vec![own(0, 1), own(1, 1), own(2, 1)],
+        vec![Some((e_out, last))],
+    );
+    head
+}
+
+/// The own statement must consume the head of proof 0, the wallet's
+/// predecessor, never the counterparty's proof. `io` is the authenticated
+/// io-fold array from that proof's scalar verifier.
+fn predecessor_head_tie(w: &mut Wiring<Fp>, host: usize, context: usize, io: usize) {
+    let leaves = (1usize << w.arrays[io].rho) / 2;
+    let row = plus(
+        &link(context, 0, vec![Some(0)], Fp::ONE),
+        &link(io, 0, vec![Some(leaves + HEAD_IO)], -Fp::ONE),
+    );
+    w.arrays[host]
+        .rows
+        .push([row, constant(vec![Fp::ONE]), Vec::new()]);
+}
+
 /// The issuer's computation at enrollment, which the credential certifies:
 /// the commitment to a key's comb tables as a P circuit's wallet row holds
 /// them (unblinded; cell `k` of table row `i` at column `512 k + i`), on the
@@ -636,6 +736,8 @@ pub struct OwnIdx {
     pub bytes: Option<usize>,
     pub logic: usize,
     pub gfam: usize,
+    /// Present in the recursive Send, Receive and Bootstrap relations.
+    pub head: Option<HeadIdx>,
 }
 
 /// Insertion values: k_low, v_low, next, key, value.
@@ -659,12 +761,32 @@ pub fn own_relation(
     key: &WalletKey,
     absorb: Option<(usize, [Fp; 4])>,
 ) -> OwnIdx {
+    own_relation_with_head(w, pool, e_out, e_zero, gfam, op, key, absorb, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn own_relation_with_head(
+    w: &mut Wiring<Fp>,
+    pool: &mut Pool<Fp>,
+    e_out: usize,
+    e_zero: usize,
+    gfam: usize,
+    op: &Op,
+    key: &WalletKey,
+    absorb: Option<(usize, [Fp; 4])>,
+    predecessor: Option<Fp>,
+) -> OwnIdx {
     assert!(
         op.signatures >= 1 && op.signatures <= op.statement_perms,
         "{}: each signature signs a statement digest",
         op.label
     );
     assert!(op.insertions <= 2, "{}: two insertions at most", op.label);
+    assert!(
+        predecessor.is_none() || op.statement_perms >= op.signatures + 2,
+        "each signature must cover the predecessor and kind absorption"
+    );
+    let head = predecessor.map(|value| head_context(w, gfam, op, value));
     let e_start = constant_entries(
         w,
         gfam,
@@ -674,13 +796,18 @@ pub fn own_relation(
     // The statement sponge: (0, 0, 7), two values absorbed per permutation;
     // with `absorb`, its first two permutations take the four values read
     // from that export (Bootstrap's table commitment, which the credential
-    // signs).
+    // signs). A head context is absorbed in the third permutation, before
+    // every signed digest; all later digests inherit it through the chain.
     let mut statement = Vec::with_capacity(op.statement_perms);
     for i in 0..op.statement_perms {
-        let (ab, from) = match absorb {
-            Some((e, vals)) if i < 2 => (
+        let (ab, from) = match (absorb, head, predecessor) {
+            (Some((e, vals)), _, _) if i < 2 => (
                 [vals[2 * i], vals[2 * i + 1]],
                 [Some((e, 2 * i)), Some((e, 2 * i + 1))],
+            ),
+            (_, Some((_, e)), Some(value)) if i == 2 => (
+                [value, Fp::from(op.kind as u64)],
+                [Some((e, 0)), Some((e, 1))],
             ),
             _ => (
                 [
@@ -810,7 +937,16 @@ pub fn own_relation(
             (Some(ins), Some(roots))
         }
     };
-    signed_and_small(w, pool, e_out, gfam, op, key, statement, ins, roots)
+    let head = head.map(|(context, _)| {
+        let last = *statement.last().expect("a signed statement");
+        HeadIdx {
+            context,
+            head: head_output(w, gfam, e_out, last, pool.out(last)),
+        }
+    });
+    let mut own = signed_and_small(w, pool, e_out, gfam, op, key, statement, ins, roots);
+    own.head = head;
+    own
 }
 
 /// The insertions' value array, its leaf-input export and the root-equality
@@ -1037,6 +1173,7 @@ fn signed_and_small(
         bytes,
         logic,
         gfam,
+        head: None,
     }
 }
 
@@ -1370,6 +1507,131 @@ mod tests {
         let (proof, _) =
             crate::spartan::prove_circuit(&c.shape, gens, inst, &Witness { w: bad }, &mut prng, c);
         crate::spartan::verify_circuit(&c.shape, gens, inst, &proof.to_bytes(), c).is_ok()
+    }
+
+    fn signed_head_relation(
+        op: &Op,
+        predecessor: Fp,
+    ) -> (UniformCircuit<Fp>, Instance<Fp>, Witness<Fp>) {
+        let mut w = Wiring::<Fp>::default();
+        let gfam = w.family(0, 1);
+        let e_out = w.reserve();
+        let e_zero = constant_entries(&mut w, gfam, "head zero", &[vec![Fp::ZERO]]);
+        let mut pool = Pool::new(Fp::from(NODE_DOMAIN));
+        own_relation_with_head(
+            &mut w,
+            &mut pool,
+            e_out,
+            e_zero,
+            gfam,
+            op,
+            &WalletKey::stand_in(),
+            None,
+            Some(predecessor),
+        );
+        pool.build(&mut w, e_out, &mut SpikeRng::new(b"signed head pool"));
+        let (arrays, pi, counts, tables, copies) = w.finish();
+        UniformCircuit::build_with_copies(
+            "signed-head",
+            arrays,
+            pi,
+            counts,
+            tables,
+            copies,
+            14,
+            64,
+            b"signed head",
+        )
+    }
+
+    /// The successor head is a constrained signed digest, not an arbitrary
+    /// public input, and a Bootstrap cannot claim a nonzero predecessor.
+    #[test]
+    fn signed_head_digest_and_bootstrap_predecessor_are_constrained() {
+        let (c, inst, wit) = signed_head_relation(&Op::SEND, Fp::from(23));
+        let gens = crate::ipa::Gens::<Vesta>::new(c.shape.cols());
+        assert!(accepted(&c, &inst, &gens, wit.w.clone()));
+        let mut wrong_head = inst.clone();
+        wrong_head.io[HEAD_IO] += Fp::ONE;
+        assert!(
+            !accepted(&c, &wrong_head, &gens, wit.w),
+            "a newly generated proof cannot expose another successor head"
+        );
+        for predecessor in [Fp::ZERO, Fp::from(23)] {
+            let (c, inst, wit) = signed_head_relation(&Op::BOOTSTRAP, predecessor);
+            assert_eq!(
+                accepted(&c, &inst, &gens, wit.w),
+                bool::from(predecessor.is_zero()),
+                "Bootstrap's signed statement must start without a predecessor"
+            );
+        }
+    }
+
+    /// Re-sign and re-prove an internally consistent own statement over a
+    /// wrong parent. That own relation is valid in isolation, but cannot be
+    /// attached to the separately verified predecessor (including when the
+    /// wrong head belongs to the other incoming proof).
+    #[test]
+    #[ignore = "recursive matrix folds require ZKS_SCHEDULE=lean; run with --include-ignored"]
+    fn signed_wrong_parent_is_refused_by_recursive_head_binding() {
+        use crate::spartan::{Link, prove_linked_circuit, verify_linked_circuit};
+        assert!(crate::fs::lean_schedule(), "run with ZKS_SCHEDULE=lean");
+        let (gens, pairs) = receive_pairs();
+        let parent = pairs[0].inst_p.io[HEAD_IO];
+        let payer = pairs[1].inst_p.io[HEAD_IO];
+        assert_ne!(parent, payer, "the two verified inputs have distinct heads");
+        for (op, input_count) in [(&Op::SEND, 1), (&Op::RECEIVE, 2)] {
+            for predecessor in [parent, parent + Fp::ONE, payer] {
+                let (own, oi, ow) = signed_head_relation(op, predecessor);
+                assert!(
+                    accepted(&own, &oi, &gens.p, ow.w),
+                    "the own statement is valid and correctly signed for this parent"
+                );
+                let (w, _) = p_circuit_with_predecessor(
+                    op,
+                    &gens,
+                    &pairs[..input_count],
+                    &WalletKey::stand_in(),
+                    predecessor,
+                );
+                let (arrays, pi, counts, tables, copies) = w.finish();
+                let (c, inst, wit) = UniformCircuit::build_with_copies(
+                    "head-recursive",
+                    arrays,
+                    pi,
+                    counts,
+                    tables,
+                    copies,
+                    14,
+                    64,
+                    b"head recursive",
+                );
+                assert_eq!(
+                    inst.io[HEAD_IO], oi.io[HEAD_IO],
+                    "the recursive circuit contains the same correctly signed own statement"
+                );
+                let rho = crate::verifier::Fq::from(7).to_repr();
+                let mut bound = wit.w.clone();
+                c.fill_link(&rho, &mut bound);
+                let r = c.binding_r(&bound).expect("the research pair binding");
+                let link = Link::First { rho, r };
+                let (proof, _, _) = prove_linked_circuit(
+                    &c.shape,
+                    &gens.p,
+                    &inst,
+                    &wit,
+                    &mut SpikeRng::new(b"recursive head prove"),
+                    &link,
+                    &c,
+                );
+                assert_eq!(
+                    verify_linked_circuit(&c.shape, &gens.p, &inst, &proof.to_bytes(), &link, &c)
+                        .is_ok(),
+                    predecessor == parent,
+                    "a signed own statement must consume proof 0's authenticated head"
+                );
+            }
+        }
     }
 
     #[test]
@@ -2968,6 +3230,20 @@ pub fn p_circuit(
     pairs: &[TracedPair],
     key: &WalletKey,
 ) -> (Wiring<Fp>, PRecvIdx) {
+    p_circuit_with_predecessor(op, gens, pairs, key, pairs[0].inst_p.io[HEAD_IO])
+}
+
+/// Builds all the own-statement hashes and signatures from the supplied
+/// predecessor witness. Its equality to proof 0's head is a circuit
+/// constraint, not a host-side assertion. Tests deliberately supply a
+/// different, correctly signed predecessor to exercise that boundary.
+fn p_circuit_with_predecessor(
+    op: &Op,
+    gens: &PairGens,
+    pairs: &[TracedPair],
+    key: &WalletKey,
+    predecessor: Fp,
+) -> (Wiring<Fp>, PRecvIdx) {
     use crate::points::{KeySelect, PointsBuilder, SharedMap};
     use iroha_pasta::Ep as Pallas;
     let kinds = slot_kinds(gens, pairs);
@@ -2978,7 +3254,17 @@ pub fn p_circuit(
     let e_zero = constant_entries(&mut w, gfam, "zero word", &[vec![Fp::ZERO]]);
     let mut pool = Pool::new(Fp::from(NODE_DOMAIN));
     let _ = kind_pin(&mut w, gfam, op.kind);
-    let own_idx = own_relation(&mut w, &mut pool, e_out, e_zero, gfam, op, key, None);
+    let own_idx = own_relation_with_head(
+        &mut w,
+        &mut pool,
+        e_out,
+        e_zero,
+        gfam,
+        op,
+        key,
+        None,
+        Some(predecessor),
+    );
     let (own_table, _) = table_io(&mut w, gfam, &wallet_table_commitment(&key.q, &gens.p));
     w.wallet = Some((own_idx.comb + nonnative::A_WTABLE, TABLE_IO));
     // Shared values: per pair, the P proof's then the S proof's; then each
@@ -3103,6 +3389,12 @@ pub fn p_circuit(
         &table_offs,
         shared,
         Some(own_table),
+    );
+    predecessor_head_tie(
+        &mut w,
+        defer.fold.values,
+        own_idx.head.as_ref().expect("a transition head").context,
+        scalars[0].io,
     );
     let mut rng = SpikeRng::new(b"p-recv pool");
     let pidx = pool.build(&mut w, e_out, &mut rng);
@@ -4083,7 +4375,7 @@ pub fn p_boot(gens: &PairGens, key: &WalletKey, tables: bool) -> (Wiring<Fp>, Bo
         values: vec![limbs.to_vec()],
     });
     let e_cert = w.export(certified, vec![own(0, 4)]);
-    let own_idx = own_relation(
+    let own_idx = own_relation_with_head(
         &mut w,
         &mut pool,
         e_out,
@@ -4092,6 +4384,7 @@ pub fn p_boot(gens: &PairGens, key: &WalletKey, tables: bool) -> (Wiring<Fp>, Bo
         &Op::BOOTSTRAP,
         key,
         Some((e_cert, limbs)),
+        Some(Fp::ZERO),
     );
     w.wallet = Some((own_idx.comb + nonnative::A_WTABLE, TABLE_IO));
     let key_tables = tables.then(|| {

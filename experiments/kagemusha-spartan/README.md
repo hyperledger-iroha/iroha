@@ -38,8 +38,13 @@ four points.
   not fit Bootstrap at Receive's layout; `ZKS_BOOT_TABLES=on` tries it.) Not
   modelled: the issuer's and root's own keys (Bootstrap's three signatures use
   the wallet's tables as a stand-in), the ledger's activation record, and the
-  rest of the wallet state carried from one step to the next
-  (`σ.predecessor = Ω.head`).
+  exact wallet state carried from one step to the next. The research head
+  boundary is now constrained: each Send/Receive statement consumes its
+  verified predecessor's public head, signs that head together with its
+  operation kind, and exposes its signed statement-sponge digest as the next
+  head. Bootstrap pins its predecessor to zero. This closes the recursive
+  head link but does not implement the monetary `CoreHead` encoding or
+  balances, counters and map transitions.
 - Spartan proof acceptance alone does not establish deferred-claim validity.
   Both native accumulator checks must hold. Intermediate template-building
   hops deliberately contain false accumulators and are not valid payments.
@@ -55,11 +60,12 @@ production integration.
 ## Reproduce
 
 Run from this directory. Keep one target directory across repeated runs; the
-following reuses the original research lane in this checkout:
+following reuses the current research lane in this checkout:
 
 ```sh
-export CARGO_TARGET_DIR="$PWD/../../output/kagemusha-100x-20261108/spike/target-zks"
-cargo test --locked --offline --release
+export CARGO_TARGET_DIR="$PWD/target"
+# Include the recursive wrong-parent regression under its lean transcript.
+ZKS_SCHEDULE=lean cargo test --locked --offline --release -- --include-ignored
 cargo build --locked --offline --release
 ZKS_SCHEDULE=lean ZKS_HOPS=8 \
   "$CARGO_TARGET_DIR/release/zk-spartan" fixed-point
@@ -79,7 +85,11 @@ every order (Send and Receive after a Bootstrap, a Receive and a Send) must run
 on the hop's circuits, verify, and have accumulators that hold natively;
 changed kind bits, a changed empty claim or a changed table-commitment limb
 must break a row, and a proof checked under the other wallet's table
-commitment must be refused. The benchmark asserts
+commitment must be refused. Every operation must consume proof 0's head;
+changing its signed predecessor or kind must break a row. The regression
+suite also re-signs and re-proves an internally valid own statement with a
+wrong predecessor, including the payer's head, for both Send and a Receive
+with two input proofs: the recursive proof must refuse it. The benchmark asserts
 exact native `q` coefficient equality between batched and pointwise
 evaluation.
 
@@ -90,6 +100,8 @@ native batching. The other Markdown files retain earlier research measurements;
 their stage-specific claims are not current production-readiness statements.
 [The design record](research/DESIGN-100X.md) and the related reviews are preserved
 under `research/`, including the unresolved soundness review.
+[The construction record](research/CONSTRUCTION.md) pins the research generator
+derivation, commitment layout and the remaining production obligations.
 
 The source was moved from
 `output/kagemusha-100x-20261108/spike/zk-spartan` without leaving a duplicate source
