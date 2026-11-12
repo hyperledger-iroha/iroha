@@ -197,14 +197,23 @@ prover evaluates the quotient on the smallest LDE subgroup that determines it, m
 DEEP trace terms by coefficient before one coset FFT per point, transforms each trace
 column on one worker with shared power tables (64 columns per dispatch), hashes adjacent
 commitment rows through the paired two-lane SHA3 sponge, gathers constraint rows in blocks
-and reduces extension dot products once. Proof bytes are unchanged; serial, scalar,
-verifier-oracle and full-domain equivalence tests compare each step. On an optimized test
+and reduces extension dot products once. It builds the copy-chip columns straight from
+the eight base cells and evaluates fixed policy only on the quotient subgroup. Proof bytes
+are unchanged; serial, scalar, verifier-oracle and full-domain equivalence tests compare
+each step. On an optimized test
 build at host load about 20 (16 cores), one genuine leg proof is constructed in 1.3 s and
 self-verified in 0.09 s with 7.7 CPU-seconds, against 6.4 s and 11.1 CPU-seconds when
 columns were transformed eight at a time; three legs proved concurrently on that host
 finish in 3.1–3.3 s. The base LDE, FRI layers, composition and base commitment (0.12–0.26 s
 each) remain the largest phases, and page faults on the 1.5 GB working set cost about one
-CPU-second per leg. No end-to-end timing has been taken on the current candidate.
+CPU-second per leg. The SDK sends the four requests to one committee concurrently for
+availability, promotion, Prepare and Commit votes, certificate handoffs and recovery
+reads, and auditor reads and approvals, joining every request before it uses a response;
+legs, and leg proofs in the one-call preparation driver, still run one after another.
+Benchmark sessions sign the protocol-default 1 s block cadence; smoke, happy-day, fault and
+leakage networks keep 4 s, at which proof construction plus the cadence interval between
+the registration and finalization blocks already exceeds five seconds. No end-to-end
+timing has been taken on the current candidate.
 Current-source happy-day settlements and serial restart have functional coverage;
 fault, leakage, performance and release campaigns remain open. Earlier source or
 component observations do not qualify the final combined candidate.
