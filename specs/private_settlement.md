@@ -956,6 +956,10 @@ configuration manifest covers N=2,3,4,8,16 in order and binds every exact
 configuration file while asserting four validators, 3-of-4 quorum, and
 mandatory signed RS16 DA/RBC. It also binds the exact bounded coordinator/
 prover Rayon width and validator scheduler, Rayon, and pipeline worker width.
+It binds the signed block cadence of each campaign: 1000 ms, the protocol
+default, for benchmark sessions, and 4000 ms for the fault and leakage
+campaigns, whose sixteen validators share one host. The localnet builder signs
+that one cadence into both the Global genesis and the participant lane policy.
 The real-process launcher must override any ambient `RAYON_NUM_THREADS` value
 with the recorded coordinator/prover width; the localnet builder must write the
 recorded validator width into every peer configuration; and the Rust harness

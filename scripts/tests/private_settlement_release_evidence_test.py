@@ -3114,6 +3114,13 @@ class ConfigurationProfileConsensusTests(unittest.TestCase):
 
     def test_consensus_profile_rejects_extra_missing_or_weakened_bindings(self) -> None:
         mutations = {
+            "missing cadence binding": lambda configuration: configuration["consensus"].pop("block_cadence_ms"),
+            "changed benchmark cadence": lambda configuration: configuration["consensus"]["block_cadence_ms"].update(benchmark=4000),
+            "changed fault cadence": lambda configuration: configuration["consensus"]["block_cadence_ms"].update(fault=1000),
+            "changed leakage cadence": lambda configuration: configuration["consensus"]["block_cadence_ms"].update(leakage=1000),
+            "missing leakage cadence": lambda configuration: configuration["consensus"]["block_cadence_ms"].pop("leakage"),
+            "unrecorded cadence profile": lambda configuration: configuration["consensus"]["block_cadence_ms"].update(smoke=4000),
+            "boolean cadence": lambda configuration: configuration["consensus"]["block_cadence_ms"].update(benchmark=True),
             "availability bypass knob": lambda configuration: configuration[
                 "consensus"
             ].update(signed_rs16_da_bypass_permitted=False),

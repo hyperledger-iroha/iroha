@@ -423,12 +423,14 @@ pub(super) fn matched_benchmark_builder(
         } // The shared AllLedger grant occurs once.
         post.extend(genesis);
     }
-    Ok(localnet_builder(shape)
+    // Benchmark sessions measure latency on the protocol-default signed cadence.
+    let cadence = REAL_PROCESS_BENCHMARK_BLOCK_CADENCE;
+    Ok(localnet_builder_with_cadence(shape, cadence)
         .with_base_seed(network_seed.to_owned())
         .with_genesis_block_and_committee_validator_entries(move |topology, entries, committee| {
             let mut processes = topology.iter().cloned().collect::<Vec<_>>();
             processes.extend(committee.iter().map(|entry| entry.peer.clone()));
-            let mut transactions = genesis_post_topology(shape, &processes, &committee);
+            let mut transactions = genesis_post_topology(shape, &processes, &committee, cadence);
             transactions.extend(post.clone());
             unexecuted_genesis_factory_with_post_topology(
                 Vec::new(),

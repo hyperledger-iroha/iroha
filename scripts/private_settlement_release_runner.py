@@ -644,6 +644,8 @@ def build_configuration(
             "quorum": QUORUM,
         },
         "consensus": {
+            # Each value is signed into both Global and participant lane genesis.
+            "block_cadence_ms": {"benchmark": 1000, "fault": 4000, "leakage": 4000},
             "mandatory_signed_rs16_da": True,
             "minimum_signed_rs16_da_observations_per_run": (
                 minimum_signed_rs16_da_observations(participants)

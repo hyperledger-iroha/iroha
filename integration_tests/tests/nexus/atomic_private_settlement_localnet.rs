@@ -142,7 +142,12 @@ const PARTICIPANT_COUNT: usize = 3;
 const PRIMARY_PUBLIC_PARTICIPANT_ORDINAL: usize = 0;
 const VALIDATORS_PER_LANE: usize = 4;
 const REAL_PROCESS_VALIDATOR_WORKER_THREADS: u64 = 4;
+// Correctness profiles (smoke, fault and leakage) sign four seconds so sixteen
+// validators on one host relay the mandatory DA payload inside the view deadline.
 const REAL_PROCESS_BLOCK_CADENCE: Duration = Duration::from_secs(4);
+// Benchmark sessions sign the protocol-default cadence: latency is measured under
+// the cadence a network runs with, not under the correctness margin above.
+const REAL_PROCESS_BENCHMARK_BLOCK_CADENCE: Duration = Duration::from_secs(1);
 const GLOBAL_LANE_ID: u32 = 0;
 const VALIDATOR_STAKE: u64 = 2_000;
 const GENESIS_HEIGHT: u64 = 1;
@@ -436,6 +441,7 @@ fn cbdc_asset_definition_id(ordinal: usize) -> AssetDefinitionId {
 fn participant_lane_policy(
     shape: TopologyShape,
     committee_validator_entries: &[GenesisTopologyEntry],
+    block_cadence: Duration,
 ) -> SumeragiLanePolicy {
     assert_eq!(
         committee_validator_entries.len(),
@@ -443,8 +449,7 @@ fn participant_lane_policy(
     );
     let lane_params = SumeragiParameters {
         block_cadence_ms: std::num::NonZeroU64::new(
-            u64::try_from(REAL_PROCESS_BLOCK_CADENCE.as_millis())
-                .expect("signed lane cadence fits u64"),
+            u64::try_from(block_cadence.as_millis()).expect("signed lane cadence fits u64"),
         )
         .expect("signed lane cadence is positive"),
         ..SumeragiParameters::default()
@@ -487,6 +492,7 @@ fn genesis_post_topology(
     shape: TopologyShape,
     topology: &[PeerId],
     committee_validator_entries: &[GenesisTopologyEntry],
+    block_cadence: Duration,
 ) -> Vec<Vec<InstructionBox>> {
     assert_eq!(topology.len(), shape.process_count());
     assert_eq!(
@@ -577,7 +583,8 @@ fn genesis_post_topology(
     // and signed validator bootstrap in this transaction.
     universal.push(
         SetParameter::new(Parameter::Custom(
-            participant_lane_policy(shape, committee_validator_entries).into_custom_parameter(),
+            participant_lane_policy(shape, committee_validator_entries, block_cadence)
+                .into_custom_parameter(),
         ))
         .into(),
     );
@@ -625,7 +632,13 @@ fn genesis_post_topology(
     transactions
 }
 
+/// Network for the correctness profiles, on their four-second signed cadence.
 fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
+    localnet_builder_with_cadence(shape, REAL_PROCESS_BLOCK_CADENCE)
+}
+
+/// One cadence is signed into both the Global genesis and the participant lane policy.
+fn localnet_builder_with_cadence(shape: TopologyShape, block_cadence: Duration) -> NetworkBuilder {
     let validator_worker_threads = i64::try_from(REAL_PROCESS_VALIDATOR_WORKER_THREADS)
         .expect("validator worker width fits i64");
     NetworkBuilder::new()
@@ -636,10 +649,9 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                 .expect("participant committee validator count fits the P2P capacity"),
         )
         .expect("global and participant committee validators fit P2P fanout")
-        // Keep every release profile, including the correctness-only N=3
-        // smoke, on a production-like signed cadence. Native protocol defaults
-        // require no registration; independent pool-policy notice remains enforced.
-        .with_block_cadence(REAL_PROCESS_BLOCK_CADENCE)
+        // Native protocol defaults require no registration; independent
+        // pool-policy notice remains enforced.
+        .with_block_cadence(block_cadence)
         .with_peer_startup_timeout(Duration::from_secs(20 * 60))
         .with_npos_consensus()
         .without_npos_genesis_bootstrap()
@@ -654,7 +666,12 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                 assert_eq!(process_topology.len(), shape.process_count());
                 unexecuted_genesis_factory_with_post_topology(
                     Vec::new(),
-                    genesis_post_topology(shape, &process_topology, &committee_validator_entries),
+                    genesis_post_topology(
+                        shape,
+                        &process_topology,
+                        &committee_validator_entries,
+                        block_cadence,
+                    ),
                     topology,
                     topology_entries,
                     genesis_staking_policy(),
@@ -941,7 +958,7 @@ fn signed_participant_lane_policy(
         })
         .collect::<Result<Vec<_>>>()?;
     ensure!(
-        policy == participant_lane_policy(shape, &entries),
+        policy == participant_lane_policy(shape, &entries, network.block_cadence()),
         "signed native policy differs from the exact participant processes or cadence"
     );
     iroha_core::sumeragi::lanes::step::validate_policy(&policy).map_err(|error| eyre!(error))?;
@@ -4184,7 +4201,12 @@ fn genesis_registers_only_participant_processes_as_committee_peers() {
         .collect::<Vec<_>>();
     let committee_validator_entries = process_entries[shape.global_validator_count()..].to_vec();
 
-    let transactions = genesis_post_topology(shape, &topology, &committee_validator_entries);
+    let transactions = genesis_post_topology(
+        shape,
+        &topology,
+        &committee_validator_entries,
+        REAL_PROCESS_BLOCK_CADENCE,
+    );
     for bootstrap in participant_domain_bootstrap() {
         assert_eq!(
             transactions
@@ -4567,7 +4589,7 @@ fn native_participant_routes_reject_substitution_and_inactive_genesis() {
             )
         })
         .collect::<Vec<_>>();
-    let policy = participant_lane_policy(shape, &entries);
+    let policy = participant_lane_policy(shape, &entries, REAL_PROCESS_BLOCK_CADENCE);
     let network_id = iroha::data_model::NetworkId::from_genesis_hash(
         HashOf::<BlockHeader>::from_untyped_unchecked(hash(0xE1)),
     );
@@ -4771,7 +4793,12 @@ fn genesis_ivm_private_note_defaults_require_no_protocol_policy() {
         .cloned()
         .map(|peer| GenesisTopologyEntry::new(peer, vec![1]))
         .collect::<Vec<_>>();
-    let transactions = genesis_post_topology(shape, &topology, &committee_validator_entries);
+    let transactions = genesis_post_topology(
+        shape,
+        &topology,
+        &committee_validator_entries,
+        REAL_PROCESS_BLOCK_CADENCE,
+    );
     let expected_privacy = private_settlement_genesis_policy();
     expected_privacy
         .validate_at_committed_height(GENESIS_HEIGHT)
@@ -5464,6 +5491,42 @@ fn n3_correctness_smoke_retains_the_release_network_cadence() {
         builder.configured_block_cadence(),
         Some(Duration::from_secs(4))
     );
+}
+
+#[test]
+fn benchmark_network_and_lane_policy_sign_the_protocol_default_cadence() {
+    let shape = TopologyShape::new(PARTICIPANT_COUNT);
+    let default_cadence =
+        Duration::from_millis(SumeragiParameters::default().block_cadence_ms.get());
+    assert_eq!(REAL_PROCESS_BENCHMARK_BLOCK_CADENCE, default_cadence);
+    assert_eq!(
+        localnet_builder_with_cadence(shape, REAL_PROCESS_BENCHMARK_BLOCK_CADENCE)
+            .configured_block_cadence(),
+        Some(default_cadence)
+    );
+    // The participant lanes sign the same cadence as the Global genesis.
+    let entries = (0..shape.participant_validator_count())
+        .map(|index| {
+            let key =
+                KeyPair::try_from_seed(vec![(index + 1) as u8; 32], Algorithm::BlsNormal).unwrap();
+            GenesisTopologyEntry::new(
+                PeerId::new(key.public_key().clone()),
+                iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    for (cadence, expected_ms) in [
+        (REAL_PROCESS_BENCHMARK_BLOCK_CADENCE, 1_000),
+        (REAL_PROCESS_BLOCK_CADENCE, 4_000),
+    ] {
+        assert_eq!(
+            participant_lane_policy(shape, &entries, cadence)
+                .lane_params
+                .block_cadence_ms
+                .get(),
+            expected_ms
+        );
+    }
 }
 
 #[test]

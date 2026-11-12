@@ -3114,6 +3114,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
         self.assertEqual(
             configuration["consensus"],
             {
+                "block_cadence_ms": {"benchmark": 1000, "fault": 4000, "leakage": 4000},
                 "mandatory_signed_rs16_da": True,
                 "minimum_signed_rs16_da_observations_per_run": 16,
                 "authenticated_private_settlement_route_control": True,

@@ -2660,10 +2660,11 @@ def _validate_configuration_manifest(
         )
         if topology.get("quorum") != "3-of-4":
             raise EvidenceError(f"{label}.topology.quorum must be '3-of-4'")
-        # Exact fields: the release profile has no consensus knob beyond these bindings.
+        # Exact fields bind the performance and correctness profiles separately.
         consensus = _exact_fields(
             configuration.get("consensus"),
             {
+                "block_cadence_ms",
                 "mandatory_signed_rs16_da",
                 "minimum_signed_rs16_da_observations_per_run",
                 "authenticated_private_settlement_route_control",
@@ -2671,6 +2672,13 @@ def _validate_configuration_manifest(
             },
             f"{label}.consensus",
         )
+        cadences = _exact_fields(
+            consensus["block_cadence_ms"],
+            {"benchmark", "fault", "leakage"},
+            f"{label}.consensus.block_cadence_ms",
+        )
+        for kind, expected in (("benchmark", 1000), ("fault", 4000), ("leakage", 4000)):
+            _exact_integer(cadences[kind], expected, f"{label}.consensus.block_cadence_ms.{kind}")
         if (
             consensus["mandatory_signed_rs16_da"] is not True
             or consensus["authenticated_private_settlement_route_control"] is not True
