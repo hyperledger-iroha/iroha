@@ -343,6 +343,7 @@ def test_norito_rpc_fixtures_have_one_closed_two_root_owner() -> None:
         "fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json",
         "fixtures/norito_rpc/iroha_compact_hash_vector.properties",
         "fixtures/norito_rpc/schema_hashes.json",
+        "fixtures/norito_rpc/transaction_fixtures.dense.json",
         "fixtures/norito_rpc/transaction_fixtures.manifest.json",
         "fixtures/norito_rpc/transaction_payloads.json",
         "java/iroha_android/src/test/resources/transaction_fixtures.manifest.json",
@@ -364,7 +365,7 @@ def test_norito_rpc_fixtures_have_one_closed_two_root_owner() -> None:
         if entry["name"] == "norito-rpc-fixtures"
     )
 
-    assert len(outputs) == 65
+    assert len(outputs) == 66
     assert set(owner["outputs"]) == outputs
     for output in outputs:
         assert sum(output in entry["outputs"] for entry in manifest["generated"]) == 1

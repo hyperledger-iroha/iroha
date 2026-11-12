@@ -262,10 +262,13 @@ def validate_columnar(sources: dict[str, str]) -> None:
 def encoding_roles(sources: dict[str, str]) -> dict[str, Function]:
     """Find the current scoped encoder operations without pinning private names."""
     predicates = {
-        "count_destination": lambda item: "->Result<bool,Error>" in item.signature and "EncoderSink::Counting" in item.code,
+        "count_destination": lambda item: "length:usize)->Result<bool,Error>" in item.signature and "EncoderSink::Counting" in item.code,
         "count_kind": lambda item: "->bool" in item.signature and "EncoderSink::Counting" in item.code,
         "count_constructor": lambda item: "LengthCountingWriter" in item.signature and "->Self" in item.signature,
         "exact_scope": lambda item: "FnOnce(&mutSelf)->Result<(),Error>" in item.signature,
+        # Single-pass framing: a child serialized once into the destination, prefix patched after.
+        "framed_child": lambda item: "value:&dynsuper::SerializePayload" in item.signature and "->Result<bool,Error>" in item.signature,
+        "in_place_destination": lambda item: "->Option<&mutVec<u8>>" in item.signature,
     }
     return {name: role(sources, ENCODER, predicate, f"encoding.{name}_owner") for name, predicate in predicates.items()}
 
@@ -277,14 +280,34 @@ def validate_encoding(sources: dict[str, str]) -> None:
     require(kind.code == "matches!(self.sink,EncoderSink::Counting(_))" and re.match(rf"super::encode_work::\w+\(0\)\?;if!self\.{kind.name}\(\)\{{returnOk\(false\);\}}", skip.code) is not None, "encoding.count_destination_isolation")
     factory_call = re.fullmatch(r"Self::(\w+)\(EncoderSink::Counting\(counter\)\)", constructor.code)
     require(factory_call is not None, "encoding.count_constructor_destination")
+    # A single-pass child declines every destination whose bytes it cannot place and patch:
+    # rejected or work-accounted writes, enclosing bounds, and streams.
+    child = owners["framed_child"]
+    require(child.code.startswith("ifself.rejected_write||super::encode_work::thread_accounting_active(){returnOk(false);}"), "encoding.framed_child_declines_untrusted")
+    require("ifself.limit.is_some(){returnOk(false);}" in child.code, "encoding.framed_child_declines_bounds")
+    require("EncoderSink::Writer(_)|EncoderSink::Compare(_)=>returnOk(false)" in child.code, "encoding.framed_child_declines_streams")
+    require(child.code.count("value.serialize(self)?;") == 1, "encoding.framed_child_single_emission")
+    after_child = child.code.split("value.serialize(self)?;", 1)[1]
+    require(after_child.startswith("ifself.rejected_write{returnErr(Error::LengthMismatch);}"), "encoding.framed_child_rejects_overrun")
+    patch_call = re.search(r"EncoderSink::Buffer\(buffer\)=>(\w+)\(buffer,prefix_at,reserved,compact\)\?", child.code)
+    require(patch_call is not None and f"{patch_call.group(1)}(&mutsink.buf,prefix_at,reserved,compact)?" in child.code, "encoding.framed_child_patches_written_length")
+    patch = operation(sources, ENCODER, patch_call.group(1))
+    require(".filter(|body_at|*body_at<=buffer.len())" in patch.code and "letlength=buffer.len()-body_at;" in patch.code, "encoding.prefix_patch_uses_written_length")
+    require("letlength=counter.len.checked_sub(prefix_at)" in child.code and "counter.add(prefix_len)?;" in child.code, "encoding.framed_child_counts_counted_length")
+    in_place = owners["in_place_destination"]
+    require(in_place.code.startswith("ifself.limit.is_some()||self.rejected_write||super::encode_work::thread_accounting_active(){returnNone;}") and "EncoderSink::Writer(_)|EncoderSink::Counting(_)|EncoderSink::Compare(_)=>None" in in_place.code, "encoding.in_place_declines_untrusted")
     counter = operation(sources, CORE, "encoded_payload_len")
-    require(f"Encoder::{constructor.name}(" in counter.code and "value.serialize(&mutencoder)?" in counter.code and ".finish()?" in counter.code and "validate_header_flags(flags)?" in counter.code, "encoding.actual_measurement")
+    require(f"Encoder::{constructor.name}(" in counter.code and "value.serialize(&mutencoder)?" in counter.code and ".finish()?" in counter.code and "validate_layout_code(flags)?" in counter.code, "encoding.actual_measurement")
     owned = role(sources, CORE, lambda item: f".{skip.name}(" in item.code, "encoding.measured_emission_owner")
     require(re.fullmatch(rf"ifwriter\.{skip.name}\(measured_len\)\?\{{Ok\(\(\)\)\}}else\{{writer\.{owners['exact_scope'].name}\(measured_len,\|writer\|\{{let\w+=encode_work::\w+::enter\(\)\?;value\.serialize\(writer\)\}}\)\}}", owned.code) is not None, "encoding.measured_emission_uses_scope")
     preceding = owned.source[max(0, owned.start - 20):owned.start]
     require(not re.search(r"\bpub(?:\([^)]*\))?\s*$", preceding), "encoding.measured_emission_private")
+    # Fields frame through one owner: the single-pass child, else an actual measurement
+    # emitted through the measured scope.
+    framed = role(sources, CORE, lambda item: f".{child.name}(" in item.code, "encoding.framed_payload_owner")
+    require(framed.code.startswith("validate_layout_code(") and re.search(rf"ifwriter\.{child.name}\(value,prefix\)\?\{{returnOk\(\(\)\);\}}letmeasured_len=encoded_payload_len\(value\)\?;", framed.code) is not None and framed.code.endswith(f"{owned.name}(value,writer,measured_len)"), "encoding.framed_payload_measured_fallback")
     field = operation(sources, CORE, "write_len_prefixed")
-    require("encoded_payload_len(value)?" in field.code and f"{owned.name}(value,writer," in field.code, "encoding.field_uses_owned_measurement")
+    require(f"{framed.name}(writer,value,LengthPrefix::Layout(effective_layout_flags())" in field.code, "encoding.field_uses_owned_measurement")
     exact = operation(sources, CORE, "serialize_to_writer_exact")
     binding = re.search(r"letmut(\w+)=ExactLengthWriter::new\(writer,(\w+)\);", exact.code)
     checked = False
@@ -293,7 +316,12 @@ def validate_encoding(sources: dict[str, str]) -> None:
         checked = f"letresult=serialize_to_writer(value,&mut{writer_name});" in exact.code and bool(re.search(rf"if{writer_name}\.\w+\(\)\{{returnErr\(Error::LengthMismatch\);\}}", exact.code)) and bool(re.search(rf"{writer_name}\.\w+\(\)=={expected_name}", exact.code))
     require(checked and "result?;" in exact.code and f".{skip.name}(" not in exact.code, "encoding.public_exact_checks_output")
     frame = operation(sources, FRAMES, "write_frame_with_prefix")
-    require("encoded_frame_len(value)?" in frame.code and "prefix(writer,frame_len)?" in frame.code and f".{skip.name}(frame_len)?" in frame.code and ".ok_or(Error::NonCanonicalEncoding)" in frame.code, "encoding.frame_owned_measurement")
+    require("encoded_frame_len(value)?" in frame.code and "prefix(writer,frame_len)?" in frame.code and f".{skip.name}(frame_len)?" in frame.code and ".ok_or_else(||Error::NonCanonicalEncoding)" in frame.code, "encoding.frame_owned_measurement")
+    # An in-place frame takes its length and checksum from the bytes it actually wrote.
+    appended = role(sources, FRAMES, lambda item: "rotate_right(" in item.code and "Header::new(" in item.code, "encoding.frame_in_place_owner")
+    require(f"ifwriter.{in_place.name}().is_some(){{return{appended.name}(value,writer,flags,prefix);}}" in frame.code, "encoding.frame_in_place_only_for_buffers")
+    require(appended.code.count("value.serialize(writer)?;") == 1 and "letpayload=buffer.get(start..)" in appended.code and "letpayload_len=payload.len();" in appended.code and "letchecksum=crc64(payload);" in appended.code and "u64::try_from(payload_len)" in appended.code and ",checksum,);" in appended.code, "encoding.frame_in_place_actual_bytes")
+    require(f"letbuffer=writer.{in_place.name}().ok_or_else(||Error::NonCanonicalEncoding)?;" in appended.code, "encoding.frame_in_place_rechecks_destination")
     emission = role(sources, FRAMES, lambda item: "ExactLengthWriter::new(" in item.code and "FramedPayloadWriter" in item.code, "encoding.frame_emission_owner")
     for error in ("LengthMismatch", "ChecksumMismatch", "NonCanonicalEncoding"):
         require(f"returnErr(Error::{error});" in emission.code, f"encoding.frame_rejects:{error}")
