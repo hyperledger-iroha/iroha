@@ -529,42 +529,6 @@ pub(crate) fn prepare(context: &RootContext, cert: &Certificate) -> Result<Prepa
         (fp(&(&s >> 128)), c.bytes(&sle[16..])),
     ];
     let local = w.push(c.a);
-    // Public output cells are linked explicitly to private cells before any
-    // copy exports. Copy helpers do not read public io cells as witnesses.
-    let mut out = vec![Fp::ZERO; 128];
-    for i in 0..65 {
-        out[i] = Fp::from(cert.body[KEY_START + i] as u64);
-    }
-    out[65] = digest;
-    for (i, byte) in context.scheme.iter().enumerate() {
-        out[66 + i] = Fp::from(*byte as u64);
-    }
-    let io = w.push(Array {
-        name: "authenticated issuer and certificate digest",
-        family: gfam,
-        rho: 7,
-        r_count: 98,
-        fixed: false,
-        lookups: vec![],
-        widths: vec![255],
-        rows: vec![],
-        values: vec![out],
-    });
-    w.io_arrays.push((io, KEY_IO));
-    for (k, index) in (0..65)
-        .map(|i| (KEY_START + i, i))
-        .chain(std::iter::once((dcell, 65)))
-        .chain((0..32).map(|i| (2 + i, 66 + i)))
-    {
-        w.arrays[local].rows.push([
-            plus(
-                &own(k, 1),
-                &scaled(&link(io, 0, vec![Some(index)], Fp::ONE), -Fp::ONE),
-            ),
-            constant(vec![Fp::ONE]),
-            vec![],
-        ]);
-    }
     curve_relation(
         &mut w,
         gfam,
@@ -616,6 +580,55 @@ pub(crate) fn prepare(context: &RootContext, cert: &Certificate) -> Result<Prepa
         digest_cell: dcell,
         sha: sha_at,
     })
+}
+
+/// Standalone public certificate outputs. Compositions use the private ports
+/// and bind their own public context rather than duplicating these IO bytes.
+pub(crate) fn expose(
+    w: &mut Wiring<Fp>,
+    gfam: usize,
+    local: usize,
+    dcell: usize,
+    context: &RootContext,
+    cert: &Certificate,
+) {
+    let digest = certificate_digest(cert);
+    // Public output cells are linked explicitly to private cells before any
+    // copy exports. Copy helpers do not read public io cells as witnesses.
+    let mut out = vec![Fp::ZERO; 128];
+    for i in 0..65 {
+        out[i] = Fp::from(cert.body[KEY_START + i] as u64);
+    }
+    out[65] = digest;
+    for (i, byte) in context.scheme.iter().enumerate() {
+        out[66 + i] = Fp::from(*byte as u64);
+    }
+    let io = w.push(Array {
+        name: "authenticated issuer and certificate digest",
+        family: gfam,
+        rho: 7,
+        r_count: 98,
+        fixed: false,
+        lookups: vec![],
+        widths: vec![255],
+        rows: vec![],
+        values: vec![out],
+    });
+    w.io_arrays.push((io, KEY_IO));
+    for (k, index) in (0..65)
+        .map(|i| (KEY_START + i, i))
+        .chain(std::iter::once((dcell, 65)))
+        .chain((0..32).map(|i| (2 + i, 66 + i)))
+    {
+        w.arrays[local].rows.push([
+            plus(
+                &own(k, 1),
+                &scaled(&link(io, 0, vec![Some(index)], Fp::ONE), -Fp::ONE),
+            ),
+            constant(vec![Fp::ONE]),
+            vec![],
+        ]);
+    }
 }
 
 /// Exact canonical-message bytes -> SHA-256 -> ECDSA, with signature scalars
@@ -698,13 +711,15 @@ pub(crate) fn add_signature(
 
 pub fn build(context: &RootContext, cert: &Certificate) -> Result<Built, &'static str> {
     let Prepared {
-        wiring,
+        mut wiring,
+        gfam,
         local,
         message_cell,
         digest_cell,
         sha,
         ..
     } = prepare(context, cert)?;
+    expose(&mut wiring, gfam, local, digest_cell, context, cert);
     let (arrays, pi, counts, tables, copies) = wiring.finish();
     let (circuit, instance, witness) = UniformCircuit::build_with_copies(
         "enrollment-certificate",

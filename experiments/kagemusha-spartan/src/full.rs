@@ -1958,12 +1958,10 @@ mod tests {
             keys_p: None,
             keys_s: None,
         };
-        let (w, bp) = p_boot(&gens, &WalletKey::stand_in(), false);
+        let (w, bp) = p_boot(&gens, &WalletKey::stand_in());
         assert!(
-            bp.own
-                .as_ref()
-                .is_some_and(|o| o.insertion_values.is_none() && o.roots.is_none()),
-            "the zero state inserts nothing"
+            bp.own.is_none(),
+            "Bootstrap uses exact state constraints, not the census relation"
         );
         let (arrays, pi, counts, tables, copies) = w.finish();
         let (cp, ip, wp) = UniformCircuit::build_with_copies(
@@ -2833,10 +2831,10 @@ pub fn receive_pairs() -> (PairGens, Vec<TracedPair>) {
 }
 
 /// The accumulators' matrix dimensions (x, y) on the P and S sides, so that
-/// every hop's accumulators share one space: P-recv verifying its own 64-row
-/// proofs packs past 2^19 constraint rows (2^20, 2^21 z entries), S-recv
-/// stays at 2^19 and 2^20.
-pub const FP_DIMS: ((usize, usize), (usize, usize)) = ((20, 21), (19, 20));
+/// every hop's accumulators share one space. The future research profile uses
+/// P columns2^16 and S columns2^15; x/y bounds include the complete authenticated
+/// Bootstrap and are asserted by next_gens. Both late claims fit reserved IO.
+pub const FP_DIMS: ((usize, usize), (usize, usize)) = ((20, 22), (19, 21));
 
 type ToySpec = (crate::r1cs::Shape, crate::r1cs::Shape, usize, &'static [u8]);
 
@@ -3390,6 +3388,12 @@ fn p_circuit_with_predecessor(
         shared,
         Some(own_table),
     );
+    let context_values: [Fp; crate::bootstrap_context::FIELDS] = pairs[0].inst_p.io
+        [crate::bootstrap_context::CONTEXT_IO
+            ..crate::bootstrap_context::CONTEXT_IO + crate::bootstrap_context::FIELDS]
+        .try_into()
+        .expect("predecessor context");
+    crate::bootstrap_context::inherit(&mut w, gfam, &context_values, scalars[0].io);
     predecessor_head_tie(
         &mut w,
         defer.fold.values,
@@ -4335,82 +4339,26 @@ fn boot_values() -> Vec<u128> {
     vec![BOOTSTRAP as u128]
 }
 
-/// Bootstrap's P circuit, the chain's first link: its own relation
-/// (`Op::BOOTSTRAP`, signed with the wallet's `key`), its kind as public io,
-/// the pair binding, and as its accumulator the empty claim, pinned as late
-/// io. It has no predecessor slot: it verifies no proof, so it has no points
-/// or scalar side and no fold. Built at Receive's layout, so that the
-/// predecessor slot of a Send or a Receive takes it.
-///
-/// The wallet's table commitment, which the issuer computed from the key at
-/// enrollment (`wallet_table_commitment`), is public io, and the statement
-/// sponge absorbs it first, through a copy, so the credential's signature
-/// covers it (the issuer certifies it); the key's tables are the wallet row
-/// as in every P circuit. With `tables` the circuit also derives the tables
-/// from the key (`nonnative::key_tables`; too large for Receive's layout).
-pub fn p_boot(gens: &PairGens, key: &WalletKey, tables: bool) -> (Wiring<Fp>, BootIdx) {
-    let mut w = Wiring::<Fp>::default();
-    let gfam = w.family(0, 1);
-    let e_out = w.reserve();
-    let e_zero = constant_entries(&mut w, gfam, "zero word", &[vec![Fp::ZERO]]);
-    let mut pool = Pool::new(Fp::from(NODE_DOMAIN));
+/// Exact authenticated Bootstrap, including the root/issuer chain, initial
+/// future Core, signed receipt and issuer-certified omitted payment table row.
+pub fn p_boot(gens: &PairGens, key: &WalletKey) -> (Wiring<Fp>, BootIdx) {
+    let (context, input) = crate::bootstrap::fixture(key, &gens.p);
+    let prepared = crate::bootstrap::prepare(&context, &input).expect("valid Bootstrap fixture");
+    let (mut w, gfam) = (prepared.wiring, prepared.gfam);
     let (_, pin) = kind_pin(&mut w, gfam, BOOTSTRAP);
-    let (own_table, limbs) = table_io(&mut w, gfam, &wallet_table_commitment(&key.q, &gens.p));
-    let certified = w.push(Array {
-        name: "certified table commitment",
-        family: gfam,
-        rho: 2,
-        r_count: 4,
-        fixed: false,
-        lookups: Vec::new(),
-        widths: vec![128],
-        rows: vec![[
-            plus(
-                &own(0, 4),
-                &link(own_table, 0, (0..4).map(Some).collect(), -Fp::ONE),
-            ),
-            constant(vec![Fp::ONE; 4]),
-            Vec::new(),
-        ]],
-        values: vec![limbs.to_vec()],
-    });
-    let e_cert = w.export(certified, vec![own(0, 4)]);
-    let own_idx = own_relation_with_head(
-        &mut w,
-        &mut pool,
-        e_out,
-        e_zero,
-        gfam,
-        &Op::BOOTSTRAP,
-        key,
-        Some((e_cert, limbs)),
-        Some(Fp::ZERO),
-    );
-    w.wallet = Some((own_idx.comb + nonnative::A_WTABLE, TABLE_IO));
-    let key_tables = tables.then(|| {
-        let first = w.arrays.len();
-        let kt = nonnative::key_tables(first, gfam, &key.q);
-        w.arrays.extend(kt.arrays);
-        w.tables.extend(kt.tables);
-        (first, kt.counts)
-    });
     let values = boot_values();
     let _ = p_binding(&mut w, gfam, &binding_mu(&values), &values);
     let (_, empty) =
         crate::deferral::expose_constant(&mut w, gfam, &gens.defer_p.empty_claim(), LATE_IO);
-    let mut rng = SpikeRng::new(b"p-boot pool");
-    let pidx = pool.build(&mut w, e_out, &mut rng);
     let mut seen = std::collections::HashSet::new();
     w.tables.retain(|(_, t)| seen.insert(*t));
-    let mut own_idx = own_idx;
-    own_idx.pool = pidx;
     (
         w,
         BootIdx {
-            own: Some(own_idx),
+            own: None,
             kind_pin: pin,
             empty,
-            key_tables,
+            key_tables: None,
         },
     )
 }
